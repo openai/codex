@@ -7,11 +7,13 @@ use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;
-use std::str::FromStr; // Added for FinalOutput Display implementation
+use std::str::FromStr;
+use std::time::Duration;
 
 use mcp_types::CallToolResult;
 use serde::Deserialize;
 use serde::Serialize;
+use serde_bytes::ByteBuf;
 use strum_macros::Display;
 use uuid::Uuid;
 
@@ -19,6 +21,7 @@ use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::message_history::HistoryEntry;
 use crate::model_provider_info::ModelProviderInfo;
+use crate::plan_tool::UpdatePlanArgs;
 
 /// Submission Queue Entry - requests from user
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -119,6 +122,10 @@ pub enum Op {
     /// Request a single history entry identified by `log_id` + `offset`.
     GetHistoryEntryRequest { offset: usize, log_id: u64 },
 
+    /// Request the agent to summarize the current conversation context.
+    /// The agent will use its existing context (either conversation history or previous response id)
+    /// to generate a summary which will be returned as an AgentMessage event.
+    Compact,
     /// Request to shut down codex instance.
     Shutdown,
 }
@@ -132,7 +139,6 @@ pub enum AskForApproval {
     /// Under this policy, only "known safe" commands—as determined by
     /// `is_safe_command()`—that **only read files** are auto‑approved.
     /// Everything else will ask the user to approve.
-    #[default]
     #[serde(rename = "untrusted")]
     #[strum(serialize = "untrusted")]
     UnlessTrusted,
@@ -143,13 +149,18 @@ pub enum AskForApproval {
     /// the user to approve execution without a sandbox.
     OnFailure,
 
+    /// The model decides when to ask the user for approval.
+    #[default]
+    OnRequest,
+
     /// Never ask the user to approve commands. Failures are immediately returned
     /// to the model, and never escalated to the user for approval.
     Never,
 }
 
 /// Determines execution restrictions for model shell commands.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Display)]
+#[strum(serialize_all = "kebab-case")]
 #[serde(tag = "mode", rename_all = "kebab-case")]
 pub enum SandboxPolicy {
     /// No restrictions whatsoever. Use with caution.
@@ -173,7 +184,28 @@ pub enum SandboxPolicy {
         /// default.
         #[serde(default)]
         network_access: bool,
+
+        /// When set to `true`, will NOT include the per-user `TMPDIR`
+        /// environment variable among the default writable roots. Defaults to
+        /// `false`.
+        #[serde(default)]
+        exclude_tmpdir_env_var: bool,
+
+        /// When set to `true`, will NOT include the `/tmp` among the default
+        /// writable roots on UNIX. Defaults to `false`.
+        #[serde(default)]
+        exclude_slash_tmp: bool,
     },
+}
+
+/// A writable root path accompanied by a list of subpaths that should remain
+/// read‑only even when the root is writable. This is primarily used to ensure
+/// top‑level VCS metadata directories (e.g. `.git`) under a writable root are
+/// not modified by the agent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WritableRoot {
+    pub root: PathBuf,
+    pub read_only_subpaths: Vec<PathBuf>,
 }
 
 impl FromStr for SandboxPolicy {
@@ -197,6 +229,8 @@ impl SandboxPolicy {
         SandboxPolicy::WorkspaceWrite {
             writable_roots: vec![],
             network_access: false,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
         }
     }
 
@@ -222,27 +256,64 @@ impl SandboxPolicy {
         }
     }
 
-    /// Returns the list of writable roots that should be passed down to the
-    /// Landlock rules installer, tailored to the current working directory.
-    pub fn get_writable_roots_with_cwd(&self, cwd: &Path) -> Vec<PathBuf> {
+    /// Returns the list of writable roots (tailored to the current working
+    /// directory) together with subpaths that should remain read‑only under
+    /// each writable root.
+    pub fn get_writable_roots_with_cwd(&self, cwd: &Path) -> Vec<WritableRoot> {
         match self {
             SandboxPolicy::DangerFullAccess => Vec::new(),
             SandboxPolicy::ReadOnly => Vec::new(),
-            SandboxPolicy::WorkspaceWrite { writable_roots, .. } => {
-                let mut roots = writable_roots.clone();
+            SandboxPolicy::WorkspaceWrite {
+                writable_roots,
+                exclude_tmpdir_env_var,
+                exclude_slash_tmp,
+                network_access: _,
+            } => {
+                // Start from explicitly configured writable roots.
+                let mut roots: Vec<PathBuf> = writable_roots.clone();
+
+                // Always include defaults: cwd, /tmp (if present on Unix), and
+                // on macOS, the per-user TMPDIR unless explicitly excluded.
                 roots.push(cwd.to_path_buf());
 
-                // Also include the per-user tmp dir on macOS.
-                // Note this is added dynamically rather than storing it in
-                // writable_roots because writable_roots contains only static
-                // values deserialized from the config file.
-                if cfg!(target_os = "macos") {
-                    if let Some(tmpdir) = std::env::var_os("TMPDIR") {
-                        roots.push(PathBuf::from(tmpdir));
+                // Include /tmp on Unix unless explicitly excluded.
+                if cfg!(unix) && !exclude_slash_tmp {
+                    let slash_tmp = PathBuf::from("/tmp");
+                    if slash_tmp.is_dir() {
+                        roots.push(slash_tmp);
                     }
                 }
 
+                // Include $TMPDIR unless explicitly excluded. On macOS, TMPDIR
+                // is per-user, so writes to TMPDIR should not be readable by
+                // other users on the system.
+                //
+                // By comparison, TMPDIR is not guaranteed to be defined on
+                // Linux or Windows, but supporting it here gives users a way to
+                // provide the model with their own temporary directory without
+                // having to hardcode it in the config.
+                if !exclude_tmpdir_env_var
+                    && let Some(tmpdir) = std::env::var_os("TMPDIR")
+                    && !tmpdir.is_empty()
+                {
+                    roots.push(PathBuf::from(tmpdir));
+                }
+
+                // For each root, compute subpaths that should remain read-only.
                 roots
+                    .into_iter()
+                    .map(|writable_root| {
+                        let mut subpaths = Vec::new();
+                        let top_level_git = writable_root.join(".git");
+                        if top_level_git.is_dir() {
+                            subpaths.push(top_level_git);
+                        }
+                        WritableRoot {
+                            root: writable_root,
+                            read_only_subpaths: subpaths,
+                        }
+                    })
+                    .collect()
             }
         }
     }
@@ -307,6 +378,12 @@ pub enum EventMsg {
     /// Agent reasoning delta event from agent.
     AgentReasoningDelta(AgentReasoningDeltaEvent),
 
+    /// Raw chain-of-thought from agent.
+    AgentReasoningRawContent(AgentReasoningRawContentEvent),
+
+    /// Agent reasoning content delta event from agent.
+    AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent),
+
     /// Ack the client's configure message.
     SessionConfigured(SessionConfiguredEvent),
 
@@ -316,6 +393,9 @@ pub enum EventMsg {
 
     /// Notification that the server is about to execute a command.
     ExecCommandBegin(ExecCommandBeginEvent),
+
+    /// Incremental chunk of output from a running command.
+    ExecCommandOutputDelta(ExecCommandOutputDeltaEvent),
 
     ExecCommandEnd(ExecCommandEndEvent),
 
@@ -332,8 +412,12 @@ pub enum EventMsg {
     /// Notification that a patch application has finished.
     PatchApplyEnd(PatchApplyEndEvent),
 
+    TurnDiff(TurnDiffEvent),
+
     /// Response to GetHistoryEntryRequest.
     GetHistoryEntryResponse(GetHistoryEntryResponseEvent),
+
+    PlanUpdate(UpdatePlanArgs),
 
     /// Notification that the agent is shutting down.
     ShutdownComplete,
@@ -360,6 +444,34 @@ pub struct TokenUsage {
     pub total_tokens: u64,
 }
 
+impl TokenUsage {
+    pub fn is_zero(&self) -> bool {
+        self.total_tokens == 0
+    }
+
+    pub fn cached_input(&self) -> u64 {
+        self.cached_input_tokens.unwrap_or(0)
+    }
+
+    pub fn non_cached_input(&self) -> u64 {
+        self.input_tokens.saturating_sub(self.cached_input())
+    }
+
+    /// Primary count for display as a single absolute value: non-cached input + output.
+    pub fn blended_total(&self) -> u64 {
+        self.non_cached_input() + self.output_tokens
+    }
+
+    /// For estimating what % of the model's context window is used, we need to account
+    /// for reasoning output tokens from prior turns being dropped from the context window.
+    /// We approximate this here by subtracting reasoning output tokens from the total.
+    /// This will be off for the current turn and pending function calls.
+    pub fn tokens_in_context_window(&self) -> u64 {
+        self.total_tokens
+            .saturating_sub(self.reasoning_output_tokens.unwrap_or(0))
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FinalOutput {
     pub token_usage: TokenUsage,
@@ -373,17 +485,20 @@ impl From<TokenUsage> for FinalOutput {
 
 impl fmt::Display for FinalOutput {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let u = &self.token_usage;
+        let token_usage = &self.token_usage;
         write!(
             f,
             "Token usage: total={} input={}{} output={}{}",
-            u.total_tokens,
-            u.input_tokens,
-            u.cached_input_tokens
-                .map(|c| format!(" (cached {c})"))
-                .unwrap_or_default(),
-            u.output_tokens,
-            u.reasoning_output_tokens
+            token_usage.blended_total(),
+            token_usage.non_cached_input(),
+            if token_usage.cached_input() > 0 {
+                format!(" (+ {} cached)", token_usage.cached_input())
+            } else {
+                String::new()
+            },
+            token_usage.output_tokens,
+            token_usage
+                .reasoning_output_tokens
                 .map(|r| format!(" (reasoning {r})"))
                 .unwrap_or_default()
         )
@@ -406,14 +521,22 @@ pub struct AgentReasoningEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AgentReasoningRawContentEvent {
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AgentReasoningRawContentDeltaEvent {
+    pub delta: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AgentReasoningDeltaEvent {
     pub delta: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct McpToolCallBeginEvent {
-    /// Identifier so this can be paired with the McpToolCallEnd event.
-    pub call_id: String,
+pub struct McpInvocation {
     /// Name of the MCP server as defined in the config.
     pub server: String,
     /// Name of the tool as given by the MCP server.
@@ -423,9 +546,18 @@ pub struct McpToolCallBeginEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct McpToolCallBeginEvent {
+    /// Identifier so this can be paired with the McpToolCallEnd event.
+    pub call_id: String,
+    pub invocation: McpInvocation,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct McpToolCallEndEvent {
     /// Identifier for the corresponding McpToolCallBegin that finished.
     pub call_id: String,
+    pub invocation: McpInvocation,
+    pub duration: Duration,
     /// Result of the tool call. Note this could be an error.
     pub result: Result<CallToolResult, String>,
 }
@@ -459,6 +591,26 @@ pub struct ExecCommandEndEvent {
     pub stderr: String,
     /// The command's exit code.
     pub exit_code: i32,
+    /// The duration of the command execution.
+    pub duration: Duration,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecOutputStream {
+    Stdout,
+    Stderr,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ExecCommandOutputDeltaEvent {
+    /// Identifier for the ExecCommandBegin that produced this chunk.
+    pub call_id: String,
+    /// Which stream produced this chunk.
+    pub stream: ExecOutputStream,
+    /// Raw bytes from the stream (may not be valid UTF-8).
+    #[serde(with = "serde_bytes")]
+    pub chunk: ByteBuf,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -512,6 +664,11 @@ pub struct PatchApplyEndEvent {
     pub stderr: String,
     /// Whether the patch was applied successfully.
     pub success: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TurnDiffEvent {
+    pub unified_diff: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

@@ -4,12 +4,13 @@ use crate::config_types::McpServerConfig;
 use crate::config_types::ReasoningEffort;
 use crate::config_types::ReasoningSummary;
 use crate::config_types::SandboxMode;
-use crate::config_types::SandboxWorkplaceWrite;
+use crate::config_types::SandboxWorkspaceWrite;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::config_types::ShellEnvironmentPolicyToml;
 use crate::config_types::Tui;
 use crate::config_types::UriBasedFileOpener;
-use crate::flags::OPENAI_DEFAULT_MODEL;
+use crate::model_family::ModelFamily;
+use crate::model_family::find_family_for_model;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::built_in_model_providers;
 use crate::openai_model_info::get_model_info;
@@ -20,18 +21,26 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
+use tempfile::NamedTempFile;
 use toml::Value as TomlValue;
+use toml_edit::DocumentMut;
+
+const OPENAI_DEFAULT_MODEL: &str = "gpt-5";
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
 /// the context window.
 pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 
+const CONFIG_TOML_FILE: &str = "config.toml";
+
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
     /// Optional override of model selection.
     pub model: String,
+
+    pub model_family: ModelFamily,
 
     /// Size of the context window for the model, in tokens.
     pub model_context_window: Option<u64>,
@@ -57,12 +66,16 @@ pub struct Config {
     /// users are only interested in the final agent responses.
     pub hide_agent_reasoning: bool,
 
+    /// When set to `true`, `AgentReasoningRawContentEvent` events will be shown in the UI/output.
+    /// Defaults to `false`.
+    pub show_raw_agent_reasoning: bool,
+
     /// Disable server-side response storage (sends the full conversation
     /// context with every request). Currently necessary for OpenAI customers
     /// who have opted into Zero Data Retention (ZDR).
     pub disable_response_storage: bool,
 
-    /// User-provided instructions from instructions.md.
+    /// User-provided instructions from AGENTS.md.
     pub user_instructions: Option<String>,
 
     /// Base instructions override.
@@ -134,15 +147,17 @@ pub struct Config {
     /// request using the Responses API.
     pub model_reasoning_summary: ReasoningSummary,
 
-    /// When set to `true`, overrides the default heuristic and forces
-    /// `model_supports_reasoning_summaries()` to return `true`.
-    pub model_supports_reasoning_summaries: bool,
-
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
 
     /// Experimental rollout resume path (absolute path to .jsonl; undocumented).
     pub experimental_resume: Option<PathBuf>,
+
+    /// Include an experimental plan tool that the model can use to update its current plan and status of each step.
+    pub include_plan_tool: bool,
+
+    /// The value for the `originator` header included with Responses API requests.
+    pub internal_originator: Option<String>,
 }
 
 impl Config {
@@ -181,10 +196,28 @@ impl Config {
     }
 }
 
+pub fn load_config_as_toml_with_cli_overrides(
+    codex_home: &Path,
+    cli_overrides: Vec<(String, TomlValue)>,
+) -> std::io::Result<ConfigToml> {
+    let mut root_value = load_config_as_toml(codex_home)?;
+
+    for (path, value) in cli_overrides.into_iter() {
+        apply_toml_override(&mut root_value, &path, value);
+    }
+
+    let cfg: ConfigToml = root_value.try_into().map_err(|e| {
+        tracing::error!("Failed to deserialize overridden config: {e}");
+        std::io::Error::new(std::io::ErrorKind::InvalidData, e)
+    })?;
+
+    Ok(cfg)
+}
+
 /// Read `CODEX_HOME/config.toml` and return it as a generic TOML value. Returns
 /// an empty TOML table when the file does not exist.
-fn load_config_as_toml(codex_home: &Path) -> std::io::Result<TomlValue> {
-    let config_path = codex_home.join("config.toml");
+pub fn load_config_as_toml(codex_home: &Path) -> std::io::Result<TomlValue> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
     match std::fs::read_to_string(&config_path) {
         Ok(contents) => match toml::from_str::<TomlValue>(&contents) {
             Ok(val) => Ok(val),
@@ -202,6 +235,35 @@ fn load_config_as_toml(codex_home: &Path) -> std::io::Result<TomlValue> {
             Err(e)
         }
     }
+}
+
+/// Patch `CODEX_HOME/config.toml` project state.
+/// Use with caution.
+pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Result<()> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    // Parse existing config if present; otherwise start a new document.
+    let mut doc = match std::fs::read_to_string(config_path.clone()) {
+        Ok(s) => s.parse::<DocumentMut>()?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => DocumentMut::new(),
+        Err(e) => return Err(e.into()),
+    };
+
+    // Mark the project as trusted. toml_edit is very good at handling
+    // missing properties
+    let project_key = project_path.to_string_lossy().to_string();
+    doc["projects"][project_key.as_str()]["trust_level"] = toml_edit::value("trusted");
+
+    // ensure codex_home exists
+    std::fs::create_dir_all(codex_home)?;
+
+    // create a tmp_file
+    let tmp_file = NamedTempFile::new_in(codex_home)?;
+    std::fs::write(tmp_file.path(), doc.to_string())?;
+
+    // atomically move the tmp file into config.toml
+    tmp_file.persist(config_path)?;
+
+    Ok(())
 }
 
 /// Apply a single dotted-path override onto a TOML value.
@@ -272,7 +334,7 @@ pub struct ConfigToml {
     pub sandbox_mode: Option<SandboxMode>,
 
     /// Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`.
-    pub sandbox_workspace_write: Option<SandboxWorkplaceWrite>,
+    pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
 
     /// Disable server-side response storage (sends the full conversation
     /// context with every request). Currently necessary for OpenAI customers
@@ -319,6 +381,10 @@ pub struct ConfigToml {
     /// UI/output. Defaults to `false`.
     pub hide_agent_reasoning: Option<bool>,
 
+    /// When set to `true`, `AgentReasoningRawContentEvent` events will be shown in the UI/output.
+    /// Defaults to `false`.
+    pub show_raw_agent_reasoning: Option<bool>,
+
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
 
@@ -333,6 +399,16 @@ pub struct ConfigToml {
 
     /// Experimental path to a file whose contents replace the built-in BASE_INSTRUCTIONS.
     pub experimental_instructions_file: Option<PathBuf>,
+
+    /// The value for the `originator` header included with Responses API requests.
+    pub internal_originator: Option<String>,
+
+    pub projects: Option<HashMap<String, ProjectConfig>>,
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ProjectConfig {
+    pub trust_level: Option<String>,
 }
 
 impl ConfigToml {
@@ -344,13 +420,50 @@ impl ConfigToml {
         match resolved_sandbox_mode {
             SandboxMode::ReadOnly => SandboxPolicy::new_read_only_policy(),
             SandboxMode::WorkspaceWrite => match self.sandbox_workspace_write.as_ref() {
-                Some(s) => SandboxPolicy::WorkspaceWrite {
-                    writable_roots: s.writable_roots.clone(),
-                    network_access: s.network_access,
+                Some(SandboxWorkspaceWrite {
+                    writable_roots,
+                    network_access,
+                    exclude_tmpdir_env_var,
+                    exclude_slash_tmp,
+                }) => SandboxPolicy::WorkspaceWrite {
+                    writable_roots: writable_roots.clone(),
+                    network_access: *network_access,
+                    exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
+                    exclude_slash_tmp: *exclude_slash_tmp,
                 },
                 None => SandboxPolicy::new_workspace_write_policy(),
             },
             SandboxMode::DangerFullAccess => SandboxPolicy::DangerFullAccess,
+        }
+    }
+
+    pub fn is_cwd_trusted(&self, resolved_cwd: &Path) -> bool {
+        let projects = self.projects.clone().unwrap_or_default();
+
+        projects
+            .get(&resolved_cwd.to_string_lossy().to_string())
+            .map(|p| p.trust_level.clone().unwrap_or("".to_string()) == "trusted")
+            .unwrap_or(false)
+    }
+
+    pub fn get_config_profile(
+        &self,
+        override_profile: Option<String>,
+    ) -> Result<ConfigProfile, std::io::Error> {
+        let profile = override_profile.or_else(|| self.profile.clone());
+
+        match profile {
+            Some(key) => {
+                if let Some(profile) = self.profiles.get(key.as_str()) {
+                    return Ok(profile.clone());
+                }
+
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("config profile `{key}` not found"),
+                ))
+            }
+            None => Ok(ConfigProfile::default()),
         }
     }
 }
@@ -366,6 +479,9 @@ pub struct ConfigOverrides {
     pub config_profile: Option<String>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub base_instructions: Option<String>,
+    pub include_plan_tool: Option<bool>,
+    pub disable_response_storage: Option<bool>,
+    pub show_raw_agent_reasoning: Option<bool>,
 }
 
 impl Config {
@@ -388,6 +504,9 @@ impl Config {
             config_profile: config_profile_key,
             codex_linux_sandbox_exe,
             base_instructions,
+            include_plan_tool,
+            disable_response_storage,
+            show_raw_agent_reasoning,
         } = overrides;
 
         let config_profile = match config_profile_key.as_ref().or(cfg.profile.as_ref()) {
@@ -453,7 +572,19 @@ impl Config {
             .or(config_profile.model)
             .or(cfg.model)
             .unwrap_or_else(default_model);
-        let openai_model_info = get_model_info(&model);
+        let model_family = find_family_for_model(&model).unwrap_or_else(|| {
+            let supports_reasoning_summaries =
+                cfg.model_supports_reasoning_summaries.unwrap_or(false);
+            ModelFamily {
+                slug: model.clone(),
+                family: model.clone(),
+                needs_special_apply_patch_instructions: false,
+                supports_reasoning_summaries,
+                uses_local_shell_tool: false,
+            }
+        });
+
+        let openai_model_info = get_model_info(&model_family);
         let model_context_window = cfg
             .model_context_window
             .or_else(|| openai_model_info.as_ref().map(|info| info.context_window));
@@ -468,14 +599,17 @@ impl Config {
         // Load base instructions override from a file if specified. If the
         // path is relative, resolve it against the effective cwd so the
         // behaviour matches other path-like config values.
-        let file_base_instructions = Self::get_base_instructions(
-            cfg.experimental_instructions_file.as_ref(),
-            &resolved_cwd,
-        )?;
+        let experimental_instructions_path = config_profile
+            .experimental_instructions_file
+            .as_ref()
+            .or(cfg.experimental_instructions_file.as_ref());
+        let file_base_instructions =
+            Self::get_base_instructions(experimental_instructions_path, &resolved_cwd)?;
         let base_instructions = base_instructions.or(file_base_instructions);
 
         let config = Self {
             model,
+            model_family,
             model_context_window,
             model_max_output_tokens,
             model_provider_id,
@@ -490,6 +624,7 @@ impl Config {
             disable_response_storage: config_profile
                 .disable_response_storage
                 .or(cfg.disable_response_storage)
+                .or(disable_response_storage)
                 .unwrap_or(false),
             notify: cfg.notify,
             user_instructions,
@@ -504,6 +639,10 @@ impl Config {
             codex_linux_sandbox_exe,
 
             hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(false),
+            show_raw_agent_reasoning: cfg
+                .show_raw_agent_reasoning
+                .or(show_raw_agent_reasoning)
+                .unwrap_or(false),
             model_reasoning_effort: config_profile
                 .model_reasoning_effort
                 .or(cfg.model_reasoning_effort)
@@ -513,16 +652,14 @@ impl Config {
                 .or(cfg.model_reasoning_summary)
                 .unwrap_or_default(),
 
-            model_supports_reasoning_summaries: cfg
-                .model_supports_reasoning_summaries
-                .unwrap_or(false),
-
             chatgpt_base_url: config_profile
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
 
             experimental_resume,
+            include_plan_tool: include_plan_tool.unwrap_or(false),
+            internal_originator: cfg.internal_originator,
         };
         Ok(config)
     }
@@ -533,7 +670,7 @@ impl Config {
             None => return None,
         };
 
-        p.push("instructions.md");
+        p.push("AGENTS.md");
         std::fs::read_to_string(&p).ok().and_then(|s| {
             let s = s.trim();
             if s.is_empty() {
@@ -703,8 +840,10 @@ sandbox_mode = "workspace-write"
 
 [sandbox_workspace_write]
 writable_roots = [
-    "/tmp",
+    "/my/workspace",
 ]
+exclude_tmpdir_env_var = true
+exclude_slash_tmp = true
 "#;
 
         let sandbox_workspace_write_cfg = toml::from_str::<ConfigToml>(sandbox_workspace_write)
@@ -712,8 +851,10 @@ writable_roots = [
         let sandbox_mode_override = None;
         assert_eq!(
             SandboxPolicy::WorkspaceWrite {
-                writable_roots: vec![PathBuf::from("/tmp")],
+                writable_roots: vec![PathBuf::from("/my/workspace")],
                 network_access: false,
+                exclude_tmpdir_env_var: true,
+                exclude_slash_tmp: true,
             },
             sandbox_workspace_write_cfg.derive_sandbox_policy(sandbox_mode_override)
         );
@@ -789,7 +930,7 @@ disable_response_storage = true
 
         let openai_chat_completions_provider = ModelProviderInfo {
             name: "OpenAI using Chat Completions".to_string(),
-            base_url: "https://api.openai.com/v1".to_string(),
+            base_url: Some("https://api.openai.com/v1".to_string()),
             env_key: Some("OPENAI_API_KEY".to_string()),
             wire_api: crate::WireApi::Chat,
             env_key_instructions: None,
@@ -799,6 +940,7 @@ disable_response_storage = true
             request_max_retries: Some(4),
             stream_max_retries: Some(10),
             stream_idle_timeout_ms: Some(300_000),
+            requires_openai_auth: false,
         };
         let model_provider_map = {
             let mut model_provider_map = built_in_model_providers();
@@ -829,7 +971,7 @@ disable_response_storage = true
     ///
     /// 1. custom command-line argument, e.g. `--model o3`
     /// 2. as part of a profile, where the `--profile` is specified via a CLI
-    ///    (or in the config file itelf)
+    ///    (or in the config file itself)
     /// 3. as an entry in `config.toml`, e.g. `model = "o3"`
     /// 4. the default value for a required field defined in code, e.g.,
     ///    `crate::flags::OPENAI_DEFAULT_MODEL`
@@ -853,6 +995,7 @@ disable_response_storage = true
         assert_eq!(
             Config {
                 model: "o3".to_string(),
+                model_family: find_family_for_model("o3").expect("known model slug"),
                 model_context_window: Some(200_000),
                 model_max_output_tokens: Some(100_000),
                 model_provider_id: "openai".to_string(),
@@ -873,12 +1016,14 @@ disable_response_storage = true
                 tui: Tui::default(),
                 codex_linux_sandbox_exe: None,
                 hide_agent_reasoning: false,
+                show_raw_agent_reasoning: false,
                 model_reasoning_effort: ReasoningEffort::High,
                 model_reasoning_summary: ReasoningSummary::Detailed,
-                model_supports_reasoning_summaries: false,
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 experimental_resume: None,
                 base_instructions: None,
+                include_plan_tool: false,
+                internal_originator: None,
             },
             o3_profile_config
         );
@@ -901,6 +1046,7 @@ disable_response_storage = true
         )?;
         let expected_gpt3_profile_config = Config {
             model: "gpt-3.5-turbo".to_string(),
+            model_family: find_family_for_model("gpt-3.5-turbo").expect("known model slug"),
             model_context_window: Some(16_385),
             model_max_output_tokens: Some(4_096),
             model_provider_id: "openai-chat-completions".to_string(),
@@ -921,12 +1067,14 @@ disable_response_storage = true
             tui: Tui::default(),
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
+            show_raw_agent_reasoning: false,
             model_reasoning_effort: ReasoningEffort::default(),
             model_reasoning_summary: ReasoningSummary::default(),
-            model_supports_reasoning_summaries: false,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             experimental_resume: None,
             base_instructions: None,
+            include_plan_tool: false,
+            internal_originator: None,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -964,6 +1112,7 @@ disable_response_storage = true
         )?;
         let expected_zdr_profile_config = Config {
             model: "o3".to_string(),
+            model_family: find_family_for_model("o3").expect("known model slug"),
             model_context_window: Some(200_000),
             model_max_output_tokens: Some(100_000),
             model_provider_id: "openai".to_string(),
@@ -984,12 +1133,14 @@ disable_response_storage = true
             tui: Tui::default(),
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
+            show_raw_agent_reasoning: false,
             model_reasoning_effort: ReasoningEffort::default(),
             model_reasoning_summary: ReasoningSummary::default(),
-            model_supports_reasoning_summaries: false,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             experimental_resume: None,
             base_instructions: None,
+            include_plan_tool: false,
+            internal_originator: None,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);

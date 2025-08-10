@@ -3,6 +3,7 @@ use codex_file_search::FileMatch;
 use crossterm::event::KeyEvent;
 use ratatui::text::Line;
 
+use crate::app::ChatWidgetArgs;
 use crate::slash_command::SlashCommand;
 
 #[allow(clippy::large_enum_variant)]
@@ -19,10 +20,6 @@ pub(crate) enum AppEvent {
 
     /// Text pasted from the terminal clipboard.
     Paste(String),
-
-    /// Scroll event with a value representing the "scroll delta" as the net
-    /// scroll up/down events within a short time window.
-    Scroll(i32),
 
     /// Request to exit the application gracefully.
     ExitRequest,
@@ -52,4 +49,8 @@ pub(crate) enum AppEvent {
     },
 
     InsertHistory(Vec<Line<'static>>),
+
+    /// Onboarding: result of login_with_chatgpt.
+    OnboardingAuthComplete(Result<(), String>),
+    OnboardingComplete(ChatWidgetArgs),
 }

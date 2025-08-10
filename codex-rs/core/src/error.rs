@@ -62,6 +62,17 @@ pub enum CodexErr {
     #[error("unexpected status {0}: {1}")]
     UnexpectedStatus(StatusCode, String),
 
+    #[error("{0}")]
+    UsageLimitReached(UsageLimitReachedError),
+
+    #[error(
+        "To use Codex with your ChatGPT plan, upgrade to Plus: https://openai.com/chatgpt/pricing."
+    )]
+    UsageNotIncluded,
+
+    #[error("We're currently experiencing high demand, which may cause temporary errors.")]
+    InternalServerError,
+
     /// Retry limit exceeded.
     #[error("exceeded retry limit, last status: {0}")]
     RetryLimit(StatusCode),
@@ -105,6 +116,30 @@ pub enum CodexErr {
 }
 
 #[derive(Debug)]
+pub struct UsageLimitReachedError {
+    pub plan_type: Option<String>,
+}
+
+impl std::fmt::Display for UsageLimitReachedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(plan_type) = &self.plan_type
+            && plan_type == "plus"
+        {
+            write!(
+                f,
+                "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing), or wait for limits to reset (every 5h and every week.)."
+            )?;
+        } else {
+            write!(
+                f,
+                "You've hit your usage limit. Limits reset every 5h and every week."
+            )?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
 pub struct EnvVarError {
     /// Name of the environment variable that is missing.
     pub var: String,
@@ -130,5 +165,48 @@ impl CodexErr {
     /// `anyhow::Error::downcast_ref` but works directly on our concrete enum.
     pub fn downcast_ref<T: std::any::Any>(&self) -> Option<&T> {
         (self as &dyn std::any::Any).downcast_ref::<T>()
+    }
+}
+
+pub fn get_error_message_ui(e: &CodexErr) -> String {
+    match e {
+        CodexErr::Sandbox(SandboxErr::Denied(_, _, stderr)) => stderr.to_string(),
+        _ => e.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn usage_limit_reached_error_formats_plus_plan() {
+        let err = UsageLimitReachedError {
+            plan_type: Some("plus".to_string()),
+        };
+        assert_eq!(
+            err.to_string(),
+            "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing), or wait for limits to reset (every 5h and every week.)."
+        );
+    }
+
+    #[test]
+    fn usage_limit_reached_error_formats_default_when_none() {
+        let err = UsageLimitReachedError { plan_type: None };
+        assert_eq!(
+            err.to_string(),
+            "You've hit your usage limit. Limits reset every 5h and every week."
+        );
+    }
+
+    #[test]
+    fn usage_limit_reached_error_formats_default_for_other_plans() {
+        let err = UsageLimitReachedError {
+            plan_type: Some("pro".to_string()),
+        };
+        assert_eq!(
+            err.to_string(),
+            "You've hit your usage limit. Limits reset every 5h and every week."
+        );
     }
 }

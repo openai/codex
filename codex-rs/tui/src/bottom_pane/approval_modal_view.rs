@@ -57,6 +57,10 @@ impl<'a> BottomPaneView<'a> for ApprovalModalView<'a> {
         self.current.is_complete() && self.queue.is_empty()
     }
 
+    fn desired_height(&self, width: u16) -> u16 {
+        self.current.desired_height(width)
+    }
+
     fn render(&self, area: Rect, buf: &mut Buffer) {
         (&self.current).render_ref(area, buf);
     }
@@ -95,6 +99,7 @@ mod tests {
         let mut pane = BottomPane::new(super::super::BottomPaneParams {
             app_event_tx: AppEventSender::new(tx_raw2),
             has_input_focus: true,
+            enhanced_keys_supported: false,
         });
         assert_eq!(CancellationEvent::Handled, view.on_ctrl_c(&mut pane));
         assert!(view.queue.is_empty());

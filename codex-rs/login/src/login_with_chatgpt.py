@@ -41,9 +41,17 @@ from typing import Any, Dict  # for type hints
 REQUIRED_PORT = 1455
 URL_BASE = f"http://localhost:{REQUIRED_PORT}"
 DEFAULT_ISSUER = "https://auth.openai.com"
-DEFAULT_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 
 EXIT_CODE_WHEN_ADDRESS_ALREADY_IN_USE = 13
+
+CA_CONTEXT = None
+try:
+    import ssl
+    import certifi as _certifi
+
+    CA_CONTEXT = ssl.create_default_context(cafile=_certifi.where())
+except Exception:
+    pass
 
 
 @dataclass
@@ -58,7 +66,7 @@ class TokenData:
 class AuthBundle:
     """Aggregates authentication data produced after successful OAuth flow."""
 
-    api_key: str
+    api_key: str | None
     token_data: TokenData
     last_refresh: str
 
@@ -78,12 +86,18 @@ def main() -> None:
         eprint("ERROR: CODEX_HOME environment variable is not set")
         sys.exit(1)
 
+    client_id = os.getenv("CODEX_CLIENT_ID")
+    if not client_id:
+        eprint("ERROR: CODEX_CLIENT_ID environment variable is not set")
+        sys.exit(1)
+
     # Spawn server.
     try:
         httpd = _ApiKeyHTTPServer(
             ("127.0.0.1", REQUIRED_PORT),
             _ApiKeyHTTPHandler,
             codex_home=codex_home,
+            client_id=client_id,
             verbose=args.verbose,
         )
     except OSError as e:
@@ -105,7 +119,7 @@ def main() -> None:
                 eprint(f"Failed to open browser: {e}")
 
         eprint(
-            f"If your browser did not open, navigate to this URL to authenticate:\n\n{auth_url}"
+            f". If your browser did not open, navigate to this URL to authenticate: \n\n{auth_url}"
         )
 
         # Run the server in the main thread until `shutdown()` is called by the
@@ -157,7 +171,7 @@ class _ApiKeyHTTPHandler(http.server.BaseHTTPRequestHandler):
                 return
 
             try:
-                auth_bundle, success_url = self._exchange_code_for_api_key(code)
+                auth_bundle, success_url = self._exchange_code(code)
             except Exception as exc:  # noqa: BLE001 – propagate to client
                 self.send_error(500, f"Token exchange failed: {exc}")
                 return
@@ -211,68 +225,22 @@ class _ApiKeyHTTPHandler(http.server.BaseHTTPRequestHandler):
         if getattr(self.server, "verbose", False):  # type: ignore[attr-defined]
             super().log_message(fmt, *args)
 
-    def _exchange_code_for_api_key(self, code: str) -> tuple[AuthBundle, str]:
-        """Perform token + token-exchange to obtain an OpenAI API key.
+    def _obtain_api_key(
+        self,
+        token_claims: Dict[str, Any],
+        access_claims: Dict[str, Any],
+        token_data: TokenData,
+    ) -> tuple[str | None, str | None]:
+        """Obtain an API key from the auth service.
 
-        Returns (AuthBundle, success_url).
+        Returns (api_key, success_url) if successful, None otherwise.
         """
 
-        token_endpoint = f"{self.server.issuer}/oauth/token"
-
-        # 1. Authorization-code -> (id_token, access_token, refresh_token)
-        data = urllib.parse.urlencode(
-            {
-                "grant_type": "authorization_code",
-                "code": code,
-                "redirect_uri": self.server.redirect_uri,
-                "client_id": self.server.client_id,
-                "code_verifier": self.server.pkce.code_verifier,
-            }
-        ).encode()
-
-        token_data: TokenData
-
-        with urllib.request.urlopen(
-            urllib.request.Request(
-                token_endpoint,
-                data=data,
-                method="POST",
-                headers={"Content-Type": "application/x-www-form-urlencoded"},
-            )
-        ) as resp:
-            payload = json.loads(resp.read().decode())
-            
-            # Extract chatgpt_account_id from id_token
-            id_token_parts = payload["id_token"].split(".")
-            if len(id_token_parts) != 3:
-                raise ValueError("Invalid ID token")
-            id_token_claims = _decode_jwt_segment(id_token_parts[1])
-            auth_claims = id_token_claims.get("https://api.openai.com/auth", {})
-            chatgpt_account_id = auth_claims.get("chatgpt_account_id", "")
-            
-            token_data = TokenData(
-                id_token=payload["id_token"],
-                access_token=payload["access_token"],
-                refresh_token=payload["refresh_token"],
-                account_id=chatgpt_account_id,
-            )
-
-        access_token_parts = token_data.access_token.split(".")
-        if len(access_token_parts) != 3:
-            raise ValueError("Invalid access token")
-
-        access_token_claims = _decode_jwt_segment(access_token_parts[1])
-
-        token_claims = id_token_claims.get("https://api.openai.com/auth", {})
-        access_claims = access_token_claims.get("https://api.openai.com/auth", {})
-
         org_id = token_claims.get("organization_id")
-        if not org_id:
-            raise ValueError("Missing organization in id_token claims")
-
         project_id = token_claims.get("project_id")
-        if not project_id:
-            raise ValueError("Missing project in id_token claims")
+
+        if not org_id or not project_id:
+            return (None, None)
 
         random_id = secrets.token_hex(6)
 
@@ -292,11 +260,12 @@ class _ApiKeyHTTPHandler(http.server.BaseHTTPRequestHandler):
         exchanged_access_token: str
         with urllib.request.urlopen(
             urllib.request.Request(
-                token_endpoint,
+                self.server.token_endpoint,
                 data=exchange_data,
                 method="POST",
                 headers={"Content-Type": "application/x-www-form-urlencoded"},
-            )
+            ),
+            context=CA_CONTEXT,
         ) as resp:
             exchange_payload = json.loads(resp.read().decode())
             exchanged_access_token = exchange_payload["access_token"]
@@ -340,6 +309,66 @@ class _ApiKeyHTTPHandler(http.server.BaseHTTPRequestHandler):
         except Exception as exc:  # pragma: no cover – best-effort only
             eprint(f"Unable to redeem ChatGPT subscriber API credits: {exc}")
 
+        return (exchanged_access_token, success_url)
+
+    def _exchange_code(self, code: str) -> tuple[AuthBundle, str]:
+        """Perform token + token-exchange to obtain an OpenAI API key.
+
+        Returns (AuthBundle, success_url).
+        """
+
+        # 1. Authorization-code -> (id_token, access_token, refresh_token)
+        data = urllib.parse.urlencode(
+            {
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": self.server.redirect_uri,
+                "client_id": self.server.client_id,
+                "code_verifier": self.server.pkce.code_verifier,
+            }
+        ).encode()
+
+        token_data: TokenData
+
+        with urllib.request.urlopen(
+            urllib.request.Request(
+                self.server.token_endpoint,
+                data=data,
+                method="POST",
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            ),
+            context=CA_CONTEXT,
+        ) as resp:
+            payload = json.loads(resp.read().decode())
+
+            # Extract chatgpt_account_id from id_token
+            id_token_parts = payload["id_token"].split(".")
+            if len(id_token_parts) != 3:
+                raise ValueError("Invalid ID token")
+            id_token_claims = _decode_jwt_segment(id_token_parts[1])
+            auth_claims = id_token_claims.get("https://api.openai.com/auth", {})
+            chatgpt_account_id = auth_claims.get("chatgpt_account_id", "")
+
+            token_data = TokenData(
+                id_token=payload["id_token"],
+                access_token=payload["access_token"],
+                refresh_token=payload["refresh_token"],
+                account_id=chatgpt_account_id,
+            )
+
+        access_token_parts = token_data.access_token.split(".")
+        if len(access_token_parts) != 3:
+            raise ValueError("Invalid access token")
+
+        access_token_claims = _decode_jwt_segment(access_token_parts[1])
+
+        token_claims = id_token_claims.get("https://api.openai.com/auth", {})
+        access_claims = access_token_claims.get("https://api.openai.com/auth", {})
+
+        exchanged_access_token, success_url = self._obtain_api_key(
+            token_claims, access_claims, token_data
+        )
+
         # Persist refresh_token/id_token for future use (redeem credits etc.)
         last_refresh_str = (
             datetime.datetime.now(datetime.timezone.utc)
@@ -353,7 +382,7 @@ class _ApiKeyHTTPHandler(http.server.BaseHTTPRequestHandler):
             last_refresh=last_refresh_str,
         )
 
-        return (auth_bundle, success_url)
+        return (auth_bundle, success_url or f"{URL_BASE}/success")
 
     def request_shutdown(self) -> None:
         # shutdown() must be invoked from another thread to avoid
@@ -413,6 +442,7 @@ class _ApiKeyHTTPServer(http.server.HTTPServer):
         request_handler_class: type[http.server.BaseHTTPRequestHandler],
         *,
         codex_home: str,
+        client_id: str,
         verbose: bool = False,
     ) -> None:
         super().__init__(server_address, request_handler_class, bind_and_activate=True)
@@ -422,7 +452,8 @@ class _ApiKeyHTTPServer(http.server.HTTPServer):
         self.verbose: bool = verbose
 
         self.issuer: str = DEFAULT_ISSUER
-        self.client_id: str = DEFAULT_CLIENT_ID
+        self.token_endpoint: str = f"{self.issuer}/oauth/token"
+        self.client_id: str = client_id
         port = server_address[1]
         self.redirect_uri: str = f"http://localhost:{port}/auth/callback"
         self.pkce: PkceCodes = _generate_pkce()
@@ -438,6 +469,7 @@ class _ApiKeyHTTPServer(http.server.HTTPServer):
             "code_challenge": self.pkce.code_challenge,
             "code_challenge_method": "S256",
             "id_token_add_organizations": "true",
+            "codex_cli_simplified_flow": "true",
             "state": self.state,
         }
         return f"{self.issuer}/oauth/authorize?" + urllib.parse.urlencode(params)
@@ -485,7 +517,7 @@ def maybe_redeem_credits(
                 headers={"Content-Type": "application/json"},
             )
 
-            with urllib.request.urlopen(req) as resp:
+            with urllib.request.urlopen(req, context=CA_CONTEXT) as resp:
                 refresh_data = json.loads(resp.read().decode())
                 new_id_token = refresh_data.get("id_token")
                 new_id_claims = parse_id_token_claims(new_id_token or "")
@@ -575,14 +607,14 @@ def maybe_redeem_credits(
             headers={"Content-Type": "application/json"},
         )
 
-        with urllib.request.urlopen(req) as resp:
+        with urllib.request.urlopen(req, context=CA_CONTEXT) as resp:
             redeem_data = json.loads(resp.read().decode())
 
         granted = redeem_data.get("granted_chatgpt_subscriber_api_credits", 0)
         if granted and granted > 0:
             eprint(
-                f"""Thanks for being a ChatGPT {'Plus' if plan_type=='plus' else 'Pro'} subscriber!
-If you haven't already redeemed, you should receive {'$5' if plan_type=='plus' else '$50'} in API credits.
+                f"""Thanks for being a ChatGPT {"Plus" if plan_type == "plus" else "Pro"} subscriber!
+If you haven't already redeemed, you should receive {"$5" if plan_type == "plus" else "$50"} in API credits.
 
 Credits: https://platform.openai.com/settings/organization/billing/credit-grants
 More info: https://help.openai.com/en/articles/11381614""",
@@ -666,6 +698,7 @@ LOGIN_SUCCESS_HTML = """<!DOCTYPE html>
         justify-content: center;
         position: relative;
         background: white;
+
         font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
       }
       .inner-container {
@@ -683,6 +716,7 @@ LOGIN_SUCCESS_HTML = """<!DOCTYPE html>
         align-items: center;
         gap: 20px;
         display: flex;
+        margin-top: 15vh;
       }
       .svg-wrapper {
         position: relative;
@@ -690,9 +724,9 @@ LOGIN_SUCCESS_HTML = """<!DOCTYPE html>
       .title {
         text-align: center;
         color: var(--text-primary, #0D0D0D);
-        font-size: 28px;
+        font-size: 32px;
         font-weight: 400;
-        line-height: 36.40px;
+        line-height: 40px;
         word-wrap: break-word;
       }
       .setup-box {
@@ -765,16 +799,26 @@ LOGIN_SUCCESS_HTML = """<!DOCTYPE html>
         word-wrap: break-word;
         text-decoration: none;
       }
+      .logo {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 4rem;
+        height: 4rem;
+        border-radius: 16px;
+        border: .5px solid rgba(0, 0, 0, 0.1);
+        box-shadow: rgba(0, 0, 0, 0.1) 0px 4px 16px 0px;
+        box-sizing: border-box;
+        background-color: rgb(255, 255, 255);
+      }
     </style>
   </head>
   <body>
     <div class="container">
       <div class="inner-container">
         <div class="content">
-          <div data-svg-wrapper class="svg-wrapper">
-            <svg width="56" height="56" viewBox="0 0 56 56" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M4.6665 28.0003C4.6665 15.1137 15.1132 4.66699 27.9998 4.66699C40.8865 4.66699 51.3332 15.1137 51.3332 28.0003C51.3332 40.887 40.8865 51.3337 27.9998 51.3337C15.1132 51.3337 4.6665 40.887 4.6665 28.0003ZM37.5093 18.5088C36.4554 17.7672 34.9999 18.0203 34.2583 19.0742L24.8508 32.4427L20.9764 28.1808C20.1095 27.2272 18.6338 27.1569 17.6803 28.0238C16.7267 28.8906 16.6565 30.3664 17.5233 31.3199L23.3566 37.7366C23.833 38.2606 24.5216 38.5399 25.2284 38.4958C25.9353 38.4517 26.5838 38.089 26.9914 37.5098L38.0747 21.7598C38.8163 20.7059 38.5632 19.2504 37.5093 18.5088Z" fill="var(--green-400, #04B84C)"/>
-            </svg>
+          <div class="logo">
+            <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" fill="none" viewBox="0 0 32 32"><path stroke="#000" stroke-linecap="round" stroke-width="2.484" d="M22.356 19.797H17.17M9.662 12.29l1.979 3.576a.511.511 0 0 1-.005.504l-1.974 3.409M30.758 16c0 8.15-6.607 14.758-14.758 14.758-8.15 0-14.758-6.607-14.758-14.758C1.242 7.85 7.85 1.242 16 1.242c8.15 0 14.758 6.608 14.758 14.758Z"></path></svg>
           </div>
           <div class="title">Signed in to Codex CLI</div>
         </div>

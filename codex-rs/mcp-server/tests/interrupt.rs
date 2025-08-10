@@ -3,7 +3,7 @@
 
 use std::path::Path;
 
-use codex_core::exec::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_mcp_server::CodexToolCallParam;
 use mcp_types::JSONRPCResponse;
 use mcp_types::RequestId;
@@ -81,6 +81,7 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
             sandbox: None,
             config: None,
             base_instructions: None,
+            include_plan_tool: None,
         })
         .await?;
 

@@ -3,9 +3,9 @@ use std::env;
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_core::exec::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::ReviewDecision;
+use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_mcp_server::CodexToolCallParam;
 use codex_mcp_server::ExecApprovalElicitRequestParams;
 use codex_mcp_server::ExecApprovalResponse;
@@ -89,14 +89,18 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
     // This is the first request from the server, so the id should be 0 given
     // how things are currently implemented.
     let elicitation_request_id = RequestId::Integer(0);
+    let params = serde_json::from_value::<ExecApprovalElicitRequestParams>(
+        elicitation_request
+            .params
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("elicitation_request.params must be set"))?,
+    )?;
     let expected_elicitation_request = create_expected_elicitation_request(
         elicitation_request_id.clone(),
         shell_command.clone(),
         workdir_for_shell_function_call.path(),
         codex_request_id.to_string(),
-        // Internal Codex id: empirically it is 1, but this is
-        // admittedly an internal detail that could change.
-        "1".to_string(),
+        params.codex_event_id.clone(),
     )?;
     assert_eq!(expected_elicitation_request, elicitation_request);
 

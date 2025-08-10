@@ -44,11 +44,18 @@ async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
         cwd: std::env::current_dir().expect("cwd should exist"),
         timeout_ms: Some(timeout_ms),
         env: create_env_from_core_vars(),
+        with_escalated_permissions: None,
+        justification: None,
     };
 
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: writable_roots.to_vec(),
         network_access: false,
+        // Exclude tmp-related folders from writable roots because we need a
+        // folder that is writable by tests but that we intentionally disallow
+        // writing to in the sandbox.
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
     };
     let sandbox_program = env!("CARGO_BIN_EXE_codex-linux-sandbox");
     let codex_linux_sandbox_exe = Some(PathBuf::from(sandbox_program));
@@ -59,6 +66,7 @@ async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
         ctrl_c,
         &sandbox_policy,
         &codex_linux_sandbox_exe,
+        None,
     )
     .await
     .unwrap();
@@ -137,6 +145,8 @@ async fn assert_network_blocked(cmd: &[&str]) {
         // do not stall the suite.
         timeout_ms: Some(NETWORK_TIMEOUT_MS),
         env: create_env_from_core_vars(),
+        with_escalated_permissions: None,
+        justification: None,
     };
 
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
@@ -149,6 +159,7 @@ async fn assert_network_blocked(cmd: &[&str]) {
         ctrl_c,
         &sandbox_policy,
         &codex_linux_sandbox_exe,
+        None,
     )
     .await;
 

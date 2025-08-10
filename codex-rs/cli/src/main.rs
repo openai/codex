@@ -7,7 +7,10 @@ use codex_chatgpt::apply_command::ApplyCommand;
 use codex_chatgpt::apply_command::run_apply_command;
 use codex_cli::LandlockCommand;
 use codex_cli::SeatbeltCommand;
+use codex_cli::login::run_login_status;
+use codex_cli::login::run_login_with_api_key;
 use codex_cli::login::run_login_with_chatgpt;
+use codex_cli::login::run_logout;
 use codex_cli::proto;
 use codex_common::CliConfigOverrides;
 use codex_exec::Cli as ExecCli;
@@ -43,8 +46,11 @@ enum Subcommand {
     #[clap(visible_alias = "e")]
     Exec(ExecCli),
 
-    /// Login with ChatGPT.
+    /// Manage login.
     Login(LoginCommand),
+
+    /// Remove stored authentication credentials.
+    Logout(LogoutCommand),
 
     /// Experimental: run Codex as an MCP server.
     Mcp,
@@ -90,6 +96,24 @@ enum DebugCommand {
 struct LoginCommand {
     #[clap(skip)]
     config_overrides: CliConfigOverrides,
+
+    #[arg(long = "api-key", value_name = "API_KEY")]
+    api_key: Option<String>,
+
+    #[command(subcommand)]
+    action: Option<LoginSubcommand>,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum LoginSubcommand {
+    /// Show login status.
+    Status,
+}
+
+#[derive(Debug, Parser)]
+struct LogoutCommand {
+    #[clap(skip)]
+    config_overrides: CliConfigOverrides,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -107,7 +131,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             let mut tui_cli = cli.interactive;
             prepend_config_flags(&mut tui_cli.config_overrides, cli.config_overrides);
             let usage = codex_tui::run_main(tui_cli, codex_linux_sandbox_exe).await?;
-            println!("{}", codex_core::protocol::FinalOutput::from(usage));
+            if !usage.is_zero() {
+                println!("{}", codex_core::protocol::FinalOutput::from(usage));
+            }
         }
         Some(Subcommand::Exec(mut exec_cli)) => {
             prepend_config_flags(&mut exec_cli.config_overrides, cli.config_overrides);
@@ -118,7 +144,22 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         }
         Some(Subcommand::Login(mut login_cli)) => {
             prepend_config_flags(&mut login_cli.config_overrides, cli.config_overrides);
-            run_login_with_chatgpt(login_cli.config_overrides).await;
+            match login_cli.action {
+                Some(LoginSubcommand::Status) => {
+                    run_login_status(login_cli.config_overrides).await;
+                }
+                None => {
+                    if let Some(api_key) = login_cli.api_key {
+                        run_login_with_api_key(login_cli.config_overrides, api_key).await;
+                    } else {
+                        run_login_with_chatgpt(login_cli.config_overrides).await;
+                    }
+                }
+            }
+        }
+        Some(Subcommand::Logout(mut logout_cli)) => {
+            prepend_config_flags(&mut logout_cli.config_overrides, cli.config_overrides);
+            run_logout(logout_cli.config_overrides).await;
         }
         Some(Subcommand::Proto(mut proto_cli)) => {
             prepend_config_flags(&mut proto_cli.config_overrides, cli.config_overrides);

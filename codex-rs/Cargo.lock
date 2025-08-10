@@ -661,7 +661,7 @@ dependencies = [
  "clap",
  "codex-core",
  "serde",
- "toml 0.9.2",
+ "toml 0.9.4",
 ]
 
 [[package]]
@@ -673,7 +673,9 @@ dependencies = [
  "async-channel",
  "base64 0.22.1",
  "bytes",
+ "chrono",
  "codex-apply-patch",
+ "codex-login",
  "codex-mcp-client",
  "core_test_support",
  "dirs",
@@ -693,9 +695,11 @@ dependencies = [
  "reqwest",
  "seccompiler",
  "serde",
+ "serde_bytes",
  "serde_json",
  "sha1",
  "shlex",
+ "similar",
  "strum_macros 0.27.2",
  "tempfile",
  "thiserror 2.0.12",
@@ -703,7 +707,8 @@ dependencies = [
  "tokio",
  "tokio-test",
  "tokio-util",
- "toml 0.9.2",
+ "toml 0.9.4",
+ "toml_edit 0.23.3",
  "tracing",
  "tree-sitter",
  "tree-sitter-bash",
@@ -725,6 +730,7 @@ dependencies = [
  "codex-arg0",
  "codex-common",
  "codex-core",
+ "codex-ollama",
  "owo-colors",
  "predicates",
  "serde_json",
@@ -787,10 +793,14 @@ dependencies = [
 name = "codex-login"
 version = "0.0.0"
 dependencies = [
+ "base64 0.22.1",
  "chrono",
+ "pretty_assertions",
  "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
+ "thiserror 2.0.12",
  "tokio",
 ]
 
@@ -822,13 +832,31 @@ dependencies = [
  "serde",
  "serde_json",
  "shlex",
+ "strum_macros 0.27.2",
  "tempfile",
  "tokio",
  "tokio-test",
- "toml 0.9.2",
+ "toml 0.9.4",
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "wiremock",
+]
+
+[[package]]
+name = "codex-ollama"
+version = "0.0.0"
+dependencies = [
+ "async-stream",
+ "bytes",
+ "codex-core",
+ "futures",
+ "reqwest",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml 0.9.4",
+ "tracing",
  "wiremock",
 ]
 
@@ -838,6 +866,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
+ "chrono",
  "clap",
  "codex-ansi-escape",
  "codex-arg0",
@@ -845,31 +874,38 @@ dependencies = [
  "codex-core",
  "codex-file-search",
  "codex-login",
+ "codex-ollama",
  "color-eyre",
  "crossterm",
+ "diffy",
  "image",
  "insta",
  "lazy_static",
  "mcp-types",
  "path-clean",
  "pretty_assertions",
+ "rand 0.8.5",
  "ratatui",
  "ratatui-image",
  "regex-lite",
+ "reqwest",
+ "serde",
  "serde_json",
  "shlex",
  "strum 0.27.2",
  "strum_macros 0.27.2",
+ "supports-color",
+ "textwrap 0.16.2",
  "tokio",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
  "tui-input",
  "tui-markdown",
- "tui-textarea",
  "unicode-segmentation",
  "unicode-width 0.1.14",
  "uuid",
+ "vt100",
 ]
 
 [[package]]
@@ -1223,6 +1259,15 @@ name = "difflib"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6184e33543162437515c2e2b48714794e37845ec9851711914eec9d308f6ebe8"
+
+[[package]]
+name = "diffy"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b545b8c50194bdd008283985ab0b31dba153cfd5b3066a92770634fbc0d7d291"
+dependencies = [
+ "nu-ansi-term 0.50.1",
+]
 
 [[package]]
 name = "digest"
@@ -1745,7 +1790,7 @@ version = "0.2.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cba6ae63eb948698e300f645f87c70f76630d505f23b8907cf1e193ee85048c1"
 dependencies = [
- "unicode-width 0.2.0",
+ "unicode-width 0.2.1",
 ]
 
 [[package]]
@@ -2006,7 +2051,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.0",
+ "socket2",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -2329,6 +2374,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "is_ci"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7655c9839580ee829dfacba1d1278c2b7883e50a277ff7541299489d6bdfdc45"
+
+[[package]]
 name = "is_terminal_polyfill"
 version = "1.70.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2639,6 +2690,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "codex-core",
  "codex-mcp-server",
  "mcp-types",
  "pretty_assertions",
@@ -2646,6 +2698,7 @@ dependencies = [
  "shlex",
  "tempfile",
  "tokio",
+ "uuid",
  "wiremock",
 ]
 
@@ -2791,6 +2844,15 @@ checksum = "77a8165726e8236064dbb45459242600304b42a5ea24ee2948e18e023bf7ba84"
 dependencies = [
  "overload",
  "winapi",
+]
+
+[[package]]
+name = "nu-ansi-term"
+version = "0.50.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d4a28e057d01f97e61255210fcff094d74ed0466038633e95017f5beb68e4399"
+dependencies = [
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -3212,7 +3274,7 @@ version = "3.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "edce586971a4dfaa28950c6f18ed55e0406c1ab88bbce2c6f6293a7aaba73d35"
 dependencies = [
- "toml_edit",
+ "toml_edit 0.22.27",
 ]
 
 [[package]]
@@ -3373,7 +3435,7 @@ dependencies = [
 [[package]]
 name = "ratatui"
 version = "0.29.0"
-source = "git+https://github.com/nornagon/ratatui?branch=nornagon-v0.29.0-patch#bca287ddc5d38fe088c79e2eda22422b96226f2e"
+source = "git+https://github.com/nornagon/ratatui?branch=nornagon-v0.29.0-patch#9b2ad1298408c45918ee9f8241a6f95498cdbed2"
 dependencies = [
  "bitflags 2.9.1",
  "cassowary",
@@ -3387,7 +3449,7 @@ dependencies = [
  "strum 0.26.3",
  "unicode-segmentation",
  "unicode-truncate",
- "unicode-width 0.2.0",
+ "unicode-width 0.2.1",
 ]
 
 [[package]]
@@ -3946,6 +4008,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_bytes"
+version = "0.11.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8437fd221bde2d4ca316d61b90e337e9e702b3820b87d63caa9ba6c02bd06d96"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "serde_derive"
 version = "1.0.219"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3969,9 +4040,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.141"
+version = "1.0.142"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "30b9eff21ebe718216c6ec64e1d9ac57087aad11efc64e32002bce4a0d4c03d3"
+checksum = "030fedb782600dcbd6f02d479bf0d817ac3bb40d644745b769d6a96bc3afc5a7"
 dependencies = [
  "indexmap 2.10.0",
  "itoa",
@@ -4155,14 +4226,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
-name = "socket2"
-version = "0.5.10"
+name = "smawk"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e22376abed350d73dd1cd119b57ffccad95b4e585a7cda43e286245ce23c0678"
-dependencies = [
- "libc",
- "windows-sys 0.52.0",
-]
+checksum = "b7c388c1b5e93756d0c740965c41e8822f866621d41acbdf6336a6a168f8840c"
 
 [[package]]
 name = "socket2"
@@ -4216,7 +4283,7 @@ dependencies = [
  "starlark_syntax",
  "static_assertions",
  "strsim 0.10.0",
- "textwrap",
+ "textwrap 0.11.0",
  "thiserror 1.0.69",
 ]
 
@@ -4351,6 +4418,15 @@ name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
+
+[[package]]
+name = "supports-color"
+version = "3.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c64fc7232dd8d2e4ac5ce4ef302b1d81e0b80d055b9d77c7c4f51f6aa4c867d6"
+dependencies = [
+ "is_ci",
+]
 
 [[package]]
 name = "syn"
@@ -4506,6 +4582,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "textwrap"
+version = "0.16.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c13547615a44dc9c452a8a534638acdf07120d4b6847c8178705da06306a3057"
+dependencies = [
+ "smawk",
+ "unicode-linebreak",
+ "unicode-width 0.2.1",
+]
+
+[[package]]
 name = "thiserror"
 version = "1.0.69"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4619,9 +4706,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.46.1"
+version = "1.47.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0cc3a2344dafbe23a245241fe8b09735b521110d30fcefbbd5feb1797ca35d17"
+checksum = "89e49afdadebb872d3145a5638b59eb0691ea23e46ca484037cfab3b76b95038"
 dependencies = [
  "backtrace",
  "bytes",
@@ -4632,9 +4719,9 @@ dependencies = [
  "pin-project-lite",
  "signal-hook-registry",
  "slab",
- "socket2 0.5.10",
+ "socket2",
  "tokio-macros",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4714,14 +4801,14 @@ dependencies = [
  "serde",
  "serde_spanned 0.6.9",
  "toml_datetime 0.6.11",
- "toml_edit",
+ "toml_edit 0.22.27",
 ]
 
 [[package]]
 name = "toml"
-version = "0.9.2"
+version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed0aee96c12fa71097902e0bb061a5e1ebd766a6636bb605ba401c45c1650eac"
+checksum = "41ae868b5a0f67631c14589f7e250c1ea2c574ee5ba21c6c8dd4b1485705a5a1"
 dependencies = [
  "indexmap 2.10.0",
  "serde",
@@ -4764,10 +4851,23 @@ dependencies = [
 ]
 
 [[package]]
-name = "toml_parser"
-version = "1.0.1"
+name = "toml_edit"
+version = "0.23.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97200572db069e74c512a14117b296ba0a80a30123fbbb5aa1f4a348f639ca30"
+checksum = "17d3b47e6b7a040216ae5302712c94d1cf88c95b47efa80e2c59ce96c878267e"
+dependencies = [
+ "indexmap 2.10.0",
+ "toml_datetime 0.7.0",
+ "toml_parser",
+ "toml_writer",
+ "winnow",
+]
+
+[[package]]
+name = "toml_parser"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b551886f449aa90d4fe2bdaa9f4a2577ad2dde302c61ecf262d80b116db95c10"
 dependencies = [
  "winnow",
 ]
@@ -4896,7 +4996,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e8189decb5ac0fa7bc8b96b7cb9b2701d60d48805aca84a238004d665fcc4008"
 dependencies = [
  "matchers",
- "nu-ansi-term",
+ "nu-ansi-term 0.46.0",
  "once_cell",
  "regex",
  "sharded-slab",
@@ -4950,7 +5050,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "911e93158bf80bbc94bad533b2b16e3d711e1132d69a6a6980c3920a63422c19"
 dependencies = [
  "ratatui",
- "unicode-width 0.2.0",
+ "unicode-width 0.2.1",
 ]
 
 [[package]]
@@ -4970,17 +5070,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tui-textarea"
-version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0a5318dd619ed73c52a9417ad19046724effc1287fb75cdcc4eca1d6ac1acbae"
-dependencies = [
- "crossterm",
- "ratatui",
- "unicode-width 0.2.0",
-]
-
-[[package]]
 name = "typenum"
 version = "1.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4997,6 +5086,12 @@ name = "unicode-ident"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5a5f39404a5da50712a4c1eecf25e90dd62b613502b7e925fd4e4d19b5c96512"
+
+[[package]]
+name = "unicode-linebreak"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b09c83c3c29d37506a3e260c08c03743a6bb66a9cd432c6934ab501a190571f"
 
 [[package]]
 name = "unicode-segmentation"
@@ -5023,9 +5118,9 @@ checksum = "7dd6e30e90baa6f72411720665d41d89b9a3d039dc45b8faea1ddd07f617f6af"
 
 [[package]]
 name = "unicode-width"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1fc81956842c57dac11422a97c3b8195a1ff727f06e85c84ed2e8aa277c9a0fd"
+checksum = "4a1a07cc7db3810833284e8d372ccdc6da29741639ecc70c9ec107df0fa6154c"
 
 [[package]]
 name = "unicode-xid"
@@ -5109,6 +5204,27 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "vt100"
+version = "0.16.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "054ff75fb8fa83e609e685106df4faeffdf3a735d3c74ebce97ec557d5d36fd9"
+dependencies = [
+ "itoa",
+ "unicode-width 0.2.1",
+ "vte",
+]
+
+[[package]]
+name = "vte"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5924018406ce0063cd67f8e008104968b74b563ee1b85dde3ed1f7cb87d3dbd"
+dependencies = [
+ "arrayvec",
+ "memchr",
+]
 
 [[package]]
 name = "wait-timeout"

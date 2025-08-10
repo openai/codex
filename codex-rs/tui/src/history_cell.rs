@@ -1,21 +1,25 @@
-use crate::cell_widget::CellWidget;
-use crate::exec_command::escape_command;
-use crate::markdown::append_markdown;
+use crate::exec_command::relativize_to_home;
+use crate::exec_command::strip_bash_lc_and_escape;
+use crate::slash_command::SlashCommand;
 use crate::text_block::TextBlock;
 use crate::text_formatting::format_and_truncate_tool_result;
 use base64::Engine;
 use codex_ansi_escape::ansi_escape_line;
+use codex_common::create_config_summary_entries;
 use codex_common::elapsed::format_duration;
-use codex_common::summarize_sandbox_policy;
-use codex_core::WireApi;
 use codex_core::config::Config;
-use codex_core::model_supports_reasoning_summaries;
+use codex_core::plan_tool::PlanItemArg;
+use codex_core::plan_tool::StepStatus;
+use codex_core::plan_tool::UpdatePlanArgs;
 use codex_core::protocol::FileChange;
+use codex_core::protocol::McpInvocation;
+use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionConfiguredEvent;
+use codex_core::protocol::TokenUsage;
+use codex_login::get_auth_file;
+use codex_login::try_read_auth_json;
 use image::DynamicImage;
-use image::GenericImageView;
 use image::ImageReader;
-use lazy_static::lazy_static;
 use mcp_types::EmbeddedResourceResource;
 use mcp_types::ResourceLink;
 use ratatui::prelude::*;
@@ -24,26 +28,45 @@ use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Line as RtLine;
 use ratatui::text::Span as RtSpan;
-use ratatui_image::Image as TuiImage;
-use ratatui_image::Resize as ImgResize;
-use ratatui_image::picker::ProtocolType;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::WidgetRef;
+use ratatui::widgets::Wrap;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::time::Duration;
-use std::time::Instant;
 use tracing::error;
 
 pub(crate) struct CommandOutput {
     pub(crate) exit_code: i32,
     pub(crate) stdout: String,
     pub(crate) stderr: String,
-    pub(crate) duration: Duration,
+}
+
+struct FileSummary {
+    display_path: String,
+    added: usize,
+    removed: usize,
 }
 
 pub(crate) enum PatchEventType {
     ApprovalRequest,
     ApplyBegin { auto_approved: bool },
+}
+
+fn span_to_static(span: &Span) -> Span<'static> {
+    Span {
+        style: span.style,
+        content: std::borrow::Cow::Owned(span.content.clone().into_owned()),
+    }
+}
+
+fn line_to_static(line: &Line) -> Line<'static> {
+    Line {
+        style: line.style,
+        alignment: line.alignment,
+        spans: line.spans.iter().map(span_to_static).collect(),
+    }
 }
 
 /// Represents an event to display in the conversation history. Returns its
@@ -56,32 +79,15 @@ pub(crate) enum HistoryCell {
     /// Message from the user.
     UserPrompt { view: TextBlock },
 
-    /// Message from the agent.
-    AgentMessage { view: TextBlock },
-
-    /// Reasoning event from the agent.
-    AgentReasoning { view: TextBlock },
-
+    // AgentMessage and AgentReasoning variants were unused and have been removed.
     /// An exec tool call that has not finished yet.
-    ActiveExecCommand {
-        call_id: String,
-        /// The shell command, escaped and formatted.
-        command: String,
-        start: Instant,
-        view: TextBlock,
-    },
+    ActiveExecCommand { view: TextBlock },
 
     /// Completed exec tool call.
     CompletedExecCommand { view: TextBlock },
 
     /// An MCP tool call that has not finished yet.
-    ActiveMcpToolCall {
-        call_id: String,
-        /// Formatted line that shows the command name and arguments
-        invocation: Line<'static>,
-        start: Instant,
-        view: TextBlock,
-    },
+    ActiveMcpToolCall { view: TextBlock },
 
     /// Completed MCP tool call where we show the result serialized as JSON.
     CompletedMcpToolCall { view: TextBlock },
@@ -94,19 +100,19 @@ pub(crate) enum HistoryCell {
     // resized version avoids doing the potentially expensive rescale twice
     // because the scroll-view first calls `height()` for layouting and then
     // `render_window()` for painting.
-    CompletedMcpToolCallWithImageOutput {
-        image: DynamicImage,
-        /// Cached data derived from the current terminal width.  The cache is
-        /// invalidated whenever the width changes (e.g. when the user
-        /// resizes the window).
-        render_cache: std::cell::RefCell<Option<ImageRenderCache>>,
-    },
+    CompletedMcpToolCallWithImageOutput { _image: DynamicImage },
 
     /// Background event.
     BackgroundEvent { view: TextBlock },
 
     /// Output from the `/diff` command.
     GitDiffOutput { view: TextBlock },
+
+    /// Output from the `/status` command.
+    StatusOutput { view: TextBlock },
+
+    /// Output from the `/prompts` command.
+    PromptsOutput { view: TextBlock },
 
     /// Error event from the backend.
     ErrorEvent { view: TextBlock },
@@ -118,9 +124,37 @@ pub(crate) enum HistoryCell {
     /// behaviour of `ActiveExecCommand` so the user sees *what* patch the
     /// model wants to apply before being prompted to approve or deny it.
     PendingPatch { view: TextBlock },
+
+    /// A human‑friendly rendering of the model's current plan and step
+    /// statuses provided via the `update_plan` tool.
+    PlanUpdate { view: TextBlock },
+
+    /// Result of applying a patch (success or failure) with optional output.
+    PatchApplyResult { view: TextBlock },
 }
 
-const TOOL_CALL_MAX_LINES: usize = 5;
+const TOOL_CALL_MAX_LINES: usize = 3;
+
+fn title_case(s: &str) -> String {
+    if s.is_empty() {
+        return String::new();
+    }
+    let mut chars = s.chars();
+    let first = match chars.next() {
+        Some(c) => c,
+        None => return String::new(),
+    };
+    let rest: String = chars.as_str().to_ascii_lowercase();
+    first.to_uppercase().collect::<String>() + &rest
+}
+
+fn pretty_provider_name(id: &str) -> String {
+    if id.eq_ignore_ascii_case("openai") {
+        "OpenAI".to_string()
+    } else {
+        title_case(id)
+    }
+}
 
 impl HistoryCell {
     /// Return a cloned, plain representation of the cell's lines suitable for
@@ -130,23 +164,36 @@ impl HistoryCell {
         match self {
             HistoryCell::WelcomeMessage { view }
             | HistoryCell::UserPrompt { view }
-            | HistoryCell::AgentMessage { view }
-            | HistoryCell::AgentReasoning { view }
             | HistoryCell::BackgroundEvent { view }
             | HistoryCell::GitDiffOutput { view }
+            | HistoryCell::StatusOutput { view }
+            | HistoryCell::PromptsOutput { view }
             | HistoryCell::ErrorEvent { view }
             | HistoryCell::SessionInfo { view }
             | HistoryCell::CompletedExecCommand { view }
             | HistoryCell::CompletedMcpToolCall { view }
             | HistoryCell::PendingPatch { view }
+            | HistoryCell::PlanUpdate { view }
+            | HistoryCell::PatchApplyResult { view }
             | HistoryCell::ActiveExecCommand { view, .. }
-            | HistoryCell::ActiveMcpToolCall { view, .. } => view.lines.clone(),
+            | HistoryCell::ActiveMcpToolCall { view, .. } => {
+                view.lines.iter().map(line_to_static).collect()
+            }
             HistoryCell::CompletedMcpToolCallWithImageOutput { .. } => vec![
                 Line::from("tool result (image output omitted)"),
                 Line::from(""),
             ],
         }
     }
+
+    pub(crate) fn desired_height(&self, width: u16) -> u16 {
+        Paragraph::new(Text::from(self.plain_lines()))
+            .wrap(Wrap { trim: false })
+            .line_count(width)
+            .try_into()
+            .unwrap_or(0)
+    }
+
     pub(crate) fn new_session_info(
         config: &Config,
         event: SessionConfiguredEvent,
@@ -154,51 +201,35 @@ impl HistoryCell {
     ) -> Self {
         let SessionConfiguredEvent {
             model,
-            session_id,
+            session_id: _,
             history_log_id: _,
             history_entry_count: _,
         } = event;
         if is_first_event {
-            const VERSION: &str = env!("CARGO_PKG_VERSION");
+            let cwd_str = match relativize_to_home(&config.cwd) {
+                Some(rel) if !rel.as_os_str().is_empty() => format!("~/{}", rel.display()),
+                Some(_) => "~".to_string(),
+                None => config.cwd.display().to_string(),
+            };
 
-            let mut lines: Vec<Line<'static>> = vec![
+            let lines: Vec<Line<'static>> = vec![
                 Line::from(vec![
-                    "OpenAI ".into(),
-                    "Codex".bold(),
-                    format!(" v{VERSION}").into(),
-                    " (research preview)".dim(),
+                    Span::raw(">_ ").dim(),
+                    Span::styled(
+                        "You are using OpenAI Codex in",
+                        Style::default().add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(format!(" {cwd_str}")).dim(),
                 ]),
-                Line::from(""),
-                Line::from(vec![
-                    "codex session".magenta().bold(),
-                    " ".into(),
-                    session_id.to_string().dim(),
-                ]),
+                Line::from("".dim()),
+                Line::from(" To get started, describe a task or try one of these commands:".dim()),
+                Line::from("".dim()),
+                Line::from(format!(" /init - {}", SlashCommand::Init.description()).dim()),
+                Line::from(format!(" /status - {}", SlashCommand::Status.description()).dim()),
+                Line::from(format!(" /diff - {}", SlashCommand::Diff.description()).dim()),
+                Line::from(format!(" /prompts - {}", SlashCommand::Prompts.description()).dim()),
+                Line::from("".dim()),
             ];
-
-            let mut entries = vec![
-                ("workdir", config.cwd.display().to_string()),
-                ("model", config.model.clone()),
-                ("provider", config.model_provider_id.clone()),
-                ("approval", config.approval_policy.to_string()),
-                ("sandbox", summarize_sandbox_policy(&config.sandbox_policy)),
-            ];
-            if config.model_provider.wire_api == WireApi::Responses
-                && model_supports_reasoning_summaries(config)
-            {
-                entries.push((
-                    "reasoning effort",
-                    config.model_reasoning_effort.to_string(),
-                ));
-                entries.push((
-                    "reasoning summaries",
-                    config.model_reasoning_summary.to_string(),
-                ));
-            }
-            for (key, value) in entries {
-                lines.push(Line::from(vec![format!("{key}: ").bold(), value.into()]));
-            }
-            lines.push(Line::from(""));
             HistoryCell::WelcomeMessage {
                 view: TextBlock::new(lines),
             }
@@ -230,78 +261,73 @@ impl HistoryCell {
         }
     }
 
-    pub(crate) fn new_agent_message(config: &Config, message: String) -> Self {
+    pub(crate) fn new_active_exec_command(command: Vec<String>) -> Self {
+        let command_escaped = strip_bash_lc_and_escape(&command);
+
         let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(Line::from("codex".magenta().bold()));
-        append_markdown(&message, &mut lines, config);
-        lines.push(Line::from(""));
-
-        HistoryCell::AgentMessage {
-            view: TextBlock::new(lines),
+        let mut iter = command_escaped.lines();
+        if let Some(first) = iter.next() {
+            lines.push(Line::from(vec![
+                "▌ ".cyan(),
+                "Running command ".magenta(),
+                first.to_string().into(),
+            ]));
+        } else {
+            lines.push(Line::from(vec!["▌ ".cyan(), "Running command".magenta()]));
         }
-    }
-
-    pub(crate) fn new_agent_reasoning(config: &Config, text: String) -> Self {
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(Line::from("thinking".magenta().italic()));
-        append_markdown(&text, &mut lines, config);
-        lines.push(Line::from(""));
-
-        HistoryCell::AgentReasoning {
-            view: TextBlock::new(lines),
+        for cont in iter {
+            lines.push(Line::from(cont.to_string()));
         }
-    }
-
-    pub(crate) fn new_active_exec_command(call_id: String, command: Vec<String>) -> Self {
-        let command_escaped = escape_command(&command);
-        let start = Instant::now();
-
-        let lines: Vec<Line<'static>> = vec![
-            Line::from(vec!["command".magenta(), " running...".dim()]),
-            Line::from(format!("$ {command_escaped}")),
-            Line::from(""),
-        ];
+        lines.push(Line::from(""));
 
         HistoryCell::ActiveExecCommand {
-            call_id,
-            command: command_escaped,
-            start,
             view: TextBlock::new(lines),
         }
     }
 
-    pub(crate) fn new_completed_exec_command(command: String, output: CommandOutput) -> Self {
+    pub(crate) fn new_completed_exec_command(command: Vec<String>, output: CommandOutput) -> Self {
         let CommandOutput {
             exit_code,
             stdout,
             stderr,
-            duration,
         } = output;
 
         let mut lines: Vec<Line<'static>> = Vec::new();
-
-        // Title depends on whether we have output yet.
-        let title_line = Line::from(vec![
-            "command".magenta(),
-            format!(
-                " (code: {}, duration: {})",
-                exit_code,
-                format_duration(duration)
-            )
-            .dim(),
-        ]);
-        lines.push(title_line);
+        let command_escaped = strip_bash_lc_and_escape(&command);
+        let mut cmd_lines = command_escaped.lines();
+        if let Some(first) = cmd_lines.next() {
+            lines.push(Line::from(vec![
+                "⚡ Ran command ".magenta(),
+                first.to_string().into(),
+            ]));
+        } else {
+            lines.push(Line::from("⚡ Ran command".magenta()));
+        }
+        for cont in cmd_lines {
+            lines.push(Line::from(cont.to_string()));
+        }
 
         let src = if exit_code == 0 { stdout } else { stderr };
 
-        lines.push(Line::from(format!("$ {command}")));
         let mut lines_iter = src.lines();
-        for raw in lines_iter.by_ref().take(TOOL_CALL_MAX_LINES) {
-            lines.push(ansi_escape_line(raw).dim());
+        for (idx, raw) in lines_iter.by_ref().take(TOOL_CALL_MAX_LINES).enumerate() {
+            let mut line = ansi_escape_line(raw);
+            let prefix = if idx == 0 { "  ⎿ " } else { "    " };
+            line.spans.insert(0, prefix.into());
+            line.spans.iter_mut().for_each(|span| {
+                span.style = span.style.add_modifier(Modifier::DIM);
+            });
+            lines.push(line);
         }
         let remaining = lines_iter.count();
         if remaining > 0 {
-            lines.push(Line::from(format!("... {remaining} additional lines")).dim());
+            let mut more = Line::from(format!("... +{remaining} lines"));
+            // Continuation/ellipsis is treated as a subsequent line for prefixing
+            more.spans.insert(0, "    ".into());
+            more.spans.iter_mut().for_each(|span| {
+                span.style = span.style.add_modifier(Modifier::DIM);
+            });
+            lines.push(more);
         }
         lines.push(Line::from(""));
 
@@ -310,41 +336,15 @@ impl HistoryCell {
         }
     }
 
-    pub(crate) fn new_active_mcp_tool_call(
-        call_id: String,
-        server: String,
-        tool: String,
-        arguments: Option<serde_json::Value>,
-    ) -> Self {
-        // Format the arguments as compact JSON so they roughly fit on one
-        // line. If there are no arguments we keep it empty so the invocation
-        // mirrors a function-style call.
-        let args_str = arguments
-            .as_ref()
-            .map(|v| {
-                // Use compact form to keep things short but readable.
-                serde_json::to_string(v).unwrap_or_else(|_| v.to_string())
-            })
-            .unwrap_or_default();
-
-        let invocation_spans = vec![
-            Span::styled(server, Style::default().fg(Color::Blue)),
-            Span::raw("."),
-            Span::styled(tool, Style::default().fg(Color::Blue)),
-            Span::raw("("),
-            Span::styled(args_str, Style::default().fg(Color::Gray)),
-            Span::raw(")"),
-        ];
-        let invocation = Line::from(invocation_spans);
-
-        let start = Instant::now();
+    pub(crate) fn new_active_mcp_tool_call(invocation: McpInvocation) -> Self {
         let title_line = Line::from(vec!["tool".magenta(), " running...".dim()]);
-        let lines: Vec<Line<'static>> = vec![title_line, invocation.clone(), Line::from("")];
+        let lines: Vec<Line> = vec![
+            title_line,
+            format_mcp_invocation(invocation.clone()),
+            Line::from(""),
+        ];
 
         HistoryCell::ActiveMcpToolCall {
-            call_id,
-            invocation,
-            start,
             view: TextBlock::new(lines),
         }
     }
@@ -382,10 +382,7 @@ impl HistoryCell {
                         }
                     };
 
-                    Some(HistoryCell::CompletedMcpToolCallWithImageOutput {
-                        image,
-                        render_cache: std::cell::RefCell::new(None),
-                    })
+                    Some(HistoryCell::CompletedMcpToolCallWithImageOutput { _image: image })
                 } else {
                     None
                 }
@@ -396,8 +393,8 @@ impl HistoryCell {
 
     pub(crate) fn new_completed_mcp_tool_call(
         num_cols: u16,
-        invocation: Line<'static>,
-        start: Instant,
+        invocation: McpInvocation,
+        duration: Duration,
         success: bool,
         result: Result<mcp_types::CallToolResult, String>,
     ) -> Self {
@@ -405,7 +402,7 @@ impl HistoryCell {
             return cell;
         }
 
-        let duration = format_duration(start.elapsed());
+        let duration = format_duration(duration);
         let status_str = if success { "success" } else { "failed" };
         let title_line = Line::from(vec![
             "tool".magenta(),
@@ -420,7 +417,7 @@ impl HistoryCell {
 
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(title_line);
-        lines.push(invocation);
+        lines.push(format_mcp_invocation(invocation));
 
         match result {
             Ok(mcp_types::CallToolResult { content, .. }) => {
@@ -479,7 +476,8 @@ impl HistoryCell {
             view: TextBlock::new(lines),
         }
     }
-
+    // allow dead code for now. maybe we'll use it again.
+    #[allow(dead_code)]
     pub(crate) fn new_background_event(message: String) -> Self {
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from("event".dim()));
@@ -506,12 +504,264 @@ impl HistoryCell {
         }
     }
 
-    pub(crate) fn new_error_event(message: String) -> Self {
-        let lines: Vec<Line<'static>> = vec![
-            vec!["ERROR: ".red().bold(), message.into()].into(),
-            "".into(),
+    pub(crate) fn new_status_output(config: &Config, usage: &TokenUsage) -> Self {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(Line::from("/status".magenta()));
+
+        let config_entries = create_config_summary_entries(config);
+        let lookup = |k: &str| -> String {
+            config_entries
+                .iter()
+                .find(|(key, _)| *key == k)
+                .map(|(_, v)| v.clone())
+                .unwrap_or_default()
+        };
+
+        // 📂 Workspace
+        lines.push(Line::from(vec!["📂 ".into(), "Workspace".bold()]));
+        // Path (home-relative, e.g., ~/code/project)
+        let cwd_str = match relativize_to_home(&config.cwd) {
+            Some(rel) if !rel.as_os_str().is_empty() => format!("~/{}", rel.display()),
+            Some(_) => "~".to_string(),
+            None => config.cwd.display().to_string(),
+        };
+        lines.push(Line::from(vec!["  • Path: ".into(), cwd_str.into()]));
+        // Approval mode (as-is)
+        lines.push(Line::from(vec![
+            "  • Approval Mode: ".into(),
+            lookup("approval").into(),
+        ]));
+        // Sandbox (simplified name only)
+        let sandbox_name = match &config.sandbox_policy {
+            SandboxPolicy::DangerFullAccess => "danger-full-access",
+            SandboxPolicy::ReadOnly => "read-only",
+            SandboxPolicy::WorkspaceWrite { .. } => "workspace-write",
+        };
+        lines.push(Line::from(vec![
+            "  • Sandbox: ".into(),
+            sandbox_name.into(),
+        ]));
+
+        lines.push(Line::from(""));
+
+        // 👤 Account (only if ChatGPT tokens exist), shown under the first block
+        let auth_file = get_auth_file(&config.codex_home);
+        if let Ok(auth) = try_read_auth_json(&auth_file) {
+            if let Some(tokens) = auth.tokens.clone() {
+                lines.push(Line::from(vec!["👤 ".into(), "Account".bold()]));
+                lines.push(Line::from("  • Signed in with ChatGPT"));
+
+                let info = tokens.id_token;
+                if let Some(email) = &info.email {
+                    lines.push(Line::from(vec!["  • Login: ".into(), email.clone().into()]));
+                }
+
+                match auth.openai_api_key.as_deref() {
+                    Some(key) if !key.is_empty() => {
+                        lines.push(Line::from(
+                            "  • Using API key. Run codex login to use ChatGPT plan",
+                        ));
+                    }
+                    _ => {
+                        let plan_text = info
+                            .get_chatgpt_plan_type()
+                            .map(|s| title_case(&s))
+                            .unwrap_or_else(|| "Unknown".to_string());
+                        lines.push(Line::from(vec!["  • Plan: ".into(), plan_text.into()]));
+                    }
+                }
+
+                lines.push(Line::from(""));
+            }
+        }
+
+        // 🧠 Model
+        lines.push(Line::from(vec!["🧠 ".into(), "Model".bold()]));
+        lines.push(Line::from(vec![
+            "  • Name: ".into(),
+            config.model.clone().into(),
+        ]));
+        let provider_disp = pretty_provider_name(&config.model_provider_id);
+        lines.push(Line::from(vec![
+            "  • Provider: ".into(),
+            provider_disp.into(),
+        ]));
+        // Only show Reasoning fields if present in config summary
+        let reff = lookup("reasoning effort");
+        if !reff.is_empty() {
+            lines.push(Line::from(vec![
+                "  • Reasoning Effort: ".into(),
+                title_case(&reff).into(),
+            ]));
+        }
+        let rsum = lookup("reasoning summaries");
+        if !rsum.is_empty() {
+            lines.push(Line::from(vec![
+                "  • Reasoning Summaries: ".into(),
+                title_case(&rsum).into(),
+            ]));
+        }
+
+        lines.push(Line::from(""));
+
+        // 📊 Token Usage
+        lines.push(Line::from(vec!["📊 ".into(), "Token Usage".bold()]));
+        // Input: <input> [+ <cached> cached]
+        let mut input_line_spans: Vec<Span<'static>> = vec![
+            "  • Input: ".into(),
+            usage.non_cached_input().to_string().into(),
         ];
+        if let Some(cached) = usage.cached_input_tokens {
+            if cached > 0 {
+                input_line_spans.push(format!(" (+ {cached} cached)").into());
+            }
+        }
+        lines.push(Line::from(input_line_spans));
+        // Output: <output>
+        lines.push(Line::from(vec![
+            "  • Output: ".into(),
+            usage.output_tokens.to_string().into(),
+        ]));
+        // Total: <total>
+        lines.push(Line::from(vec![
+            "  • Total: ".into(),
+            usage.blended_total().to_string().into(),
+        ]));
+
+        lines.push(Line::from(""));
+        HistoryCell::StatusOutput {
+            view: TextBlock::new(lines),
+        }
+    }
+
+    pub(crate) fn new_prompts_output() -> Self {
+        let lines: Vec<Line<'static>> = vec![
+            Line::from("/prompts".magenta()),
+            Line::from(""),
+            Line::from(" 1. Explain this codebase"),
+            Line::from(" 2. Summarize recent commits"),
+            Line::from(" 3. Implement {feature}"),
+            Line::from(" 4. Find and fix a bug in @filename"),
+            Line::from(" 5. Write tests for @filename"),
+            Line::from(" 6. Improve documentation in @filename"),
+            Line::from(""),
+        ];
+        HistoryCell::PromptsOutput {
+            view: TextBlock::new(lines),
+        }
+    }
+
+    pub(crate) fn new_error_event(message: String) -> Self {
+        let lines: Vec<Line<'static>> =
+            vec![vec!["🖐 ".red().bold(), message.into()].into(), "".into()];
         HistoryCell::ErrorEvent {
+            view: TextBlock::new(lines),
+        }
+    }
+
+    /// Render a user‑friendly plan update styled like a checkbox todo list.
+    pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> Self {
+        let UpdatePlanArgs { explanation, plan } = update;
+
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        // Header with progress summary
+        let total = plan.len();
+        let completed = plan
+            .iter()
+            .filter(|p| matches!(p.status, StepStatus::Completed))
+            .count();
+
+        let width: usize = 10;
+        let filled = if total > 0 {
+            (completed * width + total / 2) / total
+        } else {
+            0
+        };
+        let empty = width.saturating_sub(filled);
+
+        let mut header: Vec<Span> = Vec::new();
+        header.push(Span::raw("📋"));
+        header.push(Span::styled(
+            " Updated",
+            Style::default().add_modifier(Modifier::BOLD).magenta(),
+        ));
+        header.push(Span::raw(" to do list ["));
+        if filled > 0 {
+            header.push(Span::styled(
+                "█".repeat(filled),
+                Style::default().fg(Color::Green),
+            ));
+        }
+        if empty > 0 {
+            header.push(Span::styled(
+                "░".repeat(empty),
+                Style::default().fg(Color::Gray),
+            ));
+        }
+        header.push(Span::raw("] "));
+        header.push(Span::raw(format!("{completed}/{total}")));
+        lines.push(Line::from(header));
+
+        // Optional explanation/note from the model
+        if let Some(expl) = explanation.and_then(|s| {
+            let t = s.trim().to_string();
+            if t.is_empty() { None } else { Some(t) }
+        }) {
+            lines.push(Line::from("note".gray().italic()));
+            for l in expl.lines() {
+                lines.push(Line::from(l.to_string()).gray());
+            }
+        }
+
+        // Steps styled as checkbox items
+        if plan.is_empty() {
+            lines.push(Line::from("(no steps provided)".gray().italic()));
+        } else {
+            for (idx, PlanItemArg { step, status }) in plan.into_iter().enumerate() {
+                let (box_span, text_span) = match status {
+                    StepStatus::Completed => (
+                        Span::styled("✔", Style::default().fg(Color::Green)),
+                        Span::styled(
+                            step,
+                            Style::default()
+                                .fg(Color::Gray)
+                                .add_modifier(Modifier::CROSSED_OUT | Modifier::DIM),
+                        ),
+                    ),
+                    StepStatus::InProgress => (
+                        Span::raw("□"),
+                        Span::styled(
+                            step,
+                            Style::default()
+                                .fg(Color::Blue)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    ),
+                    StepStatus::Pending => (
+                        Span::raw("□"),
+                        Span::styled(
+                            step,
+                            Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+                        ),
+                    ),
+                };
+                let prefix = if idx == 0 {
+                    Span::raw("  ⎿ ")
+                } else {
+                    Span::raw("    ")
+                };
+                lines.push(Line::from(vec![
+                    prefix,
+                    box_span,
+                    Span::raw(" "),
+                    text_span,
+                ]));
+            }
+        }
+
+        lines.push(Line::from(""));
+
+        HistoryCell::PlanUpdate {
             view: TextBlock::new(lines),
         }
     }
@@ -527,50 +777,26 @@ impl HistoryCell {
             PatchEventType::ApprovalRequest => "proposed patch",
             PatchEventType::ApplyBegin {
                 auto_approved: true,
-            } => "applying patch",
+            } => "✏️ Applying patch",
             PatchEventType::ApplyBegin {
                 auto_approved: false,
             } => {
-                let lines = vec![Line::from("patch applied".magenta().bold())];
+                let lines: Vec<Line<'static>> = vec![
+                    Line::from("✏️ Applying patch".magenta().bold()),
+                    Line::from(""),
+                ];
                 return Self::PendingPatch {
                     view: TextBlock::new(lines),
                 };
             }
         };
 
-        let summary_lines = create_diff_summary(changes);
+        let summary_lines = create_diff_summary(title, changes);
 
         let mut lines: Vec<Line<'static>> = Vec::new();
 
-        // Header similar to the command formatter so patches are visually
-        // distinct while still fitting the overall colour scheme.
-        lines.push(Line::from(title.magenta().bold()));
-
         for line in summary_lines {
-            if line.starts_with('+') {
-                lines.push(line.green().into());
-            } else if line.starts_with('-') {
-                lines.push(line.red().into());
-            } else if let Some(space_idx) = line.find(' ') {
-                let kind_owned = line[..space_idx].to_string();
-                let rest_owned = line[space_idx + 1..].to_string();
-
-                let style_for = |fg: Color| Style::default().fg(fg).add_modifier(Modifier::BOLD);
-
-                let styled_kind = match kind_owned.as_str() {
-                    "A" => RtSpan::styled(kind_owned.clone(), style_for(Color::Green)),
-                    "D" => RtSpan::styled(kind_owned.clone(), style_for(Color::Red)),
-                    "M" => RtSpan::styled(kind_owned.clone(), style_for(Color::Yellow)),
-                    "R" | "C" => RtSpan::styled(kind_owned.clone(), style_for(Color::Cyan)),
-                    _ => RtSpan::raw(kind_owned.clone()),
-                };
-
-                let styled_line =
-                    RtLine::from(vec![styled_kind, RtSpan::raw(" "), RtSpan::raw(rest_owned)]);
-                lines.push(styled_line);
-            } else {
-                lines.push(Line::from(line));
-            }
+            lines.push(line);
         }
 
         lines.push(Line::from(""));
@@ -579,232 +805,194 @@ impl HistoryCell {
             view: TextBlock::new(lines),
         }
     }
-}
 
-// ---------------------------------------------------------------------------
-// `CellWidget` implementation – most variants delegate to their internal
-// `TextBlock`.  Variants that need custom painting can add their own logic in
-// the match arms.
-// ---------------------------------------------------------------------------
+    pub(crate) fn new_patch_apply_failure(stderr: String) -> Self {
+        let mut lines: Vec<Line<'static>> = Vec::new();
 
-impl CellWidget for HistoryCell {
-    fn height(&self, width: u16) -> usize {
-        match self {
-            HistoryCell::WelcomeMessage { view }
-            | HistoryCell::UserPrompt { view }
-            | HistoryCell::AgentMessage { view }
-            | HistoryCell::AgentReasoning { view }
-            | HistoryCell::BackgroundEvent { view }
-            | HistoryCell::GitDiffOutput { view }
-            | HistoryCell::ErrorEvent { view }
-            | HistoryCell::SessionInfo { view }
-            | HistoryCell::CompletedExecCommand { view }
-            | HistoryCell::CompletedMcpToolCall { view }
-            | HistoryCell::PendingPatch { view }
-            | HistoryCell::ActiveExecCommand { view, .. }
-            | HistoryCell::ActiveMcpToolCall { view, .. } => view.height(width),
-            HistoryCell::CompletedMcpToolCallWithImageOutput {
-                image,
-                render_cache,
-            } => ensure_image_cache(image, width, render_cache),
+        // Failure title
+        lines.push(Line::from("✘ Failed to apply patch".magenta().bold()));
+
+        if !stderr.trim().is_empty() {
+            let mut iter = stderr.lines();
+            for (i, raw) in iter.by_ref().take(TOOL_CALL_MAX_LINES).enumerate() {
+                let prefix = if i == 0 { "  ⎿ " } else { "    " };
+                let s = format!("{prefix}{raw}");
+                lines.push(ansi_escape_line(&s).dim());
+            }
+            let remaining = iter.count();
+            if remaining > 0 {
+                lines.push(Line::from(""));
+                lines.push(Line::from(format!("... +{remaining} lines")).dim());
+            }
+        }
+
+        lines.push(Line::from(""));
+
+        HistoryCell::PatchApplyResult {
+            view: TextBlock::new(lines),
         }
     }
+}
 
-    fn render_window(&self, first_visible_line: usize, area: Rect, buf: &mut Buffer) {
-        match self {
-            HistoryCell::WelcomeMessage { view }
-            | HistoryCell::UserPrompt { view }
-            | HistoryCell::AgentMessage { view }
-            | HistoryCell::AgentReasoning { view }
-            | HistoryCell::BackgroundEvent { view }
-            | HistoryCell::GitDiffOutput { view }
-            | HistoryCell::ErrorEvent { view }
-            | HistoryCell::SessionInfo { view }
-            | HistoryCell::CompletedExecCommand { view }
-            | HistoryCell::CompletedMcpToolCall { view }
-            | HistoryCell::PendingPatch { view }
-            | HistoryCell::ActiveExecCommand { view, .. }
-            | HistoryCell::ActiveMcpToolCall { view, .. } => {
-                view.render_window(first_visible_line, area, buf)
-            }
-            HistoryCell::CompletedMcpToolCallWithImageOutput {
-                image,
-                render_cache,
-            } => {
-                // Ensure we have a cached, resized copy that matches the current width.
-                // `height()` should have prepared the cache, but if something invalidated it
-                // (e.g. the first `render_window()` call happens *before* `height()` after a
-                // resize) we rebuild it here.
+impl WidgetRef for &HistoryCell {
+    fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+        Paragraph::new(Text::from(self.plain_lines()))
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
+    }
+}
 
-                let width_cells = area.width;
+fn create_diff_summary(title: &str, changes: HashMap<PathBuf, FileChange>) -> Vec<RtLine<'static>> {
+    let mut files: Vec<FileSummary> = Vec::new();
 
-                // Ensure the cache is up-to-date and extract the scaled image.
-                let _ = ensure_image_cache(image, width_cells, render_cache);
-
-                let Some(resized) = render_cache
-                    .borrow()
-                    .as_ref()
-                    .map(|c| c.scaled_image.clone())
-                else {
-                    return;
-                };
-
-                let picker = &*TERMINAL_PICKER;
-
-                if let Ok(protocol) = picker.new_protocol(resized, area, ImgResize::Fit(None)) {
-                    let img_widget = TuiImage::new(&protocol);
-                    img_widget.render(area, buf);
+    // Count additions/deletions from a unified diff body
+    let count_from_unified = |diff: &str| -> (usize, usize) {
+        if let Ok(patch) = diffy::Patch::from_str(diff) {
+            let mut adds = 0usize;
+            let mut dels = 0usize;
+            for hunk in patch.hunks() {
+                for line in hunk.lines() {
+                    match line {
+                        diffy::Line::Insert(_) => adds += 1,
+                        diffy::Line::Delete(_) => dels += 1,
+                        _ => {}
+                    }
                 }
             }
+            (adds, dels)
+        } else {
+            let mut adds = 0usize;
+            let mut dels = 0usize;
+            for l in diff.lines() {
+                if l.starts_with("+++") || l.starts_with("---") || l.starts_with("@@") {
+                    continue;
+                }
+                match l.as_bytes().first() {
+                    Some(b'+') => adds += 1,
+                    Some(b'-') => dels += 1,
+                    _ => {}
+                }
+            }
+            (adds, dels)
         }
-    }
-}
+    };
 
-fn create_diff_summary(changes: HashMap<PathBuf, FileChange>) -> Vec<String> {
-    // Build a concise, human‑readable summary list similar to the
-    // `git status` short format so the user can reason about the
-    // patch without scrolling.
-    let mut summaries: Vec<String> = Vec::new();
     for (path, change) in &changes {
         use codex_core::protocol::FileChange::*;
         match change {
             Add { content } => {
                 let added = content.lines().count();
-                summaries.push(format!("A {} (+{added})", path.display()));
+                files.push(FileSummary {
+                    display_path: path.display().to_string(),
+                    added,
+                    removed: 0,
+                });
             }
             Delete => {
-                summaries.push(format!("D {}", path.display()));
+                let removed = std::fs::read_to_string(path)
+                    .ok()
+                    .map(|s| s.lines().count())
+                    .unwrap_or(0);
+                files.push(FileSummary {
+                    display_path: path.display().to_string(),
+                    added: 0,
+                    removed,
+                });
             }
             Update {
                 unified_diff,
                 move_path,
             } => {
-                if let Some(new_path) = move_path {
-                    summaries.push(format!("R {} → {}", path.display(), new_path.display(),));
+                let (added, removed) = count_from_unified(unified_diff);
+                let display_path = if let Some(new_path) = move_path {
+                    format!("{} → {}", path.display(), new_path.display())
                 } else {
-                    summaries.push(format!("M {}", path.display(),));
-                }
-                summaries.extend(unified_diff.lines().map(|s| s.to_string()));
+                    path.display().to_string()
+                };
+                files.push(FileSummary {
+                    display_path,
+                    added,
+                    removed,
+                });
             }
         }
     }
 
-    summaries
-}
+    let file_count = files.len();
+    let total_added: usize = files.iter().map(|f| f.added).sum();
+    let total_removed: usize = files.iter().map(|f| f.removed).sum();
+    let noun = if file_count == 1 { "file" } else { "files" };
 
-// -------------------------------------
-// Helper types for image rendering
-// -------------------------------------
+    let mut out: Vec<RtLine<'static>> = Vec::new();
 
-/// Cached information for rendering an image inside a conversation cell.
-///
-/// The cache ties the resized image to a *specific* content width (in
-/// terminal cells).  Whenever the terminal is resized and the width changes
-/// we need to re-compute the scaled variant so that it still fits the
-/// available space.  Keeping the resized copy around saves a costly rescale
-/// between the back-to-back `height()` and `render_window()` calls that the
-/// scroll-view performs while laying out the UI.
-pub(crate) struct ImageRenderCache {
-    /// Width in *terminal cells* the cached image was generated for.
-    width_cells: u16,
-    /// Height in *terminal rows* that the conversation cell must occupy so
-    /// the whole image becomes visible.
-    height_rows: usize,
-    /// The resized image that fits the given width / height constraints.
-    scaled_image: DynamicImage,
-}
+    // Header
+    let mut header_spans: Vec<RtSpan<'static>> = Vec::new();
+    header_spans.push(RtSpan::styled(
+        title.to_owned(),
+        Style::default()
+            .fg(Color::Magenta)
+            .add_modifier(Modifier::BOLD),
+    ));
+    header_spans.push(RtSpan::raw(" to "));
+    header_spans.push(RtSpan::raw(format!("{file_count} {noun} ")));
+    header_spans.push(RtSpan::raw("("));
+    header_spans.push(RtSpan::styled(
+        format!("+{total_added}"),
+        Style::default().fg(Color::Green),
+    ));
+    header_spans.push(RtSpan::raw(" "));
+    header_spans.push(RtSpan::styled(
+        format!("-{total_removed}"),
+        Style::default().fg(Color::Red),
+    ));
+    header_spans.push(RtSpan::raw(")"));
+    out.push(RtLine::from(header_spans));
 
-lazy_static! {
-    static ref TERMINAL_PICKER: ratatui_image::picker::Picker = {
-        use ratatui_image::picker::Picker;
-        use ratatui_image::picker::cap_parser::QueryStdioOptions;
+    // Dimmed per-file lines with prefix
+    for (idx, f) in files.iter().enumerate() {
+        let mut spans: Vec<RtSpan<'static>> = Vec::new();
+        spans.push(RtSpan::raw(f.display_path.clone()));
+        spans.push(RtSpan::raw(" ("));
+        spans.push(RtSpan::styled(
+            format!("+{}", f.added),
+            Style::default().fg(Color::Green),
+        ));
+        spans.push(RtSpan::raw(" "));
+        spans.push(RtSpan::styled(
+            format!("-{}", f.removed),
+            Style::default().fg(Color::Red),
+        ));
+        spans.push(RtSpan::raw(")"));
 
-        // Ask the terminal for capabilities and explicit font size.  Request the
-        // Kitty *text-sizing protocol* as a fallback mechanism for terminals
-        // (like iTerm2) that do not reply to the standard CSI 16/18 queries.
-        match Picker::from_query_stdio_with_options(QueryStdioOptions {
-            text_sizing_protocol: true,
-        }) {
-            Ok(picker) => picker,
-            Err(err) => {
-                // Fall back to the conservative default that assumes ~8×16 px cells.
-                // Still better than breaking the build in a headless test run.
-                tracing::warn!("terminal capability query failed: {err:?}; using default font size");
-                Picker::from_fontsize((8, 16))
-            }
-        }
-    };
-}
-
-/// Resize `image` to fit into `width_cells`×10-rows keeping the original aspect
-/// ratio. The function updates `render_cache` and returns the number of rows
-/// (<= 10) the picture will occupy.
-fn ensure_image_cache(
-    image: &DynamicImage,
-    width_cells: u16,
-    render_cache: &std::cell::RefCell<Option<ImageRenderCache>>,
-) -> usize {
-    if let Some(cache) = render_cache.borrow().as_ref() {
-        if cache.width_cells == width_cells {
-            return cache.height_rows;
-        }
+        let mut line = RtLine::from(spans);
+        let prefix = if idx == 0 { "  ⎿ " } else { "    " };
+        line.spans.insert(0, prefix.into());
+        line.spans.iter_mut().for_each(|span| {
+            span.style = span.style.add_modifier(Modifier::DIM);
+        });
+        out.push(line);
     }
 
-    let picker = &*TERMINAL_PICKER;
-    let (char_w_px, char_h_px) = picker.font_size();
+    out
+}
 
-    // Heuristic to compensate for Hi-DPI terminals (iTerm2 on Retina Mac) that
-    // report logical pixels (≈ 8×16) while the iTerm2 graphics protocol
-    // expects *device* pixels.  Empirically the device-pixel-ratio is almost
-    // always 2 on macOS Retina panels.
-    let hidpi_scale = if picker.protocol_type() == ProtocolType::Iterm2 {
-        2.0f64
-    } else {
-        1.0
-    };
+fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
+    let args_str = invocation
+        .arguments
+        .as_ref()
+        .map(|v| {
+            // Use compact form to keep things short but readable.
+            serde_json::to_string(v).unwrap_or_else(|_| v.to_string())
+        })
+        .unwrap_or_default();
 
-    // The fallback Halfblocks protocol encodes two pixel rows per cell, so each
-    // terminal *row* represents only half the (possibly scaled) font height.
-    let effective_char_h_px: f64 = if picker.protocol_type() == ProtocolType::Halfblocks {
-        (char_h_px as f64) * hidpi_scale / 2.0
-    } else {
-        (char_h_px as f64) * hidpi_scale
-    };
-
-    let char_w_px_f64 = (char_w_px as f64) * hidpi_scale;
-
-    const MAX_ROWS: f64 = 10.0;
-    let max_height_px: f64 = effective_char_h_px * MAX_ROWS;
-
-    let (orig_w_px, orig_h_px) = {
-        let (w, h) = image.dimensions();
-        (w as f64, h as f64)
-    };
-
-    if orig_w_px == 0.0 || orig_h_px == 0.0 || width_cells == 0 {
-        *render_cache.borrow_mut() = None;
-        return 0;
-    }
-
-    let max_w_px = char_w_px_f64 * width_cells as f64;
-    let scale_w = max_w_px / orig_w_px;
-    let scale_h = max_height_px / orig_h_px;
-    let scale = scale_w.min(scale_h).min(1.0);
-
-    use image::imageops::FilterType;
-    let scaled_w_px = (orig_w_px * scale).round().max(1.0) as u32;
-    let scaled_h_px = (orig_h_px * scale).round().max(1.0) as u32;
-
-    let scaled_image = image.resize(scaled_w_px, scaled_h_px, FilterType::Lanczos3);
-
-    let height_rows = ((scaled_h_px as f64 / effective_char_h_px).ceil()) as usize;
-
-    let new_cache = ImageRenderCache {
-        width_cells,
-        height_rows,
-        scaled_image,
-    };
-    *render_cache.borrow_mut() = Some(new_cache);
-
-    height_rows
+    let invocation_spans = vec![
+        Span::styled(invocation.server.clone(), Style::default().fg(Color::Blue)),
+        Span::raw("."),
+        Span::styled(invocation.tool.clone(), Style::default().fg(Color::Blue)),
+        Span::raw("("),
+        Span::styled(args_str, Style::default().fg(Color::Gray)),
+        Span::raw(")"),
+    ];
+    Line::from(invocation_spans)
 }

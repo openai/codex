@@ -9,7 +9,7 @@ use tokio::time::timeout;
 /// Timeout for git commands to prevent freezing on large repositories
 const GIT_COMMAND_TIMEOUT: TokioDuration = TokioDuration::from_secs(5);
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct GitInfo {
     /// Current commit hash (SHA)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -111,9 +111,14 @@ mod tests {
     // Helper function to create a test git repository
     async fn create_test_git_repo(temp_dir: &TempDir) -> PathBuf {
         let repo_path = temp_dir.path().to_path_buf();
+        let envs = vec![
+            ("GIT_CONFIG_GLOBAL", "/dev/null"),
+            ("GIT_CONFIG_NOSYSTEM", "1"),
+        ];
 
         // Initialize git repo
         Command::new("git")
+            .envs(envs.clone())
             .args(["init"])
             .current_dir(&repo_path)
             .output()
@@ -122,6 +127,7 @@ mod tests {
 
         // Configure git user (required for commits)
         Command::new("git")
+            .envs(envs.clone())
             .args(["config", "user.name", "Test User"])
             .current_dir(&repo_path)
             .output()
@@ -129,6 +135,7 @@ mod tests {
             .expect("Failed to set git user name");
 
         Command::new("git")
+            .envs(envs.clone())
             .args(["config", "user.email", "test@example.com"])
             .current_dir(&repo_path)
             .output()
@@ -140,6 +147,7 @@ mod tests {
         fs::write(&test_file, "test content").expect("Failed to write test file");
 
         Command::new("git")
+            .envs(envs.clone())
             .args(["add", "."])
             .current_dir(&repo_path)
             .output()
@@ -147,6 +155,7 @@ mod tests {
             .expect("Failed to add files");
 
         Command::new("git")
+            .envs(envs.clone())
             .args(["commit", "-m", "Initial commit"])
             .current_dir(&repo_path)
             .output()

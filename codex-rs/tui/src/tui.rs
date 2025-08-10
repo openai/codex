@@ -3,15 +3,20 @@ use std::io::Stdout;
 use std::io::stdout;
 
 use codex_core::config::Config;
+use crossterm::cursor::MoveTo;
 use crossterm::event::DisableBracketedPaste;
 use crossterm::event::EnableBracketedPaste;
-use ratatui::Terminal;
-use ratatui::TerminalOptions;
-use ratatui::Viewport;
+use crossterm::event::KeyboardEnhancementFlags;
+use crossterm::event::PopKeyboardEnhancementFlags;
+use crossterm::event::PushKeyboardEnhancementFlags;
+use crossterm::terminal::Clear;
+use crossterm::terminal::ClearType;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::disable_raw_mode;
 use ratatui::crossterm::terminal::enable_raw_mode;
+
+use crate::custom_terminal::Terminal;
 
 /// A type alias for the terminal type used in this application
 pub type Tui = Terminal<CrosstermBackend<Stdout>>;
@@ -21,21 +26,27 @@ pub fn init(_config: &Config) -> Result<Tui> {
     execute!(stdout(), EnableBracketedPaste)?;
 
     enable_raw_mode()?;
+    // Enable keyboard enhancement flags so modifiers for keys like Enter are disambiguated.
+    // chat_composer.rs is using a keyboard event listener to enter for any modified keys
+    // to create a new line that require this.
+    // Some terminals (notably legacy Windows consoles) do not support
+    // keyboard enhancement flags. Attempt to enable them, but continue
+    // gracefully if unsupported.
+    let _ = execute!(
+        stdout(),
+        PushKeyboardEnhancementFlags(
+            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+        )
+    );
     set_panic_hook();
 
-    // Reserve a fixed number of lines for the interactive viewport (composer,
-    // status, popups). History is injected above using `insert_before`. This
-    // is an initial step of the refactor – later the height can become
-    // dynamic. For now a conservative default keeps enough room for the
-    // multi‑line composer while not occupying the whole screen.
-    const BOTTOM_VIEWPORT_HEIGHT: u16 = 8;
+    // Clear screen and move cursor to top-left before drawing UI
+    execute!(stdout(), Clear(ClearType::All), MoveTo(0, 0))?;
+
     let backend = CrosstermBackend::new(stdout());
-    let tui = Terminal::with_options(
-        backend,
-        TerminalOptions {
-            viewport: Viewport::Inline(BOTTOM_VIEWPORT_HEIGHT),
-        },
-    )?;
+    let tui = Terminal::with_options(backend)?;
     Ok(tui)
 }
 
@@ -49,6 +60,8 @@ fn set_panic_hook() {
 
 /// Restore the terminal to its original state
 pub fn restore() -> Result<()> {
+    // Pop may fail on platforms that didn't support the push; ignore errors.
+    let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
     execute!(stdout(), DisableBracketedPaste)?;
     disable_raw_mode()?;
     Ok(())

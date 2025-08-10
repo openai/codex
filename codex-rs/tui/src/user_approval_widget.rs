@@ -7,29 +7,27 @@
 //! driven workflow – a fully‑fledged visual match is not required.
 
 use std::path::PathBuf;
+use std::sync::LazyLock;
 
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::KeyEventKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::*;
 use ratatui::text::Line;
-use ratatui::text::Span;
 use ratatui::widgets::Block;
 use ratatui::widgets::BorderType;
 use ratatui::widgets::Borders;
-use ratatui::widgets::List;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
-use tui_input::Input;
-use tui_input::backend::crossterm::EventHandler;
+use ratatui::widgets::Wrap;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
-use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 
 /// Request coming from the agent that needs user approval.
@@ -37,6 +35,7 @@ pub(crate) enum ApprovalRequest {
     Exec {
         id: String,
         command: Vec<String>,
+        #[allow(dead_code)]
         cwd: PathBuf,
         reason: Option<String>,
     },
@@ -48,68 +47,64 @@ pub(crate) enum ApprovalRequest {
 }
 
 /// Options displayed in the *select* mode.
+///
+/// The `key` is matched case-insensitively.
 struct SelectOption {
-    label: &'static str,
-    decision: Option<ReviewDecision>,
-    /// `true` when this option switches the widget to *input* mode.
-    enters_input_mode: bool,
+    label: Line<'static>,
+    description: &'static str,
+    key: KeyCode,
+    decision: ReviewDecision,
 }
 
-// keep in same order as in the TS implementation
-const SELECT_OPTIONS: &[SelectOption] = &[
-    SelectOption {
-        label: "Yes (y)",
-        decision: Some(ReviewDecision::Approved),
+static COMMAND_SELECT_OPTIONS: LazyLock<Vec<SelectOption>> = LazyLock::new(|| {
+    vec![
+        SelectOption {
+            label: Line::from(vec!["Y".underlined(), "es".into()]),
+            description: "Approve and run the command",
+            key: KeyCode::Char('y'),
+            decision: ReviewDecision::Approved,
+        },
+        SelectOption {
+            label: Line::from(vec!["A".underlined(), "lways".into()]),
+            description: "Approve the command for the remainder of this session",
+            key: KeyCode::Char('a'),
+            decision: ReviewDecision::ApprovedForSession,
+        },
+        SelectOption {
+            label: Line::from(vec!["N".underlined(), "o".into()]),
+            description: "Do not run the command",
+            key: KeyCode::Char('n'),
+            decision: ReviewDecision::Denied,
+        },
+    ]
+});
 
-        enters_input_mode: false,
-    },
-    SelectOption {
-        label: "Yes, always approve this exact command for this session (a)",
-        decision: Some(ReviewDecision::ApprovedForSession),
-
-        enters_input_mode: false,
-    },
-    SelectOption {
-        label: "Edit or give feedback (e)",
-        decision: None,
-
-        enters_input_mode: true,
-    },
-    SelectOption {
-        label: "No, and keep going (n)",
-        decision: Some(ReviewDecision::Denied),
-
-        enters_input_mode: false,
-    },
-    SelectOption {
-        label: "No, and stop for now (esc)",
-        decision: Some(ReviewDecision::Abort),
-
-        enters_input_mode: false,
-    },
-];
-
-/// Internal mode the widget is in – mirrors the TypeScript component.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Mode {
-    Select,
-    Input,
-}
+static PATCH_SELECT_OPTIONS: LazyLock<Vec<SelectOption>> = LazyLock::new(|| {
+    vec![
+        SelectOption {
+            label: Line::from(vec!["Y".underlined(), "es".into()]),
+            description: "Approve and apply the changes",
+            key: KeyCode::Char('y'),
+            decision: ReviewDecision::Approved,
+        },
+        SelectOption {
+            label: Line::from(vec!["N".underlined(), "o".into()]),
+            description: "Do not apply the changes",
+            key: KeyCode::Char('n'),
+            decision: ReviewDecision::Denied,
+        },
+    ]
+});
 
 /// A modal prompting the user to approve or deny the pending request.
 pub(crate) struct UserApprovalWidget<'a> {
     approval_request: ApprovalRequest,
     app_event_tx: AppEventSender,
     confirmation_prompt: Paragraph<'a>,
+    select_options: &'a Vec<SelectOption>,
 
     /// Currently selected index in *select* mode.
     selected_option: usize,
-
-    /// State for the optional input widget.
-    input: Input,
-
-    /// Current mode.
-    mode: Mode,
 
     /// Set to `true` once a decision has been sent – the parent view can then
     /// remove this widget from its queue.
@@ -118,27 +113,19 @@ pub(crate) struct UserApprovalWidget<'a> {
 
 impl UserApprovalWidget<'_> {
     pub(crate) fn new(approval_request: ApprovalRequest, app_event_tx: AppEventSender) -> Self {
-        let input = Input::default();
         let confirmation_prompt = match &approval_request {
             ApprovalRequest::Exec {
-                command,
-                cwd,
-                reason,
-                ..
+                command, reason, ..
             } => {
                 let cmd = strip_bash_lc_and_escape(command);
-                // Maybe try to relativize to the cwd of this process first?
-                // Will make cwd_str shorter in the common case.
-                let cwd_str = match relativize_to_home(cwd) {
-                    Some(rel) => format!("~/{}", rel.display()),
-                    None => cwd.display().to_string(),
-                };
+                // Present a single-line summary without cwd: "codex wants to run: <cmd>"
+                let mut cmd_span: Span = cmd.clone().into();
+                cmd_span.style = cmd_span.style.add_modifier(Modifier::DIM);
                 let mut contents: Vec<Line> = vec![
-                    Line::from("Shell Command".bold()),
-                    Line::from(""),
                     Line::from(vec![
-                        format!("{cwd_str}$").dim(),
-                        Span::from(format!(" {cmd}")),
+                        "? ".fg(Color::Blue),
+                        "Codex wants to run ".bold(),
+                        cmd_span,
                     ]),
                     Line::from(""),
                 ];
@@ -146,14 +133,12 @@ impl UserApprovalWidget<'_> {
                     contents.push(Line::from(reason.clone().italic()));
                     contents.push(Line::from(""));
                 }
-                contents.extend(vec![Line::from("Allow command?"), Line::from("")]);
-                Paragraph::new(contents)
+                Paragraph::new(contents).wrap(Wrap { trim: false })
             }
             ApprovalRequest::ApplyPatch {
                 reason, grant_root, ..
             } => {
-                let mut contents: Vec<Line> =
-                    vec![Line::from("Apply patch".bold()), Line::from("")];
+                let mut contents: Vec<Line> = vec![];
 
                 if let Some(r) = reason {
                     contents.push(Line::from(r.clone().italic()));
@@ -168,20 +153,19 @@ impl UserApprovalWidget<'_> {
                     contents.push(Line::from(""));
                 }
 
-                contents.push(Line::from("Allow changes?"));
-                contents.push(Line::from(""));
-
-                Paragraph::new(contents)
+                Paragraph::new(contents).wrap(Wrap { trim: false })
             }
         };
 
         Self {
+            select_options: match &approval_request {
+                ApprovalRequest::Exec { .. } => &COMMAND_SELECT_OPTIONS,
+                ApprovalRequest::ApplyPatch { .. } => &PATCH_SELECT_OPTIONS,
+            },
             approval_request,
             app_event_tx,
             confirmation_prompt,
             selected_option: 0,
-            input,
-            mode: Mode::Select,
             done: false,
         }
     }
@@ -197,9 +181,18 @@ impl UserApprovalWidget<'_> {
     /// captures input while visible, we don’t need to report whether the event
     /// was consumed—callers can assume it always is.
     pub(crate) fn handle_key_event(&mut self, key: KeyEvent) {
-        match self.mode {
-            Mode::Select => self.handle_select_key(key),
-            Mode::Input => self.handle_input_key(key),
+        if key.kind == KeyEventKind::Press {
+            self.handle_select_key(key);
+        }
+    }
+
+    /// Normalize a key for comparison.
+    /// - For `KeyCode::Char`, converts to lowercase for case-insensitive matching.
+    /// - Other key codes are returned unchanged.
+    fn normalize_keycode(code: KeyCode) -> KeyCode {
+        match code {
+            KeyCode::Char(c) => KeyCode::Char(c.to_ascii_lowercase()),
+            other => other,
         }
     }
 
@@ -211,58 +204,29 @@ impl UserApprovalWidget<'_> {
 
     fn handle_select_key(&mut self, key_event: KeyEvent) {
         match key_event.code {
-            KeyCode::Up => {
-                if self.selected_option == 0 {
-                    self.selected_option = SELECT_OPTIONS.len() - 1;
-                } else {
-                    self.selected_option -= 1;
-                }
+            KeyCode::Left => {
+                self.selected_option = (self.selected_option + self.select_options.len() - 1)
+                    % self.select_options.len();
             }
-            KeyCode::Down => {
-                self.selected_option = (self.selected_option + 1) % SELECT_OPTIONS.len();
-            }
-            KeyCode::Char('y') => {
-                self.send_decision(ReviewDecision::Approved);
-            }
-            KeyCode::Char('a') => {
-                self.send_decision(ReviewDecision::ApprovedForSession);
-            }
-            KeyCode::Char('n') => {
-                self.send_decision(ReviewDecision::Denied);
-            }
-            KeyCode::Char('e') => {
-                self.mode = Mode::Input;
+            KeyCode::Right => {
+                self.selected_option = (self.selected_option + 1) % self.select_options.len();
             }
             KeyCode::Enter => {
-                let opt = &SELECT_OPTIONS[self.selected_option];
-                if opt.enters_input_mode {
-                    self.mode = Mode::Input;
-                } else if let Some(decision) = opt.decision {
-                    self.send_decision(decision);
-                }
+                let opt = &self.select_options[self.selected_option];
+                self.send_decision(opt.decision);
             }
             KeyCode::Esc => {
                 self.send_decision(ReviewDecision::Abort);
             }
-            _ => {}
-        }
-    }
-
-    fn handle_input_key(&mut self, key_event: KeyEvent) {
-        // Handle special keys first.
-        match key_event.code {
-            KeyCode::Enter => {
-                let feedback = self.input.value().to_string();
-                self.send_decision_with_feedback(ReviewDecision::Denied, feedback);
-            }
-            KeyCode::Esc => {
-                // Cancel input – treat as deny without feedback.
-                self.send_decision(ReviewDecision::Denied);
-            }
-            _ => {
-                // Feed into input widget for normal editing.
-                let ct_event = crossterm::event::Event::Key(key_event);
-                self.input.handle_event(&ct_event);
+            other => {
+                let normalized = Self::normalize_keycode(other);
+                if let Some(opt) = self
+                    .select_options
+                    .iter()
+                    .find(|opt| Self::normalize_keycode(opt.key) == normalized)
+                {
+                    self.send_decision(opt.decision);
+                }
             }
         }
     }
@@ -276,9 +240,52 @@ impl UserApprovalWidget<'_> {
         match &self.approval_request {
             ApprovalRequest::Exec { command, .. } => {
                 let cmd = strip_bash_lc_and_escape(command);
-                lines.push(Line::from("approval decision"));
-                lines.push(Line::from(format!("$ {cmd}")));
-                lines.push(Line::from(format!("decision: {decision:?}")));
+                let mut cmd_span: Span = cmd.clone().into();
+                cmd_span.style = cmd_span.style.add_modifier(Modifier::DIM);
+
+                // Result line based on decision.
+                match decision {
+                    ReviewDecision::Approved => {
+                        lines.push(Line::from(vec![
+                            "✓ ".fg(Color::Green),
+                            "You ".into(),
+                            "approved".bold(),
+                            " codex to run ".into(),
+                            cmd_span,
+                            " ".into(),
+                            "this time".bold(),
+                        ]));
+                    }
+                    ReviewDecision::ApprovedForSession => {
+                        lines.push(Line::from(vec![
+                            "✓ ".fg(Color::Green),
+                            "You ".into(),
+                            "approved".bold(),
+                            " codex to run ".into(),
+                            cmd_span,
+                            " ".into(),
+                            "every time this session".bold(),
+                        ]));
+                    }
+                    ReviewDecision::Denied => {
+                        lines.push(Line::from(vec![
+                            "✗ ".fg(Color::Red),
+                            "You ".into(),
+                            "did not approve".bold(),
+                            " codex to run ".into(),
+                            cmd_span,
+                        ]));
+                    }
+                    ReviewDecision::Abort => {
+                        lines.push(Line::from(vec![
+                            "✗ ".fg(Color::Red),
+                            "You ".into(),
+                            "canceled".bold(),
+                            " the request to run ".into(),
+                            cmd_span,
+                        ]));
+                    }
+                }
             }
             ApprovalRequest::ApplyPatch { .. } => {
                 lines.push(Line::from(format!("patch approval decision: {decision:?}")));
@@ -313,79 +320,126 @@ impl UserApprovalWidget<'_> {
     pub(crate) fn is_complete(&self) -> bool {
         self.done
     }
-}
 
-const PLAIN: Style = Style::new();
-const BLUE_FG: Style = Style::new().fg(Color::Blue);
+    pub(crate) fn desired_height(&self, width: u16) -> u16 {
+        self.get_confirmation_prompt_height(width) + self.select_options.len() as u16
+    }
+}
 
 impl WidgetRef for &UserApprovalWidget<'_> {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        // Take the area, wrap it in a block with a border, and divide up the
-        // remaining area into two chunks: one for the confirmation prompt and
-        // one for the response.
-        let outer = Block::default()
-            .title("Review")
-            .borders(Borders::ALL)
-            .border_type(BorderType::Rounded);
-        let inner = outer.inner(area);
-
-        // Determine how many rows we can allocate for the static confirmation
-        // prompt while *always* keeping enough space for the interactive
-        // response area (select list or input field). When the full prompt
-        // would exceed the available height we truncate it so the response
-        // options never get pushed out of view. This keeps the approval modal
-        // usable even when the overall bottom viewport is small.
-
-        // Full height of the prompt (may be larger than the available area).
-        let full_prompt_height = self.get_confirmation_prompt_height(inner.width);
-
-        // Minimum rows that must remain for the interactive section.
-        let min_response_rows = match self.mode {
-            Mode::Select => SELECT_OPTIONS.len() as u16,
-            // In input mode we need exactly two rows: one for the guidance
-            // prompt and one for the single-line input field.
-            Mode::Input => 2,
-        };
-
-        // Clamp prompt height so confirmation + response never exceed the
-        // available space. `saturating_sub` avoids underflow when the area is
-        // too small even for the minimal layout – in this unlikely case we
-        // fall back to zero-height prompt so at least the options are
-        // visible.
-        let prompt_height = full_prompt_height.min(inner.height.saturating_sub(min_response_rows));
-
-        let chunks = Layout::default()
+        let prompt_height = self.get_confirmation_prompt_height(area.width);
+        let [prompt_chunk, response_chunk] = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Length(prompt_height), Constraint::Min(0)])
-            .split(inner);
-        let prompt_chunk = chunks[0];
-        let response_chunk = chunks[1];
+            .areas(area);
 
-        // Build the inner lines based on the mode. Collect them into a List of
-        // non-wrapping lines rather than a Paragraph for predictable layout.
-        let lines = match self.mode {
-            Mode::Select => SELECT_OPTIONS
-                .iter()
-                .enumerate()
-                .map(|(idx, opt)| {
-                    let (prefix, style) = if idx == self.selected_option {
-                        ("▶", BLUE_FG)
-                    } else {
-                        (" ", PLAIN)
-                    };
-                    Line::styled(format!("  {prefix} {}", opt.label), style)
-                })
-                .collect(),
-            Mode::Input => {
-                vec![
-                    Line::from("Give the model feedback on this command:"),
-                    Line::from(self.input.value()),
-                ]
-            }
+        let lines: Vec<Line> = self
+            .select_options
+            .iter()
+            .enumerate()
+            .map(|(idx, opt)| {
+                let style = if idx == self.selected_option {
+                    Style::new().bg(Color::Cyan).fg(Color::Black)
+                } else {
+                    Style::new().bg(Color::DarkGray)
+                };
+                opt.label.clone().alignment(Alignment::Center).style(style)
+            })
+            .collect();
+
+        let [title_area, button_area, description_area] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Length(1),
+            Constraint::Min(0),
+        ])
+        .areas(response_chunk.inner(Margin::new(1, 0)));
+        let title = match &self.approval_request {
+            ApprovalRequest::Exec { .. } => "Allow command?",
+            ApprovalRequest::ApplyPatch { .. } => "Apply changes?",
         };
+        Line::from(title).render(title_area, buf);
 
-        outer.render(area, buf);
         self.confirmation_prompt.clone().render(prompt_chunk, buf);
-        Widget::render(List::new(lines), response_chunk, buf);
+        let areas = Layout::horizontal(
+            lines
+                .iter()
+                .map(|l| Constraint::Length(l.width() as u16 + 2)),
+        )
+        .spacing(1)
+        .split(button_area);
+        for (idx, area) in areas.iter().enumerate() {
+            let line = &lines[idx];
+            line.render(*area, buf);
+        }
+
+        Line::from(self.select_options[self.selected_option].description)
+            .style(Style::new().italic().fg(Color::DarkGray))
+            .render(description_area.inner(Margin::new(1, 0)), buf);
+
+        Block::bordered()
+            .border_type(BorderType::QuadrantOutside)
+            .border_style(Style::default().fg(Color::Cyan))
+            .borders(Borders::LEFT)
+            .render_ref(
+                Rect::new(0, response_chunk.y, 1, response_chunk.height),
+                buf,
+            );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::KeyCode;
+    use crossterm::event::KeyEvent;
+    use crossterm::event::KeyModifiers;
+    use std::path::PathBuf;
+    use std::sync::mpsc::channel;
+
+    #[test]
+    fn lowercase_shortcut_is_accepted() {
+        let (tx_raw, rx) = channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let req = ApprovalRequest::Exec {
+            id: "1".to_string(),
+            command: vec!["echo".to_string()],
+            cwd: PathBuf::new(),
+            reason: None,
+        };
+        let mut widget = UserApprovalWidget::new(req, tx);
+        widget.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+        assert!(widget.is_complete());
+        let events: Vec<AppEvent> = rx.try_iter().collect();
+        assert!(events.iter().any(|e| matches!(
+            e,
+            AppEvent::CodexOp(Op::ExecApproval {
+                decision: ReviewDecision::Approved,
+                ..
+            })
+        )));
+    }
+
+    #[test]
+    fn uppercase_shortcut_is_accepted() {
+        let (tx_raw, rx) = channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let req = ApprovalRequest::Exec {
+            id: "2".to_string(),
+            command: vec!["echo".to_string()],
+            cwd: PathBuf::new(),
+            reason: None,
+        };
+        let mut widget = UserApprovalWidget::new(req, tx);
+        widget.handle_key_event(KeyEvent::new(KeyCode::Char('Y'), KeyModifiers::NONE));
+        assert!(widget.is_complete());
+        let events: Vec<AppEvent> = rx.try_iter().collect();
+        assert!(events.iter().any(|e| matches!(
+            e,
+            AppEvent::CodexOp(Op::ExecApproval {
+                decision: ReviewDecision::Approved,
+                ..
+            })
+        )));
     }
 }

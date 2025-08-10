@@ -50,7 +50,7 @@ async fn spawn_codex() -> Result<Codex, CodexErr> {
     config.model_provider.request_max_retries = Some(2);
     config.model_provider.stream_max_retries = Some(2);
     let CodexSpawnOk { codex: agent, .. } =
-        Codex::spawn(config, std::sync::Arc::new(Notify::new())).await?;
+        Codex::spawn(config, None, std::sync::Arc::new(Notify::new())).await?;
 
     Ok(agent)
 }
@@ -177,8 +177,7 @@ async fn live_shell_function_call() {
         match ev.msg {
             EventMsg::ExecCommandBegin(codex_core::protocol::ExecCommandBeginEvent {
                 command,
-                call_id: _,
-                cwd: _,
+                ..
             }) => {
                 assert_eq!(command, vec!["echo", MARKER]);
                 saw_begin = true;
@@ -186,8 +185,7 @@ async fn live_shell_function_call() {
             EventMsg::ExecCommandEnd(codex_core::protocol::ExecCommandEndEvent {
                 stdout,
                 exit_code,
-                call_id: _,
-                stderr: _,
+                ..
             }) => {
                 assert_eq!(exit_code, 0, "echo returned non‑zero exit code");
                 assert!(stdout.contains(MARKER));
