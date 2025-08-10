@@ -748,6 +748,51 @@ mod tests {
     }
 
     #[test]
+    fn strips_true_in_sequence() {
+        // `true` should be dropped from parsed sequences
+        assert_parsed(
+            &shlex_split_safe("true && rg --files"),
+            vec![ParsedCommand::Search {
+                cmd: shlex_split_safe("rg --files"),
+                query: None,
+                path: None,
+            }],
+        );
+
+        assert_parsed(
+            &shlex_split_safe("rg --files && true"),
+            vec![ParsedCommand::Search {
+                cmd: shlex_split_safe("rg --files"),
+                query: None,
+                path: None,
+            }],
+        );
+    }
+
+    #[test]
+    fn strips_true_inside_bash_lc() {
+        let inner = "true && rg --files";
+        assert_parsed(
+            &vec_str(&["bash", "-lc", inner]),
+            vec![ParsedCommand::Search {
+                cmd: shlex_split_safe("rg --files"),
+                query: None,
+                path: None,
+            }],
+        );
+
+        let inner2 = "rg --files || true";
+        assert_parsed(
+            &vec_str(&["bash", "-lc", inner2]),
+            vec![ParsedCommand::Search {
+                cmd: shlex_split_safe("rg --files"),
+                query: None,
+                path: None,
+            }],
+        );
+    }
+
+    #[test]
     fn shorten_path_on_windows() {
         assert_parsed(
             &shlex_split_safe(r#"cat "pkg\src\main.rs""#),
@@ -1139,6 +1184,10 @@ pub fn parse_command_impl(command: &[String]) -> Vec<ParsedCommand> {
                     if has_and_and && contains_test && first == "cd" {
                         return false;
                     }
+                    // Drop no-op commands like `true`
+                    if cmd.len() == 1 && first == "true" {
+                        return false;
+                    }
                     if first == "nl" {
                         // Treat `nl` without an explicit file operand as formatting-only.
                         return cmd.iter().skip(1).any(|a| !a.starts_with('-'));
@@ -1149,6 +1198,14 @@ pub fn parse_command_impl(command: &[String]) -> Vec<ParsedCommand> {
             _ => true,
         });
     }
+
+    // Also drop standalone `true` commands when not part of a chained `&&` context above
+    parsed.retain(|pc| match pc {
+        ParsedCommand::Unknown { cmd } => {
+            !(cmd.len() == 1 && cmd.first().is_some_and(|s| s == "true"))
+        }
+        _ => true,
+    });
 
     parsed
 }
@@ -1489,6 +1546,13 @@ fn parse_bash_lc_commands(
                     .into_iter()
                     .map(|tokens| summarize_main_tokens(&tokens))
                     .collect();
+                // Drop no-op `true` commands
+                commands.retain(|pc| match pc {
+                    ParsedCommand::Unknown { cmd } => {
+                        !(cmd.len() == 1 && cmd.first().is_some_and(|s| s == "true"))
+                    }
+                    _ => true,
+                });
                 commands = maybe_collapse_cat_sed(commands, &script_tokens);
                 if commands.len() == 1 {
                     // If we reduced to a single command, attribute the full original script
