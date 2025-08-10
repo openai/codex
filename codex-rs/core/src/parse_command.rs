@@ -48,7 +48,16 @@ pub enum ParsedCommand {
 /// The goal of the parsed metadata is to be able to provide the user with a human readable gis
 /// of what it is doing.
 pub fn parse_command(command: &[String]) -> Vec<ParsedCommand> {
-    parse_command_impl(command)
+    // Parse and then collapse consecutive duplicate commands to avoid redundant summaries.
+    let parsed = parse_command_impl(command);
+    let mut deduped: Vec<ParsedCommand> = Vec::with_capacity(parsed.len());
+    for cmd in parsed.into_iter() {
+        if deduped.last().is_some_and(|prev| prev == &cmd) {
+            continue;
+        }
+        deduped.push(cmd);
+    }
+    deduped
 }
 
 #[cfg(test)]
@@ -98,11 +107,6 @@ mod tests {
                 },
                 ParsedCommand::Unknown {
                     cmd: vec_str(&["pnpm", "-v"]),
-                },
-                ParsedCommand::Search {
-                    cmd: vec_str(&["rg", "--files"]),
-                    query: None,
-                    path: None,
                 },
                 ParsedCommand::Search {
                     cmd: vec_str(&["rg", "--files"]),
