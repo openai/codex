@@ -94,7 +94,11 @@ pub enum ResponseItem {
 impl From<ResponseInputItem> for ResponseItem {
     fn from(item: ResponseInputItem) -> Self {
         match item {
-            ResponseInputItem::Message { role, content, timestamp } => Self::Message {
+            ResponseInputItem::Message {
+                role,
+                content,
+                timestamp,
+            } => Self::Message {
                 id: None,
                 role,
                 content,
@@ -328,6 +332,7 @@ mod tests {
         let timestamp = "2025-07-15T10:30:45.123Z".to_string();
 
         let message = ResponseItem::Message {
+            id: None,
             role: "assistant".to_string(),
             content: vec![ContentItem::OutputText {
                 text: "Hello".to_string(),
@@ -371,6 +376,7 @@ mod tests {
     #[test]
     fn message_without_optional_fields() {
         let message = ResponseItem::Message {
+            id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
                 text: "Hi".to_string(),
@@ -439,7 +445,12 @@ mod tests {
 
         let response_input_item = ResponseInputItem::from(input);
 
-        if let ResponseInputItem::Message { role, content, timestamp } = response_input_item {
+        if let ResponseInputItem::Message {
+            role,
+            content,
+            timestamp,
+        } = response_input_item
+        {
             assert_eq!(role, "user");
             assert_eq!(content.len(), 1);
             assert!(timestamp.is_some());
@@ -465,7 +476,14 @@ mod tests {
         let response_input_item = ResponseInputItem::from(input);
         let response_item = ResponseItem::from(response_input_item);
 
-        if let ResponseItem::Message { role, content, timestamp, token_usage } = response_item {
+        if let ResponseItem::Message {
+            role,
+            content,
+            timestamp,
+            token_usage,
+            ..
+        } = response_item
+        {
             assert_eq!(role, "user");
             assert_eq!(content.len(), 1);
             assert!(timestamp.is_some());

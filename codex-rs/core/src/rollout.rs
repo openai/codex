@@ -358,7 +358,7 @@ impl JsonlWriter {
         let mut json = serde_json::to_string(item)?;
         json.push('\n');
         let _ = self.file.write_all(json.as_bytes()).await;
-        self.file.flush().await?;
+        self.file.sync_all().await?;
         Ok(())
     }
 }

@@ -119,6 +119,8 @@ impl Prompt {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText { text: ec }],
+                token_usage: None,
+                timestamp: None,
             });
         }
         if let Some(ui) = self.get_formatted_user_instructions() {
@@ -126,6 +128,8 @@ impl Prompt {
                 id: None,
                 role: "user".to_string(),
                 content: vec![ContentItem::InputText { text: ui }],
+                token_usage: None,
+                timestamp: None,
             });
         }
         input_with_instructions.extend(self.input.clone());

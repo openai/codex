@@ -435,7 +435,7 @@ pub struct TaskCompleteEvent {
     pub last_agent_message: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
 pub struct TokenUsage {
     pub input_tokens: u64,
     pub cached_input_tokens: Option<u64>,

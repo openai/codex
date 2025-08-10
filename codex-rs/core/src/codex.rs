@@ -2236,6 +2236,7 @@ async fn drain_to_completed(sess: &Session, sub_id: &str, prompt: &Prompt) -> Co
             Ok(ResponseEvent::Completed {
                 response_id: _,
                 token_usage,
+                ..
             }) => {
                 let token_usage = match token_usage {
                     Some(usage) => usage,

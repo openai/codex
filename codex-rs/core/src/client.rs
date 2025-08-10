@@ -149,23 +149,6 @@ impl ModelClient {
             self.summary,
         );
 
-        // Make an API-safe copy of the input without the timestamp and token_usage fields; otherwise
-        // the API will complain "Unknown parameter: 'input[0].timestamp'".
-        let api_safe_input: Vec<ResponseItem> = prompt
-            .input
-            .iter()
-            .map(|item| match item {
-                ResponseItem::Message { role, content, .. } => ResponseItem::Message {
-                    id: None,
-                    role: role.clone(),
-                    content: content.clone(),
-                    token_usage: None,
-                    timestamp: None,
-                },
-                other => other.clone(),
-            })
-            .collect();
-
         // Request encrypted COT if we are not storing responses,
         // otherwise reasoning items will be referenced by ID
         let include: Vec<String> = if !store && reasoning.is_some() {
