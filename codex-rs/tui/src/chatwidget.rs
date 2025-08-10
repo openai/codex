@@ -81,9 +81,6 @@ pub(crate) struct ChatWidget<'a> {
     current_stream: Option<StreamKind>,
     stream_header_emitted: bool,
     live_max_rows: u16,
-    // When true, render completed exec commands using the generic renderer
-    // instead of the parsed, specialized rendering.
-    render_parsed_exec: bool,
 }
 
 struct UserMessage {
@@ -229,7 +226,6 @@ impl ChatWidget<'_> {
             current_stream: None,
             stream_header_emitted: false,
             live_max_rows: 3,
-            render_parsed_exec: true,
         }
     }
 
@@ -448,13 +444,8 @@ impl ChatWidget<'_> {
                 call_id,
                 command,
                 cwd,
-                parsed_cmd: parsed_cmd_raw,
+                parsed_cmd,
             }) => {
-                let parsed_cmd = if self.render_parsed_exec {
-                    parsed_cmd_raw
-                } else {
-                    vec![]
-                };
                 self.finalize_active_stream();
                 // Ensure the status indicator is visible while the command runs.
                 self.bottom_pane
@@ -497,12 +488,6 @@ impl ChatWidget<'_> {
             }) => {
                 // Compute summary before moving stdout into the history cell.
                 let cmd = self.running_commands.remove(&call_id);
-                let parsed_cmd = match &cmd {
-                    Some(RunningCommand { parsed_cmd, .. }) if self.render_parsed_exec => {
-                        parsed_cmd.clone()
-                    }
-                    _ => vec![],
-                };
                 self.active_history_cell = None;
                 if let Some(cmd) = cmd {
                     self.add_to_history(HistoryCell::new_completed_exec_command(
@@ -624,17 +609,6 @@ impl ChatWidget<'_> {
 
     pub(crate) fn on_ctrl_z(&mut self) {
         self.interrupt_running_task();
-    }
-
-    pub(crate) fn on_ctrl_r(&mut self) {
-        self.render_parsed_exec = !self.render_parsed_exec;
-        let text = if self.render_parsed_exec {
-            "Show formatted commands"
-        } else {
-            "Show raw commands"
-        };
-        self.add_to_history(HistoryCell::new_background_event(text.to_string()));
-        self.request_redraw();
     }
 
     pub(crate) fn composer_is_empty(&self) -> bool {
