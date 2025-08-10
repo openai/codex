@@ -10,7 +10,7 @@ pub enum ParsedCommand {
         cmd: Vec<String>,
         name: String,
     },
-    Ls {
+    ListFiles {
         cmd: Vec<String>,
         path: Option<String>,
     },
@@ -200,7 +200,7 @@ mod tests {
         let inner = "ls -la | sed -n '1,120p'";
         assert_parsed(
             &vec_str(&["bash", "-lc", inner]),
-            vec![ParsedCommand::Ls {
+            vec![ParsedCommand::ListFiles {
                 cmd: vec_str(&["ls", "-la"]),
                 path: None,
             }],
@@ -709,7 +709,7 @@ mod tests {
     fn ls_with_glob() {
         assert_parsed(
             &shlex_split_safe("ls -I '*.test.js'"),
-            vec![ParsedCommand::Ls {
+            vec![ParsedCommand::ListFiles {
                 cmd: shlex_split_safe("ls -I '*.test.js'"),
                 path: None,
             }],
@@ -1067,7 +1067,7 @@ mod tests {
     fn ls_with_time_style_and_path() {
         assert_parsed(
             &shlex_split_safe("ls --time-style=long-iso ./dist"),
-            vec![ParsedCommand::Ls {
+            vec![ParsedCommand::ListFiles {
                 cmd: shlex_split_safe("ls --time-style=long-iso ./dist"),
                 // short_display_path drops "dist" and shows "." as the last useful segment
                 path: Some(".".to_string()),
@@ -1592,11 +1592,11 @@ fn parse_bash_lc_commands(
                                     }
                                 }
                             }
-                            ParsedCommand::Ls { path, cmd } => {
+                            ParsedCommand::ListFiles { path, cmd } => {
                                 if had_connectors {
-                                    ParsedCommand::Ls { cmd, path }
+                                    ParsedCommand::ListFiles { cmd, path }
                                 } else {
-                                    ParsedCommand::Ls {
+                                    ParsedCommand::ListFiles {
                                         cmd: script_tokens.clone(),
                                         path,
                                     }
@@ -1846,7 +1846,7 @@ fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
                 .into_iter()
                 .find(|p| !p.starts_with('-'))
                 .map(|p| short_display_path(p));
-            ParsedCommand::Ls {
+            ParsedCommand::ListFiles {
                 cmd: main_cmd.to_vec(),
                 path,
             }

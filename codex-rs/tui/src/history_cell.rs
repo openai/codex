@@ -290,9 +290,10 @@ impl HistoryCell {
         parsed: &[ParsedCommand],
         output: Option<&CommandOutput>,
     ) -> Vec<Line<'static>> {
-        match parsed.is_empty() {
-            true => HistoryCell::new_exec_command_generic(command, output),
-            false => HistoryCell::new_parsed_command(parsed, output),
+        if parsed.is_empty() {
+            HistoryCell::new_exec_command_generic(command, output)
+        } else {
+            HistoryCell::new_parsed_command(parsed, output)
         }
     }
 
@@ -305,20 +306,20 @@ impl HistoryCell {
         for (i, parsed) in parsed_commands.iter().enumerate() {
             let str = match parsed {
                 ParsedCommand::Read { name, .. } => format!("📖 {name}"),
-                ParsedCommand::Ls { cmd, path } => match path {
+                ParsedCommand::ListFiles { cmd, path } => match path {
                     Some(p) => format!("📂 {p}"),
-                    None => format!("📂 {}", cmd.join(" ")),
+                    None => format!("📂 {}", shlex_join_safe(cmd)),
                 },
                 ParsedCommand::Search { query, path, cmd } => match (query, path) {
                     (Some(q), Some(p)) => format!("🔎 {q} in {p}"),
                     (Some(q), None) => format!("🔎 {q}"),
                     (None, Some(p)) => format!("🔎 {p}"),
-                    (None, None) => format!("🔎 {}", cmd.join(" ")),
+                    (None, None) => format!("🔎 {}", shlex_join_safe(cmd)),
                 },
                 ParsedCommand::Format { .. } => "✨ Formatting".to_string(),
-                ParsedCommand::Test { cmd } => format!("🧪 {}", cmd.join(" ")),
-                ParsedCommand::Lint { cmd, .. } => format!("🧹 {}", cmd.join(" ")),
-                ParsedCommand::Unknown { cmd } => format!("⌨️ {}", cmd.join(" ")),
+                ParsedCommand::Test { cmd } => format!("🧪 {}", shlex_join_safe(cmd)),
+                ParsedCommand::Lint { cmd, .. } => format!("🧹 {}", shlex_join_safe(cmd)),
+                ParsedCommand::Unknown { cmd } => format!("⌨️ {}", shlex_join_safe(cmd)),
             };
 
             let prefix = if i == 0 { "  L " } else { "    " };
@@ -1062,4 +1063,11 @@ fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
         Span::raw(")"),
     ];
     Line::from(invocation_spans)
+}
+
+fn shlex_join_safe(command: &[String]) -> String {
+    match shlex::try_join(command.iter().map(|s| s.as_str())) {
+        Ok(cmd) => cmd,
+        Err(_) => command.join(" "),
+    }
 }

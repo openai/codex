@@ -489,17 +489,19 @@ impl ChatWidget<'_> {
                 // Compute summary before moving stdout into the history cell.
                 let cmd = self.running_commands.remove(&call_id);
                 self.active_history_cell = None;
-                if let Some(cmd) = cmd {
-                    self.add_to_history(HistoryCell::new_completed_exec_command(
-                        cmd.command,
-                        parsed_cmd,
-                        CommandOutput {
-                            exit_code,
-                            stdout,
-                            stderr,
-                        },
-                    ));
-                }
+                let (command, parsed_cmd) = match cmd {
+                    Some(cmd) => (cmd.command, cmd.parsed_cmd),
+                    None => (vec![call_id], vec![]),
+                };
+                self.add_to_history(HistoryCell::new_completed_exec_command(
+                    command,
+                    parsed_cmd,
+                    CommandOutput {
+                        exit_code,
+                        stdout,
+                        stderr,
+                    },
+                ))
             }
             EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
                 call_id: _,
