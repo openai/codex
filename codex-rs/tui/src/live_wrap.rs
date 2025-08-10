@@ -225,7 +225,6 @@ pub fn take_prefix_by_width(text: &str, max_cols: usize) -> (String, &str, usize
     (prefix, suffix, cols)
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

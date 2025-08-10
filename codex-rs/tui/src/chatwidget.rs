@@ -221,9 +221,16 @@ impl ChatWidget<'_> {
             content_buffer: String::new(),
             answer_buffer: String::new(),
             running_commands: HashMap::new(),
-            live_builder: RowBuilder::new({ let cols = crossterm::terminal::size().map(|(w, _)| w as usize).unwrap_or(100);
-                let maxw = std::env::var("CODEX_TUI_MAX_WIDTH").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(100);
-                cols.min(maxw) }),
+            live_builder: RowBuilder::new({
+                let cols = crossterm::terminal::size()
+                    .map(|(w, _)| w as usize)
+                    .unwrap_or(100);
+                let maxw = std::env::var("CODEX_TUI_MAX_WIDTH")
+                    .ok()
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .unwrap_or(100);
+                cols.min(maxw)
+            }),
             current_stream: None,
             stream_header_emitted: false,
             live_max_rows: 3,

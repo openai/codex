@@ -1,4 +1,3 @@
-use textwrap::{Options, WordSeparator, WordSplitter};
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::slash_command::SlashCommand;
@@ -36,6 +35,7 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::time::Duration;
+use textwrap::{Options, WordSeparator, WordSplitter};
 use tracing::error;
 
 pub(crate) struct CommandOutput {
@@ -850,8 +850,7 @@ impl WidgetRef for &HistoryCell {
                 acc.push(ratatui::text::Line::from(wl.to_string()));
             }
         }
-        ratatui::widgets::Paragraph::new(ratatui::text::Text::from(acc))
-            .render(area, buf);
+        ratatui::widgets::Paragraph::new(ratatui::text::Text::from(acc)).render(area, buf);
     }
 }
 
