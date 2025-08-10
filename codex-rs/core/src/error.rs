@@ -122,13 +122,18 @@ pub struct UsageLimitReachedError {
 
 impl std::fmt::Display for UsageLimitReachedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if let Some(plan_type) = &self.plan_type
-            && plan_type == "plus"
-        {
-            write!(
-                f,
-                "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing), or wait for limits to reset (every 5h and every week.)."
-            )?;
+        if let Some(plan_type) = &self.plan_type {
+            if plan_type == "plus" {
+                write!(
+                    f,
+                    "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing), or wait for limits to reset (every 5h and every week.)."
+                )?;
+            } else {
+                write!(
+                    f,
+                    "You've hit your usage limit. Limits reset every 5h and every week."
+                )?;
+            }
         } else {
             write!(
                 f,

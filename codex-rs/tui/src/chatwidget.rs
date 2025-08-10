@@ -29,6 +29,7 @@ use codex_core::protocol::TokenUsage;
 use codex_core::protocol::TurnDiffEvent;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use crossterm::terminal;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
@@ -220,7 +221,9 @@ impl ChatWidget<'_> {
             content_buffer: String::new(),
             answer_buffer: String::new(),
             running_commands: HashMap::new(),
-            live_builder: RowBuilder::new(80),
+            live_builder: RowBuilder::new({ let cols = crossterm::terminal::size().map(|(w, _)| w as usize).unwrap_or(100);
+                let maxw = std::env::var("CODEX_TUI_MAX_WIDTH").ok().and_then(|v| v.parse::<usize>().ok()).unwrap_or(100);
+                cols.min(maxw) }),
             current_stream: None,
             stream_header_emitted: false,
             live_max_rows: 3,
@@ -664,6 +667,9 @@ impl ChatWidget<'_> {
     }
 
     fn stream_push_and_maybe_commit(&mut self, delta: &str) {
+        if let Ok((cols, _)) = terminal::size() {
+            self.live_builder.set_width(cols as usize);
+        }
         self.live_builder.push_fragment(delta);
 
         // Commit overflow rows (small batches) while keeping the last N rows visible.

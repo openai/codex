@@ -1,3 +1,4 @@
+use textwrap::{Options, WordSeparator, WordSplitter};
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::slash_command::SlashCommand;
@@ -836,8 +837,20 @@ impl HistoryCell {
 
 impl WidgetRef for &HistoryCell {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        Paragraph::new(Text::from(self.plain_lines()))
-            .wrap(Wrap { trim: false })
+        // Pre-wrap lines at word boundaries using textwrap to avoid mid-word splits
+        let width = area.width as usize;
+        let opts = Options::new(width)
+            .word_separator(WordSeparator::AsciiSpace)
+            .word_splitter(WordSplitter::NoHyphenation);
+        // Flatten existing lines into plain strings, wrap, and render without Paragraph::wrap.
+        let mut acc: Vec<ratatui::text::Line<'static>> = Vec::new();
+        for line in self.plain_lines() {
+            let text: String = line.spans.iter().map(|s| s.content.clone()).collect();
+            for wl in textwrap::wrap(&text, &opts) {
+                acc.push(ratatui::text::Line::from(wl.to_string()));
+            }
+        }
+        ratatui::widgets::Paragraph::new(ratatui::text::Text::from(acc))
             .render(area, buf);
     }
 }

@@ -490,7 +490,8 @@ impl App<'_> {
 
         let mut area = terminal.viewport_area;
         area.height = desired_height.min(size.height);
-        area.width = size.width;
+        let cap = std::env::var("CODEX_TUI_MAX_WIDTH").ok().and_then(|v| v.parse::<u16>().ok()).unwrap_or(100);
+        area.width = size.width.min(cap);
         if area.bottom() > size.height {
             terminal
                 .backend_mut()

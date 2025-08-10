@@ -190,9 +190,21 @@ pub fn take_prefix_by_width(text: &str, max_cols: usize) -> (String, &str, usize
     }
     let mut cols = 0usize;
     let mut end_idx = 0usize;
+    let mut last_break_idx: Option<usize> = None;
+    let mut last_break_cols: usize = 0;
     for (i, ch) in text.char_indices() {
         let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+        // Track potential break points (prefer breaking at whitespace)
+        if ch.is_whitespace() {
+            last_break_idx = Some(i + ch.len_utf8());
+            last_break_cols = cols + ch_width;
+        }
         if cols.saturating_add(ch_width) > max_cols {
+            // If we overflowed, but we saw a prior break point on this line, use it.
+            if let Some(bi) = last_break_idx {
+                end_idx = bi;
+                cols = last_break_cols;
+            }
             break;
         }
         cols += ch_width;
@@ -201,10 +213,18 @@ pub fn take_prefix_by_width(text: &str, max_cols: usize) -> (String, &str, usize
             break;
         }
     }
+    // If we never advanced, but there is content, force-take at least one char to avoid infinite loop
+    if end_idx == 0 && !text.is_empty() {
+        if let Some((i, ch)) = text.char_indices().next() {
+            end_idx = i + ch.len_utf8();
+            cols = UnicodeWidthChar::width(ch).unwrap_or(0);
+        }
+    }
     let prefix = text[..end_idx].to_string();
     let suffix = &text[end_idx..];
     (prefix, suffix, cols)
 }
+
 
 #[cfg(test)]
 mod tests {
