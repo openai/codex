@@ -1,6 +1,7 @@
 import type { AgentLoop } from "../../utils/agent/agent-loop.js";
 
 import { Box, Text } from "ink";
+// import { Onboarding } from "../animations/onboarding.s";
 import path from "node:path";
 import React from "react";
 
@@ -33,6 +34,19 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
   flexModeEnabled = false,
   blinkingIndicator,
 }) => {
+  {
+    /* 
+  const widenedOnboarding = React.useMemo(() => {
+    try {
+      return Onboarding.split("\n")
+        .map((line) => line.split("").join(" "))
+        .join("\n");
+    } catch {
+      return Onboarding;
+    }
+  }, []);
+  */
+  }
   return (
     <>
       {terminalRows < 10 ? (
@@ -48,6 +62,11 @@ const TerminalHeader: React.FC<TerminalHeaderProps> = ({
               <Text color="gray">{PWD}</Text>
             </Text>
           </Box>
+          {/* 
+          <Box marginTop={1} marginBottom={1} paddingX={1}>
+            <Text dimColor>{widenedOnboarding}</Text>
+          </Box>
+          */}
           <Box
             paddingX={1}
             width={64}

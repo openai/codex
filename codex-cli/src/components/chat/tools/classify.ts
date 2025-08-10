@@ -70,6 +70,34 @@ export function classifySuccessTitle(
     }
   }
 
+  // 2a) grep search: grep [opts] PATTERN [PATH]
+  if (/\bgrep\b/.test(lower)) {
+    const patternMatch = beforePipe.match(/grep\s+[^"']*(["'])(.*?)\1/);
+    const pattern = patternMatch ? patternMatch[2] : undefined;
+    const tokens = beforePipe.replace(/\s+/g, " ").trim().split(" ");
+    let path: string | undefined;
+    for (let i = tokens.length - 1; i >= 0; i -= 1) {
+      const t = tokens[i] ?? "";
+      if (t === "grep") {
+        break;
+      }
+      if (t.startsWith("-")) {
+        continue;
+      }
+      if (pattern && (t === `"${pattern}"` || t === `'${pattern}'`)) {
+        continue;
+      }
+      path = t;
+      break;
+    }
+    if (pattern && path) {
+      return `● Searched for "${pattern}" in "${path}"`;
+    }
+    if (pattern) {
+      return `● Searched for "${pattern}"`;
+    }
+  }
+
   // 3) sed -n '1,200p' FILE  => treat as reading FILE
   if (/\bsed\b/.test(lower) && /-n\b/.test(lower) && /p['"]?\b/.test(lower)) {
     const tokens = beforePipe.replace(/\s+/g, " ").trim().split(" ");
@@ -83,6 +111,25 @@ export function classifySuccessTitle(
   if (/^cat\s+/.test(lower)) {
     const m = beforePipe.match(/^cat\s+([^\s|&;]+)/);
     if (m && m[1]) {
+      return `● Read ${m[1]}`;
+    }
+  }
+
+  // 4a) head/tail FILE => Read FILE
+  if (/^(head|tail)\b/.test(lower)) {
+    const tokens = beforePipe.replace(/\s+/g, " ").trim().split(" ");
+    for (let i = tokens.length - 1; i >= 1; i -= 1) {
+      const t = tokens[i] ?? "";
+      if (!t.startsWith("-")) {
+        return `● Read ${t}`;
+      }
+    }
+  }
+
+  // 4b) nl FILE => Read FILE (common when piping through sed for ranges)
+  if (/^nl\b/.test(lower)) {
+    const m = beforePipe.match(/^nl\s+(?:-[^-\s][^\s]*\s+)*([^\s|&;]+)/);
+    if (m && m[1] && !m[1].startsWith("-")) {
       return `● Read ${m[1]}`;
     }
   }
@@ -168,6 +215,35 @@ export function classifyRunningTitle(commandText: string): string | undefined {
     return `⏳ Searching ${commandText}`;
   }
 
+  // grep pattern => Searching
+  if (/\bgrep\b/.test(lower)) {
+    const patternMatch = beforePipe.match(/grep\s+[^"']*(["'])(.*?)\1/);
+    const pattern = patternMatch ? patternMatch[2] : undefined;
+    const tokens = beforePipe.replace(/\s+/g, " ").trim().split(" ");
+    let path: string | undefined;
+    for (let i = tokens.length - 1; i >= 0; i -= 1) {
+      const t = tokens[i] ?? "";
+      if (t === "grep") {
+        break;
+      }
+      if (t.startsWith("-")) {
+        continue;
+      }
+      if (pattern && (t === `"${pattern}"` || t === `'${pattern}'`)) {
+        continue;
+      }
+      path = t;
+      break;
+    }
+    if (pattern && path) {
+      return `⏳ Searching for "${pattern}" in "${path}"`;
+    }
+    if (pattern) {
+      return `⏳ Searching for "${pattern}"`;
+    }
+    return `⏳ Searching ${commandText}`;
+  }
+
   // sed/cat => Reading
   if (
     (/\bsed\b/.test(lower) && /-n\b/.test(lower) && /p['"]?\b/.test(lower)) ||
@@ -189,6 +265,25 @@ export function classifyRunningTitle(commandText: string): string | undefined {
       }
       return `⏳ Reading`;
     }
+  }
+
+  // head/tail/nl => Reading
+  if (/^(head|tail)\b/.test(lower)) {
+    const tokens = beforePipe.replace(/\s+/g, " ").trim().split(" ");
+    for (let i = tokens.length - 1; i >= 1; i -= 1) {
+      const t = tokens[i] ?? "";
+      if (!t.startsWith("-")) {
+        return `⏳ Reading ${t}`;
+      }
+    }
+    return `⏳ Reading`;
+  }
+  if (/^nl\b/.test(lower)) {
+    const m = beforePipe.match(/^nl\s+(?:-[^-\s][^\s]*\s+)*([^\s|&;]+)/);
+    if (m && m[1] && !m[1].startsWith("-")) {
+      return `⏳ Reading ${m[1]}`;
+    }
+    return `⏳ Reading`;
   }
 
   // ls/find => Listing files

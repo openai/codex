@@ -1,8 +1,6 @@
 # To do list with go here
 Top to do (sm)
-speed up animation
-group read together
-remove space between > and assistant message
+- ## bug
 
 images
 - https://github.com/chjj/tng

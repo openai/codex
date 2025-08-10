@@ -46,7 +46,7 @@ export function CommandStatus({
     <Box
       flexDirection="column"
       gap={1}
-      marginTop={typeof marginTop === "number" ? marginTop : 1}
+      marginTop={typeof marginTop === "number" ? marginTop : 0}
     >
       <Text>
         {isRunningLabel ? (
@@ -70,7 +70,9 @@ export function CommandStatus({
         )}
         {/* Tail with special formatting for "[Ctrl J to inspect]" */}
         {(() => {
-          if (!tail) return <Text dimColor>{tail}</Text>;
+          if (!tail) {
+            return <Text dimColor>{tail}</Text>;
+          }
           const HINT = "[Ctrl J to inspect]";
           const idx = tail.indexOf(HINT);
           if (idx === -1) {
@@ -147,6 +149,7 @@ function splitLabelTailAndColor(full: string): {
     },
     { re: /^(●\s+Read)(.*)$/u, color: "white", suppressOutput: true },
     { re: /^(✓\s+Tests)(.*)$/u, color: "white", suppressOutput: false },
+    { re: /^(●\s+Printed output)(.*)$/u, color: "white", suppressOutput: true },
     // Failures: render '⨯' in red, rest white, suppress output
     {
       re: /^(⨯\s+Tests failed)(.*)$/u,

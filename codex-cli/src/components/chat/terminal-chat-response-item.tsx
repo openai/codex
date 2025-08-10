@@ -159,7 +159,7 @@ function TerminalChatResponseMessage({
 
   if (message.role === "user") {
     return (
-      <Box flexDirection="column">
+      <Box flexDirection="column" borderStyle="round" borderColor="gray">
         <Box paddingX={1}>
           <Text color="gray">{contentBody}</Text>
         </Box>

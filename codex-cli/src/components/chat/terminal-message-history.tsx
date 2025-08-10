@@ -281,9 +281,7 @@ const TerminalMessageHistory: React.FC<TerminalMessageHistoryProps> = ({
               key={`${message.id}-${index}`}
               flexDirection="column"
               marginLeft={0}
-              marginTop={
-                message.type === "message" && message.role === "user" ? 0 : 1
-              }
+              marginTop={index === 0 ? 0 : 1}
               marginBottom={0}
             >
               <TerminalChatResponseItem
@@ -307,7 +305,7 @@ const TerminalMessageHistory: React.FC<TerminalMessageHistoryProps> = ({
             <Box
               key={`${d.key}-${index}`}
               flexDirection="column"
-              marginTop={prevIsUserMessage ? 0 : 1}
+              marginTop={index === 0 ? 0 : 1}
             >
               <CommandStatus title={`● Listed ${d.total} paths`} />
             </Box>
@@ -322,7 +320,7 @@ const TerminalMessageHistory: React.FC<TerminalMessageHistoryProps> = ({
             <Box
               key={`${d.key}-${index}`}
               flexDirection="column"
-              marginTop={prevIsUserMessage ? 0 : 1}
+              marginTop={index === 0 ? 0 : 1}
             >
               <CommandStatus title={header} />
               {d.files.map((f, idx) => (
@@ -366,7 +364,7 @@ const TerminalMessageHistory: React.FC<TerminalMessageHistoryProps> = ({
             workdir={d.workdir}
             outputText={outputForDisplay}
             fullStdout={fullStdout}
-            marginTop={prevIsUserMessage ? 0 : 1}
+            marginTop={index === 0 ? 0 : 1}
           />
         );
       })}
