@@ -139,7 +139,6 @@ pub enum AskForApproval {
     /// Under this policy, only "known safe" commands—as determined by
     /// `is_safe_command()`—that **only read files** are auto‑approved.
     /// Everything else will ask the user to approve.
-    #[default]
     #[serde(rename = "untrusted")]
     #[strum(serialize = "untrusted")]
     UnlessTrusted,
@@ -151,6 +150,7 @@ pub enum AskForApproval {
     OnFailure,
 
     /// The model decides when to ask the user for approval.
+    #[default]
     OnRequest,
 
     /// Never ask the user to approve commands. Failures are immediately returned

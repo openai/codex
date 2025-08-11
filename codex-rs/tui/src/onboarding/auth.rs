@@ -30,7 +30,7 @@ use super::onboarding_screen::StepState;
 #[derive(Debug)]
 pub(crate) enum SignInState {
     PickMode,
-    ChatGptContinueInBrowser(#[allow(dead_code)] ContinueInBrowserState),
+    ChatGptContinueInBrowser(ContinueInBrowserState),
     ChatGptSuccessMessage,
     ChatGptSuccess,
     EnvVarMissing,
@@ -40,12 +40,12 @@ pub(crate) enum SignInState {
 #[derive(Debug)]
 /// Used to manage the lifecycle of SpawnedLogin and FrameTicker and ensure they get cleaned up.
 pub(crate) struct ContinueInBrowserState {
-    _login_child: Option<codex_login::SpawnedLogin>,
+    login_child: Option<codex_login::SpawnedLogin>,
     _frame_ticker: Option<FrameTicker>,
 }
 impl Drop for ContinueInBrowserState {
     fn drop(&mut self) {
-        if let Some(child) = &self._login_child {
+        if let Some(child) = &self.login_child {
             if let Ok(mut locked) = child.child.lock() {
                 // Best-effort terminate and reap the child to avoid zombies.
                 let _ = locked.kill();
@@ -183,11 +183,31 @@ impl AuthModeWidget {
         let idx = self.current_frame();
         let mut spans = vec![Span::from("> ")];
         spans.extend(shimmer_spans("Finish signing in via your browser", idx));
-        let lines = vec![
-            Line::from(spans),
-            Line::from(""),
+        let mut lines = vec![Line::from(spans), Line::from("")];
+
+        if let SignInState::ChatGptContinueInBrowser(state) = &self.sign_in_state {
+            if let Some(url) = state
+                .login_child
+                .as_ref()
+                .and_then(|child| child.get_login_url())
+            {
+                lines.push(Line::from("  If the link doesn't open automatically, open the following link to authenticate:"));
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(
+                        url,
+                        Style::default()
+                            .fg(LIGHT_BLUE)
+                            .add_modifier(Modifier::UNDERLINED),
+                    ),
+                ]));
+                lines.push(Line::from(""));
+            }
+        }
+
+        lines.push(
             Line::from("  Press Esc to cancel").style(Style::default().add_modifier(Modifier::DIM)),
-        ];
+        );
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .render(area, buf);
@@ -276,7 +296,7 @@ impl AuthModeWidget {
                 self.spawn_completion_poller(child.clone());
                 self.sign_in_state =
                     SignInState::ChatGptContinueInBrowser(ContinueInBrowserState {
-                        _login_child: Some(child),
+                        login_child: Some(child),
                         _frame_ticker: Some(FrameTicker::new(self.event_tx.clone())),
                     });
                 self.event_tx.send(AppEvent::RequestRedraw);

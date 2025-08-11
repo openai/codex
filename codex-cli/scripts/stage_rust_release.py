@@ -13,10 +13,17 @@ def main() -> int:
 
 Run this after the GitHub Release has been created and use
 `--release-version` to specify the version to release.
+
+Optionally pass `--tmp` to control the temporary staging directory that will be
+forwarded to stage_release.sh.
 """
     )
     parser.add_argument(
         "--release-version", required=True, help="Version to release, e.g., 0.3.0"
+    )
+    parser.add_argument(
+        "--tmp",
+        help="Optional path to stage the npm package; forwarded to stage_release.sh",
     )
     args = parser.parse_args()
     version = args.release_version
@@ -43,16 +50,17 @@ Run this after the GitHub Release has been created and use
     print(f"should `git checkout {sha}`")
 
     current_dir = Path(__file__).parent.resolve()
-    stage_release = subprocess.run(
-        [
-            current_dir / "stage_release.sh",
-            "--version",
-            version,
-            "--workflow-url",
-            workflow["url"],
-            "--native",
-        ]
-    )
+    cmd = [
+        str(current_dir / "stage_release.sh"),
+        "--version",
+        version,
+        "--workflow-url",
+        workflow["url"],
+    ]
+    if args.tmp:
+        cmd.extend(["--tmp", args.tmp])
+
+    stage_release = subprocess.run(cmd)
     stage_release.check_returncode()
 
     return 0

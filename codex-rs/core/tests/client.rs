@@ -1,8 +1,5 @@
-#![allow(clippy::expect_used)]
-#![allow(clippy::unwrap_used)]
-use std::path::PathBuf;
+#![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use chrono::Utc;
 use codex_core::Codex;
 use codex_core::CodexSpawnOk;
 use codex_core::ModelProviderInfo;
@@ -13,10 +10,7 @@ use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
-use codex_login::AuthDotJson;
-use codex_login::AuthMode;
 use codex_login::CodexAuth;
-use codex_login::TokenData;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::wait_for_event;
@@ -99,7 +93,7 @@ async fn includes_session_id_and_model_headers_in_request() {
     let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
     let CodexSpawnOk { codex, .. } = Codex::spawn(
         config,
-        Some(CodexAuth::from_api_key("Test API Key".to_string())),
+        Some(CodexAuth::from_api_key("Test API Key")),
         ctrl_c.clone(),
     )
     .await
@@ -173,7 +167,7 @@ async fn includes_base_instructions_override_in_request() {
     let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
     let CodexSpawnOk { codex, .. } = Codex::spawn(
         config,
-        Some(CodexAuth::from_api_key("Test API Key".to_string())),
+        Some(CodexAuth::from_api_key("Test API Key")),
         ctrl_c.clone(),
     )
     .await
@@ -232,7 +226,7 @@ async fn originator_config_override_is_used() {
     let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
     let CodexSpawnOk { codex, .. } = Codex::spawn(
         config,
-        Some(CodexAuth::from_api_key("Test API Key".to_string())),
+        Some(CodexAuth::from_api_key("Test API Key")),
         ctrl_c.clone(),
     )
     .await
@@ -370,7 +364,7 @@ async fn includes_user_instructions_message_in_request() {
     let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
     let CodexSpawnOk { codex, .. } = Codex::spawn(
         config,
-        Some(CodexAuth::from_api_key("Test API Key".to_string())),
+        Some(CodexAuth::from_api_key("Test API Key")),
         ctrl_c.clone(),
     )
     .await
@@ -556,19 +550,5 @@ async fn env_var_overrides_loaded_auth() {
 }
 
 fn create_dummy_codex_auth() -> CodexAuth {
-    CodexAuth::new(
-        None,
-        AuthMode::ChatGPT,
-        PathBuf::new(),
-        Some(AuthDotJson {
-            openai_api_key: None,
-            tokens: Some(TokenData {
-                id_token: Default::default(),
-                access_token: "Access Token".to_string(),
-                refresh_token: "test".to_string(),
-                account_id: Some("account_id".to_string()),
-            }),
-            last_refresh: Some(Utc::now()),
-        }),
-    )
+    CodexAuth::create_dummy_chatgpt_auth_for_testing()
 }

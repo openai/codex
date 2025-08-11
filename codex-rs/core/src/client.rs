@@ -31,6 +31,7 @@ use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::error::CodexErr;
 use crate::error::Result;
+use crate::error::UsageLimitReachedError;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
@@ -39,6 +40,16 @@ use crate::openai_tools::create_tools_json_for_responses_api;
 use crate::protocol::TokenUsage;
 use crate::util::backoff;
 use std::sync::Arc;
+
+#[derive(Debug, Deserialize)]
+struct ErrorResponse {
+    error: Error,
+}
+
+#[derive(Debug, Deserialize)]
+struct Error {
+    r#type: String,
+}
 
 #[derive(Clone)]
 pub struct ModelClient {
@@ -127,15 +138,6 @@ impl ModelClient {
 
         let auth_mode = auth.as_ref().map(|a| a.mode);
 
-        if self.config.model_family.family == "2025-08-06-model"
-            && auth_mode != Some(AuthMode::ChatGPT)
-        {
-            return Err(CodexErr::UnexpectedStatus(
-                StatusCode::BAD_REQUEST,
-                "2025-08-06-model is only supported with ChatGPT auth, run `codex login status` to check your auth status and `codex login` to login with ChatGPT".to_string(),
-            ));
-        }
-
         let store = prompt.store && auth_mode != Some(AuthMode::ChatGPT);
 
         let full_instructions = prompt.get_full_instructions(&self.config.model_family);
@@ -194,7 +196,7 @@ impl ModelClient {
 
             if let Some(auth) = auth.as_ref()
                 && auth.mode == AuthMode::ChatGPT
-                && let Some(account_id) = auth.get_account_id().await
+                && let Some(account_id) = auth.get_account_id()
             {
                 req_builder = req_builder.header("chatgpt-account-id", account_id);
             }
@@ -234,6 +236,14 @@ impl ModelClient {
                 }
                 Ok(res) => {
                     let status = res.status();
+
+                    // Pull out Retry‑After header if present.
+                    let retry_after_secs = res
+                        .headers()
+                        .get(reqwest::header::RETRY_AFTER)
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|s| s.parse::<u64>().ok());
+
                     // The OpenAI Responses endpoint returns structured JSON bodies even for 4xx/5xx
                     // errors. When we bubble early with only the HTTP status the caller sees an opaque
                     // "unexpected status 400 Bad Request" which makes debugging nearly impossible.
@@ -247,16 +257,29 @@ impl ModelClient {
                         return Err(CodexErr::UnexpectedStatus(status, body));
                     }
 
-                    if attempt > max_retries {
-                        return Err(CodexErr::RetryLimit(status));
+                    if status == StatusCode::TOO_MANY_REQUESTS {
+                        let body = res.json::<ErrorResponse>().await.ok();
+                        if let Some(ErrorResponse {
+                            error: Error { r#type, .. },
+                        }) = body
+                        {
+                            if r#type == "usage_limit_reached" {
+                                return Err(CodexErr::UsageLimitReached(UsageLimitReachedError {
+                                    plan_type: auth.and_then(|a| a.get_plan_type()),
+                                }));
+                            } else if r#type == "usage_not_included" {
+                                return Err(CodexErr::UsageNotIncluded);
+                            }
+                        }
                     }
 
-                    // Pull out Retry‑After header if present.
-                    let retry_after_secs = res
-                        .headers()
-                        .get(reqwest::header::RETRY_AFTER)
-                        .and_then(|v| v.to_str().ok())
-                        .and_then(|s| s.parse::<u64>().ok());
+                    if attempt > max_retries {
+                        if status == StatusCode::INTERNAL_SERVER_ERROR {
+                            return Err(CodexErr::InternalServerError);
+                        }
+
+                        return Err(CodexErr::RetryLimit(status));
+                    }
 
                     let delay = retry_after_secs
                         .map(|s| Duration::from_millis(s * 1_000))

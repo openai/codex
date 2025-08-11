@@ -99,7 +99,7 @@ async fn retries_on_early_close() {
     config.model_provider = model_provider;
     let CodexSpawnOk { codex, .. } = Codex::spawn(
         config,
-        Some(CodexAuth::from_api_key("Test API Key".to_string())),
+        Some(CodexAuth::from_api_key("Test API Key")),
         ctrl_c,
     )
     .await

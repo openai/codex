@@ -82,20 +82,18 @@ runs:
 
         # Note that if we start baking version numbers into the artifact name,
         # we will need to update this action.yml file to match.
-        artifact="codex-exec-${triple}.tar.gz"
+        artifact="codex-${triple}.tar.gz"
 
         TAG_ARG="${{ inputs.codex_release_tag }}"
         # The usage is `gh release download [<tag>] [flags]`, so if TAG_ARG
         # is empty, we do not pass it so we can default to the latest release.
         gh release download ${TAG_ARG:+$TAG_ARG} --repo openai/codex \
           --pattern "$artifact" --output - \
-        | tar xzO > /usr/local/bin/codex-exec
-        chmod +x /usr/local/bin/codex-exec
+        | tar xzO > /usr/local/bin/codex
+        chmod +x /usr/local/bin/codex
 
-        # Display Codex version to confirm binary integrity; ensure we point it
-        # at the checked-out repository via --cd so that any subsequent commands
-        # use the correct working directory.
-        codex-exec --cd "$GITHUB_WORKSPACE" --version
+        # Display Codex version to confirm binary integrity.
+        codex --version
 
     - name: Install Bun
       uses: oven-sh/setup-bun@v2
