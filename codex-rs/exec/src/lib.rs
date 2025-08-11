@@ -169,16 +169,11 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides)?;
 
     // Build OTEL layer and compose into subscriber.
-    let telemetry = telemetry::build_layer(&telemetry::Settings {
-        enabled: true,
-        exporter: telemetry::Exporter::OtlpFile {
-            path: PathBuf::new(),
-            rotate_mb: Some(100),
-        },
-        service_name: "codex".to_string(),
-        service_version: env!("CARGO_PKG_VERSION").to_string(),
-        codex_home: Some(config.codex_home.clone()),
-    });
+    let telemetry = codex_core::telemetry_init::build_otel_layer_from_config(
+        &config,
+        "codex",
+        env!("CARGO_PKG_VERSION"),
+    );
     let _telemetry_guard = if let Some((guard, tracer)) = telemetry {
         let otel_layer = tracing_opentelemetry::OpenTelemetryLayer::new(tracer);
         // Build env_filter separately and attach via with_filter.

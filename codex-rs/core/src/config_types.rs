@@ -76,6 +76,48 @@ pub enum HistoryPersistence {
     None,
 }
 
+// ===== Telemetry configuration =====
+
+/// Which telemetry exporter to use.
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum TelemetryExporterKind {
+    None,
+    OtlpFile,
+    OtlpHttp,
+    OtlpGrpc,
+}
+
+/// Telemetry settings loaded from config.toml. Fields are optional so we can apply defaults.
+#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct TelemetryConfigToml {
+    /// Enable or disable telemetry entirely. Defaults to true.
+    pub enabled: Option<bool>,
+
+    /// Exporter to use. Defaults to `otlp-file`.
+    pub exporter: Option<TelemetryExporterKind>,
+
+    /// Endpoint for HTTP/GRPC exporters. Example: "http://localhost:4318".
+    pub endpoint: Option<String>,
+
+    /// Optional headers for HTTP/GRPC exporters.
+    #[serde(default)]
+    pub headers: Option<HashMap<String, String>>,
+
+    /// Rotation size (MiB) for file exporter.
+    pub rotate_mb: Option<u64>,
+}
+
+/// Effective telemetry settings after defaults are applied.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TelemetryConfig {
+    pub enabled: bool,
+    pub exporter: TelemetryExporterKind,
+    pub endpoint: Option<String>,
+    pub headers: HashMap<String, String>,
+    pub rotate_mb: Option<u64>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(untagged)]
 pub enum Notifications {
