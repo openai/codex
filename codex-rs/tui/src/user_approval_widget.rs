@@ -41,6 +41,7 @@ pub(crate) enum ApprovalRequest {
     },
     ApplyPatch {
         id: String,
+        changes: std::collections::HashMap<std::path::PathBuf, codex_core::protocol::FileChange>,
         reason: Option<String>,
         grant_root: Option<PathBuf>,
     },
@@ -135,9 +136,7 @@ impl UserApprovalWidget<'_> {
                 }
                 Paragraph::new(contents).wrap(Wrap { trim: false })
             }
-            ApprovalRequest::ApplyPatch {
-                reason, grant_root, ..
-            } => {
+            ApprovalRequest::ApplyPatch { changes, reason, grant_root, .. } => {
                 let mut contents: Vec<Line> = vec![];
 
                 if let Some(r) = reason {
@@ -152,6 +151,9 @@ impl UserApprovalWidget<'_> {
                     )));
                     contents.push(Line::from(""));
                 }
+
+                let details = crate::history_cell::create_diff_details(changes);
+                contents.extend(details);
 
                 Paragraph::new(contents).wrap(Wrap { trim: false })
             }

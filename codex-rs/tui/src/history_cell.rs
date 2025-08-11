@@ -793,7 +793,7 @@ impl HistoryCell {
     /// "A path/to/file.rs").
     pub(crate) fn new_patch_event(
         event_type: PatchEventType,
-        changes: HashMap<PathBuf, FileChange>,
+        changes: &HashMap<PathBuf, FileChange>,
     ) -> Self {
         let title = match event_type {
             PatchEventType::ApprovalRequest => "proposed patch",
@@ -854,7 +854,7 @@ impl WidgetRef for &HistoryCell {
     }
 }
 
-fn create_diff_summary(title: &str, changes: HashMap<PathBuf, FileChange>) -> Vec<RtLine<'static>> {
+fn create_diff_summary(title: &str, changes: &HashMap<PathBuf, FileChange>) -> Vec<RtLine<'static>> {
     let mut files: Vec<FileSummary> = Vec::new();
 
     // Count additions/deletions from a unified diff body
@@ -889,7 +889,7 @@ fn create_diff_summary(title: &str, changes: HashMap<PathBuf, FileChange>) -> Ve
         }
     };
 
-    for (path, change) in &changes {
+    for (path, change) in changes {
         use codex_core::protocol::FileChange::*;
         match change {
             Add { content } => {
@@ -985,6 +985,48 @@ fn create_diff_summary(title: &str, changes: HashMap<PathBuf, FileChange>) -> Ve
         out.push(line);
     }
 
+    out
+}
+
+pub(crate) fn create_diff_details(
+    changes: &std::collections::HashMap<PathBuf, FileChange>,
+) -> Vec<RtLine<'static>> {
+    use ratatui::style::Stylize as _;
+    let mut out: Vec<RtLine<'static>> = Vec::new();
+    for (path, change) in changes {
+        match change {
+            FileChange::Update { unified_diff, .. } => {
+                out.push(RtLine::from(path.display().to_string()).bold());
+                for l in unified_diff.lines() {
+                    if l.starts_with("+++") || l.starts_with("---") || l.starts_with("@@") {
+                        continue;
+                    }
+                    let styled = if let Some(first) = l.as_bytes().first() {
+                        match first {
+                            b'+' => RtLine::from(l.to_string()).green(),
+                            b'-' => RtLine::from(l.to_string()).red(),
+                            _ => RtLine::from(l.to_string()).gray(),
+                        }
+                    } else {
+                        RtLine::from(l.to_string())
+                    };
+                    out.push(styled);
+                }
+                out.push(RtLine::from(""));
+            }
+            FileChange::Add { content } => {
+                out.push(RtLine::from(format!("{} (new)", path.display())).bold());
+                for l in content.lines() {
+                    out.push(RtLine::from(format!("+{}", l)).green());
+                }
+                out.push(RtLine::from(""));
+            }
+            FileChange::Delete => {
+                out.push(RtLine::from(format!("{} (deleted)", path.display())).red());
+                out.push(RtLine::from(""));
+            }
+        }
+    }
     out
 }
 

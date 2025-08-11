@@ -426,12 +426,13 @@ impl ChatWidget<'_> {
                 // ------------------------------------------------------------------
                 self.add_to_history(HistoryCell::new_patch_event(
                     PatchEventType::ApprovalRequest,
-                    changes,
+                    &changes,
                 ));
 
                 // Now surface the approval request in the BottomPane as before.
                 let request = ApprovalRequest::ApplyPatch {
                     id,
+                    changes,
                     reason,
                     grant_root,
                 };
@@ -466,7 +467,7 @@ impl ChatWidget<'_> {
             }) => {
                 self.add_to_history(HistoryCell::new_patch_event(
                     PatchEventType::ApplyBegin { auto_approved },
-                    changes,
+                    &changes,
                 ));
             }
             EventMsg::PatchApplyEnd(event) => {

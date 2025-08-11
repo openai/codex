@@ -174,6 +174,13 @@ impl TrustDirectoryWidget {
 
     fn handle_dont_trust(&mut self) {
         self.highlighted = TrustDirectorySelection::DontTrust;
+        // Update in-memory chat config for this session to require approval
+        // of edits and commands in untrusted workspaces.
+        if let Ok(mut args) = self.chat_widget_args.lock() {
+            args.config.approval_policy = AskForApproval::UnlessTrusted;
+            args.config.sandbox_policy = SandboxPolicy::new_read_only_policy();
+        }
+
         self.selection = Some(TrustDirectorySelection::DontTrust);
     }
 }
