@@ -7,124 +7,24 @@ use ratatui::text::Span as RtSpan;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::common::DEFAULT_WRAP_COLS;
 use codex_core::protocol::FileChange;
 
-const DEFAULT_WRAP_COLS: usize = 96;
+use crate::history_cell::PatchEventType;
+
 const SPACES_AFTER_LINE_NUMBER: usize = 6;
 
-pub(crate) fn render_patch_details(changes: &HashMap<PathBuf, FileChange>) -> Vec<RtLine<'static>> {
-    let mut out: Vec<RtLine<'static>> = Vec::new();
-    let term_cols: usize = terminal::size()
-        .map(|(w, _)| w as usize)
-        .unwrap_or(DEFAULT_WRAP_COLS);
-
-    let mut is_first_file = true;
-    for (path, change) in changes.iter() {
-        // Add separator only between files (not at the very start)
-        if !is_first_file {
-            out.push(RtLine::from(vec![
-                RtSpan::raw("    "),
-                RtSpan::styled("...", style_dim()),
-            ]));
-        }
-        match change {
-            FileChange::Add { content } => {
-                let ln_width = usize::max(2, digits_len(content.lines().count()));
-                for (i, raw) in content.lines().enumerate() {
-                    let ln = i + 1;
-                    push_wrapped_diff_line(
-                        &mut out,
-                        ln,
-                        '+',
-                        raw,
-                        Some(style_add()),
-                        term_cols,
-                        ln_width,
-                    );
-                }
-            }
-            FileChange::Delete => {
-                let original = std::fs::read_to_string(path).unwrap_or_default();
-                let ln_width = usize::max(2, digits_len(original.lines().count()));
-                for (i, raw) in original.lines().enumerate() {
-                    let ln = i + 1;
-                    push_wrapped_diff_line(
-                        &mut out,
-                        ln,
-                        '-',
-                        raw,
-                        Some(style_del()),
-                        term_cols,
-                        ln_width,
-                    );
-                }
-            }
-            FileChange::Update {
-                unified_diff,
-                move_path: _,
-            } => {
-                if let Ok(patch) = diffy::Patch::from_str(unified_diff) {
-                    for h in patch.hunks() {
-                        // determine a reasonable ln field width for this hunk
-                        let old_end = h.old_range().end();
-                        let new_end = h.new_range().end();
-                        let ln_width = usize::max(2, digits_len(old_end.max(new_end)));
-
-                        let mut old_ln = h.old_range().start();
-                        let mut new_ln = h.new_range().start();
-                        for l in h.lines() {
-                            match l {
-                                diffy::Line::Insert(text) => {
-                                    let s = text.trim_end_matches('\n');
-                                    push_wrapped_diff_line(
-                                        &mut out,
-                                        new_ln,
-                                        '+',
-                                        s,
-                                        Some(style_add()),
-                                        term_cols,
-                                        ln_width,
-                                    );
-                                    new_ln += 1;
-                                }
-                                diffy::Line::Delete(text) => {
-                                    let s = text.trim_end_matches('\n');
-                                    push_wrapped_diff_line(
-                                        &mut out,
-                                        old_ln,
-                                        '-',
-                                        s,
-                                        Some(style_del()),
-                                        term_cols,
-                                        ln_width,
-                                    );
-                                    old_ln += 1;
-                                }
-                                diffy::Line::Context(text) => {
-                                    let s = text.trim_end_matches('\n');
-                                    push_wrapped_diff_line(
-                                        &mut out, new_ln, ' ', s, None, term_cols, ln_width,
-                                    );
-                                    old_ln += 1;
-                                    new_ln += 1;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        out.push(RtLine::from(RtSpan::raw("")));
-        is_first_file = false;
-    }
-
-    out
+// Internal representation for diff line rendering
+enum DiffLineType {
+    Insert,
+    Delete,
+    Context,
 }
 
 pub(crate) fn create_diff_summary(
     title: &str,
     changes: &HashMap<PathBuf, FileChange>,
+    event_type: PatchEventType,
 ) -> Vec<RtLine<'static>> {
     struct FileSummary {
         display_path: String,
@@ -251,17 +151,112 @@ pub(crate) fn create_diff_summary(
         out.push(line);
     }
 
+    let show_details = matches!(
+        event_type,
+        PatchEventType::ApplyBegin {
+            auto_approved: true
+        } | PatchEventType::ApprovalRequest
+    );
+
+    if show_details {
+        out.extend(render_patch_details(changes));
+    }
+
+    out
+}
+
+fn render_patch_details(changes: &HashMap<PathBuf, FileChange>) -> Vec<RtLine<'static>> {
+    let mut out: Vec<RtLine<'static>> = Vec::new();
+    let term_cols: usize = terminal::size()
+        .map(|(w, _)| w as usize)
+        .unwrap_or(DEFAULT_WRAP_COLS);
+
+    for (index, (path, change)) in changes.iter().enumerate() {
+        let is_first_file = index == 0;
+        // Add separator only between files (not at the very start)
+        if !is_first_file {
+            out.push(RtLine::from(vec![
+                RtSpan::raw("    "),
+                RtSpan::styled("...", style_dim()),
+            ]));
+        }
+        match change {
+            FileChange::Add { content } => {
+                for (i, raw) in content.lines().enumerate() {
+                    let ln = i + 1;
+                    push_wrapped_diff_line(&mut out, ln, DiffLineType::Insert, raw, term_cols);
+                }
+            }
+            FileChange::Delete => {
+                let original = std::fs::read_to_string(path).unwrap_or_default();
+                for (i, raw) in original.lines().enumerate() {
+                    let ln = i + 1;
+                    push_wrapped_diff_line(&mut out, ln, DiffLineType::Delete, raw, term_cols);
+                }
+            }
+            FileChange::Update {
+                unified_diff,
+                move_path: _,
+            } => {
+                if let Ok(patch) = diffy::Patch::from_str(unified_diff) {
+                    for h in patch.hunks() {
+                        let mut old_ln = h.old_range().start();
+                        let mut new_ln = h.new_range().start();
+                        for l in h.lines() {
+                            match l {
+                                diffy::Line::Insert(text) => {
+                                    let s = text.trim_end_matches('\n');
+                                    push_wrapped_diff_line(
+                                        &mut out,
+                                        new_ln,
+                                        DiffLineType::Insert,
+                                        s,
+                                        term_cols,
+                                    );
+                                    new_ln += 1;
+                                }
+                                diffy::Line::Delete(text) => {
+                                    let s = text.trim_end_matches('\n');
+                                    push_wrapped_diff_line(
+                                        &mut out,
+                                        old_ln,
+                                        DiffLineType::Delete,
+                                        s,
+                                        term_cols,
+                                    );
+                                    old_ln += 1;
+                                }
+                                diffy::Line::Context(text) => {
+                                    let s = text.trim_end_matches('\n');
+                                    push_wrapped_diff_line(
+                                        &mut out,
+                                        new_ln,
+                                        DiffLineType::Context,
+                                        s,
+                                        term_cols,
+                                    );
+                                    old_ln += 1;
+                                    new_ln += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        out.push(RtLine::from(RtSpan::raw("")));
+    }
+
     out
 }
 
 fn push_wrapped_diff_line(
     out: &mut Vec<RtLine<'static>>,
     line_number: usize,
-    sign: char,
+    kind: DiffLineType,
     text: &str,
-    bg_style: Option<Style>,
     term_cols: usize,
-    _ln_width: usize,
 ) {
     let indent = "    ";
     let ln_str = line_number.to_string();
@@ -275,6 +270,11 @@ fn push_wrapped_diff_line(
     let cont_prefix_cols = indent.len() + ln_str.len() + gap_after_ln;
 
     let mut first = true;
+    let (sign_opt, bg_style) = match kind {
+        DiffLineType::Insert => (Some('+'), Some(style_add())),
+        DiffLineType::Delete => (Some('-'), Some(style_del())),
+        DiffLineType::Context => (None, None),
+    };
     while !remaining.is_empty() {
         let prefix_cols = if first {
             first_prefix_cols
@@ -298,14 +298,14 @@ fn push_wrapped_diff_line(
 
             // Prefix the content with the sign if it is an insertion or deletion, and color
             // the sign with the same background as the edited text.
-            let display_chunk = match sign {
-                '+' | '-' => {
+            let display_chunk = match sign_opt {
+                Some(sign_char) => {
                     let mut s = String::with_capacity(1 + chunk.len());
-                    s.push(sign);
+                    s.push(sign_char);
                     s.push_str(chunk);
                     s
                 }
-                _ => chunk.to_string(),
+                None => chunk.to_string(),
             };
 
             let content_span = match bg_style {
@@ -342,13 +342,62 @@ fn style_del() -> Style {
     Style::default().bg(Color::Red)
 }
 
-#[inline]
-fn digits_len(n: usize) -> usize {
-    let mut d = 1;
-    let mut x = n;
-    while x >= 10 {
-        x /= 10;
-        d += 1;
+#[allow(clippy::expect_used)]
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::history_cell::HistoryCell;
+    use crate::text_block::TextBlock;
+    use insta::assert_snapshot;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    fn snapshot_lines(name: &str, lines: Vec<RtLine<'static>>, width: u16, height: u16) {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+        let cell = HistoryCell::PendingPatch {
+            view: TextBlock::new(lines),
+        };
+        terminal
+            .draw(|f| f.render_widget_ref(&cell, f.area()))
+            .expect("draw");
+        assert_snapshot!(name, terminal.backend());
     }
-    d
+
+    #[test]
+    fn ui_snapshot_add_details() {
+        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+        changes.insert(
+            PathBuf::from("README.md"),
+            FileChange::Add {
+                content: "first line\nsecond line\n".to_string(),
+            },
+        );
+
+        let lines =
+            create_diff_summary("proposed patch", &changes, PatchEventType::ApprovalRequest);
+
+        snapshot_lines("add_details", lines, 80, 10);
+    }
+
+    #[test]
+    fn ui_snapshot_update_details_with_rename() {
+        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+
+        let original = "line one\nline two\nline three\n";
+        let modified = "line one\nline two changed\nline three\n";
+        let patch = diffy::create_patch(original, modified).to_string();
+
+        changes.insert(
+            PathBuf::from("src/lib.rs"),
+            FileChange::Update {
+                unified_diff: patch,
+                move_path: Some(PathBuf::from("src/lib_new.rs")),
+            },
+        );
+
+        let lines =
+            create_diff_summary("proposed patch", &changes, PatchEventType::ApprovalRequest);
+
+        snapshot_lines("update_details_with_rename", lines, 80, 12);
+    }
 }

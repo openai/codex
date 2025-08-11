@@ -1,5 +1,4 @@
 use crate::diff_render::create_diff_summary;
-use crate::diff_render::render_patch_details;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::slash_command::SlashCommand;
@@ -386,7 +385,7 @@ impl HistoryCell {
     }
 
     pub(crate) fn new_completed_mcp_tool_call(
-        num_cols: u16,
+        num_cols: usize,
         invocation: McpInvocation,
         duration: Duration,
         success: bool,
@@ -424,7 +423,7 @@ impl HistoryCell {
                                 format_and_truncate_tool_result(
                                     &text.text,
                                     TOOL_CALL_MAX_LINES,
-                                    num_cols as usize,
+                                    num_cols,
                                 )
                             }
                             mcp_types::ContentBlock::ImageContent(_) => {
@@ -767,13 +766,6 @@ impl HistoryCell {
         event_type: PatchEventType,
         changes: HashMap<PathBuf, FileChange>,
     ) -> Self {
-        let show_details = matches!(
-            event_type,
-            PatchEventType::ApplyBegin {
-                auto_approved: true
-            } | PatchEventType::ApprovalRequest
-        );
-
         let title = match &event_type {
             PatchEventType::ApprovalRequest => "proposed patch",
             PatchEventType::ApplyBegin {
@@ -792,11 +784,7 @@ impl HistoryCell {
             }
         };
 
-        let mut lines: Vec<Line<'static>> = create_diff_summary(title, &changes);
-
-        if show_details {
-            lines.extend(render_patch_details(&changes));
-        }
+        let mut lines: Vec<Line<'static>> = create_diff_summary(title, &changes, event_type);
 
         lines.push(Line::from(""));
 
