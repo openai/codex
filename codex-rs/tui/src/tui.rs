@@ -11,6 +11,7 @@ use crossterm::event::PopKeyboardEnhancementFlags;
 use crossterm::event::PushKeyboardEnhancementFlags;
 use crossterm::terminal::Clear;
 use crossterm::terminal::ClearType;
+use crossterm::terminal::SetTitle;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::disable_raw_mode;
@@ -42,8 +43,13 @@ pub fn init(_config: &Config) -> Result<Tui> {
     );
     set_panic_hook();
 
-    // Clear screen and move cursor to top-left before drawing UI
-    execute!(stdout(), Clear(ClearType::All), MoveTo(0, 0))?;
+    // Set terminal title and clear screen and move cursor to top-left before drawing UI
+    execute!(
+        stdout(),
+        SetTitle("Codex CLI"),
+        Clear(ClearType::All),
+        MoveTo(0, 0)
+    )?;
 
     let backend = CrosstermBackend::new(stdout());
     let tui = Terminal::with_options(backend)?;
