@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use codex_core::exec::ExecParams;
+use codex_core::exec::ExecToolCallOutput;
 use codex_core::exec::SandboxType;
 use codex_core::exec::process_exec_tool_call;
 use codex_core::protocol::SandboxPolicy;
@@ -14,10 +15,14 @@ use tokio::sync::Notify;
 
 use codex_core::get_platform_sandbox;
 
-async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>, should_be_ok: bool) {
+async fn run_test_cmd(
+    tmp: TempDir,
+    cmd: Vec<&str>,
+    should_be_ok: bool,
+) -> Option<ExecToolCallOutput> {
     if std::env::var(CODEX_SANDBOX_ENV_VAR) == Ok("seatbelt".to_string()) {
         eprintln!("{CODEX_SANDBOX_ENV_VAR} is set to 'seatbelt', skipping test.");
-        return;
+        return None;
     }
 
     let sandbox_type = get_platform_sandbox().expect("should be able to get sandbox type");
@@ -38,6 +43,7 @@ async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>, should_be_ok: bool) {
     let result = process_exec_tool_call(params, sandbox_type, ctrl_c, &policy, &None, None).await;
 
     assert!(result.is_ok() == should_be_ok);
+    result.ok()
 }
 
 /// Command succeeds with exit code 0 normally
@@ -46,7 +52,42 @@ async fn exit_code_0_succeeds() {
     let tmp = TempDir::new().expect("should be able to create temp dir");
     let cmd = vec!["echo", "hello"];
 
-    run_test_cmd(tmp, cmd, true).await
+    #[expect(clippy::unwrap_used)]
+    let output = run_test_cmd(tmp, cmd, true).await.unwrap();
+    assert_eq!(output.stdout.text, "hello\n");
+    assert_eq!(output.stderr.text, "");
+    assert_eq!(output.stdout.truncated_after_lines, None);
+}
+
+/// Command succeeds with exit code 0 normally
+#[tokio::test]
+async fn truncates_output_lines() {
+    let tmp = TempDir::new().expect("should be able to create temp dir");
+    let cmd = vec!["seq", "300"];
+
+    #[expect(clippy::unwrap_used)]
+    let output = run_test_cmd(tmp, cmd, true).await.unwrap();
+
+    let expected_output = (1..=256)
+        .map(|i| format!("{i}\n"))
+        .collect::<Vec<_>>()
+        .join("");
+    assert_eq!(output.stdout.text, expected_output);
+    assert_eq!(output.stdout.truncated_after_lines, Some(256));
+}
+
+/// Command succeeds with exit code 0 normally
+#[tokio::test]
+async fn truncates_output_bytes() {
+    let tmp = TempDir::new().expect("should be able to create temp dir");
+    // each line is 1000 bytes
+    let cmd = vec!["bash", "-lc", "seq 15 | awk '{printf \"%-1000s\\n\", $0}'"];
+
+    #[expect(clippy::unwrap_used)]
+    let output = run_test_cmd(tmp, cmd, true).await.unwrap();
+
+    assert_eq!(output.stdout.text.len(), 10240);
+    assert_eq!(output.stdout.truncated_after_lines, Some(10));
 }
 
 /// Command not found returns exit code 127, this is not considered a sandbox error
@@ -54,7 +95,7 @@ async fn exit_code_0_succeeds() {
 async fn exit_command_not_found_is_ok() {
     let tmp = TempDir::new().expect("should be able to create temp dir");
     let cmd = vec!["/bin/bash", "-c", "nonexistent_command_12345"];
-    run_test_cmd(tmp, cmd, true).await
+    run_test_cmd(tmp, cmd, true).await;
 }
 
 /// Writing a file fails and should be considered a sandbox error

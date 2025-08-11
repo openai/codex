@@ -76,7 +76,7 @@ async fn test_exec_stdout_stream_events_echo() {
     };
 
     assert_eq!(result.exit_code, 0);
-    assert_eq!(result.stdout, "hello-world\n");
+    assert_eq!(result.stdout.text, "hello-world\n");
 
     let streamed = collect_stdout_events(rx);
     // We should have received at least the same contents (possibly in one chunk)
