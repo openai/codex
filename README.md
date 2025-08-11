@@ -111,6 +111,15 @@ Run `codex` and select **Sign in with ChatGPT**. You'll need a Plus, Pro, or Tea
 
 If you encounter problems with the login flow, please comment on [this issue](https://github.com/openai/codex/issues/1243).
 
+### Logging in with Browser in WSL
+
+To log in with the browser in WSL, you need to run the following command:
+```shell
+sudo apt install wslu
+export BROWSER=wslview
+```
+After that, you can run `codex` and select **Sign in with ChatGPT** and the browser on you local machine will open and you can login.
+
 ### Connecting on a "Headless" Machine
 
 Today, the login process entails running a server on `localhost:1455`. If you are on a "headless" server, such as a Docker container or are `ssh`'d into a remote machine, loading `localhost:1455` in the browser on your local machine will not automatically connect to the webserver running on the _headless_ machine, so you must use one of the following workarounds:
