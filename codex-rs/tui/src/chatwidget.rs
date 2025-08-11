@@ -312,9 +312,7 @@ impl ChatWidget<'_> {
                 self.request_redraw();
             }
             EventMsg::AgentMessage(AgentMessageEvent { message }) => {
-                // Final assistant answer.
-                // If no deltas were streamed (no active Answer stream), still render
-                // the provided final message text so events like compact completion are visible.
+                // AgentMessage: if no deltas were streamed, render the final text.
                 if self.current_stream != Some(StreamKind::Answer) && !message.is_empty() {
                     self.begin_stream(StreamKind::Answer);
                     self.stream_push_and_maybe_commit(&message);
@@ -336,8 +334,12 @@ impl ChatWidget<'_> {
                 self.stream_push_and_maybe_commit(&delta);
                 self.request_redraw();
             }
-            EventMsg::AgentReasoning(AgentReasoningEvent { text: _ }) => {
-                // Final reasoning: commit remaining rows and close with a blank.
+            EventMsg::AgentReasoning(AgentReasoningEvent { text }) => {
+                // Final reasoning: if no deltas were streamed, render the final text.
+                if self.current_stream != Some(StreamKind::Reasoning) && !text.is_empty() {
+                    self.begin_stream(StreamKind::Reasoning);
+                    self.stream_push_and_maybe_commit(&text);
+                }
                 self.finalize_stream(StreamKind::Reasoning);
                 self.request_redraw();
             }
@@ -350,8 +352,12 @@ impl ChatWidget<'_> {
                 self.stream_push_and_maybe_commit(&delta);
                 self.request_redraw();
             }
-            EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text: _ }) => {
-                // Finalize the raw reasoning stream just like the summarized reasoning event.
+            EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text }) => {
+                // Final raw reasoning content: if no deltas were streamed, render the final text.
+                if self.current_stream != Some(StreamKind::Reasoning) && !text.is_empty() {
+                    self.begin_stream(StreamKind::Reasoning);
+                    self.stream_push_and_maybe_commit(&text);
+                }
                 self.finalize_stream(StreamKind::Reasoning);
                 self.request_redraw();
             }
