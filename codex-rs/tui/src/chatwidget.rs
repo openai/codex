@@ -769,7 +769,10 @@ impl ChatWidget<'_> {
             return;
         }
         // Flush any partial line as a full row, then drain all remaining rows.
-        self.live_builder.end_line();
+        // Only call end_line() if there's content to flush to avoid adding empty rows.
+        if !self.live_builder.is_current_line_empty() {
+            self.live_builder.end_line();
+        }
         let remaining = self.live_builder.drain_rows();
         // TODO: Re-add markdown rendering for assistant answers and reasoning.
         // When finalizing, pass the accumulated text through `markdown::append_markdown`

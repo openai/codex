@@ -91,6 +91,11 @@ impl RowBuilder {
         &self.rows
     }
 
+    /// Check if the current line buffer is empty.
+    pub fn is_current_line_empty(&self) -> bool {
+        self.current_line.is_empty()
+    }
+
     /// Rows suitable for display, including the current partial line if any.
     pub fn display_rows(&self) -> Vec<Row> {
         let mut out = self.rows.clone();
@@ -286,5 +291,28 @@ mod tests {
         for r in rb.rows() {
             assert!(r.width() <= 5);
         }
+    }
+
+    #[test]
+    fn is_current_line_empty_behaves_correctly() {
+        let mut rb = RowBuilder::new(10);
+        // Initially empty
+        assert!(rb.is_current_line_empty());
+
+        // After adding text, not empty
+        rb.push_fragment("hello");
+        assert!(!rb.is_current_line_empty());
+
+        // After a newline, empty again
+        rb.push_fragment("\n");
+        assert!(rb.is_current_line_empty());
+
+        // After adding more text, not empty again
+        rb.push_fragment("world");
+        assert!(!rb.is_current_line_empty());
+
+        // After ending the line, empty again
+        rb.end_line();
+        assert!(rb.is_current_line_empty());
     }
 }
