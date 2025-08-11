@@ -233,24 +233,13 @@ impl ChatWidget<'_> {
     }
 
     fn on_patch_apply_end(&mut self, event: codex_core::protocol::PatchApplyEndEvent) {
-        if event.success {
-            self.add_to_history(HistoryCell::new_patch_apply_success(event.stdout));
-        } else {
-            self.add_to_history(HistoryCell::new_patch_apply_failure(event.stderr));
-        }
+        let ev2 = event.clone();
+        self.defer_or_handle(|q| q.push_patch_end(event), |s| s.handle_patch_apply_end_now(ev2));
     }
 
     fn on_exec_command_end(&mut self, ev: ExecCommandEndEvent) {
-        let cmd = self.running_commands.remove(&ev.call_id);
-        self.active_history_cell = None;
-        self.add_to_history(HistoryCell::new_completed_exec_command(
-            cmd.unwrap_or_else(|| vec![ev.call_id]),
-            CommandOutput {
-                exit_code: ev.exit_code,
-                stdout: ev.stdout,
-                stderr: ev.stderr,
-            },
-        ));
+        let ev2 = ev.clone();
+        self.defer_or_handle(|q| q.push_exec_end(ev), |s| s.handle_exec_end_now(ev2));
     }
 
     fn on_mcp_tool_call_begin(&mut self, ev: McpToolCallBeginEvent) {
@@ -310,7 +299,10 @@ impl ChatWidget<'_> {
         push: impl FnOnce(&mut InterruptManager),
         handle: impl FnOnce(&mut Self),
     ) {
-        if self.is_write_cycle_active() {
+        // Preserve deterministic FIFO across queued interrupts: once anything
+        // is queued due to an active write cycle, continue queueing until the
+        // queue is flushed to avoid reordering (e.g., ExecEnd before ExecBegin).
+        if self.is_write_cycle_active() || !self.interrupts.is_empty() {
             push(&mut self.interrupts);
         } else {
             handle(self);
@@ -340,14 +332,32 @@ impl ChatWidget<'_> {
         self.set_waiting_for_model_status();
         self.stream.begin(kind, &sink);
         self.last_stream_kind = Some(kind);
-        let is_reasoning = matches!(kind, StreamKind::Reasoning);
         self.stream.push_and_maybe_commit(&delta, &sink);
-        // For raw reasoning content, commit at sentence boundaries so content is visible
-        // during streaming even if no explicit newline is sent by the provider.
-        if is_reasoning && (delta.contains('.') || delta.contains('!') || delta.contains('?')) {
-            self.stream.push_and_maybe_commit("\n", &sink);
-        }
         self.mark_needs_redraw();
+    }
+
+    pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
+        let cmd = self.running_commands.remove(&ev.call_id);
+        self.active_history_cell = None;
+        self.add_to_history(HistoryCell::new_completed_exec_command(
+            cmd.unwrap_or_else(|| vec![ev.call_id.clone()]),
+            CommandOutput {
+                exit_code: ev.exit_code,
+                stdout: ev.stdout.clone(),
+                stderr: ev.stderr.clone(),
+            },
+        ));
+    }
+
+    pub(crate) fn handle_patch_apply_end_now(
+        &mut self,
+        event: codex_core::protocol::PatchApplyEndEvent,
+    ) {
+        if event.success {
+            self.add_to_history(HistoryCell::new_patch_apply_success(event.stdout));
+        } else {
+            self.add_to_history(HistoryCell::new_patch_apply_failure(event.stderr));
+        }
     }
 
     pub(crate) fn handle_exec_approval_now(&mut self, id: String, ev: ExecApprovalRequestEvent) {

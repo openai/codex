@@ -55,9 +55,8 @@ mod tui;
 mod user_approval_widget;
 
 // Internal vt100-based replay tests live as a separate source file to keep them
-// close to the widget code. Include them only when running tests with the
-// explicit feature enabled.
-#[cfg(all(test, feature = "vt100-tests"))]
+// close to the widget code. Include them in unit tests.
+#[cfg(test)]
 mod chatwidget_stream_tests;
 
 #[cfg(not(debug_assertions))]
