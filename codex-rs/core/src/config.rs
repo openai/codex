@@ -159,8 +159,8 @@ pub struct Config {
     /// Responses API.
     pub model_reasoning_effort: Option<ReasoningEffort>,
 
-    /// If true, a short textual description of the agent's internal reasoning
-    /// will be included in model responses.
+    /// If not "none", the value to use for `reasoning.summary` when making a
+    /// request using the Responses API.
     pub model_reasoning_summary: ReasoningSummary,
 
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).

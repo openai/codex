@@ -19,14 +19,11 @@ mod imp {
     use opentelemetry_sdk::export::trace::ExportResult;
     use opentelemetry_sdk::export::trace::SpanData;
     use opentelemetry_sdk::export::trace::SpanExporter;
-    use opentelemetry_sdk::export::ExportError;
     use opentelemetry_sdk::resource::Resource;
     use opentelemetry_sdk::trace::TracerProvider;
     use opentelemetry_sdk::trace::{self as sdktrace};
     use serde::Serialize;
-    use serde_json::json;
     use tracing_opentelemetry::OpenTelemetryLayer;
-    use tracing_subscriber::layer::SubscriberExt;
     use tracing_subscriber::Registry;
 
     use std::collections::HashMap;
@@ -365,20 +362,6 @@ mod imp {
         resource_attributes: Vec<JsonKeyValue>,
     }
 
-    #[derive(Debug)]
-    struct FileExportError(String);
-    impl std::fmt::Display for FileExportError {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "{}", self.0)
-        }
-    }
-    impl std::error::Error for FileExportError {}
-    impl ExportError for FileExportError {
-        fn exporter_name(&self) -> &'static str {
-            "otlp-json-file"
-        }
-    }
-
     impl OtlpJsonFileExporter {
         fn new(
             path: PathBuf,
@@ -407,7 +390,7 @@ mod imp {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map(|d| d.as_secs())
                     .unwrap_or(0);
-                let rotated = self.path.with_extension(format!("json.{}", secs));
+                let rotated = self.path.with_extension(format!("json.{secs}"));
                 {
                     let mut w = self.writer.lock().unwrap();
                     w.flush()?;
@@ -433,16 +416,16 @@ mod imp {
             }
             let spans_json: Vec<JsonSpan> = batch.into_iter().map(span_to_json).collect();
             let traces = TracesData {
-                resourceSpans: vec![JsonResourceSpans {
+                resource_spans: vec![JsonResourceSpans {
                     resource: Some(JsonResource {
                         attributes: self.resource_attributes.clone(),
                     }),
-                    scopeSpans: vec![JsonScopeSpans {
+                    scope_spans: vec![JsonScopeSpans {
                         scope: JsonScope {},
                         spans: spans_json,
-                        schemaUrl: String::new(),
+                        schema_url: String::new(),
                     }],
-                    schemaUrl: String::new(),
+                    schema_url: String::new(),
                 }],
             };
             let mut w = self.writer.lock().unwrap();
@@ -481,16 +464,18 @@ mod imp {
     // ===== OTLP JSON model =====
     #[derive(Serialize, Clone, Debug)]
     struct TracesData {
-        resourceSpans: Vec<JsonResourceSpans>,
+        #[serde(rename = "resourceSpans")]
+        resource_spans: Vec<JsonResourceSpans>,
     }
 
     #[derive(Serialize, Clone, Debug)]
     struct JsonResourceSpans {
         #[serde(skip_serializing_if = "Option::is_none")]
         resource: Option<JsonResource>,
-        scopeSpans: Vec<JsonScopeSpans>,
-        #[serde(default)]
-        schemaUrl: String,
+        #[serde(rename = "scopeSpans")]
+        scope_spans: Vec<JsonScopeSpans>,
+        #[serde(default, rename = "schemaUrl")]
+        schema_url: String,
     }
 
     #[derive(Serialize, Clone, Debug)]
@@ -502,8 +487,8 @@ mod imp {
     struct JsonScopeSpans {
         scope: JsonScope,
         spans: Vec<JsonSpan>,
-        #[serde(default)]
-        schemaUrl: String,
+        #[serde(default, rename = "schemaUrl")]
+        schema_url: String,
     }
 
     #[derive(Serialize, Clone, Debug, Default)]
@@ -511,26 +496,30 @@ mod imp {
 
     #[derive(Serialize, Clone, Debug)]
     struct JsonSpan {
-        traceId: String,
-        spanId: String,
-        #[serde(default)]
-        parentSpanId: String,
+        #[serde(rename = "traceId")]
+        trace_id: String,
+        #[serde(rename = "spanId")]
+        span_id: String,
+        #[serde(default, rename = "parentSpanId")]
+        parent_span_id: String,
         name: String,
         kind: i32,
-        startTimeUnixNano: String,
-        endTimeUnixNano: String,
+        #[serde(rename = "startTimeUnixNano")]
+        start_time_unix_nano: String,
+        #[serde(rename = "endTimeUnixNano")]
+        end_time_unix_nano: String,
         #[serde(default)]
         attributes: Vec<JsonKeyValue>,
-        #[serde(default)]
-        droppedAttributesCount: i32,
+        #[serde(default, rename = "droppedAttributesCount")]
+        dropped_attributes_count: i32,
         #[serde(default)]
         events: Vec<JsonEvent>,
-        #[serde(default)]
-        droppedEventsCount: i32,
+        #[serde(default, rename = "droppedEventsCount")]
+        dropped_events_count: i32,
         #[serde(default)]
         links: Vec<JsonLink>,
-        #[serde(default)]
-        droppedLinksCount: i32,
+        #[serde(default, rename = "droppedLinksCount")]
+        dropped_links_count: i32,
         #[serde(skip_serializing_if = "Option::is_none")]
         status: Option<JsonStatus>,
     }
@@ -544,32 +533,47 @@ mod imp {
     #[derive(Serialize, Clone, Debug)]
     #[serde(untagged)]
     enum JsonAnyValue {
-        StringValue { stringValue: String },
-        BoolValue { boolValue: bool },
-        IntValue { intValue: i64 },
-        DoubleValue { doubleValue: f64 },
+        String {
+            #[serde(rename = "stringValue")]
+            string_value: String,
+        },
+        Bool {
+            #[serde(rename = "boolValue")]
+            bool_value: bool,
+        },
+        Int {
+            #[serde(rename = "intValue")]
+            int_value: i64,
+        },
+        Double {
+            #[serde(rename = "doubleValue")]
+            double_value: f64,
+        },
     }
 
     #[derive(Serialize, Clone, Debug)]
     struct JsonEvent {
-        timeUnixNano: String,
+        #[serde(rename = "timeUnixNano")]
+        time_unix_nano: String,
         name: String,
         #[serde(default)]
         attributes: Vec<JsonKeyValue>,
-        #[serde(default)]
-        droppedAttributesCount: i32,
+        #[serde(default, rename = "droppedAttributesCount")]
+        dropped_attributes_count: i32,
     }
 
     #[derive(Serialize, Clone, Debug)]
     struct JsonLink {
-        traceId: String,
-        spanId: String,
-        #[serde(default)]
-        traceState: String,
+        #[serde(rename = "traceId")]
+        trace_id: String,
+        #[serde(rename = "spanId")]
+        span_id: String,
+        #[serde(default, rename = "traceState")]
+        trace_state: String,
         #[serde(default)]
         attributes: Vec<JsonKeyValue>,
-        #[serde(default)]
-        droppedAttributesCount: i32,
+        #[serde(default, rename = "droppedAttributesCount")]
+        dropped_attributes_count: i32,
         #[serde(default)]
         flags: i32,
     }
@@ -591,14 +595,14 @@ mod imp {
 
     fn json_any_from(val: Value) -> JsonAnyValue {
         match val {
-            Value::String(s) => JsonAnyValue::StringValue {
-                stringValue: s.to_string(),
+            Value::String(s) => JsonAnyValue::String {
+                string_value: s.to_string(),
             },
-            Value::Bool(b) => JsonAnyValue::BoolValue { boolValue: b },
-            Value::I64(i) => JsonAnyValue::IntValue { intValue: i },
-            Value::F64(f) => JsonAnyValue::DoubleValue { doubleValue: f },
-            other => JsonAnyValue::StringValue {
-                stringValue: format!("{other:?}"),
+            Value::Bool(b) => JsonAnyValue::Bool { bool_value: b },
+            Value::I64(i) => JsonAnyValue::Int { int_value: i },
+            Value::F64(f) => JsonAnyValue::Double { double_value: f },
+            other => JsonAnyValue::String {
+                string_value: format!("{other:?}"),
             },
         }
     }
@@ -631,24 +635,20 @@ mod imp {
         let start = to_unix_nanos(sd.start_time).to_string();
         let end = to_unix_nanos(sd.end_time).to_string();
 
-        let attributes = sd
-            .attributes
-            .iter()
-            .map(|kv| json_kv_from(kv))
-            .collect::<Vec<_>>();
+        let attributes = sd.attributes.iter().map(json_kv_from).collect::<Vec<_>>();
 
         let events = sd
             .events
             .into_iter()
             .map(|ev| JsonEvent {
-                timeUnixNano: to_unix_nanos(ev.timestamp).to_string(),
+                time_unix_nano: to_unix_nanos(ev.timestamp).to_string(),
                 name: ev.name.to_string(),
                 attributes: ev
                     .attributes
                     .into_iter()
                     .map(|kv| json_kv_from(&kv))
                     .collect(),
-                droppedAttributesCount: 0,
+                dropped_attributes_count: 0,
             })
             .collect();
 
@@ -656,15 +656,15 @@ mod imp {
             .links
             .into_iter()
             .map(|lnk| JsonLink {
-                traceId: hex::encode(lnk.span_context.trace_id().to_bytes()),
-                spanId: hex::encode(lnk.span_context.span_id().to_bytes()),
-                traceState: lnk.span_context.trace_state().header(),
+                trace_id: hex::encode(lnk.span_context.trace_id().to_bytes()),
+                span_id: hex::encode(lnk.span_context.span_id().to_bytes()),
+                trace_state: lnk.span_context.trace_state().header(),
                 attributes: lnk
                     .attributes
                     .into_iter()
                     .map(|kv| json_kv_from(&kv))
                     .collect(),
-                droppedAttributesCount: 0,
+                dropped_attributes_count: 0,
                 flags: 0,
             })
             .collect();
@@ -678,19 +678,19 @@ mod imp {
         };
 
         JsonSpan {
-            traceId: trace_id,
-            spanId: span_id,
-            parentSpanId: parent_span_id,
+            trace_id,
+            span_id,
+            parent_span_id,
             name: sd.name.into_owned(),
             kind,
-            startTimeUnixNano: start,
-            endTimeUnixNano: end,
+            start_time_unix_nano: start,
+            end_time_unix_nano: end,
             attributes,
-            droppedAttributesCount: 0,
+            dropped_attributes_count: 0,
             events,
-            droppedEventsCount: 0,
+            dropped_events_count: 0,
             links,
-            droppedLinksCount: 0,
+            dropped_links_count: 0,
             status: Some(status_to_json(&sd.status)),
         }
     }
@@ -737,7 +737,7 @@ mod imp {
         let mut bytes = [0u8; 8];
         rand::thread_rng().fill_bytes(&mut bytes);
         let hex_id = hex::encode(bytes);
-        traces_dir.join(format!("codex_traces_{}_{}.jsonl", ts, hex_id))
+        traces_dir.join(format!("codex_traces_{ts}_{hex_id}.jsonl"))
     }
 
     // Re-exports for consumers

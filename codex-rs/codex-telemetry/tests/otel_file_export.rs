@@ -1,14 +1,15 @@
 #![cfg(feature = "otel")]
 
 use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 
 use codex_telemetry as telemetry;
 use tempfile::TempDir;
-use tokio;
+
 use tracing_subscriber::prelude::*;
 
-fn latest_trace_file(dir: &PathBuf) -> Option<PathBuf> {
+fn latest_trace_file(dir: &Path) -> Option<PathBuf> {
     let traces_dir = dir.join("traces");
     let mut entries: Vec<_> = fs::read_dir(&traces_dir)
         .ok()?
