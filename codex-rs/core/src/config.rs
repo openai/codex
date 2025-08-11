@@ -143,8 +143,8 @@ pub struct Config {
     /// request using the Responses API.
     pub model_reasoning_effort: ReasoningEffort,
 
-    /// If not "none", the value to use for `reasoning.summary` when making a
-    /// request using the Responses API.
+    /// If true, a short textual description of the agent's internal reasoning
+    /// will be included in model responses.
     pub model_reasoning_summary: ReasoningSummary,
 
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
@@ -153,11 +153,14 @@ pub struct Config {
     /// Experimental rollout resume path (absolute path to .jsonl; undocumented).
     pub experimental_resume: Option<PathBuf>,
 
-    /// Include an experimental plan tool that the model can use to update its current plan and status of each step.
+    /// Include the plan tool in the prompt to the model (default false).
     pub include_plan_tool: bool,
 
     /// The value for the `originator` header included with Responses API requests.
     pub internal_originator: Option<String>,
+
+    /// Telemetry configuration (exporter type, endpoint, headers, etc.).
+    pub telemetry: crate::config_types::TelemetryConfig,
 }
 
 impl Config {
@@ -404,6 +407,9 @@ pub struct ConfigToml {
     pub internal_originator: Option<String>,
 
     pub projects: Option<HashMap<String, ProjectConfig>>,
+
+    /// Telemetry configuration.
+    pub telemetry: Option<crate::config_types::TelemetryConfigToml>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -660,6 +666,25 @@ impl Config {
             experimental_resume,
             include_plan_tool: include_plan_tool.unwrap_or(false),
             internal_originator: cfg.internal_originator,
+
+            telemetry: {
+                use crate::config_types::TelemetryConfig;
+                use crate::config_types::TelemetryConfigToml;
+                use crate::config_types::TelemetryExporterKind;
+                let t: TelemetryConfigToml = cfg.telemetry.unwrap_or_default();
+                let enabled = t.enabled.unwrap_or(true);
+                let exporter = t.exporter.unwrap_or(TelemetryExporterKind::OtlpFile);
+                let endpoint = t.endpoint;
+                let headers = t.headers.unwrap_or_default();
+                let rotate_mb = t.rotate_mb.or(Some(100));
+                TelemetryConfig {
+                    enabled,
+                    exporter,
+                    endpoint,
+                    headers,
+                    rotate_mb,
+                }
+            },
         };
         Ok(config)
     }
@@ -1024,6 +1049,13 @@ disable_response_storage = true
                 base_instructions: None,
                 include_plan_tool: false,
                 internal_originator: None,
+                telemetry: crate::config_types::TelemetryConfig {
+                    enabled: true,
+                    exporter: crate::config_types::TelemetryExporterKind::OtlpFile,
+                    endpoint: None,
+                    headers: HashMap::new(),
+                    rotate_mb: Some(100),
+                },
             },
             o3_profile_config
         );
@@ -1075,6 +1107,13 @@ disable_response_storage = true
             base_instructions: None,
             include_plan_tool: false,
             internal_originator: None,
+            telemetry: crate::config_types::TelemetryConfig {
+                enabled: true,
+                exporter: crate::config_types::TelemetryExporterKind::OtlpFile,
+                endpoint: None,
+                headers: HashMap::new(),
+                rotate_mb: Some(100),
+            },
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -1141,6 +1180,13 @@ disable_response_storage = true
             base_instructions: None,
             include_plan_tool: false,
             internal_originator: None,
+            telemetry: crate::config_types::TelemetryConfig {
+                enabled: true,
+                exporter: crate::config_types::TelemetryExporterKind::OtlpFile,
+                endpoint: None,
+                headers: HashMap::new(),
+                rotate_mb: Some(100),
+            },
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);

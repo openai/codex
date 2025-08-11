@@ -738,6 +738,7 @@ dependencies = [
  "mcp-types",
  "mime_guess",
  "openssl-sys",
+ "opentelemetry_sdk",
  "predicates",
  "pretty_assertions",
  "rand 0.9.2",
@@ -3157,6 +3158,7 @@ dependencies = [
  "bytes",
  "http",
  "opentelemetry",
+ "reqwest",
 ]
 
 [[package]]
@@ -3173,6 +3175,7 @@ dependencies = [
  "opentelemetry-proto",
  "opentelemetry_sdk",
  "prost",
+ "reqwest",
  "thiserror 1.0.69",
  "tokio",
  "tonic",
@@ -3873,6 +3876,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "encoding_rs",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "h2",
