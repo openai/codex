@@ -311,10 +311,14 @@ impl ChatWidget<'_> {
 
                 self.request_redraw();
             }
-            EventMsg::AgentMessage(AgentMessageEvent { message: _ }) => {
-                // Final assistant answer: commit all remaining rows and close with
-                // a blank line. Use the final text if provided, otherwise rely on
-                // streamed deltas already in the builder.
+            EventMsg::AgentMessage(AgentMessageEvent { message }) => {
+                // Final assistant answer.
+                // If no deltas were streamed (no active Answer stream), still render
+                // the provided final message text so events like compact completion are visible.
+                if self.current_stream != Some(StreamKind::Answer) && !message.is_empty() {
+                    self.begin_stream(StreamKind::Answer);
+                    self.stream_push_and_maybe_commit(&message);
+                }
                 self.finalize_stream(StreamKind::Answer);
                 self.request_redraw();
             }
