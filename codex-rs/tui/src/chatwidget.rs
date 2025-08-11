@@ -676,6 +676,10 @@ impl ChatWidget<'_> {
         self.submit_user_message(text.into());
     }
 
+    pub(crate) fn insert_str(&mut self, text: &str) {
+        self.bottom_pane.insert_str(text);
+    }
+
     pub(crate) fn token_usage(&self) -> &TokenUsage {
         &self.total_token_usage
     }
