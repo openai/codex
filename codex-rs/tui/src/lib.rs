@@ -14,7 +14,6 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_login::CodexAuth;
 use codex_ollama::DEFAULT_OSS_MODEL;
-use codex_telemetry as telemetry;
 use log_layer::TuiLogLayer;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
