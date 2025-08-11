@@ -468,8 +468,6 @@ impl ChatWidget<'_> {
                 cwd,
                 parsed_cmd,
             }) => {
-                // TODO: merge this into the active exec call.
-                self.flush_active_exec_cell();
                 self.finalize_active_stream();
                 // Ensure the status indicator is visible while the command runs.
                 self.bottom_pane
@@ -483,8 +481,8 @@ impl ChatWidget<'_> {
                     },
                 );
                 let active_exec_cell = self.active_exec_cell.take();
-                self.active_exec_cell = match merge_cells(&command, &parsed_cmd, &active_exec_cell)
-                {
+                let merge_result = merge_cells(&command, &parsed_cmd, &active_exec_cell);
+                self.active_exec_cell = match merge_result {
                     MergeResult::Merge(cell) => Some(cell),
                     MergeResult::Drop => active_exec_cell,
                     MergeResult::NewCell(cell) => {
