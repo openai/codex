@@ -2173,7 +2173,7 @@ fn format_exec_output(exec_output: &ExecToolCallOutput) -> String {
     let mut formatted_output = output.text.clone();
     if let Some(truncated_after_lines) = output.truncated_after_lines {
         formatted_output.push_str(&format!(
-            "Output truncated after {truncated_after_lines} lines",
+            "\n\n[Output truncated after {truncated_after_lines} lines: too many lines or bytes.]",
         ));
     }
 
