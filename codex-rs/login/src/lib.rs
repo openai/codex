@@ -427,7 +427,7 @@ fn python_version_ok(exe: &str) -> std::io::Result<bool> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .and_then(|mut child| child.wait_with_output())?;
+        .and_then(|child| child.wait_with_output())?;
 
     if !out.status.success() {
         return Err(std::io::Error::other(format!(
