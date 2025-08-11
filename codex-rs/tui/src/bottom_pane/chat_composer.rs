@@ -698,14 +698,15 @@ impl WidgetRef for &ChatComposer {
                     let token_usage = &token_usage_info.total_token_usage;
                     hint.push(Span::from("   "));
                     hint.push(
-                        Span::from(format!("{} tokens used", token_usage.total_tokens))
+                        Span::from(format!("{} tokens used", token_usage.blended_total()))
                             .style(Style::default().add_modifier(Modifier::DIM)),
                     );
                     let last_token_usage = &token_usage_info.last_token_usage;
                     if let Some(context_window) = token_usage_info.model_context_window {
                         let percent_remaining: u8 = if context_window > 0 {
                             let percent = 100.0
-                                - (last_token_usage.total_tokens as f32 / context_window as f32
+                                - (last_token_usage.tokens_in_context_window() as f32
+                                    / context_window as f32
                                     * 100.0);
                             percent.clamp(0.0, 100.0) as u8
                         } else {
