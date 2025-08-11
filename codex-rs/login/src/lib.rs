@@ -343,7 +343,7 @@ pub fn spawn_login_with_chatgpt(codex_home: &Path) -> std::io::Result<SpawnedLog
     })
 }
 
-/// Run the Python login helper with the CODEX_HOME
+/// Run `python3 -c {{SOURCE_FOR_PYTHON_SERVER}}` or `python -c {{SOURCE_FOR_PYTHON_SERVER}}` with the CODEX_HOME
 /// environment variable set to the provided `codex_home` path. If the
 /// subprocess exits 0, read the OPENAI_API_KEY property out of
 /// CODEX_HOME/auth.json and return Ok(OPENAI_API_KEY). Otherwise, return Err
