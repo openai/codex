@@ -936,6 +936,7 @@ mod tests {
                 call_id: "c1".into(),
                 command: vec!["bash".into(), "-lc".into(), "echo hi".into()],
                 cwd: std::path::PathBuf::from("/work"),
+                parsed_cmd: vec![],
             }),
         };
 
@@ -947,7 +948,8 @@ mod tests {
                     "type": "exec_command_begin",
                     "call_id": "c1",
                     "command": ["bash", "-lc", "echo hi"],
-                    "cwd": "/work"
+                    "cwd": "/work",
+                    "parsed_cmd": []
                 }
             }
         });
