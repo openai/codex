@@ -70,6 +70,8 @@ jobs:
             target: aarch64-unknown-linux-musl
           - runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
 
     steps:
       - uses: actions/checkout@v4
@@ -93,7 +95,7 @@ jobs:
           sudo apt install -y musl-tools pkg-config
 
       - name: Cargo build
-        run: cargo build --target ${{ matrix.target }} --release --bin codex --bin codex-exec --bin codex-linux-sandbox
+        run: cargo build --target ${{ matrix.target }} --release --bin codex
 
       - name: Stage artifacts
         shell: bash
@@ -101,18 +103,11 @@ jobs:
           dest="dist/${{ matrix.target }}"
           mkdir -p "$dest"
 
-          cp target/${{ matrix.target }}/release/codex-exec "$dest/codex-exec-${{ matrix.target }}"
-          cp target/${{ matrix.target }}/release/codex "$dest/codex-${{ matrix.target }}"
-
-        # After https://github.com/openai/codex/pull/1228 is merged and a new
-        # release is cut with an artifacts built after that PR, the `-gnu`
-        # variants can go away as we will only use the `-musl` variants.
-      - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'x86_64-unknown-linux-gnu' || matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'aarch64-unknown-linux-musl' }}
-        name: Stage Linux-only artifacts
-        shell: bash
-        run: |
-          dest="dist/${{ matrix.target }}"
-          cp target/${{ matrix.target }}/release/codex-linux-sandbox "$dest/codex-linux-sandbox-${{ matrix.target }}"
+          if [[ "${{ matrix.runner }}" == windows* ]]; then
+            cp target/${{ matrix.target }}/release/codex.exe "$dest/codex-${{ matrix.target }}.exe"
+          else
+            cp target/${{ matrix.target }}/release/codex "$dest/codex-${{ matrix.target }}"
+          fi
 
       - name: Compress artifacts
         shell: bash
@@ -126,7 +121,6 @@ jobs:
           # we publish. The end result is:
           #   codex-<target>.zst          (existing)
           #   codex-<target>.tar.gz       (new)
-          #   ...same naming for codex-exec-* and codex-linux-sandbox-*
 
           # 1. Produce a .tar.gz for every file in the directory *before* we
           #    run `zstd --rm`, because that flag deletes the original files.
@@ -160,6 +154,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -174,6 +171,22 @@ jobs:
           # "rust-v0.1.0".
           version="${GITHUB_REF_NAME#rust-v}"
           echo "name=${version}" >> $GITHUB_OUTPUT
+
+      - name: Stage npm package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TMP_DIR="${RUNNER_TEMP}/npm-stage"
+          python3 codex-cli/scripts/stage_rust_release.py \
+            --release-version "${{ steps.release_name.outputs.name }}" \
+            --tmp "${TMP_DIR}"
+          mkdir -p dist/npm
+          # Produce an npm-ready tarball using `npm pack` and store it in dist/npm.
+          # We then rename it to a stable name used by our publishing script.
+          (cd "$TMP_DIR" && npm pack --pack-destination "${GITHUB_WORKSPACE}/dist/npm")
+          mv "${GITHUB_WORKSPACE}"/dist/npm/*.tgz \
+             "${GITHUB_WORKSPACE}/dist/npm/codex-npm-${{ steps.release_name.outputs.name }}.tgz"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
