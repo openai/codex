@@ -246,6 +246,143 @@ impl Session {
     }
 }
 
+#[cfg(test)]
+mod mapper_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn make_session(show_raw: bool) -> (Arc<Session>, async_channel::Receiver<Event>) {
+        use crate::model_provider_info::ModelProviderInfo;
+        use crate::model_provider_info::WireApi;
+        use std::sync::Arc as StdArc;
+
+        let (tx_event, rx_event) = async_channel::unbounded::<Event>();
+
+        // Create a minimal Config suitable for tests
+        let codex_home = TempDir::new().expect("temp dir");
+        let cfg: StdArc<Config> = StdArc::new(
+            Config::load_from_base_config_with_overrides(
+                crate::config::ConfigToml::default(),
+                crate::config::ConfigOverrides::default(),
+                codex_home.path().to_path_buf(),
+            )
+            .expect("config"),
+        );
+        let provider = ModelProviderInfo {
+            name: "test".to_string(),
+            base_url: None,
+            env_key: None,
+            env_key_instructions: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: Some(0),
+            stream_max_retries: Some(0),
+            stream_idle_timeout_ms: Some(1000),
+            requires_openai_auth: false,
+        };
+        let client = ModelClient::new(
+            cfg.clone(),
+            None,
+            provider,
+            cfg.model_reasoning_effort,
+            cfg.model_reasoning_summary,
+            uuid::Uuid::nil(),
+        );
+
+        let sess = Arc::new(Session {
+            client,
+            tx_event,
+            ctrl_c: Arc::new(Notify::new()),
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            base_instructions: None,
+            user_instructions: None,
+            approval_policy: AskForApproval::OnRequest,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            shell_environment_policy: ShellEnvironmentPolicy::default(),
+            writable_roots: Mutex::new(Vec::new()),
+            disable_response_storage: true,
+            tools_config: ToolsConfig::new(
+                &cfg.model_family,
+                AskForApproval::OnRequest,
+                SandboxPolicy::new_read_only_policy(),
+                cfg.include_plan_tool,
+            ),
+            mcp_connection_manager: McpConnectionManager::default(),
+            notify: None,
+            rollout: Mutex::new(None),
+            state: Mutex::new(State::default()),
+            codex_linux_sandbox_exe: None,
+            user_shell: shell::Shell::Unknown,
+            show_raw_agent_reasoning: show_raw,
+        });
+        (sess, rx_event)
+    }
+
+    #[tokio::test]
+    async fn normal_text_deltas_always_emit_agent_message_delta() {
+        let (sess, rx) = make_session(false);
+        let sub_id = "s".to_string();
+
+        let delta = "hi".to_string();
+        {
+            let mut st = sess.state.lock().unwrap();
+            st.history.append_assistant_text(&delta);
+        }
+        let event = Event {
+            id: sub_id.clone(),
+            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
+        };
+        sess.tx_event.send(event).await.ok();
+
+        let out = rx.recv().await.expect("no event");
+        match out.msg {
+            EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
+                assert_eq!(delta, "hi");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn reasoning_content_delta_gated_by_flag() {
+        let (sess_off, rx_off) = make_session(false);
+        let sub_id = "s".to_string();
+
+        let delta = "think".to_string();
+        if sess_off.show_raw_agent_reasoning {
+            let event = Event {
+                id: sub_id.clone(),
+                msg: EventMsg::AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent {
+                    delta: delta.clone(),
+                }),
+            };
+            sess_off.tx_event.send(event).await.ok();
+        }
+        assert!(rx_off.try_recv().is_err());
+
+        let (sess_on, rx_on) = make_session(true);
+        if sess_on.show_raw_agent_reasoning {
+            let event = Event {
+                id: sub_id.clone(),
+                msg: EventMsg::AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent {
+                    delta: delta.clone(),
+                }),
+            };
+            sess_on.tx_event.send(event).await.ok();
+        }
+        let out = rx_on.recv().await.expect("no event");
+        match out.msg {
+            EventMsg::AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent {
+                delta,
+            }) => {
+                assert_eq!(delta, "think");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+}
 /// Mutable state of the agent
 #[derive(Default)]
 struct State {

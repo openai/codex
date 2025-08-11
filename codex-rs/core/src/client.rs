@@ -19,7 +19,6 @@ use tracing::trace;
 use tracing::warn;
 use uuid::Uuid;
 
-use crate::chat_completions::AggregateStreamExt;
 use crate::chat_completions::stream_chat_completions;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
@@ -98,14 +97,11 @@ impl ModelClient {
                 )
                 .await?;
 
-                // Wrap it with the aggregation adapter so callers see *only*
-                // the final assistant message per turn (matching the
-                // behaviour of the Responses API).
-                let mut aggregated = if self.config.show_raw_agent_reasoning {
-                    crate::chat_completions::AggregatedChatStream::streaming_mode(response_stream)
-                } else {
-                    response_stream.aggregate()
-                };
+                // Use streaming mode so normal assistant text deltas are forwarded live
+                // while still accumulating to emit a single final OutputItemDone at turn end.
+                // Reasoning visibility remains controlled separately by config downstream.
+                let mut aggregated =
+                    crate::chat_completions::AggregatedChatStream::streaming_mode(response_stream);
 
                 // Bridge the aggregated stream back into a standard
                 // `ResponseStream` by forwarding events through a channel.

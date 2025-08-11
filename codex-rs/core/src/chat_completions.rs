@@ -636,3 +636,113 @@ impl<S> AggregatedChatStream<S> {
         Self::new(inner, AggregateMode::Streaming)
     }
 }
+
+#[cfg(test)]
+mod adapter_tests {
+    use super::*;
+    use futures::StreamExt;
+    use futures::stream;
+
+    fn ev_text_delta(s: &str) -> Result<ResponseEvent> {
+        Ok(ResponseEvent::OutputTextDelta(s.to_string()))
+    }
+
+    fn ev_completed() -> Result<ResponseEvent> {
+        Ok(ResponseEvent::Completed {
+            response_id: String::new(),
+            token_usage: None,
+        })
+    }
+
+    // Helper kept for future tests; silence dead_code warning when unused.
+    #[allow(dead_code)]
+    fn ev_item_done_full_message(text: &str) -> Result<ResponseEvent> {
+        Ok(ResponseEvent::OutputItemDone(ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: text.to_string(),
+            }],
+        }))
+    }
+
+    #[tokio::test]
+    async fn streaming_mode_forwards_text_deltas_and_emits_final_message() {
+        // Arrange a stream: two deltas, then completed
+        let src = stream::iter(vec![
+            ev_text_delta("Hi "),
+            ev_text_delta("there"),
+            ev_completed(),
+        ]);
+
+        let mut s = AggregatedChatStream::streaming_mode(src);
+        let mut out = Vec::new();
+        while let Some(ev) = s.next().await {
+            match ev {
+                Ok(e) => out.push(e),
+                Err(_) => panic!("stream error"),
+            }
+            if out.len() > 4 {
+                break;
+            }
+        }
+
+        // Expect: two deltas forwarded, then aggregated final message, then completed
+        assert!(matches!(out.get(0), Some(ResponseEvent::OutputTextDelta(d)) if d == "Hi "));
+        assert!(matches!(out.get(1), Some(ResponseEvent::OutputTextDelta(d)) if d == "there"));
+        // The next should be a full assistant message with concatenated text
+        match out.get(2) {
+            Some(ResponseEvent::OutputItemDone(ResponseItem::Message {
+                content, role, ..
+            })) => {
+                assert_eq!(role, "assistant");
+                let text = content.iter().find_map(|c| match c {
+                    ContentItem::OutputText { text } => Some(text.clone()),
+                    _ => None,
+                });
+                assert_eq!(text.as_deref(), Some("Hi there"));
+            }
+            other => panic!("unexpected third event: {other:?}"),
+        }
+        assert!(matches!(out.get(3), Some(ResponseEvent::Completed { .. })));
+    }
+
+    #[tokio::test]
+    async fn aggregate_mode_suppresses_text_deltas_and_emits_only_final_message() {
+        // Arrange a stream: two deltas, then completed
+        let src = stream::iter(vec![
+            ev_text_delta("Hi "),
+            ev_text_delta("there"),
+            ev_completed(),
+        ]);
+
+        let mut s = AggregateStreamExt::aggregate(src);
+        let mut out = Vec::new();
+        while let Some(ev) = s.next().await {
+            match ev {
+                Ok(e) => out.push(e),
+                Err(_) => panic!("stream error"),
+            }
+            if out.len() > 2 {
+                break;
+            }
+        }
+
+        // Expect: no deltas, only final full message then completed
+        assert_eq!(out.len(), 2);
+        match out.get(0) {
+            Some(ResponseEvent::OutputItemDone(ResponseItem::Message {
+                content, role, ..
+            })) => {
+                assert_eq!(role, "assistant");
+                let text = content.iter().find_map(|c| match c {
+                    ContentItem::OutputText { text } => Some(text.clone()),
+                    _ => None,
+                });
+                assert_eq!(text.as_deref(), Some("Hi there"));
+            }
+            other => panic!("unexpected first event: {other:?}"),
+        }
+        assert!(matches!(out.get(1), Some(ResponseEvent::Completed { .. })));
+    }
+}
