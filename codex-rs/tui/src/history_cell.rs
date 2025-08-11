@@ -134,7 +134,7 @@ pub(crate) enum HistoryCell {
     PatchApplyResult { view: TextBlock },
 }
 
-const TOOL_CALL_MAX_LINES: usize = 3;
+const TOOL_CALL_MAX_LINES: usize = 5;
 
 fn title_case(s: &str) -> String {
     if s.is_empty() {
@@ -313,20 +313,20 @@ impl HistoryCell {
         for (i, parsed) in parsed_commands.iter().enumerate() {
             let str = match parsed {
                 ParsedCommand::Read { name, .. } => format!("📖 {name}"),
-                ParsedCommand::Ls { cmd, path } => match path {
+                ParsedCommand::ListFiles { cmd, path } => match path {
                     Some(p) => format!("📂 {p}"),
-                    None => format!("📂 {}", cmd.join(" ")),
+                    None => format!("📂 {}", shlex_join_safe(cmd)),
                 },
                 ParsedCommand::Search { query, path, cmd } => match (query, path) {
                     (Some(q), Some(p)) => format!("🔎 {q} in {p}"),
                     (Some(q), None) => format!("🔎 {q}"),
                     (None, Some(p)) => format!("🔎 {p}"),
-                    (None, None) => format!("🔎 {}", cmd.join(" ")),
+                    (None, None) => format!("🔎 {}", shlex_join_safe(cmd)),
                 },
                 ParsedCommand::Format { .. } => "✨ Formatting".to_string(),
-                ParsedCommand::Test { cmd } => format!("🧪 {}", cmd.join(" ")),
-                ParsedCommand::Lint { cmd, .. } => format!("🧹 {}", cmd.join(" ")),
-                ParsedCommand::Unknown { cmd } => format!("⌨️ {}", cmd.join(" ")),
+                ParsedCommand::Test { cmd } => format!("🧪 {}", shlex_join_safe(cmd)),
+                ParsedCommand::Lint { cmd, .. } => format!("🧹 {}", shlex_join_safe(cmd)),
+                ParsedCommand::Unknown { cmd } => format!("⌨️ {}", shlex_join_safe(cmd)),
             };
 
             let prefix = if i == 0 { "  L " } else { "    " };
@@ -843,17 +843,15 @@ impl HistoryCell {
         lines.push(Line::from("✘ Failed to apply patch".magenta().bold()));
 
         if !stderr.trim().is_empty() {
-            let mut iter = stderr.lines();
-            for (i, raw) in iter.by_ref().take(TOOL_CALL_MAX_LINES).enumerate() {
-                let prefix = if i == 0 { "  ⎿ " } else { "    " };
-                let s = format!("{prefix}{raw}");
-                lines.push(ansi_escape_line(&s).dim());
-            }
-            let remaining = iter.count();
-            if remaining > 0 {
-                lines.push(Line::from(""));
-                lines.push(Line::from(format!("... +{remaining} lines")).dim());
-            }
+            lines.extend(output_lines(
+                Some(&CommandOutput {
+                    exit_code: 1,
+                    stdout: String::new(),
+                    stderr,
+                }),
+                true,
+                true,
+            ));
         }
 
         lines.push(Line::from(""));
@@ -888,11 +886,16 @@ fn output_lines(
     };
 
     let src = if *exit_code == 0 { stdout } else { stderr };
-    let mut out: Vec<Line<'static>> = Vec::new();
-    let mut lines_iter = src.lines();
-    for (idx, raw) in lines_iter.by_ref().take(TOOL_CALL_MAX_LINES).enumerate() {
+    let lines: Vec<&str> = src.lines().collect();
+    let total = lines.len();
+    let limit = TOOL_CALL_MAX_LINES;
+
+    let mut out = Vec::new();
+
+    let head_end = total.min(limit);
+    for (i, raw) in lines[..head_end].iter().enumerate() {
         let mut line = ansi_escape_line(raw);
-        let prefix = if idx == 0 && include_angle_pipe {
+        let prefix = if i == 0 && include_angle_pipe {
             "  ⎿ "
         } else {
             "    "
@@ -903,17 +906,28 @@ fn output_lines(
         });
         out.push(line);
     }
-    let remaining = lines_iter.count();
-    if remaining > 0 {
-        let mut more = Line::from(format!("… +{remaining} lines"));
-        // Continuation/ellipsis is treated as a subsequent line for prefixing
-        more.spans.insert(0, "    ".into());
-        more.spans.iter_mut().for_each(|span| {
+
+    // If we will ellipsize less than the limit, just show it.
+    let show_ellipsis = total > 2 * limit;
+    if show_ellipsis {
+        let omitted = total - 2 * limit;
+        out.push(Line::from(format!("… +{omitted} lines")));
+    }
+
+    let tail_start = if show_ellipsis {
+        total - limit
+    } else {
+        head_end
+    };
+    for raw in lines[tail_start..].iter() {
+        let mut line = ansi_escape_line(raw);
+        line.spans.insert(0, "    ".into());
+        line.spans.iter_mut().for_each(|span| {
             span.style = span.style.add_modifier(Modifier::DIM);
         });
-        out.push(more);
+        out.push(line);
     }
-    out.push(Line::from(""));
+
     out
 }
 
@@ -1070,4 +1084,11 @@ fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
         Span::raw(")"),
     ];
     Line::from(invocation_spans)
+}
+
+fn shlex_join_safe(command: &[String]) -> String {
+    match shlex::try_join(command.iter().map(|s| s.as_str())) {
+        Ok(cmd) => cmd,
+        Err(_) => command.join(" "),
+    }
 }
