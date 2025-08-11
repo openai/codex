@@ -536,13 +536,8 @@ async fn vt100_replay_longer_markdown_session_from_log() {
     // batching to prevent the cut-off at the start.
 }
 
-// drain helper moved to `crate::test_utils::drain_insert_history`
-
-// Replay a longer hello session and ensure every turn's full answer is present
-// in the transcript by extracting expected answers from AgentMessage/TaskComplete
-// events and comparing them to accumulated InsertHistory content.
 #[tokio::test(flavor = "current_thread")]
-async fn vt100_replay_longer_hello_session_from_log() {
+async fn vt100_replay_longer_story_session_from_log() {
     let width: u16 = 100;
     let height: u16 = 50;
     let viewport = Rect::new(0, height - 1, width, 1);
@@ -869,6 +864,21 @@ async fn vt100_replay_binary_size_session_from_log() {
         "expected at least one 'codex' header in final turn; counts = {:?}",
         codex_headers_per_turn
     );
+
+    // Additionally, assert that nothing visible follows the closing sentence
+    // "estimate impact per binary." (screen reflects what the user sees).
+    let end_sentence = normalize_text("estimate impact per binary.");
+    // Collapse all whitespace in the visible buffer and in the target phrase to
+    // tolerate line wrapping across the sentence while still ensuring no extra
+    // non-whitespace content appears after it.
+    let collapse_ws = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+    let compact_visible = collapse_ws(&visible_norm);
+    let compact_phrase = collapse_ws(&end_sentence);
+    assert!(
+        compact_visible.ends_with(&compact_phrase),
+        "visible screen has extra content after closing sentence (ignoring whitespace).\nvisible:\n{}",
+        visible
+    );
 }
 
 // Replay the OSS hello session which streams agent_reasoning_raw_content_delta chunks
@@ -897,7 +907,7 @@ async fn vt100_replay_oss_hello_session_from_log() {
 
     let mut ansi: Vec<u8> = Vec::new();
 
-    let file = open_fixture("oss-hello.jsonl");
+    let file = open_fixture("oss-story.jsonl");
     let reader = BufReader::new(file);
 
     let mut current_turn_index: Option<usize> = None;
@@ -982,11 +992,7 @@ async fn vt100_replay_oss_hello_session_from_log() {
     // The OSS log's reasoning stream should contain this phrase once aggregated.
     // Intentionally checking the exact phrase (with spelling as provided) to catch
     // any aggregation/ordering bugs in reasoning content handling.
-    let needles = [
-        "They probably just want a response",
-        "They probaly just want a response",
-        "They probbaly just want a response",
-    ];
+    let needles = ["They probably just want a response"];
     let full_transcript: String = transcript_per_turn.join("\n---\n");
     assert!(
         needles.iter().any(|n| full_transcript.contains(n)),

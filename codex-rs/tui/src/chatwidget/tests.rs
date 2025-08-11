@@ -118,6 +118,7 @@ fn make_chatwidget_manual() -> (
         total_token_usage: TokenUsage::default(),
         last_token_usage: TokenUsage::default(),
         stream: StreamController::new(cfg),
+        last_stream_kind: None,
         running_commands: HashMap::new(),
         task_complete_pending: false,
         interrupts: InterruptManager::new(),

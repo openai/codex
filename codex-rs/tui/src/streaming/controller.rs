@@ -185,18 +185,23 @@ impl StreamController {
             state.collector.finalize_and_drain(&cfg)
         };
         if flush_immediately {
-            let mut lines: Lines = Vec::new();
-            self.emit_header_if_needed(kind, &mut lines);
+            // Collect all output first to avoid emitting headers when there is no content.
+            let mut out_lines: Lines = Vec::new();
             {
                 let state = self.state_mut(kind);
                 if !remaining.is_empty() {
                     state.enqueue(remaining);
                 }
                 let step = state.drain_all();
-                lines.extend(step.history);
+                out_lines.extend(step.history);
             }
-            Self::ensure_single_trailing_blank(&mut lines);
-            sink.insert_history(lines);
+            if !out_lines.is_empty() {
+                let mut lines_with_header: Lines = Vec::new();
+                self.emit_header_if_needed(kind, &mut lines_with_header);
+                lines_with_header.extend(out_lines);
+                Self::ensure_single_trailing_blank(&mut lines_with_header);
+                sink.insert_history(lines_with_header);
+            }
 
             // Cleanup
             self.state_mut(kind).clear();

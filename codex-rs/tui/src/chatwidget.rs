@@ -68,6 +68,8 @@ pub(crate) struct ChatWidget<'a> {
     last_token_usage: TokenUsage,
     // Stream lifecycle controller
     stream: StreamController,
+    // Track the most recently active stream kind in the current turn
+    last_stream_kind: Option<StreamKind>,
     running_commands: HashMap<String, Vec<String>>,
     task_complete_pending: bool,
     // Queue of interruptive UI events deferred during an active write cycle
@@ -152,20 +154,19 @@ impl ChatWidget<'_> {
         self.bottom_pane.set_task_running(true);
         self.set_waiting_for_model_status();
         self.stream.reset_headers_for_new_turn();
+        self.last_stream_kind = None;
         self.mark_needs_redraw();
     }
 
     fn on_task_complete(&mut self) {
-        // Always flush any buffered reasoning/answer content so thinking blocks are not empty
-        // at the end of a turn even if no trailing newline was streamed or streaming is idle.
-        let sink = AppEventHistorySink(self.app_event_tx.clone());
-        // Finalize reasoning first to preserve intuitive header ordering.
-        self.stream.begin(StreamKind::Reasoning, &sink);
-        let _ = self.stream.finalize(StreamKind::Reasoning, true, &sink);
-        // Then finalize any remaining answer content.
-        self.stream.begin(StreamKind::Answer, &sink);
-        let _ = self.stream.finalize(StreamKind::Answer, true, &sink);
-
+        // If a stream is currently active, finalize only that stream to flush any tail
+        // without emitting stray headers for other streams.
+        if self.stream.is_write_cycle_active() {
+            let sink = AppEventHistorySink(self.app_event_tx.clone());
+            if let Some(kind) = self.last_stream_kind {
+                let _ = self.stream.finalize(kind, true, &sink);
+            }
+        }
         // Mark task stopped and request redraw now that all content is in history.
         self.bottom_pane.set_task_running(false);
         self.mark_needs_redraw();
@@ -338,6 +339,7 @@ impl ChatWidget<'_> {
         let sink = AppEventHistorySink(self.app_event_tx.clone());
         self.set_waiting_for_model_status();
         self.stream.begin(kind, &sink);
+        self.last_stream_kind = Some(kind);
         let is_reasoning = matches!(kind, StreamKind::Reasoning);
         self.stream.push_and_maybe_commit(&delta, &sink);
         // For raw reasoning content, commit at sentence boundaries so content is visible
@@ -463,6 +465,7 @@ impl ChatWidget<'_> {
             total_token_usage: TokenUsage::default(),
             last_token_usage: TokenUsage::default(),
             stream: StreamController::new(config),
+            last_stream_kind: None,
             running_commands: HashMap::new(),
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
