@@ -63,6 +63,7 @@ pub struct CodexToolCallParam {
 pub enum CodexToolCallApprovalPolicy {
     Untrusted,
     OnFailure,
+    OnRequest,
     Never,
 }
 
@@ -71,6 +72,7 @@ impl From<CodexToolCallApprovalPolicy> for AskForApproval {
         match value {
             CodexToolCallApprovalPolicy::Untrusted => AskForApproval::UnlessTrusted,
             CodexToolCallApprovalPolicy::OnFailure => AskForApproval::OnFailure,
+            CodexToolCallApprovalPolicy::OnRequest => AskForApproval::OnRequest,
             CodexToolCallApprovalPolicy::Never => AskForApproval::Never,
         }
     }
