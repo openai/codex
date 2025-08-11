@@ -25,8 +25,6 @@ mod mcp_cmd;
 use crate::mcp_cmd::McpCli;
 use crate::proto::ProtoCli;
 
-// Telemetry is initialized after Config is loaded in subcommands.
-
 /// Codex CLI
 ///
 /// If no subcommand is specified, options will be forwarded to the interactive CLI.
