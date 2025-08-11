@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -13,10 +12,11 @@ use crate::mcp_protocol::ToolCallResponseResult;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::tool_handlers::create_conversation::handle_create_conversation;
 use crate::tool_handlers::send_message::handle_send_message;
+use crate::tool_handlers::stream_conversation;
+use crate::tool_handlers::stream_conversation::handle_stream_conversation;
 
 use codex_core::Codex;
 use codex_core::config::Config as CodexConfig;
-use codex_core::protocol::Submission;
 use mcp_types::CallToolRequest;
 use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
@@ -43,8 +43,10 @@ pub(crate) struct MessageProcessor {
     initialized: bool,
     codex_linux_sandbox_exe: Option<PathBuf>,
     session_map: Arc<Mutex<HashMap<Uuid, Arc<Codex>>>>,
+    conversation_map: Arc<Mutex<HashMap<Uuid, Arc<crate::conversation_loop::Conversation>>>>,
     running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, Uuid>>>,
-    running_session_ids: Arc<Mutex<HashSet<Uuid>>>,
+    /// Track request IDs to the original ToolCallRequestParams for cancellation handling
+    tool_request_map: Arc<Mutex<HashMap<RequestId, ToolCallRequestParams>>>,
 }
 
 impl MessageProcessor {
@@ -59,21 +61,20 @@ impl MessageProcessor {
             initialized: false,
             codex_linux_sandbox_exe,
             session_map: Arc::new(Mutex::new(HashMap::new())),
+            conversation_map: Arc::new(Mutex::new(HashMap::new())),
             running_requests_id_to_codex_uuid: Arc::new(Mutex::new(HashMap::new())),
-            running_session_ids: Arc::new(Mutex::new(HashSet::new())),
+            tool_request_map: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
-    pub(crate) fn session_map(&self) -> Arc<Mutex<HashMap<Uuid, Arc<Codex>>>> {
-        self.session_map.clone()
+    pub(crate) fn conversation_map(
+        &self,
+    ) -> Arc<Mutex<HashMap<Uuid, Arc<crate::conversation_loop::Conversation>>>> {
+        self.conversation_map.clone()
     }
 
     pub(crate) fn outgoing(&self) -> Arc<OutgoingMessageSender> {
         self.outgoing.clone()
-    }
-
-    pub(crate) fn running_session_ids(&self) -> Arc<Mutex<HashSet<Uuid>>> {
-        self.running_session_ids.clone()
     }
 
     pub(crate) async fn process_request(&mut self, request: JSONRPCRequest) {
@@ -353,12 +354,20 @@ impl MessageProcessor {
         }
     }
     async fn handle_new_tool_calls(&self, request_id: RequestId, params: ToolCallRequestParams) {
+        // Track the request to allow graceful cancellation routing later.
+        {
+            let mut tool_request_map = self.tool_request_map.lock().await;
+            tool_request_map.insert(request_id.clone(), params.clone());
+        }
         match params {
             ToolCallRequestParams::ConversationCreate(args) => {
                 handle_create_conversation(self, request_id, args).await;
             }
             ToolCallRequestParams::ConversationSendMessage(args) => {
                 handle_send_message(self, request_id, args).await;
+            }
+            ToolCallRequestParams::ConversationStream(args) => {
+                handle_stream_conversation(self, request_id, args).await;
             }
             _ => {
                 let result = CallToolResult {
@@ -584,23 +593,72 @@ impl MessageProcessor {
     // ---------------------------------------------------------------------
     // Notification handlers
     // ---------------------------------------------------------------------
-
     async fn handle_cancelled_notification(
         &self,
         params: <mcp_types::CancelledNotification as mcp_types::ModelContextProtocolNotification>::Params,
     ) {
         let request_id = params.request_id;
-        // Create a stable string form early for logging and submission id.
-        let request_id_string = match &request_id {
-            RequestId::String(s) => s.clone(),
-            RequestId::Integer(i) => i.to_string(),
-        };
 
-        // Obtain the session_id while holding the first lock, then release.
+        if let Some(orig) = {
+            let mut tool_request_map = self.tool_request_map.lock().await;
+            tool_request_map.remove(&request_id)
+        } {
+            self.handle_mcp_protocol_cancelled_notification(request_id, orig)
+                .await;
+        } else {
+            self.handle_legacy_cancelled_notification(request_id).await;
+        }
+    }
+
+    async fn handle_mcp_protocol_cancelled_notification(
+        &self,
+        request_id: RequestId,
+        orig: ToolCallRequestParams,
+    ) {
+        match orig {
+            ToolCallRequestParams::ConversationStream(args) => {
+                stream_conversation::handle_cancel(self, &args).await;
+            }
+            ToolCallRequestParams::ConversationSendMessage(args) => {
+                // Cancel in-flight user input for this conversation by interrupting the session.
+
+                let session_id = args.conversation_id.0;
+                let codex_arc = {
+                    let sessions_guard = self.conversation_map.lock().await;
+                    match sessions_guard.get(&session_id) {
+                        Some(conv) => conv.codex().clone(),
+                        None => {
+                            tracing::warn!(
+                                "Cancel send_message: session not found for session_id: {session_id}"
+                            );
+                            return;
+                        }
+                    }
+                };
+
+                if let Err(e) = codex_arc.submit(codex_core::protocol::Op::Interrupt).await {
+                    tracing::error!("Failed to submit interrupt for send_message cancel: {e}");
+                }
+            }
+            ToolCallRequestParams::ConversationCreate(_)
+            | ToolCallRequestParams::ConversationsList(_) => {
+                // Likely fast/non-streaming; nothing to cancel currently.
+                tracing::debug!(
+                    "Cancel conversationsList received for request_id: {:?} (no-op)",
+                    request_id
+                );
+            }
+        }
+    }
+
+    async fn handle_legacy_cancelled_notification(&self, request_id: RequestId) {
+        use crate::request_id::request_id_to_string;
+        let request_id_string = request_id_to_string(&request_id);
+
         let session_id = {
             let map_guard = self.running_requests_id_to_codex_uuid.lock().await;
             match map_guard.get(&request_id) {
-                Some(id) => *id, // Uuid is Copy
+                Some(id) => *id,
                 None => {
                     tracing::warn!("Session not found for request_id: {}", request_id_string);
                     return;
@@ -609,7 +667,6 @@ impl MessageProcessor {
         };
         tracing::info!("session_id: {session_id}");
 
-        // Obtain the Codex Arc while holding the session_map lock, then release.
         let codex_arc = {
             let sessions_guard = self.session_map.lock().await;
             match sessions_guard.get(&session_id) {
@@ -621,18 +678,11 @@ impl MessageProcessor {
             }
         };
 
-        // Submit interrupt to Codex.
-        let err = codex_arc
-            .submit_with_id(Submission {
-                id: request_id_string,
-                op: codex_core::protocol::Op::Interrupt,
-            })
-            .await;
-        if let Err(e) = err {
+        if let Err(e) = codex_arc.submit(codex_core::protocol::Op::Interrupt).await {
             tracing::error!("Failed to submit interrupt to Codex: {e}");
             return;
         }
-        // unregister the id so we don't keep it in the map
+
         self.running_requests_id_to_codex_uuid
             .lock()
             .await

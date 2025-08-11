@@ -15,7 +15,6 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
-use codex_core::protocol::Submission;
 use codex_core::protocol::TaskCompleteEvent;
 use mcp_types::CallToolResult;
 use mcp_types::ContentBlock;
@@ -79,27 +78,18 @@ pub async fn run_codex_tool_session(
         )
         .await;
 
-    // Use the original MCP request ID as the `sub_id` for the Codex submission so that
-    // any events emitted for this tool-call can be correlated with the
-    // originating `tools/call` request.
-    let sub_id = match &id {
-        RequestId::String(s) => s.clone(),
-        RequestId::Integer(n) => n.to_string(),
-    };
     running_requests_id_to_codex_uuid
         .lock()
         .await
         .insert(id.clone(), session_id);
-    let submission = Submission {
-        id: sub_id.clone(),
-        op: Op::UserInput {
+    if let Err(e) = codex
+        .submit(Op::UserInput {
             items: vec![InputItem::Text {
                 text: initial_prompt.clone(),
             }],
-        },
-    };
-
-    if let Err(e) = codex.submit_with_id(submission).await {
+        })
+        .await
+    {
         tracing::error!("Failed to submit initial prompt: {e}");
         // unregister the id so we don't keep it in the map
         running_requests_id_to_codex_uuid.lock().await.remove(&id);
@@ -151,10 +141,7 @@ async fn run_codex_tool_session_inner(
     request_id: RequestId,
     running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, Uuid>>>,
 ) {
-    let request_id_str = match &request_id {
-        RequestId::String(s) => s.clone(),
-        RequestId::Integer(n) => n.to_string(),
-    };
+    let request_id_str = crate::request_id::request_id_to_string(&request_id);
 
     // Stream events until the task needs to pause for user interaction or
     // completes.

@@ -24,6 +24,7 @@ pub mod mcp_protocol;
 pub(crate) mod message_processor;
 mod outgoing_message;
 mod patch_approval;
+mod request_id;
 pub(crate) mod tool_handlers;
 
 use crate::message_processor::MessageProcessor;

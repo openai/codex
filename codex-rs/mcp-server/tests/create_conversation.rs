@@ -1,8 +1,7 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use std::path::Path;
-
 use mcp_test_support::McpProcess;
+use mcp_test_support::create_config_toml;
 use mcp_test_support::create_final_assistant_message_sse_response;
 use mcp_test_support::create_mock_chat_completions_server;
 use mcp_types::JSONRPCResponse;
@@ -103,26 +102,4 @@ async fn test_conversation_create_and_send_message_ok() {
     drop(server);
 }
 
-// Helper to create a config.toml pointing at the mock model server.
-fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
-    let config_toml = codex_home.join("config.toml");
-    std::fs::write(
-        config_toml,
-        format!(
-            r#"
-model = "mock-model"
-approval_policy = "never"
-sandbox_mode = "danger-full-access"
-
-model_provider = "mock_provider"
-
-[model_providers.mock_provider]
-name = "Mock provider for test"
-base_url = "{server_uri}/v1"
-wire_api = "chat"
-request_max_retries = 0
-stream_max_retries = 0
-"#
-        ),
-    )
-}
+// create_config_toml is provided by tests/common

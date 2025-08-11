@@ -836,6 +836,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-test",
+ "tokio-util",
  "toml 0.9.4",
  "tracing",
  "tracing-subscriber",
