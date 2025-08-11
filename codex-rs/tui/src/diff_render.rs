@@ -44,7 +44,7 @@ pub(crate) fn create_diff_summary(
                     _ => (a, d),
                 })
         } else {
-            // Fallback: manual scan to preserve counts even for unparseable diffs
+            // Fallback: manual scan to preserve counts even for unparsable diffs
             let mut adds = 0usize;
             let mut dels = 0usize;
             for l in diff.lines() {
