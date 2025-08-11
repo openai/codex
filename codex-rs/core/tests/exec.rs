@@ -1,5 +1,5 @@
 #![cfg(target_os = "macos")]
-#![expect(clippy::expect_used)]
+#![expect(clippy::unwrap_used, clippy::expect_used)]
 
 use std::collections::HashMap;
 use std::sync::Arc;
