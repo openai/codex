@@ -335,7 +335,7 @@ impl HistoryCell {
         let mut lines: Vec<Line> = vec![Line::from("⚙︎ Working")];
 
         for (i, parsed) in parsed_commands.iter().enumerate() {
-            let str = match parsed {
+            let text = match parsed {
                 ParsedCommand::Read { name, .. } => format!("📖 {name}"),
                 ParsedCommand::ListFiles { cmd, path } => match path {
                     Some(p) => format!("📂 {p}"),
@@ -353,11 +353,14 @@ impl HistoryCell {
                 ParsedCommand::Unknown { cmd } => format!("⌨️ {}", shlex_join_safe(cmd)),
             };
 
-            let prefix = if i == 0 { "  L " } else { "    " };
-            lines.push(Line::from(vec![
-                Span::styled(prefix, Style::default().add_modifier(Modifier::DIM)),
-                Span::styled(str, Style::default().fg(LIGHT_BLUE)),
-            ]));
+            let first_prefix = if i == 0 { "  L " } else { "    " };
+            for (j, line_text) in text.lines().enumerate() {
+                let prefix = if j == 0 { first_prefix } else { "    " };
+                lines.push(Line::from(vec![
+                    Span::styled(prefix, Style::default().add_modifier(Modifier::DIM)),
+                    Span::styled(line_text.to_string(), Style::default().fg(LIGHT_BLUE)),
+                ]));
+            }
         }
 
         lines.extend(output_lines(output, true, false));
@@ -972,5 +975,21 @@ fn shlex_join_safe(command: &[String]) -> String {
     match shlex::try_join(command.iter().map(|s| s.as_str())) {
         Ok(cmd) => cmd,
         Err(_) => command.join(" "),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parsed_command_with_newlines_starts_each_line_at_origin() {
+        let parsed = vec![ParsedCommand::Unknown {
+            cmd: vec!["printf".into(), "foo\nbar".into()],
+        }];
+        let lines = HistoryCell::exec_command_lines(&[], &parsed, None);
+        assert!(lines.len() >= 3);
+        assert_eq!(lines[1].spans[0].content, "  L ");
+        assert_eq!(lines[2].spans[0].content, "    ");
     }
 }
