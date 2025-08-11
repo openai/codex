@@ -1,6 +1,7 @@
 use std::io::Result;
 use std::io::Stdout;
 use std::io::stdout;
+use std::env;
 
 use codex_core::config::Config;
 use crossterm::cursor::MoveTo;
@@ -44,9 +45,15 @@ pub fn init(_config: &Config) -> Result<Tui> {
     set_panic_hook();
 
     // Set terminal title and clear screen and move cursor to top-left before drawing UI
+    let current_dir = env::current_dir()
+        .ok()
+        .and_then(|path| path.file_name().map(|name| name.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| "Unknown".to_string());
+    let title = format!("Codex CLI | {}", current_dir);
+    
     execute!(
         stdout(),
-        SetTitle("Codex CLI"),
+        SetTitle(&title),
         Clear(ClearType::All),
         MoveTo(0, 0)
     )?;
