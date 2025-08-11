@@ -32,6 +32,11 @@ const SOURCE_FOR_PYTHON_SERVER: &str = include_str!("./login_with_chatgpt.py");
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 pub const OPENAI_API_KEY_ENV_VAR: &str = "OPENAI_API_KEY";
 
+// Minimum Python required to run the bundled script. The script uses
+// modern typing features (e.g., `str | None`) which require Python 3.10+.
+const MIN_PY_MAJOR: u32 = 3;
+const MIN_PY_MINOR: u32 = 10;
+
 #[derive(Clone, Debug, PartialEq, Copy)]
 pub enum AuthMode {
     ApiKey,
@@ -310,7 +315,8 @@ fn spawn_pipe_reader<R: Read + Send + 'static>(mut reader: R, buf: Arc<Mutex<Vec
 /// Spawn the ChatGPT login Python server as a child process and return a handle to its process.
 pub fn spawn_login_with_chatgpt(codex_home: &Path) -> std::io::Result<SpawnedLogin> {
     let script_path = write_login_script_to_disk()?;
-    let mut cmd = std::process::Command::new("python3");
+    let python = find_python_executable()?;
+    let mut cmd = std::process::Command::new(&python);
     cmd.arg(&script_path)
         .env("CODEX_HOME", codex_home)
         .env("CODEX_CLIENT_ID", CLIENT_ID)
@@ -337,7 +343,7 @@ pub fn spawn_login_with_chatgpt(codex_home: &Path) -> std::io::Result<SpawnedLog
     })
 }
 
-/// Run `python3 -c {{SOURCE_FOR_PYTHON_SERVER}}` with the CODEX_HOME
+/// Run the Python login helper with the CODEX_HOME
 /// environment variable set to the provided `codex_home` path. If the
 /// subprocess exits 0, read the OPENAI_API_KEY property out of
 /// CODEX_HOME/auth.json and return Ok(OPENAI_API_KEY). Otherwise, return Err
@@ -348,7 +354,8 @@ pub fn spawn_login_with_chatgpt(codex_home: &Path) -> std::io::Result<SpawnedLog
 /// current process's stdout/stderr.
 pub async fn login_with_chatgpt(codex_home: &Path, capture_output: bool) -> std::io::Result<()> {
     let script_path = write_login_script_to_disk()?;
-    let child = Command::new("python3")
+    let python = find_python_executable()?;
+    let child = Command::new(&python)
         .arg(&script_path)
         .env("CODEX_HOME", codex_home)
         .env("CODEX_CLIENT_ID", CLIENT_ID)
@@ -385,6 +392,82 @@ fn write_login_script_to_disk() -> std::io::Result<PathBuf> {
 
     let (_file, path) = tmp.keep()?;
     Ok(path)
+}
+
+/// Try to find a Python interpreter that satisfies the minimum version
+/// requirements. Checks `python3` first, then `python`, and validates that
+/// the version is >= MIN_PY_MAJOR.MIN_PY_MINOR.
+fn find_python_executable() -> std::io::Result<String> {
+    let candidates = ["python3", "python"];
+    let mut tried: Vec<String> = Vec::new();
+
+    for cand in candidates {
+        match python_version_ok(cand) {
+            Ok(true) => return Ok(cand.to_string()),
+            Ok(false) => {
+                tried.push(format!(
+                    "{cand} (found but version < {MIN_PY_MAJOR}.{MIN_PY_MINOR})"
+                ));
+            }
+            Err(e) => {
+                tried.push(format!("{cand} (not usable: {e})"));
+            }
+        }
+    }
+
+    Err(std::io::Error::other(format!(
+        "Could not find a suitable Python interpreter. Tried: {}. Please install Python >= {MIN_PY_MAJOR}.{MIN_PY_MINOR} and ensure it is on your PATH as 'python3' or 'python'.",
+        tried.join(", ")
+    )))
+}
+
+fn python_version_ok(exe: &str) -> std::io::Result<bool> {
+    let out = std::process::Command::new(exe)
+        .arg("--version")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .and_then(|mut child| child.wait_with_output())?;
+
+    if !out.status.success() {
+        return Err(std::io::Error::other(format!(
+            "{exe} --version exited with {:?}",
+            out.status.code()
+        )));
+    }
+
+    // Python writes version to stdout on some platforms and stderr on others.
+    let combined = if out.stdout.is_empty() {
+        String::from_utf8_lossy(&out.stderr).into_owned()
+    } else {
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+
+    // Expect a string like: "Python 3.11.9"
+    // Be tolerant of extra text; just find the first occurrence of "Python "
+    // and parse numbers after it.
+    let needle = "Python ";
+    let Some(idx) = combined.find(needle) else {
+        return Err(std::io::Error::other(format!(
+            "unexpected version output from {exe}: {combined}"
+        )));
+    };
+    let ver_str = &combined[idx + needle.len()..];
+    // Take up to first whitespace/newline
+    let ver_token = ver_str.split_whitespace().next().unwrap_or("");
+    let mut parts = ver_token.split('.');
+    let major: u32 = parts
+        .next()
+        .ok_or_else(|| std::io::Error::other("missing major version"))?
+        .parse()
+        .map_err(std::io::Error::other)?;
+    let minor: u32 = parts
+        .next()
+        .ok_or_else(|| std::io::Error::other("missing minor version"))?
+        .parse()
+        .map_err(std::io::Error::other)?;
+
+    Ok(major > MIN_PY_MAJOR || (major == MIN_PY_MAJOR && minor >= MIN_PY_MINOR))
 }
 
 pub fn login_with_api_key(codex_home: &Path, api_key: &str) -> std::io::Result<()> {
