@@ -32,7 +32,8 @@ tracing-subscriber = { version = "0.3", features = ["registry", "fmt"], optional
 tracing-opentelemetry = { version = "0.27", optional = true }
 opentelemetry = { version = "0.26", features = ["trace"], optional = true }
 opentelemetry_sdk = { version = "0.26", features = ["trace", "rt-tokio"], optional = true }
-opentelemetry-otlp = { version = "0.26", features = ["tonic", "http-proto"], optional = true }
+# Enable HTTP exporter protocol and the reqwest HTTP client backend
+opentelemetry-otlp = { version = "0.26", features = ["tonic", "http-proto", "reqwest-client"], optional = true }
 opentelemetry-proto = { version = "0.26", features = ["gen-tonic"], optional = true }
 prost = { version = "0.13", optional = true }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"], optional = true }

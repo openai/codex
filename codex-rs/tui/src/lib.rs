@@ -166,6 +166,13 @@ pub async fn run_main(
         }
     };
 
+    // Build OTEL layer and compose into subscriber.
+    let telemetry = codex_core::telemetry_init::build_otel_layer_from_config(
+        &config,
+        "codex",
+        env!("CARGO_PKG_VERSION"),
+    );
+
     // we load config.toml here to determine project state.
     #[allow(clippy::print_stderr)]
     let config_toml = {

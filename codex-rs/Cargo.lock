@@ -798,6 +798,7 @@ dependencies = [
  "maplit",
  "mcp-types",
  "openssl-sys",
+ "opentelemetry_sdk",
  "os_info",
  "portable-pty",
  "predicates",
@@ -3476,6 +3477,7 @@ dependencies = [
  "bytes",
  "http",
  "opentelemetry",
+ "reqwest",
 ]
 
 [[package]]
@@ -3492,6 +3494,7 @@ dependencies = [
  "opentelemetry-proto",
  "opentelemetry_sdk",
  "prost",
+ "reqwest",
  "thiserror 1.0.69",
  "tokio",
  "tonic",
