@@ -67,6 +67,7 @@ tree-sitter-bash = { workspace = true }
 uuid = { workspace = true, features = ["serde", "v4"] }
 which = { workspace = true }
 wildmatch = { workspace = true }
+opentelemetry_sdk = { workspace = true, features = ["trace"] }
 
 
 [target.'cfg(target_os = "linux")'.dependencies]
