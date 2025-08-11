@@ -47,6 +47,7 @@ use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::InputResult;
 use crate::history_cell::CommandOutput;
+use crate::history_cell::ExecCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PatchEventType;
 use crate::live_wrap::RowBuilder;
@@ -467,8 +468,6 @@ impl ChatWidget<'_> {
                 cwd,
                 parsed_cmd,
             }) => {
-                // TODO: merge this into the active exec call.
-                self.flush_active_exec_cell();
                 self.finalize_active_stream();
                 // Ensure the status indicator is visible while the command runs.
                 self.bottom_pane
@@ -481,8 +480,19 @@ impl ChatWidget<'_> {
                         parsed_cmd: parsed_cmd.clone(),
                     },
                 );
-                self.active_exec_cell =
-                    Some(HistoryCell::new_active_exec_command(command, parsed_cmd));
+                let active_exec_cell = self.active_exec_cell.take();
+                let merge_result = merge_cells(&command, &parsed_cmd, &active_exec_cell);
+                self.active_exec_cell = match merge_result {
+                    MergeResult::Merge(cell) => Some(cell),
+                    MergeResult::Drop => active_exec_cell,
+                    MergeResult::NewCell(cell) => {
+                        if let Some(active) = active_exec_cell {
+                            self.app_event_tx
+                                .send(AppEvent::InsertHistory(active.plain_lines()));
+                        }
+                        Some(cell)
+                    }
+                }
             }
             EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id,
@@ -493,11 +503,15 @@ impl ChatWidget<'_> {
             }) => {
                 // Compute summary before moving stdout into the history cell.
                 let cmd = self.running_commands.remove(&call_id);
-                let parsed_cmd = match &cmd {
-                    Some(RunningCommand { parsed_cmd, .. }) => parsed_cmd.clone(),
-                    _ => vec![],
-                };
                 if let Some(cmd) = cmd {
+                    // Preserve any merged parsed commands already present on the
+                    // active cell; otherwise, fall back to this command's parsed.
+                    let parsed_cmd = match &self.active_exec_cell {
+                        Some(HistoryCell::Exec(ExecCell { parsed, .. })) if !parsed.is_empty() => {
+                            parsed.clone()
+                        }
+                        _ => cmd.parsed_cmd.clone(),
+                    };
                     // Replace the active running cell with the finalized result,
                     // but keep it as the active cell so it can be merged with
                     // subsequent commands before being committed.
@@ -824,5 +838,242 @@ fn add_token_usage(current_usage: &TokenUsage, new_usage: &TokenUsage) -> TokenU
         output_tokens: current_usage.output_tokens + new_usage.output_tokens,
         reasoning_output_tokens,
         total_tokens: current_usage.total_tokens + new_usage.total_tokens,
+    }
+}
+
+enum MergeResult {
+    Merge(HistoryCell),
+    Drop,
+    NewCell(HistoryCell),
+}
+
+// Determine whether to and how to merge two consecutive exec cells.
+fn merge_cells(
+    new_command: &[String],
+    new_parsed: &[ParsedCommand],
+    active_exec_cell: &Option<HistoryCell>,
+) -> MergeResult {
+    let ExecCell {
+        command: _existing_command,
+        parsed: existing_parsed,
+        output: existing_output,
+    } = match active_exec_cell {
+        Some(HistoryCell::Exec(cell)) => cell,
+        _ => {
+            // There is no existing exec cell.
+            return MergeResult::NewCell(HistoryCell::new_active_exec_command(
+                new_command.to_vec(),
+                new_parsed.to_vec(),
+            ));
+        }
+    };
+    let existing_last = existing_parsed.last();
+    let new_last = new_parsed.last();
+
+    // Drop the first command if it is a read and matches the last command.
+    // This is a common pattern the model does and it simplifies the output to dedupe.
+    let drop_first = if let (
+        Some(ParsedCommand::Read {
+            name: existing_name,
+            ..
+        }),
+        Some(ParsedCommand::Read { name: new_name, .. }),
+    ) = (existing_last, new_last)
+    {
+        existing_name == new_name
+    } else {
+        false
+    };
+
+    if drop_first && new_parsed.len() == 1 {
+        // There is only one command and it was deduped.
+        return MergeResult::Drop;
+    }
+    let existing_exit_code = existing_output.as_ref().map(|o| o.exit_code);
+    if let Some(code) = existing_exit_code {
+        if code != 0 {
+            // If the previous command failed, don't merge so the user can see stderr.
+            // Start a fresh cell for the new command instead of duplicating the old one.
+            return MergeResult::NewCell(HistoryCell::new_active_exec_command(
+                new_command.to_vec(),
+                new_parsed.to_vec(),
+            ));
+        }
+    }
+
+    let mut merged_parsed = existing_parsed.to_vec();
+    if drop_first {
+        merged_parsed.extend(new_parsed[1..].to_vec());
+    } else {
+        merged_parsed.extend(new_parsed.to_vec());
+    }
+
+    MergeResult::Merge(HistoryCell::new_active_exec_command(
+        new_command.to_vec(),
+        merged_parsed,
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::history_cell::CommandOutput;
+
+    fn read_cmd(name: &str) -> ParsedCommand {
+        ParsedCommand::Read {
+            cmd: vec!["cat".to_string(), name.to_string()],
+            name: name.to_string(),
+        }
+    }
+
+    fn unknown_cmd(cmd: &str) -> ParsedCommand {
+        ParsedCommand::Unknown {
+            cmd: cmd.split_whitespace().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn when_no_active_exec_cell_creates_new_cell() {
+        let new_command = vec!["echo".to_string(), "hi".to_string()];
+        let new_parsed = vec![read_cmd("a")];
+
+        let result = merge_cells(&new_command, &new_parsed, &None);
+
+        match result {
+            MergeResult::NewCell(cell) => match cell {
+                HistoryCell::Exec(ExecCell {
+                    command,
+                    parsed,
+                    output,
+                }) => {
+                    assert_eq!(command, new_command);
+                    assert_eq!(parsed, new_parsed);
+                    assert!(output.is_none());
+                }
+                _ => panic!("expected Exec cell"),
+            },
+            _ => panic!("expected NewCell"),
+        }
+    }
+
+    #[test]
+    fn drops_duplicate_trailing_read_when_new_has_only_one_read() {
+        // existing last = Read("foo"), new last = Read("foo"), new_parsed.len() == 1
+        let active = Some(HistoryCell::new_active_exec_command(
+            vec!["bash".into(), "-lc".into(), "cat foo".into()],
+            vec![read_cmd("foo")],
+        ));
+        let new_command = vec!["cat".into(), "foo".into()];
+        let new_parsed = vec![read_cmd("foo")];
+
+        let result = merge_cells(&new_command, &new_parsed, &active);
+        match result {
+            MergeResult::Drop => {}
+            _ => panic!("expected Drop"),
+        }
+    }
+
+    #[test]
+    fn does_not_merge_when_previous_command_failed() {
+        // existing exit_code != 0 forces starting a fresh cell
+        let active = Some(HistoryCell::new_completed_exec_command(
+            vec!["bash".into(), "-lc".into(), "cat bar".into()],
+            vec![read_cmd("bar")],
+            CommandOutput {
+                exit_code: 1,
+                stdout: String::new(),
+                stderr: "err".into(),
+            },
+        ));
+        // Ensure drop_first condition is false (different name)
+        let new_command = vec!["cat".into(), "baz".into()];
+        let new_parsed = vec![read_cmd("baz")];
+
+        let result = merge_cells(&new_command, &new_parsed, &active);
+        match result {
+            MergeResult::NewCell(cell) => match cell {
+                HistoryCell::Exec(ExecCell {
+                    command, parsed, ..
+                }) => {
+                    assert_eq!(command, new_command);
+                    assert_eq!(parsed, new_parsed);
+                }
+                _ => panic!("expected Exec cell"),
+            },
+            _ => panic!("expected NewCell"),
+        }
+    }
+
+    #[test]
+    fn merges_with_drop_first_true_when_new_len_gt_one() {
+        // existing last Read("file.txt"), new starts with same Read then more
+        let active = Some(HistoryCell::new_active_exec_command(
+            vec!["cat".into(), "file.txt".into()],
+            vec![read_cmd("file.txt")],
+        ));
+        let new_command = vec!["bash".into(), "-lc".into(), "sed -n 1,20p file.txt".into()];
+        // Place the duplicate Read as the LAST element to satisfy drop_first condition
+        let leading = unknown_cmd("tail -n 20");
+        let new_parsed = vec![leading.clone(), read_cmd("file.txt")];
+
+        let result = merge_cells(&new_command, &new_parsed, &active);
+        match result {
+            MergeResult::Merge(cell) => match cell {
+                HistoryCell::Exec(ExecCell {
+                    command, parsed, ..
+                }) => {
+                    assert_eq!(command, new_command);
+                    // Expect existing parsed + new_parsed[1..]
+                    assert_eq!(parsed.len(), 2);
+                    match (&parsed[0], &parsed[1]) {
+                        (
+                            ParsedCommand::Read { name, .. },
+                            ParsedCommand::Read { name: n2, .. },
+                        ) => {
+                            assert_eq!(name, "file.txt");
+                            assert_eq!(n2, "file.txt");
+                        }
+                        _ => panic!("unexpected parsed commands"),
+                    }
+                }
+                _ => panic!("expected Exec cell"),
+            },
+            _ => panic!("expected Merge"),
+        }
+    }
+
+    #[test]
+    fn merges_without_drop_first_when_last_commands_differ() {
+        // existing last Read("file1.txt"), new last Read("file2.txt"); should concatenate
+        let active = Some(HistoryCell::new_active_exec_command(
+            vec!["cat".into(), "file1.txt".into()],
+            vec![read_cmd("file1.txt")],
+        ));
+        let new_command = vec!["bash".into(), "-lc".into(), "cat file2.txt".into()];
+        let t2 = read_cmd("file2.txt");
+        let extra = unknown_cmd("echo done");
+        let new_parsed = vec![t2.clone(), extra.clone()];
+
+        let result = merge_cells(&new_command, &new_parsed, &active);
+        match result {
+            MergeResult::Merge(cell) => match cell {
+                HistoryCell::Exec(ExecCell {
+                    command, parsed, ..
+                }) => {
+                    assert_eq!(command, new_command);
+                    assert_eq!(parsed.len(), 3);
+                    match (&parsed[0], &parsed[1], &parsed[2]) {
+                        (ParsedCommand::Read { name: n1, .. }, p2, p3) => {
+                            assert_eq!(n1, "file1.txt");
+                            assert_eq!(p2, &t2);
+                            assert_eq!(p3, &extra);
+                        }
+                        _ => panic!("unexpected parsed commands"),
+                    }
+                }
+                _ => panic!("expected Exec cell"),
+            },
+            _ => panic!("expected Merge"),
+        }
     }
 }
