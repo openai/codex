@@ -68,7 +68,7 @@ pub(crate) struct ChatWidget<'a> {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
     bottom_pane: BottomPane<'a>,
-    active_history_cell: Option<HistoryCell>,
+    active_exec_cell: Option<HistoryCell>,
     config: Config,
     initial_user_message: Option<UserMessage>,
     total_token_usage: TokenUsage,
@@ -348,7 +348,7 @@ impl ChatWidget<'_> {
 
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
         let running = self.running_commands.remove(&ev.call_id);
-        self.active_history_cell = None;
+        self.active_exec_cell = None;
         let (command, parsed) = match running {
             Some(rc) => (rc.command, rc.parsed_cmd),
             None => (vec![ev.call_id.clone()], Vec::new()),
@@ -429,7 +429,7 @@ impl ChatWidget<'_> {
                 parsed_cmd: ev.parsed_cmd.clone(),
             },
         );
-        self.active_history_cell = Some(HistoryCell::new_active_exec_command(
+        self.active_exec_cell = Some(HistoryCell::new_active_exec_command(
             ev.command,
             ev.parsed_cmd,
         ));
@@ -452,7 +452,7 @@ impl ChatWidget<'_> {
     }
     fn interrupt_running_task(&mut self) {
         if self.bottom_pane.is_task_running() {
-            self.active_history_cell = None;
+            self.active_exec_cell = None;
             self.bottom_pane.clear_ctrl_c_quit_hint();
             self.submit_op(Op::Interrupt);
             self.bottom_pane.set_task_running(false);
@@ -463,7 +463,7 @@ impl ChatWidget<'_> {
     fn layout_areas(&self, area: Rect) -> [Rect; 2] {
         Layout::vertical([
             Constraint::Max(
-                self.active_history_cell
+                self.active_exec_cell
                     .as_ref()
                     .map_or(0, |c| c.desired_height(area.width)),
             ),
@@ -489,7 +489,7 @@ impl ChatWidget<'_> {
                 has_input_focus: true,
                 enhanced_keys_supported,
             }),
-            active_history_cell: None,
+            active_exec_cell: None,
             config: config.clone(),
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
@@ -509,7 +509,7 @@ impl ChatWidget<'_> {
     pub fn desired_height(&self, width: u16) -> u16 {
         self.bottom_pane.desired_height(width)
             + self
-                .active_history_cell
+                .active_exec_cell
                 .as_ref()
                 .map_or(0, |c| c.desired_height(width))
     }
@@ -531,7 +531,15 @@ impl ChatWidget<'_> {
         self.bottom_pane.handle_paste(text);
     }
 
+    fn flush_active_exec_cell(&mut self) {
+        if let Some(active) = self.active_exec_cell.take() {
+            self.app_event_tx
+                .send(AppEvent::InsertHistory(active.plain_lines()));
+        }
+    }
+
     fn add_to_history(&mut self, cell: HistoryCell) {
+        self.flush_active_exec_cell();
         self.app_event_tx
             .send(AppEvent::InsertHistory(cell.plain_lines()));
     }
@@ -577,6 +585,16 @@ impl ChatWidget<'_> {
         // Reset redraw flag for this dispatch
         self.needs_redraw = false;
         let Event { id, msg } = event;
+
+        match msg {
+            EventMsg::AgentMessageDelta(_)
+            | EventMsg::AgentReasoningDelta(_)
+            | EventMsg::ExecCommandOutputDelta(_) => {}
+            _ => {
+                tracing::info!("handle_codex_event: {:?}", msg);
+            }
+        }
+
         match msg {
             EventMsg::SessionConfigured(e) => self.on_session_configured(e),
             EventMsg::AgentMessage(AgentMessageEvent { message }) => self.on_agent_message(message),
@@ -734,7 +752,7 @@ impl WidgetRef for &ChatWidget<'_> {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let [active_cell_area, bottom_pane_area] = self.layout_areas(area);
         (&self.bottom_pane).render(bottom_pane_area, buf);
-        if let Some(cell) = &self.active_history_cell {
+        if let Some(cell) = &self.active_exec_cell {
             cell.render_ref(active_cell_area, buf);
         }
     }

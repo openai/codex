@@ -126,7 +126,7 @@ fn make_chatwidget_manual() -> (
         app_event_tx,
         codex_op_tx: op_tx,
         bottom_pane: bottom,
-        active_history_cell: None,
+        active_exec_cell: None,
         config: cfg.clone(),
         initial_user_message: None,
         total_token_usage: TokenUsage::default(),
