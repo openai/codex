@@ -149,8 +149,8 @@ pub struct Config {
     /// Responses API.
     pub model_reasoning_effort: Option<ReasoningEffort>,
 
-    /// If not "none", the value to use for `reasoning.summary` when making a
-    /// request using the Responses API.
+    /// If true, a short textual description of the agent's internal reasoning
+    /// will be included in model responses.
     pub model_reasoning_summary: ReasoningSummary,
 
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
@@ -162,7 +162,7 @@ pub struct Config {
     /// Experimental rollout resume path (absolute path to .jsonl; undocumented).
     pub experimental_resume: Option<PathBuf>,
 
-    /// Include an experimental plan tool that the model can use to update its current plan and status of each step.
+    /// Include the plan tool in the prompt to the model (default false).
     pub include_plan_tool: bool,
 
     /// Include the `apply_patch` tool for models that benefit from invoking
@@ -187,6 +187,9 @@ pub struct Config {
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: bool,
+
+    /// Telemetry configuration (exporter type, endpoint, headers, etc.).
+    pub telemetry: crate::config_types::TelemetryConfig,
 }
 
 impl Config {
@@ -619,6 +622,9 @@ pub struct ConfigToml {
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: Option<bool>,
+
+    /// Telemetry configuration.
+    pub telemetry: Option<crate::config_types::TelemetryConfigToml>,
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -973,6 +979,24 @@ impl Config {
             include_view_image_tool,
             active_profile: active_profile_name,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
+            telemetry: {
+                use crate::config_types::TelemetryConfig;
+                use crate::config_types::TelemetryConfigToml;
+                use crate::config_types::TelemetryExporterKind;
+                let t: TelemetryConfigToml = cfg.telemetry.unwrap_or_default();
+                let enabled = t.enabled.unwrap_or(true);
+                let exporter = t.exporter.unwrap_or(TelemetryExporterKind::OtlpFile);
+                let endpoint = t.endpoint;
+                let headers = t.headers.unwrap_or_default();
+                let rotate_mb = t.rotate_mb.or(Some(100));
+                TelemetryConfig {
+                    enabled,
+                    exporter,
+                    endpoint,
+                    headers,
+                    rotate_mb,
+                }
+            },
         };
         Ok(config)
     }
@@ -1493,6 +1517,13 @@ model_verbosity = "high"
                 include_view_image_tool: true,
                 active_profile: Some("o3".to_string()),
                 disable_paste_burst: false,
+                telemetry: crate::config_types::TelemetryConfig {
+                    enabled: true,
+                    exporter: crate::config_types::TelemetryExporterKind::OtlpFile,
+                    endpoint: None,
+                    headers: HashMap::new(),
+                    rotate_mb: Some(100),
+                },
             },
             o3_profile_config
         );
@@ -1551,6 +1582,13 @@ model_verbosity = "high"
             include_view_image_tool: true,
             active_profile: Some("gpt3".to_string()),
             disable_paste_burst: false,
+            telemetry: crate::config_types::TelemetryConfig {
+                enabled: true,
+                exporter: crate::config_types::TelemetryExporterKind::OtlpFile,
+                endpoint: None,
+                headers: HashMap::new(),
+                rotate_mb: Some(100),
+            },
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -1624,6 +1662,13 @@ model_verbosity = "high"
             include_view_image_tool: true,
             active_profile: Some("zdr".to_string()),
             disable_paste_burst: false,
+            telemetry: crate::config_types::TelemetryConfig {
+                enabled: true,
+                exporter: crate::config_types::TelemetryExporterKind::OtlpFile,
+                endpoint: None,
+                headers: HashMap::new(),
+                rotate_mb: Some(100),
+            },
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);

@@ -58,6 +58,7 @@ uuid = { version = "1", features = ["serde", "v4"] }
 which = "6"
 wildmatch = "2.4.0"
 codex-telemetry = { path = "../codex-telemetry", features = ["otel"] }
+opentelemetry_sdk = { version = "0.26", features = ["trace"] }
 
 
 [target.'cfg(target_os = "linux")'.dependencies]
