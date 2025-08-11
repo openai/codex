@@ -164,7 +164,7 @@ async fn assert_network_blocked(cmd: &[&str]) {
     .await;
 
     let (exit_code, stdout, stderr) = match result {
-        Ok(output) => (output.exit_code, output.stdout, output.stderr),
+        Ok(output) => (output.exit_code, output.stdout.text, output.stderr.text),
         Err(CodexErr::Sandbox(SandboxErr::Denied(exit_code, stdout, stderr))) => {
             (exit_code, stdout, stderr)
         }
