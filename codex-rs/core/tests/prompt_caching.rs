@@ -126,13 +126,12 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
         "content": [ { "type": "input_text", "text": "hello 2" } ]
     });
     let body2 = requests[1].body_json::<serde_json::Value>().unwrap();
-    assert_eq!(
-        body2["input"],
-        serde_json::json!([
-            expected_env_msg,
-            expected_ui_msg,
-            expected_user_message_1,
-            expected_user_message_2
-        ])
+    let expected_body2 = serde_json::json!(
+        [
+            body1["input"].as_array().unwrap().as_slice(),
+            [expected_user_message_2].as_slice(),
+        ]
+        .concat()
     );
+    assert_eq!(body2["input"], expected_body2);
 }
