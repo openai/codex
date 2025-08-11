@@ -618,6 +618,10 @@ impl ChatWidget<'_> {
         self.add_to_history(HistoryCell::new_prompts_output());
     }
 
+    pub(crate) fn add_help_output(&mut self, help_text: String) {
+        self.add_to_history(HistoryCell::new_help_output(help_text));
+    }
+
     /// Forward file-search results to the bottom pane.
     pub(crate) fn apply_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
         self.bottom_pane.on_file_search_result(query, matches);
