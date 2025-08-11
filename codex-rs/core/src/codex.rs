@@ -51,6 +51,7 @@ use crate::exec::ExecParams;
 use crate::exec::ExecToolCallOutput;
 use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
+use crate::exec::StreamOutput;
 use crate::exec::process_exec_tool_call;
 use crate::exec_env::create_env;
 use crate::mcp_connection_manager::McpConnectionManager;
@@ -431,8 +432,8 @@ impl Session {
         // Because stdout and stderr could each be up to 100 KiB, we send
         // truncated versions.
         const MAX_STREAM_OUTPUT: usize = 5 * 1024; // 5KiB
-        let stdout = stdout.chars().take(MAX_STREAM_OUTPUT).collect();
-        let stderr = stderr.chars().take(MAX_STREAM_OUTPUT).collect();
+        let stdout = stdout.text.chars().take(MAX_STREAM_OUTPUT).collect();
+        let stderr = stderr.text.chars().take(MAX_STREAM_OUTPUT).collect();
 
         let msg = if is_apply_patch {
             EventMsg::PatchApplyEnd(PatchApplyEndEvent {
@@ -504,8 +505,8 @@ impl Session {
             Err(e) => {
                 output_stderr = ExecToolCallOutput {
                     exit_code: -1,
-                    stdout: String::new(),
-                    stderr: get_error_message_ui(e),
+                    stdout: StreamOutput::new(String::new()),
+                    stderr: StreamOutput::new(get_error_message_ui(e)),
                     duration: Duration::default(),
                 };
                 &output_stderr
@@ -1977,19 +1978,10 @@ async fn handle_container_exec_with_params(
 
     match output_result {
         Ok(output) => {
-            let ExecToolCallOutput {
-                exit_code,
-                stdout,
-                stderr,
-                duration,
-            } = &output;
+            let ExecToolCallOutput { exit_code, .. } = &output;
 
             let is_success = *exit_code == 0;
-            let content = format_exec_output(
-                if is_success { stdout } else { stderr },
-                *exit_code,
-                *duration,
-            );
+            let content = format_exec_output(&output);
             ResponseInputItem::FunctionCallOutput {
                 call_id: call_id.clone(),
                 output: FunctionCallOutputPayload {
@@ -2118,19 +2110,10 @@ async fn handle_sandbox_error(
 
             match retry_output_result {
                 Ok(retry_output) => {
-                    let ExecToolCallOutput {
-                        exit_code,
-                        stdout,
-                        stderr,
-                        duration,
-                    } = &retry_output;
+                    let ExecToolCallOutput { exit_code, .. } = &retry_output;
 
                     let is_success = *exit_code == 0;
-                    let content = format_exec_output(
-                        if is_success { stdout } else { stderr },
-                        *exit_code,
-                        *duration,
-                    );
+                    let content = format_exec_output(&retry_output);
 
                     ResponseInputItem::FunctionCallOutput {
                         call_id: call_id.clone(),
@@ -2163,7 +2146,14 @@ async fn handle_sandbox_error(
 }
 
 /// Exec output is a pre-serialized JSON payload
-fn format_exec_output(output: &str, exit_code: i32, duration: Duration) -> String {
+fn format_exec_output(exec_output: &ExecToolCallOutput) -> String {
+    let ExecToolCallOutput {
+        exit_code,
+        stdout,
+        stderr,
+        duration,
+    } = exec_output;
+
     #[derive(Serialize)]
     struct ExecMetadata {
         exit_code: i32,
@@ -2179,10 +2169,20 @@ fn format_exec_output(output: &str, exit_code: i32, duration: Duration) -> Strin
     // round to 1 decimal place
     let duration_seconds = ((duration.as_secs_f32()) * 10.0).round() / 10.0;
 
+    let is_success = *exit_code == 0;
+    let output = if is_success { stdout } else { stderr };
+
+    let mut formatted_output = output.text.clone();
+    if let Some(truncated_after_lines) = output.truncated_after_lines {
+        formatted_output.push_str(&format!(
+            "\n\n[Output truncated after {truncated_after_lines} lines: too many lines or bytes.]",
+        ));
+    }
+
     let payload = ExecOutput {
-        output,
+        output: &formatted_output,
         metadata: ExecMetadata {
-            exit_code,
+            exit_code: *exit_code,
             duration_seconds,
         },
     };

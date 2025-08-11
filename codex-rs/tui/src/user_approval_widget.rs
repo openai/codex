@@ -152,7 +152,7 @@ impl UserApprovalWidget<'_> {
                     contents.push(Line::from(""));
                 }
 
-                let details = crate::history_cell::create_diff_details(changes);
+                let details = crate::diff_render::create_diff_details(changes);
                 contents.extend(details);
 
                 Paragraph::new(contents).wrap(Wrap { trim: false })
