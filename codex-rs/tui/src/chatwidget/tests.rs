@@ -22,12 +22,14 @@ use codex_core::protocol::TaskCompleteEvent;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
+use pretty_assertions::assert_eq;
+use std::fs::File;
+use std::io::BufRead;
+use std::io::BufReader;
+use std::io::Read;
 use std::path::PathBuf;
 use std::sync::mpsc::channel;
 use tokio::sync::mpsc::unbounded_channel;
-use pretty_assertions::assert_eq;
-use std::fs::File;
-use std::io::{BufRead, BufReader, Read};
 
 fn test_config() -> Config {
     // Use base defaults to avoid depending on host state.
@@ -213,9 +215,15 @@ async fn binary_size_transcript_matches_ideal_fixture() {
         let Ok(v): Result<serde_json::Value, _> = serde_json::from_str(&line) else {
             continue;
         };
-        let Some(dir) = v.get("dir").and_then(|d| d.as_str()) else { continue; };
-        if dir != "to_tui" { continue; }
-        let Some(kind) = v.get("kind").and_then(|k| k.as_str()) else { continue; };
+        let Some(dir) = v.get("dir").and_then(|d| d.as_str()) else {
+            continue;
+        };
+        if dir != "to_tui" {
+            continue;
+        }
+        let Some(kind) = v.get("kind").and_then(|k| k.as_str()) else {
+            continue;
+        };
 
         match kind {
             "codex_event" => {

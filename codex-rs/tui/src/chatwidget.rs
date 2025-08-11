@@ -234,7 +234,10 @@ impl ChatWidget<'_> {
 
     fn on_patch_apply_end(&mut self, event: codex_core::protocol::PatchApplyEndEvent) {
         let ev2 = event.clone();
-        self.defer_or_handle(|q| q.push_patch_end(event), |s| s.handle_patch_apply_end_now(ev2));
+        self.defer_or_handle(
+            |q| q.push_patch_end(event),
+            |s| s.handle_patch_apply_end_now(ev2),
+        );
     }
 
     fn on_exec_command_end(&mut self, ev: ExecCommandEndEvent) {
