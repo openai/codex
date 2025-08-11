@@ -149,8 +149,8 @@ pub struct Config {
     /// Responses API.
     pub model_reasoning_effort: Option<ReasoningEffort>,
 
-    /// If true, a short textual description of the agent's internal reasoning
-    /// will be included in model responses.
+    /// If not "none", the value to use for `reasoning.summary` when making a
+    /// request using the Responses API.
     pub model_reasoning_summary: ReasoningSummary,
 
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
@@ -162,7 +162,7 @@ pub struct Config {
     /// Experimental rollout resume path (absolute path to .jsonl; undocumented).
     pub experimental_resume: Option<PathBuf>,
 
-    /// Include the plan tool in the prompt to the model (default false).
+    /// Include an experimental plan tool that the model can use to update its current plan and status of each step.
     pub include_plan_tool: bool,
 
     /// Include the `apply_patch` tool for models that benefit from invoking
