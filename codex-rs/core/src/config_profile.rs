@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use crate::config_types::ReasoningEffort;
 use crate::config_types::ReasoningSummary;
+use crate::config_types::Verbosity;
 use crate::protocol::AskForApproval;
 
 /// Collection of common configuration options that a user can define as a unit
@@ -17,6 +18,7 @@ pub struct ConfigProfile {
     pub disable_response_storage: Option<bool>,
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
+    pub model_verbosity: Option<Verbosity>,
     pub chatgpt_base_url: Option<String>,
     pub experimental_instructions_file: Option<PathBuf>,
 }

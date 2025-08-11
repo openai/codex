@@ -26,6 +26,7 @@ use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::client_common::ResponsesApiRequest;
 use crate::client_common::create_reasoning_param_for_request;
+use crate::client_common::create_text_param_for_request;
 use crate::config::Config;
 use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -158,6 +159,13 @@ impl ModelClient {
 
         let input_with_instructions = prompt.get_formatted_input();
 
+        // Only include `text.verbosity` for GPT-5 family models
+        let text = if self.config.model_family.family == "gpt-5" {
+            create_text_param_for_request(self.config.model_verbosity)
+        } else {
+            None
+        };
+
         let payload = ResponsesApiRequest {
             model: &self.config.model,
             instructions: &full_instructions,
@@ -169,6 +177,7 @@ impl ModelClient {
             store,
             stream: true,
             include,
+            text,
         };
 
         let mut attempt = 0;

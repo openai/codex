@@ -21,6 +21,17 @@ While we are [working to close the gap between the TypeScript and Rust implement
 
 Codex supports a rich set of configuration options. Note that the Rust CLI uses `config.toml` instead of `config.json`. See [`config.md`](./config.md) for details.
 
+#### GPT-5 Verbosity
+
+When using GPT‑5 models via the Responses API, you can control output length/detail with `model_verbosity` in `~/.codex/config.toml`:
+
+```toml
+model = "gpt-5"
+model_verbosity = "low"  # or "medium" (default) / "high"
+```
+
+Codex will include a `text` object in the request payload: `{"text": {"verbosity": "low|medium|high"}}`. This setting applies only to GPT‑5 models; legacy providers are unaffected. See the "model_verbosity" section in [`config.md`](./config.md#model_verbosity).
+
 ### Model Context Protocol Support
 
 Codex CLI functions as an MCP client that can connect to MCP servers on startup. See the [`mcp_servers`](./config.md#mcp_servers) section in the configuration documentation for details.

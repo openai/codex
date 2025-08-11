@@ -243,6 +243,25 @@ To disable reasoning summaries, set `model_reasoning_summary` to `"none"` in you
 model_reasoning_summary = "none"  # disable reasoning summaries
 ```
 
+## model_verbosity
+
+Controls output length/detail on GPT‑5 family models when using the Responses API. Supported values:
+
+- `"low"`
+- `"medium"` (default when omitted)
+- `"high"`
+
+When set, Codex includes a `text` object in the request payload with the configured verbosity, for example: `"text": { "verbosity": "low" }`.
+
+Example:
+
+```toml
+model = "gpt-5"
+model_verbosity = "low"
+```
+
+Note: This applies only to providers using the Responses API. Chat Completions providers are unaffected.
+
 ## model_supports_reasoning_summaries
 
 By default, `reasoning` is only set on requests to OpenAI models that are known to support them. To force `reasoning` to set on requests to the current model, you can force this behavior by setting the following in `config.toml`:
