@@ -483,19 +483,16 @@ impl ChatWidget<'_> {
                     },
                 );
                 let active_exec_cell = self.active_exec_cell.take();
-                match merge_cells(&command, &parsed_cmd, &active_exec_cell) {
-                    MergeResult::Merge(cell) => {
-                        self.active_exec_cell = Some(cell);
-                    }
-                    MergeResult::Drop => {
-                        self.active_exec_cell = active_exec_cell;
-                    }
+                self.active_exec_cell = match merge_cells(&command, &parsed_cmd, &active_exec_cell)
+                {
+                    MergeResult::Merge(cell) => Some(cell),
+                    MergeResult::Drop => active_exec_cell,
                     MergeResult::NewCell(cell) => {
                         if let Some(active) = active_exec_cell {
                             self.app_event_tx
                                 .send(AppEvent::InsertHistory(active.plain_lines()));
                         }
-                        self.active_exec_cell = Some(cell);
+                        Some(cell)
                     }
                 }
             }
@@ -511,17 +508,11 @@ impl ChatWidget<'_> {
                 if let Some(cmd) = cmd {
                     // Preserve any merged parsed commands already present on the
                     // active cell; otherwise, fall back to this command's parsed.
-                    let parsed_cmd = if self.render_parsed_exec {
-                        match &self.active_exec_cell {
-                            Some(HistoryCell::Exec(ExecCell { parsed, .. }))
-                                if !parsed.is_empty() =>
-                            {
-                                parsed.clone()
-                            }
-                            _ => cmd.parsed_cmd.clone(),
+                    let parsed_cmd = match &self.active_exec_cell {
+                        Some(HistoryCell::Exec(ExecCell { parsed, .. })) if !parsed.is_empty() => {
+                            parsed.clone()
                         }
-                    } else {
-                        vec![]
+                        _ => cmd.parsed_cmd.clone(),
                     };
                     // Replace the active running cell with the finalized result,
                     // but keep it as the active cell so it can be merged with
