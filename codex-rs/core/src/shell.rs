@@ -230,7 +230,7 @@ mod tests {
             assert_eq!(output.exit_code, 0, "input: {input:?} output: {output:?}");
             if let Some(expected) = expected_output {
                 assert_eq!(
-                    output.stdout, expected,
+                    output.stdout.text, expected,
                     "input: {input:?} output: {output:?}"
                 );
             }

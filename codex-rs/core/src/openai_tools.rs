@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value as JsonValue;
 use serde_json::json;
 use std::collections::BTreeMap;
 use std::collections::HashMap;
@@ -81,6 +82,8 @@ pub(crate) enum JsonSchema {
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
     },
+    /// MCP schema allows "number" | "integer" for Number
+    #[serde(alias = "integer")]
     Number {
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
@@ -296,7 +299,13 @@ pub(crate) fn mcp_tool_to_openai_tool(
         input_schema.properties = Some(serde_json::Value::Object(serde_json::Map::new()));
     }
 
-    let serialized_input_schema = serde_json::to_value(input_schema)?;
+    // Serialize to a raw JSON value so we can sanitize schemas coming from MCP
+    // servers. Some servers omit the top-level or nested `type` in JSON
+    // Schemas (e.g. using enum/anyOf), or use unsupported variants like
+    // `integer`. Our internal JsonSchema is a small subset and requires
+    // `type`, so we coerce/sanitize here for compatibility.
+    let mut serialized_input_schema = serde_json::to_value(input_schema)?;
+    sanitize_json_schema(&mut serialized_input_schema);
     let input_schema = serde_json::from_value::<JsonSchema>(serialized_input_schema)?;
 
     Ok(ResponsesApiTool {
@@ -305,6 +314,120 @@ pub(crate) fn mcp_tool_to_openai_tool(
         strict: false,
         parameters: input_schema,
     })
+}
+
+/// Sanitize a JSON Schema (as serde_json::Value) so it can fit our limited
+/// JsonSchema enum. This function:
+/// - Ensures every schema object has a "type". If missing, infers it from
+///   common keywords (properties => object, items => array, enum/const/format => string)
+///   and otherwise defaults to "string".
+/// - Fills required child fields (e.g. array items, object properties) with
+///   permissive defaults when absent.
+fn sanitize_json_schema(value: &mut JsonValue) {
+    match value {
+        JsonValue::Bool(_) => {
+            // JSON Schema boolean form: true/false. Coerce to an accept-all string.
+            *value = json!({ "type": "string" });
+        }
+        JsonValue::Array(arr) => {
+            for v in arr.iter_mut() {
+                sanitize_json_schema(v);
+            }
+        }
+        JsonValue::Object(map) => {
+            // First, recursively sanitize known nested schema holders
+            if let Some(props) = map.get_mut("properties") {
+                if let Some(props_map) = props.as_object_mut() {
+                    for (_k, v) in props_map.iter_mut() {
+                        sanitize_json_schema(v);
+                    }
+                }
+            }
+            if let Some(items) = map.get_mut("items") {
+                sanitize_json_schema(items);
+            }
+            // Some schemas use oneOf/anyOf/allOf - sanitize their entries
+            for combiner in ["oneOf", "anyOf", "allOf", "prefixItems"] {
+                if let Some(v) = map.get_mut(combiner) {
+                    sanitize_json_schema(v);
+                }
+            }
+
+            // Normalize/ensure type
+            let mut ty = map
+                .get("type")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
+            // If type is an array (union), pick first supported; else leave to inference
+            if ty.is_none() {
+                if let Some(JsonValue::Array(types)) = map.get("type") {
+                    for t in types {
+                        if let Some(tt) = t.as_str() {
+                            if matches!(
+                                tt,
+                                "object" | "array" | "string" | "number" | "integer" | "boolean"
+                            ) {
+                                ty = Some(tt.to_string());
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Infer type if still missing
+            if ty.is_none() {
+                if map.contains_key("properties")
+                    || map.contains_key("required")
+                    || map.contains_key("additionalProperties")
+                {
+                    ty = Some("object".to_string());
+                } else if map.contains_key("items") || map.contains_key("prefixItems") {
+                    ty = Some("array".to_string());
+                } else if map.contains_key("enum")
+                    || map.contains_key("const")
+                    || map.contains_key("format")
+                {
+                    ty = Some("string".to_string());
+                } else if map.contains_key("minimum")
+                    || map.contains_key("maximum")
+                    || map.contains_key("exclusiveMinimum")
+                    || map.contains_key("exclusiveMaximum")
+                    || map.contains_key("multipleOf")
+                {
+                    ty = Some("number".to_string());
+                }
+            }
+            // If we still couldn't infer, default to string
+            let ty = ty.unwrap_or_else(|| "string".to_string());
+            map.insert("type".to_string(), JsonValue::String(ty.to_string()));
+
+            // Ensure object schemas have properties map
+            if ty == "object" {
+                if !map.contains_key("properties") {
+                    map.insert(
+                        "properties".to_string(),
+                        JsonValue::Object(serde_json::Map::new()),
+                    );
+                }
+                // If additionalProperties is an object schema, sanitize it too.
+                // Leave booleans as-is, since JSON Schema allows boolean here.
+                if let Some(ap) = map.get_mut("additionalProperties") {
+                    let is_bool = matches!(ap, JsonValue::Bool(_));
+                    if !is_bool {
+                        sanitize_json_schema(ap);
+                    }
+                }
+            }
+
+            // Ensure array schemas have items
+            if ty == "array" && !map.contains_key("items") {
+                map.insert("items".to_string(), json!({ "type": "string" }));
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Returns a list of OpenAiTools based on the provided config and MCP tools.
@@ -351,6 +474,7 @@ pub(crate) fn get_openai_tools(
 mod tests {
     use crate::model_family::find_family_for_model;
     use mcp_types::ToolInputSchema;
+    use pretty_assertions::assert_eq;
 
     use super::*;
 
@@ -493,6 +617,214 @@ mod tests {
                     additional_properties: None,
                 },
                 description: "Do something cool".to_string(),
+                strict: false,
+            })
+        );
+    }
+
+    #[test]
+    fn test_mcp_tool_property_missing_type_defaults_to_string() {
+        let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
+        let config = ToolsConfig::new(
+            &model_family,
+            AskForApproval::Never,
+            SandboxPolicy::ReadOnly,
+            false,
+        );
+
+        let tools = get_openai_tools(
+            &config,
+            Some(HashMap::from([(
+                "dash/search".to_string(),
+                mcp_types::Tool {
+                    name: "search".to_string(),
+                    input_schema: ToolInputSchema {
+                        properties: Some(serde_json::json!({
+                            "query": {
+                                "description": "search query"
+                            }
+                        })),
+                        required: None,
+                        r#type: "object".to_string(),
+                    },
+                    output_schema: None,
+                    title: None,
+                    annotations: None,
+                    description: Some("Search docs".to_string()),
+                },
+            )])),
+        );
+
+        assert_eq_tool_names(&tools, &["shell", "dash/search"]);
+
+        assert_eq!(
+            tools[1],
+            OpenAiTool::Function(ResponsesApiTool {
+                name: "dash/search".to_string(),
+                parameters: JsonSchema::Object {
+                    properties: BTreeMap::from([(
+                        "query".to_string(),
+                        JsonSchema::String {
+                            description: Some("search query".to_string())
+                        }
+                    )]),
+                    required: None,
+                    additional_properties: None,
+                },
+                description: "Search docs".to_string(),
+                strict: false,
+            })
+        );
+    }
+
+    #[test]
+    fn test_mcp_tool_integer_normalized_to_number() {
+        let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
+        let config = ToolsConfig::new(
+            &model_family,
+            AskForApproval::Never,
+            SandboxPolicy::ReadOnly,
+            false,
+        );
+
+        let tools = get_openai_tools(
+            &config,
+            Some(HashMap::from([(
+                "dash/paginate".to_string(),
+                mcp_types::Tool {
+                    name: "paginate".to_string(),
+                    input_schema: ToolInputSchema {
+                        properties: Some(serde_json::json!({
+                            "page": { "type": "integer" }
+                        })),
+                        required: None,
+                        r#type: "object".to_string(),
+                    },
+                    output_schema: None,
+                    title: None,
+                    annotations: None,
+                    description: Some("Pagination".to_string()),
+                },
+            )])),
+        );
+
+        assert_eq_tool_names(&tools, &["shell", "dash/paginate"]);
+        assert_eq!(
+            tools[1],
+            OpenAiTool::Function(ResponsesApiTool {
+                name: "dash/paginate".to_string(),
+                parameters: JsonSchema::Object {
+                    properties: BTreeMap::from([(
+                        "page".to_string(),
+                        JsonSchema::Number { description: None }
+                    )]),
+                    required: None,
+                    additional_properties: None,
+                },
+                description: "Pagination".to_string(),
+                strict: false,
+            })
+        );
+    }
+
+    #[test]
+    fn test_mcp_tool_array_without_items_gets_default_string_items() {
+        let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
+        let config = ToolsConfig::new(
+            &model_family,
+            AskForApproval::Never,
+            SandboxPolicy::ReadOnly,
+            false,
+        );
+
+        let tools = get_openai_tools(
+            &config,
+            Some(HashMap::from([(
+                "dash/tags".to_string(),
+                mcp_types::Tool {
+                    name: "tags".to_string(),
+                    input_schema: ToolInputSchema {
+                        properties: Some(serde_json::json!({
+                            "tags": { "type": "array" }
+                        })),
+                        required: None,
+                        r#type: "object".to_string(),
+                    },
+                    output_schema: None,
+                    title: None,
+                    annotations: None,
+                    description: Some("Tags".to_string()),
+                },
+            )])),
+        );
+
+        assert_eq_tool_names(&tools, &["shell", "dash/tags"]);
+        assert_eq!(
+            tools[1],
+            OpenAiTool::Function(ResponsesApiTool {
+                name: "dash/tags".to_string(),
+                parameters: JsonSchema::Object {
+                    properties: BTreeMap::from([(
+                        "tags".to_string(),
+                        JsonSchema::Array {
+                            items: Box::new(JsonSchema::String { description: None }),
+                            description: None
+                        }
+                    )]),
+                    required: None,
+                    additional_properties: None,
+                },
+                description: "Tags".to_string(),
+                strict: false,
+            })
+        );
+    }
+
+    #[test]
+    fn test_mcp_tool_anyof_defaults_to_string() {
+        let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
+        let config = ToolsConfig::new(
+            &model_family,
+            AskForApproval::Never,
+            SandboxPolicy::ReadOnly,
+            false,
+        );
+
+        let tools = get_openai_tools(
+            &config,
+            Some(HashMap::from([(
+                "dash/value".to_string(),
+                mcp_types::Tool {
+                    name: "value".to_string(),
+                    input_schema: ToolInputSchema {
+                        properties: Some(serde_json::json!({
+                            "value": { "anyOf": [ { "type": "string" }, { "type": "number" } ] }
+                        })),
+                        required: None,
+                        r#type: "object".to_string(),
+                    },
+                    output_schema: None,
+                    title: None,
+                    annotations: None,
+                    description: Some("AnyOf Value".to_string()),
+                },
+            )])),
+        );
+
+        assert_eq_tool_names(&tools, &["shell", "dash/value"]);
+        assert_eq!(
+            tools[1],
+            OpenAiTool::Function(ResponsesApiTool {
+                name: "dash/value".to_string(),
+                parameters: JsonSchema::Object {
+                    properties: BTreeMap::from([(
+                        "value".to_string(),
+                        JsonSchema::String { description: None }
+                    )]),
+                    required: None,
+                    additional_properties: None,
+                },
+                description: "AnyOf Value".to_string(),
                 strict: false,
             })
         );
