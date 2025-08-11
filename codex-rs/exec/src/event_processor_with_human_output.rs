@@ -263,6 +263,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 call_id,
                 command,
                 cwd,
+                parsed_cmd: _,
             }) => {
                 self.call_id_to_command.insert(
                     call_id.clone(),

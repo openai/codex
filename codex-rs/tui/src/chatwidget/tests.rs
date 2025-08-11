@@ -309,6 +309,16 @@ async fn binary_size_transcript_matches_ideal_fixture() {
     compare_lines.extend(lines[(thinking_line_idx + 1)..].iter().cloned());
     let visible_after = compare_lines.join("\n");
 
+    // Optionally update the fixture when env var is set
+    if std::env::var("UPDATE_IDEAL").as_deref() == Ok("1") {
+        let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        p.push("tests");
+        p.push("fixtures");
+        p.push("ideal-binary-response.txt");
+        std::fs::write(&p, &visible_after).expect("write updated ideal fixture");
+        return;
+    }
+
     // Exact equality with pretty diff on failure
     assert_eq!(visible_after, ideal);
 }

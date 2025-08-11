@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use codex_core::config::Config;
+use codex_core::parse_command::ParsedCommand;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -55,7 +56,13 @@ use crate::streaming::controller::AppEventHistorySink;
 use crate::streaming::controller::StreamController;
 use codex_file_search::FileMatch;
 
-// Simplified: track only the command arguments for running exec calls.
+// Track information about an in-flight exec command.
+struct RunningCommand {
+    command: Vec<String>,
+    #[allow(dead_code)]
+    cwd: PathBuf,
+    parsed_cmd: Vec<ParsedCommand>,
+}
 
 pub(crate) struct ChatWidget<'a> {
     app_event_tx: AppEventSender,
@@ -70,7 +77,7 @@ pub(crate) struct ChatWidget<'a> {
     stream: StreamController,
     // Track the most recently active stream kind in the current turn
     last_stream_kind: Option<StreamKind>,
-    running_commands: HashMap<String, Vec<String>>,
+    running_commands: HashMap<String, RunningCommand>,
     task_complete_pending: bool,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
@@ -340,10 +347,15 @@ impl ChatWidget<'_> {
     }
 
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
-        let cmd = self.running_commands.remove(&ev.call_id);
+        let running = self.running_commands.remove(&ev.call_id);
         self.active_history_cell = None;
+        let (command, parsed) = match running {
+            Some(rc) => (rc.command, rc.parsed_cmd),
+            None => (vec![ev.call_id.clone()], Vec::new()),
+        };
         self.add_to_history(HistoryCell::new_completed_exec_command(
-            cmd.unwrap_or_else(|| vec![ev.call_id.clone()]),
+            command,
+            parsed,
             CommandOutput {
                 exit_code: ev.exit_code,
                 stdout: ev.stdout.clone(),
@@ -409,15 +421,23 @@ impl ChatWidget<'_> {
         // Ensure the status indicator is visible while the command runs.
         self.bottom_pane
             .update_status_text("running command".to_string());
-        self.running_commands
-            .insert(ev.call_id.clone(), ev.command.clone());
-        self.active_history_cell = Some(HistoryCell::new_active_exec_command(ev.command));
+        self.running_commands.insert(
+            ev.call_id.clone(),
+            RunningCommand {
+                command: ev.command.clone(),
+                cwd: ev.cwd.clone(),
+                parsed_cmd: ev.parsed_cmd.clone(),
+            },
+        );
+        self.active_history_cell = Some(HistoryCell::new_active_exec_command(
+            ev.command,
+            ev.parsed_cmd,
+        ));
     }
 
     pub(crate) fn handle_mcp_begin_now(&mut self, ev: McpToolCallBeginEvent) {
         self.add_to_history(HistoryCell::new_active_mcp_tool_call(ev.invocation));
     }
-
     pub(crate) fn handle_mcp_end_now(&mut self, ev: McpToolCallEndEvent) {
         self.add_to_history(HistoryCell::new_completed_mcp_tool_call(
             80,
@@ -667,6 +687,9 @@ impl ChatWidget<'_> {
         self.bottom_pane.composer_is_empty()
     }
 
+    pub(crate) fn insert_str(&mut self, text: &str) {
+        self.bottom_pane.insert_str(text);
+    }
     /// Forward an `Op` directly to codex.
     pub(crate) fn submit_op(&self, op: Op) {
         // Record outbound operation for session replay fidelity.
