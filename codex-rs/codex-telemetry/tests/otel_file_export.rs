@@ -31,7 +31,6 @@ async fn file_exporter_writes_span_json() {
     let (guard, tracer) = telemetry::build_layer(&telemetry::Settings {
         enabled: true,
         exporter: telemetry::Exporter::OtlpFile {
-            path: PathBuf::new(),
             rotate_mb: Some(100),
         },
         service_name: "codex-test".to_string(),
@@ -80,7 +79,6 @@ async fn session_span_flushes_on_shutdown() {
     let (guard, tracer) = telemetry::build_layer(&telemetry::Settings {
         enabled: true,
         exporter: telemetry::Exporter::OtlpFile {
-            path: PathBuf::new(),
             rotate_mb: Some(100),
         },
         service_name: "codex-test".to_string(),

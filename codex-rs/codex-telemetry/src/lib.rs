@@ -32,7 +32,6 @@ mod imp {
     pub enum TelemetryExporter {
         None,
         OtlpFile {
-            path: PathBuf,
             rotate_mb: Option<u64>,
         },
         OtlpGrpc {
@@ -112,10 +111,7 @@ mod imp {
                 global::set_tracer_provider(provider.clone());
                 return Some(TelemetryGuard { provider });
             }
-            TelemetryExporter::OtlpFile {
-                path: _ignored,
-                rotate_mb,
-            } => {
+            TelemetryExporter::OtlpFile { rotate_mb } => {
                 let final_path = determine_traces_file_path(settings.codex_home.as_ref());
                 if debug_enabled() {
                     eprintln!(
@@ -245,10 +241,7 @@ mod imp {
                 let tracer = provider.tracer(settings.service_name.clone());
                 return Some((TelemetryGuard { provider }, tracer));
             }
-            TelemetryExporter::OtlpFile {
-                path: _ignored,
-                rotate_mb,
-            } => {
+            TelemetryExporter::OtlpFile { rotate_mb } => {
                 let final_path = determine_traces_file_path(settings.codex_home.as_ref());
                 if debug_enabled() {
                     eprintln!(
