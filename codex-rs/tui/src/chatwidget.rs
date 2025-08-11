@@ -5,6 +5,7 @@ use std::sync::Arc;
 use codex_core::codex_wrapper::CodexConversation;
 use codex_core::codex_wrapper::init_codex;
 use codex_core::config::Config;
+use codex_core::parse_command::ParsedCommand;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -57,6 +58,7 @@ struct RunningCommand {
     command: Vec<String>,
     #[allow(dead_code)]
     cwd: PathBuf,
+    parsed_cmd: Vec<ParsedCommand>,
 }
 
 pub(crate) struct ChatWidget<'a> {
@@ -452,6 +454,7 @@ impl ChatWidget<'_> {
                 call_id,
                 command,
                 cwd,
+                parsed_cmd,
             }) => {
                 self.finalize_active_stream();
                 // Ensure the status indicator is visible while the command runs.
@@ -462,9 +465,11 @@ impl ChatWidget<'_> {
                     RunningCommand {
                         command: command.clone(),
                         cwd: cwd.clone(),
+                        parsed_cmd: parsed_cmd.clone(),
                     },
                 );
-                self.active_history_cell = Some(HistoryCell::new_active_exec_command(command));
+                self.active_history_cell =
+                    Some(HistoryCell::new_active_exec_command(command, parsed_cmd));
             }
             EventMsg::ExecCommandOutputDelta(_) => {
                 // TODO
@@ -494,14 +499,19 @@ impl ChatWidget<'_> {
                 // Compute summary before moving stdout into the history cell.
                 let cmd = self.running_commands.remove(&call_id);
                 self.active_history_cell = None;
+                let (command, parsed_cmd) = match cmd {
+                    Some(cmd) => (cmd.command, cmd.parsed_cmd),
+                    None => (vec![call_id], vec![]),
+                };
                 self.add_to_history(HistoryCell::new_completed_exec_command(
-                    cmd.map(|cmd| cmd.command).unwrap_or_else(|| vec![call_id]),
+                    command,
+                    parsed_cmd,
                     CommandOutput {
                         exit_code,
                         stdout,
                         stderr,
                     },
-                ));
+                ))
             }
             EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
                 call_id: _,

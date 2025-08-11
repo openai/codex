@@ -1,3 +1,4 @@
+use crate::colors::LIGHT_BLUE;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::slash_command::SlashCommand;
@@ -8,6 +9,7 @@ use codex_ansi_escape::ansi_escape_line;
 use codex_common::create_config_summary_entries;
 use codex_common::elapsed::format_duration;
 use codex_core::config::Config;
+use codex_core::parse_command::ParsedCommand;
 use codex_core::plan_tool::PlanItemArg;
 use codex_core::plan_tool::StepStatus;
 use codex_core::plan_tool::UpdatePlanArgs;
@@ -160,6 +162,7 @@ impl HistoryCell {
     /// Return a cloned, plain representation of the cell's lines suitable for
     /// one‑shot insertion into the terminal scrollback. Image cells are
     /// represented with a simple placeholder for now.
+    /// These lines are also rendered directly by ratatui wrapped in a Paragraph.
     pub(crate) fn plain_lines(&self) -> Vec<Line<'static>> {
         match self {
             HistoryCell::WelcomeMessage { view }
@@ -192,48 +195,6 @@ impl HistoryCell {
             .line_count(width)
             .try_into()
             .unwrap_or(0)
-    }
-
-    fn output_lines(src: &str) -> Vec<Line<'static>> {
-        let lines: Vec<&str> = src.lines().collect();
-        let total = lines.len();
-        let limit = TOOL_CALL_MAX_LINES;
-
-        let mut out = Vec::new();
-
-        let head_end = total.min(limit);
-        for (i, raw) in lines[..head_end].iter().enumerate() {
-            let mut line = ansi_escape_line(raw);
-            let prefix = if i == 0 { "  ⎿ " } else { "    " };
-            line.spans.insert(0, prefix.into());
-            line.spans.iter_mut().for_each(|span| {
-                span.style = span.style.add_modifier(Modifier::DIM);
-            });
-            out.push(line);
-        }
-
-        // If we will ellipsize less than the limit, just show it.
-        let show_ellipsis = total > 2 * limit;
-        if show_ellipsis {
-            let omitted = total - 2 * limit;
-            out.push(Line::from(format!("… +{omitted} lines")));
-        }
-
-        let tail_start = if show_ellipsis {
-            total - limit
-        } else {
-            head_end
-        };
-        for raw in lines[tail_start..].iter() {
-            let mut line = ansi_escape_line(raw);
-            line.spans.insert(0, "    ".into());
-            line.spans.iter_mut().for_each(|span| {
-                span.style = span.style.add_modifier(Modifier::DIM);
-            });
-            out.push(line);
-        }
-
-        out
     }
 
     pub(crate) fn new_session_info(
@@ -303,59 +264,99 @@ impl HistoryCell {
         }
     }
 
-    pub(crate) fn new_active_exec_command(command: Vec<String>) -> Self {
-        let command_escaped = strip_bash_lc_and_escape(&command);
-
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        let mut iter = command_escaped.lines();
-        if let Some(first) = iter.next() {
-            lines.push(Line::from(vec![
-                "▌ ".cyan(),
-                "Running command ".magenta(),
-                first.to_string().into(),
-            ]));
-        } else {
-            lines.push(Line::from(vec!["▌ ".cyan(), "Running command".magenta()]));
-        }
-        for cont in iter {
-            lines.push(Line::from(cont.to_string()));
-        }
-        lines.push(Line::from(""));
-
+    pub(crate) fn new_active_exec_command(
+        command: Vec<String>,
+        parsed: Vec<ParsedCommand>,
+    ) -> Self {
+        let lines = HistoryCell::exec_command_lines(&command, &parsed, None);
         HistoryCell::ActiveExecCommand {
             view: TextBlock::new(lines),
         }
     }
 
-    pub(crate) fn new_completed_exec_command(command: Vec<String>, output: CommandOutput) -> Self {
-        let CommandOutput {
-            exit_code,
-            stdout,
-            stderr,
-        } = output;
+    pub(crate) fn new_completed_exec_command(
+        command: Vec<String>,
+        parsed: Vec<ParsedCommand>,
+        output: CommandOutput,
+    ) -> Self {
+        let lines = HistoryCell::exec_command_lines(&command, &parsed, Some(&output));
+        HistoryCell::CompletedExecCommand {
+            view: TextBlock::new(lines),
+        }
+    }
 
+    fn exec_command_lines(
+        command: &[String],
+        parsed: &[ParsedCommand],
+        output: Option<&CommandOutput>,
+    ) -> Vec<Line<'static>> {
+        if parsed.is_empty() {
+            HistoryCell::new_exec_command_generic(command, output)
+        } else {
+            HistoryCell::new_parsed_command(parsed, output)
+        }
+    }
+
+    fn new_parsed_command(
+        parsed_commands: &[ParsedCommand],
+        output: Option<&CommandOutput>,
+    ) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line> = vec![Line::from("⚙︎ Working")];
+
+        for (i, parsed) in parsed_commands.iter().enumerate() {
+            let str = match parsed {
+                ParsedCommand::Read { name, .. } => format!("📖 {name}"),
+                ParsedCommand::ListFiles { cmd, path } => match path {
+                    Some(p) => format!("📂 {p}"),
+                    None => format!("📂 {}", shlex_join_safe(cmd)),
+                },
+                ParsedCommand::Search { query, path, cmd } => match (query, path) {
+                    (Some(q), Some(p)) => format!("🔎 {q} in {p}"),
+                    (Some(q), None) => format!("🔎 {q}"),
+                    (None, Some(p)) => format!("🔎 {p}"),
+                    (None, None) => format!("🔎 {}", shlex_join_safe(cmd)),
+                },
+                ParsedCommand::Format { .. } => "✨ Formatting".to_string(),
+                ParsedCommand::Test { cmd } => format!("🧪 {}", shlex_join_safe(cmd)),
+                ParsedCommand::Lint { cmd, .. } => format!("🧹 {}", shlex_join_safe(cmd)),
+                ParsedCommand::Unknown { cmd } => format!("⌨️ {}", shlex_join_safe(cmd)),
+            };
+
+            let prefix = if i == 0 { "  L " } else { "    " };
+            lines.push(Line::from(vec![
+                Span::styled(prefix, Style::default().add_modifier(Modifier::DIM)),
+                Span::styled(str, Style::default().fg(LIGHT_BLUE)),
+            ]));
+        }
+
+        lines.extend(output_lines(output, true, false));
+        lines.push(Line::from(""));
+
+        lines
+    }
+
+    fn new_exec_command_generic(
+        command: &[String],
+        output: Option<&CommandOutput>,
+    ) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
-        let command_escaped = strip_bash_lc_and_escape(&command);
+        let command_escaped = strip_bash_lc_and_escape(command);
         let mut cmd_lines = command_escaped.lines();
         if let Some(first) = cmd_lines.next() {
             lines.push(Line::from(vec![
-                "⚡ Ran command ".magenta(),
+                "⚡ Running ".to_string().magenta(),
                 first.to_string().into(),
             ]));
         } else {
-            lines.push(Line::from("⚡ Ran command".magenta()));
+            lines.push(Line::from("⚡ Running".to_string().magenta()));
         }
         for cont in cmd_lines {
             lines.push(Line::from(cont.to_string()));
         }
 
-        let src = if exit_code == 0 { stdout } else { stderr };
-        lines.extend(Self::output_lines(&src));
-        lines.push(Line::from(""));
+        lines.extend(output_lines(output, false, true));
 
-        HistoryCell::CompletedExecCommand {
-            view: TextBlock::new(lines),
-        }
+        lines
     }
 
     pub(crate) fn new_active_mcp_tool_call(invocation: McpInvocation) -> Self {
@@ -835,7 +836,15 @@ impl HistoryCell {
         lines.push(Line::from("✘ Failed to apply patch".magenta().bold()));
 
         if !stderr.trim().is_empty() {
-            lines.extend(Self::output_lines(&stderr));
+            lines.extend(output_lines(
+                Some(&CommandOutput {
+                    exit_code: 1,
+                    stdout: String::new(),
+                    stderr,
+                }),
+                true,
+                true,
+            ));
         }
 
         lines.push(Line::from(""));
@@ -852,6 +861,67 @@ impl WidgetRef for &HistoryCell {
             .wrap(Wrap { trim: false })
             .render(area, buf);
     }
+}
+
+fn output_lines(
+    output: Option<&CommandOutput>,
+    only_err: bool,
+    include_angle_pipe: bool,
+) -> Vec<Line<'static>> {
+    let CommandOutput {
+        exit_code,
+        stdout,
+        stderr,
+    } = match output {
+        Some(output) if only_err && output.exit_code == 0 => return vec![],
+        Some(output) => output,
+        None => return vec![],
+    };
+
+    let src = if *exit_code == 0 { stdout } else { stderr };
+    let lines: Vec<&str> = src.lines().collect();
+    let total = lines.len();
+    let limit = TOOL_CALL_MAX_LINES;
+
+    let mut out = Vec::new();
+
+    let head_end = total.min(limit);
+    for (i, raw) in lines[..head_end].iter().enumerate() {
+        let mut line = ansi_escape_line(raw);
+        let prefix = if i == 0 && include_angle_pipe {
+            "  ⎿ "
+        } else {
+            "    "
+        };
+        line.spans.insert(0, prefix.into());
+        line.spans.iter_mut().for_each(|span| {
+            span.style = span.style.add_modifier(Modifier::DIM);
+        });
+        out.push(line);
+    }
+
+    // If we will ellipsize less than the limit, just show it.
+    let show_ellipsis = total > 2 * limit;
+    if show_ellipsis {
+        let omitted = total - 2 * limit;
+        out.push(Line::from(format!("… +{omitted} lines")));
+    }
+
+    let tail_start = if show_ellipsis {
+        total - limit
+    } else {
+        head_end
+    };
+    for raw in lines[tail_start..].iter() {
+        let mut line = ansi_escape_line(raw);
+        line.spans.insert(0, "    ".into());
+        line.spans.iter_mut().for_each(|span| {
+            span.style = span.style.add_modifier(Modifier::DIM);
+        });
+        out.push(line);
+    }
+
+    out
 }
 
 fn create_diff_summary(title: &str, changes: HashMap<PathBuf, FileChange>) -> Vec<RtLine<'static>> {
@@ -1007,4 +1077,11 @@ fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
         Span::raw(")"),
     ];
     Line::from(invocation_spans)
+}
+
+fn shlex_join_safe(command: &[String]) -> String {
+    match shlex::try_join(command.iter().map(|s| s.as_str())) {
+        Ok(cmd) => cmd,
+        Err(_) => command.join(" "),
+    }
 }
