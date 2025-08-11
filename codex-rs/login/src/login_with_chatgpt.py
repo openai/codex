@@ -47,11 +47,44 @@ EXIT_CODE_WHEN_ADDRESS_ALREADY_IN_USE = 13
 CA_CONTEXT = None
 try:
     import ssl
-    import certifi as _certifi
+    def _make_tls_context():
+        # Start with OS defaults
+        ctx = ssl.create_default_context()
 
-    CA_CONTEXT = ssl.create_default_context(cafile=_certifi.where())
-except Exception:
-    pass
+        # Highest priority: explicit CA bundle from env
+        for env in ("CODEX_CA_BUNDLE", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"):
+            p = os.environ.get(env)
+            if p and os.path.isfile(p):
+                try:
+                    ctx.load_verify_locations(cafile=p)
+                    eprint(f"Using CA bundle from {env}={p}")
+                    return ctx
+                except Exception as e:
+                    eprint(f"WARNING: failed to load CA bundle from {env}={p}: {e}")
+
+        # Try system trust store via truststore, if available
+        try:
+            import truststore
+            truststore.inject_into_ssl()  # makes ssl default use OS trust
+            eprint("Using OS trust store via truststore")
+            return ctx
+        except Exception:
+            pass
+
+        # Fall back to certifi (Mozilla CA bundle)
+        try:
+            import certifi
+            ctx.load_verify_locations(cafile=certifi.where())
+            eprint(f"Using certifi CA bundle: {certifi.where()}")
+        except Exception:
+            eprint("WARNING: certifi not available; using default OS trust only")
+        return ctx
+
+    CA_CONTEXT = _make_tls_context()
+except Exception as e:
+    eprint(f"WARNING: unable to build TLS context: {e}")
+    CA_CONTEXT = None
+
 
 
 @dataclass
