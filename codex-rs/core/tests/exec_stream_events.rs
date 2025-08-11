@@ -128,8 +128,8 @@ async fn test_exec_stderr_stream_events_echo() {
     };
 
     assert_eq!(result.exit_code, 0);
-    assert_eq!(result.stdout, "");
-    assert_eq!(result.stderr, "oops\n");
+    assert_eq!(result.stdout.text, "");
+    assert_eq!(result.stderr.text, "oops\n");
 
     // Collect only stderr delta events
     let mut err = Vec::new();
