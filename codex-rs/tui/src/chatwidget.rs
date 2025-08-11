@@ -544,8 +544,8 @@ impl ChatWidget<'_> {
                 invocation,
                 result,
             }) => {
-                self.add_to_history(HistoryCell::new_completed_mcp_tool_call(
-                    DEFAULT_WRAP_COLS,
+                let completed = HistoryCell::new_completed_mcp_tool_call(
+                    80,
                     invocation,
                     duration,
                     result
