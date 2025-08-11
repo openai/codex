@@ -48,6 +48,9 @@ pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 
 pub(crate) const CONFIG_TOML_FILE: &str = "config.toml";
 
+/// Default rotation size for telemetry file exporter, in MiB.
+pub(crate) const DEFAULT_TELEMETRY_ROTATE_MB: u64 = 100;
+
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -1068,7 +1071,7 @@ impl Config {
                 let exporter = t.exporter.unwrap_or(TelemetryExporterKind::OtlpFile);
                 let endpoint = t.endpoint;
                 let headers = t.headers.unwrap_or_default();
-                let rotate_mb = t.rotate_mb.or(Some(100));
+                let rotate_mb = t.rotate_mb.or(Some(DEFAULT_TELEMETRY_ROTATE_MB));
                 TelemetryConfig {
                     enabled,
                     exporter,

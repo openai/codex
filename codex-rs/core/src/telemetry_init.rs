@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use opentelemetry_sdk::trace::Tracer;
 
 use crate::config::Config;
@@ -17,7 +15,6 @@ pub fn build_otel_layer_from_config(
     let exporter = match config.telemetry.exporter {
         Kind::None => telemetry::Exporter::None,
         Kind::OtlpFile => telemetry::Exporter::OtlpFile {
-            path: PathBuf::new(),
             rotate_mb: config.telemetry.rotate_mb,
         },
         Kind::OtlpHttp => telemetry::Exporter::OtlpHttp {
