@@ -366,6 +366,11 @@ impl App<'_> {
                             widget.add_diff_output(text);
                         }
                     }
+                    SlashCommand::Mention => {
+                        if let AppState::Chat { widget } = &mut self.app_state {
+                            widget.insert_str("@");
+                        }
+                    }
                     SlashCommand::Status => {
                         if let AppState::Chat { widget } = &mut self.app_state {
                             widget.add_status_output();
