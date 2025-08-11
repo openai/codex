@@ -38,6 +38,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tracing::error;
 
+#[derive(Clone)]
 pub(crate) struct CommandOutput {
     pub(crate) exit_code: i32,
     pub(crate) stdout: String,
@@ -64,27 +65,37 @@ fn line_to_static(line: &Line) -> Line<'static> {
     }
 }
 
+pub(crate) struct ExecCell {
+    pub(crate) command: Vec<String>,
+    pub(crate) parsed: Vec<ParsedCommand>,
+    pub(crate) output: Option<CommandOutput>,
+}
+
 /// Represents an event to display in the conversation history. Returns its
 /// `Vec<Line<'static>>` representation to make it easier to display in a
 /// scrollable list.
 pub(crate) enum HistoryCell {
     /// Welcome message.
-    WelcomeMessage { view: TextBlock },
-
-    /// Message from the user.
-    UserPrompt { view: TextBlock },
-
-    Exec {
-        command: Vec<String>,
-        parsed: Vec<ParsedCommand>,
-        output: Option<CommandOutput>,
+    WelcomeMessage {
+        view: TextBlock,
     },
 
+    /// Message from the user.
+    UserPrompt {
+        view: TextBlock,
+    },
+
+    Exec(ExecCell),
+
     /// An MCP tool call that has not finished yet.
-    ActiveMcpToolCall { view: TextBlock },
+    ActiveMcpToolCall {
+        view: TextBlock,
+    },
 
     /// Completed MCP tool call where we show the result serialized as JSON.
-    CompletedMcpToolCall { view: TextBlock },
+    CompletedMcpToolCall {
+        view: TextBlock,
+    },
 
     /// Completed MCP tool call where the result is an image.
     /// Admittedly, [mcp_types::CallToolResult] can have multiple content types,
@@ -94,37 +105,57 @@ pub(crate) enum HistoryCell {
     // resized version avoids doing the potentially expensive rescale twice
     // because the scroll-view first calls `height()` for layouting and then
     // `render_window()` for painting.
-    CompletedMcpToolCallWithImageOutput { _image: DynamicImage },
+    CompletedMcpToolCallWithImageOutput {
+        _image: DynamicImage,
+    },
 
     /// Background event.
-    BackgroundEvent { view: TextBlock },
+    BackgroundEvent {
+        view: TextBlock,
+    },
 
     /// Output from the `/diff` command.
-    GitDiffOutput { view: TextBlock },
+    GitDiffOutput {
+        view: TextBlock,
+    },
 
     /// Output from the `/status` command.
-    StatusOutput { view: TextBlock },
+    StatusOutput {
+        view: TextBlock,
+    },
 
     /// Output from the `/prompts` command.
-    PromptsOutput { view: TextBlock },
+    PromptsOutput {
+        view: TextBlock,
+    },
 
     /// Error event from the backend.
-    ErrorEvent { view: TextBlock },
+    ErrorEvent {
+        view: TextBlock,
+    },
 
     /// Info describing the newly-initialized session.
-    SessionInfo { view: TextBlock },
+    SessionInfo {
+        view: TextBlock,
+    },
 
     /// A pending code patch that is awaiting user approval. Mirrors the
     /// behaviour of `ExecCell` so the user sees *what* patch the
     /// model wants to apply before being prompted to approve or deny it.
-    PendingPatch { view: TextBlock },
+    PendingPatch {
+        view: TextBlock,
+    },
 
     /// A human‑friendly rendering of the model's current plan and step
     /// statuses provided via the `update_plan` tool.
-    PlanUpdate { view: TextBlock },
+    PlanUpdate {
+        view: TextBlock,
+    },
 
     /// Result of applying a patch (success or failure) with optional output.
-    PatchApplyResult { view: TextBlock },
+    PatchApplyResult {
+        view: TextBlock,
+    },
 }
 
 const TOOL_CALL_MAX_LINES: usize = 5;
@@ -172,11 +203,11 @@ impl HistoryCell {
             | HistoryCell::ActiveMcpToolCall { view, .. } => {
                 view.lines.iter().map(line_to_static).collect()
             }
-            HistoryCell::Exec {
+            HistoryCell::Exec(ExecCell {
                 command,
                 parsed,
                 output,
-            } => HistoryCell::exec_command_lines(command, parsed, output.as_ref()),
+            }) => HistoryCell::exec_command_lines(command, parsed, output.as_ref()),
             HistoryCell::CompletedMcpToolCallWithImageOutput { .. } => vec![
                 Line::from("tool result (image output omitted)"),
                 Line::from(""),
@@ -279,11 +310,11 @@ impl HistoryCell {
         parsed: Vec<ParsedCommand>,
         output: Option<CommandOutput>,
     ) -> Self {
-        HistoryCell::Exec {
+        HistoryCell::Exec(ExecCell {
             command,
             parsed,
             output,
-        }
+        })
     }
 
     fn exec_command_lines(
