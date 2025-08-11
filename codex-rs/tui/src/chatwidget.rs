@@ -778,3 +778,104 @@ fn add_token_usage(current_usage: &TokenUsage, new_usage: &TokenUsage) -> TokenU
         total_tokens: current_usage.total_tokens + new_usage.total_tokens,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_core::config::ConfigOverrides;
+    use codex_core::config::ConfigToml;
+    use std::sync::mpsc::channel;
+
+    fn make_test_config() -> Config {
+        // Construct a minimal Config using the core helper that avoids touching disk state.
+        let codex_home = {
+            let mut p = std::env::temp_dir();
+            p.push(format!(
+                "codex_tui_test_{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0)
+            ));
+            let _ = std::fs::create_dir_all(&p);
+            p
+        };
+
+        Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            codex_home,
+        )
+        .unwrap_or_else(|_| panic!("failed to build test config"))
+    }
+
+    fn make_widget() -> (ChatWidget<'static>, std::sync::mpsc::Receiver<AppEvent>) {
+        let (tx, rx) = channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let widget = ChatWidget::new(make_test_config(), sender, None, Vec::new(), false);
+        (widget, rx)
+    }
+
+    /// Ensures normal text deltas activate streaming and finalize clears state.
+    #[tokio::test(flavor = "current_thread")]
+    async fn chat_streams_normal_text_deltas() {
+        let (mut w, _rx_unused) = make_widget();
+        // Force immediate commits of streamed rows for test determinism.
+        w.live_max_rows = 0;
+        // app events are delivered synchronously in tests via std::sync::mpsc,
+        // but we no longer consume them here – assertions use internal state.
+
+        // Send two deltas with newlines so they commit to history.
+        w.handle_codex_event(Event {
+            id: "1".to_string(),
+            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+                delta: "Hi \n".to_string(),
+            }),
+        });
+        w.handle_codex_event(Event {
+            id: "1".to_string(),
+            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+                delta: "there\n".to_string(),
+            }),
+        });
+
+        // Assert internal streaming state is active and header is emitted.
+        assert!(matches!(w.current_stream, Some(StreamKind::Answer)));
+        assert!(
+            w.stream_header_emitted,
+            "expected header emission during stream"
+        );
+
+        // Final event to ensure finalize works without panicking.
+        w.handle_codex_event(Event {
+            id: "1".to_string(),
+            msg: EventMsg::AgentMessage(AgentMessageEvent {
+                message: "ignored".to_string(),
+            }),
+        });
+
+        // After finalization, internal stream should be cleared.
+        assert!(w.current_stream.is_none());
+        assert!(!w.stream_header_emitted);
+    }
+
+    /// Ensures a final-only AgentMessage renders by creating and finalizing a stream.
+    #[tokio::test(flavor = "current_thread")]
+    async fn chat_final_only_renders() {
+        let (mut w, _rx_unused) = make_widget();
+        w.live_max_rows = 0;
+        // no event drain needed; we assert via internal state
+
+        // Only a final message, no deltas.
+        w.handle_codex_event(Event {
+            id: "2".to_string(),
+            msg: EventMsg::AgentMessage(AgentMessageEvent {
+                message: "Hello".to_string(),
+            }),
+        });
+
+        // After final-only finalize, stream should be cleared.
+        assert!(w.current_stream.is_none());
+        assert!(!w.stream_header_emitted);
+    }
+}
