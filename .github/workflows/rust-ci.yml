@@ -106,12 +106,12 @@ jobs:
         id: build
         if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' }}
         continue-on-error: true
-        run: find . -name Cargo.toml -mindepth 2 -maxdepth 2 -print0 | xargs -0 -n1 -I{} bash -c 'cd "$(dirname "{}")" && cargo build'
+        run: find . -name Cargo.toml -mindepth 2 -maxdepth 2 -print0 | xargs -0 -n1 -I{} bash -c 'cd "$(dirname "{}")" && cargo build --${{ matrix.profile }}'
 
       - name: cargo test
         id: test
         continue-on-error: true
-        run: cargo test --all-features --target ${{ matrix.target }} --profile ${{ matrix.profile }}
+        run: cargo test --all-features --target ${{ matrix.target }} --${{ matrix.profile }}
         env:
           RUST_BACKTRACE: 1
 
