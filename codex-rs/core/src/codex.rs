@@ -84,6 +84,7 @@ use crate::protocol::EventMsg;
 use crate::protocol::ExecApprovalRequestEvent;
 use crate::protocol::ExecCommandBeginEvent;
 use crate::protocol::ExecCommandEndEvent;
+use crate::protocol::ExecCommandSummary;
 use crate::protocol::FileChange;
 use crate::protocol::InputItem;
 use crate::protocol::Op;
@@ -422,6 +423,7 @@ impl Session {
         call_id: &str,
         output: &ExecToolCallOutput,
         is_apply_patch: bool,
+        cwd: &std::path::Path,
     ) {
         let ExecToolCallOutput {
             stdout,
@@ -443,12 +445,46 @@ impl Session {
                 success: *exit_code == 0,
             })
         } else {
+            // Build an optional summary for non-zero exit codes to reduce log noise downstream
+            let summary = if *exit_code != 0 {
+                let stderr_tail: String = output
+                    .stderr
+                    .text
+                    .chars()
+                    .rev()
+                    .take(1024)
+                    .collect::<String>()
+                    .chars()
+                    .rev()
+                    .collect();
+                let stdout_tail: String = output
+                    .stdout
+                    .text
+                    .chars()
+                    .rev()
+                    .take(1024)
+                    .collect::<String>()
+                    .chars()
+                    .rev()
+                    .collect();
+                Some(ExecCommandSummary {
+                    cwd: cwd.to_path_buf(),
+                    stderr_tail,
+                    stdout_tail,
+                    stdout_truncated_after_lines: output.stdout.truncated_after_lines,
+                    stderr_truncated_after_lines: output.stderr.truncated_after_lines,
+                })
+            } else {
+                None
+            };
+
             EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id: call_id.to_string(),
                 stdout,
                 stderr,
                 duration: *duration,
                 exit_code: *exit_code,
+                summary,
             })
         };
 
@@ -518,6 +554,7 @@ impl Session {
             &call_id,
             borrowed,
             is_apply_patch,
+            &begin_ctx.cwd,
         )
         .await;
 

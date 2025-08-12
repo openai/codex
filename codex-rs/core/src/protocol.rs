@@ -595,6 +595,26 @@ pub struct ExecCommandEndEvent {
     pub exit_code: i32,
     /// The duration of the command execution.
     pub duration: Duration,
+    /// Optional concise summary to aid logs when a command fails.
+    /// Includes cwd and tails of streams; present primarily for non-zero exits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<ExecCommandSummary>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ExecCommandSummary {
+    /// The working directory used for the command.
+    pub cwd: std::path::PathBuf,
+    /// Last characters of stderr (up to implementation-defined limit).
+    pub stderr_tail: String,
+    /// Last characters of stdout (up to implementation-defined limit).
+    pub stdout_tail: String,
+    /// If output was truncated after a number of lines, this carries that value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stdout_truncated_after_lines: Option<u32>,
+    /// If output was truncated after a number of lines, this carries that value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stderr_truncated_after_lines: Option<u32>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
