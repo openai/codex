@@ -72,8 +72,8 @@ async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
     .unwrap();
 
     if res.exit_code != 0 {
-        println!("stdout:\n{}", res.stdout);
-        println!("stderr:\n{}", res.stderr);
+        println!("stdout:\n{}", res.stdout.text);
+        println!("stderr:\n{}", res.stderr.text);
         panic!("exit code: {}", res.exit_code);
     }
 }
@@ -164,7 +164,7 @@ async fn assert_network_blocked(cmd: &[&str]) {
     .await;
 
     let (exit_code, stdout, stderr) = match result {
-        Ok(output) => (output.exit_code, output.stdout, output.stderr),
+        Ok(output) => (output.exit_code, output.stdout.text, output.stderr.text),
         Err(CodexErr::Sandbox(SandboxErr::Denied(exit_code, stdout, stderr))) => {
             (exit_code, stdout, stderr)
         }

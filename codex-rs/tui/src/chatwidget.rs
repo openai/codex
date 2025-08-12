@@ -5,6 +5,7 @@ use std::sync::Arc;
 use codex_core::codex_wrapper::CodexConversation;
 use codex_core::codex_wrapper::init_codex;
 use codex_core::config::Config;
+use codex_core::parse_command::ParsedCommand;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -45,7 +46,9 @@ use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::InputResult;
+use crate::common::DEFAULT_WRAP_COLS;
 use crate::history_cell::CommandOutput;
+use crate::history_cell::ExecCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PatchEventType;
 use crate::live_wrap::RowBuilder;
@@ -57,13 +60,14 @@ struct RunningCommand {
     command: Vec<String>,
     #[allow(dead_code)]
     cwd: PathBuf,
+    parsed_cmd: Vec<ParsedCommand>,
 }
 
 pub(crate) struct ChatWidget<'a> {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
     bottom_pane: BottomPane<'a>,
-    active_history_cell: Option<HistoryCell>,
+    active_exec_cell: Option<HistoryCell>,
     config: Config,
     initial_user_message: Option<UserMessage>,
     total_token_usage: TokenUsage,
@@ -112,7 +116,7 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 impl ChatWidget<'_> {
     fn interrupt_running_task(&mut self) {
         if self.bottom_pane.is_task_running() {
-            self.active_history_cell = None;
+            self.active_exec_cell = None;
             self.bottom_pane.clear_ctrl_c_quit_hint();
             self.submit_op(Op::Interrupt);
             self.bottom_pane.set_task_running(false);
@@ -129,7 +133,7 @@ impl ChatWidget<'_> {
     fn layout_areas(&self, area: Rect) -> [Rect; 2] {
         Layout::vertical([
             Constraint::Max(
-                self.active_history_cell
+                self.active_exec_cell
                     .as_ref()
                     .map_or(0, |c| c.desired_height(area.width)),
             ),
@@ -208,7 +212,7 @@ impl ChatWidget<'_> {
                 has_input_focus: true,
                 enhanced_keys_supported,
             }),
-            active_history_cell: None,
+            active_exec_cell: None,
             config,
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
@@ -220,7 +224,7 @@ impl ChatWidget<'_> {
             content_buffer: String::new(),
             answer_buffer: String::new(),
             running_commands: HashMap::new(),
-            live_builder: RowBuilder::new(80),
+            live_builder: RowBuilder::new(DEFAULT_WRAP_COLS.into()),
             current_stream: None,
             stream_header_emitted: false,
             live_max_rows: 3,
@@ -230,7 +234,7 @@ impl ChatWidget<'_> {
     pub fn desired_height(&self, width: u16) -> u16 {
         self.bottom_pane.desired_height(width)
             + self
-                .active_history_cell
+                .active_exec_cell
                 .as_ref()
                 .map_or(0, |c| c.desired_height(width))
     }
@@ -253,6 +257,7 @@ impl ChatWidget<'_> {
     }
 
     fn add_to_history(&mut self, cell: HistoryCell) {
+        self.flush_active_exec_cell();
         self.app_event_tx
             .send(AppEvent::InsertHistory(cell.plain_lines()));
     }
@@ -296,6 +301,16 @@ impl ChatWidget<'_> {
 
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
         let Event { id, msg } = event;
+
+        match msg {
+            EventMsg::AgentMessageDelta(_)
+            | EventMsg::AgentReasoningDelta(_)
+            | EventMsg::ExecCommandOutputDelta(_) => {}
+            _ => {
+                tracing::info!("handle_codex_event: {:?}", msg);
+            }
+        }
+
         match msg {
             EventMsg::SessionConfigured(event) => {
                 self.bottom_pane
@@ -311,10 +326,12 @@ impl ChatWidget<'_> {
 
                 self.request_redraw();
             }
-            EventMsg::AgentMessage(AgentMessageEvent { message: _ }) => {
-                // Final assistant answer: commit all remaining rows and close with
-                // a blank line. Use the final text if provided, otherwise rely on
-                // streamed deltas already in the builder.
+            EventMsg::AgentMessage(AgentMessageEvent { message }) => {
+                // AgentMessage: if no deltas were streamed, render the final text.
+                if self.current_stream != Some(StreamKind::Answer) && !message.is_empty() {
+                    self.begin_stream(StreamKind::Answer);
+                    self.stream_push_and_maybe_commit(&message);
+                }
                 self.finalize_stream(StreamKind::Answer);
                 self.request_redraw();
             }
@@ -332,8 +349,12 @@ impl ChatWidget<'_> {
                 self.stream_push_and_maybe_commit(&delta);
                 self.request_redraw();
             }
-            EventMsg::AgentReasoning(AgentReasoningEvent { text: _ }) => {
-                // Final reasoning: commit remaining rows and close with a blank.
+            EventMsg::AgentReasoning(AgentReasoningEvent { text }) => {
+                // Final reasoning: if no deltas were streamed, render the final text.
+                if self.current_stream != Some(StreamKind::Reasoning) && !text.is_empty() {
+                    self.begin_stream(StreamKind::Reasoning);
+                    self.stream_push_and_maybe_commit(&text);
+                }
                 self.finalize_stream(StreamKind::Reasoning);
                 self.request_redraw();
             }
@@ -346,8 +367,12 @@ impl ChatWidget<'_> {
                 self.stream_push_and_maybe_commit(&delta);
                 self.request_redraw();
             }
-            EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text: _ }) => {
-                // Finalize the raw reasoning stream just like the summarized reasoning event.
+            EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text }) => {
+                // Final raw reasoning content: if no deltas were streamed, render the final text.
+                if self.current_stream != Some(StreamKind::Reasoning) && !text.is_empty() {
+                    self.begin_stream(StreamKind::Reasoning);
+                    self.stream_push_and_maybe_commit(&text);
+                }
                 self.finalize_stream(StreamKind::Reasoning);
                 self.request_redraw();
             }
@@ -442,6 +467,7 @@ impl ChatWidget<'_> {
                 call_id,
                 command,
                 cwd,
+                parsed_cmd,
             }) => {
                 self.finalize_active_stream();
                 // Ensure the status indicator is visible while the command runs.
@@ -452,9 +478,54 @@ impl ChatWidget<'_> {
                     RunningCommand {
                         command: command.clone(),
                         cwd: cwd.clone(),
+                        parsed_cmd: parsed_cmd.clone(),
                     },
                 );
-                self.active_history_cell = Some(HistoryCell::new_active_exec_command(command));
+                let active_exec_cell = self.active_exec_cell.take();
+                let merge_result = merge_cells(&command, &parsed_cmd, &active_exec_cell);
+                self.active_exec_cell = match merge_result {
+                    MergeResult::Merge(cell) => Some(cell),
+                    MergeResult::Drop => active_exec_cell,
+                    MergeResult::NewCell(cell) => {
+                        if let Some(active) = active_exec_cell {
+                            self.app_event_tx
+                                .send(AppEvent::InsertHistory(active.plain_lines()));
+                        }
+                        Some(cell)
+                    }
+                }
+            }
+            EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+                call_id,
+                exit_code,
+                duration: _,
+                stdout,
+                stderr,
+            }) => {
+                // Compute summary before moving stdout into the history cell.
+                let cmd = self.running_commands.remove(&call_id);
+                if let Some(cmd) = cmd {
+                    // Preserve any merged parsed commands already present on the
+                    // active cell; otherwise, fall back to this command's parsed.
+                    let parsed_cmd = match &self.active_exec_cell {
+                        Some(HistoryCell::Exec(ExecCell { parsed, .. })) if !parsed.is_empty() => {
+                            parsed.clone()
+                        }
+                        _ => cmd.parsed_cmd.clone(),
+                    };
+                    // Replace the active running cell with the finalized result,
+                    // but keep it as the active cell so it can be merged with
+                    // subsequent commands before being committed.
+                    self.active_exec_cell = Some(HistoryCell::new_completed_exec_command(
+                        cmd.command,
+                        parsed_cmd,
+                        CommandOutput {
+                            exit_code,
+                            stdout,
+                            stderr,
+                        },
+                    ));
+                }
             }
             EventMsg::ExecCommandOutputDelta(_) => {
                 // TODO
@@ -474,31 +545,12 @@ impl ChatWidget<'_> {
                     self.add_to_history(HistoryCell::new_patch_apply_failure(event.stderr));
                 }
             }
-            EventMsg::ExecCommandEnd(ExecCommandEndEvent {
-                call_id,
-                exit_code,
-                duration: _,
-                stdout,
-                stderr,
-            }) => {
-                // Compute summary before moving stdout into the history cell.
-                let cmd = self.running_commands.remove(&call_id);
-                self.active_history_cell = None;
-                self.add_to_history(HistoryCell::new_completed_exec_command(
-                    cmd.map(|cmd| cmd.command).unwrap_or_else(|| vec![call_id]),
-                    CommandOutput {
-                        exit_code,
-                        stdout,
-                        stderr,
-                    },
-                ));
-            }
             EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
                 call_id: _,
                 invocation,
             }) => {
                 self.finalize_active_stream();
-                self.add_to_history(HistoryCell::new_active_mcp_tool_call(invocation));
+                self.active_exec_cell = Some(HistoryCell::new_active_mcp_tool_call(invocation));
             }
             EventMsg::McpToolCallEnd(McpToolCallEndEvent {
                 call_id: _,
@@ -506,7 +558,7 @@ impl ChatWidget<'_> {
                 invocation,
                 result,
             }) => {
-                self.add_to_history(HistoryCell::new_completed_mcp_tool_call(
+                let completed = HistoryCell::new_completed_mcp_tool_call(
                     80,
                     invocation,
                     duration,
@@ -515,7 +567,8 @@ impl ChatWidget<'_> {
                         .map(|r| r.is_error.unwrap_or(false))
                         .unwrap_or(false),
                     result,
-                ));
+                );
+                self.active_exec_cell = Some(completed);
             }
             EventMsg::GetHistoryEntryResponse(event) => {
                 let codex_core::protocol::GetHistoryEntryResponseEvent {
@@ -599,10 +652,6 @@ impl ChatWidget<'_> {
         }
     }
 
-    pub(crate) fn on_ctrl_z(&mut self) {
-        self.interrupt_running_task();
-    }
-
     pub(crate) fn composer_is_empty(&self) -> bool {
         self.bottom_pane.composer_is_empty()
     }
@@ -622,6 +671,10 @@ impl ChatWidget<'_> {
             return;
         }
         self.submit_user_message(text.into());
+    }
+
+    pub(crate) fn insert_str(&mut self, text: &str) {
+        self.bottom_pane.insert_str(text);
     }
 
     pub(crate) fn token_usage(&self) -> &TokenUsage {
@@ -659,11 +712,21 @@ impl ChatWidget<'_> {
             // Ensure the waiting status is visible (composer replaced).
             self.bottom_pane
                 .update_status_text("waiting for model".to_string());
+            self.flush_active_exec_cell();
             self.emit_stream_header(kind);
         }
     }
 
+    fn flush_active_exec_cell(&mut self) {
+        if let Some(active) = self.active_exec_cell.take() {
+            self.app_event_tx
+                .send(AppEvent::InsertHistory(active.plain_lines()));
+        }
+    }
+
     fn stream_push_and_maybe_commit(&mut self, delta: &str) {
+        self.flush_active_exec_cell();
+
         self.live_builder.push_fragment(delta);
 
         // Commit overflow rows (small batches) while keeping the last N rows visible.
@@ -745,7 +808,7 @@ impl WidgetRef for &ChatWidget<'_> {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let [active_cell_area, bottom_pane_area] = self.layout_areas(area);
         (&self.bottom_pane).render(bottom_pane_area, buf);
-        if let Some(cell) = &self.active_history_cell {
+        if let Some(cell) = &self.active_exec_cell {
             cell.render_ref(active_cell_area, buf);
         }
     }
@@ -776,5 +839,242 @@ fn add_token_usage(current_usage: &TokenUsage, new_usage: &TokenUsage) -> TokenU
         output_tokens: current_usage.output_tokens + new_usage.output_tokens,
         reasoning_output_tokens,
         total_tokens: current_usage.total_tokens + new_usage.total_tokens,
+    }
+}
+
+enum MergeResult {
+    Merge(HistoryCell),
+    Drop,
+    NewCell(HistoryCell),
+}
+
+// Determine whether to and how to merge two consecutive exec cells.
+fn merge_cells(
+    new_command: &[String],
+    new_parsed: &[ParsedCommand],
+    active_exec_cell: &Option<HistoryCell>,
+) -> MergeResult {
+    let ExecCell {
+        command: _existing_command,
+        parsed: existing_parsed,
+        output: existing_output,
+    } = match active_exec_cell {
+        Some(HistoryCell::Exec(cell)) => cell,
+        _ => {
+            // There is no existing exec cell.
+            return MergeResult::NewCell(HistoryCell::new_active_exec_command(
+                new_command.to_vec(),
+                new_parsed.to_vec(),
+            ));
+        }
+    };
+    let existing_last = existing_parsed.last();
+    let new_last = new_parsed.last();
+
+    // Drop the first command if it is a read and matches the last command.
+    // This is a common pattern the model does and it simplifies the output to dedupe.
+    let drop_first = if let (
+        Some(ParsedCommand::Read {
+            name: existing_name,
+            ..
+        }),
+        Some(ParsedCommand::Read { name: new_name, .. }),
+    ) = (existing_last, new_last)
+    {
+        existing_name == new_name
+    } else {
+        false
+    };
+
+    if drop_first && new_parsed.len() == 1 {
+        // There is only one command and it was deduped.
+        return MergeResult::Drop;
+    }
+    let existing_exit_code = existing_output.as_ref().map(|o| o.exit_code);
+    if let Some(code) = existing_exit_code {
+        if code != 0 {
+            // If the previous command failed, don't merge so the user can see stderr.
+            // Start a fresh cell for the new command instead of duplicating the old one.
+            return MergeResult::NewCell(HistoryCell::new_active_exec_command(
+                new_command.to_vec(),
+                new_parsed.to_vec(),
+            ));
+        }
+    }
+
+    let mut merged_parsed = existing_parsed.to_vec();
+    if drop_first {
+        merged_parsed.extend(new_parsed[1..].to_vec());
+    } else {
+        merged_parsed.extend(new_parsed.to_vec());
+    }
+
+    MergeResult::Merge(HistoryCell::new_active_exec_command(
+        new_command.to_vec(),
+        merged_parsed,
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::history_cell::CommandOutput;
+
+    fn read_cmd(name: &str) -> ParsedCommand {
+        ParsedCommand::Read {
+            cmd: vec!["cat".to_string(), name.to_string()],
+            name: name.to_string(),
+        }
+    }
+
+    fn unknown_cmd(cmd: &str) -> ParsedCommand {
+        ParsedCommand::Unknown {
+            cmd: cmd.split_whitespace().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn when_no_active_exec_cell_creates_new_cell() {
+        let new_command = vec!["echo".to_string(), "hi".to_string()];
+        let new_parsed = vec![read_cmd("a")];
+
+        let result = merge_cells(&new_command, &new_parsed, &None);
+
+        match result {
+            MergeResult::NewCell(cell) => match cell {
+                HistoryCell::Exec(ExecCell {
+                    command,
+                    parsed,
+                    output,
+                }) => {
+                    assert_eq!(command, new_command);
+                    assert_eq!(parsed, new_parsed);
+                    assert!(output.is_none());
+                }
+                _ => panic!("expected Exec cell"),
+            },
+            _ => panic!("expected NewCell"),
+        }
+    }
+
+    #[test]
+    fn drops_duplicate_trailing_read_when_new_has_only_one_read() {
+        // existing last = Read("foo"), new last = Read("foo"), new_parsed.len() == 1
+        let active = Some(HistoryCell::new_active_exec_command(
+            vec!["bash".into(), "-lc".into(), "cat foo".into()],
+            vec![read_cmd("foo")],
+        ));
+        let new_command = vec!["cat".into(), "foo".into()];
+        let new_parsed = vec![read_cmd("foo")];
+
+        let result = merge_cells(&new_command, &new_parsed, &active);
+        match result {
+            MergeResult::Drop => {}
+            _ => panic!("expected Drop"),
+        }
+    }
+
+    #[test]
+    fn does_not_merge_when_previous_command_failed() {
+        // existing exit_code != 0 forces starting a fresh cell
+        let active = Some(HistoryCell::new_completed_exec_command(
+            vec!["bash".into(), "-lc".into(), "cat bar".into()],
+            vec![read_cmd("bar")],
+            CommandOutput {
+                exit_code: 1,
+                stdout: String::new(),
+                stderr: "err".into(),
+            },
+        ));
+        // Ensure drop_first condition is false (different name)
+        let new_command = vec!["cat".into(), "baz".into()];
+        let new_parsed = vec![read_cmd("baz")];
+
+        let result = merge_cells(&new_command, &new_parsed, &active);
+        match result {
+            MergeResult::NewCell(cell) => match cell {
+                HistoryCell::Exec(ExecCell {
+                    command, parsed, ..
+                }) => {
+                    assert_eq!(command, new_command);
+                    assert_eq!(parsed, new_parsed);
+                }
+                _ => panic!("expected Exec cell"),
+            },
+            _ => panic!("expected NewCell"),
+        }
+    }
+
+    #[test]
+    fn merges_with_drop_first_true_when_new_len_gt_one() {
+        // existing last Read("file.txt"), new starts with same Read then more
+        let active = Some(HistoryCell::new_active_exec_command(
+            vec!["cat".into(), "file.txt".into()],
+            vec![read_cmd("file.txt")],
+        ));
+        let new_command = vec!["bash".into(), "-lc".into(), "sed -n 1,20p file.txt".into()];
+        // Place the duplicate Read as the LAST element to satisfy drop_first condition
+        let leading = unknown_cmd("tail -n 20");
+        let new_parsed = vec![leading.clone(), read_cmd("file.txt")];
+
+        let result = merge_cells(&new_command, &new_parsed, &active);
+        match result {
+            MergeResult::Merge(cell) => match cell {
+                HistoryCell::Exec(ExecCell {
+                    command, parsed, ..
+                }) => {
+                    assert_eq!(command, new_command);
+                    // Expect existing parsed + new_parsed[1..]
+                    assert_eq!(parsed.len(), 2);
+                    match (&parsed[0], &parsed[1]) {
+                        (
+                            ParsedCommand::Read { name, .. },
+                            ParsedCommand::Read { name: n2, .. },
+                        ) => {
+                            assert_eq!(name, "file.txt");
+                            assert_eq!(n2, "file.txt");
+                        }
+                        _ => panic!("unexpected parsed commands"),
+                    }
+                }
+                _ => panic!("expected Exec cell"),
+            },
+            _ => panic!("expected Merge"),
+        }
+    }
+
+    #[test]
+    fn merges_without_drop_first_when_last_commands_differ() {
+        // existing last Read("file1.txt"), new last Read("file2.txt"); should concatenate
+        let active = Some(HistoryCell::new_active_exec_command(
+            vec!["cat".into(), "file1.txt".into()],
+            vec![read_cmd("file1.txt")],
+        ));
+        let new_command = vec!["bash".into(), "-lc".into(), "cat file2.txt".into()];
+        let t2 = read_cmd("file2.txt");
+        let extra = unknown_cmd("echo done");
+        let new_parsed = vec![t2.clone(), extra.clone()];
+
+        let result = merge_cells(&new_command, &new_parsed, &active);
+        match result {
+            MergeResult::Merge(cell) => match cell {
+                HistoryCell::Exec(ExecCell {
+                    command, parsed, ..
+                }) => {
+                    assert_eq!(command, new_command);
+                    assert_eq!(parsed.len(), 3);
+                    match (&parsed[0], &parsed[1], &parsed[2]) {
+                        (ParsedCommand::Read { name: n1, .. }, p2, p3) => {
+                            assert_eq!(n1, "file1.txt");
+                            assert_eq!(p2, &t2);
+                            assert_eq!(p3, &extra);
+                        }
+                        _ => panic!("unexpected parsed commands"),
+                    }
+                }
+                _ => panic!("expected Exec cell"),
+            },
+            _ => panic!("expected Merge"),
+        }
     }
 }

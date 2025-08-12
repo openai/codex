@@ -520,9 +520,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.41"
+version = "4.5.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be92d32e80243a54711e5d7ce823c35c41c9d929dc4ab58e1276f625841aadf9"
+checksum = "50fd97c9dc2399518aa331917ac6f274280ec5eb34e555dd291899745c48ec6f"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -530,9 +530,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.41"
+version = "4.5.43"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "707eab41e9622f9139419d573eca0900137718000c517d47da73045f54331c3d"
+checksum = "c35b5830294e1fa0462034af85cc95225a4cb07092c088c55bda3147cfcd8f65"
 dependencies = [
  "anstream",
  "anstyle",
@@ -543,9 +543,9 @@ dependencies = [
 
 [[package]]
 name = "clap_complete"
-version = "4.5.55"
+version = "4.5.56"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5abde44486daf70c5be8b8f8f1b66c49f86236edf6fa2abadb4d961c4c6229a"
+checksum = "67e4efcbb5da11a92e8a609233aa1e8a7d91e38de0be865f016d14700d45a7fd"
 dependencies = [
  "clap",
 ]
@@ -661,7 +661,7 @@ dependencies = [
  "clap",
  "codex-core",
  "serde",
- "toml 0.9.4",
+ "toml 0.9.5",
 ]
 
 [[package]]
@@ -707,7 +707,7 @@ dependencies = [
  "tokio",
  "tokio-test",
  "tokio-util",
- "toml 0.9.4",
+ "toml 0.9.5",
  "toml_edit 0.23.3",
  "tracing",
  "tree-sitter",
@@ -836,7 +836,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "tokio-test",
- "toml 0.9.4",
+ "toml 0.9.5",
  "tracing",
  "tracing-subscriber",
  "uuid",
@@ -855,7 +855,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
- "toml 0.9.4",
+ "toml 0.9.5",
  "tracing",
  "wiremock",
 ]
@@ -881,6 +881,7 @@ dependencies = [
  "image",
  "insta",
  "lazy_static",
+ "libc",
  "mcp-types",
  "path-clean",
  "pretty_assertions",
@@ -4781,9 +4782,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-util"
-version = "0.7.15"
+version = "0.7.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "66a539a9ad6d5d281510d5bd368c973d636c02dbf8a67300bfb6b950696ad7df"
+checksum = "14307c986784f72ef81c89db7d9e28d6ac26d16213b109ea501696195e6e3ce5"
 dependencies = [
  "bytes",
  "futures-core",
@@ -4806,9 +4807,9 @@ dependencies = [
 
 [[package]]
 name = "toml"
-version = "0.9.4"
+version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41ae868b5a0f67631c14589f7e250c1ea2c574ee5ba21c6c8dd4b1485705a5a1"
+checksum = "75129e1dc5000bfbaa9fee9d1b21f974f9fbad9daec557a521ee6e080825f6e8"
 dependencies = [
  "indexmap 2.10.0",
  "serde",
