@@ -294,10 +294,10 @@ async fn binary_size_transcript_matches_ideal_fixture() {
         lines.pop();
     }
     // Compare only after the last session banner marker, and start at the next 'thinking' line.
-    const MARKER: &str = ">_ You are using OpenAI Codex in ~/code/codex/codex-rs/tui";
+    const MARKER_PREFIX: &str = ">_ You are using OpenAI Codex in ";
     let last_marker_line_idx = lines
         .iter()
-        .rposition(|l| l == MARKER)
+        .rposition(|l| l.starts_with(MARKER_PREFIX))
         .expect("marker not found in visible output");
     let thinking_line_idx = (last_marker_line_idx + 1..lines.len())
         .find(|&idx| lines[idx].trim_start() == "thinking")
