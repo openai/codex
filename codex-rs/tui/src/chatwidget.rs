@@ -275,9 +275,7 @@ impl ChatWidget<'_> {
     }
 
     fn percent_remaining(&self) -> Option<u8> {
-        let Some(context_window) = self.config.model_context_window else {
-            return None;
-        };
+        let context_window = self.config.model_context_window?;
         if context_window == 0 {
             return Some(100);
         }
