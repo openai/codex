@@ -11,7 +11,6 @@ use crate::slash_command::SlashCommand;
 use crate::tui;
 use codex_core::config::Config;
 use codex_core::protocol::Event;
-use codex_core::protocol::EventMsg;
 use codex_core::protocol::Op;
 use color_eyre::eyre::Result;
 use crossterm::SynchronizedUpdate;
@@ -366,6 +365,11 @@ impl App<'_> {
                             widget.add_diff_output(text);
                         }
                     }
+                    SlashCommand::Mention => {
+                        if let AppState::Chat { widget } = &mut self.app_state {
+                            widget.insert_str("@");
+                        }
+                    }
                     SlashCommand::Status => {
                         if let AppState::Chat { widget } = &mut self.app_state {
                             widget.add_status_output();
@@ -378,6 +382,7 @@ impl App<'_> {
                     }
                     #[cfg(debug_assertions)]
                     SlashCommand::TestApproval => {
+                        use codex_core::protocol::EventMsg;
                         use std::collections::HashMap;
 
                         use codex_core::protocol::ApplyPatchApprovalRequestEvent;
