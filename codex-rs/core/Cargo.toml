@@ -76,7 +76,7 @@ core_test_support = { path = "tests/common" }
 maplit = "1.0.2"
 predicates = "3"
 pretty_assertions = "1.4.1"
-regex = "1.8.1"
+regex-lite = "0.1.6"
 tempfile = "3"
 tokio-test = "0.4"
 walkdir = "2.5.0"
