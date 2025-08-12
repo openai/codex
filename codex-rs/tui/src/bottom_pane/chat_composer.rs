@@ -1354,8 +1354,7 @@ mod tests {
         let idx = match row.find(needle) {
             Some(i) => i,
             None => {
-                assert!(false, "expected hint substring present");
-                0
+                panic!("expected hint substring present");
             }
         };
         let start = idx as u16;
@@ -1397,8 +1396,7 @@ mod tests {
         let idx = match row.find(needle) {
             Some(i) => i,
             None => {
-                assert!(false, "expected hint substring present");
-                0
+                panic!("expected hint substring present");
             }
         };
         let start = idx as u16;
