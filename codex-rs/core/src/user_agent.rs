@@ -14,7 +14,6 @@ pub fn get_codex_user_agent(originator: Option<&str>) -> String {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use regex::Regex;
 
     #[test]
     fn test_get_codex_user_agent() {
@@ -25,6 +24,7 @@ mod tests {
     #[test]
     #[cfg(target_os = "macos")]
     fn test_macos() {
+        use regex::Regex;
         let user_agent = get_codex_user_agent(None);
         let re =
             Regex::new(r"^codex_cli_rs/\d+\.\d+\.\d+ \(Mac OS \d+\.\d+\.\d+; (x86_64|arm64)\)$")
