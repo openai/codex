@@ -67,13 +67,7 @@ async fn check_for_update(version_file: &Path) -> anyhow::Result<()> {
         tag_name: latest_tag_name,
     } = reqwest::Client::new()
         .get(LATEST_RELEASE_URL)
-        .header(
-            "User-Agent",
-            format!(
-                "codex/{} (+https://github.com/openai/codex)",
-                env!("CARGO_PKG_VERSION")
-            ),
-        )
+        .header("User-Agent", get_codex_user_agent(None))
         .send()
         .await?
         .error_for_status()?
