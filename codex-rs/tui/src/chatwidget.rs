@@ -501,6 +501,7 @@ impl ChatWidget<'_> {
                 duration: _,
                 stdout,
                 stderr,
+                ..
             }) => {
                 // Compute summary before moving stdout into the history cell.
                 let cmd = self.running_commands.remove(&call_id);
