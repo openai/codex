@@ -72,6 +72,9 @@ unicode-segmentation = "1.12.0"
 unicode-width = "0.1"
 uuid = "1"
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 
 [dev-dependencies]
 chrono = { version = "0.4", features = ["serde"] }
