@@ -1981,7 +1981,7 @@ async fn handle_container_exec_with_params(
             let ExecToolCallOutput { exit_code, .. } = &output;
 
             let is_success = *exit_code == 0;
-            let content = format_exec_output(&output);
+            let content = format_exec_output(output);
             ResponseInputItem::FunctionCallOutput {
                 call_id: call_id.clone(),
                 output: FunctionCallOutputPayload {
@@ -2113,7 +2113,7 @@ async fn handle_sandbox_error(
                     let ExecToolCallOutput { exit_code, .. } = &retry_output;
 
                     let is_success = *exit_code == 0;
-                    let content = format_exec_output(&retry_output);
+                    let content = format_exec_output(retry_output);
 
                     ResponseInputItem::FunctionCallOutput {
                         call_id: call_id.clone(),
@@ -2146,7 +2146,7 @@ async fn handle_sandbox_error(
 }
 
 /// Exec output is a pre-serialized JSON payload
-fn format_exec_output(exec_output: &ExecToolCallOutput) -> String {
+fn format_exec_output(exec_output: ExecToolCallOutput) -> String {
     let ExecToolCallOutput {
         exit_code,
         stdout,
@@ -2169,10 +2169,10 @@ fn format_exec_output(exec_output: &ExecToolCallOutput) -> String {
     // round to 1 decimal place
     let duration_seconds = ((duration.as_secs_f32()) * 10.0).round() / 10.0;
 
-    let is_success = *exit_code == 0;
+    let is_success = exit_code == 0;
     let output = if is_success { stdout } else { stderr };
 
-    let mut formatted_output = output.text.clone();
+    let mut formatted_output = output.text;
     if let Some(truncated_after_lines) = output.truncated_after_lines {
         formatted_output.push_str(&format!(
             "\n\n[Output truncated after {truncated_after_lines} lines: too many lines or bytes.]",
@@ -2182,7 +2182,7 @@ fn format_exec_output(exec_output: &ExecToolCallOutput) -> String {
     let payload = ExecOutput {
         output: &formatted_output,
         metadata: ExecMetadata {
-            exit_code: *exit_code,
+            exit_code,
             duration_seconds,
         },
     };
