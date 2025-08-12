@@ -65,9 +65,40 @@ const binaryPath = path.join(__dirname, "..", "bin", `codex-${targetTriple}`);
 // receives a fatal signal, both processes exit in a predictable manner.
 const { spawn } = await import("child_process");
 
+async function resolveExtraBinDirs() {
+  const dirs = [];
+  async function tryImport(moduleName) {
+    try {
+      // eslint-disable-next-line node/no-unsupported-features/es-syntax
+      return await import(moduleName);
+    } catch {
+      return null;
+    }
+  }
+
+  const rgCandidates = ["@vscode/ripgrep"];
+  for (const name of rgCandidates) {
+    const mod = await tryImport(name);
+    if (mod && mod.rgPath) {
+      dirs.push(path.dirname(mod.rgPath));
+      break;
+    }
+  }
+
+  return Array.from(new Set(dirs));
+}
+
+const extraBinDirs = await resolveExtraBinDirs();
+const pathSep = process.platform === "win32" ? ";" : ":";
+const existingPath = process.env.PATH || process.env.Path || "";
+const updatedPath = [
+  ...extraBinDirs,
+  ...existingPath.split(pathSep).filter(Boolean),
+].join(pathSep);
+
 const child = spawn(binaryPath, process.argv.slice(2), {
   stdio: "inherit",
-  env: { ...process.env, CODEX_MANAGED_BY_NPM: "1" },
+  env: { ...process.env, PATH: updatedPath, CODEX_MANAGED_BY_NPM: "1" },
 });
 
 child.on("error", (err) => {
@@ -120,4 +151,3 @@ if (childResult.type === "signal") {
 } else {
   process.exit(childResult.exitCode);
 }
-
