@@ -169,7 +169,7 @@ fn render_patch_details(changes: &HashMap<PathBuf, FileChange>) -> Vec<RtLine<'s
     let mut out: Vec<RtLine<'static>> = Vec::new();
     let term_cols: usize = terminal::size()
         .map(|(w, _)| w as usize)
-        .unwrap_or(DEFAULT_WRAP_COLS);
+        .unwrap_or(DEFAULT_WRAP_COLS.into());
 
     for (index, (path, change)) in changes.iter().enumerate() {
         let is_first_file = index == 0;
@@ -184,14 +184,24 @@ fn render_patch_details(changes: &HashMap<PathBuf, FileChange>) -> Vec<RtLine<'s
             FileChange::Add { content } => {
                 for (i, raw) in content.lines().enumerate() {
                     let ln = i + 1;
-                    push_wrapped_diff_line(&mut out, ln, DiffLineType::Insert, raw, term_cols);
+                    out.extend(push_wrapped_diff_line(
+                        ln,
+                        DiffLineType::Insert,
+                        raw,
+                        term_cols,
+                    ));
                 }
             }
             FileChange::Delete => {
                 let original = std::fs::read_to_string(path).unwrap_or_default();
                 for (i, raw) in original.lines().enumerate() {
                     let ln = i + 1;
-                    push_wrapped_diff_line(&mut out, ln, DiffLineType::Delete, raw, term_cols);
+                    out.extend(push_wrapped_diff_line(
+                        ln,
+                        DiffLineType::Delete,
+                        raw,
+                        term_cols,
+                    ));
                 }
             }
             FileChange::Update {
@@ -206,35 +216,32 @@ fn render_patch_details(changes: &HashMap<PathBuf, FileChange>) -> Vec<RtLine<'s
                             match l {
                                 diffy::Line::Insert(text) => {
                                     let s = text.trim_end_matches('\n');
-                                    push_wrapped_diff_line(
-                                        &mut out,
+                                    out.extend(push_wrapped_diff_line(
                                         new_ln,
                                         DiffLineType::Insert,
                                         s,
                                         term_cols,
-                                    );
+                                    ));
                                     new_ln += 1;
                                 }
                                 diffy::Line::Delete(text) => {
                                     let s = text.trim_end_matches('\n');
-                                    push_wrapped_diff_line(
-                                        &mut out,
+                                    out.extend(push_wrapped_diff_line(
                                         old_ln,
                                         DiffLineType::Delete,
                                         s,
                                         term_cols,
-                                    );
+                                    ));
                                     old_ln += 1;
                                 }
                                 diffy::Line::Context(text) => {
                                     let s = text.trim_end_matches('\n');
-                                    push_wrapped_diff_line(
-                                        &mut out,
+                                    out.extend(push_wrapped_diff_line(
                                         new_ln,
                                         DiffLineType::Context,
                                         s,
                                         term_cols,
-                                    );
+                                    ));
                                     old_ln += 1;
                                     new_ln += 1;
                                 }
@@ -252,15 +259,14 @@ fn render_patch_details(changes: &HashMap<PathBuf, FileChange>) -> Vec<RtLine<'s
 }
 
 fn push_wrapped_diff_line(
-    out: &mut Vec<RtLine<'static>>,
     line_number: usize,
     kind: DiffLineType,
     text: &str,
     term_cols: usize,
-) {
+) -> Vec<RtLine<'static>> {
     let indent = "    ";
     let ln_str = line_number.to_string();
-    let mut remaining: &str = text;
+    let mut remaining_text: &str = text;
 
     // Reserve a fixed number of spaces after the line number so that content starts
     // at a consistent column. The sign ("+"/"-") is rendered as part of the content
@@ -275,20 +281,24 @@ fn push_wrapped_diff_line(
         DiffLineType::Delete => (Some('-'), Some(style_del())),
         DiffLineType::Context => (None, None),
     };
-    while !remaining.is_empty() {
+    let mut lines: Vec<RtLine<'static>> = Vec::new();
+    while !remaining_text.is_empty() {
         let prefix_cols = if first {
             first_prefix_cols
         } else {
             cont_prefix_cols
         };
-        let available = term_cols.saturating_sub(prefix_cols).max(1);
-        let take = remaining
+        // Fit the content for the current terminal row:
+        // compute how many columns are available after the prefix, then split
+        // at a UTF-8 character boundary so this row's chunk fits exactly.
+        let available_content_cols = term_cols.saturating_sub(prefix_cols).max(1);
+        let split_at_byte_index = remaining_text
             .char_indices()
-            .nth(available)
+            .nth(available_content_cols)
             .map(|(i, _)| i)
-            .unwrap_or_else(|| remaining.len());
-        let (chunk, rest) = remaining.split_at(take);
-        remaining = rest;
+            .unwrap_or_else(|| remaining_text.len());
+        let (chunk, rest) = remaining_text.split_at(split_at_byte_index);
+        remaining_text = rest;
 
         if first {
             let mut spans: Vec<RtSpan<'static>> = Vec::new();
@@ -313,7 +323,7 @@ fn push_wrapped_diff_line(
                 None => RtSpan::raw(display_chunk),
             };
             spans.push(content_span);
-            out.push(RtLine::from(spans));
+            lines.push(RtLine::from(spans));
             first = false;
         } else {
             let hang_prefix = format!(
@@ -325,9 +335,10 @@ fn push_wrapped_diff_line(
                 Some(style) => RtSpan::styled(chunk.to_string(), style),
                 None => RtSpan::raw(chunk.to_string()),
             };
-            out.push(RtLine::from(vec![RtSpan::raw(hang_prefix), content_span]));
+            lines.push(RtLine::from(vec![RtSpan::raw(hang_prefix), content_span]));
         }
     }
+    lines
 }
 
 fn style_dim() -> Style {
@@ -399,5 +410,18 @@ mod tests {
             create_diff_summary("proposed patch", &changes, PatchEventType::ApprovalRequest);
 
         snapshot_lines("update_details_with_rename", lines, 80, 12);
+    }
+
+    #[test]
+    fn ui_snapshot_wrap_behavior_insert() {
+        // Narrow width to force wrapping within our diff line rendering
+        let long_line = "this is a very long line that should wrap across multiple terminal columns and continue";
+
+        // Call the wrapping function directly so we can precisely control the width
+        let lines =
+            push_wrapped_diff_line(1, DiffLineType::Insert, long_line, DEFAULT_WRAP_COLS.into());
+
+        // Render into a small terminal to capture the visual layout
+        snapshot_lines("wrap_behavior_insert", lines, DEFAULT_WRAP_COLS + 10, 8);
     }
 }

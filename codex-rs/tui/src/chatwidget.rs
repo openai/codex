@@ -224,7 +224,7 @@ impl ChatWidget<'_> {
             content_buffer: String::new(),
             answer_buffer: String::new(),
             running_commands: HashMap::new(),
-            live_builder: RowBuilder::new(DEFAULT_WRAP_COLS),
+            live_builder: RowBuilder::new(DEFAULT_WRAP_COLS.into()),
             current_stream: None,
             stream_header_emitted: false,
             live_max_rows: 3,
