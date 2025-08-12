@@ -46,6 +46,7 @@ use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::InputResult;
+use crate::common::DEFAULT_WRAP_COLS;
 use crate::history_cell::CommandOutput;
 use crate::history_cell::ExecCell;
 use crate::history_cell::HistoryCell;
@@ -223,7 +224,7 @@ impl ChatWidget<'_> {
             content_buffer: String::new(),
             answer_buffer: String::new(),
             running_commands: HashMap::new(),
-            live_builder: RowBuilder::new(80),
+            live_builder: RowBuilder::new(DEFAULT_WRAP_COLS.into()),
             current_stream: None,
             stream_header_emitted: false,
             live_max_rows: 3,
@@ -651,10 +652,6 @@ impl ChatWidget<'_> {
         }
     }
 
-    pub(crate) fn on_ctrl_z(&mut self) {
-        self.interrupt_running_task();
-    }
-
     pub(crate) fn composer_is_empty(&self) -> bool {
         self.bottom_pane.composer_is_empty()
     }
@@ -674,6 +671,10 @@ impl ChatWidget<'_> {
             return;
         }
         self.submit_user_message(text.into());
+    }
+
+    pub(crate) fn insert_str(&mut self, text: &str) {
+        self.bottom_pane.insert_str(text);
     }
 
     pub(crate) fn token_usage(&self) -> &TokenUsage {
