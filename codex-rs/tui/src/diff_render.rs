@@ -309,12 +309,7 @@ fn push_wrapped_diff_line(
             // Prefix the content with the sign if it is an insertion or deletion, and color
             // the sign with the same background as the edited text.
             let display_chunk = match sign_opt {
-                Some(sign_char) => {
-                    let mut s = String::with_capacity(1 + chunk.len());
-                    s.push(sign_char);
-                    s.push_str(chunk);
-                    s
-                }
+                Some(sign_char) => format!("{sign_char}{chunk}"),
                 None => chunk.to_string(),
             };
 
