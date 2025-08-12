@@ -82,6 +82,8 @@ pub(crate) struct ChatWidget<'a> {
     current_stream: Option<StreamKind>,
     stream_header_emitted: bool,
     live_max_rows: u16,
+    auto_compact_enabled: bool,
+    pending_user_message: Option<UserMessage>,
 }
 
 struct UserMessage {
@@ -164,6 +166,7 @@ impl ChatWidget<'_> {
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
         enhanced_keys_supported: bool,
+        auto_compact_enabled: bool,
     ) -> Self {
         let (codex_op_tx, mut codex_op_rx) = unbounded_channel::<Op>();
 
@@ -203,14 +206,17 @@ impl ChatWidget<'_> {
             }
         });
 
+        let mut bottom_pane = BottomPane::new(BottomPaneParams {
+            app_event_tx: app_event_tx.clone(),
+            has_input_focus: true,
+            enhanced_keys_supported,
+        });
+        bottom_pane.set_auto_compact_enabled(auto_compact_enabled);
+
         Self {
             app_event_tx: app_event_tx.clone(),
             codex_op_tx,
-            bottom_pane: BottomPane::new(BottomPaneParams {
-                app_event_tx,
-                has_input_focus: true,
-                enhanced_keys_supported,
-            }),
+            bottom_pane,
             active_exec_cell: None,
             config,
             initial_user_message: create_initial_user_message(
@@ -227,6 +233,8 @@ impl ChatWidget<'_> {
             current_stream: None,
             stream_header_emitted: false,
             live_max_rows: 3,
+            auto_compact_enabled,
+            pending_user_message: None,
         }
     }
 
@@ -245,10 +253,37 @@ impl ChatWidget<'_> {
 
         match self.bottom_pane.handle_key_event(key_event) {
             InputResult::Submitted(text) => {
-                self.submit_user_message(text.into());
+                self.on_user_submit(text);
             }
             InputResult::None => {}
         }
+    }
+
+    /// Handle a user submission, optionally triggering auto‑compact when the
+    /// remaining model context is 0%.
+    fn on_user_submit(&mut self, text: String) {
+        let message: UserMessage = text.into();
+        if self.auto_compact_enabled {
+            if let Some(0) = self.percent_remaining() {
+                self.pending_user_message = Some(message);
+                self.clear_token_usage();
+                self.app_event_tx.send(AppEvent::CodexOp(Op::Compact));
+                return;
+            }
+        }
+        self.submit_user_message(message);
+    }
+
+    fn percent_remaining(&self) -> Option<u8> {
+        let Some(context_window) = self.config.model_context_window else {
+            return None;
+        };
+        if context_window == 0 {
+            return Some(100);
+        }
+        let used = self.last_token_usage.tokens_in_context_window() as f32;
+        let percent = 100.0f32 - (used / (context_window as f32)) * 100.0;
+        Some(percent.clamp(0.0, 100.0) as u8)
     }
 
     pub(crate) fn handle_paste(&mut self, text: String) {
@@ -389,6 +424,10 @@ impl ChatWidget<'_> {
                 self.bottom_pane.set_task_running(false);
                 self.bottom_pane.clear_live_ring();
                 self.request_redraw();
+
+                if let Some(msg) = self.pending_user_message.take() {
+                    self.submit_user_message(msg);
+                }
             }
             EventMsg::TokenCount(token_usage) => {
                 self.total_token_usage = add_token_usage(&self.total_token_usage, &token_usage);

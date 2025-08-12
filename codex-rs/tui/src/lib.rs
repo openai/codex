@@ -266,8 +266,19 @@ fn run_ratatui_app(
     let mut terminal = tui::init(&config)?;
     terminal.clear()?;
 
-    let Cli { prompt, images, .. } = cli;
-    let mut app = App::new(config.clone(), prompt, images, should_show_trust_screen);
+    let Cli {
+        prompt,
+        images,
+        auto_compact,
+        ..
+    } = cli;
+    let mut app = App::new(
+        config.clone(),
+        prompt,
+        images,
+        should_show_trust_screen,
+        auto_compact,
+    );
 
     // Bridge log receiver into the AppEvent channel so latest log lines update the UI.
     {

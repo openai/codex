@@ -61,6 +61,7 @@ pub(crate) struct ChatComposer {
     pending_pastes: Vec<(String, String)>,
     token_usage_info: Option<TokenUsageInfo>,
     has_focus: bool,
+    auto_compact_enabled: bool,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -91,6 +92,7 @@ impl ChatComposer {
             pending_pastes: Vec::new(),
             token_usage_info: None,
             has_focus: has_input_focus,
+            auto_compact_enabled: false,
         }
     }
 
@@ -196,6 +198,10 @@ impl ChatComposer {
     pub fn set_ctrl_c_quit_hint(&mut self, show: bool, has_focus: bool) {
         self.ctrl_c_quit_hint = show;
         self.set_has_focus(has_focus);
+    }
+
+    pub(crate) fn set_auto_compact_enabled(&mut self, enabled: bool) {
+        self.auto_compact_enabled = enabled;
     }
 
     pub(crate) fn insert_str(&mut self, text: &str) {
@@ -719,9 +725,13 @@ impl WidgetRef for &ChatComposer {
                             100
                         };
                         hint.push(Span::from("   "));
+                        let style = if self.auto_compact_enabled && percent_remaining <= 20 {
+                            Style::default().fg(Color::Red)
+                        } else {
+                            Style::default().add_modifier(Modifier::DIM)
+                        };
                         hint.push(
-                            Span::from(format!("{percent_remaining}% context left"))
-                                .style(Style::default().add_modifier(Modifier::DIM)),
+                            Span::from(format!("{percent_remaining}% context left")).style(style),
                         );
                     }
                 }
