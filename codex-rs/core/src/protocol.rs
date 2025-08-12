@@ -21,6 +21,7 @@ use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::message_history::HistoryEntry;
 use crate::model_provider_info::ModelProviderInfo;
+use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
 
 /// Submission Queue Entry - requests from user
@@ -579,6 +580,7 @@ pub struct ExecCommandBeginEvent {
     pub command: Vec<String>,
     /// The command's working directory if not the default cwd for the agent.
     pub cwd: PathBuf,
+    pub parsed_cmd: Vec<ParsedCommand>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

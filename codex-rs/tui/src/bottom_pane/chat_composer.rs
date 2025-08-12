@@ -198,6 +198,12 @@ impl ChatComposer {
         self.set_has_focus(has_focus);
     }
 
+    pub(crate) fn insert_str(&mut self, text: &str) {
+        self.textarea.insert_str(text);
+        self.sync_command_popup();
+        self.sync_file_search_popup();
+    }
+
     /// Handle a key event coming from the main UI.
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
         let result = match &mut self.active_popup {
@@ -698,14 +704,15 @@ impl WidgetRef for &ChatComposer {
                     let token_usage = &token_usage_info.total_token_usage;
                     hint.push(Span::from("   "));
                     hint.push(
-                        Span::from(format!("{} tokens used", token_usage.total_tokens))
+                        Span::from(format!("{} tokens used", token_usage.blended_total()))
                             .style(Style::default().add_modifier(Modifier::DIM)),
                     );
                     let last_token_usage = &token_usage_info.last_token_usage;
                     if let Some(context_window) = token_usage_info.model_context_window {
                         let percent_remaining: u8 = if context_window > 0 {
                             let percent = 100.0
-                                - (last_token_usage.total_tokens as f32 / context_window as f32
+                                - (last_token_usage.tokens_in_context_window() as f32
+                                    / context_window as f32
                                     * 100.0);
                             percent.clamp(0.0, 100.0) as u8
                         } else {
@@ -1075,6 +1082,46 @@ mod tests {
             Err(TryRecvError::Empty) => panic!("expected a DispatchCommand event for '/init'"),
             Err(TryRecvError::Disconnected) => panic!("app event channel disconnected"),
         }
+    }
+
+    #[test]
+    fn slash_mention_dispatches_command_and_inserts_at() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+        use std::sync::mpsc::TryRecvError;
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(true, sender, false);
+
+        for ch in ['/', 'm', 'e', 'n', 't', 'i', 'o', 'n'] {
+            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        match result {
+            InputResult::None => {}
+            InputResult::Submitted(text) => {
+                panic!("expected command dispatch, but composer submitted literal text: {text}")
+            }
+        }
+        assert!(composer.textarea.is_empty(), "composer should be cleared");
+
+        match rx.try_recv() {
+            Ok(AppEvent::DispatchCommand(cmd)) => {
+                assert_eq!(cmd.command(), "mention");
+                composer.insert_str("@");
+            }
+            Ok(_other) => panic!("unexpected app event"),
+            Err(TryRecvError::Empty) => panic!("expected a DispatchCommand event for '/mention'"),
+            Err(TryRecvError::Disconnected) => {
+                panic!("app event channel disconnected")
+            }
+        }
+        assert_eq!(composer.textarea.text(), "@");
     }
 
     #[test]

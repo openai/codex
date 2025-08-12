@@ -46,8 +46,8 @@ tokio = { version = "1", features = [
     "rt-multi-thread",
     "signal",
 ] }
-tokio-util = "0.7.14"
-toml = "0.9.4"
+tokio-util = "0.7.16"
+toml = "0.9.5"
 toml_edit = "0.23.3"
 tracing = { version = "0.1.41", features = ["log"] }
 tree-sitter = "0.25.8"
