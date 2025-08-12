@@ -449,7 +449,7 @@ impl HistoryCell {
     }
 
     pub(crate) fn new_completed_mcp_tool_call(
-        num_cols: u16,
+        num_cols: usize,
         invocation: McpInvocation,
         duration: Duration,
         success: bool,
@@ -487,7 +487,7 @@ impl HistoryCell {
                                 format_and_truncate_tool_result(
                                     &text.text,
                                     TOOL_CALL_MAX_LINES,
-                                    num_cols as usize,
+                                    num_cols,
                                 )
                             }
                             mcp_types::ContentBlock::ImageContent(_) => {
@@ -848,7 +848,9 @@ impl HistoryCell {
             }
         };
 
-        let lines: Vec<Line<'static>> = create_diff_summary(title, changes);
+        let mut lines: Vec<Line<'static>> = create_diff_summary(title, &changes, event_type);
+
+        lines.push(Line::from(""));
 
         HistoryCell::PendingPatch {
             view: TextBlock::new(lines),
