@@ -45,11 +45,54 @@ DEFAULT_ISSUER = "https://auth.openai.com"
 EXIT_CODE_WHEN_ADDRESS_ALREADY_IN_USE = 13
 
 CA_CONTEXT = None
-try:
-    import ssl
-    import certifi as _certifi
+CODEX_LOGIN_TRACE = os.environ.get("CODEX_LOGIN_TRACE", "false") in ["true", "1"]
 
-    CA_CONTEXT = ssl.create_default_context(cafile=_certifi.where())
+try:
+
+    def trace(msg: str) -> None:
+        if CODEX_LOGIN_TRACE:
+            print(msg)
+
+    def attempt_request(method: str) -> bool:
+        try:
+            with urllib.request.urlopen(
+                urllib.request.Request(
+                    f"{DEFAULT_ISSUER}/.well-known/openid-configuration",
+                    method="GET",
+                ),
+                context=CA_CONTEXT,
+            ) as resp:
+                if resp.status != 200:
+                    trace(f"Request using {method} failed: {resp.status}")
+                    return False
+
+                trace(f"Request using {method} succeeded")
+                return True
+        except Exception as e:
+            trace(f"Request using {method} failed: {e}")
+            return False
+
+    status = attempt_request("default settings")
+    if not status:
+        try:
+            import truststore
+
+            truststore.inject_into_ssl()
+            status = attempt_request("truststore")
+        except Exception as e:
+            trace(f"Failed to use truststore: {e}")
+
+    if not status:
+        try:
+            import ssl
+            import certifi as _certifi
+
+            CA_CONTEXT = ssl.create_default_context(cafile=_certifi.where())
+            status = attempt_request("certify")
+        except Exception as e:
+            trace(f"Failed to use certify: {e}")
+
+
 except Exception:
     pass
 
