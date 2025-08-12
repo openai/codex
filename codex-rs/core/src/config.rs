@@ -258,7 +258,9 @@ pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Re
 
     // create a tmp_file
     let tmp_file = NamedTempFile::new_in(codex_home)?;
-    std::fs::write(tmp_file.path(), doc.to_string())?;
+    let val: TomlValue = doc.to_string().parse::<TomlValue>()?;
+    let pretty = toml::to_string_pretty(&val)?;
+    std::fs::write(tmp_file.path(), pretty)?;
 
     // atomically move the tmp file into config.toml
     tmp_file.persist(config_path)?;
