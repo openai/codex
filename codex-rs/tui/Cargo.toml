@@ -20,6 +20,7 @@ workspace = true
 
 [dependencies]
 anyhow = "1"
+arboard = "3"
 base64 = "0.22.1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
@@ -37,7 +38,10 @@ codex-ollama = { path = "../ollama" }
 color-eyre = "0.6.3"
 crossterm = { version = "0.28.1", features = ["bracketed-paste"] }
 diffy = "0.4.2"
-image = { version = "^0.25.6", default-features = false, features = ["jpeg"] }
+image = { version = "^0.25.6", default-features = false, features = [
+    "jpeg",
+    "png",
+] }
 lazy_static = "1"
 mcp-types = { path = "../mcp-types" }
 path-clean = "1.0.1"
