@@ -235,8 +235,7 @@ impl SandboxPolicy {
         }
     }
 
-    /// Always returns `true` for now, as we do not yet support restricting read
-    /// access.
+    /// Always returns `true`; restricting read access is not supported.
     pub fn has_full_disk_read_access(&self) -> bool {
         true
     }

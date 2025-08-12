@@ -59,8 +59,6 @@ use codex_file_search::FileMatch;
 // Track information about an in-flight exec command.
 struct RunningCommand {
     command: Vec<String>,
-    #[allow(dead_code)]
-    cwd: PathBuf,
     parsed_cmd: Vec<ParsedCommand>,
 }
 
@@ -91,8 +89,6 @@ struct UserMessage {
 }
 
 use crate::streaming::StreamKind;
-
-// queued interrupt enum moved to chatwidget/interrupts.rs
 
 impl From<String> for UserMessage {
     fn from(text: String) -> Self {
@@ -391,7 +387,6 @@ impl ChatWidget<'_> {
         let request = ApprovalRequest::Exec {
             id,
             command: ev.command,
-            cwd: ev.cwd,
             reason: ev.reason,
         };
         self.bottom_pane.push_approval_request(request);
@@ -425,7 +420,6 @@ impl ChatWidget<'_> {
             ev.call_id.clone(),
             RunningCommand {
                 command: ev.command.clone(),
-                cwd: ev.cwd.clone(),
                 parsed_cmd: ev.parsed_cmd.clone(),
             },
         );
@@ -575,7 +569,7 @@ impl ChatWidget<'_> {
                 });
         }
 
-        // Only show text portion in conversation history for now.
+        // Only show the text portion in conversation history.
         if !text.is_empty() {
             self.add_to_history(HistoryCell::new_user_prompt(text.clone()));
         }
@@ -745,8 +739,6 @@ impl ChatWidget<'_> {
         self.bottom_pane.cursor_pos(bottom_pane_area)
     }
 }
-
-// (stream control methods moved to StreamController)
 
 impl WidgetRef for &ChatWidget<'_> {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {

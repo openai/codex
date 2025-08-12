@@ -75,14 +75,12 @@ impl<'a> BottomPaneView<'a> for ApprovalModalView<'a> {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
-    use std::path::PathBuf;
     use std::sync::mpsc::channel;
 
     fn make_exec_request() -> ApprovalRequest {
         ApprovalRequest::Exec {
             id: "test".to_string(),
             command: vec!["echo".to_string(), "hi".to_string()],
-            cwd: PathBuf::from("/tmp"),
             reason: None,
         }
     }

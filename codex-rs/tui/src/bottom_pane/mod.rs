@@ -392,14 +392,12 @@ mod tests {
     use crate::app_event::AppEvent;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
-    use std::path::PathBuf;
     use std::sync::mpsc::channel;
 
     fn exec_request() -> ApprovalRequest {
         ApprovalRequest::Exec {
             id: "1".to_string(),
             command: vec!["echo".into(), "ok".into()],
-            cwd: PathBuf::from("."),
             reason: None,
         }
     }
