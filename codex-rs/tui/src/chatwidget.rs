@@ -603,6 +603,13 @@ impl ChatWidget<'_> {
         self.app_event_tx.send(AppEvent::RequestRedraw);
     }
 
+    pub(crate) fn add_diff_in_progress(&mut self) {
+        self.active_exec_cell = Some(HistoryCell::new_diff_output(
+            "Computing diff...".to_string(),
+        ));
+        self.request_redraw();
+    }
+
     pub(crate) fn add_diff_output(&mut self, diff_output: String) {
         self.add_to_history(HistoryCell::new_diff_output(diff_output.clone()));
     }
