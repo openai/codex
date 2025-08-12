@@ -135,6 +135,13 @@ pub async fn run_main(
         }
     };
 
+    // Build OTEL layer and compose into subscriber.
+    let telemetry = codex_core::telemetry_init::build_otel_layer_from_config(
+        &config,
+        "codex",
+        env!("CARGO_PKG_VERSION"),
+    );
+
     // we load config.toml here to determine project state.
     #[allow(clippy::print_stderr)]
     let config_toml = {
@@ -206,10 +213,21 @@ pub async fn run_main(
     let (log_tx, log_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
     let tui_layer = TuiLogLayer::new(log_tx.clone(), 120).with_filter(env_filter());
 
-    let _ = tracing_subscriber::registry()
-        .with(file_layer)
-        .with(tui_layer)
-        .try_init();
+    let _telemetry_guard = if let Some((guard, tracer)) = telemetry {
+        let otel_layer = tracing_opentelemetry::OpenTelemetryLayer::new(tracer);
+        let _ = tracing_subscriber::registry()
+            .with(file_layer)
+            .with(tui_layer)
+            .with(otel_layer)
+            .try_init();
+        Some(guard)
+    } else {
+        let _ = tracing_subscriber::registry()
+            .with(file_layer)
+            .with(tui_layer)
+            .try_init();
+        None
+    };
 
     #[allow(clippy::print_stderr)]
     #[cfg(not(debug_assertions))]

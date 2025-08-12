@@ -26,6 +26,7 @@ codex-exec = { path = "../exec" }
 codex-login = { path = "../login" }
 codex-mcp-server = { path = "../mcp-server" }
 codex-tui = { path = "../tui" }
+codex-telemetry = { path = "../codex-telemetry", features = ["otel"] }
 serde_json = "1"
 tokio = { version = "1", features = [
     "io-std",

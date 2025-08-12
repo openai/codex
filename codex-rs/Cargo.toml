@@ -16,6 +16,7 @@ members = [
     "mcp-types",
     "ollama",
     "tui",
+    "codex-telemetry",
 ]
 resolver = "2"
 

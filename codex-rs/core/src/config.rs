@@ -34,6 +34,9 @@ pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 
 const CONFIG_TOML_FILE: &str = "config.toml";
 
+/// Default rotation size for telemetry file exporter, in MiB.
+pub(crate) const DEFAULT_TELEMETRY_ROTATE_MB: u64 = 100;
+
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -158,6 +161,9 @@ pub struct Config {
 
     /// The value for the `originator` header included with Responses API requests.
     pub internal_originator: Option<String>,
+
+    /// Telemetry configuration (exporter type, endpoint, headers, etc.).
+    pub telemetry: crate::config_types::TelemetryConfig,
 }
 
 impl Config {
@@ -404,6 +410,9 @@ pub struct ConfigToml {
     pub internal_originator: Option<String>,
 
     pub projects: Option<HashMap<String, ProjectConfig>>,
+
+    /// Telemetry configuration.
+    pub telemetry: Option<crate::config_types::TelemetryConfigToml>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -660,6 +669,25 @@ impl Config {
             experimental_resume,
             include_plan_tool: include_plan_tool.unwrap_or(false),
             internal_originator: cfg.internal_originator,
+
+            telemetry: {
+                use crate::config_types::TelemetryConfig;
+                use crate::config_types::TelemetryConfigToml;
+                use crate::config_types::TelemetryExporterKind;
+                let t: TelemetryConfigToml = cfg.telemetry.unwrap_or_default();
+                let enabled = t.enabled.unwrap_or(true);
+                let exporter = t.exporter.unwrap_or(TelemetryExporterKind::OtlpFile);
+                let endpoint = t.endpoint;
+                let headers = t.headers.unwrap_or_default();
+                let rotate_mb = t.rotate_mb.or(Some(DEFAULT_TELEMETRY_ROTATE_MB));
+                TelemetryConfig {
+                    enabled,
+                    exporter,
+                    endpoint,
+                    headers,
+                    rotate_mb,
+                }
+            },
         };
         Ok(config)
     }
@@ -1024,6 +1052,13 @@ disable_response_storage = true
                 base_instructions: None,
                 include_plan_tool: false,
                 internal_originator: None,
+                telemetry: crate::config_types::TelemetryConfig {
+                    enabled: true,
+                    exporter: crate::config_types::TelemetryExporterKind::OtlpFile,
+                    endpoint: None,
+                    headers: HashMap::new(),
+                    rotate_mb: Some(100),
+                },
             },
             o3_profile_config
         );
@@ -1075,6 +1110,13 @@ disable_response_storage = true
             base_instructions: None,
             include_plan_tool: false,
             internal_originator: None,
+            telemetry: crate::config_types::TelemetryConfig {
+                enabled: true,
+                exporter: crate::config_types::TelemetryExporterKind::OtlpFile,
+                endpoint: None,
+                headers: HashMap::new(),
+                rotate_mb: Some(100),
+            },
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -1141,6 +1183,13 @@ disable_response_storage = true
             base_instructions: None,
             include_plan_tool: false,
             internal_originator: None,
+            telemetry: crate::config_types::TelemetryConfig {
+                enabled: true,
+                exporter: crate::config_types::TelemetryExporterKind::OtlpFile,
+                endpoint: None,
+                headers: HashMap::new(),
+                rotate_mb: Some(100),
+            },
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
