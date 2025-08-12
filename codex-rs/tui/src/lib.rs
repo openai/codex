@@ -48,8 +48,6 @@ mod shimmer;
 mod slash_command;
 mod status_indicator_widget;
 mod streaming;
-#[cfg(all(test, feature = "vt100-tests"))]
-mod test_utils;
 mod text_block;
 mod text_formatting;
 mod tui;
