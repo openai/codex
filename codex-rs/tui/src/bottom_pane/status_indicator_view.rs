@@ -1,7 +1,10 @@
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::widgets::WidgetRef;
 
 use crate::app_event_sender::AppEventSender;
+use crate::bottom_pane::BottomPane;
 use crate::status_indicator_widget::StatusIndicatorWidget;
 
 use super::BottomPaneView;
@@ -39,5 +42,11 @@ impl BottomPaneView<'_> for StatusIndicatorView {
 
     fn render(&self, area: ratatui::layout::Rect, buf: &mut Buffer) {
         self.view.render_ref(area, buf);
+    }
+
+    fn handle_key_event(&mut self, _pane: &mut BottomPane<'_>, key_event: KeyEvent) {
+        if key_event.code == KeyCode::Esc {
+            self.view.interrupt();
+        }
     }
 }
