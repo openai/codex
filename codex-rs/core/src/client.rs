@@ -39,6 +39,7 @@ use crate::models::ResponseItem;
 use crate::models::generate_timestamp;
 use crate::openai_tools::create_tools_json_for_responses_api;
 use crate::protocol::TokenUsage;
+use crate::user_agent::get_codex_user_agent;
 use crate::util::backoff;
 use std::sync::Arc;
 
@@ -224,6 +225,7 @@ impl ModelClient {
                 .as_deref()
                 .unwrap_or("codex_cli_rs");
             req_builder = req_builder.header("originator", originator);
+            req_builder = req_builder.header("User-Agent", get_codex_user_agent(Some(originator)));
 
             let res = req_builder.send().await;
             if let Ok(resp) = &res {
