@@ -255,9 +255,11 @@ impl App<'_> {
                             kind: KeyEventKind::Press,
                             ..
                         } => {
-                            if let AppState::Chat { widget } = &mut self.app_state {
-                                widget.on_ctrl_z();
+                            #[cfg(unix)]
+                            {
+                                self.suspend(terminal)?;
                             }
+                            // No-op on non-Unix platforms.
                         }
                         KeyEvent {
                             code: KeyCode::Char('d'),
@@ -456,6 +458,23 @@ impl App<'_> {
         }
         terminal.clear()?;
 
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn suspend(&mut self, terminal: &mut tui::Tui) -> Result<()> {
+        tui::restore()?;
+        // SAFETY: Unix-only code path. We intentionally send SIGTSTP to the
+        // current process group (pid 0) to trigger standard job-control
+        // suspension semantics. This FFI does not involve any raw pointers,
+        // is not called from a signal handler, and uses a constant signal.
+        // Errors from kill are acceptable (e.g., if already stopped) — the
+        // subsequent re-init path will still leave the terminal in a good state.
+        // We considered `nix`, but didn't think it was worth pulling in for this one call.
+        unsafe { libc::kill(0, libc::SIGTSTP) };
+        *terminal = tui::init(&self.config)?;
+        terminal.clear()?;
+        self.app_event_tx.send(AppEvent::RequestRedraw);
         Ok(())
     }
 
