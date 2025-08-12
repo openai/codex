@@ -465,6 +465,7 @@ impl App<'_> {
         // is not called from a signal handler, and uses a constant signal.
         // Errors from kill are acceptable (e.g., if already stopped) — the
         // subsequent re-init path will still leave the terminal in a good state.
+        // We considered `nix`, but didn't think it was worth pulling in for this one call.
         unsafe { libc::kill(0, libc::SIGTSTP) };
         *terminal = tui::init(&self.config)?;
         terminal.clear()?;
