@@ -21,8 +21,5 @@
     "node": ">=22",
     "pnpm": ">=9.0.0"
   },
-  "packageManager": "pnpm@10.8.1",
-  "dependencies": {
-    "@vscode/ripgrep": "^1.15.14"
-  }
+  "packageManager": "pnpm@10.8.1"
 }
