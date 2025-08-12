@@ -193,6 +193,7 @@ pub async fn run_main(
     // Build layered subscriber:
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(non_blocking)
+        .with_ansi(false)
         .with_target(false)
         .with_filter(env_filter());
 

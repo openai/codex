@@ -527,8 +527,22 @@ impl ChatWidget<'_> {
                     ));
                 }
             }
-            EventMsg::ExecCommandOutputDelta(_) => {
-                // TODO
+            EventMsg::ExecCommandOutputDelta(delta) => {
+                // Show a live tail of exec output in the status line while running.
+                use codex_core::protocol::ExecOutputStream;
+                let mut text = String::from_utf8_lossy(&delta.chunk).to_string();
+                // Use only the last non-empty line for status.
+                if let Some(last) = text.lines().rev().find(|l| !l.trim().is_empty()) {
+                    text = last.trim().to_string();
+                } else {
+                    text.truncate(120);
+                }
+                let prefix = match delta.stream {
+                    ExecOutputStream::Stdout => "stdout",
+                    ExecOutputStream::Stderr => "stderr",
+                };
+                let status = format!("{prefix}: {text}");
+                self.update_latest_log(status);
             }
             EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
                 call_id: _,
@@ -585,7 +599,10 @@ impl ChatWidget<'_> {
                 self.app_event_tx.send(AppEvent::ExitRequest);
             }
             EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) => {
-                info!("TurnDiffEvent: {unified_diff}");
+                // Avoid spamming logs with full unified diffs; log a concise summary instead.
+                let bytes = unified_diff.len();
+                let lines = unified_diff.lines().count();
+                info!("TurnDiffEvent received ({} bytes, {} lines)", bytes, lines);
             }
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
                 info!("BackgroundEvent: {message}");
