@@ -776,6 +776,10 @@ mod tests {
     use crate::bottom_pane::InputResult;
     use crate::bottom_pane::chat_composer::LARGE_PASTE_CHAR_THRESHOLD;
     use crate::bottom_pane::textarea::TextArea;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    use ratatui::style::Color;
+    use ratatui::widgets::WidgetRef;
 
     #[test]
     fn test_current_at_token_basic_cases() {
@@ -1316,5 +1320,75 @@ mod tests {
                 (false, 0), // After deleting from end
             ]
         );
+    }
+
+    #[test]
+    fn context_left_is_red_when_low_and_auto_compact_enabled() {
+        use crate::app_event::AppEvent;
+        use crate::bottom_pane::AppEventSender;
+        use codex_core::protocol::TokenUsage;
+
+        let (tx, _rx) = std::sync::mpsc::channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(true, sender, false);
+        composer.set_auto_compact_enabled(true);
+
+        let total = TokenUsage::default();
+        let mut last = TokenUsage::default();
+        // Force 0% remaining (100 used of 100 window).
+        last.total_tokens = 100;
+        composer.set_token_usage(total, last, Some(100));
+
+        let area = Rect::new(0, 0, 100, 4);
+        let mut buf = Buffer::empty(area);
+        (&composer).render_ref(area, &mut buf);
+
+        // Inspect last row for the substring and verify it's red.
+        let y = area.y + area.height - 1;
+        let mut row = String::new();
+        for x in area.x..(area.x + area.width) {
+            row.push_str(buf.get(x, y).symbol());
+        }
+        let needle = "0% context left";
+        let idx = row.find(needle).expect("expected hint substring present");
+        let start = idx as u16;
+        let x0 = area.x + start;
+        // Check a couple of chars for red fg (e.g., '0' and '%').
+        assert_eq!(buf.get(x0, y).style().fg, Some(Color::Red));
+        assert_eq!(buf.get(x0 + 1, y).style().fg, Some(Color::Red));
+    }
+
+    #[test]
+    fn context_left_is_dim_when_auto_compact_disabled() {
+        use crate::app_event::AppEvent;
+        use crate::bottom_pane::AppEventSender;
+        use codex_core::protocol::TokenUsage;
+
+        let (tx, _rx) = std::sync::mpsc::channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(true, sender, false);
+        composer.set_auto_compact_enabled(false);
+
+        let total = TokenUsage::default();
+        let mut last = TokenUsage::default();
+        last.total_tokens = 100; // 0% remaining
+        composer.set_token_usage(total, last, Some(100));
+
+        let area = Rect::new(0, 0, 100, 4);
+        let mut buf = Buffer::empty(area);
+        (&composer).render_ref(area, &mut buf);
+
+        let y = area.y + area.height - 1;
+        let mut row = String::new();
+        for x in area.x..(area.x + area.width) {
+            row.push_str(buf.get(x, y).symbol());
+        }
+        let needle = "0% context left";
+        let idx = row.find(needle).expect("expected hint substring present");
+        let start = idx as u16;
+        let x0 = area.x + start;
+        // When auto-compact is disabled, the hint should not be red.
+        assert_ne!(buf.get(x0, y).style().fg, Some(Color::Red));
+        assert_ne!(buf.get(x0 + 1, y).style().fg, Some(Color::Red));
     }
 }
