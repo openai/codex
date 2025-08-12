@@ -652,10 +652,6 @@ impl ChatWidget<'_> {
         }
     }
 
-    pub(crate) fn on_ctrl_z(&mut self) {
-        self.interrupt_running_task();
-    }
-
     pub(crate) fn composer_is_empty(&self) -> bool {
         self.bottom_pane.composer_is_empty()
     }
