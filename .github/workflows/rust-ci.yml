@@ -52,6 +52,7 @@ jobs:
             profile: dev
           - runner: macos-14
             target: x86_64-apple-darwin
+            profile: dev
           - runner: macos-14
             target: aarch64-apple-darwin
             profile: release
