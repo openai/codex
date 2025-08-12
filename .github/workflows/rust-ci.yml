@@ -95,7 +95,6 @@ jobs:
 
       - name: cargo clippy
         id: clippy
-        continue-on-error: true
         run: cargo clippy --target ${{ matrix.target }} --all-features --tests -- -D warnings
 
       # Running `cargo build` from the workspace root builds the workspace using
