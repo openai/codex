@@ -130,8 +130,8 @@ pub async fn process_exec_tool_call(
     let duration = start.elapsed();
     match raw_output_result {
         Ok(raw_output) => {
-            let stdout = String::from_utf8_lossy(&raw_output.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&raw_output.stderr).to_string();
+            let stdout = raw_output.stdout.from_utf8_lossy();
+            let stderr = raw_output.stderr.from_utf8_lossy();
 
             #[cfg(target_family = "unix")]
             match raw_output.exit_status.signal() {
@@ -146,7 +146,9 @@ pub async fn process_exec_tool_call(
 
             if exit_code != 0 && is_likely_sandbox_denied(sandbox_type, exit_code) {
                 return Err(CodexErr::Sandbox(SandboxErr::Denied(
-                    exit_code, stdout, stderr,
+                    exit_code,
+                    stdout.text,
+                    stderr.text,
                 )));
             }
 
@@ -244,17 +246,40 @@ fn is_likely_sandbox_denied(sandbox_type: SandboxType, exit_code: i32) -> bool {
 }
 
 #[derive(Debug)]
+pub struct StreamOutput<T> {
+    pub text: T,
+    pub truncated_after_lines: Option<u32>,
+}
+#[derive(Debug)]
 pub struct RawExecToolCallOutput {
     pub exit_status: ExitStatus,
-    pub stdout: Vec<u8>,
-    pub stderr: Vec<u8>,
+    pub stdout: StreamOutput<Vec<u8>>,
+    pub stderr: StreamOutput<Vec<u8>>,
+}
+
+impl StreamOutput<String> {
+    pub fn new(text: String) -> Self {
+        Self {
+            text,
+            truncated_after_lines: None,
+        }
+    }
+}
+
+impl StreamOutput<Vec<u8>> {
+    pub fn from_utf8_lossy(&self) -> StreamOutput<String> {
+        StreamOutput {
+            text: String::from_utf8_lossy(&self.text).to_string(),
+            truncated_after_lines: self.truncated_after_lines,
+        }
+    }
 }
 
 #[derive(Debug)]
 pub struct ExecToolCallOutput {
     pub exit_code: i32,
-    pub stdout: String,
-    pub stderr: String,
+    pub stdout: StreamOutput<String>,
+    pub stderr: StreamOutput<String>,
     pub duration: Duration,
 }
 
@@ -363,7 +388,7 @@ async fn read_capped<R: AsyncRead + Unpin + Send + 'static>(
     max_lines: usize,
     stream: Option<StdoutStream>,
     is_stderr: bool,
-) -> io::Result<Vec<u8>> {
+) -> io::Result<StreamOutput<Vec<u8>>> {
     let mut buf = Vec::with_capacity(max_output.min(8 * 1024));
     let mut tmp = [0u8; 8192];
 
@@ -413,7 +438,16 @@ async fn read_capped<R: AsyncRead + Unpin + Send + 'static>(
         // Continue reading to EOF to avoid back-pressure, but discard once caps are hit.
     }
 
-    Ok(buf)
+    let truncated = remaining_lines == 0 || remaining_bytes == 0;
+
+    Ok(StreamOutput {
+        text: buf,
+        truncated_after_lines: if truncated {
+            Some((max_lines - remaining_lines) as u32)
+        } else {
+            None
+        },
+    })
 }
 
 #[cfg(unix)]

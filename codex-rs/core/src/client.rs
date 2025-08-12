@@ -169,6 +169,7 @@ impl ModelClient {
             store,
             stream: true,
             include,
+            prompt_cache_key: Some(self.session_id.to_string()),
         };
 
         let mut attempt = 0;

@@ -82,8 +82,9 @@ pub struct ApplyPatchArgs {
 }
 
 pub fn maybe_parse_apply_patch(argv: &[String]) -> MaybeApplyPatch {
+    const APPLY_PATCH_COMMANDS: [&str; 2] = ["apply_patch", "applypatch"];
     match argv {
-        [cmd, body] if cmd == "apply_patch" => match parse_patch(body) {
+        [cmd, body] if APPLY_PATCH_COMMANDS.contains(&cmd.as_str()) => match parse_patch(body) {
             Ok(source) => MaybeApplyPatch::Body(source),
             Err(e) => MaybeApplyPatch::PatchParseError(e),
         },
@@ -701,6 +702,31 @@ mod tests {
     fn test_literal() {
         let args = strs_to_strings(&[
             "apply_patch",
+            r#"*** Begin Patch
+*** Add File: foo
++hi
+*** End Patch
+"#,
+        ]);
+
+        match maybe_parse_apply_patch(&args) {
+            MaybeApplyPatch::Body(ApplyPatchArgs { hunks, patch: _ }) => {
+                assert_eq!(
+                    hunks,
+                    vec![Hunk::AddFile {
+                        path: PathBuf::from("foo"),
+                        contents: "hi\n".to_string()
+                    }]
+                );
+            }
+            result => panic!("expected MaybeApplyPatch::Body got {result:?}"),
+        }
+    }
+
+    #[test]
+    fn test_literal_applypatch() {
+        let args = strs_to_strings(&[
+            "applypatch",
             r#"*** Begin Patch
 *** Add File: foo
 +hi

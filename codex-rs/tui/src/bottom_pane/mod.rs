@@ -196,6 +196,11 @@ impl BottomPane<'_> {
         }
     }
 
+    pub(crate) fn insert_str(&mut self, text: &str) {
+        self.composer.insert_str(text);
+        self.request_redraw();
+    }
+
     /// Update the status indicator text. Prefer replacing the composer with
     /// the StatusIndicatorView so the input pane shows a single-line status
     /// like: `▌ Working waiting for model`.
