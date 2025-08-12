@@ -28,8 +28,9 @@ mod tests {
     fn test_macos() {
         use regex_lite::Regex;
         let user_agent = get_codex_user_agent(None);
-        let re = Regex::new(r"^codex_cli_rs/\d+\.\d+\.\d+ \(Mac OS \d+\.\d+\.\d+; (x86_64|arm64)\)$")
-            .unwrap();
+        let re =
+            Regex::new(r"^codex_cli_rs/\d+\.\d+\.\d+ \(Mac OS \d+\.\d+\.\d+; (x86_64|arm64)\)$")
+                .unwrap();
         assert!(re.is_match(&user_agent));
     }
 }
