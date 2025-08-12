@@ -268,6 +268,8 @@ async fn binary_size_transcript_matches_ideal_fixture() {
     let mut ideal = String::new();
     f.read_to_string(&mut ideal)
         .expect("read ideal-binary-response.txt");
+    // Normalize line endings for Windows vs. Unix checkouts
+    let ideal = ideal.replace("\r\n", "\n");
 
     // Build the final VT100 visual by parsing the ANSI stream. Trim trailing spaces per line
     // and drop trailing empty lines so the shape matches the ideal fixture exactly.
