@@ -22,14 +22,14 @@ pub(crate) fn shimmer_spans(text: &str) -> Vec<Span<'static>> {
     // Use time-based sweep synchronized to process start.
     let padding = 10usize;
     let period = chars.len() + padding * 2;
-    let sweep_seconds = 1.5f32;
+    let sweep_seconds = 2.5f32;
     let pos_f =
         (elapsed_since_start().as_secs_f32() % sweep_seconds) / sweep_seconds * (period as f32);
     let pos = pos_f as usize;
     let has_true_color = supports_color::on_cached(supports_color::Stream::Stdout)
         .map(|level| level.has_16m)
         .unwrap_or(false);
-    let band_half_width = 6.0;
+    let band_half_width = 3.0;
 
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(chars.len());
     for (i, ch) in chars.iter().enumerate() {
