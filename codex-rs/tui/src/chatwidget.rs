@@ -727,6 +727,7 @@ impl ChatWidget<'_> {
         // model to see the actual image content.
         if !text.is_empty() {
             for path in self.detect_image_paths_in_text(&text) {
+                tracing::info!("Attaching image from text: {}", path.display());
                 items.push(InputItem::LocalImage { path });
             }
         }
