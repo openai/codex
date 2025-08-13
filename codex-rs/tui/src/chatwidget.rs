@@ -132,19 +132,36 @@ impl ChatWidget<'_> {
             .replace('\u{00A0}', " ")    // NBSP
             .replace('\u{202F}', " ");   // NNBSP
 
-        // shlex-like tokenization to respect quotes; fall back to whitespace split on parse failure.
-        let tokens: Vec<String> = {
-            let mut v = Vec::new();
+        // Extract obvious candidates via regex too (robust against odd quoting and punctuation).
+        // We combine both regex captures and shlex tokens to maximize recall.
+        let mut candidates: Vec<String> = Vec::new();
+        {
+            let re = regex_lite::Regex::new(
+                r"(?xi)
+                (file://[^\s]+)
+                |(/[^\s'\"\)]+\.(?:png|jpe?g|gif|webp|bmp|tiff?|svg))
+                |([A-Za-z0-9_\-\s\.\u{00A0}\u{202F}]+\.(?:png|jpe?g|gif|webp|bmp|tiff?|svg))
+                "
+            ).ok();
+            if let Some(re) = re {
+                for cap in re.captures_iter(&normalized) {
+                    if let Some(m) = cap.get(1).or_else(|| cap.get(2)).or_else(|| cap.get(3)) {
+                        candidates.push(m.as_str().to_string());
+                    }
+                }
+            }
+        }
+
+        // shlex-like tokenization to respect quotes; fall back to whitespace split if needed.
+        {
             let mut lexer = shlex::Shlex::new(&normalized);
             for item in &mut lexer {
-                v.push(item);
+                candidates.push(item);
             }
-            if v.is_empty() {
-                normalized.split_whitespace().map(|s| s.to_string()).collect()
-            } else {
-                v
+            if candidates.is_empty() {
+                candidates.extend(normalized.split_whitespace().map(|s| s.to_string()));
             }
-        };
+        }
 
         // Very small helper to unescape common terminal drag patterns.
         fn normalize_token(tok: &str) -> String {
@@ -206,7 +223,7 @@ impl ChatWidget<'_> {
         let mut seen: HashSet<PathBuf> = HashSet::new();
         let cwd = &self.config.cwd;
 
-        for raw_tok in tokens {
+        for raw_tok in candidates {
             if raw_tok.is_empty() {
                 continue;
             }
