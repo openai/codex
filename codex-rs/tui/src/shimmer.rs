@@ -66,18 +66,19 @@ pub(crate) fn shimmer_spans(text: &str, frame_idx: usize) -> Vec<Span<'static>> 
                 .fg(Color::Rgb(level, level, level))
                 .add_modifier(Modifier::BOLD)
         } else {
-            // Fallback without gray colors: DIM for low levels, normal for mid, BOLD for high
-            if level < 144 {
-                Style::default().add_modifier(Modifier::DIM)
-            } else if level < 208 {
-                Style::default()
-            } else {
-                Style::default().add_modifier(Modifier::BOLD)
-            }
+            color_for_level(level)
         };
         spans.push(Span::styled(ch.to_string(), style));
     }
     spans
 }
 
-// No longer using gray shades for fallback; gradient is handled via DIM/BOLD modifiers above.
+fn color_for_level(level: u8) -> Style {
+    if level < 144 {
+        Style::default().add_modifier(Modifier::DIM)
+    } else if level < 208 {
+        Style::default()
+    } else {
+        Style::default().add_modifier(Modifier::BOLD)
+    }
+}

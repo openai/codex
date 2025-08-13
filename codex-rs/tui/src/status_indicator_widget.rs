@@ -205,14 +205,7 @@ impl WidgetRef for StatusIndicatorWidget {
                     .fg(Color::Rgb(level, level, level))
                     .add_modifier(Modifier::BOLD)
             } else {
-                // Fallback without gray colors: use DIM for low levels, normal for mid, bold for high
-                if level < 144 {
-                    Style::default().add_modifier(Modifier::DIM)
-                } else if level < 208 {
-                    Style::default()
-                } else {
-                    Style::default().add_modifier(Modifier::BOLD)
-                }
+                color_for_level(level)
             };
 
             animated_spans.push(Span::styled(ch.to_string(), style));
@@ -286,7 +279,15 @@ impl WidgetRef for StatusIndicatorWidget {
     }
 }
 
-// No longer using gray shades for fallback; gradient is handled via DIM/BOLD modifiers above.
+fn color_for_level(level: u8) -> Style {
+    if level < 144 {
+        Style::default().add_modifier(Modifier::DIM)
+    } else if level < 208 {
+        Style::default()
+    } else {
+        Style::default().add_modifier(Modifier::BOLD)
+    }
+}
 
 #[cfg(test)]
 mod tests {
