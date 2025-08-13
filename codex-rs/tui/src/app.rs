@@ -9,6 +9,7 @@ use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::should_show_login_screen;
 use crate::slash_command::SlashCommand;
 use crate::tui;
+use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::protocol::Event;
 use codex_core::protocol::Op;
@@ -49,6 +50,7 @@ enum AppState<'a> {
 }
 
 pub(crate) struct App<'a> {
+    server: Arc<ConversationManager>,
     app_event_tx: AppEventSender,
     app_event_rx: Receiver<AppEvent>,
     app_state: AppState<'a>,
@@ -87,6 +89,8 @@ impl App<'_> {
         initial_images: Vec<std::path::PathBuf>,
         show_trust_screen: bool,
     ) -> Self {
+        let conversation_manager = Arc::new(ConversationManager::default());
+
         let (app_event_tx, app_event_rx) = channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
 
@@ -154,6 +158,7 @@ impl App<'_> {
         } else {
             let chat_widget = ChatWidget::new(
                 config.clone(),
+                conversation_manager.clone(),
                 app_event_tx.clone(),
                 initial_prompt,
                 initial_images,
@@ -207,6 +212,7 @@ impl App<'_> {
             });
         }
         Self {
+            server: conversation_manager,
             app_event_tx,
             pending_history_lines: Vec::new(),
             app_event_rx,
@@ -354,6 +360,7 @@ impl App<'_> {
                         // User accepted – switch to chat view.
                         let new_widget = Box::new(ChatWidget::new(
                             self.config.clone(),
+                            self.server.clone(),
                             self.app_event_tx.clone(),
                             None,
                             Vec::new(),
@@ -475,6 +482,7 @@ impl App<'_> {
                     self.app_state = AppState::Chat {
                         widget: Box::new(ChatWidget::new(
                             config,
+                            self.server.clone(),
                             self.app_event_tx.clone(),
                             initial_prompt,
                             initial_images,

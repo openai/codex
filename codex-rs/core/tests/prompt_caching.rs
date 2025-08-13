@@ -1,7 +1,6 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use codex_core::Codex;
-use codex_core::CodexSpawnOk;
+use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
 use codex_core::built_in_model_providers;
 use codex_core::protocol::EventMsg;
@@ -55,14 +54,12 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
     config.model_provider = model_provider;
     config.user_instructions = Some("be consistent and helpful".to_string());
 
-    let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
-    let CodexSpawnOk { codex, .. } = Codex::spawn(
-        config,
-        Some(CodexAuth::from_api_key("Test API Key")),
-        ctrl_c.clone(),
-    )
-    .await
-    .unwrap();
+    let conversation_manager = ConversationManager::default();
+    let codex = conversation_manager
+        .new_conversation_with_auth(config, Some(CodexAuth::from_api_key("Test API Key")))
+        .await
+        .expect("create new conversation")
+        .conversation;
 
     codex
         .submit(Op::UserInput {

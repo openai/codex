@@ -1,14 +1,13 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use codex_core::Codex;
-use codex_core::CodexSpawnOk;
+use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
+use codex_core::NewConversation;
 use codex_core::WireApi;
 use codex_core::built_in_model_providers;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
-use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_login::CodexAuth;
 use core_test_support::load_default_config_for_test;
@@ -90,14 +89,15 @@ async fn includes_session_id_and_model_headers_in_request() {
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = model_provider;
 
-    let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
-    let CodexSpawnOk { codex, .. } = Codex::spawn(
-        config,
-        Some(CodexAuth::from_api_key("Test API Key")),
-        ctrl_c.clone(),
-    )
-    .await
-    .unwrap();
+    let conversation_manager = ConversationManager::default();
+    let NewConversation {
+        conversation: codex,
+        conversation_id,
+        session_configured: _,
+    } = conversation_manager
+        .new_conversation_with_auth(config, Some(CodexAuth::from_api_key("Test API Key")))
+        .await
+        .expect("create new conversation");
 
     codex
         .submit(Op::UserInput {
@@ -108,13 +108,6 @@ async fn includes_session_id_and_model_headers_in_request() {
         .await
         .unwrap();
 
-    let EventMsg::SessionConfigured(SessionConfiguredEvent { session_id, .. }) =
-        wait_for_event(&codex, |ev| matches!(ev, EventMsg::SessionConfigured(_))).await
-    else {
-        unreachable!()
-    };
-
-    let current_session_id = Some(session_id.to_string());
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // get request from the server
@@ -123,10 +116,9 @@ async fn includes_session_id_and_model_headers_in_request() {
     let request_authorization = request.headers.get("authorization").unwrap();
     let request_originator = request.headers.get("originator").unwrap();
 
-    assert!(current_session_id.is_some());
     assert_eq!(
         request_session_id.to_str().unwrap(),
-        current_session_id.as_ref().unwrap()
+        conversation_id.to_string()
     );
     assert_eq!(request_originator.to_str().unwrap(), "codex_cli_rs");
     assert_eq!(
@@ -164,14 +156,12 @@ async fn includes_base_instructions_override_in_request() {
     config.base_instructions = Some("test instructions".to_string());
     config.model_provider = model_provider;
 
-    let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
-    let CodexSpawnOk { codex, .. } = Codex::spawn(
-        config,
-        Some(CodexAuth::from_api_key("Test API Key")),
-        ctrl_c.clone(),
-    )
-    .await
-    .unwrap();
+    let conversation_manager = ConversationManager::default();
+    let codex = conversation_manager
+        .new_conversation_with_auth(config, Some(CodexAuth::from_api_key("Test API Key")))
+        .await
+        .expect("create new conversation")
+        .conversation;
 
     codex
         .submit(Op::UserInput {
@@ -223,14 +213,12 @@ async fn originator_config_override_is_used() {
     config.model_provider = model_provider;
     config.internal_originator = Some("my_override".to_string());
 
-    let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
-    let CodexSpawnOk { codex, .. } = Codex::spawn(
-        config,
-        Some(CodexAuth::from_api_key("Test API Key")),
-        ctrl_c.clone(),
-    )
-    .await
-    .unwrap();
+    let conversation_manager = ConversationManager::default();
+    let codex = conversation_manager
+        .new_conversation_with_auth(config, Some(CodexAuth::from_api_key("Test API Key")))
+        .await
+        .expect("create new conversation")
+        .conversation;
 
     codex
         .submit(Op::UserInput {
@@ -283,11 +271,15 @@ async fn chatgpt_auth_sends_correct_request() {
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = model_provider;
-    let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
-    let CodexSpawnOk { codex, .. } =
-        Codex::spawn(config, Some(create_dummy_codex_auth()), ctrl_c.clone())
-            .await
-            .unwrap();
+    let conversation_manager = ConversationManager::default();
+    let NewConversation {
+        conversation: codex,
+        conversation_id,
+        session_configured: _,
+    } = conversation_manager
+        .new_conversation_with_auth(config, Some(create_dummy_codex_auth()))
+        .await
+        .expect("create new conversation");
 
     codex
         .submit(Op::UserInput {
@@ -298,13 +290,6 @@ async fn chatgpt_auth_sends_correct_request() {
         .await
         .unwrap();
 
-    let EventMsg::SessionConfigured(SessionConfiguredEvent { session_id, .. }) =
-        wait_for_event(&codex, |ev| matches!(ev, EventMsg::SessionConfigured(_))).await
-    else {
-        unreachable!()
-    };
-
-    let current_session_id = Some(session_id.to_string());
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // get request from the server
@@ -315,10 +300,9 @@ async fn chatgpt_auth_sends_correct_request() {
     let request_chatgpt_account_id = request.headers.get("chatgpt-account-id").unwrap();
     let request_body = request.body_json::<serde_json::Value>().unwrap();
 
-    assert!(current_session_id.is_some());
     assert_eq!(
         request_session_id.to_str().unwrap(),
-        current_session_id.as_ref().unwrap()
+        conversation_id.to_string()
     );
     assert_eq!(request_originator.to_str().unwrap(), "codex_cli_rs");
     assert_eq!(
@@ -361,14 +345,12 @@ async fn includes_user_instructions_message_in_request() {
     config.model_provider = model_provider;
     config.user_instructions = Some("be nice".to_string());
 
-    let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
-    let CodexSpawnOk { codex, .. } = Codex::spawn(
-        config,
-        Some(CodexAuth::from_api_key("Test API Key")),
-        ctrl_c.clone(),
-    )
-    .await
-    .unwrap();
+    let conversation_manager = ConversationManager::default();
+    let codex = conversation_manager
+        .new_conversation_with_auth(config, Some(CodexAuth::from_api_key("Test API Key")))
+        .await
+        .expect("create new conversation")
+        .conversation;
 
     codex
         .submit(Op::UserInput {
@@ -457,8 +439,12 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = provider;
 
-    let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
-    let CodexSpawnOk { codex, .. } = Codex::spawn(config, None, ctrl_c.clone()).await.unwrap();
+    let conversation_manager = ConversationManager::default();
+    let codex = conversation_manager
+        .new_conversation_with_auth(config, None)
+        .await
+        .expect("create new conversation")
+        .conversation;
 
     codex
         .submit(Op::UserInput {
@@ -531,11 +517,12 @@ async fn env_var_overrides_loaded_auth() {
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = provider;
 
-    let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
-    let CodexSpawnOk { codex, .. } =
-        Codex::spawn(config, Some(create_dummy_codex_auth()), ctrl_c.clone())
-            .await
-            .unwrap();
+    let conversation_manager = ConversationManager::default();
+    let codex = conversation_manager
+        .new_conversation_with_auth(config, Some(create_dummy_codex_auth()))
+        .await
+        .expect("create new conversation")
+        .conversation;
 
     codex
         .submit(Op::UserInput {

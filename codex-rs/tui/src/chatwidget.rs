@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use codex_core::config::Config;
 use codex_core::parse_command::ParsedCommand;
@@ -54,6 +55,7 @@ mod agent;
 use self::agent::spawn_agent;
 use crate::streaming::controller::AppEventHistorySink;
 use crate::streaming::controller::StreamController;
+use codex_core::ConversationManager;
 use codex_file_search::FileMatch;
 
 // Track information about an in-flight exec command.
@@ -76,6 +78,7 @@ pub(crate) struct ChatWidget<'a> {
     // Track the most recently active stream kind in the current turn
     last_stream_kind: Option<StreamKind>,
     running_commands: HashMap<String, RunningCommand>,
+    pending_exec_completions: Vec<(Vec<String>, Vec<ParsedCommand>, CommandOutput)>,
     task_complete_pending: bool,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
@@ -111,6 +114,10 @@ impl ChatWidget<'_> {
     #[inline]
     fn mark_needs_redraw(&mut self) {
         self.needs_redraw = true;
+    }
+    fn flush_answer_stream_with_separator(&mut self) {
+        let sink = AppEventHistorySink(self.app_event_tx.clone());
+        let _ = self.stream.finalize(StreamKind::Answer, true, &sink);
     }
     // --- Small event handlers ---
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
@@ -215,6 +222,7 @@ impl ChatWidget<'_> {
     }
 
     fn on_exec_command_begin(&mut self, ev: ExecCommandBeginEvent) {
+        self.flush_answer_stream_with_separator();
         let ev2 = ev.clone();
         self.defer_or_handle(|q| q.push_exec_begin(ev), |s| s.handle_exec_begin_now(ev2));
     }
@@ -344,12 +352,11 @@ impl ChatWidget<'_> {
 
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
         let running = self.running_commands.remove(&ev.call_id);
-        self.active_exec_cell = None;
         let (command, parsed) = match running {
             Some(rc) => (rc.command, rc.parsed_cmd),
             None => (vec![ev.call_id.clone()], Vec::new()),
         };
-        self.add_to_history(HistoryCell::new_completed_exec_command(
+        self.pending_exec_completions.push((
             command,
             parsed,
             CommandOutput {
@@ -358,6 +365,16 @@ impl ChatWidget<'_> {
                 stderr: ev.stderr.clone(),
             },
         ));
+
+        if self.running_commands.is_empty() {
+            self.active_exec_cell = None;
+            let pending = std::mem::take(&mut self.pending_exec_completions);
+            for (command, parsed, output) in pending {
+                self.add_to_history(HistoryCell::new_completed_exec_command(
+                    command, parsed, output,
+                ));
+            }
+        }
     }
 
     pub(crate) fn handle_patch_apply_end_now(
@@ -372,6 +389,7 @@ impl ChatWidget<'_> {
     }
 
     pub(crate) fn handle_exec_approval_now(&mut self, id: String, ev: ExecApprovalRequestEvent) {
+        self.flush_answer_stream_with_separator();
         // Log a background summary immediately so the history is chronological.
         let cmdline = strip_bash_lc_and_escape(&ev.command);
         let text = format!(
@@ -398,6 +416,7 @@ impl ChatWidget<'_> {
         id: String,
         ev: ApplyPatchApprovalRequestEvent,
     ) {
+        self.flush_answer_stream_with_separator();
         self.add_to_history(HistoryCell::new_patch_event(
             PatchEventType::ApprovalRequest,
             ev.changes.clone(),
@@ -423,16 +442,29 @@ impl ChatWidget<'_> {
                 parsed_cmd: ev.parsed_cmd.clone(),
             },
         );
-        self.active_exec_cell = Some(HistoryCell::new_active_exec_command(
-            ev.command,
-            ev.parsed_cmd,
-        ));
+        // Accumulate parsed commands into a single active Exec cell so they stack
+        match self.active_exec_cell.as_mut() {
+            Some(HistoryCell::Exec(exec)) => {
+                exec.parsed.extend(ev.parsed_cmd);
+            }
+            _ => {
+                self.active_exec_cell = Some(HistoryCell::new_active_exec_command(
+                    ev.command,
+                    ev.parsed_cmd,
+                ));
+            }
+        }
+
+        // Request a redraw so the working header and command list are visible immediately.
+        self.mark_needs_redraw();
     }
 
     pub(crate) fn handle_mcp_begin_now(&mut self, ev: McpToolCallBeginEvent) {
+        self.flush_answer_stream_with_separator();
         self.add_to_history(HistoryCell::new_active_mcp_tool_call(ev.invocation));
     }
     pub(crate) fn handle_mcp_end_now(&mut self, ev: McpToolCallEndEvent) {
+        self.flush_answer_stream_with_separator();
         self.add_to_history(HistoryCell::new_completed_mcp_tool_call(
             80,
             ev.invocation,
@@ -468,12 +500,13 @@ impl ChatWidget<'_> {
 
     pub(crate) fn new(
         config: Config,
+        conversation_manager: Arc<ConversationManager>,
         app_event_tx: AppEventSender,
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
         enhanced_keys_supported: bool,
     ) -> Self {
-        let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone());
+        let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
 
         Self {
             app_event_tx: app_event_tx.clone(),
@@ -494,6 +527,7 @@ impl ChatWidget<'_> {
             stream: StreamController::new(config),
             last_stream_kind: None,
             running_commands: HashMap::new(),
+            pending_exec_completions: Vec::new(),
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
             needs_redraw: false,
