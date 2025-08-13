@@ -81,6 +81,8 @@ pub(crate) struct ChatWidget<'a> {
     interrupts: InterruptManager,
     // Whether a redraw is needed after handling the current event
     needs_redraw: bool,
+    // Image paths captured from paste events during composition
+    pending_image_paths: Vec<PathBuf>,
 }
 
 struct UserMessage {
@@ -669,6 +671,7 @@ impl ChatWidget<'_> {
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
             needs_redraw: false,
+            pending_image_paths: Vec::new(),
         }
     }
 
@@ -694,6 +697,14 @@ impl ChatWidget<'_> {
     }
 
     pub(crate) fn handle_paste(&mut self, text: String) {
+        let detected = self.detect_image_paths_in_text(&text);
+        if !detected.is_empty() {
+            for p in detected {
+                if !self.pending_image_paths.contains(&p) {
+                    self.pending_image_paths.push(p);
+                }
+            }
+        }
         self.bottom_pane.handle_paste(text);
     }
 
@@ -720,6 +731,14 @@ impl ChatWidget<'_> {
 
         for path in image_paths {
             items.push(InputItem::LocalImage { path });
+        }
+
+        // Include any images captured from paste events while composing.
+        if !self.pending_image_paths.is_empty() {
+            for path in self.pending_image_paths.drain(..) {
+                tracing::info!("Attaching image from paste: {}", path.display());
+                items.push(InputItem::LocalImage { path });
+            }
         }
 
         // Heuristically attach any image files referenced directly in the text.
