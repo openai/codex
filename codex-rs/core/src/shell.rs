@@ -7,8 +7,15 @@ pub struct ZshShell {
 }
 
 #[derive(Debug, PartialEq, Eq)]
+pub struct PowerShellShell {
+    /// Executable name or path, e.g. "pwsh" or "powershell.exe".
+    exe: String,
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub enum Shell {
     Zsh(ZshShell),
+    PowerShell(PowerShellShell),
     Unknown,
 }
 
@@ -33,6 +40,31 @@ impl Shell {
                 }
                 Some(result)
             }
+            Shell::PowerShell(ps) => {
+                let mut result = vec![ps.exe.clone()];
+                result.push("-NoProfile".to_string());
+                result.push("-Command".to_string());
+
+                let joined = strip_bash_lc(&command)
+                    .or_else(|| shlex::try_join(command.iter().map(|s| s.as_str())).ok());
+
+                if let Some(script) = joined {
+                    result.push(script);
+                    Some(result)
+                } else {
+                    None
+                }
+            }
+            Shell::Unknown => None,
+        }
+    }
+
+    pub fn name(&self) -> Option<String> {
+        match self {
+            Shell::Zsh(zsh) => std::path::Path::new(&zsh.shell_path)
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string()),
+            Shell::PowerShell(ps) => Some(ps.exe.clone()),
             Shell::Unknown => None,
         }
     }
@@ -86,9 +118,35 @@ pub async fn default_user_shell() -> Shell {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 pub async fn default_user_shell() -> Shell {
     Shell::Unknown
+}
+
+#[cfg(target_os = "windows")]
+pub async fn default_user_shell() -> Shell {
+    use tokio::process::Command;
+
+    // Prefer PowerShell 7+ (`pwsh`) if available, otherwise fall back to Windows PowerShell.
+    let has_pwsh = Command::new("pwsh")
+        .arg("-NoLogo")
+        .arg("-NoProfile")
+        .arg("-Command")
+        .arg("$PSVersionTable.PSVersion.Major")
+        .output()
+        .await
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    if has_pwsh {
+        Shell::PowerShell(PowerShellShell {
+            exe: "pwsh.exe".to_string(),
+        })
+    } else {
+        Shell::PowerShell(PowerShellShell {
+            exe: "powershell.exe".to_string(),
+        })
+    }
 }
 
 #[cfg(test)]
