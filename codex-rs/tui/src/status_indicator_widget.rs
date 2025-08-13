@@ -205,7 +205,14 @@ impl WidgetRef for StatusIndicatorWidget {
                     .fg(Color::Rgb(level, level, level))
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(color_for_level(level))
+                // Fallback without gray colors: use DIM for low levels, normal for mid, bold for high
+                if level < 144 {
+                    Style::default().add_modifier(Modifier::DIM)
+                } else if level < 208 {
+                    Style::default()
+                } else {
+                    Style::default().add_modifier(Modifier::BOLD)
+                }
             };
 
             animated_spans.push(Span::styled(ch.to_string(), style));
@@ -223,7 +230,7 @@ impl WidgetRef for StatusIndicatorWidget {
         let spinner_ch = spinner_frames[(idx / SPINNER_SLOWDOWN) % spinner_frames.len()];
         spans.push(Span::styled(
             spinner_ch.to_string(),
-            Style::default().fg(Color::DarkGray),
+            Style::default().add_modifier(Modifier::DIM),
         ));
         spans.push(Span::raw(" "));
 
@@ -236,27 +243,25 @@ impl WidgetRef for StatusIndicatorWidget {
         let bracket_prefix = format!("({elapsed}s • ");
         spans.push(Span::styled(
             bracket_prefix,
-            Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+            Style::default().add_modifier(Modifier::DIM),
         ));
         spans.push(Span::styled(
             "Esc",
-            Style::default()
-                .fg(Color::Gray)
-                .add_modifier(Modifier::DIM | Modifier::BOLD),
+            Style::default().add_modifier(Modifier::DIM | Modifier::BOLD),
         ));
         spans.push(Span::styled(
             " to interrupt)",
-            Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+            Style::default().add_modifier(Modifier::DIM),
         ));
         // Add a space and then the log text (not animated by the gradient)
         if !status_prefix.is_empty() {
             spans.push(Span::styled(
                 " ",
-                Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+                Style::default().add_modifier(Modifier::DIM),
             ));
             spans.push(Span::styled(
                 status_prefix,
-                Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+                Style::default().add_modifier(Modifier::DIM),
             ));
         }
 
@@ -281,15 +286,7 @@ impl WidgetRef for StatusIndicatorWidget {
     }
 }
 
-fn color_for_level(level: u8) -> Color {
-    if level < 128 {
-        Color::DarkGray
-    } else if level < 192 {
-        Color::Gray
-    } else {
-        Color::White
-    }
-}
+// No longer using gray shades for fallback; gradient is handled via DIM/BOLD modifiers above.
 
 #[cfg(test)]
 mod tests {

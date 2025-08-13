@@ -731,15 +731,15 @@ impl WidgetRef for &ChatComposer {
                     .render_ref(bottom_line_rect, buf);
             }
         }
+        let border_style = if self.has_focus {
+            Style::default().fg(Color::Cyan)
+        } else {
+            Style::default().add_modifier(Modifier::DIM)
+        };
         Block::default()
-            .border_style(Style::default().dim())
             .borders(Borders::LEFT)
             .border_type(BorderType::QuadrantOutside)
-            .border_style(Style::default().fg(if self.has_focus {
-                Color::Cyan
-            } else {
-                Color::Gray
-            }))
+            .border_style(border_style)
             .render_ref(
                 Rect::new(textarea_rect.x, textarea_rect.y, 1, textarea_rect.height),
                 buf,
