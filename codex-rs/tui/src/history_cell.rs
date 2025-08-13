@@ -347,7 +347,7 @@ impl HistoryCell {
             Some(o) if o.exit_code == 0 => "✓ Completed".to_string(),
             Some(o) => format!("✗ Failed (exit {})", o.exit_code),
         };
-        let mut lines: Vec<Line> = vec![Line::from(header_text)];
+        let mut lines: Vec<Line> = vec![Line::from(header_text.magenta().bold())];
 
         for (i, parsed) in parsed_commands.iter().enumerate() {
             let text = match parsed {
