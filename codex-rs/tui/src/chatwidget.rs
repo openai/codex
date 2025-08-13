@@ -137,7 +137,7 @@ impl ChatWidget<'_> {
         let mut candidates: Vec<String> = Vec::new();
         {
             // Keep pattern simple to avoid engine differences.
-            let pattern = r"(?xi)(file://[^\s]+)|(/[^\s'\"]+\.(?:png|jpe?g|gif|webp|bmp|tiff?|svg))|([A-Za-z0-9_\-\s\.]+\.(?:png|jpe?g|gif|webp|bmp|tiff?|svg))";
+            let pattern = "(?xi)(file://[^\\s]+)|(/[^\\s'\\\"]+\\.(?:png|jpe?g|gif|webp|bmp|tiff?|svg))|([A-Za-z0-9_\\-\\s\\.]+\\.(?:png|jpe?g|gif|webp|bmp|tiff?|svg))";
             if let Ok(re) = regex_lite::Regex::new(pattern) {
                 for cap in re.captures_iter(&normalized) {
                     if let Some(m) = cap.get(1).or_else(|| cap.get(2)).or_else(|| cap.get(3)) {
