@@ -367,7 +367,7 @@ impl HistoryCell {
                 ParsedCommand::Unknown { cmd } => format!("⌨️ {}", shlex_join_safe(cmd)),
             };
 
-            let first_prefix = if i == 0 { "  L " } else { "    " };
+            let first_prefix = if i == 0 { "  └ " } else { "    " };
             for (j, line_text) in text.lines().enumerate() {
                 let prefix = if j == 0 { first_prefix } else { "    " };
                 lines.push(Line::from(vec![
@@ -804,7 +804,7 @@ impl HistoryCell {
                     ),
                 };
                 let prefix = if idx == 0 {
-                    Span::raw("  ⎿ ")
+                    Span::raw("  └ ")
                 } else {
                     Span::raw("    ")
                 };
@@ -892,7 +892,7 @@ impl HistoryCell {
         if !stdout.trim().is_empty() {
             let mut iter = stdout.lines();
             for (i, raw) in iter.by_ref().take(TOOL_CALL_MAX_LINES).enumerate() {
-                let prefix = if i == 0 { "  ⎿ " } else { "    " };
+                let prefix = if i == 0 { "  └ " } else { "    " };
                 let s = format!("{prefix}{raw}");
                 lines.push(ansi_escape_line(&s).dim());
             }
@@ -945,7 +945,7 @@ fn output_lines(
     for (i, raw) in lines[..head_end].iter().enumerate() {
         let mut line = ansi_escape_line(raw);
         let prefix = if i == 0 && include_angle_pipe {
-            "  ⎿ "
+            "  └ "
         } else {
             "    "
         };
@@ -1019,7 +1019,7 @@ mod tests {
         }];
         let lines = HistoryCell::exec_command_lines(&[], &parsed, None);
         assert!(lines.len() >= 3);
-        assert_eq!(lines[1].spans[0].content, "  L ");
+        assert_eq!(lines[1].spans[0].content, "  └ ");
         assert_eq!(lines[2].spans[0].content, "    ");
     }
 }
