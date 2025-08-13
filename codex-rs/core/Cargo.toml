@@ -29,6 +29,7 @@ mcp-types = { path = "../mcp-types" }
 mime_guess = "2.0"
 os_info = "3.12.0"
 rand = "0.9"
+regex-lite = "0.1.6"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
@@ -76,7 +77,6 @@ core_test_support = { path = "tests/common" }
 maplit = "1.0.2"
 predicates = "3"
 pretty_assertions = "1.4.1"
-regex-lite = "0.1.6"
 tempfile = "3"
 tokio-test = "0.4"
 walkdir = "2.5.0"
