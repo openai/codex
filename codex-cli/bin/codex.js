@@ -70,17 +70,16 @@ async function tryImport(moduleName) {
     // eslint-disable-next-line node/no-unsupported-features/es-syntax
     return await import(moduleName);
   } catch (err) {
-    console.error(`unable to import ${moduleName}`, err);
     return null;
   }
 }
 
-async function resolveRgPath() {
-  const { rgPath } = await tryImport("@vscode/ripgrep");
-  if (!rgPath) {
-    throw new Error("ripgrep not found");
+async function resolveRgDir() {
+  const ripgrep = await tryImport("@vscode/ripgrep");
+  if (!ripgrep?.rgPath) {
+    return null;
   }
-  return path.dirname(rgPath);
+  return path.dirname(ripgrep.rgPath);
 }
 
 function getUpdatedPath(newDirs) {
@@ -93,8 +92,12 @@ function getUpdatedPath(newDirs) {
   return updatedPath;
 }
 
-const rgPath = await resolveRgPath();
-const updatedPath = getUpdatedPath([rgPath]);
+const additionalDirs = [];
+const rgDir = await resolveRgDir();
+if (rgDir) {
+  additionalDirs.push(rgDir);
+}
+const updatedPath = getUpdatedPath(additionalDirs);
 
 const child = spawn(binaryPath, process.argv.slice(2), {
   stdio: "inherit",
