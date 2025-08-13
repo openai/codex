@@ -217,17 +217,6 @@ impl WidgetRef for StatusIndicatorWidget {
         let mut spans: Vec<Span<'static>> = Vec::new();
         spans.push(Span::styled("▌ ", Style::default().fg(Color::Cyan)));
 
-        // Simple dim spinner to the left of the header.
-        let spinner_frames = ['·', '•', '●', '•'];
-        const SPINNER_SLOWDOWN: usize = 2;
-        let spinner_ch = spinner_frames[(idx / SPINNER_SLOWDOWN) % spinner_frames.len()];
-        spans.push(Span::styled(
-            spinner_ch.to_string(),
-            Style::default().fg(Color::DarkGray),
-        ));
-        spans.push(Span::raw(" "));
-
-        // Space after header
         // Animated header after the left bar
         spans.extend(animated_spans);
         // Space between header and bracket block
