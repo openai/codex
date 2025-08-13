@@ -123,14 +123,37 @@ impl ChatWidget<'_> {
             return Vec::new();
         }
 
+        // Normalize curly quotes and non-breaking spaces that commonly appear in macOS filenames.
+        let mut normalized = text
+            .replace('\u{2018}', "'")  // ‘
+            .replace('\u{2019}', "'")  // ’
+            .replace('\u{201C}', "\"") // “
+            .replace('\u{201D}', "\"") // ”
+            .replace('\u{00A0}', " ")    // NBSP
+            .replace('\u{202F}', " ");   // NNBSP
+
+        // shlex-like tokenization to respect quotes; fall back to whitespace split on parse failure.
+        let tokens: Vec<String> = {
+            let mut v = Vec::new();
+            let mut lexer = shlex::Shlex::new(&normalized);
+            lexer.whitespace = " "; // treat standard spaces as separators; others already normalized
+            for item in &mut lexer {
+                v.push(item);
+            }
+            if v.is_empty() {
+                normalized.split_whitespace().map(|s| s.to_string()).collect()
+            } else {
+                v
+            }
+        };
+
         // Very small helper to unescape common terminal drag patterns.
         fn normalize_token(tok: &str) -> String {
-            // Strip wrapping quotes if present.
-            let mut s = tok.trim().trim_matches(['"', '\'']).to_string();
             // Handle typical terminal escaping of spaces.
-            s = s.replace("\\ ", " ");
+            let mut s = tok.replace("\\ ", " ");
             // Strip trivial trailing punctuation that often follows paths in prose.
-            s.trim_end_matches([',', '.', ';', ':']).to_string()
+            s = s.trim_end_matches([',', '.', ';', ':']).to_string();
+            s
         }
 
         fn from_file_url(url: &str) -> Option<PathBuf> {
@@ -165,14 +188,13 @@ impl ChatWidget<'_> {
         let mut seen: HashSet<PathBuf> = HashSet::new();
         let cwd = &self.config.cwd;
 
-        // Split on ASCII whitespace; this misses fancy quoting but keeps logic simple and dependency-free.
-        for raw_tok in text.split_whitespace() {
+        for raw_tok in tokens {
             if raw_tok.is_empty() {
                 continue;
             }
 
             let candidate = if raw_tok.starts_with("file://") {
-                from_file_url(raw_tok)
+                from_file_url(&raw_tok)
             } else {
                 let norm = normalize_token(raw_tok);
                 // Expand ~ at start.
