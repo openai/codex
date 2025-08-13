@@ -9,6 +9,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use codex_core::config::Config;
+use codex_core::user_agent::get_codex_user_agent;
 
 pub fn get_upgrade_version(config: &Config) -> Option<String> {
     let version_file = version_filepath(config);

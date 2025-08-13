@@ -9,6 +9,7 @@ use std::thread;
 use std::time::Duration;
 use std::time::Instant;
 
+use codex_core::protocol::Op;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
@@ -44,11 +45,7 @@ pub(crate) struct StatusIndicatorWidget {
     frame_idx: Arc<AtomicUsize>,
     running: Arc<AtomicBool>,
     start_time: Instant,
-    // Keep one sender alive to prevent the channel from closing while the
-    // animation thread is still running. The field itself is currently not
-    // accessed anywhere, therefore the leading underscore silences the
-    // `dead_code` warning without affecting behavior.
-    _app_event_tx: AppEventSender,
+    app_event_tx: AppEventSender,
 }
 
 impl StatusIndicatorWidget {
@@ -82,7 +79,7 @@ impl StatusIndicatorWidget {
             running,
             start_time: Instant::now(),
 
-            _app_event_tx: app_event_tx,
+            app_event_tx,
         }
     }
 
@@ -118,6 +115,10 @@ impl StatusIndicatorWidget {
         self.last_target_len = new_len;
         self.base_frame = current_frame;
         self.reveal_len_at_base = shown_now.min(new_len);
+    }
+
+    pub(crate) fn interrupt(&self) {
+        self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
     }
 
     /// Reset the animation and start revealing `text` from the beginning.
