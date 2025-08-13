@@ -354,7 +354,6 @@ impl AuthModeWidget {
             }
         });
     }
-
 }
 
 impl StepStateProvider for AuthModeWidget {
