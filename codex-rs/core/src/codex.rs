@@ -509,6 +509,7 @@ impl Session {
             turn_context.cwd.to_path_buf(),
             turn_context.approval_policy,
             turn_context.sandbox_policy.clone(),
+            default_shell.clone(),
         )));
         sess.record_conversation_items(&conversation_items).await;
 
@@ -1950,11 +1951,15 @@ fn maybe_run_with_user_profile(
     sess: &Session,
     turn_context: &TurnContext,
 ) -> ExecParams {
-    if turn_context.shell_environment_policy.use_profile {
-        let command = sess
+    let should_translate =
+        matches!(sess.user_shell, crate::shell::Shell::PowerShell(_))
+        || turn_context.shell_environment_policy.use_profile;
+
+    if should_translate {
+        if let Some(command) = sess
             .user_shell
-            .format_default_shell_invocation(params.command.clone());
-        if let Some(command) = command {
+            .format_default_shell_invocation(params.command.clone())
+        {
             return ExecParams { command, ..params };
         }
     }
