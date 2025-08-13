@@ -357,7 +357,7 @@ impl App<'_> {
 
                         let tx = self.app_event_tx.clone();
                         tokio::spawn(async move {
-                            let text = match get_git_diff().await {
+                            let text = match get_git_diff() {
                                 Ok((is_git_repo, diff_text)) => {
                                     if is_git_repo {
                                         diff_text

@@ -7,25 +7,24 @@
 
 use std::io;
 use std::path::Path;
+use std::process::Command;
 use std::process::Stdio;
-use tokio::process::Command;
 
 /// Return value of [`get_git_diff`].
 ///
 /// * `bool` – Whether the current working directory is inside a Git repo.
 /// * `String` – The concatenated diff (may be empty).
-pub(crate) async fn get_git_diff() -> io::Result<(bool, String)> {
+pub(crate) fn get_git_diff() -> io::Result<(bool, String)> {
     // First check if we are inside a Git repository.
-    if !inside_git_repo().await? {
+    if !inside_git_repo()? {
         return Ok((false, String::new()));
     }
 
     // 1. Diff for tracked files.
-    let tracked_diff = run_git_capture_diff(&["diff", "--color"]).await?;
+    let tracked_diff = run_git_capture_diff(&["diff", "--color"])?;
 
     // 2. Determine untracked files.
-    let untracked_output =
-        run_git_capture_stdout(&["ls-files", "--others", "--exclude-standard"]).await?;
+    let untracked_output = run_git_capture_stdout(&["ls-files", "--others", "--exclude-standard"])?;
 
     let mut untracked_diff = String::new();
     let null_device: &Path = if cfg!(windows) {
@@ -49,7 +48,7 @@ pub(crate) async fn get_git_diff() -> io::Result<(bool, String)> {
             file,
         ];
 
-        match run_git_capture_diff(&args).await {
+        match run_git_capture_diff(&args) {
             Ok(diff) => untracked_diff.push_str(&diff),
             // If the file disappeared between ls-files and diff we ignore the error.
             Err(err) if err.kind() == io::ErrorKind::NotFound => {}
@@ -62,13 +61,12 @@ pub(crate) async fn get_git_diff() -> io::Result<(bool, String)> {
 
 /// Helper that executes `git` with the given `args` and returns `stdout` as a
 /// UTF-8 string. Any non-zero exit status is considered an *error*.
-async fn run_git_capture_stdout(args: &[&str]) -> io::Result<String> {
+fn run_git_capture_stdout(args: &[&str]) -> io::Result<String> {
     let output = Command::new("git")
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .output()
-        .await?;
+        .output()?;
 
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
@@ -82,13 +80,12 @@ async fn run_git_capture_stdout(args: &[&str]) -> io::Result<String> {
 
 /// Like [`run_git_capture_stdout`] but treats exit status 1 as success and
 /// returns stdout. Git returns 1 for diffs when differences are present.
-async fn run_git_capture_diff(args: &[&str]) -> io::Result<String> {
+fn run_git_capture_diff(args: &[&str]) -> io::Result<String> {
     let output = Command::new("git")
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .output()
-        .await?;
+        .output()?;
 
     if output.status.success() || output.status.code() == Some(1) {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
@@ -101,13 +98,12 @@ async fn run_git_capture_diff(args: &[&str]) -> io::Result<String> {
 }
 
 /// Determine if the current directory is inside a Git repository.
-async fn inside_git_repo() -> io::Result<bool> {
+fn inside_git_repo() -> io::Result<bool> {
     let status = Command::new("git")
         .args(["rev-parse", "--is-inside-work-tree"])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status()
-        .await;
+        .status();
 
     match status {
         Ok(s) if s.success() => Ok(true),
