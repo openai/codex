@@ -1,7 +1,6 @@
 #![expect(clippy::unwrap_used)]
 
-use codex_core::Codex;
-use codex_core::CodexSpawnOk;
+use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
 use codex_core::built_in_model_providers;
 use codex_core::protocol::EventMsg;
@@ -142,14 +141,12 @@ async fn summarize_context_three_requests_and_instructions() {
     let home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&home);
     config.model_provider = model_provider;
-    let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
-    let CodexSpawnOk { codex, .. } = Codex::spawn(
-        config,
-        Some(CodexAuth::from_api_key("dummy")),
-        ctrl_c.clone(),
-    )
-    .await
-    .unwrap();
+    let conversation_manager = ConversationManager::default();
+    let codex = conversation_manager
+        .new_conversation_with_auth(config, Some(CodexAuth::from_api_key("dummy")))
+        .await
+        .unwrap()
+        .conversation;
 
     // 1) Normal user input – should hit server once.
     codex

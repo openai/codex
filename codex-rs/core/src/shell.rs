@@ -167,9 +167,6 @@ mod tests {
         for (input, expected_cmd, expected_output) in cases {
             use std::collections::HashMap;
             use std::path::PathBuf;
-            use std::sync::Arc;
-
-            use tokio::sync::Notify;
 
             use crate::exec::ExecParams;
             use crate::exec::SandboxType;
@@ -219,7 +216,6 @@ mod tests {
                     justification: None,
                 },
                 SandboxType::None,
-                Arc::new(Notify::new()),
                 &SandboxPolicy::DangerFullAccess,
                 &None,
                 None,

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use codex_core::config::Config;
 use codex_core::parse_command::ParsedCommand;
@@ -54,6 +55,7 @@ mod agent;
 use self::agent::spawn_agent;
 use crate::streaming::controller::AppEventHistorySink;
 use crate::streaming::controller::StreamController;
+use codex_core::ConversationManager;
 use codex_file_search::FileMatch;
 
 // Track information about an in-flight exec command.
@@ -498,12 +500,13 @@ impl ChatWidget<'_> {
 
     pub(crate) fn new(
         config: Config,
+        conversation_manager: Arc<ConversationManager>,
         app_event_tx: AppEventSender,
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
         enhanced_keys_supported: bool,
     ) -> Self {
-        let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone());
+        let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
 
         Self {
             app_event_tx: app_event_tx.clone(),

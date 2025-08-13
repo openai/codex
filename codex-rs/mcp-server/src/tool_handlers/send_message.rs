@@ -1,12 +1,6 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-
-use codex_core::Codex;
 use codex_core::protocol::Op;
 use codex_core::protocol::Submission;
 use mcp_types::RequestId;
-use tokio::sync::Mutex;
-use uuid::Uuid;
 
 use crate::mcp_protocol::ConversationSendMessageArgs;
 use crate::mcp_protocol::ConversationSendMessageResult;
@@ -41,7 +35,11 @@ pub(crate) async fn handle_send_message(
     }
 
     let session_id = conversation_id.0;
-    let Some(codex) = get_session(session_id, message_processor.session_map()).await else {
+    let Ok(codex) = message_processor
+        .get_conversation_manager()
+        .get_conversation(session_id)
+        .await
+    else {
         message_processor
             .send_response_with_optional_error(
                 id,
@@ -113,12 +111,4 @@ pub(crate) async fn handle_send_message(
             Some(false),
         )
         .await;
-}
-
-pub(crate) async fn get_session(
-    session_id: Uuid,
-    session_map: Arc<Mutex<HashMap<Uuid, Arc<Codex>>>>,
-) -> Option<Arc<Codex>> {
-    let guard = session_map.lock().await;
-    guard.get(&session_id).cloned()
 }
