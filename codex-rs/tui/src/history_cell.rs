@@ -342,7 +342,11 @@ impl HistoryCell {
         parsed_commands: &[ParsedCommand],
         output: Option<&CommandOutput>,
     ) -> Vec<Line<'static>> {
-        let mut lines: Vec<Line> = vec![Line::from("⚙︎ Working")];
+        let mut lines: Vec<Line> = vec![match output {
+            None => Line::from("⚙︎ Working".magenta().bold()),
+            Some(o) if o.exit_code == 0 => Line::from("✓ Completed".green().bold()),
+            Some(o) => Line::from(format!("✗ Failed (exit {})", o.exit_code).red().bold()),
+        }];
 
         for (i, parsed) in parsed_commands.iter().enumerate() {
             let text = match parsed {
