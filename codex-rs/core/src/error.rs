@@ -1,6 +1,7 @@
 use reqwest::StatusCode;
 use serde_json;
 use std::io;
+use std::time::Duration;
 use thiserror::Error;
 use tokio::task::JoinError;
 
@@ -41,8 +42,10 @@ pub enum CodexErr {
     /// handshake has succeeded but **before** it finished emitting `response.completed`.
     ///
     /// The Session loop treats this as a transient error and will automatically retry the turn.
+    ///
+    /// Optionally includes the delay to wait before retrying the turn.
     #[error("stream disconnected before completion: {0}")]
-    Stream(String),
+    Stream(String, Option<Duration>),
 
     /// Returned by run_command_stream when the spawned child process timed out (10s).
     #[error("timeout waiting for child process to exit")]

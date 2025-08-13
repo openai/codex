@@ -1303,9 +1303,12 @@ async fn run_turn(
                 let max_retries = sess.client.get_provider().stream_max_retries();
                 if retries < max_retries {
                     retries += 1;
-                    let delay = backoff(retries);
+                    let delay = match e {
+                        CodexErr::Stream(_, Some(delay)) => delay,
+                        _ => backoff(retries),
+                    };
                     warn!(
-                        "stream disconnected - retrying turn ({retries}/{max_retries} in {delay:?})...",
+                        "stream disconnected - retrying turn ({retries}/{max_retries} in {delay:?}) {e:?}...",
                     );
 
                     // Surface retry information to any UI/front‑end so the
@@ -1413,6 +1416,7 @@ async fn try_run_turn(
             // Treat as a disconnected stream so the caller can retry.
             return Err(CodexErr::Stream(
                 "stream closed before response.completed".into(),
+                None,
             ));
         };
 
@@ -2226,6 +2230,7 @@ async fn drain_to_completed(sess: &Session, sub_id: &str, prompt: &Prompt) -> Co
         let Some(event) = maybe_event else {
             return Err(CodexErr::Stream(
                 "stream closed before response.completed".into(),
+                None,
             ));
         };
         match event {
@@ -2243,6 +2248,7 @@ async fn drain_to_completed(sess: &Session, sub_id: &str, prompt: &Prompt) -> Co
                     None => {
                         return Err(CodexErr::Stream(
                             "token_usage was None in ResponseEvent::Completed".into(),
+                            None,
                         ));
                     }
                 };
