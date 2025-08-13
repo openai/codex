@@ -76,7 +76,6 @@ pub(crate) struct ChatWidget<'a> {
     // Track the most recently active stream kind in the current turn
     last_stream_kind: Option<StreamKind>,
     running_commands: HashMap<String, RunningCommand>,
-    pending_exec_completions: Vec<(Vec<String>, Vec<ParsedCommand>, CommandOutput)>,
     task_complete_pending: bool,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
@@ -109,13 +108,114 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 }
 
 impl ChatWidget<'_> {
+    /// Best-effort detection of image file paths in the submitted text.
+    ///
+    /// This enables simple workflows like dragging a file from Finder into the
+    /// terminal (which typically inserts a POSIX path with spaces escaped) or
+    /// pasting a path directly. Any detected images are attached in addition to
+    /// the raw text so the model can see the content.
+    fn detect_image_paths_in_text(&self, text: &str) -> Vec<PathBuf> {
+        use std::collections::HashSet;
+        use std::path::{Path, PathBuf};
+
+        // Quick guard: avoid work for short texts.
+        if text.trim().is_empty() {
+            return Vec::new();
+        }
+
+        // Very small helper to unescape common terminal drag patterns.
+        fn normalize_token(tok: &str) -> String {
+            // Strip wrapping quotes if present.
+            let mut s = tok.trim().trim_matches(['"', '\'']).to_string();
+            // Handle typical terminal escaping of spaces.
+            s = s.replace("\\ ", " ");
+            // Strip trivial trailing punctuation that often follows paths in prose.
+            s.trim_end_matches([',', '.', ';', ':']).to_string()
+        }
+
+        fn from_file_url(url: &str) -> Option<PathBuf> {
+            // Accept file:///path or file://localhost/path
+            let rest = url.strip_prefix("file://")?;
+            let path = if let Some(stripped) = rest.strip_prefix("localhost") {
+                stripped
+            } else {
+                rest
+            };
+            // Very lightweight percent-decoding for spaces only to avoid new deps.
+            let p = path.replace("%20", " ");
+            if p.starts_with('/') {
+                Some(PathBuf::from(p))
+            } else {
+                None
+            }
+        }
+
+        fn looks_like_image_path(p: &Path) -> bool {
+            match p.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()) {
+                Some(ext)
+                    if matches!(
+                        ext.as_str(),
+                        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tif" | "tiff" | "svg"
+                    ) => true,
+                _ => false,
+            }
+        }
+
+        let mut out: Vec<PathBuf> = Vec::new();
+        let mut seen: HashSet<PathBuf> = HashSet::new();
+        let cwd = &self.config.cwd;
+
+        // Split on ASCII whitespace; this misses fancy quoting but keeps logic simple and dependency-free.
+        for raw_tok in text.split_whitespace() {
+            if raw_tok.is_empty() {
+                continue;
+            }
+
+            let candidate = if raw_tok.starts_with("file://") {
+                from_file_url(raw_tok)
+            } else {
+                let norm = normalize_token(raw_tok);
+                // Expand ~ at start.
+                let expanded = if let Some(rest) = norm.strip_prefix("~/") {
+                    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+                        home.join(rest)
+                    } else {
+                        PathBuf::from(norm)
+                    }
+                } else {
+                    PathBuf::from(norm)
+                };
+
+                // Resolve against configured cwd if relative.
+                let abs = if expanded.is_absolute() {
+                    expanded
+                } else {
+                    cwd.join(expanded)
+                };
+                Some(abs)
+            };
+
+            let Some(path) = candidate else { continue };
+            // Cheap extension filter first.
+            if !looks_like_image_path(&path) {
+                continue;
+            }
+            // Ensure it exists and is a regular file.
+            if let Ok(meta) = std::fs::metadata(&path) {
+                if meta.is_file() {
+                    // Deduplicate
+                    if seen.insert(path.clone()) {
+                        out.push(path);
+                    }
+                }
+            }
+        }
+
+        out
+    }
     #[inline]
     fn mark_needs_redraw(&mut self) {
         self.needs_redraw = true;
-    }
-    fn flush_answer_stream_with_separator(&mut self) {
-        let sink = AppEventHistorySink(self.app_event_tx.clone());
-        let _ = self.stream.finalize(StreamKind::Answer, true, &sink);
     }
     // --- Small event handlers ---
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
@@ -220,7 +320,6 @@ impl ChatWidget<'_> {
     }
 
     fn on_exec_command_begin(&mut self, ev: ExecCommandBeginEvent) {
-        self.flush_answer_stream_with_separator();
         let ev2 = ev.clone();
         self.defer_or_handle(|q| q.push_exec_begin(ev), |s| s.handle_exec_begin_now(ev2));
     }
@@ -350,11 +449,12 @@ impl ChatWidget<'_> {
 
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
         let running = self.running_commands.remove(&ev.call_id);
+        self.active_exec_cell = None;
         let (command, parsed) = match running {
             Some(rc) => (rc.command, rc.parsed_cmd),
             None => (vec![ev.call_id.clone()], Vec::new()),
         };
-        self.pending_exec_completions.push((
+        self.add_to_history(HistoryCell::new_completed_exec_command(
             command,
             parsed,
             CommandOutput {
@@ -363,16 +463,6 @@ impl ChatWidget<'_> {
                 stderr: ev.stderr.clone(),
             },
         ));
-
-        if self.running_commands.is_empty() {
-            self.active_exec_cell = None;
-            let pending = std::mem::take(&mut self.pending_exec_completions);
-            for (command, parsed, output) in pending {
-                self.add_to_history(HistoryCell::new_completed_exec_command(
-                    command, parsed, output,
-                ));
-            }
-        }
     }
 
     pub(crate) fn handle_patch_apply_end_now(
@@ -387,7 +477,6 @@ impl ChatWidget<'_> {
     }
 
     pub(crate) fn handle_exec_approval_now(&mut self, id: String, ev: ExecApprovalRequestEvent) {
-        self.flush_answer_stream_with_separator();
         // Log a background summary immediately so the history is chronological.
         let cmdline = strip_bash_lc_and_escape(&ev.command);
         let text = format!(
@@ -414,7 +503,6 @@ impl ChatWidget<'_> {
         id: String,
         ev: ApplyPatchApprovalRequestEvent,
     ) {
-        self.flush_answer_stream_with_separator();
         self.add_to_history(HistoryCell::new_patch_event(
             PatchEventType::ApprovalRequest,
             ev.changes.clone(),
@@ -440,29 +528,16 @@ impl ChatWidget<'_> {
                 parsed_cmd: ev.parsed_cmd.clone(),
             },
         );
-        // Accumulate parsed commands into a single active Exec cell so they stack
-        match self.active_exec_cell.as_mut() {
-            Some(HistoryCell::Exec(exec)) => {
-                exec.parsed.extend(ev.parsed_cmd);
-            }
-            _ => {
-                self.active_exec_cell = Some(HistoryCell::new_active_exec_command(
-                    ev.command,
-                    ev.parsed_cmd,
-                ));
-            }
-        }
-
-        // Request a redraw so the working header and command list are visible immediately.
-        self.mark_needs_redraw();
+        self.active_exec_cell = Some(HistoryCell::new_active_exec_command(
+            ev.command,
+            ev.parsed_cmd,
+        ));
     }
 
     pub(crate) fn handle_mcp_begin_now(&mut self, ev: McpToolCallBeginEvent) {
-        self.flush_answer_stream_with_separator();
         self.add_to_history(HistoryCell::new_active_mcp_tool_call(ev.invocation));
     }
     pub(crate) fn handle_mcp_end_now(&mut self, ev: McpToolCallEndEvent) {
-        self.flush_answer_stream_with_separator();
         self.add_to_history(HistoryCell::new_completed_mcp_tool_call(
             80,
             ev.invocation,
@@ -524,7 +599,6 @@ impl ChatWidget<'_> {
             stream: StreamController::new(config),
             last_stream_kind: None,
             running_commands: HashMap::new(),
-            pending_exec_completions: Vec::new(),
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
             needs_redraw: false,
@@ -579,6 +653,15 @@ impl ChatWidget<'_> {
 
         for path in image_paths {
             items.push(InputItem::LocalImage { path });
+        }
+
+        // Heuristically attach any image files referenced directly in the text.
+        // Keep the text unchanged; this preserves user intent while allowing the
+        // model to see the actual image content.
+        if !text.is_empty() {
+            for path in self.detect_image_paths_in_text(&text) {
+                items.push(InputItem::LocalImage { path });
+            }
         }
 
         if items.is_empty() {
