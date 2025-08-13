@@ -43,7 +43,7 @@ switch (platform) {
         targetTriple = "x86_64-pc-windows-msvc.exe";
         break;
       case "arm64":
-        // We do not build this today, fall through...
+      // We do not build this today, fall through...
       default:
         break;
     }
@@ -69,28 +69,28 @@ async function tryImport(moduleName) {
   try {
     // eslint-disable-next-line node/no-unsupported-features/es-syntax
     return await import(moduleName);
-  } catch {
+  } catch (err) {
+    console.error(`unable to import ${moduleName}`, err);
     return null;
   }
 }
 
 async function resolveRgPath() {
-    try {
-        const { rgPath } = await tryImport("@vscode/ripgrep");
-        return path.dirname(rgPath);
-    } catch(err) {
-        console.error('unable to import ripgrep', err);
-    }
+  const { rgPath } = await tryImport("@vscode/ripgrep");
+  if (!rgPath) {
+    throw new Error("ripgrep not found");
+  }
+  return path.dirname(rgPath);
 }
 
 function getUpdatedPath(newDirs) {
-    const pathSep = process.platform === "win32" ? ";" : ":";
-    const existingPath = process.env.PATH || process.env.Path || "";
-    const updatedPath = [
-      ...newDirs,
-      ...existingPath.split(pathSep).filter(Boolean),
-    ].join(pathSep);
-    return updatedPath;
+  const pathSep = process.platform === "win32" ? ";" : ":";
+  const existingPath = process.env.PATH || "";
+  const updatedPath = [
+    ...newDirs,
+    ...existingPath.split(pathSep).filter(Boolean),
+  ].join(pathSep);
+  return updatedPath;
 }
 
 const rgPath = await resolveRgPath();
