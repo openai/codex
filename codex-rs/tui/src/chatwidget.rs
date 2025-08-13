@@ -183,6 +183,25 @@ impl ChatWidget<'_> {
             }
         }
 
+        // If a candidate path does not exist, attempt to resolve by basename in common locations.
+        fn resolve_by_basename(basename: &str, home: &Path, cwd: &Path) -> Option<PathBuf> {
+            let candidates = [
+                cwd.join(basename),
+                home.join("Desktop").join(basename),
+                home.join("Downloads").join(basename),
+                home.join("Pictures").join(basename),
+                home.join("Pictures").join("Screenshots").join(basename),
+            ];
+            for p in candidates.into_iter() {
+                if let Ok(meta) = std::fs::metadata(&p) {
+                    if meta.is_file() {
+                        return Some(p);
+                    }
+                }
+            }
+            None
+        }
+
         let mut out: Vec<PathBuf> = Vec::new();
         let mut seen: HashSet<PathBuf> = HashSet::new();
         let cwd = &self.config.cwd;
@@ -216,19 +235,34 @@ impl ChatWidget<'_> {
                 Some(abs)
             };
 
-            let Some(path) = candidate else { continue };
+            let Some(mut path) = candidate else { continue };
             // Cheap extension filter first.
             if !looks_like_image_path(&path) {
                 continue;
             }
             // Ensure it exists and is a regular file.
-            if let Ok(meta) = std::fs::metadata(&path) {
-                if meta.is_file() {
-                    // Deduplicate
-                    if seen.insert(path.clone()) {
-                        out.push(path);
+            let exists_and_file = std::fs::metadata(&path).map(|m| m.is_file()).unwrap_or(false);
+            if !exists_and_file {
+                // Common macOS drag path is a TemporaryItems screenshot that is
+                // immediately moved to Desktop. Try to locate by basename.
+                if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+                    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+                        if let Some(found) = resolve_by_basename(name, &home, cwd) {
+                            path = found;
+                        } else {
+                            // Skip if we still can't find it.
+                            continue;
+                        }
+                    } else {
+                        continue;
                     }
+                } else {
+                    continue;
                 }
+            }
+            // Deduplicate and record
+            if seen.insert(path.clone()) {
+                out.push(path);
             }
         }
 
