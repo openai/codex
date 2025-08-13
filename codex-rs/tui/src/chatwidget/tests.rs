@@ -15,6 +15,8 @@ use codex_core::protocol::AgentReasoningDeltaEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
+use codex_core::protocol::ExecCommandBeginEvent;
+use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
@@ -134,6 +136,7 @@ fn make_chatwidget_manual() -> (
         stream: StreamController::new(cfg),
         last_stream_kind: None,
         running_commands: HashMap::new(),
+        pending_exec_completions: Vec::new(),
         task_complete_pending: false,
         interrupts: InterruptManager::new(),
         needs_redraw: false,
@@ -186,6 +189,90 @@ fn open_fixture(name: &str) -> std::fs::File {
     }
     // 3) Last resort: CWD
     File::open(name).expect("open fixture file")
+}
+
+#[test]
+fn exec_history_cell_shows_working_then_completed() {
+    let (mut chat, rx, _op_rx) = make_chatwidget_manual();
+
+    // Begin command
+    chat.handle_codex_event(Event {
+        id: "call-1".into(),
+        msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+            call_id: "call-1".into(),
+            command: vec!["bash".into(), "-lc".into(), "echo done".into()],
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            parsed_cmd: vec![codex_core::parse_command::ParsedCommand::Unknown {
+                cmd: vec!["echo".into(), "done".into()],
+            }],
+        }),
+    });
+
+    // End command successfully
+    chat.handle_codex_event(Event {
+        id: "call-1".into(),
+        msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+            call_id: "call-1".into(),
+            stdout: "done".into(),
+            stderr: String::new(),
+            exit_code: 0,
+            duration: std::time::Duration::from_millis(5),
+        }),
+    });
+
+    let cells = drain_insert_history(&rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected only the completed exec cell to be inserted into history"
+    );
+    let blob = lines_to_single_string(&cells[0]);
+    assert!(
+        blob.contains("Completed"),
+        "expected completed exec cell to show Completed header: {blob:?}"
+    );
+}
+
+#[test]
+fn exec_history_cell_shows_working_then_failed() {
+    let (mut chat, rx, _op_rx) = make_chatwidget_manual();
+
+    // Begin command
+    chat.handle_codex_event(Event {
+        id: "call-2".into(),
+        msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+            call_id: "call-2".into(),
+            command: vec!["bash".into(), "-lc".into(), "false".into()],
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            parsed_cmd: vec![codex_core::parse_command::ParsedCommand::Unknown {
+                cmd: vec!["false".into()],
+            }],
+        }),
+    });
+
+    // End command with failure
+    chat.handle_codex_event(Event {
+        id: "call-2".into(),
+        msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+            call_id: "call-2".into(),
+            stdout: String::new(),
+            stderr: "error".into(),
+            exit_code: 2,
+            duration: std::time::Duration::from_millis(7),
+        }),
+    });
+
+    let cells = drain_insert_history(&rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected only the completed exec cell to be inserted into history"
+    );
+    let blob = lines_to_single_string(&cells[0]);
+    assert!(
+        blob.contains("Failed (exit 2)"),
+        "expected completed exec cell to show Failed header with exit code: {blob:?}"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

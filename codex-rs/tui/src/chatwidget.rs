@@ -220,7 +220,7 @@ impl ChatWidget<'_> {
                     }
                 }
             }
-
+            
             // If not found, do a best‑effort scan of those same directories
             // and match filenames after normalizing NBSP/NNBSP to regular
             // spaces so that macOS screenshot names like "11.53.36\u{202F}AM"
