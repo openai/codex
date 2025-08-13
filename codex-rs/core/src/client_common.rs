@@ -149,6 +149,7 @@ pub enum ResponseEvent {
     OutputTextDelta(String),
     ReasoningSummaryDelta(String),
     ReasoningContentDelta(String),
+    ReasoningSummaryPartAdded,
 }
 
 #[derive(Debug, Serialize)]
