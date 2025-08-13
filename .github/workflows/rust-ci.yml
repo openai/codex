@@ -53,15 +53,9 @@ jobs:
           - runner: macos-14
             target: x86_64-apple-darwin
             profile: dev
-          - runner: macos-14
-            target: aarch64-apple-darwin
-            profile: release
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
             profile: dev
-          - runner: ubuntu-24.04
-            target: x86_64-unknown-linux-musl
-            profile: release
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-gnu
             profile: dev
@@ -74,6 +68,15 @@ jobs:
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
             profile: dev
+
+          # Also run representative release builds on Mac and Linux because
+          # there could be release-only build errors we want to catch.
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            profile: release
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            profile: release
 
     steps:
       - uses: actions/checkout@v4
@@ -108,12 +111,14 @@ jobs:
       # slower, we only do this for the x86_64-unknown-linux-gnu target.
       - name: cargo build individual crates
         id: build
-        if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' }}
+        if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' && matrix.profile != 'release' }}
         continue-on-error: true
         run: find . -name Cargo.toml -mindepth 2 -maxdepth 2 -print0 | xargs -0 -n1 -I{} bash -c 'cd "$(dirname "{}")" && cargo build --profile ${{ matrix.profile }}'
 
       - name: cargo test
         id: test
+        # `cargo test` takes too long for release builds to run them on every PR
+        if: ${{ matrix.profile != 'release' }}
         continue-on-error: true
         run: cargo test --all-features --target ${{ matrix.target }} --profile ${{ matrix.profile }}
         env:
