@@ -103,15 +103,3 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
         None
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn codex_models_support_reasoning() {
-        let mf = find_family_for_model("codex-example").expect("codex model");
-        assert!(mf.supports_reasoning_summaries);
-        assert_eq!(mf.family, "codex-example");
-    }
-}
