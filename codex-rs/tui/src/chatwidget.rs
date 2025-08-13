@@ -136,14 +136,9 @@ impl ChatWidget<'_> {
         // We combine both regex captures and shlex tokens to maximize recall.
         let mut candidates: Vec<String> = Vec::new();
         {
-            let re = regex_lite::Regex::new(
-                r"(?xi)
-                (file://[^\s]+)
-                |(/[^\s'\"\)]+\.(?:png|jpe?g|gif|webp|bmp|tiff?|svg))
-                |([A-Za-z0-9_\-\s\.\u{00A0}\u{202F}]+\.(?:png|jpe?g|gif|webp|bmp|tiff?|svg))
-                "
-            ).ok();
-            if let Some(re) = re {
+            // Keep pattern simple to avoid engine differences.
+            let pattern = r"(?xi)(file://[^\s]+)|(/[^\s'\"]+\.(?:png|jpe?g|gif|webp|bmp|tiff?|svg))|([A-Za-z0-9_\-\s\.]+\.(?:png|jpe?g|gif|webp|bmp|tiff?|svg))";
+            if let Ok(re) = regex_lite::Regex::new(pattern) {
                 for cap in re.captures_iter(&normalized) {
                     if let Some(m) = cap.get(1).or_else(|| cap.get(2)).or_else(|| cap.get(3)) {
                         candidates.push(m.as_str().to_string());
