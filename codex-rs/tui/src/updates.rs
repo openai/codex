@@ -9,6 +9,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use codex_core::config::Config;
+use codex_core::user_agent::get_codex_user_agent;
 
 pub fn get_upgrade_version(config: &Config) -> Option<String> {
     let version_file = version_filepath(config);
@@ -67,13 +68,7 @@ async fn check_for_update(version_file: &Path) -> anyhow::Result<()> {
         tag_name: latest_tag_name,
     } = reqwest::Client::new()
         .get(LATEST_RELEASE_URL)
-        .header(
-            "User-Agent",
-            format!(
-                "codex/{} (+https://github.com/openai/codex)",
-                env!("CARGO_PKG_VERSION")
-            ),
-        )
+        .header("User-Agent", get_codex_user_agent(None))
         .send()
         .await?
         .error_for_status()?

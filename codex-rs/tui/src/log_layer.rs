@@ -21,9 +21,6 @@ use tracing_subscriber::registry::LookupSpan;
 
 /// Maximum characters forwarded to the TUI. Longer messages are truncated so the
 /// single‑line status indicator cannot overflow the viewport.
-#[allow(dead_code)]
-const _DEFAULT_MAX_LEN: usize = 120;
-
 pub struct TuiLogLayer {
     tx: UnboundedSender<String>,
     max_len: usize,

@@ -109,7 +109,7 @@ impl TextArea {
         self.wrapped_lines(width).len() as u16
     }
 
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         self.cursor_pos_with_state(area, &TextAreaState::default())
     }
@@ -295,6 +295,20 @@ impl TextArea {
             } => {
                 self.move_cursor_right();
             }
+            KeyEvent {
+                code: KeyCode::Char('b'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                self.move_cursor_left();
+            }
+            KeyEvent {
+                code: KeyCode::Char('f'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                self.move_cursor_right();
+            }
             // Some terminals send Alt+Arrow for word-wise movement:
             // Option/Left -> Alt+Left (previous word start)
             // Option/Right -> Alt+Right (next word end)
@@ -359,8 +373,9 @@ impl TextArea {
             } => {
                 self.move_cursor_to_end_of_line(true);
             }
-            o => {
-                tracing::debug!("Unhandled key event in TextArea: {:?}", o);
+            _o => {
+                #[cfg(feature = "debug-logs")]
+                tracing::debug!("Unhandled key event in TextArea: {:?}", _o);
             }
         }
     }
@@ -905,6 +920,22 @@ mod tests {
         t.move_cursor_right();
         t.move_cursor_right();
         assert_eq!(t.cursor(), t.text().len());
+    }
+
+    #[test]
+    fn control_b_and_f_move_cursor() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let mut t = ta_with("abcd");
+        t.set_cursor(1);
+
+        t.input(KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL));
+        assert_eq!(t.cursor(), 2);
+
+        t.input(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
+        assert_eq!(t.cursor(), 1);
     }
 
     #[test]

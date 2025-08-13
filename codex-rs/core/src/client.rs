@@ -38,6 +38,7 @@ use crate::model_provider_info::WireApi;
 use crate::models::ResponseItem;
 use crate::openai_tools::create_tools_json_for_responses_api;
 use crate::protocol::TokenUsage;
+use crate::user_agent::get_codex_user_agent;
 use crate::util::backoff;
 use std::sync::Arc;
 
@@ -208,6 +209,7 @@ impl ModelClient {
                 .as_deref()
                 .unwrap_or("codex_cli_rs");
             req_builder = req_builder.header("originator", originator);
+            req_builder = req_builder.header("User-Agent", get_codex_user_agent(Some(originator)));
 
             let res = req_builder.send().await;
             if let Ok(resp) = &res {
@@ -505,12 +507,18 @@ async fn process_sse<S>(
             | "response.function_call_arguments.delta"
             | "response.in_progress"
             | "response.output_item.added"
-            | "response.output_text.done"
-            | "response.reasoning_summary_part.added"
-            | "response.reasoning_summary_text.done" => {
-                // Currently, we ignore these events, but we handle them
+            | "response.output_text.done" => {
+                // Currently, we ignore this event, but we handle it
                 // separately to skip the logging message in the `other` case.
             }
+            "response.reasoning_summary_part.added" => {
+                // Boundary between reasoning summary sections (e.g., titles).
+                let event = ResponseEvent::ReasoningSummaryPartAdded;
+                if tx_event.send(Ok(event)).await.is_err() {
+                    return;
+                }
+            }
+            "response.reasoning_summary_text.done" => {}
             other => debug!(other, "sse event"),
         }
     }

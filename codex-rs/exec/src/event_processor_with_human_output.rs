@@ -210,6 +210,14 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 #[allow(clippy::expect_used)]
                 std::io::stdout().flush().expect("could not flush stdout");
             }
+            EventMsg::AgentReasoningSectionBreak(_) => {
+                if !self.show_agent_reasoning {
+                    return CodexStatus::Running;
+                }
+                println!();
+                #[allow(clippy::expect_used)]
+                std::io::stdout().flush().expect("could not flush stdout");
+            }
             EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text }) => {
                 if !self.show_raw_agent_reasoning {
                     return CodexStatus::Running;
