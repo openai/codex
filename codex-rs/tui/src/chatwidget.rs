@@ -604,13 +604,15 @@ impl ChatWidget<'_> {
     }
 
     pub(crate) fn add_diff_in_progress(&mut self) {
-        self.active_exec_cell = Some(HistoryCell::new_diff_output(
-            "Computing diff...".to_string(),
-        ));
+        self.bottom_pane.set_task_running(true);
+        self.bottom_pane
+            .update_status_text("computing diff".to_string());
         self.request_redraw();
     }
 
     pub(crate) fn add_diff_output(&mut self, diff_output: String) {
+        self.bottom_pane.set_task_running(false);
+        self.bottom_pane.clear_live_ring();
         self.add_to_history(HistoryCell::new_diff_output(diff_output.clone()));
     }
 
