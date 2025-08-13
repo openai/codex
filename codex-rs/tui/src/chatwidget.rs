@@ -76,6 +76,7 @@ pub(crate) struct ChatWidget<'a> {
     // Track the most recently active stream kind in the current turn
     last_stream_kind: Option<StreamKind>,
     running_commands: HashMap<String, RunningCommand>,
+    pending_exec_completions: Vec<(Vec<String>, Vec<ParsedCommand>, CommandOutput)>,
     task_complete_pending: bool,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
@@ -344,12 +345,11 @@ impl ChatWidget<'_> {
 
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
         let running = self.running_commands.remove(&ev.call_id);
-        self.active_exec_cell = None;
         let (command, parsed) = match running {
             Some(rc) => (rc.command, rc.parsed_cmd),
             None => (vec![ev.call_id.clone()], Vec::new()),
         };
-        self.add_to_history(HistoryCell::new_completed_exec_command(
+        self.pending_exec_completions.push((
             command,
             parsed,
             CommandOutput {
@@ -358,6 +358,16 @@ impl ChatWidget<'_> {
                 stderr: ev.stderr.clone(),
             },
         ));
+
+        if self.running_commands.is_empty() {
+            self.active_exec_cell = None;
+            let pending = std::mem::take(&mut self.pending_exec_completions);
+            for (command, parsed, output) in pending {
+                self.add_to_history(HistoryCell::new_completed_exec_command(
+                    command, parsed, output,
+                ));
+            }
+        }
     }
 
     pub(crate) fn handle_patch_apply_end_now(
@@ -423,10 +433,18 @@ impl ChatWidget<'_> {
                 parsed_cmd: ev.parsed_cmd.clone(),
             },
         );
-        self.active_exec_cell = Some(HistoryCell::new_active_exec_command(
-            ev.command,
-            ev.parsed_cmd,
-        ));
+        // Accumulate parsed commands into a single active Exec cell so they stack
+        match self.active_exec_cell.as_mut() {
+            Some(HistoryCell::Exec(exec)) => {
+                exec.parsed.extend(ev.parsed_cmd.into_iter());
+            }
+            _ => {
+                self.active_exec_cell = Some(HistoryCell::new_active_exec_command(
+                    ev.command,
+                    ev.parsed_cmd,
+                ));
+            }
+        }
     }
 
     pub(crate) fn handle_mcp_begin_now(&mut self, ev: McpToolCallBeginEvent) {
@@ -494,6 +512,7 @@ impl ChatWidget<'_> {
             stream: StreamController::new(config),
             last_stream_kind: None,
             running_commands: HashMap::new(),
+            pending_exec_completions: Vec::new(),
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
             needs_redraw: false,
