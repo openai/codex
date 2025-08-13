@@ -136,7 +136,6 @@ impl ChatWidget<'_> {
         let tokens: Vec<String> = {
             let mut v = Vec::new();
             let mut lexer = shlex::Shlex::new(&normalized);
-            lexer.whitespace = " "; // treat standard spaces as separators; others already normalized
             for item in &mut lexer {
                 v.push(item);
             }
@@ -196,7 +195,7 @@ impl ChatWidget<'_> {
             let candidate = if raw_tok.starts_with("file://") {
                 from_file_url(&raw_tok)
             } else {
-                let norm = normalize_token(raw_tok);
+                let norm = normalize_token(&raw_tok);
                 // Expand ~ at start.
                 let expanded = if let Some(rest) = norm.strip_prefix("~/") {
                     if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
