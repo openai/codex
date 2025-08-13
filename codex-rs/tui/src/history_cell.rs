@@ -782,8 +782,7 @@ impl HistoryCell {
                         Span::styled("✔", Style::default().fg(Color::Green)),
                         Span::styled(
                             step,
-                            Style::default()
-                                .add_modifier(Modifier::CROSSED_OUT | Modifier::DIM),
+                            Style::default().add_modifier(Modifier::CROSSED_OUT | Modifier::DIM),
                         ),
                     ),
                     StepStatus::InProgress => (
@@ -797,10 +796,7 @@ impl HistoryCell {
                     ),
                     StepStatus::Pending => (
                         Span::raw("□"),
-                        Span::styled(
-                            step,
-                            Style::default().add_modifier(Modifier::DIM),
-                        ),
+                        Span::styled(step, Style::default().add_modifier(Modifier::DIM)),
                     ),
                 };
                 let prefix = if idx == 0 {
