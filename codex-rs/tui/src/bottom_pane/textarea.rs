@@ -109,7 +109,7 @@ impl TextArea {
         self.wrapped_lines(width).len() as u16
     }
 
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         self.cursor_pos_with_state(area, &TextAreaState::default())
     }
@@ -359,8 +359,9 @@ impl TextArea {
             } => {
                 self.move_cursor_to_end_of_line(true);
             }
-            o => {
-                tracing::debug!("Unhandled key event in TextArea: {:?}", o);
+            _o => {
+                #[cfg(feature = "debug-logs")]
+                tracing::debug!("Unhandled key event in TextArea: {:?}", _o);
             }
         }
     }

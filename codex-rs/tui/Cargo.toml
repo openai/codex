@@ -14,6 +14,8 @@ path = "src/lib.rs"
 [features]
 # Enable vt100-based tests (emulator) when running with `--features vt100-tests`.
 vt100-tests = []
+# Gate verbose debug logging inside the TUI implementation.
+debug-logs = []
 
 [lints]
 workspace = true
@@ -39,6 +41,7 @@ crossterm = { version = "0.28.1", features = ["bracketed-paste"] }
 diffy = "0.4.2"
 image = { version = "^0.25.6", default-features = false, features = ["jpeg"] }
 lazy_static = "1"
+once_cell = "1"
 mcp-types = { path = "../mcp-types" }
 path-clean = "1.0.1"
 ratatui = { version = "0.29.0", features = [
@@ -71,6 +74,9 @@ tui-markdown = "0.3.3"
 unicode-segmentation = "1.12.0"
 unicode-width = "0.1"
 uuid = "1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 
 [dev-dependencies]

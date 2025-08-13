@@ -184,7 +184,7 @@ fn pretty_provider_name(id: &str) -> String {
 impl HistoryCell {
     /// Return a cloned, plain representation of the cell's lines suitable for
     /// one‑shot insertion into the terminal scrollback. Image cells are
-    /// represented with a simple placeholder for now.
+    /// represented with a simple placeholder.
     /// These lines are also rendered directly by ratatui wrapped in a Paragraph.
     pub(crate) fn plain_lines(&self) -> Vec<Line<'static>> {
         match self {
@@ -212,6 +212,16 @@ impl HistoryCell {
                 Line::from("tool result (image output omitted)"),
                 Line::from(""),
             ],
+        }
+    }
+
+    pub(crate) fn new_background_event(message: String) -> Self {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(Line::from("event".dim()));
+        lines.extend(message.lines().map(|line| ansi_escape_line(line).dim()));
+        lines.push(Line::from(""));
+        HistoryCell::BackgroundEvent {
+            view: TextBlock::new(lines),
         }
     }
 
@@ -533,17 +543,6 @@ impl HistoryCell {
             view: TextBlock::new(lines),
         }
     }
-    // allow dead code for now. maybe we'll use it again.
-    #[allow(dead_code)]
-    pub(crate) fn new_background_event(message: String) -> Self {
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(Line::from("event".dim()));
-        lines.extend(message.lines().map(|line| ansi_escape_line(line).dim()));
-        lines.push(Line::from(""));
-        HistoryCell::BackgroundEvent {
-            view: TextBlock::new(lines),
-        }
-    }
 
     pub(crate) fn new_diff_output(message: String) -> Self {
         let mut lines: Vec<Line<'static>> = Vec::new();
@@ -739,10 +738,10 @@ impl HistoryCell {
         let mut header: Vec<Span> = Vec::new();
         header.push(Span::raw("📋"));
         header.push(Span::styled(
-            " Updated",
+            " Update plan",
             Style::default().add_modifier(Modifier::BOLD).magenta(),
         ));
-        header.push(Span::raw(" to do list ["));
+        header.push(Span::raw(" ["));
         if filled > 0 {
             header.push(Span::styled(
                 "█".repeat(filled),
@@ -873,6 +872,33 @@ impl HistoryCell {
                 true,
                 true,
             ));
+        }
+
+        lines.push(Line::from(""));
+
+        HistoryCell::PatchApplyResult {
+            view: TextBlock::new(lines),
+        }
+    }
+
+    pub(crate) fn new_patch_apply_success(stdout: String) -> Self {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+
+        // Success title
+        lines.push(Line::from("✓ Applied patch".magenta().bold()));
+
+        if !stdout.trim().is_empty() {
+            let mut iter = stdout.lines();
+            for (i, raw) in iter.by_ref().take(TOOL_CALL_MAX_LINES).enumerate() {
+                let prefix = if i == 0 { "  ⎿ " } else { "    " };
+                let s = format!("{prefix}{raw}");
+                lines.push(ansi_escape_line(&s).dim());
+            }
+            let remaining = iter.count();
+            if remaining > 0 {
+                lines.push(Line::from(""));
+                lines.push(Line::from(format!("... +{remaining} lines")).dim());
+            }
         }
 
         lines.push(Line::from(""));

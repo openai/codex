@@ -47,6 +47,7 @@ pub mod seatbelt;
 pub mod shell;
 pub mod spawn;
 pub mod turn_diff_tracker;
+pub mod user_agent;
 mod user_notification;
 pub mod util;
 pub use apply_patch::CODEX_APPLY_PATCH_ARG1;
