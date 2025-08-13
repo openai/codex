@@ -6,7 +6,6 @@ use ratatui::text::Span;
 use std::borrow::Cow;
 use std::path::Path;
 
-#[allow(dead_code)]
 pub(crate) fn append_markdown(
     markdown_source: &str,
     lines: &mut Vec<Line<'static>>,
@@ -15,42 +14,41 @@ pub(crate) fn append_markdown(
     append_markdown_with_opener_and_cwd(markdown_source, lines, config.file_opener, &config.cwd);
 }
 
-#[allow(dead_code)]
 fn append_markdown_with_opener_and_cwd(
     markdown_source: &str,
     lines: &mut Vec<Line<'static>>,
     file_opener: UriBasedFileOpener,
     cwd: &Path,
 ) {
-    // Perform citation rewrite *before* feeding the string to the markdown
-    // renderer. When `file_opener` is absent we bypass the transformation to
-    // avoid unnecessary allocations.
-    let processed_markdown = rewrite_file_citations(markdown_source, file_opener, cwd);
-
-    let markdown = tui_markdown::from_str(&processed_markdown);
-
-    // `tui_markdown` returns a `ratatui::text::Text` where every `Line` borrows
-    // from the input `message` string. Since the `HistoryCell` stores its lines
-    // with a `'static` lifetime we must create an **owned** copy of each line
-    // so that it is no longer tied to `message`. We do this by cloning the
-    // content of every `Span` into an owned `String`.
-
-    for borrowed_line in markdown.lines {
-        let mut owned_spans = Vec::with_capacity(borrowed_line.spans.len());
-        for span in &borrowed_line.spans {
-            // Create a new owned String for the span's content to break the lifetime link.
-            let owned_span = Span::styled(span.content.to_string(), span.style);
-            owned_spans.push(owned_span);
+    // Historically, we fed the entire `markdown_source` into the renderer in
+    // one pass. However, fenced code blocks sometimes lost leading whitespace
+    // when formatted by the markdown renderer/highlighter. To preserve code
+    // block content exactly, split the source into "text" and "code" segments:
+    // - Render non-code text through `tui_markdown` (with citation rewrite).
+    // - Render code block content verbatim as plain lines without additional
+    //   formatting, preserving leading spaces.
+    for seg in split_text_and_fences(markdown_source) {
+        match seg {
+            Segment::Text(s) => {
+                let processed = rewrite_file_citations(&s, file_opener, cwd);
+                let rendered = tui_markdown::from_str(&processed);
+                crate::render::line_utils::push_owned_lines(&rendered.lines, lines);
+            }
+            Segment::Code { content, .. } => {
+                // Emit the code content exactly as-is, line by line.
+                // We don't attempt syntax highlighting to avoid whitespace bugs.
+                for line in content.split_inclusive('\n') {
+                    // split_inclusive keeps the trailing \n; we want lines without it.
+                    let line = if let Some(stripped) = line.strip_suffix('\n') {
+                        stripped
+                    } else {
+                        line
+                    };
+                    let owned_line: Line<'static> = Line::from(Span::raw(line.to_string()));
+                    lines.push(owned_line);
+                }
+            }
         }
-
-        let owned_line: Line<'static> = Line::from(owned_spans).style(borrowed_line.style);
-        // Preserve alignment if it was set on the source line.
-        let owned_line = match borrowed_line.alignment {
-            Some(alignment) => owned_line.alignment(alignment),
-            None => owned_line,
-        };
-
-        lines.push(owned_line);
     }
 }
 
@@ -61,7 +59,6 @@ fn append_markdown_with_opener_and_cwd(
 /// ```text
 /// <scheme>://file<ABS_PATH>:<LINE>
 /// ```
-#[allow(dead_code)]
 fn rewrite_file_citations<'a>(
     src: &'a str,
     file_opener: UriBasedFileOpener,
@@ -99,6 +96,162 @@ fn rewrite_file_citations<'a>(
         // - add a space after the link to make it easier to read
         format!("[{file}:{start_line}]({scheme}://file{absolute_path}:{start_line}) ")
     })
+}
+
+// use shared helper from `line_utils`
+
+// Minimal code block splitting.
+// - Recognizes fenced blocks opened by ``` or ~~~ (allowing leading whitespace).
+//   The opening fence may include a language string which we ignore.
+//   The closing fence must be on its own line (ignoring surrounding whitespace).
+// - Additionally recognizes indented code blocks that begin after a blank line
+//   with a line starting with at least 4 spaces or a tab, and continue for
+//   consecutive lines that are blank or also indented by >= 4 spaces or a tab.
+enum Segment {
+    Text(String),
+    Code {
+        _lang: Option<String>,
+        content: String,
+    },
+}
+
+fn split_text_and_fences(src: &str) -> Vec<Segment> {
+    let mut segments = Vec::new();
+    let mut curr_text = String::new();
+    #[derive(Copy, Clone, PartialEq)]
+    enum CodeMode {
+        None,
+        Fenced,
+        Indented,
+    }
+    let mut code_mode = CodeMode::None;
+    let mut fence_token = "";
+    let mut code_lang: Option<String> = None;
+    let mut code_content = String::new();
+    // We intentionally do not require a preceding blank line for indented code blocks,
+    // since streamed model output often omits it. This favors preserving indentation.
+
+    for line in src.split_inclusive('\n') {
+        let line_no_nl = line.strip_suffix('\n');
+        let trimmed_start = match line_no_nl {
+            Some(l) => l.trim_start(),
+            None => line.trim_start(),
+        };
+        if code_mode == CodeMode::None {
+            let open = if trimmed_start.starts_with("```") {
+                Some("```")
+            } else if trimmed_start.starts_with("~~~") {
+                Some("~~~")
+            } else {
+                None
+            };
+            if let Some(tok) = open {
+                // Flush pending text segment.
+                if !curr_text.is_empty() {
+                    segments.push(Segment::Text(curr_text.clone()));
+                    curr_text.clear();
+                }
+                fence_token = tok;
+                // Capture language after the token on this line (before newline).
+                let after = &trimmed_start[tok.len()..];
+                let lang = after.trim();
+                code_lang = if lang.is_empty() {
+                    None
+                } else {
+                    Some(lang.to_string())
+                };
+                code_mode = CodeMode::Fenced;
+                code_content.clear();
+                // Do not include the opening fence line in output.
+                continue;
+            }
+            // Check for start of an indented code block: only after a blank line
+            // (or at the beginning), and the line must start with >=4 spaces or a tab.
+            let raw_line = match line_no_nl {
+                Some(l) => l,
+                None => line,
+            };
+            let leading_spaces = raw_line.chars().take_while(|c| *c == ' ').count();
+            let starts_with_tab = raw_line.starts_with('\t');
+            // Consider any line that begins with >=4 spaces or a tab to start an
+            // indented code block. This favors preserving indentation even when a
+            // preceding blank line is omitted (common in streamed model output).
+            let starts_indented_code = (leading_spaces >= 4) || starts_with_tab;
+            if starts_indented_code {
+                // Flush pending text and begin an indented code block.
+                if !curr_text.is_empty() {
+                    segments.push(Segment::Text(curr_text.clone()));
+                    curr_text.clear();
+                }
+                code_mode = CodeMode::Indented;
+                code_content.clear();
+                code_content.push_str(line);
+                // Inside code now; do not treat this line as normal text.
+                continue;
+            }
+            // Normal text line.
+            curr_text.push_str(line);
+        } else {
+            match code_mode {
+                CodeMode::Fenced => {
+                    // inside fenced code: check for closing fence on its own line
+                    let trimmed = match line_no_nl {
+                        Some(l) => l.trim(),
+                        None => line.trim(),
+                    };
+                    if trimmed == fence_token {
+                        // End code block: emit segment without fences
+                        segments.push(Segment::Code {
+                            _lang: code_lang.take(),
+                            content: code_content.clone(),
+                        });
+                        code_content.clear();
+                        code_mode = CodeMode::None;
+                        fence_token = "";
+                        continue;
+                    }
+                    // Accumulate code content exactly as-is.
+                    code_content.push_str(line);
+                }
+                CodeMode::Indented => {
+                    // Continue while the line is blank, or starts with >=4 spaces, or a tab.
+                    let raw_line = match line_no_nl {
+                        Some(l) => l,
+                        None => line,
+                    };
+                    let is_blank = raw_line.trim().is_empty();
+                    let leading_spaces = raw_line.chars().take_while(|c| *c == ' ').count();
+                    let starts_with_tab = raw_line.starts_with('\t');
+                    if is_blank || leading_spaces >= 4 || starts_with_tab {
+                        code_content.push_str(line);
+                    } else {
+                        // Close the indented code block and reprocess this line as normal text.
+                        segments.push(Segment::Code {
+                            _lang: None,
+                            content: code_content.clone(),
+                        });
+                        code_content.clear();
+                        code_mode = CodeMode::None;
+                        // Now handle current line as text.
+                        curr_text.push_str(line);
+                    }
+                }
+                CodeMode::None => unreachable!(),
+            }
+        }
+    }
+
+    if code_mode != CodeMode::None {
+        // Unterminated code fence: treat accumulated content as a code segment.
+        segments.push(Segment::Code {
+            _lang: code_lang.take(),
+            content: code_content.clone(),
+        });
+    } else if !curr_text.is_empty() {
+        segments.push(Segment::Text(curr_text.clone()));
+    }
+
+    segments
 }
 
 #[cfg(test)]
@@ -161,5 +314,125 @@ mod tests {
         assert_eq!(markdown, rendered);
         // Ensure helper rewrites.
         assert_ne!(markdown, unchanged);
+    }
+
+    #[test]
+    fn fenced_code_blocks_preserve_leading_whitespace() {
+        let src = "```\n  indented\n\t\twith tabs\n    four spaces\n```\n";
+        let cwd = Path::new("/");
+        let mut out = Vec::new();
+        append_markdown_with_opener_and_cwd(src, &mut out, UriBasedFileOpener::None, cwd);
+        let rendered: Vec<String> = out
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.clone())
+                    .collect::<String>()
+            })
+            .collect();
+        assert_eq!(
+            rendered,
+            vec![
+                "  indented".to_string(),
+                "\t\twith tabs".to_string(),
+                "    four spaces".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn citations_not_rewritten_inside_code_blocks() {
+        let src = "Before 【F:/x.rs†L1】\n```\nInside 【F:/x.rs†L2】\n```\nAfter 【F:/x.rs†L3】\n";
+        let cwd = Path::new("/");
+        let mut out = Vec::new();
+        append_markdown_with_opener_and_cwd(src, &mut out, UriBasedFileOpener::VsCode, cwd);
+        let rendered: Vec<String> = out
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.clone())
+                    .collect::<String>()
+            })
+            .collect();
+        // Expect first and last lines rewritten, middle line unchanged.
+        assert!(rendered[0].contains("vscode://file"));
+        assert_eq!(rendered[1], "Inside 【F:/x.rs†L2】");
+        assert!(matches!(rendered.last(), Some(s) if s.contains("vscode://file")));
+    }
+
+    #[test]
+    fn indented_code_blocks_preserve_leading_whitespace() {
+        let src = "Before\n    code 1\n\tcode with tab\n        code 2\nAfter\n";
+        let cwd = Path::new("/");
+        let mut out = Vec::new();
+        append_markdown_with_opener_and_cwd(src, &mut out, UriBasedFileOpener::None, cwd);
+        let rendered: Vec<String> = out
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.clone())
+                    .collect::<String>()
+            })
+            .collect();
+        assert_eq!(
+            rendered,
+            vec![
+                "Before".to_string(),
+                "    code 1".to_string(),
+                "\tcode with tab".to_string(),
+                "        code 2".to_string(),
+                "After".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn citations_not_rewritten_inside_indented_code_blocks() {
+        let src = "Start 【F:/x.rs†L1】\n\n    Inside 【F:/x.rs†L2】\n\nEnd 【F:/x.rs†L3】\n";
+        let cwd = Path::new("/");
+        let mut out = Vec::new();
+        append_markdown_with_opener_and_cwd(src, &mut out, UriBasedFileOpener::VsCode, cwd);
+        let rendered: Vec<String> = out
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.clone())
+                    .collect::<String>()
+            })
+            .collect();
+        // Expect first and last lines rewritten, and the indented code line present
+        // unchanged (citations inside not rewritten). We do not assert on blank
+        // separator lines since the markdown renderer may normalize them.
+        assert!(rendered.iter().any(|s| s.contains("vscode://file")));
+        assert!(rendered.iter().any(|s| s == "    Inside 【F:/x.rs†L2】"));
+    }
+
+    #[test]
+    fn append_markdown_preserves_full_text_line() {
+        use codex_core::config_types::UriBasedFileOpener;
+        use std::path::Path;
+        let src = "Hi! How can I help with codex-rs today? Want me to explore the repo, run tests, or work on a specific change?\n";
+        let cwd = Path::new("/");
+        let mut out = Vec::new();
+        append_markdown_with_opener_and_cwd(src, &mut out, UriBasedFileOpener::None, cwd);
+        assert_eq!(
+            out.len(),
+            1,
+            "expected a single rendered line for plain text"
+        );
+        let rendered: String = out
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.clone())
+            .collect::<Vec<_>>()
+            .join("");
+        assert_eq!(
+            rendered,
+            "Hi! How can I help with codex-rs today? Want me to explore the repo, run tests, or work on a specific change?"
+        );
     }
 }

@@ -885,6 +885,7 @@ dependencies = [
  "lazy_static",
  "libc",
  "mcp-types",
+ "once_cell",
  "path-clean",
  "pretty_assertions",
  "rand 0.8.5",

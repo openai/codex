@@ -31,7 +31,7 @@ use std::thread;
 use std::time::Duration;
 
 /// Time window for debouncing redraw requests.
-const REDRAW_DEBOUNCE: Duration = Duration::from_millis(10);
+const REDRAW_DEBOUNCE: Duration = Duration::from_millis(1);
 
 /// Top-level application state: which full-screen view is currently active.
 #[allow(clippy::large_enum_variant)]
@@ -63,6 +63,9 @@ pub(crate) struct App<'a> {
     pending_history_lines: Vec<Line<'static>>,
 
     enhanced_keys_supported: bool,
+
+    /// Controls the animation thread that sends CommitTick events.
+    commit_anim_running: Arc<AtomicBool>,
 }
 
 /// Aggregate parameters needed to create a `ChatWidget`, as creation may be
@@ -110,10 +113,8 @@ impl App<'_> {
                                     app_event_tx.send(AppEvent::RequestRedraw);
                                 }
                                 crossterm::event::Event::Paste(pasted) => {
-                                    // Many terminals convert newlines to \r when
-                                    // pasting, e.g. [iTerm2][]. But [tui-textarea
-                                    // expects \n][tui-textarea]. This seems like a bug
-                                    // in tui-textarea IMO, but work around it for now.
+                                    // Many terminals convert newlines to \r when pasting (e.g., iTerm2),
+                                    // but tui-textarea expects \n. Normalize CR to LF.
                                     // [tui-textarea]: https://github.com/rhysd/tui-textarea/blob/4d18622eeac13b309e0ff6a55a46ac6706da68cf/src/textarea.rs#L782-L783
                                     // [iTerm2]: https://github.com/gnachman/iTerm2/blob/5d0c0d9f68523cbd0494dad5422998964a2ecd8d/sources/iTermPasteHelper.m#L206-L216
                                     let pasted = pasted.replace("\r", "\n");
@@ -172,6 +173,7 @@ impl App<'_> {
             file_search,
             pending_redraw,
             enhanced_keys_supported,
+            commit_anim_running: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -188,7 +190,7 @@ impl App<'_> {
         // redraw is already pending so we can return early.
         if self
             .pending_redraw
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_err()
         {
             return;
@@ -199,7 +201,7 @@ impl App<'_> {
         thread::spawn(move || {
             thread::sleep(REDRAW_DEBOUNCE);
             tx.send(AppEvent::Redraw);
-            pending_redraw.store(false, Ordering::SeqCst);
+            pending_redraw.store(false, Ordering::Release);
         });
     }
 
@@ -219,6 +221,30 @@ impl App<'_> {
                 }
                 AppEvent::Redraw => {
                     std::io::stdout().sync_update(|_| self.draw_next_frame(terminal))??;
+                }
+                AppEvent::StartCommitAnimation => {
+                    if self
+                        .commit_anim_running
+                        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+                        .is_ok()
+                    {
+                        let tx = self.app_event_tx.clone();
+                        let running = self.commit_anim_running.clone();
+                        thread::spawn(move || {
+                            while running.load(Ordering::Relaxed) {
+                                thread::sleep(Duration::from_millis(50));
+                                tx.send(AppEvent::CommitTick);
+                            }
+                        });
+                    }
+                }
+                AppEvent::StopCommitAnimation => {
+                    self.commit_anim_running.store(false, Ordering::Release);
+                }
+                AppEvent::CommitTick => {
+                    if let AppState::Chat { widget } = &mut self.app_state {
+                        widget.on_commit_tick();
+                    }
                 }
                 AppEvent::KeyEvent(key_event) => {
                     match key_event {
@@ -276,7 +302,7 @@ impl App<'_> {
                             self.dispatch_key_event(key_event);
                         }
                         _ => {
-                            // Ignore Release key events for now.
+                            // Ignore Release key events.
                         }
                     };
                 }
