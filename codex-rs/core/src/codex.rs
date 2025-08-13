@@ -104,6 +104,7 @@ use crate::shell;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
+use regex_lite::Regex;
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
@@ -257,6 +258,225 @@ struct State {
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
     pending_input: Vec<ResponseInputItem>,
     history: ConversationHistory,
+}
+
+/// Heuristically detect image file paths inside user text and attach them as
+/// `InputItem::LocalImage`, preserving the original text. This makes mid-chat
+/// drag/paste of image paths work across all front-ends by default.
+fn attach_images_from_text(mut items: Vec<InputItem>, cwd: &std::path::Path) -> Vec<InputItem> {
+    use std::collections::HashSet;
+    use std::path::{Path, PathBuf};
+
+    // Track existing attached images to avoid duplicates if the client already added some.
+    let mut existing: HashSet<PathBuf> = items
+        .iter()
+        .filter_map(|it| match it {
+            InputItem::LocalImage { path } => Some(path.clone()),
+            _ => None,
+        })
+        .collect();
+
+    // Collect images discovered in text.
+    let mut discovered: Vec<PathBuf> = Vec::new();
+
+    for it in &items {
+        if let InputItem::Text { text } = it {
+            for p in detect_image_paths_in_text(text, cwd) {
+                if existing.insert(p.clone()) {
+                    discovered.push(p);
+                }
+            }
+        }
+    }
+
+    for path in discovered {
+        items.push(InputItem::LocalImage { path });
+    }
+    items
+}
+
+/// Parse a free‑form text looking for plausible image paths.
+fn detect_image_paths_in_text(text: &str, cwd: &std::path::Path) -> Vec<std::path::PathBuf> {
+    use std::collections::HashSet;
+    use std::path::{Path, PathBuf};
+
+    if text.trim().is_empty() {
+        return Vec::new();
+    }
+
+    // Only normalize quotes; preserve NBSP/NNBSP so we don't break real filenames.
+    let normalized = text
+        .replace('\u{2018}', "'")
+        .replace('\u{2019}', "'")
+        .replace('\u{201C}', "\"")
+        .replace('\u{201D}', "\"");
+
+    // Regex to capture file:// URLs and absolute path-like substrings that end with an image extension.
+    let re = Regex::new(r#"(?xi)(file://\S+)|(/[^'"\s]+\.(?:png|jpe?g|gif|webp|bmp|tiff?|svg))|([A-Za-z0-9_\-\s\.]+\.(?:png|jpe?g|gif|webp|bmp|tiff?|svg))"#)
+    .ok();
+
+    let mut candidates: Vec<String> = Vec::new();
+    if let Some(re) = &re {
+        for cap in re.captures_iter(&normalized) {
+            if let Some(m) = cap.get(1).or_else(|| cap.get(2)).or_else(|| cap.get(3)) {
+                candidates.push(m.as_str().to_string());
+            }
+        }
+    }
+
+    // Also try shlex splitting to handle quoted paths.
+    let mut lexer = shlex::Shlex::new(&normalized);
+    for tok in &mut lexer {
+        candidates.push(tok);
+    }
+    if candidates.is_empty() {
+        candidates.extend(normalized.split_whitespace().map(|s| s.to_string()));
+    }
+
+    fn strip_surrounding_quotes(mut s: String) -> String {
+        if (s.starts_with('\'') && s.ends_with('\'')) || (s.starts_with('"') && s.ends_with('"')) {
+            s = s[1..s.len() - 1].to_string();
+        }
+        s
+    }
+
+    fn from_file_url(url: &str) -> Option<PathBuf> {
+        let rest = url.strip_prefix("file://")?;
+        let path = if let Some(stripped) = rest.strip_prefix("localhost") {
+            stripped
+        } else {
+            rest
+        };
+        let p = path.replace("%20", " ");
+        if p.starts_with('/') {
+            Some(PathBuf::from(p))
+        } else {
+            None
+        }
+    }
+
+    fn looks_like_image_path(p: &Path) -> bool {
+        match p.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()) {
+            Some(ext)
+                if matches!(
+                    ext.as_str(),
+                    "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tif" | "tiff" | "svg"
+                ) => true,
+            _ => false,
+        }
+    }
+
+    fn norm_spaces(s: &str) -> String {
+        s.chars()
+            .map(|ch| match ch {
+                '\u{00A0}' | '\u{202F}' => ' ',
+                other => other,
+            })
+            .collect::<String>()
+    }
+
+    fn resolve_by_basename(basename: &str, home: &Path, cwd: &Path) -> Option<PathBuf> {
+        let exact = [
+            cwd.join(basename),
+            home.join("Desktop").join(basename),
+            home.join("Downloads").join(basename),
+            home.join("Pictures").join(basename),
+            home.join("Pictures").join("Screenshots").join(basename),
+        ];
+        for p in exact.into_iter() {
+            if let Ok(meta) = std::fs::metadata(&p) {
+                if meta.is_file() {
+                    return Some(p);
+                }
+            }
+        }
+
+        // Fallback scan with NBSP normalization for macOS screenshot names.
+        let norm_base = norm_spaces(basename);
+        let scan_dirs = [
+            cwd.to_path_buf(),
+            home.join("Desktop"),
+            home.join("Downloads"),
+            home.join("Pictures"),
+            home.join("Pictures").join("Screenshots"),
+        ];
+        for dir in scan_dirs.into_iter() {
+            if let Ok(rd) = std::fs::read_dir(&dir) {
+                for entry in rd.flatten() {
+                    let is_file = entry.file_type().map(|ft| ft.is_file()).unwrap_or(false);
+                    if !is_file {
+                        continue;
+                    }
+                    if let Some(name) = entry.file_name().to_str() {
+                        if norm_spaces(name) == norm_base {
+                            return Some(entry.path());
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    let mut out: Vec<PathBuf> = Vec::new();
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+
+    for raw in candidates {
+        if raw.is_empty() {
+            continue;
+        }
+        let candidate = if raw.starts_with("file://") {
+            from_file_url(&raw)
+        } else {
+            let mut tok = strip_surrounding_quotes(raw);
+            // Unescape typical shell-escaped spaces.
+            tok = tok.replace("\\ ", " ");
+
+            // Expand ~/
+            let expanded = if let Some(rest) = tok.strip_prefix("~/") {
+                if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+                    home.join(rest)
+                } else {
+                    PathBuf::from(tok)
+                }
+            } else {
+                PathBuf::from(tok)
+            };
+
+            let abs = if expanded.is_absolute() {
+                expanded
+            } else {
+                cwd.join(expanded)
+            };
+            Some(abs)
+        };
+
+        let Some(mut path) = candidate else { continue };
+        if !looks_like_image_path(&path) {
+            continue;
+        }
+        let exists_and_file = std::fs::metadata(&path).map(|m| m.is_file()).unwrap_or(false);
+        if !exists_and_file {
+            if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+                if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+                    if let Some(found) = resolve_by_basename(name, &home, cwd) {
+                        path = found;
+                    } else {
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
+            } else {
+                continue;
+            }
+        }
+        if seen.insert(path.clone()) {
+            out.push(path);
+        }
+    }
+
+    out
 }
 
 impl Session {
@@ -932,6 +1152,9 @@ async fn submission_loop(
                         continue;
                     }
                 };
+
+                // Auto‑attach local images referenced in text items so mid‑chat drags work by default.
+                let items = attach_images_from_text(items, &sess.cwd);
 
                 // attempt to inject input into current task
                 if let Err(items) = sess.inject_input(items) {

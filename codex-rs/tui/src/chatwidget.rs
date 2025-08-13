@@ -81,6 +81,8 @@ pub(crate) struct ChatWidget<'a> {
     interrupts: InterruptManager,
     // Whether a redraw is needed after handling the current event
     needs_redraw: bool,
+    // Image paths captured from paste events during composition
+    pending_image_paths: Vec<PathBuf>,
 }
 
 struct UserMessage {
@@ -108,6 +110,222 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 }
 
 impl ChatWidget<'_> {
+    /// Best-effort detection of image file paths in the submitted text.
+    ///
+    /// This enables simple workflows like dragging a file from Finder into the
+    /// terminal (which typically inserts a POSIX path with spaces escaped) or
+    /// pasting a path directly. Any detected images are attached in addition to
+    /// the raw text so the model can see the content.
+    fn detect_image_paths_in_text(&self, text: &str) -> Vec<PathBuf> {
+        use std::collections::HashSet;
+        use std::path::{Path, PathBuf};
+
+        // Quick guard: avoid work for short texts.
+        if text.trim().is_empty() {
+            return Vec::new();
+        }
+
+        // Normalize curly quotes that commonly appear in macOS filenames, but
+        // DO NOT replace NBSP variants here. Some macOS screenshot filenames
+        // include a narrow no‑break space before AM/PM; replacing it with a
+        // regular space would make the path not match the on‑disk filename.
+        let mut normalized = text
+            .replace('\u{2018}', "'")  // ‘
+            .replace('\u{2019}', "'")  // ’
+            .replace('\u{201C}', "\"") // “
+            .replace('\u{201D}', "\""); // ”
+
+        // Extract obvious candidates via regex too (robust against odd quoting and punctuation).
+        // We combine both regex captures and shlex tokens to maximize recall.
+        let mut candidates: Vec<String> = Vec::new();
+        {
+            // Keep pattern simple to avoid engine differences.
+            // Allow spaces in absolute paths (stop at quotes), match file:// URLs and bare filenames.
+            let pattern = "(?xi)(file://[^\\s]+)|(/[^'\\\"]+\\.(?:png|jpe?g|gif|webp|bmp|tiff?|svg))|([A-Za-z0-9_\\-\\s\\.]+\\.(?:png|jpe?g|gif|webp|bmp|tiff?|svg))";
+            if let Ok(re) = regex_lite::Regex::new(pattern) {
+                for cap in re.captures_iter(&normalized) {
+                    if let Some(m) = cap.get(1).or_else(|| cap.get(2)).or_else(|| cap.get(3)) {
+                        candidates.push(m.as_str().to_string());
+                    }
+                }
+            }
+        }
+
+        // shlex-like tokenization to respect quotes; fall back to whitespace split if needed.
+        {
+            let mut lexer = shlex::Shlex::new(&normalized);
+            for item in &mut lexer {
+                candidates.push(item);
+            }
+            if candidates.is_empty() {
+                candidates.extend(normalized.split_whitespace().map(|s| s.to_string()));
+            }
+        }
+
+        // Very small helper to unescape common terminal drag patterns.
+        fn normalize_token(tok: &str) -> String {
+            // Handle typical terminal escaping of spaces.
+            let mut s = tok.replace("\\ ", " ");
+            // Strip trivial trailing punctuation that often follows paths in prose.
+            s = s.trim_end_matches([',', '.', ';', ':']).to_string();
+            // Strip surrounding straight quotes if present (common when dragging paths).
+            if (s.starts_with('\'') && s.ends_with('\'')) || (s.starts_with('"') && s.ends_with('"')) {
+                s = s[1..s.len() - 1].to_string();
+            }
+            s
+        }
+
+        fn from_file_url(url: &str) -> Option<PathBuf> {
+            // Accept file:///path or file://localhost/path
+            let rest = url.strip_prefix("file://")?;
+            let path = if let Some(stripped) = rest.strip_prefix("localhost") {
+                stripped
+            } else {
+                rest
+            };
+            // Very lightweight percent-decoding for spaces only to avoid new deps.
+            let p = path.replace("%20", " ");
+            if p.starts_with('/') {
+                Some(PathBuf::from(p))
+            } else {
+                None
+            }
+        }
+
+        fn looks_like_image_path(p: &Path) -> bool {
+            match p.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()) {
+                Some(ext)
+                    if matches!(
+                        ext.as_str(),
+                        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "tif" | "tiff" | "svg"
+                    ) => true,
+                _ => false,
+            }
+        }
+
+        // If a candidate path does not exist, attempt to resolve by basename in common locations.
+        fn resolve_by_basename(basename: &str, home: &Path, cwd: &Path) -> Option<PathBuf> {
+            // First try exact joins in common locations.
+            let exact_candidates = [
+                cwd.join(basename),
+                home.join("Desktop").join(basename),
+                home.join("Downloads").join(basename),
+                home.join("Pictures").join(basename),
+                home.join("Pictures").join("Screenshots").join(basename),
+            ];
+            for p in exact_candidates.into_iter() {
+                if let Ok(meta) = std::fs::metadata(&p) {
+                    if meta.is_file() {
+                        return Some(p);
+                    }
+                }
+            }
+
+            // If not found, do a best‑effort scan of those same directories
+            // and match filenames after normalizing NBSP/NNBSP to regular
+            // spaces so that macOS screenshot names like "11.53.36\u{202F}AM"
+            // are located even if the pasted path used an ASCII space.
+            fn norm_spaces(s: &str) -> String {
+                s.chars()
+                    .map(|ch| match ch {
+                        '\u{00A0}' | '\u{202F}' => ' ', // NBSP / NNBSP → ASCII space
+                        other => other,
+                    })
+                    .collect::<String>()
+            }
+
+            let norm_basename = norm_spaces(basename);
+            let scan_dirs = [
+                cwd.to_path_buf(),
+                home.join("Desktop"),
+                home.join("Downloads"),
+                home.join("Pictures"),
+                home.join("Pictures").join("Screenshots"),
+            ];
+            for dir in scan_dirs.into_iter() {
+                if let Ok(rd) = std::fs::read_dir(&dir) {
+                    for entry in rd.flatten() {
+                        let file_type_ok = entry.file_type().map(|ft| ft.is_file()).unwrap_or(false);
+                        if !file_type_ok {
+                            continue;
+                        }
+                        if let Some(name) = entry.file_name().to_str() {
+                            if norm_spaces(name) == norm_basename {
+                                return Some(entry.path());
+                            }
+                        }
+                    }
+                }
+            }
+            None
+        }
+
+        let mut out: Vec<PathBuf> = Vec::new();
+        let mut seen: HashSet<PathBuf> = HashSet::new();
+        let cwd = &self.config.cwd;
+
+        for raw_tok in candidates {
+            if raw_tok.is_empty() {
+                continue;
+            }
+
+            let candidate = if raw_tok.starts_with("file://") {
+                from_file_url(&raw_tok)
+            } else {
+                let norm = normalize_token(&raw_tok);
+                // Expand ~ at start.
+                let expanded = if let Some(rest) = norm.strip_prefix("~/") {
+                    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+                        home.join(rest)
+                    } else {
+                        PathBuf::from(norm)
+                    }
+                } else {
+                    PathBuf::from(norm)
+                };
+
+                // Resolve against configured cwd if relative.
+                let abs = if expanded.is_absolute() {
+                    expanded
+                } else {
+                    cwd.join(expanded)
+                };
+                Some(abs)
+            };
+
+            let Some(mut path) = candidate else { continue };
+            // Cheap extension filter first.
+            if !looks_like_image_path(&path) {
+                continue;
+            }
+            // Ensure it exists and is a regular file.
+            let exists_and_file = std::fs::metadata(&path).map(|m| m.is_file()).unwrap_or(false);
+            if !exists_and_file {
+                // Common macOS drag path is a TemporaryItems screenshot that is
+                // immediately moved to Desktop. Try to locate by basename.
+                if let Some(name) = path.file_name().and_then(|s| s.to_str()) {
+                    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+                        if let Some(found) = resolve_by_basename(name, &home, cwd) {
+                            path = found;
+                        } else {
+                            // Skip if we still can't find it.
+                            continue;
+                        }
+                    } else {
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
+            }
+            // Deduplicate and record
+            if seen.insert(path.clone()) {
+                out.push(path);
+            }
+        }
+
+        out
+    }
     #[inline]
     fn mark_needs_redraw(&mut self) {
         self.needs_redraw = true;
@@ -497,6 +715,7 @@ impl ChatWidget<'_> {
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
             needs_redraw: false,
+            pending_image_paths: Vec::new(),
         }
     }
 
@@ -522,6 +741,14 @@ impl ChatWidget<'_> {
     }
 
     pub(crate) fn handle_paste(&mut self, text: String) {
+        let detected = self.detect_image_paths_in_text(&text);
+        if !detected.is_empty() {
+            for p in detected {
+                if !self.pending_image_paths.contains(&p) {
+                    self.pending_image_paths.push(p);
+                }
+            }
+        }
         self.bottom_pane.handle_paste(text);
     }
 
@@ -548,6 +775,24 @@ impl ChatWidget<'_> {
 
         for path in image_paths {
             items.push(InputItem::LocalImage { path });
+        }
+
+        // Include any images captured from paste events while composing.
+        if !self.pending_image_paths.is_empty() {
+            for path in self.pending_image_paths.drain(..) {
+                tracing::info!("Attaching image from paste: {}", path.display());
+                items.push(InputItem::LocalImage { path });
+            }
+        }
+
+        // Heuristically attach any image files referenced directly in the text.
+        // Keep the text unchanged; this preserves user intent while allowing the
+        // model to see the actual image content.
+        if !text.is_empty() {
+            for path in self.detect_image_paths_in_text(&text) {
+                tracing::info!("Attaching image from text: {}", path.display());
+                items.push(InputItem::LocalImage { path });
+            }
         }
 
         if items.is_empty() {
