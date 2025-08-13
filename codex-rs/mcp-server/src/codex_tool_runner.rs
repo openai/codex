@@ -61,7 +61,7 @@ pub async fn run_codex_tool_session(
                 is_error: Some(true),
                 structured_content: None,
             };
-            outgoing.send_response(id.clone(), result.into()).await;
+            outgoing.send_response(id.clone(), result).await;
             return;
         }
     };
@@ -235,9 +235,7 @@ async fn run_codex_tool_session_inner(
                             is_error: None,
                             structured_content: None,
                         };
-                        outgoing
-                            .send_response(request_id.clone(), result.into())
-                            .await;
+                        outgoing.send_response(request_id.clone(), result).await;
                         // unregister the id so we don't keep it in the map
                         running_requests_id_to_codex_uuid
                             .lock()
@@ -296,9 +294,7 @@ async fn run_codex_tool_session_inner(
                     // structured way.
                     structured_content: None,
                 };
-                outgoing
-                    .send_response(request_id.clone(), result.into())
-                    .await;
+                outgoing.send_response(request_id.clone(), result).await;
                 break;
             }
         }
