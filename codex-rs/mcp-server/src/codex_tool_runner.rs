@@ -5,12 +5,13 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use codex_core::Codex;
-use codex_core::codex_wrapper::CodexConversation;
-use codex_core::codex_wrapper::init_codex;
+use codex_core::CodexConversation;
+use codex_core::ConversationManager;
+use codex_core::NewConversation;
 use codex_core::config::Config as CodexConfig;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
+use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::InputItem;
@@ -41,15 +42,14 @@ pub async fn run_codex_tool_session(
     initial_prompt: String,
     config: CodexConfig,
     outgoing: Arc<OutgoingMessageSender>,
-    session_map: Arc<Mutex<HashMap<Uuid, Arc<Codex>>>>,
+    conversation_manager: Arc<ConversationManager>,
     running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, Uuid>>>,
 ) {
-    let CodexConversation {
-        codex,
+    let NewConversation {
+        conversation_id,
+        conversation,
         session_configured,
-        session_id,
-        ..
-    } = match init_codex(config).await {
+    } = match conversation_manager.new_conversation(config).await {
         Ok(res) => res,
         Err(e) => {
             let result = CallToolResult {
@@ -65,16 +65,15 @@ pub async fn run_codex_tool_session(
             return;
         }
     };
-    let codex = Arc::new(codex);
 
-    // update the session map so we can retrieve the session in a reply, and then drop it, since
-    // we no longer need it for this function
-    session_map.lock().await.insert(session_id, codex.clone());
-    drop(session_map);
-
+    let session_configured_event = Event {
+        // Use a fake id value for now.
+        id: "".to_string(),
+        msg: EventMsg::SessionConfigured(session_configured.clone()),
+    };
     outgoing
         .send_event_as_notification(
-            &session_configured,
+            &session_configured_event,
             Some(OutgoingNotificationMeta::new(Some(id.clone()))),
         )
         .await;
@@ -89,7 +88,7 @@ pub async fn run_codex_tool_session(
     running_requests_id_to_codex_uuid
         .lock()
         .await
-        .insert(id.clone(), session_id);
+        .insert(id.clone(), conversation_id);
     let submission = Submission {
         id: sub_id.clone(),
         op: Op::UserInput {
@@ -99,18 +98,24 @@ pub async fn run_codex_tool_session(
         },
     };
 
-    if let Err(e) = codex.submit_with_id(submission).await {
+    if let Err(e) = conversation.submit_with_id(submission).await {
         tracing::error!("Failed to submit initial prompt: {e}");
         // unregister the id so we don't keep it in the map
         running_requests_id_to_codex_uuid.lock().await.remove(&id);
         return;
     }
 
-    run_codex_tool_session_inner(codex, outgoing, id, running_requests_id_to_codex_uuid).await;
+    run_codex_tool_session_inner(
+        conversation,
+        outgoing,
+        id,
+        running_requests_id_to_codex_uuid,
+    )
+    .await;
 }
 
 pub async fn run_codex_tool_session_reply(
-    codex: Arc<Codex>,
+    conversation: Arc<CodexConversation>,
     outgoing: Arc<OutgoingMessageSender>,
     request_id: RequestId,
     prompt: String,
@@ -121,7 +126,7 @@ pub async fn run_codex_tool_session_reply(
         .lock()
         .await
         .insert(request_id.clone(), session_id);
-    if let Err(e) = codex
+    if let Err(e) = conversation
         .submit(Op::UserInput {
             items: vec![InputItem::Text { text: prompt }],
         })
@@ -137,7 +142,7 @@ pub async fn run_codex_tool_session_reply(
     }
 
     run_codex_tool_session_inner(
-        codex,
+        conversation,
         outgoing,
         request_id,
         running_requests_id_to_codex_uuid,
@@ -146,7 +151,7 @@ pub async fn run_codex_tool_session_reply(
 }
 
 async fn run_codex_tool_session_inner(
-    codex: Arc<Codex>,
+    codex: Arc<CodexConversation>,
     outgoing: Arc<OutgoingMessageSender>,
     request_id: RequestId,
     running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, Uuid>>>,

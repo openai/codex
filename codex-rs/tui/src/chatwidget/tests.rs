@@ -104,7 +104,8 @@ async fn helpers_are_available_and_do_not_panic() {
     let (tx_raw, _rx) = channel::<AppEvent>();
     let tx = AppEventSender::new(tx_raw);
     let cfg = test_config();
-    let mut w = ChatWidget::new(cfg, tx, None, Vec::new(), false);
+    let conversation_manager = Arc::new(ConversationManager::default());
+    let mut w = ChatWidget::new(cfg, conversation_manager, tx, None, Vec::new(), false);
     // Basic construction sanity.
     let _ = &mut w;
 }

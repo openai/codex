@@ -3,6 +3,7 @@ use serde_json;
 use std::io;
 use thiserror::Error;
 use tokio::task::JoinError;
+use uuid::Uuid;
 
 pub type Result<T> = std::result::Result<T, CodexErr>;
 
@@ -43,6 +44,12 @@ pub enum CodexErr {
     /// The Session loop treats this as a transient error and will automatically retry the turn.
     #[error("stream disconnected before completion: {0}")]
     Stream(String),
+
+    #[error("no conversation with id: {0}")]
+    ConversationNotFound(Uuid),
+
+    #[error("session configured event was not the first event in the stream")]
+    SessionConfiguredNotFirstEvent,
 
     /// Returned by run_command_stream when the spawned child process timed out (10s).
     #[error("timeout waiting for child process to exit")]

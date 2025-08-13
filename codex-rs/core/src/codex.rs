@@ -20,7 +20,6 @@ use futures::prelude::*;
 use mcp_types::CallToolResult;
 use serde::Serialize;
 use serde_json;
-use tokio::sync::Notify;
 use tokio::sync::oneshot;
 use tokio::task::AbortHandle;
 use tracing::debug;
@@ -124,11 +123,7 @@ pub struct CodexSpawnOk {
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
-    pub async fn spawn(
-        config: Config,
-        auth: Option<CodexAuth>,
-        ctrl_c: Arc<Notify>,
-    ) -> CodexResult<CodexSpawnOk> {
+    pub async fn spawn(config: Config, auth: Option<CodexAuth>) -> CodexResult<CodexSpawnOk> {
         // experimental resume path (undocumented)
         let resume_path = config.experimental_resume.clone();
         info!("resume_path: {resume_path:?}");
@@ -156,9 +151,9 @@ impl Codex {
 
         // Generate a unique ID for the lifetime of this Codex session.
         let session_id = Uuid::new_v4();
-        tokio::spawn(submission_loop(
-            session_id, config, auth, rx_sub, tx_event, ctrl_c,
-        ));
+
+        // This task will run until Op::Shutdown is received.
+        tokio::spawn(submission_loop(session_id, config, auth, rx_sub, tx_event));
         let codex = Codex {
             next_id: AtomicU64::new(0),
             tx_sub,
@@ -210,7 +205,6 @@ impl Codex {
 pub(crate) struct Session {
     client: ModelClient,
     pub(crate) tx_event: Sender<Event>,
-    ctrl_c: Arc<Notify>,
 
     /// The session's current working directory. All relative paths provided by
     /// the model as well as sandbox policies are resolved against this path
@@ -493,7 +487,6 @@ impl Session {
         let result = process_exec_tool_call(
             exec_args.params,
             exec_args.sandbox_type,
-            exec_args.ctrl_c,
             exec_args.sandbox_policy,
             exec_args.codex_linux_sandbox_exe,
             exec_args.stdout_stream,
@@ -578,7 +571,7 @@ impl Session {
             .await
     }
 
-    pub fn abort(&self) {
+    fn abort(&self) {
         info!("Aborting existing session");
         let mut state = self.state.lock().unwrap();
         state.pending_approvals.clear();
@@ -709,7 +702,6 @@ async fn submission_loop(
     auth: Option<CodexAuth>,
     rx_sub: Receiver<Submission>,
     tx_event: Sender<Event>,
-    ctrl_c: Arc<Notify>,
 ) {
     let mut sess: Option<Arc<Session>> = None;
     // shorthand - send an event when there is no active session
@@ -724,21 +716,8 @@ async fn submission_loop(
         tx_event.send(event).await.ok();
     };
 
-    loop {
-        let interrupted = ctrl_c.notified();
-        let sub = tokio::select! {
-            res = rx_sub.recv() => match res {
-                Ok(sub) => sub,
-                Err(_) => break,
-            },
-            _ = interrupted => {
-                if let Some(sess) = sess.as_ref(){
-                    sess.abort();
-                }
-                continue;
-            },
-        };
-
+    // To break out of this loop, send Op::Shutdown.
+    while let Ok(sub) = rx_sub.recv().await {
         debug!(?sub, "Submission");
         match sub.op {
             Op::Interrupt => {
@@ -877,7 +856,6 @@ async fn submission_loop(
                         config.include_plan_tool,
                     ),
                     tx_event: tx_event.clone(),
-                    ctrl_c: Arc::clone(&ctrl_c),
                     user_instructions,
                     base_instructions,
                     approval_policy,
@@ -1787,7 +1765,6 @@ fn parse_container_exec_arguments(
 pub struct ExecInvokeArgs<'a> {
     pub params: ExecParams,
     pub sandbox_type: SandboxType,
-    pub ctrl_c: Arc<Notify>,
     pub sandbox_policy: &'a SandboxPolicy,
     pub codex_linux_sandbox_exe: &'a Option<PathBuf>,
     pub stdout_stream: Option<StdoutStream>,
@@ -1972,7 +1949,6 @@ async fn handle_container_exec_with_params(
             ExecInvokeArgs {
                 params: params.clone(),
                 sandbox_type,
-                ctrl_c: sess.ctrl_c.clone(),
                 sandbox_policy: &sess.sandbox_policy,
                 codex_linux_sandbox_exe: &sess.codex_linux_sandbox_exe,
                 stdout_stream: Some(StdoutStream {
@@ -2104,7 +2080,6 @@ async fn handle_sandbox_error(
                     ExecInvokeArgs {
                         params,
                         sandbox_type: SandboxType::None,
-                        ctrl_c: sess.ctrl_c.clone(),
                         sandbox_policy: &sess.sandbox_policy,
                         codex_linux_sandbox_exe: &sess.codex_linux_sandbox_exe,
                         stdout_stream: Some(StdoutStream {
