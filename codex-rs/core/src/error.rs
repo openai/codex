@@ -43,7 +43,7 @@ pub enum CodexErr {
     ///
     /// The Session loop treats this as a transient error and will automatically retry the turn.
     ///
-    /// Optionally includes the delay to wait before retrying the turn.
+    /// Optionally includes the requested delay before retrying the turn.
     #[error("stream disconnected before completion: {0}")]
     Stream(String, Option<Duration>),
 

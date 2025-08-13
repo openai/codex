@@ -1308,7 +1308,7 @@ async fn run_turn(
                         _ => backoff(retries),
                     };
                     warn!(
-                        "stream disconnected - retrying turn ({retries}/{max_retries} in {delay:?}) {e:?}...",
+                        "stream disconnected - retrying turn ({retries}/{max_retries} in {delay:?})...",
                     );
 
                     // Surface retry information to any UI/front‑end so the
