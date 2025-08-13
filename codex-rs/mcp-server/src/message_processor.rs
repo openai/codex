@@ -7,6 +7,7 @@ use crate::codex_tool_config::CodexToolCallParam;
 use crate::codex_tool_config::CodexToolCallReplyParam;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_param;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_reply_param;
+use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::mcp_protocol::ToolCallRequestParams;
 use crate::mcp_protocol::ToolCallResponse;
 use crate::mcp_protocol::ToolCallResponseResult;
@@ -191,7 +192,7 @@ impl MessageProcessor {
         if self.initialized {
             // Already initialised: send JSON-RPC error response.
             let error = JSONRPCErrorError {
-                code: -32600, // Invalid Request
+                code: INVALID_REQUEST_ERROR_CODE,
                 message: "initialize called more than once".to_string(),
                 data: None,
             };
@@ -230,9 +231,6 @@ impl MessageProcessor {
     where
         T: ModelContextProtocolRequest,
     {
-        // result has `Serialized` instance so should never fail
-        #[expect(clippy::unwrap_used)]
-        let result = serde_json::to_value(result).unwrap();
         self.outgoing.send_response(id, result).await;
     }
 
@@ -533,9 +531,7 @@ impl MessageProcessor {
                     is_error: Some(true),
                     structured_content: None,
                 };
-                outgoing
-                    .send_response(request_id, serde_json::to_value(result).unwrap_or_default())
-                    .await;
+                outgoing.send_response(request_id, result).await;
                 return;
             }
         };
