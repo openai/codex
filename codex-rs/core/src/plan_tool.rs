@@ -42,7 +42,9 @@ pub(crate) static PLAN_TOOL: LazyLock<OpenAiTool> = LazyLock::new(|| {
     plan_item_props.insert("step".to_string(), JsonSchema::String { description: None });
     plan_item_props.insert(
         "status".to_string(),
-        JsonSchema::String { description: None },
+        JsonSchema::String {
+            description: Some("One of: pending, in_progress, completed".to_string()),
+        },
     );
 
     let plan_items_schema = JsonSchema::Array {
@@ -63,17 +65,11 @@ pub(crate) static PLAN_TOOL: LazyLock<OpenAiTool> = LazyLock::new(|| {
 
     OpenAiTool::Function(ResponsesApiTool {
         name: "update_plan".to_string(),
-        description: r#"Use the update_plan tool to keep the user updated on the current plan for the task.
-After understanding the user's task, call the update_plan tool with an initial plan. An example of a plan:
-1. Explore the codebase to find relevant files (status: in_progress)
-2. Implement the feature in the XYZ component (status: pending)
-3. Commit changes and make a pull request (status: pending)
-Each step should be a short, 1-sentence description.
-Until all the steps are finished, there should always be exactly one in_progress step in the plan.
-Call the update_plan tool whenever you finish a step, marking the completed step as `completed` and marking the next step as `in_progress`.
-Before running a command, consider whether or not you have completed the previous step, and make sure to mark it as completed before moving on to the next step.
-Sometimes, you may need to change plans in the middle of a task: call `update_plan` with the updated plan and make sure to provide an `explanation` of the rationale when doing so.
-When all steps are completed, call update_plan one last time with all steps marked as `completed`."#.to_string(),
+        description: r#"Updates the task plan.
+Provide an optional explanation and a list of plan items, each with a step and status.
+At most one step can be in_progress at a time.
+"#
+        .to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
