@@ -652,8 +652,8 @@ impl ChatWidget<'_> {
 
     pub(crate) fn add_diff_output(&mut self, diff_output: String) {
         self.bottom_pane.set_task_running(false);
-        self.bottom_pane.clear_live_ring();
         self.add_to_history(HistoryCell::new_diff_output(diff_output.clone()));
+        self.mark_needs_redraw();
     }
 
     pub(crate) fn add_status_output(&mut self) {
