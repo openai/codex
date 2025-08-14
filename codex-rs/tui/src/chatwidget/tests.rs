@@ -824,3 +824,64 @@ fn final_reasoning_then_message_without_deltas_are_rendered() {
         .collect::<String>();
     assert_snapshot!(combined);
 }
+
+#[test]
+fn deltas_then_same_final_message_are_rendered_snapshot() {
+    let (mut chat, rx, _op_rx) = make_chatwidget_manual();
+
+    // Stream some reasoning deltas first.
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "I will ".into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "first analyze the ".into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "request.".into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentReasoning(AgentReasoningEvent {
+            text: "request.".into(),
+        }),
+    });
+
+    // Then stream answer deltas, followed by the exact same final message.
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "Here is the ".into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "result.".into(),
+        }),
+    });
+
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "Here is the result.".into(),
+        }),
+    });
+
+    // Snapshot the combined visible content to ensure we render as expected
+    // when deltas are followed by the identical final message.
+    let cells = drain_insert_history(&rx);
+    let combined = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_snapshot!(combined);
+}
