@@ -1160,56 +1160,10 @@ pub fn parse_command_impl(command: &[String]) -> Vec<ParsedCommand> {
     // so summaries reflect the order they will run.
 
     // Map each pipeline segment to its parsed summary.
-    let mut parsed: Vec<(ParsedCommand, Vec<String>)> = parts
+    parts
         .iter()
-        .map(|tokens| (summarize_main_tokens(tokens), tokens.clone()))
-        .collect();
-    parsed.retain(|(pc, _)| !matches!(pc, ParsedCommand::Noop { .. }));
-
-    // If a pipeline ends with `nl` using only flags (e.g., `| nl -ba`), drop it so the
-    // main action (e.g., a sed range over a file) is surfaced cleanly.
-    if parsed.len() >= 2 {
-        let has_and_and = normalized.iter().any(|t| t == "&&");
-        let contains_test = parsed
-            .iter()
-            .any(|(pc, _)| matches!(pc, ParsedCommand::Test { .. }));
-        parsed.retain(|(pc, tokens)| match pc {
-            ParsedCommand::Unknown { .. } => {
-                if let Some(first) = tokens.first() {
-                    // Drop cosmetic echo segments in chained commands
-                    if has_and_and && first == "echo" {
-                        return false;
-                    }
-                    // In non-bash chained commands, ignore directory changes like `cd foo`
-                    // when the sequence includes a recognized test command. Preserve `cd`
-                    // for other sequences (e.g., followed by a search command).
-                    if has_and_and && contains_test && first == "cd" {
-                        return false;
-                    }
-                    // Drop no-op commands like `true`
-                    if tokens.len() == 1 && first == "true" {
-                        return false;
-                    }
-                    if first == "nl" {
-                        // Treat `nl` without an explicit file operand as formatting-only.
-                        return tokens.iter().skip(1).any(|a| !a.starts_with('-'));
-                    }
-                }
-                true
-            }
-            _ => true,
-        });
-    }
-
-    // Also drop standalone `true` commands when not part of a chained `&&` context above
-    parsed.retain(|(pc, tokens)| match pc {
-        ParsedCommand::Unknown { .. } => {
-            !(tokens.len() == 1 && tokens.first().is_some_and(|s| s == "true"))
-        }
-        _ => true,
-    });
-
-    parsed.into_iter().map(|(pc, _)| pc).collect()
+        .map(|tokens| summarize_main_tokens(tokens))
+        .collect()
 }
 
 /// Validates that this is a `sed -n 123,123p` command.
@@ -1545,7 +1499,9 @@ fn parse_bash_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
                     .into_iter()
                     .map(|tokens| summarize_main_tokens(&tokens))
                     .collect();
-                commands.retain(|pc| !matches!(pc, ParsedCommand::Noop { .. }));
+                if commands.len() > 1 {
+                    commands.retain(|pc| !matches!(pc, ParsedCommand::Noop { .. }));
+                }
                 if commands.len() == 1 {
                     // If we reduced to a single command, attribute the full original script
                     // for clearer UX in file-reading and listing scenarios, or when there were
