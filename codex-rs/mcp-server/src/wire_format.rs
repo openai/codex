@@ -36,7 +36,11 @@ pub enum ClientRequest {
         request_id: RequestId,
         params: SendUserMessageParams,
     },
-
+    InterruptConversation {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: InterruptConversationParams,
+    },
     AddConversationListener {
         #[serde(rename = "id")]
         request_id: RequestId,
@@ -111,6 +115,16 @@ pub struct SendUserMessageParams {
     pub conversation_id: ConversationId,
     pub items: Vec<InputItem>,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct InterruptConversationParams {
+    pub conversation_id: ConversationId,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct InterruptConversationResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
