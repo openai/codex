@@ -289,3 +289,27 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[cfg(target_os = "windows")]
+mod tests_windows {
+    use super::*;
+
+    #[test]
+    fn test_powershell_strips_bash_lc() {
+        let shell = Shell::PowerShell(PowerShellShell {
+            exe: "pwsh.exe".to_string(),
+        });
+
+        let input = vec!["bash".to_string(), "-lc".to_string(), "echo hello".to_string()];
+
+        let out = shell
+            .format_default_shell_invocation(input)
+            .expect("expected wrapped command");
+
+        assert_eq!(
+            out,
+            vec!["pwsh.exe".to_string(), "-NoProfile".to_string(), "-Command".to_string(), "echo hello".to_string()]
+        );
+    }
+}
