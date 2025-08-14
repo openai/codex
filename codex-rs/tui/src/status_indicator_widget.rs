@@ -163,7 +163,7 @@ impl WidgetRef for StatusIndicatorWidget {
         let spinner_ch = spinner_frames[(idx / SPINNER_SLOWDOWN) % spinner_frames.len()];
         spans.push(Span::styled(
             spinner_ch.to_string(),
-            Style::default().fg(Color::DarkGray),
+            Style::default().add_modifier(Modifier::DIM),
         ));
         spans.push(Span::raw(" "));
 
@@ -176,27 +176,25 @@ impl WidgetRef for StatusIndicatorWidget {
         let bracket_prefix = format!("({elapsed}s • ");
         spans.push(Span::styled(
             bracket_prefix,
-            Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+            Style::default().add_modifier(Modifier::DIM),
         ));
         spans.push(Span::styled(
             "Esc",
-            Style::default()
-                .fg(Color::Gray)
-                .add_modifier(Modifier::DIM | Modifier::BOLD),
+            Style::default().add_modifier(Modifier::DIM | Modifier::BOLD),
         ));
         spans.push(Span::styled(
             " to interrupt)",
-            Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+            Style::default().add_modifier(Modifier::DIM),
         ));
         // Add a space and then the log text (not animated by the gradient)
         if !status_prefix.is_empty() {
             spans.push(Span::styled(
                 " ",
-                Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+                Style::default().add_modifier(Modifier::DIM),
             ));
             spans.push(Span::styled(
                 status_prefix,
-                Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
+                Style::default().add_modifier(Modifier::DIM),
             ));
         }
 

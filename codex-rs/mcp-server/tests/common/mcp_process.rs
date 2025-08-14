@@ -18,6 +18,10 @@ use codex_mcp_server::mcp_protocol::ConversationCreateArgs;
 use codex_mcp_server::mcp_protocol::ConversationId;
 use codex_mcp_server::mcp_protocol::ConversationSendMessageArgs;
 use codex_mcp_server::mcp_protocol::ToolCallRequestParams;
+use codex_mcp_server::wire_format::AddConversationListenerParams;
+use codex_mcp_server::wire_format::NewConversationParams;
+use codex_mcp_server::wire_format::RemoveConversationListenerParams;
+use codex_mcp_server::wire_format::SendUserMessageParams;
 
 use mcp_types::CallToolRequestParams;
 use mcp_types::ClientCapabilities;
@@ -236,6 +240,47 @@ impl McpProcess {
         .await
     }
 
+    // ---------------------------------------------------------------------
+    // Codex JSON-RPC (non-tool) helpers
+    // ---------------------------------------------------------------------
+    /// Send a `newConversation` JSON-RPC request.
+    pub async fn send_new_conversation_request(
+        &mut self,
+        params: NewConversationParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("newConversation", params).await
+    }
+
+    /// Send an `addConversationListener` JSON-RPC request.
+    pub async fn send_add_conversation_listener_request(
+        &mut self,
+        params: AddConversationListenerParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("addConversationListener", params).await
+    }
+
+    /// Send a `sendUserMessage` JSON-RPC request with a single text item.
+    pub async fn send_send_user_message_request(
+        &mut self,
+        params: SendUserMessageParams,
+    ) -> anyhow::Result<i64> {
+        // Wire format expects variants in camelCase; text item uses external tagging.
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("sendUserMessage", params).await
+    }
+
+    /// Send a `removeConversationListener` JSON-RPC request.
+    pub async fn send_remove_conversation_listener_request(
+        &mut self,
+        params: RemoveConversationListenerParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("removeConversationListener", params)
+            .await
+    }
+
     async fn send_request(
         &mut self,
         method: &str,
@@ -324,6 +369,33 @@ impl McpProcess {
                     if jsonrpc_response.id == request_id {
                         return Ok(jsonrpc_response);
                     }
+                }
+            }
+        }
+    }
+
+    pub async fn read_stream_until_notification_message(
+        &mut self,
+        method: &str,
+    ) -> anyhow::Result<JSONRPCNotification> {
+        loop {
+            let message = self.read_jsonrpc_message().await?;
+            eprint!("message: {message:?}");
+
+            match message {
+                JSONRPCMessage::Notification(notification) => {
+                    if notification.method == method {
+                        return Ok(notification);
+                    }
+                }
+                JSONRPCMessage::Request(_) => {
+                    anyhow::bail!("unexpected JSONRPCMessage::Request: {message:?}");
+                }
+                JSONRPCMessage::Error(_) => {
+                    anyhow::bail!("unexpected JSONRPCMessage::Error: {message:?}");
+                }
+                JSONRPCMessage::Response(_) => {
+                    anyhow::bail!("unexpected JSONRPCMessage::Response: {message:?}");
                 }
             }
         }

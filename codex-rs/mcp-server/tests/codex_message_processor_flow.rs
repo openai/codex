@@ -1,0 +1,193 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+
+use std::path::Path;
+
+use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_mcp_server::wire_format::AddConversationListenerParams;
+use codex_mcp_server::wire_format::AddConversationSubscriptionResponse;
+use codex_mcp_server::wire_format::NewConversationParams;
+use codex_mcp_server::wire_format::NewConversationResponse;
+use codex_mcp_server::wire_format::RemoveConversationListenerParams;
+use codex_mcp_server::wire_format::RemoveConversationSubscriptionResponse;
+use codex_mcp_server::wire_format::SendUserMessageParams;
+use codex_mcp_server::wire_format::SendUserMessageResponse;
+use mcp_test_support::McpProcess;
+use mcp_test_support::create_final_assistant_message_sse_response;
+use mcp_test_support::create_mock_chat_completions_server;
+use mcp_test_support::create_shell_sse_response;
+use mcp_types::JSONRPCNotification;
+use mcp_types::JSONRPCResponse;
+use mcp_types::RequestId;
+use pretty_assertions::assert_eq;
+use serde::de::DeserializeOwned;
+use std::env;
+use tempfile::TempDir;
+use tokio::time::timeout;
+
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_codex_jsonrpc_conversation_flow() {
+    if env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+        );
+        return;
+    }
+
+    let tmp = TempDir::new().expect("tmp dir");
+    // Temporary Codex home with config pointing at the mock server.
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home).expect("create codex home dir");
+    let working_directory = tmp.path().join("workdir");
+    std::fs::create_dir(&working_directory).expect("create working directory");
+
+    // Create a mock model server that immediately ends each turn.
+    // Two turns are expected: initial session configure + one user message.
+    let responses = vec![
+        create_shell_sse_response(
+            vec!["ls".to_string()],
+            Some(&working_directory),
+            Some(5000),
+            "call1234",
+        )
+        .expect("create shell sse response"),
+        create_final_assistant_message_sse_response("Enjoy your new git repo!")
+            .expect("create final assistant message"),
+    ];
+    let server = create_mock_chat_completions_server(responses).await;
+    create_config_toml(&codex_home, &server.uri()).expect("write config");
+
+    // Start MCP server and initialize.
+    let mut mcp = McpProcess::new(&codex_home).await.expect("spawn mcp");
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize())
+        .await
+        .expect("init timeout")
+        .expect("init error");
+
+    // 1) newConversation
+    let new_conv_id = mcp
+        .send_new_conversation_request(NewConversationParams {
+            cwd: Some(working_directory.to_string_lossy().into_owned()),
+            ..Default::default()
+        })
+        .await
+        .expect("send newConversation");
+    let new_conv_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(new_conv_id)),
+    )
+    .await
+    .expect("newConversation timeout")
+    .expect("newConversation resp");
+    let new_conv_resp = to_response::<NewConversationResponse>(new_conv_resp)
+        .expect("deserialize newConversation response");
+    let NewConversationResponse {
+        conversation_id,
+        model,
+    } = new_conv_resp;
+    assert_eq!(model, "mock-model");
+
+    // 2) addConversationListener
+    let add_listener_id = mcp
+        .send_add_conversation_listener_request(AddConversationListenerParams { conversation_id })
+        .await
+        .expect("send addConversationListener");
+    let add_listener_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(add_listener_id)),
+    )
+    .await
+    .expect("addConversationListener timeout")
+    .expect("addConversationListener resp");
+    let AddConversationSubscriptionResponse { subscription_id } =
+        to_response::<AddConversationSubscriptionResponse>(add_listener_resp)
+            .expect("deserialize addConversationListener response");
+
+    // 3) sendUserMessage (should trigger notifications; we only validate an OK response)
+    let send_user_id = mcp
+        .send_send_user_message_request(SendUserMessageParams {
+            conversation_id,
+            items: vec![codex_mcp_server::wire_format::InputItem::Text {
+                text: "text".to_string(),
+            }],
+        })
+        .await
+        .expect("send sendUserMessage");
+    let send_user_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(send_user_id)),
+    )
+    .await
+    .expect("sendUserMessage timeout")
+    .expect("sendUserMessage resp");
+    let SendUserMessageResponse {} = to_response::<SendUserMessageResponse>(send_user_resp)
+        .expect("deserialize sendUserMessage response");
+
+    // Verify the task_finished notification is received.
+    // Note this also ensures that the final request to the server was made.
+    let task_finished_notification: JSONRPCNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+    )
+    .await
+    .expect("task_finished_notification timeout")
+    .expect("task_finished_notification resp");
+    let serde_json::Value::Object(map) = task_finished_notification
+        .params
+        .expect("notification should have params")
+    else {
+        panic!("task_finished_notification should have params");
+    };
+    assert_eq!(
+        map.get("conversationId")
+            .expect("should have conversationId"),
+        &serde_json::Value::String(conversation_id.to_string())
+    );
+
+    // 4) removeConversationListener
+    let remove_listener_id = mcp
+        .send_remove_conversation_listener_request(RemoveConversationListenerParams {
+            subscription_id,
+        })
+        .await
+        .expect("send removeConversationListener");
+    let remove_listener_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(remove_listener_id)),
+    )
+    .await
+    .expect("removeConversationListener timeout")
+    .expect("removeConversationListener resp");
+    let RemoveConversationSubscriptionResponse {} =
+        to_response(remove_listener_resp).expect("deserialize removeConversationListener response");
+}
+
+fn to_response<T: DeserializeOwned>(response: JSONRPCResponse) -> anyhow::Result<T> {
+    let value = serde_json::to_value(response.result)?;
+    let codex_response = serde_json::from_value(value)?;
+    Ok(codex_response)
+}
+
+// Helper: minimal config.toml pointing at mock provider.
+fn create_config_toml(codex_home: &Path, server_uri: &str) -> std::io::Result<()> {
+    let config_toml = codex_home.join("config.toml");
+    std::fs::write(
+        config_toml,
+        format!(
+            r#"
+model = "mock-model"
+approval_policy = "never"
+
+model_provider = "mock_provider"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{server_uri}/v1"
+wire_api = "chat"
+request_max_retries = 0
+stream_max_retries = 0
+"#
+        ),
+    )
+}

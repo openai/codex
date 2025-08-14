@@ -3,16 +3,19 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::codex_message_processor::CodexMessageProcessor;
 use crate::codex_tool_config::CodexToolCallParam;
 use crate::codex_tool_config::CodexToolCallReplyParam;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_param;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_reply_param;
+use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::mcp_protocol::ToolCallRequestParams;
 use crate::mcp_protocol::ToolCallResponse;
 use crate::mcp_protocol::ToolCallResponseResult;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::tool_handlers::create_conversation::handle_create_conversation;
 use crate::tool_handlers::send_message::handle_send_message;
+use crate::wire_format::ClientRequest;
 
 use codex_core::ConversationManager;
 use codex_core::config::Config as CodexConfig;
@@ -20,7 +23,7 @@ use codex_core::protocol::Submission;
 use mcp_types::CallToolRequest;
 use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
-use mcp_types::ClientRequest;
+use mcp_types::ClientRequest as McpClientRequest;
 use mcp_types::ContentBlock;
 use mcp_types::JSONRPCError;
 use mcp_types::JSONRPCErrorError;
@@ -39,6 +42,7 @@ use tokio::task;
 use uuid::Uuid;
 
 pub(crate) struct MessageProcessor {
+    codex_message_processor: CodexMessageProcessor,
     outgoing: Arc<OutgoingMessageSender>,
     initialized: bool,
     codex_linux_sandbox_exe: Option<PathBuf>,
@@ -54,11 +58,19 @@ impl MessageProcessor {
         outgoing: OutgoingMessageSender,
         codex_linux_sandbox_exe: Option<PathBuf>,
     ) -> Self {
+        let outgoing = Arc::new(outgoing);
+        let conversation_manager = Arc::new(ConversationManager::default());
+        let codex_message_processor = CodexMessageProcessor::new(
+            conversation_manager.clone(),
+            outgoing.clone(),
+            codex_linux_sandbox_exe.clone(),
+        );
         Self {
-            outgoing: Arc::new(outgoing),
+            codex_message_processor,
+            outgoing,
             initialized: false,
             codex_linux_sandbox_exe,
-            conversation_manager: Arc::new(ConversationManager::default()),
+            conversation_manager,
             running_requests_id_to_codex_uuid: Arc::new(Mutex::new(HashMap::new())),
             running_session_ids: Arc::new(Mutex::new(HashSet::new())),
         }
@@ -77,10 +89,21 @@ impl MessageProcessor {
     }
 
     pub(crate) async fn process_request(&mut self, request: JSONRPCRequest) {
+        if let Ok(request_json) = serde_json::to_value(request.clone())
+            && let Ok(codex_request) = serde_json::from_value::<ClientRequest>(request_json)
+        {
+            // If the request is a Codex request, handle it with the Codex
+            // message processor.
+            self.codex_message_processor
+                .process_request(codex_request)
+                .await;
+            return;
+        }
+
         // Hold on to the ID so we can respond.
         let request_id = request.id.clone();
 
-        let client_request = match ClientRequest::try_from(request) {
+        let client_request = match McpClientRequest::try_from(request) {
             Ok(client_request) => client_request,
             Err(e) => {
                 tracing::warn!("Failed to convert request: {e}");
@@ -90,43 +113,43 @@ impl MessageProcessor {
 
         // Dispatch to a dedicated handler for each request type.
         match client_request {
-            ClientRequest::InitializeRequest(params) => {
+            McpClientRequest::InitializeRequest(params) => {
                 self.handle_initialize(request_id, params).await;
             }
-            ClientRequest::PingRequest(params) => {
+            McpClientRequest::PingRequest(params) => {
                 self.handle_ping(request_id, params).await;
             }
-            ClientRequest::ListResourcesRequest(params) => {
+            McpClientRequest::ListResourcesRequest(params) => {
                 self.handle_list_resources(params);
             }
-            ClientRequest::ListResourceTemplatesRequest(params) => {
+            McpClientRequest::ListResourceTemplatesRequest(params) => {
                 self.handle_list_resource_templates(params);
             }
-            ClientRequest::ReadResourceRequest(params) => {
+            McpClientRequest::ReadResourceRequest(params) => {
                 self.handle_read_resource(params);
             }
-            ClientRequest::SubscribeRequest(params) => {
+            McpClientRequest::SubscribeRequest(params) => {
                 self.handle_subscribe(params);
             }
-            ClientRequest::UnsubscribeRequest(params) => {
+            McpClientRequest::UnsubscribeRequest(params) => {
                 self.handle_unsubscribe(params);
             }
-            ClientRequest::ListPromptsRequest(params) => {
+            McpClientRequest::ListPromptsRequest(params) => {
                 self.handle_list_prompts(params);
             }
-            ClientRequest::GetPromptRequest(params) => {
+            McpClientRequest::GetPromptRequest(params) => {
                 self.handle_get_prompt(params);
             }
-            ClientRequest::ListToolsRequest(params) => {
+            McpClientRequest::ListToolsRequest(params) => {
                 self.handle_list_tools(request_id, params).await;
             }
-            ClientRequest::CallToolRequest(params) => {
+            McpClientRequest::CallToolRequest(params) => {
                 self.handle_call_tool(request_id, params).await;
             }
-            ClientRequest::SetLevelRequest(params) => {
+            McpClientRequest::SetLevelRequest(params) => {
                 self.handle_set_level(params);
             }
-            ClientRequest::CompleteRequest(params) => {
+            McpClientRequest::CompleteRequest(params) => {
                 self.handle_complete(params);
             }
         }
@@ -191,7 +214,7 @@ impl MessageProcessor {
         if self.initialized {
             // Already initialised: send JSON-RPC error response.
             let error = JSONRPCErrorError {
-                code: -32600, // Invalid Request
+                code: INVALID_REQUEST_ERROR_CODE,
                 message: "initialize called more than once".to_string(),
                 data: None,
             };
@@ -230,9 +253,6 @@ impl MessageProcessor {
     where
         T: ModelContextProtocolRequest,
     {
-        // result has `Serialized` instance so should never fail
-        #[expect(clippy::unwrap_used)]
-        let result = serde_json::to_value(result).unwrap();
         self.outgoing.send_response(id, result).await;
     }
 
@@ -533,9 +553,7 @@ impl MessageProcessor {
                     is_error: Some(true),
                     structured_content: None,
                 };
-                outgoing
-                    .send_response(request_id, serde_json::to_value(result).unwrap_or_default())
-                    .await;
+                outgoing.send_response(request_id, result).await;
                 return;
             }
         };

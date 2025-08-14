@@ -85,7 +85,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
     assert_eq!(requests.len(), 2, "expected two POST requests");
 
     let expected_env_text = format!(
-        "<environment_context>\n\nCurrent working directory: {}\nApproval policy: on-request\nSandbox policy: read-only\nNetwork access: restricted\n\n\n</environment_context>",
+        "<environment_context>\nCurrent working directory: {}\nApproval policy: on-request\nSandbox mode: read-only\nNetwork access: restricted\n</environment_context>",
         cwd.path().to_string_lossy()
     );
     let expected_ui_text =
@@ -113,7 +113,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
     let body1 = requests[0].body_json::<serde_json::Value>().unwrap();
     assert_eq!(
         body1["input"],
-        serde_json::json!([expected_env_msg, expected_ui_msg, expected_user_message_1])
+        serde_json::json!([expected_ui_msg, expected_env_msg, expected_user_message_1])
     );
 
     let expected_user_message_2 = serde_json::json!({
