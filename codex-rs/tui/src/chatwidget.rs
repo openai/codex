@@ -166,7 +166,6 @@ impl ChatWidget<'_> {
     fn on_task_started(&mut self) {
         self.bottom_pane.clear_ctrl_c_quit_hint();
         self.bottom_pane.set_task_running(true);
-        self.set_waiting_for_model_status();
         self.stream.reset_headers_for_new_turn();
         self.last_stream_kind = None;
         self.mark_needs_redraw();
@@ -339,15 +338,8 @@ impl ChatWidget<'_> {
     }
 
     #[inline]
-    fn set_waiting_for_model_status(&mut self) {
-        self.bottom_pane
-            .update_status_text("waiting for model".to_string());
-    }
-
-    #[inline]
     fn handle_streaming_delta(&mut self, kind: StreamKind, delta: String) {
         let sink = AppEventHistorySink(self.app_event_tx.clone());
-        self.set_waiting_for_model_status();
         self.stream.begin(kind, &sink);
         self.last_stream_kind = Some(kind);
         self.stream.push_and_maybe_commit(&delta, &sink);
@@ -437,8 +429,6 @@ impl ChatWidget<'_> {
 
     pub(crate) fn handle_exec_begin_now(&mut self, ev: ExecCommandBeginEvent) {
         // Ensure the status indicator is visible while the command runs.
-        self.bottom_pane
-            .update_status_text("running command".to_string());
         self.running_commands.insert(
             ev.call_id.clone(),
             RunningCommand {
@@ -667,13 +657,6 @@ impl ChatWidget<'_> {
         if self.needs_redraw {
             self.request_redraw();
             self.needs_redraw = false;
-        }
-    }
-
-    /// Update the live log preview while a task is running.
-    pub(crate) fn update_latest_log(&mut self, line: String) {
-        if self.bottom_pane.is_task_running() {
-            self.bottom_pane.update_status_text(line);
         }
     }
 

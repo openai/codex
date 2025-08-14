@@ -183,12 +183,6 @@ impl App<'_> {
         }
     }
 
-    /// Clone of the internal event sender so external tasks (e.g. log bridge)
-    /// can inject `AppEvent`s.
-    pub fn event_sender(&self) -> AppEventSender {
-        self.app_event_tx.clone()
-    }
-
     /// Schedule a redraw if one is not already pending.
     #[allow(clippy::unwrap_used)]
     fn schedule_redraw(&self) {
@@ -323,10 +317,6 @@ impl App<'_> {
                 }
                 AppEvent::CodexOp(op) => match &mut self.app_state {
                     AppState::Chat { widget } => widget.submit_op(op),
-                    AppState::Onboarding { .. } => {}
-                },
-                AppEvent::LatestLog(line) => match &mut self.app_state {
-                    AppState::Chat { widget } => widget.update_latest_log(line),
                     AppState::Onboarding { .. } => {}
                 },
                 AppEvent::DispatchCommand(command) => match command {
