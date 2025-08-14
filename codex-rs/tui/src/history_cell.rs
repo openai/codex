@@ -248,18 +248,19 @@ fn new_parsed_command(
             ParsedCommand::Read { name, .. } => format!("📖 {name}"),
             ParsedCommand::ListFiles { cmd, path } => match path {
                 Some(p) => format!("📂 {p}"),
-                None => format!("📂 {}", shlex_join_safe(cmd)),
+                None => format!("📂 {cmd}"),
             },
             ParsedCommand::Search { query, path, cmd } => match (query, path) {
                 (Some(q), Some(p)) => format!("🔎 {q} in {p}"),
                 (Some(q), None) => format!("🔎 {q}"),
                 (None, Some(p)) => format!("🔎 {p}"),
-                (None, None) => format!("🔎 {}", shlex_join_safe(cmd)),
+                (None, None) => format!("🔎 {cmd}"),
             },
             ParsedCommand::Format { .. } => "✨ Formatting".to_string(),
-            ParsedCommand::Test { cmd } => format!("🧪 {}", shlex_join_safe(cmd)),
-            ParsedCommand::Lint { cmd, .. } => format!("🧹 {}", shlex_join_safe(cmd)),
-            ParsedCommand::Unknown { cmd } => format!("⌨️ {}", shlex_join_safe(cmd)),
+            ParsedCommand::Test { cmd } => format!("🧪 {cmd}"),
+            ParsedCommand::Lint { cmd, .. } => format!("🧹 {cmd}"),
+            ParsedCommand::Unknown { cmd } => format!("⌨️ {cmd}"),
+            ParsedCommand::Noop { cmd } => format!("🔄 {cmd}"),
         };
 
         let first_prefix = if i == 0 { "  └ " } else { "    " };
@@ -856,13 +857,6 @@ fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
     Line::from(invocation_spans)
 }
 
-fn shlex_join_safe(command: &[String]) -> String {
-    match shlex::try_join(command.iter().map(|s| s.as_str())) {
-        Ok(cmd) => cmd,
-        Err(_) => command.join(" "),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -870,7 +864,7 @@ mod tests {
     #[test]
     fn parsed_command_with_newlines_starts_each_line_at_origin() {
         let parsed = vec![ParsedCommand::Unknown {
-            cmd: vec!["printf".into(), "foo\nbar".into()],
+            cmd: "printf 'foo\nbar'".to_string(),
         }];
         let lines = exec_command_lines(&[], &parsed, None);
         assert!(lines.len() >= 3);

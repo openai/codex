@@ -1,6 +1,9 @@
 #![cfg(target_os = "macos")]
 #![expect(clippy::expect_used)]
 
+//! Tests for the macOS sandboxing that are specific to Seatbelt.
+//! Tests that apply to both Mac and Linux sandboxing should go in sandbox.rs.
+
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;

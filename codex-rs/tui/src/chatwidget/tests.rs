@@ -206,7 +206,7 @@ fn exec_history_cell_shows_working_then_completed() {
             command: vec!["bash".into(), "-lc".into(), "echo done".into()],
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             parsed_cmd: vec![codex_core::parse_command::ParsedCommand::Unknown {
-                cmd: vec!["echo".into(), "done".into()],
+                cmd: "echo done".into(),
             }],
         }),
     });
@@ -248,7 +248,7 @@ fn exec_history_cell_shows_working_then_failed() {
             command: vec!["bash".into(), "-lc".into(), "false".into()],
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             parsed_cmd: vec![codex_core::parse_command::ParsedCommand::Unknown {
-                cmd: vec!["false".into()],
+                cmd: "false".into(),
             }],
         }),
     });

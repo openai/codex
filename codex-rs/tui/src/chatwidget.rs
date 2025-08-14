@@ -613,7 +613,7 @@ impl ChatWidget<'_> {
             | EventMsg::AgentReasoningDelta(_)
             | EventMsg::ExecCommandOutputDelta(_) => {}
             _ => {
-                tracing::info!("handle_codex_event: {:?}", msg);
+                tracing::trace!("handle_codex_event: {:?}", msg);
             }
         }
 
