@@ -28,7 +28,7 @@ use codex_core::protocol::TokenUsage;
 use codex_core::protocol::TurnDiffEvent;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
-use rand::prelude::IndexedRandom;
+use rand::Rng;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
@@ -502,7 +502,7 @@ impl ChatWidget<'_> {
         enhanced_keys_supported: bool,
     ) -> Self {
         let mut rng = rand::rng();
-        let placeholder = EXAMPLE_PROMPTS.choose(&mut rng).unwrap().to_string();
+        let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
 
         Self {
