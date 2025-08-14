@@ -217,17 +217,6 @@ impl WidgetRef for StatusIndicatorWidget {
         let mut spans: Vec<Span<'static>> = Vec::new();
         spans.push(Span::styled("▌ ", Style::default().fg(Color::Cyan)));
 
-        // Simple dim spinner to the left of the header.
-        let spinner_frames = ['·', '•', '●', '•'];
-        const SPINNER_SLOWDOWN: usize = 2;
-        let spinner_ch = spinner_frames[(idx / SPINNER_SLOWDOWN) % spinner_frames.len()];
-        spans.push(Span::styled(
-            spinner_ch.to_string(),
-            Style::default().add_modifier(Modifier::DIM),
-        ));
-        spans.push(Span::raw(" "));
-
-        // Space after header
         // Animated header after the left bar
         spans.extend(animated_spans);
         // Space between header and bracket block
@@ -336,7 +325,7 @@ mod tests {
     }
 
     #[test]
-    fn spinner_is_rendered() {
+    fn header_starts_at_expected_position() {
         let (tx_raw, _rx) = channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut w = StatusIndicatorWidget::new(tx);
@@ -348,9 +337,6 @@ mod tests {
         w.render_ref(area, &mut buf);
 
         let ch = buf[(2, 0)].symbol().chars().next().unwrap_or(' ');
-        assert!(
-            matches!(ch, '·' | '•' | '●'),
-            "expected spinner char at col 2: {ch:?}"
-        );
+        assert_eq!(ch, 'W', "expected Working header at col 2: {ch:?}");
     }
 }
