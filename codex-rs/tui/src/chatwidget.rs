@@ -133,6 +133,7 @@ impl ChatWidget<'_> {
     fn on_agent_message(&mut self, message: String) {
         let sink = AppEventHistorySink(self.app_event_tx.clone());
         let finished = self.stream.apply_final_answer(&message, &sink);
+        self.last_stream_kind = Some(StreamKind::Answer);
         self.handle_if_stream_finished(finished);
         self.mark_needs_redraw();
     }
@@ -145,9 +146,10 @@ impl ChatWidget<'_> {
         self.handle_streaming_delta(StreamKind::Reasoning, delta);
     }
 
-    fn on_agent_reasoning_final(&mut self) {
+    fn on_agent_reasoning_final(&mut self, text: String) {
         let sink = AppEventHistorySink(self.app_event_tx.clone());
-        let finished = self.stream.finalize(StreamKind::Reasoning, false, &sink);
+        let finished = self.stream.apply_final_reasoning(&text, &sink);
+        self.last_stream_kind = Some(StreamKind::Reasoning);
         self.handle_if_stream_finished(finished);
         self.mark_needs_redraw();
     }
@@ -633,9 +635,9 @@ impl ChatWidget<'_> {
             | EventMsg::AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent {
                 delta,
             }) => self.on_agent_reasoning_delta(delta),
-            EventMsg::AgentReasoning(AgentReasoningEvent { .. })
-            | EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { .. }) => {
-                self.on_agent_reasoning_final()
+            EventMsg::AgentReasoning(AgentReasoningEvent { text })
+            | EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text }) => {
+                self.on_agent_reasoning_final(text)
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
             EventMsg::TaskStarted => self.on_task_started(),
