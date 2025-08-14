@@ -23,6 +23,7 @@ use codex_core::protocol::TaskCompleteEvent;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
+use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 use std::fs::File;
 use std::io::BufRead;
@@ -815,30 +816,11 @@ fn final_reasoning_then_message_without_deltas_are_rendered() {
         }),
     });
 
-    // Drain history and assert both reasoning and message are visible.
+    // Drain history and snapshot the combined visible content.
     let cells = drain_insert_history(&rx);
     let combined = cells
         .iter()
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
-    assert!(
-        combined.contains("I will first analyze the request."),
-        "expected final reasoning text to be visible in UI history: {combined:?}"
-    );
-    assert!(
-        combined.contains("Here is the result."),
-        "expected final message text to be visible in UI history: {combined:?}"
-    );
-
-    // Ensure reasoning appears before the final message.
-    let idx_reasoning = combined
-        .find("I will first analyze the request.")
-        .expect("reasoning text not found");
-    let idx_message = combined
-        .find("Here is the result.")
-        .expect("message text not found");
-    assert!(
-        idx_reasoning < idx_message,
-        "reasoning should precede message: {combined:?}"
-    );
+    assert_snapshot!(combined);
 }
