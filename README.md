@@ -568,11 +568,11 @@ We're excited to launch a **$1 million initiative** supporting open source proje
 
 This project is under active development and the code will likely change pretty significantly.
 
-**At the moment, we will prioritize reviewing external contributions for bugs or security fixes.**
+**At the moment, we only plan to prioritize reviewing external contributions for bugs or security fixes.**
 
 If you want to add a new feature or change the behavior of an existing one, please open an issue proposing the feature and get approval from an OpenAI team member before spending time building it.
 
-**New contributions that don't go through this process may be closed** if they aren't aligned or conflict with other priorities/upcoming features.
+**New contributions that don't go through this process may be closed** if they aren't aligned with our current roadmap or conflict with other priorities/upcoming features.
 
 ### Development workflow
 
@@ -598,7 +598,7 @@ If you want to add a new feature or change the behavior of an existing one, plea
 
 1. One maintainer will be assigned as a primary reviewer.
 2. If your PR adds a new feature that was not previously discussed and approved, we may choose to close your PR (cee [Contributing](#contributing)).
-3. We may ask for changes - please do not take this personally. We value the work, we just also value consistency and long-term maintainability.
+3. We may ask for changes - please do not take this personally. We value the work, but we also value consistency and long-term maintainability.
 5. When there is consensus that the PR meets the bar, a maintainer will squash-and-merge.
 
 ### Community values
