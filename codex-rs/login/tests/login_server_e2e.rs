@@ -1,22 +1,19 @@
+#![allow(clippy::unwrap_used)]
 use std::net::SocketAddr;
 use std::net::TcpListener;
 use std::thread;
-use std::time::Duration;
 
 use base64::Engine;
-use codex_login::login_server::ServerOptions;
-use codex_login::login_server::run_server_blocking;
+use codex_login::LoginServerInfo;
+use codex_login::ServerOptions;
+use codex_login::run_server_blocking_with_notify;
 use tempfile::tempdir;
 
 fn start_mock_issuer() -> (SocketAddr, thread::JoinHandle<()>) {
     // Bind to a random available port
-    let listener =
-        TcpListener::bind(("127.0.0.1", 0)).unwrap_or_else(|e| panic!("bind mock issuer: {e}"));
-    let addr = listener
-        .local_addr()
-        .unwrap_or_else(|e| panic!("local_addr: {e}"));
-    let server = tiny_http::Server::from_listener(listener, None)
-        .unwrap_or_else(|e| panic!("tiny_http from_listener: {e}"));
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tiny_http::Server::from_listener(listener, None).unwrap();
 
     let handle = thread::spawn(move || {
         while let Ok(mut req) = server.recv() {
@@ -43,10 +40,8 @@ fn start_mock_issuer() -> (SocketAddr, thread::JoinHandle<()>) {
                     }
                 });
                 let b64 = |b: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b);
-                let header_bytes =
-                    serde_json::to_vec(&header).unwrap_or_else(|e| panic!("serialize header: {e}"));
-                let payload_bytes = serde_json::to_vec(&payload)
-                    .unwrap_or_else(|e| panic!("serialize payload: {e}"));
+                let header_bytes = serde_json::to_vec(&header).unwrap();
+                let payload_bytes = serde_json::to_vec(&payload).unwrap();
                 let id_token = format!(
                     "{}.{}.{}",
                     b64(&header_bytes),
@@ -59,8 +54,7 @@ fn start_mock_issuer() -> (SocketAddr, thread::JoinHandle<()>) {
                     "access_token": "access-123",
                     "refresh_token": "refresh-123",
                 });
-                let data =
-                    serde_json::to_vec(&tokens).unwrap_or_else(|e| panic!("serialize tokens: {e}"));
+                let data = serde_json::to_vec(&tokens).unwrap();
                 let mut resp = tiny_http::Response::from_data(data);
                 resp.add_header(
                     tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
@@ -82,48 +76,37 @@ fn end_to_end_login_flow_persists_auth_json() {
     let (issuer_addr, issuer_handle) = start_mock_issuer();
     let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
 
-    let tmp = tempdir().unwrap_or_else(|e| panic!("tempdir failed: {e}"));
+    let tmp = tempdir().unwrap();
     let codex_home = tmp.path().to_path_buf();
-
-    // Choose a free port for the login server
-    let login_listener =
-        TcpListener::bind(("127.0.0.1", 0)).unwrap_or_else(|e| panic!("bind login: {e}"));
-    let login_port = login_listener
-        .local_addr()
-        .unwrap_or_else(|e| panic!("login local_addr: {e}"))
-        .port();
-    drop(login_listener);
 
     let state = "test_state_123".to_string();
 
     // Run server in background
     let server_home = codex_home.clone();
+
+    let (tx, rx) = std::sync::mpsc::channel::<LoginServerInfo>();
     let server_thread = thread::spawn(move || {
         let opts = ServerOptions {
             codex_home: &server_home,
             client_id: codex_login::CLIENT_ID,
             issuer: &issuer,
-            port_start: login_port,
-            port_end: login_port,
+            port: 0,
             open_browser: false,
             force_state: Some(state),
         };
-        run_server_blocking(opts).unwrap_or_else(|e| panic!("server run: {e}"));
+        run_server_blocking_with_notify(opts, Some(tx), None).unwrap();
     });
 
-    // Give the server a moment to start
-    std::thread::sleep(Duration::from_millis(200));
+    let server_info = rx.recv().unwrap();
+    let login_port = server_info.actual_port;
 
     // Simulate browser callback, and follow redirect to /success
     let client = reqwest::blocking::Client::builder()
         .redirect(reqwest::redirect::Policy::limited(5))
         .build()
-        .unwrap_or_else(|e| panic!("client build: {e}"));
+        .unwrap();
     let url = format!("http://127.0.0.1:{login_port}/auth/callback?code=abc&state=test_state_123");
-    let resp = client
-        .get(&url)
-        .send()
-        .unwrap_or_else(|e| panic!("GET {url}: {e}"));
+    let resp = client.get(&url).send().unwrap();
     assert!(resp.status().is_success());
 
     // Wait for server shutdown
@@ -133,10 +116,8 @@ fn end_to_end_login_flow_persists_auth_json() {
 
     // Validate auth.json
     let auth_path = codex_home.join("auth.json");
-    let data =
-        std::fs::read_to_string(&auth_path).unwrap_or_else(|e| panic!("auth.json exists: {e}"));
-    let json: serde_json::Value =
-        serde_json::from_str(&data).unwrap_or_else(|e| panic!("parse auth.json: {e}"));
+    let data = std::fs::read_to_string(&auth_path).unwrap();
+    let json: serde_json::Value = serde_json::from_str(&data).unwrap();
     assert!(
         !json["OPENAI_API_KEY"].is_null(),
         "OPENAI_API_KEY should be set"
@@ -154,43 +135,32 @@ fn creates_missing_codex_home_dir() {
     let (issuer_addr, _issuer_handle) = start_mock_issuer();
     let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
 
-    let tmp = tempdir().unwrap_or_else(|e| panic!("tempdir failed: {e}"));
+    let tmp = tempdir().unwrap();
     let codex_home = tmp.path().join("missing-subdir"); // does not exist
-
-    // Choose a free port for the login server
-    let login_listener =
-        TcpListener::bind(("127.0.0.1", 0)).unwrap_or_else(|e| panic!("bind login: {e}"));
-    let login_port = login_listener
-        .local_addr()
-        .unwrap_or_else(|e| panic!("login local_addr: {e}"))
-        .port();
-    drop(login_listener);
 
     let state = "state2".to_string();
 
     // Run server in background
     let server_home = codex_home.clone();
+    let (tx, rx) = std::sync::mpsc::channel::<LoginServerInfo>();
     let server_thread = thread::spawn(move || {
         let opts = ServerOptions {
             codex_home: &server_home,
             client_id: codex_login::CLIENT_ID,
             issuer: &issuer,
-            port_start: login_port,
-            port_end: login_port,
+            port: 0,
             open_browser: false,
             force_state: Some(state),
         };
-        run_server_blocking(opts).unwrap_or_else(|e| panic!("server run: {e}"));
+        run_server_blocking_with_notify(opts, Some(tx), None).unwrap()
     });
 
-    std::thread::sleep(Duration::from_millis(200));
+    let server_info = rx.recv().unwrap();
+    let login_port = server_info.actual_port;
 
     let client = reqwest::blocking::Client::new();
     let url = format!("http://127.0.0.1:{login_port}/auth/callback?code=abc&state=state2");
-    let resp = client
-        .get(&url)
-        .send()
-        .unwrap_or_else(|e| panic!("GET {url}: {e}"));
+    let resp = client.get(&url).send().unwrap();
     assert!(resp.status().is_success());
 
     server_thread

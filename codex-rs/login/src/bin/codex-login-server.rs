@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use codex_login::login_server::ServerOptions;
-use codex_login::login_server::run_server_blocking;
+use codex_login::ServerOptions;
+use codex_login::run_server_blocking;
 
 fn main() {
     let codex_home = match std::env::var("CODEX_HOME") {
@@ -17,7 +17,7 @@ fn main() {
         codex_login::CLIENT_ID.to_string()
     });
 
-    let opts = ServerOptions::with_env_defaults(&codex_home, &client_id);
+    let opts = ServerOptions::new(&codex_home, &client_id);
     match run_server_blocking(opts) {
         Ok(()) => std::process::exit(0),
         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => std::process::exit(13),
