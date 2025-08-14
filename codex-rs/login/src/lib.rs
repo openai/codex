@@ -253,7 +253,7 @@ pub fn logout(codex_home: &Path) -> std::io::Result<bool> {
 }
 
 /// Represents a running login subprocess. The child can be killed by holding
-/// the mutex and calling `kill()`.
+/// the mutex and calling `cancel()`.
 #[derive(Debug, Clone)]
 pub struct SpawnedLogin {
     url: Arc<Mutex<Option<String>>>,
@@ -266,7 +266,7 @@ impl SpawnedLogin {
         self.url.lock().ok().and_then(|u| u.clone())
     }
 
-    pub fn try_status(&self) -> Option<bool> {
+    pub fn get_auth_result(&self) -> Option<bool> {
         self.done.lock().ok().and_then(|d| *d)
     }
 

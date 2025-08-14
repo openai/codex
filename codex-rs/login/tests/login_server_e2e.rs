@@ -9,6 +9,9 @@ use codex_login::ServerOptions;
 use codex_login::run_server_blocking_with_notify;
 use tempfile::tempdir;
 
+// See spawn.rs for details
+pub const CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR: &str = "CODEX_SANDBOX_NETWORK_DISABLED";
+
 fn start_mock_issuer() -> (SocketAddr, thread::JoinHandle<()>) {
     // Bind to a random available port
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
@@ -73,6 +76,13 @@ fn start_mock_issuer() -> (SocketAddr, thread::JoinHandle<()>) {
 
 #[test]
 fn end_to_end_login_flow_persists_auth_json() {
+    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+        );
+        return;
+    }
+
     let (issuer_addr, issuer_handle) = start_mock_issuer();
     let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
 
@@ -132,6 +142,13 @@ fn end_to_end_login_flow_persists_auth_json() {
 
 #[test]
 fn creates_missing_codex_home_dir() {
+    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+        );
+        return;
+    }
+
     let (issuer_addr, _issuer_handle) = start_mock_issuer();
     let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
 

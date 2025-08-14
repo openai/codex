@@ -319,8 +319,7 @@ impl AuthModeWidget {
         let event_tx = self.event_tx.clone();
         std::thread::spawn(move || {
             loop {
-                let done = child.try_status();
-                if let Some(success) = done {
+                if let Some(success) = child.get_auth_result() {
                     if success {
                         event_tx.send(AppEvent::OnboardingAuthComplete(Ok(())));
                     } else {

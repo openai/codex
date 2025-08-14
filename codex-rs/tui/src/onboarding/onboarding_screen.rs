@@ -2,9 +2,9 @@ use codex_core::util::is_inside_git_repo;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::widgets::WidgetRef;
 use ratatui::prelude::Widget;
 use ratatui::widgets::Clear;
+use ratatui::widgets::WidgetRef;
 
 use codex_login::AuthMode;
 
