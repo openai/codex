@@ -144,6 +144,7 @@ pub struct RemoveConversationListenerParams {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
+#[serde(tag = "type", content = "data")]
 pub enum InputItem {
     Text {
         text: String,

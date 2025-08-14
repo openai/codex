@@ -8,7 +8,6 @@ use crate::bottom_pane::BottomPane;
 use crate::status_indicator_widget::StatusIndicatorWidget;
 
 use super::BottomPaneView;
-use super::bottom_pane_view::ConditionalUpdate;
 
 pub(crate) struct StatusIndicatorView {
     view: StatusIndicatorWidget,
@@ -27,11 +26,6 @@ impl StatusIndicatorView {
 }
 
 impl BottomPaneView<'_> for StatusIndicatorView {
-    fn update_status_text(&mut self, text: String) -> ConditionalUpdate {
-        self.update_text(text);
-        ConditionalUpdate::NeedsRedraw
-    }
-
     fn should_hide_when_task_is_done(&mut self) -> bool {
         true
     }

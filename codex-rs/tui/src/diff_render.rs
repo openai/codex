@@ -361,19 +361,22 @@ fn style_del() -> Style {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::history_cell::HistoryCell;
-    use crate::text_block::TextBlock;
     use insta::assert_snapshot;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::text::Text;
+    use ratatui::widgets::Paragraph;
+    use ratatui::widgets::WidgetRef;
+    use ratatui::widgets::Wrap;
 
     fn snapshot_lines(name: &str, lines: Vec<RtLine<'static>>, width: u16, height: u16) {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
-        let cell = HistoryCell::PendingPatch {
-            view: TextBlock::new(lines),
-        };
         terminal
-            .draw(|f| f.render_widget_ref(&cell, f.area()))
+            .draw(|f| {
+                Paragraph::new(Text::from(lines))
+                    .wrap(Wrap { trim: false })
+                    .render_ref(f.area(), f.buffer_mut())
+            })
             .expect("draw");
         assert_snapshot!(name, terminal.backend());
     }

@@ -14,7 +14,6 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_login::CodexAuth;
 use codex_ollama::DEFAULT_OSS_MODEL;
-use log_layer::TuiLogLayer;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
 use tracing::error;
@@ -39,7 +38,6 @@ mod get_git_diff;
 mod history_cell;
 pub mod insert_history;
 pub mod live_wrap;
-mod log_layer;
 mod markdown;
 mod markdown_stream;
 pub mod onboarding;
@@ -49,7 +47,6 @@ mod shimmer;
 mod slash_command;
 mod status_indicator_widget;
 mod streaming;
-mod text_block;
 mod text_formatting;
 mod tui;
 mod user_approval_widget;
@@ -213,14 +210,7 @@ pub async fn run_main(
             .map_err(|e| std::io::Error::other(format!("OSS setup failed: {e}")))?;
     }
 
-    // Channel that carries formatted log lines to the UI.
-    let (log_tx, log_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-    let tui_layer = TuiLogLayer::new(log_tx.clone(), 120).with_filter(env_filter());
-
-    let _ = tracing_subscriber::registry()
-        .with(file_layer)
-        .with(tui_layer)
-        .try_init();
+    let _ = tracing_subscriber::registry().with(file_layer).try_init();
 
     #[allow(clippy::print_stderr)]
     #[cfg(not(debug_assertions))]
@@ -254,7 +244,7 @@ pub async fn run_main(
         eprintln!("");
     }
 
-    run_ratatui_app(cli, config, should_show_trust_screen, log_rx)
+    run_ratatui_app(cli, config, should_show_trust_screen)
         .map_err(|err| std::io::Error::other(err.to_string()))
 }
 
@@ -262,7 +252,6 @@ fn run_ratatui_app(
     cli: Cli,
     config: Config,
     should_show_trust_screen: bool,
-    mut log_rx: tokio::sync::mpsc::UnboundedReceiver<String>,
 ) -> color_eyre::Result<codex_core::protocol::TokenUsage> {
     color_eyre::install()?;
 
@@ -283,16 +272,6 @@ fn run_ratatui_app(
 
     let Cli { prompt, images, .. } = cli;
     let mut app = App::new(config.clone(), prompt, images, should_show_trust_screen);
-
-    // Bridge log receiver into the AppEvent channel so latest log lines update the UI.
-    {
-        let app_event_tx = app.event_sender();
-        tokio::spawn(async move {
-            while let Some(line) = log_rx.recv().await {
-                app_event_tx.send(crate::app_event::AppEvent::LatestLog(line));
-            }
-        });
-    }
 
     let app_result = app.run(&mut terminal);
     let usage = app.token_usage();

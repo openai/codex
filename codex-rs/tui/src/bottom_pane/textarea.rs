@@ -3,6 +3,7 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Color;
 use ratatui::style::Style;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::WidgetRef;
@@ -13,12 +14,18 @@ use textwrap::Options;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+#[derive(Debug, Clone)]
+struct TextElement {
+    range: Range<usize>,
+}
+
 #[derive(Debug)]
 pub(crate) struct TextArea {
     text: String,
     cursor_pos: usize,
     wrap_cache: RefCell<Option<WrapCache>>,
     preferred_col: Option<usize>,
+    elements: Vec<TextElement>,
 }
 
 #[derive(Debug, Clone)]
@@ -40,6 +47,7 @@ impl TextArea {
             cursor_pos: 0,
             wrap_cache: RefCell::new(None),
             preferred_col: None,
+            elements: Vec::new(),
         }
     }
 
@@ -48,6 +56,7 @@ impl TextArea {
         self.cursor_pos = self.cursor_pos.clamp(0, self.text.len());
         self.wrap_cache.replace(None);
         self.preferred_col = None;
+        self.elements.clear();
     }
 
     pub fn text(&self) -> &str {
@@ -59,15 +68,22 @@ impl TextArea {
     }
 
     pub fn insert_str_at(&mut self, pos: usize, text: &str) {
+        let pos = self.clamp_pos_for_insertion(pos);
         self.text.insert_str(pos, text);
         self.wrap_cache.replace(None);
         if pos <= self.cursor_pos {
             self.cursor_pos += text.len();
         }
+        self.shift_elements(pos, 0, text.len());
         self.preferred_col = None;
     }
 
     pub fn replace_range(&mut self, range: std::ops::Range<usize>, text: &str) {
+        let range = self.expand_range_to_element_boundaries(range);
+        self.replace_range_raw(range, text);
+    }
+
+    fn replace_range_raw(&mut self, range: std::ops::Range<usize>, text: &str) {
         assert!(range.start <= range.end);
         let start = range.start.clamp(0, self.text.len());
         let end = range.end.clamp(0, self.text.len());
@@ -81,6 +97,7 @@ impl TextArea {
         self.text.replace_range(range, text);
         self.wrap_cache.replace(None);
         self.preferred_col = None;
+        self.update_elements_after_replace(start, end, inserted_len);
 
         // Update the cursor position to account for the edit.
         self.cursor_pos = if self.cursor_pos < start {
@@ -94,6 +111,9 @@ impl TextArea {
             ((self.cursor_pos as isize) + diff) as usize
         }
         .min(self.text.len());
+
+        // Ensure cursor is not inside an element
+        self.cursor_pos = self.clamp_pos_to_nearest_boundary(self.cursor_pos);
     }
 
     pub fn cursor(&self) -> usize {
@@ -102,6 +122,7 @@ impl TextArea {
 
     pub fn set_cursor(&mut self, pos: usize) {
         self.cursor_pos = pos.clamp(0, self.text.len());
+        self.cursor_pos = self.clamp_pos_to_nearest_boundary(self.cursor_pos);
         self.preferred_col = None;
     }
 
@@ -155,10 +176,13 @@ impl TextArea {
             width_so_far += g.width();
             if width_so_far > target_col {
                 self.cursor_pos = line_start + i;
+                // Avoid landing inside an element; round to nearest boundary
+                self.cursor_pos = self.clamp_pos_to_nearest_boundary(self.cursor_pos);
                 return;
             }
         }
         self.cursor_pos = line_end;
+        self.cursor_pos = self.clamp_pos_to_nearest_boundary(self.cursor_pos);
     }
 
     fn beginning_of_line(&self, pos: usize) -> usize {
@@ -176,30 +200,6 @@ impl TextArea {
     }
     fn end_of_current_line(&self) -> usize {
         self.end_of_line(self.cursor_pos)
-    }
-
-    pub(crate) fn beginning_of_previous_word(&self) -> usize {
-        if let Some(first_non_ws) = self.text[..self.cursor_pos].rfind(|c: char| !c.is_whitespace())
-        {
-            self.text[..first_non_ws]
-                .rfind(|c: char| c.is_whitespace())
-                .map(|i| i + 1)
-                .unwrap_or(0)
-        } else {
-            0
-        }
-    }
-
-    pub(crate) fn end_of_next_word(&self) -> usize {
-        let Some(first_non_ws) = self.text[self.cursor_pos..].find(|c: char| !c.is_whitespace())
-        else {
-            return self.text.len();
-        };
-        let word_start = self.cursor_pos + first_non_ws;
-        match self.text[word_start..].find(|c: char| c.is_whitespace()) {
-            Some(rel_idx) => word_start + rel_idx,
-            None => self.text.len(),
-        }
     }
 
     pub fn input(&mut self, event: KeyEvent) {
@@ -385,19 +385,11 @@ impl TextArea {
         if n == 0 || self.cursor_pos == 0 {
             return;
         }
-        let mut gc =
-            unicode_segmentation::GraphemeCursor::new(self.cursor_pos, self.text.len(), false);
         let mut target = self.cursor_pos;
         for _ in 0..n {
-            match gc.prev_boundary(&self.text, 0) {
-                Ok(Some(b)) => target = b,
-                Ok(None) => {
-                    target = 0;
-                    break;
-                }
-                Err(_) => {
-                    target = target.saturating_sub(1);
-                }
+            target = self.prev_atomic_boundary(target);
+            if target == 0 {
+                break;
             }
         }
         self.replace_range(target..self.cursor_pos, "");
@@ -407,26 +399,19 @@ impl TextArea {
         if n == 0 || self.cursor_pos >= self.text.len() {
             return;
         }
-        let mut gc =
-            unicode_segmentation::GraphemeCursor::new(self.cursor_pos, self.text.len(), false);
         let mut target = self.cursor_pos;
         for _ in 0..n {
-            match gc.next_boundary(&self.text, 0) {
-                Ok(Some(b)) => target = b,
-                Ok(None) => {
-                    target = self.text.len();
-                    break;
-                }
-                Err(_) => {
-                    target = target.saturating_add(1);
-                }
+            target = self.next_atomic_boundary(target);
+            if target >= self.text.len() {
+                break;
             }
         }
         self.replace_range(self.cursor_pos..target, "");
     }
 
     pub fn delete_backward_word(&mut self) {
-        self.replace_range(self.beginning_of_previous_word()..self.cursor_pos, "");
+        let start = self.beginning_of_previous_word();
+        self.replace_range(start..self.cursor_pos, "");
     }
 
     pub fn kill_to_end_of_line(&mut self) {
@@ -453,25 +438,13 @@ impl TextArea {
 
     /// Move the cursor left by a single grapheme cluster.
     pub fn move_cursor_left(&mut self) {
-        let mut gc =
-            unicode_segmentation::GraphemeCursor::new(self.cursor_pos, self.text.len(), false);
-        match gc.prev_boundary(&self.text, 0) {
-            Ok(Some(boundary)) => self.cursor_pos = boundary,
-            Ok(None) => self.cursor_pos = 0, // Already at start.
-            Err(_) => self.cursor_pos = self.cursor_pos.saturating_sub(1),
-        }
+        self.cursor_pos = self.prev_atomic_boundary(self.cursor_pos);
         self.preferred_col = None;
     }
 
     /// Move the cursor right by a single grapheme cluster.
     pub fn move_cursor_right(&mut self) {
-        let mut gc =
-            unicode_segmentation::GraphemeCursor::new(self.cursor_pos, self.text.len(), false);
-        match gc.next_boundary(&self.text, 0) {
-            Ok(Some(boundary)) => self.cursor_pos = boundary,
-            Ok(None) => self.cursor_pos = self.text.len(), // Already at end.
-            Err(_) => self.cursor_pos = self.cursor_pos.saturating_add(1),
-        }
+        self.cursor_pos = self.next_atomic_boundary(self.cursor_pos);
         self.preferred_col = None;
     }
 
@@ -626,6 +599,208 @@ impl TextArea {
         }
     }
 
+    // ===== Text elements support =====
+
+    pub fn insert_element(&mut self, text: &str) {
+        let start = self.clamp_pos_for_insertion(self.cursor_pos);
+        self.insert_str_at(start, text);
+        let end = start + text.len();
+        self.add_element(start..end);
+        // Place cursor at end of inserted element
+        self.set_cursor(end);
+    }
+
+    fn add_element(&mut self, range: Range<usize>) {
+        let elem = TextElement {
+            range: range.clone(),
+        };
+        self.elements.push(elem);
+        self.elements.sort_by_key(|e| e.range.start);
+    }
+
+    fn find_element_containing(&self, pos: usize) -> Option<usize> {
+        self.elements
+            .iter()
+            .position(|e| pos > e.range.start && pos < e.range.end)
+    }
+
+    fn clamp_pos_to_nearest_boundary(&self, mut pos: usize) -> usize {
+        if pos > self.text.len() {
+            pos = self.text.len();
+        }
+        if let Some(idx) = self.find_element_containing(pos) {
+            let e = &self.elements[idx];
+            let dist_start = pos.saturating_sub(e.range.start);
+            let dist_end = e.range.end.saturating_sub(pos);
+            if dist_start <= dist_end {
+                e.range.start
+            } else {
+                e.range.end
+            }
+        } else {
+            pos
+        }
+    }
+
+    fn clamp_pos_for_insertion(&self, pos: usize) -> usize {
+        // Do not allow inserting into the middle of an element
+        if let Some(idx) = self.find_element_containing(pos) {
+            let e = &self.elements[idx];
+            // Choose closest edge for insertion
+            let dist_start = pos.saturating_sub(e.range.start);
+            let dist_end = e.range.end.saturating_sub(pos);
+            if dist_start <= dist_end {
+                e.range.start
+            } else {
+                e.range.end
+            }
+        } else {
+            pos
+        }
+    }
+
+    fn expand_range_to_element_boundaries(&self, mut range: Range<usize>) -> Range<usize> {
+        // Expand to include any intersecting elements fully
+        loop {
+            let mut changed = false;
+            for e in &self.elements {
+                if e.range.start < range.end && e.range.end > range.start {
+                    let new_start = range.start.min(e.range.start);
+                    let new_end = range.end.max(e.range.end);
+                    if new_start != range.start || new_end != range.end {
+                        range.start = new_start;
+                        range.end = new_end;
+                        changed = true;
+                    }
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+        range
+    }
+
+    fn shift_elements(&mut self, at: usize, removed: usize, inserted: usize) {
+        // Generic shift: for pure insert, removed = 0; for delete, inserted = 0.
+        let end = at + removed;
+        let diff = inserted as isize - removed as isize;
+        // Remove elements fully deleted by the operation and shift the rest
+        self.elements
+            .retain(|e| !(e.range.start >= at && e.range.end <= end));
+        for e in &mut self.elements {
+            if e.range.end <= at {
+                // before edit
+            } else if e.range.start >= end {
+                // after edit
+                e.range.start = ((e.range.start as isize) + diff) as usize;
+                e.range.end = ((e.range.end as isize) + diff) as usize;
+            } else {
+                // Overlap with element but not fully contained (shouldn't happen when using
+                // element-aware replace, but degrade gracefully by snapping element to new bounds)
+                let new_start = at.min(e.range.start);
+                let new_end = at + inserted.max(e.range.end.saturating_sub(end));
+                e.range.start = new_start;
+                e.range.end = new_end;
+            }
+        }
+    }
+
+    fn update_elements_after_replace(&mut self, start: usize, end: usize, inserted_len: usize) {
+        self.shift_elements(start, end.saturating_sub(start), inserted_len);
+    }
+
+    fn prev_atomic_boundary(&self, pos: usize) -> usize {
+        if pos == 0 {
+            return 0;
+        }
+        // If currently at an element end or inside, jump to start of that element.
+        if let Some(idx) = self
+            .elements
+            .iter()
+            .position(|e| pos > e.range.start && pos <= e.range.end)
+        {
+            return self.elements[idx].range.start;
+        }
+        let mut gc = unicode_segmentation::GraphemeCursor::new(pos, self.text.len(), false);
+        match gc.prev_boundary(&self.text, 0) {
+            Ok(Some(b)) => {
+                if let Some(idx) = self.find_element_containing(b) {
+                    self.elements[idx].range.start
+                } else {
+                    b
+                }
+            }
+            Ok(None) => 0,
+            Err(_) => pos.saturating_sub(1),
+        }
+    }
+
+    fn next_atomic_boundary(&self, pos: usize) -> usize {
+        if pos >= self.text.len() {
+            return self.text.len();
+        }
+        // If currently at an element start or inside, jump to end of that element.
+        if let Some(idx) = self
+            .elements
+            .iter()
+            .position(|e| pos >= e.range.start && pos < e.range.end)
+        {
+            return self.elements[idx].range.end;
+        }
+        let mut gc = unicode_segmentation::GraphemeCursor::new(pos, self.text.len(), false);
+        match gc.next_boundary(&self.text, 0) {
+            Ok(Some(b)) => {
+                if let Some(idx) = self.find_element_containing(b) {
+                    self.elements[idx].range.end
+                } else {
+                    b
+                }
+            }
+            Ok(None) => self.text.len(),
+            Err(_) => pos.saturating_add(1),
+        }
+    }
+
+    pub(crate) fn beginning_of_previous_word(&self) -> usize {
+        if let Some(first_non_ws) = self.text[..self.cursor_pos].rfind(|c: char| !c.is_whitespace())
+        {
+            let candidate = self.text[..first_non_ws]
+                .rfind(|c: char| c.is_whitespace())
+                .map(|i| i + 1)
+                .unwrap_or(0);
+            self.adjust_pos_out_of_elements(candidate, true)
+        } else {
+            0
+        }
+    }
+
+    pub(crate) fn end_of_next_word(&self) -> usize {
+        let Some(first_non_ws) = self.text[self.cursor_pos..].find(|c: char| !c.is_whitespace())
+        else {
+            return self.text.len();
+        };
+        let word_start = self.cursor_pos + first_non_ws;
+        let candidate = match self.text[word_start..].find(|c: char| c.is_whitespace()) {
+            Some(rel_idx) => word_start + rel_idx,
+            None => self.text.len(),
+        };
+        self.adjust_pos_out_of_elements(candidate, false)
+    }
+
+    fn adjust_pos_out_of_elements(&self, pos: usize, prefer_start: bool) -> usize {
+        if let Some(idx) = self.find_element_containing(pos) {
+            let e = &self.elements[idx];
+            if prefer_start {
+                e.range.start
+            } else {
+                e.range.end
+            }
+        } else {
+            pos
+        }
+    }
+
     #[allow(clippy::unwrap_used)]
     fn wrapped_lines(&self, width: u16) -> Ref<'_, Vec<Range<usize>>> {
         // Ensure cache is ready (potentially mutably borrow, then drop)
@@ -700,10 +875,7 @@ impl TextArea {
 impl WidgetRef for &TextArea {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let lines = self.wrapped_lines(area.width);
-        for (i, ls) in lines.iter().enumerate() {
-            let s = &self.text[ls.start..ls.end - 1];
-            buf.set_string(area.x, area.y + i as u16, s, Style::default());
-        }
+        self.render_lines(area, buf, &lines, 0..lines.len());
     }
 }
 
@@ -717,10 +889,38 @@ impl StatefulWidgetRef for &TextArea {
 
         let start = scroll as usize;
         let end = (scroll + area.height).min(lines.len() as u16) as usize;
-        for (row, ls) in (start..end).enumerate() {
-            let r = &lines[ls];
-            let s = &self.text[r.start..r.end - 1];
-            buf.set_string(area.x, area.y + row as u16, s, Style::default());
+        self.render_lines(area, buf, &lines, start..end);
+    }
+}
+
+impl TextArea {
+    fn render_lines(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        lines: &[Range<usize>],
+        range: std::ops::Range<usize>,
+    ) {
+        for (row, idx) in range.enumerate() {
+            let r = &lines[idx];
+            let y = area.y + row as u16;
+            let line_range = r.start..r.end - 1;
+            // Draw base line with default style.
+            buf.set_string(area.x, y, &self.text[line_range.clone()], Style::default());
+
+            // Overlay styled segments for elements that intersect this line.
+            for elem in &self.elements {
+                // Compute overlap with displayed slice.
+                let overlap_start = elem.range.start.max(line_range.start);
+                let overlap_end = elem.range.end.min(line_range.end);
+                if overlap_start >= overlap_end {
+                    continue;
+                }
+                let styled = &self.text[overlap_start..overlap_end];
+                let x_off = self.text[line_range.start..overlap_start].width() as u16;
+                let style = Style::default().fg(Color::Cyan);
+                buf.set_string(area.x + x_off, y, styled, style);
+            }
         }
     }
 }
@@ -1244,6 +1444,10 @@ mod tests {
         for _case in 0..10_000 {
             let mut ta = TextArea::new();
             let mut state = TextAreaState::default();
+            // Track element payloads we insert. Payloads use characters '[' and ']' which
+            // are not produced by rand_grapheme(), avoiding accidental collisions.
+            let mut elem_texts: Vec<String> = Vec::new();
+            let mut next_elem_id: usize = 0;
             // Start with a random base string
             let base_len = rng.gen_range(0..30);
             let mut base = String::new();
@@ -1271,7 +1475,7 @@ mod tests {
                 }
 
                 // Pick an operation
-                match rng.gen_range(0..14) {
+                match rng.gen_range(0..18) {
                     0 => {
                         // insert small random string at cursor
                         let len = rng.gen_range(0..6);
@@ -1299,12 +1503,24 @@ mod tests {
                             s.push_str(&rand_grapheme(&mut rng));
                         }
                         let before = ta.text().len();
+                        // If the chosen range intersects an element, replace_range will expand to
+                        // element boundaries, so the naive size delta assertion does not hold.
+                        let intersects_element = elem_texts.iter().any(|payload| {
+                            if let Some(pstart) = ta.text().find(payload) {
+                                let pend = pstart + payload.len();
+                                pstart < end && pend > start
+                            } else {
+                                false
+                            }
+                        });
                         ta.replace_range(start..end, &s);
-                        let after = ta.text().len();
-                        assert_eq!(
-                            after as isize,
-                            before as isize + (s.len() as isize) - ((end - start) as isize)
-                        );
+                        if !intersects_element {
+                            let after = ta.text().len();
+                            assert_eq!(
+                                after as isize,
+                                before as isize + (s.len() as isize) - ((end - start) as isize)
+                            );
+                        }
                     }
                     2 => ta.delete_backward(rng.gen_range(0..=3)),
                     3 => ta.delete_forward(rng.gen_range(0..=3)),
@@ -1317,6 +1533,66 @@ mod tests {
                     10 => ta.move_cursor_down(),
                     11 => ta.move_cursor_to_beginning_of_line(true),
                     12 => ta.move_cursor_to_end_of_line(true),
+                    13 => {
+                        // Insert an element with a unique sentinel payload
+                        let payload =
+                            format!("[[EL#{}:{}]]", next_elem_id, rng.gen_range(1000..9999));
+                        next_elem_id += 1;
+                        ta.insert_element(&payload);
+                        elem_texts.push(payload);
+                    }
+                    14 => {
+                        // Try inserting inside an existing element (should clamp to boundary)
+                        if let Some(payload) = elem_texts.choose(&mut rng).cloned() {
+                            if let Some(start) = ta.text().find(&payload) {
+                                let end = start + payload.len();
+                                if end - start > 2 {
+                                    let pos = rng.gen_range(start + 1..end - 1);
+                                    let ins = rand_grapheme(&mut rng);
+                                    ta.insert_str_at(pos, &ins);
+                                }
+                            }
+                        }
+                    }
+                    15 => {
+                        // Replace a range that intersects an element -> whole element should be replaced
+                        if let Some(payload) = elem_texts.choose(&mut rng).cloned() {
+                            if let Some(start) = ta.text().find(&payload) {
+                                let end = start + payload.len();
+                                // Create an intersecting range [start-δ, end-δ2)
+                                let mut s = start.saturating_sub(rng.gen_range(0..=2));
+                                let mut e = (end + rng.gen_range(0..=2)).min(ta.text().len());
+                                // Align to char boundaries to satisfy String::replace_range contract
+                                let txt = ta.text();
+                                while s > 0 && !txt.is_char_boundary(s) {
+                                    s -= 1;
+                                }
+                                while e < txt.len() && !txt.is_char_boundary(e) {
+                                    e += 1;
+                                }
+                                if s < e {
+                                    // Small replacement text
+                                    let mut srep = String::new();
+                                    for _ in 0..rng.gen_range(0..=2) {
+                                        srep.push_str(&rand_grapheme(&mut rng));
+                                    }
+                                    ta.replace_range(s..e, &srep);
+                                }
+                            }
+                        }
+                    }
+                    16 => {
+                        // Try setting the cursor to a position inside an element; it should clamp out
+                        if let Some(payload) = elem_texts.choose(&mut rng).cloned() {
+                            if let Some(start) = ta.text().find(&payload) {
+                                let end = start + payload.len();
+                                if end - start > 2 {
+                                    let pos = rng.gen_range(start + 1..end - 1);
+                                    ta.set_cursor(pos);
+                                }
+                            }
+                        }
+                    }
                     _ => {
                         // Jump to word boundaries
                         if rng.gen_bool(0.5) {
@@ -1331,6 +1607,21 @@ mod tests {
 
                 // Sanity invariants
                 assert!(ta.cursor() <= ta.text().len());
+
+                // Element invariants
+                for payload in &elem_texts {
+                    if let Some(start) = ta.text().find(payload) {
+                        let end = start + payload.len();
+                        // 1) Text inside elements matches the initially set payload
+                        assert_eq!(&ta.text()[start..end], payload);
+                        // 2) Cursor is never strictly inside an element
+                        let c = ta.cursor();
+                        assert!(
+                            c <= start || c >= end,
+                            "cursor inside element: {start}..{end} at {c}"
+                        );
+                    }
+                }
 
                 // Render and compute cursor positions; ensure they are in-bounds and do not panic
                 let area = Rect::new(0, 0, width, height);
