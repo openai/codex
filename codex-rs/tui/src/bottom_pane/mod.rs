@@ -18,6 +18,7 @@ mod chat_composer_history;
 mod command_popup;
 mod file_search_popup;
 mod popup_consts;
+mod reasoning_selector_view;
 mod scroll_state;
 mod selection_popup_common;
 mod status_indicator_view;
@@ -34,6 +35,8 @@ pub(crate) use chat_composer::InputResult;
 
 use crate::status_indicator_widget::StatusIndicatorWidget;
 use approval_modal_view::ApprovalModalView;
+use codex_core::config_types::ReasoningEffort;
+use reasoning_selector_view::ReasoningSelectorView;
 use status_indicator_view::StatusIndicatorView;
 
 /// Pane displayed in the lower half of the chat UI.
@@ -282,6 +285,16 @@ impl BottomPane<'_> {
     ) {
         self.composer
             .set_token_usage(total_token_usage, last_token_usage, model_context_window);
+        self.request_redraw();
+    }
+
+    /// Show the selector for reasoning effort.
+    pub(crate) fn show_reasoning_selector(&mut self, current: ReasoningEffort) {
+        let view = ReasoningSelectorView::new(current, self.app_event_tx.clone());
+        self.active_view = Some(Box::new(view));
+        // Hide any overlay status while a modal view is visible.
+        self.live_status = None;
+        self.status_view_active = false;
         self.request_redraw();
     }
 

@@ -18,6 +18,7 @@ pub enum SlashCommand {
     Diff,
     Mention,
     Status,
+    Reasoning,
     Prompts,
     Logout,
     Quit,
@@ -36,6 +37,7 @@ impl SlashCommand {
             SlashCommand::Diff => "show git diff (including untracked files)",
             SlashCommand::Mention => "mention a file",
             SlashCommand::Status => "show current session configuration and token usage",
+            SlashCommand::Reasoning => "set reasoning effort (low|medium|high)",
             SlashCommand::Prompts => "show example prompts",
             SlashCommand::Logout => "log out of Codex",
             #[cfg(debug_assertions)]
