@@ -278,4 +278,20 @@ impl StreamController {
         }
         self.finalize(StreamKind::Answer, true, sink)
     }
+
+    pub(crate) fn apply_final_reasoning(&mut self, message: &str, sink: &impl HistorySink) -> bool {
+        self.begin(StreamKind::Reasoning, sink);
+        if !message.is_empty() {
+            let mut msg_with_nl = message.to_string();
+            if !msg_with_nl.ends_with('\n') {
+                msg_with_nl.push('\n');
+            }
+            let state = self.state_mut(StreamKind::Reasoning);
+            let already_committed = state.collector.committed_count();
+            state
+                .collector
+                .replace_with_and_mark_committed(&msg_with_nl, already_committed);
+        }
+        self.finalize(StreamKind::Reasoning, false, sink)
+    }
 }
