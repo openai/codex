@@ -43,7 +43,7 @@ switch (platform) {
         targetTriple = "x86_64-pc-windows-msvc.exe";
         break;
       case "arm64":
-        // We do not build this today, fall through...
+      // We do not build this today, fall through...
       default:
         break;
     }
@@ -65,9 +65,43 @@ const binaryPath = path.join(__dirname, "..", "bin", `codex-${targetTriple}`);
 // receives a fatal signal, both processes exit in a predictable manner.
 const { spawn } = await import("child_process");
 
+async function tryImport(moduleName) {
+  try {
+    // eslint-disable-next-line node/no-unsupported-features/es-syntax
+    return await import(moduleName);
+  } catch (err) {
+    return null;
+  }
+}
+
+async function resolveRgDir() {
+  const ripgrep = await tryImport("@vscode/ripgrep");
+  if (!ripgrep?.rgPath) {
+    return null;
+  }
+  return path.dirname(ripgrep.rgPath);
+}
+
+function getUpdatedPath(newDirs) {
+  const pathSep = process.platform === "win32" ? ";" : ":";
+  const existingPath = process.env.PATH || "";
+  const updatedPath = [
+    ...newDirs,
+    ...existingPath.split(pathSep).filter(Boolean),
+  ].join(pathSep);
+  return updatedPath;
+}
+
+const additionalDirs = [];
+const rgDir = await resolveRgDir();
+if (rgDir) {
+  additionalDirs.push(rgDir);
+}
+const updatedPath = getUpdatedPath(additionalDirs);
+
 const child = spawn(binaryPath, process.argv.slice(2), {
   stdio: "inherit",
-  env: { ...process.env, CODEX_MANAGED_BY_NPM: "1" },
+  env: { ...process.env, PATH: updatedPath, CODEX_MANAGED_BY_NPM: "1" },
 });
 
 child.on("error", (err) => {
@@ -120,4 +154,3 @@ if (childResult.type === "signal") {
 } else {
   process.exit(childResult.exitCode);
 }
-

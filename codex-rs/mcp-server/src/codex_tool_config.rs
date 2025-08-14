@@ -58,7 +58,7 @@ pub struct CodexToolCallParam {
 
 /// Custom enum mirroring [`AskForApproval`], but has an extra dependency on
 /// [`JsonSchema`].
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum CodexToolCallApprovalPolicy {
     Untrusted,
@@ -80,7 +80,7 @@ impl From<CodexToolCallApprovalPolicy> for AskForApproval {
 
 /// Custom enum mirroring [`SandboxMode`] from config_types.rs, but with
 /// `JsonSchema` support.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum CodexToolCallSandboxMode {
     ReadOnly,

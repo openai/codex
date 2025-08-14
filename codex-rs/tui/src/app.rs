@@ -9,6 +9,7 @@ use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::should_show_login_screen;
 use crate::slash_command::SlashCommand;
 use crate::tui;
+use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::protocol::Event;
 use codex_core::protocol::Op;
@@ -48,6 +49,7 @@ enum AppState<'a> {
 }
 
 pub(crate) struct App<'a> {
+    server: Arc<ConversationManager>,
     app_event_tx: AppEventSender,
     app_event_rx: Receiver<AppEvent>,
     app_state: AppState<'a>,
@@ -85,6 +87,8 @@ impl App<'_> {
         initial_images: Vec<std::path::PathBuf>,
         show_trust_screen: bool,
     ) -> Self {
+        let conversation_manager = Arc::new(ConversationManager::default());
+
         let (app_event_tx, app_event_rx) = channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
         let pending_redraw = Arc::new(AtomicBool::new(false));
@@ -153,6 +157,7 @@ impl App<'_> {
         } else {
             let chat_widget = ChatWidget::new(
                 config.clone(),
+                conversation_manager.clone(),
                 app_event_tx.clone(),
                 initial_prompt,
                 initial_images,
@@ -165,6 +170,7 @@ impl App<'_> {
 
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
         Self {
+            server: conversation_manager,
             app_event_tx,
             pending_history_lines: Vec::new(),
             app_event_rx,
@@ -175,12 +181,6 @@ impl App<'_> {
             enhanced_keys_supported,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
         }
-    }
-
-    /// Clone of the internal event sender so external tasks (e.g. log bridge)
-    /// can inject `AppEvent`s.
-    pub fn event_sender(&self) -> AppEventSender {
-        self.app_event_tx.clone()
     }
 
     /// Schedule a redraw if one is not already pending.
@@ -319,15 +319,12 @@ impl App<'_> {
                     AppState::Chat { widget } => widget.submit_op(op),
                     AppState::Onboarding { .. } => {}
                 },
-                AppEvent::LatestLog(line) => match &mut self.app_state {
-                    AppState::Chat { widget } => widget.update_latest_log(line),
-                    AppState::Onboarding { .. } => {}
-                },
                 AppEvent::DispatchCommand(command) => match command {
                     SlashCommand::New => {
                         // User accepted – switch to chat view.
                         let new_widget = Box::new(ChatWidget::new(
                             self.config.clone(),
+                            self.server.clone(),
                             self.app_event_tx.clone(),
                             None,
                             Vec::new(),
@@ -449,6 +446,7 @@ impl App<'_> {
                     self.app_state = AppState::Chat {
                         widget: Box::new(ChatWidget::new(
                             config,
+                            self.server.clone(),
                             app_event_tx.clone(),
                             initial_prompt,
                             initial_images,

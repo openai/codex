@@ -4,6 +4,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -20,7 +21,6 @@ use futures::prelude::*;
 use mcp_types::CallToolResult;
 use serde::Serialize;
 use serde_json;
-use tokio::sync::Notify;
 use tokio::sync::oneshot;
 use tokio::task::AbortHandle;
 use tracing::debug;
@@ -30,6 +30,7 @@ use tracing::trace;
 use tracing::warn;
 use uuid::Uuid;
 
+use crate::ModelProviderInfo;
 use crate::apply_patch::ApplyPatchExec;
 use crate::apply_patch::CODEX_APPLY_PATCH_ARG1;
 use crate::apply_patch::InternalApplyPatchInvocation;
@@ -37,12 +38,14 @@ use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::apply_patch::get_writable_roots;
 use crate::apply_patch::{self};
 use crate::client::ModelClient;
-use crate::client_common::EnvironmentContext;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::config::Config;
+use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
+use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::conversation_history::ConversationHistory;
+use crate::environment_context::EnvironmentContext;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::error::SandboxErr;
@@ -118,26 +121,25 @@ pub struct Codex {
 /// unique session id.
 pub struct CodexSpawnOk {
     pub codex: Codex,
-    pub init_id: String,
     pub session_id: Uuid,
 }
 
+pub(crate) const INITIAL_SUBMIT_ID: &str = "";
+
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
-    pub async fn spawn(
-        config: Config,
-        auth: Option<CodexAuth>,
-        ctrl_c: Arc<Notify>,
-    ) -> CodexResult<CodexSpawnOk> {
-        // experimental resume path (undocumented)
-        let resume_path = config.experimental_resume.clone();
-        info!("resume_path: {resume_path:?}");
+    pub async fn spawn(config: Config, auth: Option<CodexAuth>) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(64);
         let (tx_event, rx_event) = async_channel::unbounded();
 
         let user_instructions = get_user_instructions(&config).await;
 
-        let configure_session = Op::ConfigureSession {
+        let config = Arc::new(config);
+        let resume_path = config.experimental_resume.clone();
+
+        let session_id = Uuid::new_v4();
+        let configure_session = ConfigureSession {
+            session_id,
             provider: config.model_provider.clone(),
             model: config.model.clone(),
             model_reasoning_effort: config.model_reasoning_effort,
@@ -149,28 +151,26 @@ impl Codex {
             disable_response_storage: config.disable_response_storage,
             notify: config.notify.clone(),
             cwd: config.cwd.clone(),
-            resume_path: resume_path.clone(),
+            resume_path,
         };
 
-        let config = Arc::new(config);
-
         // Generate a unique ID for the lifetime of this Codex session.
-        let session_id = Uuid::new_v4();
-        tokio::spawn(submission_loop(
-            session_id, config, auth, rx_sub, tx_event, ctrl_c,
-        ));
+        let session = Session::new(configure_session, config.clone(), auth, tx_event.clone())
+            .await
+            .map_err(|e| {
+                error!("Failed to create session: {e:#}");
+                CodexErr::InternalAgentDied
+            })?;
+
+        // This task will run until Op::Shutdown is received.
+        tokio::spawn(submission_loop(session, config, rx_sub));
         let codex = Codex {
             next_id: AtomicU64::new(0),
             tx_sub,
             rx_event,
         };
-        let init_id = codex.submit(configure_session).await?;
 
-        Ok(CodexSpawnOk {
-            codex,
-            init_id,
-            session_id,
-        })
+        Ok(CodexSpawnOk { codex, session_id })
     }
 
     /// Submit the `op` wrapped in a `Submission` with a unique ID.
@@ -204,24 +204,34 @@ impl Codex {
     }
 }
 
+/// Mutable state of the agent
+#[derive(Default)]
+struct State {
+    approved_commands: HashSet<Vec<String>>,
+    current_task: Option<AgentTask>,
+    pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
+    pending_input: Vec<ResponseInputItem>,
+    history: ConversationHistory,
+}
+
 /// Context for an initialized model agent
 ///
 /// A session has at most 1 running task at a time, and can be interrupted by user input.
 pub(crate) struct Session {
+    session_id: Uuid,
     client: ModelClient,
-    pub(crate) tx_event: Sender<Event>,
-    ctrl_c: Arc<Notify>,
+    tx_event: Sender<Event>,
 
     /// The session's current working directory. All relative paths provided by
     /// the model as well as sandbox policies are resolved against this path
     /// instead of `std::env::current_dir()`.
-    pub(crate) cwd: PathBuf,
+    cwd: PathBuf,
     base_instructions: Option<String>,
     user_instructions: Option<String>,
-    pub(crate) approval_policy: AskForApproval,
+    approval_policy: AskForApproval,
     sandbox_policy: SandboxPolicy,
     shell_environment_policy: ShellEnvironmentPolicy,
-    pub(crate) writable_roots: Mutex<Vec<PathBuf>>,
+    writable_roots: Vec<PathBuf>,
     disable_response_storage: bool,
     tools_config: ToolsConfig,
 
@@ -241,25 +251,256 @@ pub(crate) struct Session {
     show_raw_agent_reasoning: bool,
 }
 
+/// Configure the model session.
+struct ConfigureSession {
+    session_id: Uuid,
+
+    /// Provider identifier ("openai", "openrouter", ...).
+    provider: ModelProviderInfo,
+
+    /// If not specified, server will use its default model.
+    model: String,
+
+    model_reasoning_effort: ReasoningEffortConfig,
+    model_reasoning_summary: ReasoningSummaryConfig,
+
+    /// Model instructions that are appended to the base instructions.
+    user_instructions: Option<String>,
+
+    /// Base instructions override.
+    base_instructions: Option<String>,
+
+    /// When to escalate for approval for execution
+    approval_policy: AskForApproval,
+    /// How to sandbox commands executed in the system
+    sandbox_policy: SandboxPolicy,
+    /// Disable server-side response storage (send full context each request)
+    disable_response_storage: bool,
+
+    /// Optional external notifier command tokens. Present only when the
+    /// client wants the agent to spawn a program after each completed
+    /// turn.
+    notify: Option<Vec<String>>,
+
+    /// Working directory that should be treated as the *root* of the
+    /// session. All relative paths supplied by the model as well as the
+    /// execution sandbox are resolved against this directory **instead**
+    /// of the process-wide current working directory. CLI front-ends are
+    /// expected to expand this to an absolute path before sending the
+    /// `ConfigureSession` operation so that the business-logic layer can
+    /// operate deterministically.
+    cwd: PathBuf,
+
+    resume_path: Option<PathBuf>,
+}
+
 impl Session {
+    async fn new(
+        configure_session: ConfigureSession,
+        config: Arc<Config>,
+        auth: Option<CodexAuth>,
+        tx_event: Sender<Event>,
+    ) -> anyhow::Result<Arc<Self>> {
+        let ConfigureSession {
+            mut session_id,
+            provider,
+            model,
+            model_reasoning_effort,
+            model_reasoning_summary,
+            user_instructions,
+            base_instructions,
+            approval_policy,
+            sandbox_policy,
+            disable_response_storage,
+            notify,
+            cwd,
+            resume_path,
+        } = configure_session;
+        debug!("Configuring session: model={model}; provider={provider:?}");
+        if !cwd.is_absolute() {
+            return Err(anyhow::anyhow!("cwd is not absolute: {cwd:?}"));
+        }
+
+        // Error messages to dispatch after SessionConfigured is sent.
+        let mut post_session_configured_error_events = Vec::<Event>::new();
+
+        // If `resume_path` is specified, then fail if we cannot resume the
+        // existing rollout. Though if `resume_path` is not specified and we
+        // fail to create a `RolloutRecorder`, potentially due to some sort of
+        // I/O error in attempting to create the log file, then we should still
+        // create the `Session`, but we do log an error.
+        let mut restored_items: Option<Vec<ResponseItem>> = None;
+        let rollout_recorder: Option<RolloutRecorder> = match resume_path.as_ref() {
+            Some(path) => match RolloutRecorder::resume(path, cwd.clone()).await {
+                Ok((rec, saved)) => {
+                    session_id = saved.session_id;
+                    if !saved.items.is_empty() {
+                        restored_items = Some(saved.items);
+                    }
+                    Some(rec)
+                }
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "failed to resume rollout from {path:?}: {e}"
+                    ));
+                }
+            },
+            None => {
+                match RolloutRecorder::new(&config, session_id, user_instructions.clone()).await {
+                    Ok(r) => Some(r),
+                    Err(e) => {
+                        let message = format!("failed to initialise rollout recorder: {e}");
+                        post_session_configured_error_events.push(Event {
+                            id: INITIAL_SUBMIT_ID.to_owned(),
+                            msg: EventMsg::Error(ErrorEvent {
+                                message: message.clone(),
+                            }),
+                        });
+                        warn!(message);
+                        None
+                    }
+                }
+            }
+        };
+
+        let client = ModelClient::new(
+            config.clone(),
+            auth.clone(),
+            provider.clone(),
+            model_reasoning_effort,
+            model_reasoning_summary,
+            session_id,
+        );
+
+        // Create the mutable state for the Session.
+        let mut state = State {
+            history: ConversationHistory::new(),
+            ..Default::default()
+        };
+        if let Some(restored_items) = restored_items {
+            state.history.record_items(&restored_items);
+        }
+
+        let writable_roots = get_writable_roots(&cwd);
+
+        let (mcp_connection_manager, failed_clients) =
+            match McpConnectionManager::new(config.mcp_servers.clone()).await {
+                Ok((mgr, failures)) => (mgr, failures),
+                Err(e) => {
+                    let message = format!("Failed to create MCP connection manager: {e:#}");
+                    error!("{message}");
+                    post_session_configured_error_events.push(Event {
+                        id: INITIAL_SUBMIT_ID.to_owned(),
+                        msg: EventMsg::Error(ErrorEvent { message }),
+                    });
+                    (McpConnectionManager::default(), Default::default())
+                }
+            };
+
+        // Surface individual client start-up failures to the user.
+        if !failed_clients.is_empty() {
+            for (server_name, err) in failed_clients {
+                let message = format!("MCP client for `{server_name}` failed to start: {err:#}");
+                error!("{message}");
+                post_session_configured_error_events.push(Event {
+                    id: INITIAL_SUBMIT_ID.to_owned(),
+                    msg: EventMsg::Error(ErrorEvent { message }),
+                });
+            }
+        }
+
+        let default_shell = shell::default_user_shell().await;
+        let sess = Arc::new(Session {
+            session_id,
+            client,
+            tools_config: ToolsConfig::new(
+                &config.model_family,
+                approval_policy,
+                sandbox_policy.clone(),
+                config.include_plan_tool,
+            ),
+            tx_event: tx_event.clone(),
+            user_instructions,
+            base_instructions,
+            approval_policy,
+            sandbox_policy,
+            shell_environment_policy: config.shell_environment_policy.clone(),
+            cwd,
+            writable_roots,
+            mcp_connection_manager,
+            notify,
+            state: Mutex::new(state),
+            rollout: Mutex::new(rollout_recorder),
+            codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
+            disable_response_storage,
+            user_shell: default_shell,
+            show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+        });
+
+        // record the initial user instructions and environment context, regardless of whether we restored items.
+        if let Some(user_instructions) = sess.get_user_instructions().clone() {
+            sess.record_conversation_items(&[Prompt::format_user_instructions_message(
+                &user_instructions,
+            )])
+            .await;
+        }
+        sess.record_conversation_items(&[ResponseItem::from(EnvironmentContext::new(
+            sess.get_cwd().to_path_buf(),
+            sess.get_approval_policy(),
+            sess.get_sandbox_policy().clone(),
+        ))])
+        .await;
+
+        // Gather history metadata for SessionConfiguredEvent.
+        let (history_log_id, history_entry_count) =
+            crate::message_history::history_metadata(&config).await;
+
+        // ack
+        let events = std::iter::once(Event {
+            id: INITIAL_SUBMIT_ID.to_owned(),
+            msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id,
+                model,
+                history_log_id,
+                history_entry_count,
+            }),
+        })
+        .chain(post_session_configured_error_events.into_iter());
+        for event in events {
+            if let Err(e) = tx_event.send(event).await {
+                error!("failed to send event: {e:?}");
+            }
+        }
+
+        Ok(sess)
+    }
+
+    pub(crate) fn get_writable_roots(&self) -> &[PathBuf] {
+        &self.writable_roots
+    }
+
+    pub(crate) fn get_approval_policy(&self) -> AskForApproval {
+        self.approval_policy
+    }
+
+    pub(crate) fn get_cwd(&self) -> &Path {
+        &self.cwd
+    }
+
+    pub(crate) fn get_user_instructions(&self) -> Option<String> {
+        self.user_instructions.clone()
+    }
+
+    pub(crate) fn get_sandbox_policy(&self) -> &SandboxPolicy {
+        &self.sandbox_policy
+    }
+
     fn resolve_path(&self, path: Option<String>) -> PathBuf {
         path.as_ref()
             .map(PathBuf::from)
             .map_or_else(|| self.cwd.clone(), |p| self.cwd.join(p))
     }
-}
 
-/// Mutable state of the agent
-#[derive(Default)]
-struct State {
-    approved_commands: HashSet<Vec<String>>,
-    current_task: Option<AgentTask>,
-    pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
-    pending_input: Vec<ResponseInputItem>,
-    history: ConversationHistory,
-}
-
-impl Session {
     pub fn set_task(&self, task: AgentTask) {
         let mut state = self.state.lock().unwrap();
         if let Some(current_task) = state.current_task.take() {
@@ -493,7 +734,6 @@ impl Session {
         let result = process_exec_tool_call(
             exec_args.params,
             exec_args.sandbox_type,
-            exec_args.ctrl_c,
             exec_args.sandbox_policy,
             exec_args.codex_linux_sandbox_exe,
             exec_args.stdout_stream,
@@ -578,7 +818,7 @@ impl Session {
             .await
     }
 
-    pub fn abort(&self) {
+    fn abort(&self) {
         info!("Aborting existing session");
         let mut state = self.state.lock().unwrap();
         state.pending_approvals.clear();
@@ -624,16 +864,6 @@ impl Drop for Session {
     }
 }
 
-impl State {
-    pub fn partial_clone(&self) -> Self {
-        Self {
-            approved_commands: self.approved_commands.clone(),
-            history: self.history.clone(),
-            ..Default::default()
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct ExecCommandContext {
     pub(crate) sub_id: String,
@@ -666,6 +896,7 @@ impl AgentTask {
             handle,
         }
     }
+
     fn compact(
         sess: Arc<Session>,
         sub_id: String,
@@ -703,277 +934,36 @@ impl AgentTask {
     }
 }
 
-async fn submission_loop(
-    mut session_id: Uuid,
-    config: Arc<Config>,
-    auth: Option<CodexAuth>,
-    rx_sub: Receiver<Submission>,
-    tx_event: Sender<Event>,
-    ctrl_c: Arc<Notify>,
-) {
-    let mut sess: Option<Arc<Session>> = None;
-    // shorthand - send an event when there is no active session
-    let send_no_session_event = |sub_id: String| async {
-        let event = Event {
-            id: sub_id,
-            msg: EventMsg::Error(ErrorEvent {
-                message: "No session initialized, expected 'ConfigureSession' as first Op"
-                    .to_string(),
-            }),
-        };
-        tx_event.send(event).await.ok();
-    };
-
-    loop {
-        let interrupted = ctrl_c.notified();
-        let sub = tokio::select! {
-            res = rx_sub.recv() => match res {
-                Ok(sub) => sub,
-                Err(_) => break,
-            },
-            _ = interrupted => {
-                if let Some(sess) = sess.as_ref(){
-                    sess.abort();
-                }
-                continue;
-            },
-        };
-
+async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiver<Submission>) {
+    // To break out of this loop, send Op::Shutdown.
+    while let Ok(sub) = rx_sub.recv().await {
         debug!(?sub, "Submission");
         match sub.op {
             Op::Interrupt => {
-                let sess = match sess.as_ref() {
-                    Some(sess) => sess,
-                    None => {
-                        send_no_session_event(sub.id).await;
-                        continue;
-                    }
-                };
                 sess.abort();
             }
-            Op::ConfigureSession {
-                provider,
-                model,
-                model_reasoning_effort,
-                model_reasoning_summary,
-                user_instructions,
-                base_instructions,
-                approval_policy,
-                sandbox_policy,
-                disable_response_storage,
-                notify,
-                cwd,
-                resume_path,
-            } => {
-                debug!(
-                    "Configuring session: model={model}; provider={provider:?}; resume={resume_path:?}"
-                );
-                if !cwd.is_absolute() {
-                    let message = format!("cwd is not absolute: {cwd:?}");
-                    error!(message);
-                    let event = Event {
-                        id: sub.id,
-                        msg: EventMsg::Error(ErrorEvent { message }),
-                    };
-                    if let Err(e) = tx_event.send(event).await {
-                        error!("failed to send error message: {e:?}");
-                    }
-                    return;
-                }
-                // Optionally resume an existing rollout.
-                let mut restored_items: Option<Vec<ResponseItem>> = None;
-                let rollout_recorder: Option<RolloutRecorder> =
-                    if let Some(path) = resume_path.as_ref() {
-                        match RolloutRecorder::resume(path, cwd.clone()).await {
-                            Ok((rec, saved)) => {
-                                session_id = saved.session_id;
-                                if !saved.items.is_empty() {
-                                    restored_items = Some(saved.items);
-                                }
-                                Some(rec)
-                            }
-                            Err(e) => {
-                                warn!("failed to resume rollout from {path:?}: {e}");
-                                None
-                            }
-                        }
-                    } else {
-                        None
-                    };
-
-                let rollout_recorder = match rollout_recorder {
-                    Some(rec) => Some(rec),
-                    None => {
-                        match RolloutRecorder::new(&config, session_id, user_instructions.clone())
-                            .await
-                        {
-                            Ok(r) => Some(r),
-                            Err(e) => {
-                                warn!("failed to initialise rollout recorder: {e}");
-                                None
-                            }
-                        }
-                    }
-                };
-
-                let client = ModelClient::new(
-                    config.clone(),
-                    auth.clone(),
-                    provider.clone(),
-                    model_reasoning_effort,
-                    model_reasoning_summary,
-                    session_id,
-                );
-
-                // abort any current running session and clone its state
-                let state = match sess.take() {
-                    Some(sess) => {
-                        sess.abort();
-                        sess.state.lock().unwrap().partial_clone()
-                    }
-                    None => State {
-                        history: ConversationHistory::new(),
-                        ..Default::default()
-                    },
-                };
-
-                let writable_roots = Mutex::new(get_writable_roots(&cwd));
-
-                // Error messages to dispatch after SessionConfigured is sent.
-                let mut mcp_connection_errors = Vec::<Event>::new();
-                let (mcp_connection_manager, failed_clients) =
-                    match McpConnectionManager::new(config.mcp_servers.clone()).await {
-                        Ok((mgr, failures)) => (mgr, failures),
-                        Err(e) => {
-                            let message = format!("Failed to create MCP connection manager: {e:#}");
-                            error!("{message}");
-                            mcp_connection_errors.push(Event {
-                                id: sub.id.clone(),
-                                msg: EventMsg::Error(ErrorEvent { message }),
-                            });
-                            (McpConnectionManager::default(), Default::default())
-                        }
-                    };
-
-                // Surface individual client start-up failures to the user.
-                if !failed_clients.is_empty() {
-                    for (server_name, err) in failed_clients {
-                        let message =
-                            format!("MCP client for `{server_name}` failed to start: {err:#}");
-                        error!("{message}");
-                        mcp_connection_errors.push(Event {
-                            id: sub.id.clone(),
-                            msg: EventMsg::Error(ErrorEvent { message }),
-                        });
-                    }
-                }
-                let default_shell = shell::default_user_shell().await;
-                sess = Some(Arc::new(Session {
-                    client,
-                    tools_config: ToolsConfig::new(
-                        &config.model_family,
-                        approval_policy,
-                        sandbox_policy.clone(),
-                        config.include_plan_tool,
-                    ),
-                    tx_event: tx_event.clone(),
-                    ctrl_c: Arc::clone(&ctrl_c),
-                    user_instructions,
-                    base_instructions,
-                    approval_policy,
-                    sandbox_policy,
-                    shell_environment_policy: config.shell_environment_policy.clone(),
-                    cwd,
-                    writable_roots,
-                    mcp_connection_manager,
-                    notify,
-                    state: Mutex::new(state),
-                    rollout: Mutex::new(rollout_recorder),
-                    codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
-                    disable_response_storage,
-                    user_shell: default_shell,
-                    show_raw_agent_reasoning: config.show_raw_agent_reasoning,
-                }));
-
-                // Patch restored state into the newly created session.
-                if let Some(sess_arc) = &sess {
-                    if restored_items.is_some() {
-                        let mut st = sess_arc.state.lock().unwrap();
-                        st.history.record_items(restored_items.unwrap().iter());
-                    }
-                }
-
-                // Gather history metadata for SessionConfiguredEvent.
-                let (history_log_id, history_entry_count) =
-                    crate::message_history::history_metadata(&config).await;
-
-                // ack
-                let events = std::iter::once(Event {
-                    id: sub.id.clone(),
-                    msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                        session_id,
-                        model,
-                        history_log_id,
-                        history_entry_count,
-                    }),
-                })
-                .chain(mcp_connection_errors.into_iter());
-                for event in events {
-                    if let Err(e) = tx_event.send(event).await {
-                        error!("failed to send event: {e:?}");
-                    }
-                }
-            }
             Op::UserInput { items } => {
-                let sess = match sess.as_ref() {
-                    Some(sess) => sess,
-                    None => {
-                        send_no_session_event(sub.id).await;
-                        continue;
-                    }
-                };
-
                 // attempt to inject input into current task
                 if let Err(items) = sess.inject_input(items) {
                     // no current task, spawn a new one
-                    let task = AgentTask::spawn(Arc::clone(sess), sub.id, items);
+                    let task = AgentTask::spawn(sess.clone(), sub.id, items);
                     sess.set_task(task);
                 }
             }
-            Op::ExecApproval { id, decision } => {
-                let sess = match sess.as_ref() {
-                    Some(sess) => sess,
-                    None => {
-                        send_no_session_event(sub.id).await;
-                        continue;
-                    }
-                };
-                match decision {
-                    ReviewDecision::Abort => {
-                        sess.abort();
-                    }
-                    other => sess.notify_approval(&id, other),
+            Op::ExecApproval { id, decision } => match decision {
+                ReviewDecision::Abort => {
+                    sess.abort();
                 }
-            }
-            Op::PatchApproval { id, decision } => {
-                let sess = match sess.as_ref() {
-                    Some(sess) => sess,
-                    None => {
-                        send_no_session_event(sub.id).await;
-                        continue;
-                    }
-                };
-                match decision {
-                    ReviewDecision::Abort => {
-                        sess.abort();
-                    }
-                    other => sess.notify_approval(&id, other),
+                other => sess.notify_approval(&id, other),
+            },
+            Op::PatchApproval { id, decision } => match decision {
+                ReviewDecision::Abort => {
+                    sess.abort();
                 }
-            }
+                other => sess.notify_approval(&id, other),
+            },
             Op::AddToHistory { text } => {
-                // TODO: What should we do if we got AddToHistory before ConfigureSession?
-                // currently, if ConfigureSession has resume path, this history will be ignored
-                let id = session_id;
+                let id = sess.session_id;
                 let config = config.clone();
                 tokio::spawn(async move {
                     if let Err(e) = crate::message_history::append_entry(&text, &id, &config).await
@@ -985,7 +975,7 @@ async fn submission_loop(
 
             Op::GetHistoryEntryRequest { offset, log_id } => {
                 let config = config.clone();
-                let tx_event = tx_event.clone();
+                let tx_event = sess.tx_event.clone();
                 let sub_id = sub.id.clone();
 
                 tokio::spawn(async move {
@@ -1013,14 +1003,6 @@ async fn submission_loop(
                 });
             }
             Op::Compact => {
-                let sess = match sess.as_ref() {
-                    Some(sess) => sess,
-                    None => {
-                        send_no_session_event(sub.id).await;
-                        continue;
-                    }
-                };
-
                 // Create a summarization request as user input
                 const SUMMARIZATION_PROMPT: &str = include_str!("prompt_for_compact_command.md");
 
@@ -1042,28 +1024,27 @@ async fn submission_loop(
 
                 // Gracefully flush and shutdown rollout recorder on session end so tests
                 // that inspect the rollout file do not race with the background writer.
-                if let Some(sess_arc) = sess {
-                    let recorder_opt = sess_arc.rollout.lock().unwrap().take();
-                    if let Some(rec) = recorder_opt {
-                        if let Err(e) = rec.shutdown().await {
-                            warn!("failed to shutdown rollout recorder: {e}");
-                            let event = Event {
-                                id: sub.id.clone(),
-                                msg: EventMsg::Error(ErrorEvent {
-                                    message: "Failed to shutdown rollout recorder".to_string(),
-                                }),
-                            };
-                            if let Err(e) = tx_event.send(event).await {
-                                warn!("failed to send error message: {e:?}");
-                            }
+                let recorder_opt = sess.rollout.lock().unwrap().take();
+                if let Some(rec) = recorder_opt {
+                    if let Err(e) = rec.shutdown().await {
+                        warn!("failed to shutdown rollout recorder: {e}");
+                        let event = Event {
+                            id: sub.id.clone(),
+                            msg: EventMsg::Error(ErrorEvent {
+                                message: "Failed to shutdown rollout recorder".to_string(),
+                            }),
+                        };
+                        if let Err(e) = sess.tx_event.send(event).await {
+                            warn!("failed to send error message: {e:?}");
                         }
                     }
                 }
+
                 let event = Event {
                     id: sub.id.clone(),
                     msg: EventMsg::ShutdownComplete,
                 };
-                if let Err(e) = tx_event.send(event).await {
+                if let Err(e) = sess.tx_event.send(event).await {
                     warn!("failed to send Shutdown event: {e}");
                 }
                 break;
@@ -1278,15 +1259,9 @@ async fn run_turn(
 
     let prompt = Prompt {
         input,
-        user_instructions: sess.user_instructions.clone(),
         store: !sess.disable_response_storage,
         tools,
         base_instructions_override: sess.base_instructions.clone(),
-        environment_context: Some(EnvironmentContext {
-            cwd: sess.cwd.clone(),
-            approval_policy: sess.approval_policy,
-            sandbox_policy: sess.sandbox_policy.clone(),
-        }),
     };
 
     let mut retries = 0;
@@ -1303,7 +1278,10 @@ async fn run_turn(
                 let max_retries = sess.client.get_provider().stream_max_retries();
                 if retries < max_retries {
                     retries += 1;
-                    let delay = backoff(retries);
+                    let delay = match e {
+                        CodexErr::Stream(_, Some(delay)) => delay,
+                        _ => backoff(retries),
+                    };
                     warn!(
                         "stream disconnected - retrying turn ({retries}/{max_retries} in {delay:?})...",
                     );
@@ -1413,6 +1391,7 @@ async fn try_run_turn(
             // Treat as a disconnected stream so the caller can retry.
             return Err(CodexErr::Stream(
                 "stream closed before response.completed".into(),
+                None,
             ));
         };
 
@@ -1520,9 +1499,7 @@ async fn run_compact_task(
 
     let prompt = Prompt {
         input: turn_input,
-        user_instructions: None,
         store: !sess.disable_response_storage,
-        environment_context: None,
         tools: Vec::new(),
         base_instructions_override: Some(compact_instructions.clone()),
     };
@@ -1624,6 +1601,7 @@ async fn handle_response_item(
                 for item in content {
                     let text = match item {
                         ReasoningItemContent::ReasoningText { text } => text,
+                        ReasoningItemContent::Text { text } => text,
                     };
                     let event = Event {
                         id: sub_id.to_string(),
@@ -1787,7 +1765,6 @@ fn parse_container_exec_arguments(
 pub struct ExecInvokeArgs<'a> {
     pub params: ExecParams,
     pub sandbox_type: SandboxType,
-    pub ctrl_c: Arc<Notify>,
     pub sandbox_policy: &'a SandboxPolicy,
     pub codex_linux_sandbox_exe: &'a Option<PathBuf>,
     pub stdout_stream: Option<StdoutStream>,
@@ -1972,7 +1949,6 @@ async fn handle_container_exec_with_params(
             ExecInvokeArgs {
                 params: params.clone(),
                 sandbox_type,
-                ctrl_c: sess.ctrl_c.clone(),
                 sandbox_policy: &sess.sandbox_policy,
                 codex_linux_sandbox_exe: &sess.codex_linux_sandbox_exe,
                 stdout_stream: Some(StdoutStream {
@@ -2104,7 +2080,6 @@ async fn handle_sandbox_error(
                     ExecInvokeArgs {
                         params,
                         sandbox_type: SandboxType::None,
-                        ctrl_c: sess.ctrl_c.clone(),
                         sandbox_policy: &sess.sandbox_policy,
                         codex_linux_sandbox_exe: &sess.codex_linux_sandbox_exe,
                         stdout_stream: Some(StdoutStream {
@@ -2226,6 +2201,7 @@ async fn drain_to_completed(sess: &Session, sub_id: &str, prompt: &Prompt) -> Co
         let Some(event) = maybe_event else {
             return Err(CodexErr::Stream(
                 "stream closed before response.completed".into(),
+                None,
             ));
         };
         match event {
@@ -2243,6 +2219,7 @@ async fn drain_to_completed(sess: &Session, sub_id: &str, prompt: &Prompt) -> Co
                     None => {
                         return Err(CodexErr::Stream(
                             "token_usage was None in ResponseEvent::Completed".into(),
+                            None,
                         ));
                     }
                 };

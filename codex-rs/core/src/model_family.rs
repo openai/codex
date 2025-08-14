@@ -78,6 +78,11 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             supports_reasoning_summaries: true,
             uses_local_shell_tool: true,
         )
+    } else if slug.starts_with("codex-") {
+        model_family!(
+            slug, slug,
+            supports_reasoning_summaries: true,
+        )
     } else if slug.starts_with("gpt-4.1") {
         model_family!(
             slug, "gpt-4.1",

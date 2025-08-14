@@ -1,7 +1,6 @@
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
-use codex_core::Codex;
-use codex_core::CodexSpawnOk;
+use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
 use codex_core::built_in_model_providers;
 use codex_core::protocol::EventMsg;
@@ -55,14 +54,12 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
     config.model_provider = model_provider;
     config.user_instructions = Some("be consistent and helpful".to_string());
 
-    let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
-    let CodexSpawnOk { codex, .. } = Codex::spawn(
-        config,
-        Some(CodexAuth::from_api_key("Test API Key")),
-        ctrl_c.clone(),
-    )
-    .await
-    .unwrap();
+    let conversation_manager = ConversationManager::default();
+    let codex = conversation_manager
+        .new_conversation_with_auth(config, Some(CodexAuth::from_api_key("Test API Key")))
+        .await
+        .expect("create new conversation")
+        .conversation;
 
     codex
         .submit(Op::UserInput {
@@ -88,7 +85,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
     assert_eq!(requests.len(), 2, "expected two POST requests");
 
     let expected_env_text = format!(
-        "<environment_context>\n\nCurrent working directory: {}\nApproval policy: on-request\nSandbox policy: read-only\nNetwork access: restricted\n\n\n</environment_context>",
+        "<environment_context>\nCurrent working directory: {}\nApproval policy: on-request\nSandbox mode: read-only\nNetwork access: restricted\n</environment_context>",
         cwd.path().to_string_lossy()
     );
     let expected_ui_text =
@@ -116,7 +113,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
     let body1 = requests[0].body_json::<serde_json::Value>().unwrap();
     assert_eq!(
         body1["input"],
-        serde_json::json!([expected_env_msg, expected_ui_msg, expected_user_message_1])
+        serde_json::json!([expected_ui_msg, expected_env_msg, expected_user_message_1])
     );
 
     let expected_user_message_2 = serde_json::json!({

@@ -12,9 +12,12 @@ use codex_core::plan_tool::UpdatePlanArgs;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
+use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
+use codex_core::protocol::ExecCommandBeginEvent;
+use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
@@ -22,6 +25,7 @@ use codex_core::protocol::TaskCompleteEvent;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
+use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 use std::fs::File;
 use std::io::BufRead;
@@ -102,7 +106,8 @@ async fn helpers_are_available_and_do_not_panic() {
     let (tx_raw, _rx) = channel::<AppEvent>();
     let tx = AppEventSender::new(tx_raw);
     let cfg = test_config();
-    let mut w = ChatWidget::new(cfg, tx, None, Vec::new(), false);
+    let conversation_manager = Arc::new(ConversationManager::default());
+    let mut w = ChatWidget::new(cfg, conversation_manager, tx, None, Vec::new(), false);
     // Basic construction sanity.
     let _ = &mut w;
 }
@@ -134,6 +139,7 @@ fn make_chatwidget_manual() -> (
         stream: StreamController::new(cfg),
         last_stream_kind: None,
         running_commands: HashMap::new(),
+        pending_exec_completions: Vec::new(),
         task_complete_pending: false,
         interrupts: InterruptManager::new(),
         needs_redraw: false,
@@ -186,6 +192,90 @@ fn open_fixture(name: &str) -> std::fs::File {
     }
     // 3) Last resort: CWD
     File::open(name).expect("open fixture file")
+}
+
+#[test]
+fn exec_history_cell_shows_working_then_completed() {
+    let (mut chat, rx, _op_rx) = make_chatwidget_manual();
+
+    // Begin command
+    chat.handle_codex_event(Event {
+        id: "call-1".into(),
+        msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+            call_id: "call-1".into(),
+            command: vec!["bash".into(), "-lc".into(), "echo done".into()],
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            parsed_cmd: vec![codex_core::parse_command::ParsedCommand::Unknown {
+                cmd: vec!["echo".into(), "done".into()],
+            }],
+        }),
+    });
+
+    // End command successfully
+    chat.handle_codex_event(Event {
+        id: "call-1".into(),
+        msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+            call_id: "call-1".into(),
+            stdout: "done".into(),
+            stderr: String::new(),
+            exit_code: 0,
+            duration: std::time::Duration::from_millis(5),
+        }),
+    });
+
+    let cells = drain_insert_history(&rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected only the completed exec cell to be inserted into history"
+    );
+    let blob = lines_to_single_string(&cells[0]);
+    assert!(
+        blob.contains("Completed"),
+        "expected completed exec cell to show Completed header: {blob:?}"
+    );
+}
+
+#[test]
+fn exec_history_cell_shows_working_then_failed() {
+    let (mut chat, rx, _op_rx) = make_chatwidget_manual();
+
+    // Begin command
+    chat.handle_codex_event(Event {
+        id: "call-2".into(),
+        msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+            call_id: "call-2".into(),
+            command: vec!["bash".into(), "-lc".into(), "false".into()],
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            parsed_cmd: vec![codex_core::parse_command::ParsedCommand::Unknown {
+                cmd: vec!["false".into()],
+            }],
+        }),
+    });
+
+    // End command with failure
+    chat.handle_codex_event(Event {
+        id: "call-2".into(),
+        msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+            call_id: "call-2".into(),
+            stdout: String::new(),
+            stderr: "error".into(),
+            exit_code: 2,
+            duration: std::time::Duration::from_millis(7),
+        }),
+    });
+
+    let cells = drain_insert_history(&rx);
+    assert_eq!(
+        cells.len(),
+        1,
+        "expected only the completed exec cell to be inserted into history"
+    );
+    let blob = lines_to_single_string(&cells[0]);
+    assert!(
+        blob.contains("Failed (exit 2)"),
+        "expected completed exec cell to show Failed header with exit code: {blob:?}"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -323,46 +413,6 @@ async fn binary_size_transcript_matches_ideal_fixture() {
 
     // Exact equality with pretty diff on failure
     assert_eq!(visible_after, ideal);
-}
-
-#[test]
-fn final_longer_answer_after_single_char_delta_is_complete() {
-    let (mut chat, rx, _op_rx) = make_chatwidget_manual();
-
-    // Simulate a stray delta without newline (e.g., punctuation).
-    chat.handle_codex_event(Event {
-        id: "sub-x".into(),
-        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta: "?".into() }),
-    });
-
-    // Now send the full final answer with no newline.
-    let full = "Hi! How can I help with codex-rs today? Want me to explore the repo, run tests, or work on a specific change?";
-    chat.handle_codex_event(Event {
-        id: "sub-x".into(),
-        msg: EventMsg::AgentMessage(AgentMessageEvent {
-            message: full.into(),
-        }),
-    });
-
-    // Drain and assert the full message appears in history.
-    let cells = drain_insert_history(&rx);
-    let mut found = false;
-    for lines in &cells {
-        let s = lines
-            .iter()
-            .flat_map(|l| l.spans.iter())
-            .map(|sp| sp.content.clone())
-            .collect::<String>();
-        if s.contains(full) {
-            found = true;
-            break;
-        }
-    }
-    assert!(
-        found,
-        "expected full final message to be flushed to history, cells={:?}",
-        cells.len()
-    );
 }
 
 #[test]
@@ -834,4 +884,92 @@ fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
     let first_idx = combined.find("First message").unwrap();
     let second_idx = combined.find("Second message").unwrap();
     assert!(first_idx < second_idx, "messages out of order: {combined}");
+}
+
+#[test]
+fn final_reasoning_then_message_without_deltas_are_rendered() {
+    let (mut chat, rx, _op_rx) = make_chatwidget_manual();
+
+    // No deltas; only final reasoning followed by final message.
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentReasoning(AgentReasoningEvent {
+            text: "I will first analyze the request.".into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "Here is the result.".into(),
+        }),
+    });
+
+    // Drain history and snapshot the combined visible content.
+    let cells = drain_insert_history(&rx);
+    let combined = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_snapshot!(combined);
+}
+
+#[test]
+fn deltas_then_same_final_message_are_rendered_snapshot() {
+    let (mut chat, rx, _op_rx) = make_chatwidget_manual();
+
+    // Stream some reasoning deltas first.
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "I will ".into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "first analyze the ".into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "request.".into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentReasoning(AgentReasoningEvent {
+            text: "request.".into(),
+        }),
+    });
+
+    // Then stream answer deltas, followed by the exact same final message.
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "Here is the ".into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "result.".into(),
+        }),
+    });
+
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "Here is the result.".into(),
+        }),
+    });
+
+    // Snapshot the combined visible content to ensure we render as expected
+    // when deltas are followed by the identical final message.
+    let cells = drain_insert_history(&rx);
+    let combined = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert_snapshot!(combined);
 }

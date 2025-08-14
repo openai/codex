@@ -1,7 +1,6 @@
 use std::time::Duration;
 
-use codex_core::Codex;
-use codex_core::CodexSpawnOk;
+use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
 use codex_core::WireApi;
 use codex_core::protocol::EventMsg;
@@ -90,13 +89,12 @@ async fn continue_after_stream_error() {
     config.base_instructions = Some("You are a helpful assistant".to_string());
     config.model_provider = provider;
 
-    let CodexSpawnOk { codex, .. } = Codex::spawn(
-        config,
-        Some(CodexAuth::from_api_key("Test API Key")),
-        std::sync::Arc::new(tokio::sync::Notify::new()),
-    )
-    .await
-    .unwrap();
+    let conversation_manager = ConversationManager::default();
+    let codex = conversation_manager
+        .new_conversation_with_auth(config, Some(CodexAuth::from_api_key("Test API Key")))
+        .await
+        .unwrap()
+        .conversation;
 
     codex
         .submit(Op::UserInput {
