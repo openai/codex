@@ -187,7 +187,6 @@ mod tests {
     #[test]
     #[expect(clippy::expect_used, clippy::unwrap_used)]
     fn id_token_info_parses_email_and_plan() {
-        // Build a fake JWT with a URL-safe base64 payload containing email and plan.
         #[derive(Serialize)]
         struct Header {
             alg: &'static str,
