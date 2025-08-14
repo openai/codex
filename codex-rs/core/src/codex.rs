@@ -227,6 +227,7 @@ pub(crate) struct Session {
     /// instead of `std::env::current_dir()`.
     cwd: PathBuf,
     base_instructions: Option<String>,
+    user_instructions: Option<String>,
     approval_policy: AskForApproval,
     sandbox_policy: SandboxPolicy,
     shell_environment_policy: ShellEnvironmentPolicy,
@@ -419,6 +420,7 @@ impl Session {
                 config.include_plan_tool,
             ),
             tx_event: tx_event.clone(),
+            user_instructions,
             base_instructions,
             approval_policy,
             sandbox_policy,
@@ -486,7 +488,7 @@ impl Session {
     }
 
     pub(crate) fn get_user_instructions(&self) -> Option<String> {
-        self.base_instructions.clone()
+        self.user_instructions.clone()
     }
 
     pub(crate) fn get_sandbox_policy(&self) -> &SandboxPolicy {
