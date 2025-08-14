@@ -566,9 +566,13 @@ We're excited to launch a **$1 million initiative** supporting open source proje
 
 ## Contributing
 
-This project is under active development and the code will likely change pretty significantly. We'll update this message once that's complete!
+This project is under active development and the code will likely change pretty significantly.
 
-More broadly we welcome contributions - whether you are opening your very first pull request or you're a seasoned maintainer. At the same time we care about reliability and long-term maintainability, so the bar for merging code is intentionally **high**. The guidelines below spell out what "high-quality" means in practice and should make the whole process transparent and friendly.
+**At the moment, we only plan to prioritize reviewing external contributions for bugs or security fixes.**
+
+If you want to add a new feature or change the behavior of an existing one, please open an issue proposing the feature and get approval from an OpenAI team member before spending time building it.
+
+**New contributions that don't go through this process may be closed** if they aren't aligned with our current roadmap or conflict with other priorities/upcoming features.
 
 ### Development workflow
 
@@ -593,8 +597,9 @@ More broadly we welcome contributions - whether you are opening your very first 
 ### Review process
 
 1. One maintainer will be assigned as a primary reviewer.
-2. We may ask for changes - please do not take this personally. We value the work, we just also value consistency and long-term maintainability.
-3. When there is consensus that the PR meets the bar, a maintainer will squash-and-merge.
+2. If your PR adds a new feature that was not previously discussed and approved, we may choose to close your PR (see [Contributing](#contributing)).
+3. We may ask for changes - please do not take this personally. We value the work, but we also value consistency and long-term maintainability.
+5. When there is consensus that the PR meets the bar, a maintainer will squash-and-merge.
 
 ### Community values
 
