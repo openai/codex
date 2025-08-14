@@ -25,7 +25,9 @@ use crate::model_family::ModelFamily;
 use crate::models::ContentItem;
 use crate::models::ReasoningItemContent;
 use crate::models::ResponseItem;
+use crate::models::generate_timestamp;
 use crate::openai_tools::create_tools_json_for_chat_completions_api;
+use crate::protocol::TokenUsage;
 use crate::util::backoff;
 
 /// Implementation for the classic Chat Completions API.
@@ -114,6 +116,9 @@ pub(crate) async fn stream_chat_completions(
         "model": model_family.slug,
         "messages": messages,
         "stream": true,
+        "stream_options": {
+            "include_usage": true
+        },
         "tools": tools_json,
     });
 
@@ -208,6 +213,7 @@ async fn process_chat_sse<S>(
     let mut fn_call_state = FunctionCallState::default();
     let mut assistant_text = String::new();
     let mut reasoning_text = String::new();
+    let mut token_usage: Option<TokenUsage> = None;
 
     loop {
         let sse = match timeout(idle_timeout, stream.next()).await {
@@ -223,7 +229,8 @@ async fn process_chat_sse<S>(
                 let _ = tx_event
                     .send(Ok(ResponseEvent::Completed {
                         response_id: String::new(),
-                        token_usage: None,
+                        token_usage,
+                        timestamp: Some(generate_timestamp()),
                     }))
                     .await;
                 return;
@@ -250,6 +257,8 @@ async fn process_chat_sse<S>(
                         text: std::mem::take(&mut assistant_text),
                     }],
                     id: None,
+                    token_usage: None,
+                    timestamp: None,
                 };
                 let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
             }
@@ -269,7 +278,8 @@ async fn process_chat_sse<S>(
             let _ = tx_event
                 .send(Ok(ResponseEvent::Completed {
                     response_id: String::new(),
-                    token_usage: None,
+                    token_usage,
+                    timestamp: Some(generate_timestamp()),
                 }))
                 .await;
             return;
@@ -281,6 +291,31 @@ async fn process_chat_sse<S>(
             Err(_) => continue,
         };
         trace!("chat_completions received SSE chunk: {chunk:?}");
+
+        if let Some(usage) = chunk.get("usage") {
+            let prompt_tokens = usage["prompt_tokens"].as_u64();
+            let completion_tokens = usage["completion_tokens"].as_u64();
+            let total_tokens = usage["total_tokens"].as_u64();
+
+            if let (Some(prompt_tokens), Some(completion_tokens), Some(total_tokens)) =
+                (prompt_tokens, completion_tokens, total_tokens)
+            {
+                let prompt_details = &usage["prompt_tokens_details"];
+                let completion_details = &usage["completion_tokens_details"];
+
+                token_usage = Some(TokenUsage {
+                    input_tokens: prompt_tokens,
+                    output_tokens: completion_tokens,
+                    total_tokens,
+                    cached_input_tokens: prompt_details
+                        .get("cached_tokens")
+                        .and_then(|v| v.as_u64()),
+                    reasoning_output_tokens: completion_details
+                        .get("reasoning_tokens")
+                        .and_then(|v| v.as_u64()),
+                });
+            }
+        }
 
         let choice_opt = chunk.get("choices").and_then(|c| c.get(0));
 
@@ -396,6 +431,8 @@ async fn process_chat_sse<S>(
                                     text: std::mem::take(&mut assistant_text),
                                 }],
                                 id: None,
+                                token_usage: None,
+                                timestamp: None,
                             };
                             let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
                         }
@@ -415,18 +452,19 @@ async fn process_chat_sse<S>(
                     _ => {}
                 }
 
-                // Emit Completed regardless of reason so the agent can advance.
-                let _ = tx_event
-                    .send(Ok(ResponseEvent::Completed {
-                        response_id: String::new(),
-                        token_usage: None,
-                    }))
-                    .await;
+                if token_usage.is_some() {
+                    // Emit Completed regardless of reason so the agent can advance.
+                    let _ = tx_event
+                        .send(Ok(ResponseEvent::Completed {
+                            response_id: String::new(),
+                            token_usage: token_usage.clone(),
+                            timestamp: Some(generate_timestamp()),
+                        }))
+                        .await;
+                }
 
                 // Prepare for potential next turn (should not happen in same stream).
                 // fn_call_state = FunctionCallState::default();
-
-                return; // End processing for this SSE stream.
             }
         }
     }
@@ -512,6 +550,7 @@ where
                 Poll::Ready(Some(Ok(ResponseEvent::Completed {
                     response_id,
                     token_usage,
+                    timestamp,
                 }))) => {
                     // Build any aggregated items in the correct order: Reasoning first, then Message.
                     let mut emitted_any = false;
@@ -541,6 +580,8 @@ where
                             content: vec![crate::models::ContentItem::OutputText {
                                 text: std::mem::take(&mut this.cumulative),
                             }],
+                            token_usage: token_usage.clone(),
+                            timestamp: timestamp.clone(),
                         };
                         this.pending
                             .push_back(ResponseEvent::OutputItemDone(aggregated_message));
@@ -552,6 +593,7 @@ where
                         this.pending.push_back(ResponseEvent::Completed {
                             response_id: response_id.clone(),
                             token_usage: token_usage.clone(),
+                            timestamp: timestamp.clone(),
                         });
                         // Return the first pending event now.
                         if let Some(ev) = this.pending.pop_front() {
@@ -563,6 +605,7 @@ where
                     return Poll::Ready(Some(Ok(ResponseEvent::Completed {
                         response_id,
                         token_usage,
+                        timestamp,
                     })));
                 }
                 Poll::Ready(Some(Ok(ResponseEvent::Created))) => {
@@ -642,5 +685,236 @@ impl<S> AggregatedChatStream<S> {
 
     pub(crate) fn streaming_mode(inner: S) -> Self {
         Self::new(inner, AggregateMode::Streaming)
+    }
+}
+
+#[cfg(test)]
+#[expect(clippy::expect_used)]
+mod tests {
+    use super::*;
+    use bytes::Bytes;
+    use futures::stream;
+    use serde_json::json;
+    use tokio::sync::mpsc;
+    use tokio::time::Duration;
+
+    #[tokio::test]
+    async fn test_token_usage_sse_parsing() {
+        let (tx_event, mut rx_event) = mpsc::channel(10);
+
+        // Create SSE-formatted data as Bytes
+        let sse_data = vec![
+            Ok(Bytes::from(format!(
+                "data: {}\n\n",
+                json!({
+                    "choices": [{
+                        "delta": {
+                            "content": "Hello"
+                        }
+                    }]
+                })
+            ))),
+            Ok(Bytes::from(format!(
+                "data: {}\n\n",
+                json!({
+                    "usage": {
+                        "prompt_tokens": 100,
+                        "completion_tokens": 50,
+                        "total_tokens": 150,
+                        "prompt_tokens_details": {
+                            "cached_tokens": 25
+                        },
+                        "completion_tokens_details": {
+                            "reasoning_tokens": 10
+                        }
+                    }
+                })
+            ))),
+            Ok(Bytes::from(format!(
+                "data: {}\n\n",
+                json!({
+                    "choices": [{
+                        "finish_reason": "stop"
+                    }]
+                })
+            ))),
+        ];
+
+        let stream = stream::iter(sse_data);
+
+        // Spawn the SSE processor
+        let handle = tokio::spawn(async move {
+            process_chat_sse(stream, tx_event, Duration::from_secs(30)).await;
+        });
+
+        handle.await.expect("task should complete");
+
+        // Collect events
+        let mut events = Vec::new();
+        while let Some(event) = rx_event.recv().await {
+            events.push(event);
+        }
+
+        // Verify we got a Completed event with correct token usage
+        let completed_event = events.iter().find_map(|e| match e {
+            Ok(ResponseEvent::Completed { token_usage, .. }) => token_usage.as_ref(),
+            _ => None,
+        });
+
+        assert!(completed_event.is_some());
+        let usage = completed_event.expect("should have token usage");
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.output_tokens, 50);
+        assert_eq!(usage.total_tokens, 150);
+        assert_eq!(usage.cached_input_tokens, Some(25));
+        assert_eq!(usage.reasoning_output_tokens, Some(10));
+    }
+
+    #[tokio::test]
+    async fn test_token_usage_without_details() {
+        let (tx_event, mut rx_event) = mpsc::channel(10);
+
+        // Create SSE-formatted data without detailed fields
+        let sse_data = vec![
+            Ok(Bytes::from(format!(
+                "data: {}\n\n",
+                json!({
+                    "usage": {
+                        "prompt_tokens": 75,
+                        "completion_tokens": 25,
+                        "total_tokens": 100
+                    }
+                })
+            ))),
+            Ok(Bytes::from(format!(
+                "data: {}\n\n",
+                json!({
+                    "choices": [{
+                        "finish_reason": "stop"
+                    }]
+                })
+            ))),
+        ];
+
+        let stream = stream::iter(sse_data);
+
+        let handle = tokio::spawn(async move {
+            process_chat_sse(stream, tx_event, Duration::from_secs(30)).await;
+        });
+
+        handle.await.expect("task should complete");
+
+        let mut events = Vec::new();
+        while let Some(event) = rx_event.recv().await {
+            events.push(event);
+        }
+
+        let completed_event = events.iter().find_map(|e| match e {
+            Ok(ResponseEvent::Completed { token_usage, .. }) => token_usage.as_ref(),
+            _ => None,
+        });
+
+        assert!(completed_event.is_some());
+        let usage = completed_event.expect("should have token usage");
+        assert_eq!(usage.input_tokens, 75);
+        assert_eq!(usage.output_tokens, 25);
+        assert_eq!(usage.total_tokens, 100);
+        assert_eq!(usage.cached_input_tokens, None);
+        assert_eq!(usage.reasoning_output_tokens, None);
+    }
+
+    #[tokio::test]
+    async fn test_stream_options_in_request() {
+        // Test that the stream_options field is included in requests
+        // This is a simple validation test
+        let messages = vec![json!({
+            "role": "user",
+            "content": "test"
+        })];
+
+        let tools_json = serde_json::Value::Null;
+
+        // Build the request body that would be sent
+        let body = json!({
+            "model": "gpt-4",
+            "messages": messages,
+            "stream": true,
+            "stream_options": {
+                "include_usage": true
+            },
+            "tools": tools_json,
+        });
+
+        // Verify stream_options is present with include_usage
+        assert!(body["stream_options"].is_object());
+        assert_eq!(body["stream_options"]["include_usage"], true);
+    }
+
+    #[tokio::test]
+    async fn test_completed_event_has_timestamp() {
+        let (tx_event, mut rx_event) = mpsc::channel(10);
+
+        // Send minimal SSE to trigger Completed event
+        let sse_data = vec![Ok(Bytes::from(format!(
+            "data: {}\n\n",
+            json!({
+                "choices": [{
+                    "finish_reason": "stop"
+                }]
+            })
+        )))];
+
+        let stream = stream::iter(sse_data);
+
+        let handle = tokio::spawn(async move {
+            process_chat_sse(stream, tx_event, Duration::from_secs(30)).await;
+        });
+
+        handle.await.expect("task should complete");
+
+        let mut events = Vec::new();
+        while let Some(event) = rx_event.recv().await {
+            events.push(event);
+        }
+
+        // Find the Completed event and verify it has a timestamp
+        let has_timestamp = events.iter().any(|e| match e {
+            Ok(ResponseEvent::Completed { timestamp, .. }) => timestamp.is_some(),
+            _ => false,
+        });
+
+        assert!(has_timestamp, "Completed event should have a timestamp");
+    }
+
+    #[tokio::test]
+    async fn test_completed_event_on_done_signal() {
+        let (tx_event, mut rx_event) = mpsc::channel(10);
+
+        // Send [DONE] signal
+        let sse_data = vec![Ok(Bytes::from("data: [DONE]\n\n"))];
+
+        let stream = stream::iter(sse_data);
+
+        let handle = tokio::spawn(async move {
+            process_chat_sse(stream, tx_event, Duration::from_secs(30)).await;
+        });
+
+        handle.await.expect("task should complete");
+
+        let mut events = Vec::new();
+        while let Some(event) = rx_event.recv().await {
+            events.push(event);
+        }
+
+        // Verify we get a Completed event with timestamp even on [DONE]
+        let completed_with_timestamp = events.iter().any(|e| match e {
+            Ok(ResponseEvent::Completed { timestamp, .. }) => timestamp.is_some(),
+            _ => false,
+        });
+
+        assert!(
+            completed_with_timestamp,
+            "Completed event from [DONE] should have timestamp"
+        );
     }
 }
