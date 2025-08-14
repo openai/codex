@@ -1,7 +1,7 @@
 name: 🎁 Feature Request
 description: Propose a new feature for Codex
 labels:
-  - feature
+  - enhancement
   - needs triage
 body:
   - type: markdown
