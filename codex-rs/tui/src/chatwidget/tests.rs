@@ -12,6 +12,7 @@ use codex_core::plan_tool::UpdatePlanArgs;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
+use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
@@ -834,4 +835,50 @@ fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
     let first_idx = combined.find("First message").unwrap();
     let second_idx = combined.find("Second message").unwrap();
     assert!(first_idx < second_idx, "messages out of order: {combined}");
+}
+
+#[test]
+fn final_reasoning_then_message_without_deltas_are_rendered() {
+    let (mut chat, rx, _op_rx) = make_chatwidget_manual();
+
+    // No deltas; only final reasoning followed by final message.
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentReasoning(AgentReasoningEvent {
+            text: "I will first analyze the request.".into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "Here is the result.".into(),
+        }),
+    });
+
+    // Drain history and assert both reasoning and message are visible.
+    let cells = drain_insert_history(&rx);
+    let combined = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(
+        combined.contains("I will first analyze the request."),
+        "expected final reasoning text to be visible in UI history: {combined:?}"
+    );
+    assert!(
+        combined.contains("Here is the result."),
+        "expected final message text to be visible in UI history: {combined:?}"
+    );
+
+    // Ensure reasoning appears before the final message.
+    let idx_reasoning = combined
+        .find("I will first analyze the request.")
+        .expect("reasoning text not found");
+    let idx_message = combined
+        .find("Here is the result.")
+        .expect("message text not found");
+    assert!(
+        idx_reasoning < idx_message,
+        "reasoning should precede message: {combined:?}"
+    );
 }

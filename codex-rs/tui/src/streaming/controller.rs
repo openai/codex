@@ -263,35 +263,37 @@ impl StreamController {
     /// Apply a full final answer: replace queued content with only the remaining tail,
     /// then finalize immediately and notify completion.
     pub(crate) fn apply_final_answer(&mut self, message: &str, sink: &impl HistorySink) -> bool {
-        self.begin(StreamKind::Answer, sink);
-        if !message.is_empty() {
-            let mut msg_with_nl = message.to_string();
-            if !msg_with_nl.ends_with('\n') {
-                msg_with_nl.push('\n');
-            }
-            let state = self.state_mut(StreamKind::Answer);
-            let already_committed = state.collector.committed_count();
-            // Preserve previously committed count so finalize emits only the remaining tail.
-            state
-                .collector
-                .replace_with_and_mark_committed(&msg_with_nl, already_committed);
-        }
-        self.finalize(StreamKind::Answer, true, sink)
+        self.apply_full_final(StreamKind::Answer, message, true, sink)
     }
 
     pub(crate) fn apply_final_reasoning(&mut self, message: &str, sink: &impl HistorySink) -> bool {
-        self.begin(StreamKind::Reasoning, sink);
+        self.apply_full_final(StreamKind::Reasoning, message, false, sink)
+    }
+
+    fn apply_full_final(
+        &mut self,
+        kind: StreamKind,
+        message: &str,
+        immediate: bool,
+        sink: &impl HistorySink,
+    ) -> bool {
+        self.begin(kind, sink);
+
         if !message.is_empty() {
-            let mut msg_with_nl = message.to_string();
-            if !msg_with_nl.ends_with('\n') {
-                msg_with_nl.push('\n');
+            // normalize to end with newline
+            let mut msg = message.to_owned();
+            if !msg.ends_with('\n') {
+                msg.push('\n');
             }
-            let state = self.state_mut(StreamKind::Reasoning);
-            let already_committed = state.collector.committed_count();
+
+            // replace while preserving already committed count
+            let state = self.state_mut(kind);
+            let committed = state.collector.committed_count();
             state
                 .collector
-                .replace_with_and_mark_committed(&msg_with_nl, already_committed);
+                .replace_with_and_mark_committed(&msg, committed);
         }
-        self.finalize(StreamKind::Reasoning, false, sink)
+
+        self.finalize(kind, immediate, sink)
     }
 }
