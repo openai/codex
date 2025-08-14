@@ -38,7 +38,6 @@ use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::apply_patch::get_writable_roots;
 use crate::apply_patch::{self};
 use crate::client::ModelClient;
-use crate::client_common::EnvironmentContext;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::config::Config;
@@ -46,6 +45,7 @@ use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::conversation_history::ConversationHistory;
+use crate::environment_context::EnvironmentContext;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::error::SandboxErr;
@@ -437,6 +437,20 @@ impl Session {
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         });
 
+        // record the initial user instructions and environment context, regardless of whether we restored items.
+        if let Some(user_instructions) = sess.get_user_instructions().clone() {
+            sess.record_conversation_items(&[Prompt::format_user_instructions_message(
+                &user_instructions,
+            )])
+            .await;
+        }
+        sess.record_conversation_items(&[ResponseItem::from(EnvironmentContext::new(
+            sess.get_cwd().to_path_buf(),
+            sess.get_approval_policy(),
+            sess.get_sandbox_policy().clone(),
+        ))])
+        .await;
+
         // Gather history metadata for SessionConfiguredEvent.
         let (history_log_id, history_entry_count) =
             crate::message_history::history_metadata(&config).await;
@@ -471,6 +485,14 @@ impl Session {
 
     pub(crate) fn get_cwd(&self) -> &Path {
         &self.cwd
+    }
+
+    pub(crate) fn get_user_instructions(&self) -> Option<String> {
+        self.user_instructions.clone()
+    }
+
+    pub(crate) fn get_sandbox_policy(&self) -> &SandboxPolicy {
+        &self.sandbox_policy
     }
 
     fn resolve_path(&self, path: Option<String>) -> PathBuf {
@@ -1237,15 +1259,9 @@ async fn run_turn(
 
     let prompt = Prompt {
         input,
-        user_instructions: sess.user_instructions.clone(),
         store: !sess.disable_response_storage,
         tools,
         base_instructions_override: sess.base_instructions.clone(),
-        environment_context: Some(EnvironmentContext {
-            cwd: sess.cwd.clone(),
-            approval_policy: sess.approval_policy,
-            sandbox_policy: sess.sandbox_policy.clone(),
-        }),
     };
 
     let mut retries = 0;
@@ -1483,9 +1499,7 @@ async fn run_compact_task(
 
     let prompt = Prompt {
         input: turn_input,
-        user_instructions: None,
         store: !sess.disable_response_storage,
-        environment_context: None,
         tools: Vec::new(),
         base_instructions_override: Some(compact_instructions.clone()),
     };
