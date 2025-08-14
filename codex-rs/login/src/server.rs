@@ -418,9 +418,7 @@ fn jwt_auth_claims(jwt: &str) -> serde_json::Map<String, serde_json::Value> {
                 {
                     return obj.clone();
                 }
-                eprintln!(
-                    "JWT payload missing expected 'https://api.openai.com/auth' object"
-                );
+                eprintln!("JWT payload missing expected 'https://api.openai.com/auth' object");
             }
             Err(e) => {
                 eprintln!("Failed to parse JWT JSON payload: {e}");
