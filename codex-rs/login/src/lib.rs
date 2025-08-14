@@ -312,18 +312,6 @@ pub fn spawn_login_with_chatgpt(codex_home: &Path) -> std::io::Result<SpawnedLog
     })
 }
 
-pub async fn login_with_chatgpt(codex_home: &Path) -> std::io::Result<()> {
-    let client_id = CLIENT_ID;
-    let codex_home = codex_home.to_path_buf();
-    tokio::task::spawn_blocking(move || {
-        let opts = ServerOptions::new(&codex_home, client_id);
-        run_server_blocking_with_notify(opts, None, None)
-    })
-    .await
-    .map_err(std::io::Error::other)??;
-    Ok(())
-}
-
 pub fn login_with_api_key(codex_home: &Path, api_key: &str) -> std::io::Result<()> {
     let auth_dot_json = AuthDotJson {
         openai_api_key: Some(api_key.to_string()),
