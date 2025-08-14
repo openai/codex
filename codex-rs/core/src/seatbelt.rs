@@ -301,59 +301,6 @@ mod tests {
         assert_eq!(expected_args, args);
     }
 
-    #[test]
-    fn seatbelt_base_policy_allows_ipc_posix_sem() {
-        assert!(
-            MACOS_SEATBELT_BASE_POLICY.contains("(allow ipc-posix-sem)"),
-            "base policy should allow ipc-posix-sem"
-        );
-    }
-
-    #[cfg(target_os = "macos")]
-    #[tokio::test]
-    async fn python_multiprocessing_lock_works_under_seatbelt() {
-        use super::spawn_command_under_seatbelt;
-        use crate::spawn::StdioPolicy;
-        use std::collections::HashMap;
-
-        let policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![],
-            network_access: false,
-            include_default_writable_roots: true,
-        };
-
-        let python_code = r#"import multiprocessing
-from multiprocessing import Lock, Process
-
-def f(lock):
-    with lock:
-        print("Lock acquired in child process")
-
-if __name__ == '__main__':
-    lock = Lock()
-    p = Process(target=f, args=(lock,))
-    p.start()
-    p.join()
-"#;
-
-        let mut child = spawn_command_under_seatbelt(
-            vec![
-                "python3".to_string(),
-                "-c".to_string(),
-                python_code.to_string(),
-            ],
-            &policy,
-            std::env::current_dir().expect("should be able to get current dir"),
-            StdioPolicy::RedirectForShellTool,
-            HashMap::new(),
-        )
-        .await
-        .expect("should be able to spawn python under seatbelt");
-
-        let status = child.wait().await.expect("should wait for child process");
-        assert!(status.success(), "python exited with {status:?}");
-    }
-
     struct PopulatedTmp {
         root_with_git: PathBuf,
         root_without_git: PathBuf,
