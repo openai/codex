@@ -26,7 +26,6 @@ pub struct ServerOptions<'a> {
     pub issuer: &'a str,
     pub port_start: u16,
     pub port_end: u16,
-    pub require_fixed_port: bool,
     pub open_browser: bool,
     pub force_state: Option<String>,
 }
@@ -41,17 +40,12 @@ impl<'a> ServerOptions<'a> {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(1499);
-        let require_fixed_port = matches!(
-            std::env::var("CODEX_LOGIN_REQUIRE_FIXED_PORT").as_deref(),
-            Ok("true") | Ok("1")
-        );
         Self {
             codex_home,
             client_id,
             issuer: DEFAULT_ISSUER,
             port_start,
             port_end,
-            require_fixed_port,
             open_browser: true,
             force_state: None,
         }
@@ -67,7 +61,7 @@ pub fn run_server_blocking_with_notify(
     notify_login_url: Option<std::sync::mpsc::Sender<String>>,
     shutdown_flag: Option<Arc<AtomicBool>>,
 ) -> io::Result<()> {
-    let bind_addr = bind_local_port(opts.port_start, opts.port_end, opts.require_fixed_port)?;
+    let bind_addr = bind_local_port(opts.port_start, opts.port_end)?;
     let redirect_uri = format!("http://localhost:{}/auth/callback", bind_addr.port());
     let pkce = generate_pkce();
     let state = opts.force_state.clone().unwrap_or_else(generate_state);
@@ -78,11 +72,14 @@ pub fn run_server_blocking_with_notify(
         let _ = tx.send(auth_url.clone());
     }
 
-    eprintln!(
-        "Starting local login server on http://localhost:{}\n. If your browser did not open, navigate to this URL to authenticate: \n\n{}",
-        bind_addr.port(),
-        auth_url
-    );
+    // Only print the verbose banner when not embedded (e.g., CLI mode).
+    if notify_login_url.is_none() {
+        eprintln!(
+            "Starting local login server on http://localhost:{}.\nIf your browser did not open, navigate to this URL to authenticate:\n\n{}",
+            bind_addr.port(),
+            auth_url
+        );
+    }
     if opts.open_browser {
         let _ = webbrowser::open(&auth_url);
     }
@@ -96,12 +93,21 @@ pub fn run_server_blocking_with_notify(
             Err(e) => return Err(io::Error::other(e)),
         };
 
-        let url = req.url().to_string();
-        let (path, query) = split_path_query(&url);
+        let url_raw = req.url().to_string();
+        let parsed_url = match url::Url::parse(&format!("http://localhost{url_raw}")) {
+            Ok(u) => u,
+            Err(e) => {
+                eprintln!("URL parse error: {e}");
+                let _ = req.respond(Response::from_string("Bad Request").with_status_code(400));
+                continue;
+            }
+        };
+        let path = parsed_url.path().to_string();
 
         match path.as_str() {
             "/auth/callback" => {
-                let params = parse_query(query);
+                let params: std::collections::HashMap<String, String> =
+                    parsed_url.query_pairs().into_owned().collect();
                 if params.get("state").map(String::as_str) != Some(state.as_str()) {
                     let _ =
                         req.respond(Response::from_string("State mismatch").with_status_code(400));
@@ -198,7 +204,7 @@ pub fn run_server_blocking_with_notify(
     Ok(())
 }
 
-fn bind_local_port(start: u16, end: u16, require_fixed: bool) -> io::Result<SocketAddr> {
+fn bind_local_port(start: u16, end: u16) -> io::Result<SocketAddr> {
     for port in start..=end {
         if let Ok(listener) = TcpListener::bind(("127.0.0.1", port)) {
             let addr = listener.local_addr()?;
@@ -206,15 +212,11 @@ fn bind_local_port(start: u16, end: u16, require_fixed: bool) -> io::Result<Sock
             drop(listener);
             return Ok(addr);
         }
-        if require_fixed {
-            break;
-        }
     }
-    if require_fixed {
-        // 13 mirrors previous behavior when fixed port not available
+    if start == end {
         return Err(io::Error::new(
             io::ErrorKind::AddrInUse,
-            "required port is in use",
+            "requested port is in use",
         ));
     }
     Err(io::Error::other("no free port found"))
@@ -308,13 +310,14 @@ fn persist_tokens(
     access_token: Option<String>,
     refresh_token: Option<String>,
 ) -> io::Result<()> {
-    // Reuse existing AuthDotJson layout and writer
+    // Reuse existing AuthDotJson layout and writer to minimize changes.
     let auth_file = get_auth_file(codex_home);
     if let Some(parent) = auth_file.parent() {
         if !parent.exists() {
             std::fs::create_dir_all(parent).map_err(io::Error::other)?;
         }
     }
+
     let mut auth = read_or_default(&auth_file);
     if let Some(key) = api_key {
         auth.openai_api_key = Some(key);
@@ -349,32 +352,6 @@ fn read_or_default(path: &Path) -> AuthDotJson {
             last_refresh: None,
         },
     }
-}
-
-fn split_path_query(url: &str) -> (String, Option<String>) {
-    match url.split_once('?') {
-        Some((p, q)) => (p.to_string(), Some(q.to_string())),
-        None => (url.to_string(), None),
-    }
-}
-
-fn parse_query(q: Option<String>) -> std::collections::HashMap<String, String> {
-    let mut map = std::collections::HashMap::new();
-    if let Some(qs) = q {
-        for pair in qs.split('&') {
-            if pair.is_empty() {
-                continue;
-            }
-            let (k, v) = match pair.split_once('=') {
-                Some((k, v)) => (k, v),
-                None => (pair, ""),
-            };
-            if let (Ok(k), Ok(v)) = (urlencoding::decode(k), urlencoding::decode(v)) {
-                map.insert(k.into_owned(), v.into_owned());
-            }
-        }
-    }
-    map
 }
 
 fn compose_success_url(port: u16, issuer: &str, id_token: &str, access_token: &str) -> String {

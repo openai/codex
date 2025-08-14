@@ -26,7 +26,6 @@ pub mod login_server {
 }
 mod server;
 
-
 pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 pub const OPENAI_API_KEY_ENV_VAR: &str = "OPENAI_API_KEY";
 
@@ -276,8 +275,6 @@ impl SpawnedLogin {
     }
 }
 
-
-
 pub fn spawn_login_with_chatgpt(codex_home: &Path) -> std::io::Result<SpawnedLogin> {
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -319,7 +316,6 @@ pub fn spawn_login_with_chatgpt(codex_home: &Path) -> std::io::Result<SpawnedLog
     })
 }
 
-
 pub async fn login_with_chatgpt(codex_home: &Path, _capture_output: bool) -> std::io::Result<()> {
     let client_id = CLIENT_ID;
     let codex_home = codex_home.to_path_buf();
@@ -331,8 +327,6 @@ pub async fn login_with_chatgpt(codex_home: &Path, _capture_output: bool) -> std
     .map_err(std::io::Error::other)??;
     Ok(())
 }
-
-
 
 pub fn login_with_api_key(codex_home: &Path, api_key: &str) -> std::io::Result<()> {
     let auth_dot_json = AuthDotJson {

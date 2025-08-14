@@ -825,6 +825,7 @@ dependencies = [
  "thiserror 2.0.12",
  "tiny_http",
  "tokio",
+ "url",
  "urlencoding",
  "webbrowser",
 ]

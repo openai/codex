@@ -26,6 +26,7 @@ sha2 = "0.10"
 rand = "0.8"
 urlencoding = "2.1"
 webbrowser = "1.0"
+url = "2"
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"

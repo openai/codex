@@ -29,7 +29,7 @@ impl TokenData {
 }
 
 /// Flat subset of useful claims in id_token from auth.json.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct IdTokenInfo {
     pub email: Option<String>,
     /// The ChatGPT subscription plan type
@@ -129,12 +129,54 @@ pub(crate) fn parse_id_token(id_token: &str) -> Result<IdTokenInfo, IdTokenInfoE
     })
 }
 
+/// deserializer used by `TokenData.id_token`.
+///
+/// Why accept both a raw JWT string and an object?
+/// - Python flow (historical): The original Python login helper wrote
+///   `tokens.id_token` as a compact JWT string in `$CODEX_HOME/auth.json`.
+///   Readers parsed the claims when loading.
+/// - Current Rust flow: Code in this repo may serialize `TokenData` via Serde,
+///   which emits the already-parsed `IdTokenInfo` claims object for
+///   `tokens.id_token`.
+///
+/// To support both the current Rust code and the earlier Python-written files
+/// without forcing users to re‑login, this deserializer accepts either shape
+/// and normalizes it into `IdTokenInfo`:
+/// - If the value is a string, treat it as a JWT and parse claims.
+/// - If the value is an object, deserialize it directly as `IdTokenInfo`.
+///
+/// Any other type results in a deserialization error.
 fn deserialize_id_token<'de, D>(deserializer: D) -> Result<IdTokenInfo, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    let s = String::deserialize(deserializer)?;
-    parse_id_token(&s).map_err(serde::de::Error::custom)
+    struct IdTokenVisitor;
+
+    impl<'de> serde::de::Visitor<'de> for IdTokenVisitor {
+        type Value = IdTokenInfo;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a JWT string or an object with id token claims")
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            parse_id_token(v).map_err(serde::de::Error::custom)
+        }
+
+        fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
+        where
+            A: serde::de::MapAccess<'de>,
+        {
+            // Delegate to IdTokenInfo's Deserialize impl to support objects written by newer flows.
+            let de = serde::de::value::MapAccessDeserializer::new(map);
+            IdTokenInfo::deserialize(de)
+        }
+    }
+
+    deserializer.deserialize_any(IdTokenVisitor)
 }
 
 #[cfg(test)]

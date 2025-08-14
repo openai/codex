@@ -105,7 +105,6 @@ fn end_to_end_login_flow_persists_auth_json() {
             issuer: &issuer,
             port_start: login_port,
             port_end: login_port,
-            require_fixed_port: true,
             open_browser: false,
             force_state: Some(state),
         };
@@ -178,7 +177,6 @@ fn creates_missing_codex_home_dir() {
             issuer: &issuer,
             port_start: login_port,
             port_end: login_port,
-            require_fixed_port: true,
             open_browser: false,
             force_state: Some(state),
         };
