@@ -475,9 +475,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
+    async fn roundtrip_auth_dot_json() {
         let codex_home = tempdir().unwrap();
         write_auth_file(
+            AuthFileParams {
+                openai_api_key: None,
+                chatgpt_plan_type: "pro".to_string(),
+            },
+            codex_home.path(),
+        )
+        .expect("failed to write auth file");
+
+        let file = get_auth_file(codex_home.path());
+        let auth_dot_json = try_read_auth_json(&file).unwrap();
+        write_auth_json(&file, &auth_dot_json).unwrap();
+
+        let same_auth_dot_json = try_read_auth_json(&file).unwrap();
+        assert_eq!(auth_dot_json, same_auth_dot_json);
+    }
+
+    #[tokio::test]
+    async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
+        let codex_home = tempdir().unwrap();
+        let fake_jwt = write_auth_file(
             AuthFileParams {
                 openai_api_key: None,
                 chatgpt_plan_type: "pro".to_string(),
@@ -504,6 +524,7 @@ mod tests {
                     id_token: IdTokenInfo {
                         email: Some("user@example.com".to_string()),
                         chatgpt_plan_type: Some(PlanType::Known(KnownPlan::Pro)),
+                        raw_jwt: fake_jwt,
                     },
                     access_token: "test-access-token".to_string(),
                     refresh_token: "test-refresh-token".to_string(),
@@ -525,7 +546,7 @@ mod tests {
     #[tokio::test]
     async fn pro_account_with_api_key_still_uses_chatgpt_auth() {
         let codex_home = tempdir().unwrap();
-        write_auth_file(
+        let fake_jwt = write_auth_file(
             AuthFileParams {
                 openai_api_key: Some("sk-test-key".to_string()),
                 chatgpt_plan_type: "pro".to_string(),
@@ -552,6 +573,7 @@ mod tests {
                     id_token: IdTokenInfo {
                         email: Some("user@example.com".to_string()),
                         chatgpt_plan_type: Some(PlanType::Known(KnownPlan::Pro)),
+                        raw_jwt: fake_jwt,
                     },
                     access_token: "test-access-token".to_string(),
                     refresh_token: "test-refresh-token".to_string(),
@@ -599,7 +621,7 @@ mod tests {
         chatgpt_plan_type: String,
     }
 
-    fn write_auth_file(params: AuthFileParams, codex_home: &Path) -> std::io::Result<()> {
+    fn write_auth_file(params: AuthFileParams, codex_home: &Path) -> std::io::Result<String> {
         let auth_file = get_auth_file(codex_home);
         // Create a minimal valid JWT for the id_token field.
         #[derive(Serialize)]
@@ -637,7 +659,9 @@ mod tests {
             "last_refresh": LAST_REFRESH,
         });
         let auth_json = serde_json::to_string_pretty(&auth_json_data)?;
-        std::fs::write(auth_file, auth_json)
+        std::fs::write(auth_file, auth_json)?;
+
+        Ok(fake_jwt)
     }
 
     #[test]
