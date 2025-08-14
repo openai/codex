@@ -23,16 +23,21 @@ where
 {
     if std::env::var(IN_SANDBOX_ENV_VAR).is_err() {
         let exe = std::env::current_exe()?;
+        let mut cmds = vec![exe.to_string_lossy().into_owned(), "--exact".into()];
+        let mut stdio_policy = StdioPolicy::RedirectForShellTool;
+        // Allow for us to pass forward --nocapture / use the right stdio policy.
+        if std::env::args().any(|a| a == "--nocapture") {
+            cmds.push("--nocapture".into());
+            stdio_policy = StdioPolicy::Inherit;
+        }
+        cmds.push(test_selector.into());
+
         // Your existing launcher:
         let mut child = spawn_command_under_sandbox(
-            vec![
-                exe.to_string_lossy().into_owned(),
-                "--exact".into(),
-                test_selector.into(),
-            ],
+            cmds,
             policy,
             std::env::current_dir().expect("should be able to get current dir"),
-            StdioPolicy::Inherit,
+            stdio_policy,
             HashMap::from([("IN_SANDBOX".into(), "1".into())]),
         )
         .await?;
