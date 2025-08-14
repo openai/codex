@@ -54,17 +54,6 @@ impl FileSearchPopup {
         }
     }
 
-    /// Put the popup into an "idle" state used for an empty query (just "@").
-    /// Shows a hint instead of matches until the user types more characters.
-    pub(crate) fn set_empty_prompt(&mut self) {
-        self.display_query.clear();
-        self.pending_query.clear();
-        self.waiting = false;
-        self.matches.clear();
-        // Reset selection/scroll state when showing the empty prompt.
-        self.state.reset();
-    }
-
     /// Replace matches when a `FileSearchResult` arrives.
     /// Replace matches. Only applied when `query` matches `pending_query`.
     pub(crate) fn set_matches(&mut self, query: &str, matches: Vec<FileMatch>) {
