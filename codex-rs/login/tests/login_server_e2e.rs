@@ -1,0 +1,207 @@
+use std::net::SocketAddr;
+use std::net::TcpListener;
+use std::thread;
+use std::time::Duration;
+
+use base64::Engine;
+use codex_login::login_server::ServerOptions;
+use codex_login::login_server::run_server_blocking;
+use tempfile::tempdir;
+
+fn start_mock_issuer() -> (SocketAddr, thread::JoinHandle<()>) {
+    // Bind to a random available port
+    let listener =
+        TcpListener::bind(("127.0.0.1", 0)).unwrap_or_else(|e| panic!("bind mock issuer: {e}"));
+    let addr = listener
+        .local_addr()
+        .unwrap_or_else(|e| panic!("local_addr: {e}"));
+    let server = tiny_http::Server::from_listener(listener, None)
+        .unwrap_or_else(|e| panic!("tiny_http from_listener: {e}"));
+
+    let handle = thread::spawn(move || {
+        while let Ok(mut req) = server.recv() {
+            let url = req.url().to_string();
+            if url.starts_with("/oauth/token") {
+                // Read body
+                let mut body = String::new();
+                let _ = req.as_reader().read_to_string(&mut body);
+                // Build minimal JWT with plan=pro
+                #[derive(serde::Serialize)]
+                struct Header {
+                    alg: &'static str,
+                    typ: &'static str,
+                }
+                let header = Header {
+                    alg: "none",
+                    typ: "JWT",
+                };
+                let payload = serde_json::json!({
+                    "email": "user@example.com",
+                    "https://api.openai.com/auth": {
+                        "chatgpt_plan_type": "pro",
+                        "chatgpt_account_id": "acc-123"
+                    }
+                });
+                let b64 = |b: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b);
+                let header_bytes =
+                    serde_json::to_vec(&header).unwrap_or_else(|e| panic!("serialize header: {e}"));
+                let payload_bytes = serde_json::to_vec(&payload)
+                    .unwrap_or_else(|e| panic!("serialize payload: {e}"));
+                let id_token = format!(
+                    "{}.{}.{}",
+                    b64(&header_bytes),
+                    b64(&payload_bytes),
+                    b64(b"sig")
+                );
+
+                let tokens = serde_json::json!({
+                    "id_token": id_token,
+                    "access_token": "access-123",
+                    "refresh_token": "refresh-123",
+                });
+                let data =
+                    serde_json::to_vec(&tokens).unwrap_or_else(|e| panic!("serialize tokens: {e}"));
+                let mut resp = tiny_http::Response::from_data(data);
+                resp.add_header(
+                    tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..])
+                        .unwrap_or_else(|_| panic!("header bytes")),
+                );
+                let _ = req.respond(resp);
+            } else {
+                let _ = req
+                    .respond(tiny_http::Response::from_string("not found").with_status_code(404));
+            }
+        }
+    });
+
+    (addr, handle)
+}
+
+#[test]
+fn end_to_end_login_flow_persists_auth_json() {
+    let (issuer_addr, issuer_handle) = start_mock_issuer();
+    let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
+
+    let tmp = tempdir().unwrap_or_else(|e| panic!("tempdir failed: {e}"));
+    let codex_home = tmp.path().to_path_buf();
+
+    // Choose a free port for the login server
+    let login_listener =
+        TcpListener::bind(("127.0.0.1", 0)).unwrap_or_else(|e| panic!("bind login: {e}"));
+    let login_port = login_listener
+        .local_addr()
+        .unwrap_or_else(|e| panic!("login local_addr: {e}"))
+        .port();
+    drop(login_listener);
+
+    let state = "test_state_123".to_string();
+
+    // Run server in background
+    let server_home = codex_home.clone();
+    let server_thread = thread::spawn(move || {
+        let opts = ServerOptions {
+            codex_home: &server_home,
+            client_id: codex_login::CLIENT_ID,
+            issuer: &issuer,
+            port_start: login_port,
+            port_end: login_port,
+            require_fixed_port: true,
+            open_browser: false,
+            force_state: Some(state),
+        };
+        run_server_blocking(opts).unwrap_or_else(|e| panic!("server run: {e}"));
+    });
+
+    // Give the server a moment to start
+    std::thread::sleep(Duration::from_millis(200));
+
+    // Simulate browser callback, and follow redirect to /success
+    let client = reqwest::blocking::Client::builder()
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .build()
+        .unwrap_or_else(|e| panic!("client build: {e}"));
+    let url = format!("http://127.0.0.1:{login_port}/auth/callback?code=abc&state=test_state_123");
+    let resp = client
+        .get(&url)
+        .send()
+        .unwrap_or_else(|e| panic!("GET {url}: {e}"));
+    assert!(resp.status().is_success());
+
+    // Wait for server shutdown
+    server_thread
+        .join()
+        .unwrap_or_else(|_| panic!("server thread panicked"));
+
+    // Validate auth.json
+    let auth_path = codex_home.join("auth.json");
+    let data =
+        std::fs::read_to_string(&auth_path).unwrap_or_else(|e| panic!("auth.json exists: {e}"));
+    let json: serde_json::Value =
+        serde_json::from_str(&data).unwrap_or_else(|e| panic!("parse auth.json: {e}"));
+    assert!(
+        !json["OPENAI_API_KEY"].is_null(),
+        "OPENAI_API_KEY should be set"
+    );
+    assert_eq!(json["tokens"]["access_token"], "access-123");
+    assert_eq!(json["tokens"]["refresh_token"], "refresh-123");
+    assert_eq!(json["tokens"]["account_id"], "acc-123");
+
+    // Stop mock issuer
+    drop(issuer_handle);
+}
+
+#[test]
+fn creates_missing_codex_home_dir() {
+    let (issuer_addr, _issuer_handle) = start_mock_issuer();
+    let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
+
+    let tmp = tempdir().unwrap_or_else(|e| panic!("tempdir failed: {e}"));
+    let codex_home = tmp.path().join("missing-subdir"); // does not exist
+
+    // Choose a free port for the login server
+    let login_listener =
+        TcpListener::bind(("127.0.0.1", 0)).unwrap_or_else(|e| panic!("bind login: {e}"));
+    let login_port = login_listener
+        .local_addr()
+        .unwrap_or_else(|e| panic!("login local_addr: {e}"))
+        .port();
+    drop(login_listener);
+
+    let state = "state2".to_string();
+
+    // Run server in background
+    let server_home = codex_home.clone();
+    let server_thread = thread::spawn(move || {
+        let opts = ServerOptions {
+            codex_home: &server_home,
+            client_id: codex_login::CLIENT_ID,
+            issuer: &issuer,
+            port_start: login_port,
+            port_end: login_port,
+            require_fixed_port: true,
+            open_browser: false,
+            force_state: Some(state),
+        };
+        run_server_blocking(opts).unwrap_or_else(|e| panic!("server run: {e}"));
+    });
+
+    std::thread::sleep(Duration::from_millis(200));
+
+    let client = reqwest::blocking::Client::new();
+    let url = format!("http://127.0.0.1:{login_port}/auth/callback?code=abc&state=state2");
+    let resp = client
+        .get(&url)
+        .send()
+        .unwrap_or_else(|e| panic!("GET {url}: {e}"));
+    assert!(resp.status().is_success());
+
+    server_thread
+        .join()
+        .unwrap_or_else(|_| panic!("server thread panicked"));
+
+    let auth_path = codex_home.join("auth.json");
+    assert!(
+        auth_path.exists(),
+        "auth.json should be created even if parent dir was missing"
+    );
+}
