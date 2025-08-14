@@ -367,7 +367,7 @@ impl HistoryCell {
                 ParsedCommand::Unknown { cmd } => format!("⌨️ {}", shlex_join_safe(cmd)),
             };
 
-            let first_prefix = if i == 0 { "  L " } else { "    " };
+            let first_prefix = if i == 0 { "  └ " } else { "    " };
             for (j, line_text) in text.lines().enumerate() {
                 let prefix = if j == 0 { first_prefix } else { "    " };
                 lines.push(Line::from(vec![
@@ -483,7 +483,7 @@ impl HistoryCell {
             } else {
                 status_str.red()
             },
-            format!(", duration: {duration}").gray(),
+            format!(", duration: {duration}").dim(),
         ]);
 
         let mut lines: Vec<Line<'static>> = Vec::new();
@@ -526,7 +526,10 @@ impl HistoryCell {
                                 format!("link: {uri}")
                             }
                         };
-                        lines.push(Line::styled(line_text, Style::default().fg(Color::Gray)));
+                        lines.push(Line::styled(
+                            line_text,
+                            Style::default().add_modifier(Modifier::DIM),
+                        ));
                     }
                 }
 
@@ -755,7 +758,7 @@ impl HistoryCell {
         if empty > 0 {
             header.push(Span::styled(
                 "░".repeat(empty),
-                Style::default().fg(Color::Gray),
+                Style::default().add_modifier(Modifier::DIM),
             ));
         }
         header.push(Span::raw("] "));
@@ -767,15 +770,15 @@ impl HistoryCell {
             let t = s.trim().to_string();
             if t.is_empty() { None } else { Some(t) }
         }) {
-            lines.push(Line::from("note".gray().italic()));
+            lines.push(Line::from("note".dim().italic()));
             for l in expl.lines() {
-                lines.push(Line::from(l.to_string()).gray());
+                lines.push(Line::from(l.to_string()).dim());
             }
         }
 
         // Steps styled as checkbox items
         if plan.is_empty() {
-            lines.push(Line::from("(no steps provided)".gray().italic()));
+            lines.push(Line::from("(no steps provided)".dim().italic()));
         } else {
             for (idx, PlanItemArg { step, status }) in plan.into_iter().enumerate() {
                 let (box_span, text_span) = match status {
@@ -783,9 +786,7 @@ impl HistoryCell {
                         Span::styled("✔", Style::default().fg(Color::Green)),
                         Span::styled(
                             step,
-                            Style::default()
-                                .fg(Color::Gray)
-                                .add_modifier(Modifier::CROSSED_OUT | Modifier::DIM),
+                            Style::default().add_modifier(Modifier::CROSSED_OUT | Modifier::DIM),
                         ),
                     ),
                     StepStatus::InProgress => (
@@ -799,14 +800,11 @@ impl HistoryCell {
                     ),
                     StepStatus::Pending => (
                         Span::raw("□"),
-                        Span::styled(
-                            step,
-                            Style::default().fg(Color::Gray).add_modifier(Modifier::DIM),
-                        ),
+                        Span::styled(step, Style::default().add_modifier(Modifier::DIM)),
                     ),
                 };
                 let prefix = if idx == 0 {
-                    Span::raw("  ⎿ ")
+                    Span::raw("  └ ")
                 } else {
                     Span::raw("    ")
                 };
@@ -894,7 +892,7 @@ impl HistoryCell {
         if !stdout.trim().is_empty() {
             let mut iter = stdout.lines();
             for (i, raw) in iter.by_ref().take(TOOL_CALL_MAX_LINES).enumerate() {
-                let prefix = if i == 0 { "  ⎿ " } else { "    " };
+                let prefix = if i == 0 { "  └ " } else { "    " };
                 let s = format!("{prefix}{raw}");
                 lines.push(ansi_escape_line(&s).dim());
             }
@@ -947,7 +945,7 @@ fn output_lines(
     for (i, raw) in lines[..head_end].iter().enumerate() {
         let mut line = ansi_escape_line(raw);
         let prefix = if i == 0 && include_angle_pipe {
-            "  ⎿ "
+            "  └ "
         } else {
             "    "
         };
@@ -997,7 +995,7 @@ fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
         Span::raw("."),
         Span::styled(invocation.tool.clone(), Style::default().fg(Color::Blue)),
         Span::raw("("),
-        Span::styled(args_str, Style::default().fg(Color::Gray)),
+        Span::styled(args_str, Style::default().add_modifier(Modifier::DIM)),
         Span::raw(")"),
     ];
     Line::from(invocation_spans)
@@ -1021,7 +1019,7 @@ mod tests {
         }];
         let lines = HistoryCell::exec_command_lines(&[], &parsed, None);
         assert!(lines.len() >= 3);
-        assert_eq!(lines[1].spans[0].content, "  L ");
+        assert_eq!(lines[1].spans[0].content, "  └ ");
         assert_eq!(lines[2].spans[0].content, "    ");
     }
 }

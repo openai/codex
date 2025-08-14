@@ -45,17 +45,13 @@ pub(crate) async fn apply_patch(
     call_id: &str,
     action: ApplyPatchAction,
 ) -> InternalApplyPatchInvocation {
-    let writable_roots_snapshot = {
-        #[allow(clippy::unwrap_used)]
-        let guard = sess.writable_roots.lock().unwrap();
-        guard.clone()
-    };
+    let writable_roots_snapshot = sess.get_writable_roots().to_vec();
 
     match assess_patch_safety(
         &action,
-        sess.approval_policy,
+        sess.get_approval_policy(),
         &writable_roots_snapshot,
-        &sess.cwd,
+        sess.get_cwd(),
     ) {
         SafetyCheck::AutoApprove { .. } => {
             InternalApplyPatchInvocation::DelegateToExec(ApplyPatchExec {

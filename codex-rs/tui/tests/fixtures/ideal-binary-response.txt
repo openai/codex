@@ -13,7 +13,7 @@ I’m going to scan the workspace and Cargo manifests to see build profiles and
 dependencies that impact binary size. Then I’ll summarize the main causes.
 
 ⚡  Running ls -la
-  ⎿ total 6696
+  └ total 6696
     drwxr-xr-x@ 39 easong  staff     1248 Aug  9 08:49 .
     drwxr-xr-x@ 29 easong  staff      928 Aug  9 08:50 ..
     -rw-r--r--@  1 easong  staff    10244 Aug  8 21:13 .DS_Store
@@ -25,7 +25,7 @@ dependencies that impact binary size. Then I’ll summarize the main causes.
     -rw-r--r--@  1 easong  staff     8639 Aug  6 23:30 typewriter.md
     -rw-r--r--@  1 easong  staff     7673 Aug  6 21:58 wrap-plan.md
 ⚡  Running sed -n '1,200p' Cargo.toml
-  ⎿ [workspace]
+  └ [workspace]
     members = [
         "ansi-escape",
         "apply-patch",
@@ -50,7 +50,7 @@ tui, login, ollama, and mcp.
 ⚡  Running for d in ansi-escape apply-patch arg0 cli common core exec execpolicy
 file-search linux-sandbox login mcp-client mcp-server mcp-types ollama tui; do
 echo "--- $d/Cargo.toml"; sed -n '1,200p' $d/Cargo.toml; echo; done
-  ⎿ --- ansi-escape/Cargo.toml
+  └ --- ansi-escape/Cargo.toml
     [package]
     edition = "2024"
     name = "codex-ansi-escape"
@@ -62,7 +62,7 @@ echo "--- $d/Cargo.toml"; sed -n '1,200p' $d/Cargo.toml; echo; done
     ] }
     tracing = { version
 ⚡  Running sed -n '1,200p' execpolicy/Cargo.toml
-  ⎿ [package]
+  └ [package]
     name = "codex-execpolicy"
     version = { workspace = true }
     edition = "2024"
@@ -74,7 +74,7 @@ echo "--- $d/Cargo.toml"; sed -n '1,200p' $d/Cargo.toml; echo; done
     [dev-dependencies]
     tempfile = "3.13.0"
 ⚡  Running sed -n '1,200p' file-search/Cargo.toml
-  ⎿ [package]
+  └ [package]
     edition = "2024"
     name = "codex-file-search"
     version = { workspace = true }
@@ -86,7 +86,7 @@ echo "--- $d/Cargo.toml"; sed -n '1,200p' $d/Cargo.toml; echo; done
     serde_json = "1.0.142"
     tokio = { version = "1", features = ["full"] }
 ⚡  Running sed -n '1,200p' linux-sandbox/Cargo.toml
-  ⎿ [package]
+  └ [package]
     edition = "2024"
     name = "codex-linux-sandbox"
     version = { workspace = true }
@@ -98,7 +98,7 @@ echo "--- $d/Cargo.toml"; sed -n '1,200p' $d/Cargo.toml; echo; done
         "signal",
     ] }
 ⚡  Running sed -n '1,200p' login/Cargo.toml
-  ⎿ [package]
+  └ [package]
     edition = "2024"
     name = "codex-login"
     version = { workspace = true }
@@ -110,7 +110,7 @@ echo "--- $d/Cargo.toml"; sed -n '1,200p' $d/Cargo.toml; echo; done
     pretty_assertions = "1.4.1"
     tempfile = "3"
 ⚡  Running sed -n '1,200p' mcp-client/Cargo.toml
-  ⎿ [package]
+  └ [package]
     name = "codex-mcp-client"
     version = { workspace = true }
     edition = "2024"
@@ -122,7 +122,7 @@ echo "--- $d/Cargo.toml"; sed -n '1,200p' $d/Cargo.toml; echo; done
         "time",
     ] }
 ⚡  Running sed -n '1,200p' mcp-server/Cargo.toml
-  ⎿ [package]
+  └ [package]
     edition = "2024"
     name = "codex-mcp-server"
     version = { workspace = true }
@@ -134,7 +134,7 @@ echo "--- $d/Cargo.toml"; sed -n '1,200p' $d/Cargo.toml; echo; done
     tokio-test = "0.4"
     wiremock = "0.6"
 ⚡  Running sed -n '1,200p' mcp-types/Cargo.toml
-  ⎿ [package]
+  └ [package]
     edition = "2024"
     name = "mcp-types"
     version = { workspace = true }
@@ -146,7 +146,7 @@ echo "--- $d/Cargo.toml"; sed -n '1,200p' $d/Cargo.toml; echo; done
     serde = { version = "1", features = ["derive"] }
     serde_json = "1"
 ⚡  Running sed -n '1,200p' ollama/Cargo.toml
-  ⎿ [package]
+  └ [package]
     edition = "2024"
     name = "codex-ollama"
     version = { workspace = true }
@@ -158,7 +158,7 @@ echo "--- $d/Cargo.toml"; sed -n '1,200p' $d/Cargo.toml; echo; done
     [dev-dependencies]
     tempfile = "3"
 ⚡  Running sed -n '1,200p' tui/Cargo.toml
-  ⎿ [package]
+  └ [package]
     edition = "2024"
     name = "codex-tui"
     version = { workspace = true }
@@ -170,7 +170,7 @@ echo "--- $d/Cargo.toml"; sed -n '1,200p' $d/Cargo.toml; echo; done
     rand = "0.8"
     vt100 = "0.16.2"
 ⚡  Running sed -n '1,200p' chatgpt/Cargo.toml
-  ⎿ [package]
+  └ [package]
     edition = "2024"
     name = "codex-chatgpt"
     version = { workspace = true }

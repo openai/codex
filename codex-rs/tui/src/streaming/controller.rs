@@ -143,6 +143,10 @@ impl StreamController {
         };
         let cfg = self.config.clone();
         let state = self.state_mut(kind);
+        // Record that at least one delta was received for this stream
+        if !delta.is_empty() {
+            state.has_seen_delta = true;
+        }
         state.collector.push_delta(delta);
         if delta.contains('\n') {
             let newly_completed = state.collector.commit_complete_lines(&cfg);
@@ -263,19 +267,41 @@ impl StreamController {
     /// Apply a full final answer: replace queued content with only the remaining tail,
     /// then finalize immediately and notify completion.
     pub(crate) fn apply_final_answer(&mut self, message: &str, sink: &impl HistorySink) -> bool {
-        self.begin(StreamKind::Answer, sink);
-        if !message.is_empty() {
-            let mut msg_with_nl = message.to_string();
-            if !msg_with_nl.ends_with('\n') {
-                msg_with_nl.push('\n');
+        self.apply_full_final(StreamKind::Answer, message, true, sink)
+    }
+
+    pub(crate) fn apply_final_reasoning(&mut self, message: &str, sink: &impl HistorySink) -> bool {
+        self.apply_full_final(StreamKind::Reasoning, message, false, sink)
+    }
+
+    fn apply_full_final(
+        &mut self,
+        kind: StreamKind,
+        message: &str,
+        immediate: bool,
+        sink: &impl HistorySink,
+    ) -> bool {
+        self.begin(kind, sink);
+
+        {
+            let state = self.state_mut(kind);
+            // Only inject the final full message if we have not seen any deltas for this stream.
+            // If deltas were received, rely on the collector's existing buffer to avoid duplication.
+            if !state.has_seen_delta && !message.is_empty() {
+                // normalize to end with newline
+                let mut msg = message.to_owned();
+                if !msg.ends_with('\n') {
+                    msg.push('\n');
+                }
+
+                // replace while preserving already committed count
+                let committed = state.collector.committed_count();
+                state
+                    .collector
+                    .replace_with_and_mark_committed(&msg, committed);
             }
-            let state = self.state_mut(StreamKind::Answer);
-            let already_committed = state.collector.committed_count();
-            // Preserve previously committed count so finalize emits only the remaining tail.
-            state
-                .collector
-                .replace_with_and_mark_committed(&msg_with_nl, already_committed);
         }
-        self.finalize(StreamKind::Answer, true, sink)
+
+        self.finalize(kind, immediate, sink)
     }
 }

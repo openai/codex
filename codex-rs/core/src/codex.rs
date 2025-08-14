@@ -4,6 +4,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -20,7 +21,6 @@ use futures::prelude::*;
 use mcp_types::CallToolResult;
 use serde::Serialize;
 use serde_json;
-use tokio::sync::Notify;
 use tokio::sync::oneshot;
 use tokio::task::AbortHandle;
 use tracing::debug;
@@ -124,11 +124,7 @@ pub struct CodexSpawnOk {
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
-    pub async fn spawn(
-        config: Config,
-        auth: Option<CodexAuth>,
-        ctrl_c: Arc<Notify>,
-    ) -> CodexResult<CodexSpawnOk> {
+    pub async fn spawn(config: Config, auth: Option<CodexAuth>) -> CodexResult<CodexSpawnOk> {
         // experimental resume path (undocumented)
         let resume_path = config.experimental_resume.clone();
         info!("resume_path: {resume_path:?}");
@@ -156,9 +152,9 @@ impl Codex {
 
         // Generate a unique ID for the lifetime of this Codex session.
         let session_id = Uuid::new_v4();
-        tokio::spawn(submission_loop(
-            session_id, config, auth, rx_sub, tx_event, ctrl_c,
-        ));
+
+        // This task will run until Op::Shutdown is received.
+        tokio::spawn(submission_loop(session_id, config, auth, rx_sub, tx_event));
         let codex = Codex {
             next_id: AtomicU64::new(0),
             tx_sub,
@@ -204,24 +200,33 @@ impl Codex {
     }
 }
 
+/// Mutable state of the agent
+#[derive(Default)]
+struct State {
+    approved_commands: HashSet<Vec<String>>,
+    current_task: Option<AgentTask>,
+    pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
+    pending_input: Vec<ResponseInputItem>,
+    history: ConversationHistory,
+}
+
 /// Context for an initialized model agent
 ///
 /// A session has at most 1 running task at a time, and can be interrupted by user input.
 pub(crate) struct Session {
     client: ModelClient,
-    pub(crate) tx_event: Sender<Event>,
-    ctrl_c: Arc<Notify>,
+    tx_event: Sender<Event>,
 
     /// The session's current working directory. All relative paths provided by
     /// the model as well as sandbox policies are resolved against this path
     /// instead of `std::env::current_dir()`.
-    pub(crate) cwd: PathBuf,
+    cwd: PathBuf,
     base_instructions: Option<String>,
     user_instructions: Option<String>,
-    pub(crate) approval_policy: AskForApproval,
+    approval_policy: AskForApproval,
     sandbox_policy: SandboxPolicy,
     shell_environment_policy: ShellEnvironmentPolicy,
-    pub(crate) writable_roots: Mutex<Vec<PathBuf>>,
+    writable_roots: Vec<PathBuf>,
     disable_response_storage: bool,
     tools_config: ToolsConfig,
 
@@ -242,24 +247,24 @@ pub(crate) struct Session {
 }
 
 impl Session {
+    pub(crate) fn get_writable_roots(&self) -> &[PathBuf] {
+        &self.writable_roots
+    }
+
+    pub(crate) fn get_approval_policy(&self) -> AskForApproval {
+        self.approval_policy
+    }
+
+    pub(crate) fn get_cwd(&self) -> &Path {
+        &self.cwd
+    }
+
     fn resolve_path(&self, path: Option<String>) -> PathBuf {
         path.as_ref()
             .map(PathBuf::from)
             .map_or_else(|| self.cwd.clone(), |p| self.cwd.join(p))
     }
-}
 
-/// Mutable state of the agent
-#[derive(Default)]
-struct State {
-    approved_commands: HashSet<Vec<String>>,
-    current_task: Option<AgentTask>,
-    pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
-    pending_input: Vec<ResponseInputItem>,
-    history: ConversationHistory,
-}
-
-impl Session {
     pub fn set_task(&self, task: AgentTask) {
         let mut state = self.state.lock().unwrap();
         if let Some(current_task) = state.current_task.take() {
@@ -493,7 +498,6 @@ impl Session {
         let result = process_exec_tool_call(
             exec_args.params,
             exec_args.sandbox_type,
-            exec_args.ctrl_c,
             exec_args.sandbox_policy,
             exec_args.codex_linux_sandbox_exe,
             exec_args.stdout_stream,
@@ -578,7 +582,7 @@ impl Session {
             .await
     }
 
-    pub fn abort(&self) {
+    fn abort(&self) {
         info!("Aborting existing session");
         let mut state = self.state.lock().unwrap();
         state.pending_approvals.clear();
@@ -666,6 +670,7 @@ impl AgentTask {
             handle,
         }
     }
+
     fn compact(
         sess: Arc<Session>,
         sub_id: String,
@@ -709,7 +714,6 @@ async fn submission_loop(
     auth: Option<CodexAuth>,
     rx_sub: Receiver<Submission>,
     tx_event: Sender<Event>,
-    ctrl_c: Arc<Notify>,
 ) {
     let mut sess: Option<Arc<Session>> = None;
     // shorthand - send an event when there is no active session
@@ -724,21 +728,8 @@ async fn submission_loop(
         tx_event.send(event).await.ok();
     };
 
-    loop {
-        let interrupted = ctrl_c.notified();
-        let sub = tokio::select! {
-            res = rx_sub.recv() => match res {
-                Ok(sub) => sub,
-                Err(_) => break,
-            },
-            _ = interrupted => {
-                if let Some(sess) = sess.as_ref(){
-                    sess.abort();
-                }
-                continue;
-            },
-        };
-
+    // To break out of this loop, send Op::Shutdown.
+    while let Ok(sub) = rx_sub.recv().await {
         debug!(?sub, "Submission");
         match sub.op {
             Op::Interrupt => {
@@ -837,7 +828,7 @@ async fn submission_loop(
                     },
                 };
 
-                let writable_roots = Mutex::new(get_writable_roots(&cwd));
+                let writable_roots = get_writable_roots(&cwd);
 
                 // Error messages to dispatch after SessionConfigured is sent.
                 let mut mcp_connection_errors = Vec::<Event>::new();
@@ -877,7 +868,6 @@ async fn submission_loop(
                         config.include_plan_tool,
                     ),
                     tx_event: tx_event.clone(),
-                    ctrl_c: Arc::clone(&ctrl_c),
                     user_instructions,
                     base_instructions,
                     approval_policy,
@@ -1303,7 +1293,10 @@ async fn run_turn(
                 let max_retries = sess.client.get_provider().stream_max_retries();
                 if retries < max_retries {
                     retries += 1;
-                    let delay = backoff(retries);
+                    let delay = match e {
+                        CodexErr::Stream(_, Some(delay)) => delay,
+                        _ => backoff(retries),
+                    };
                     warn!(
                         "stream disconnected - retrying turn ({retries}/{max_retries} in {delay:?})...",
                     );
@@ -1413,6 +1406,7 @@ async fn try_run_turn(
             // Treat as a disconnected stream so the caller can retry.
             return Err(CodexErr::Stream(
                 "stream closed before response.completed".into(),
+                None,
             ));
         };
 
@@ -1624,6 +1618,7 @@ async fn handle_response_item(
                 for item in content {
                     let text = match item {
                         ReasoningItemContent::ReasoningText { text } => text,
+                        ReasoningItemContent::Text { text } => text,
                     };
                     let event = Event {
                         id: sub_id.to_string(),
@@ -1787,7 +1782,6 @@ fn parse_container_exec_arguments(
 pub struct ExecInvokeArgs<'a> {
     pub params: ExecParams,
     pub sandbox_type: SandboxType,
-    pub ctrl_c: Arc<Notify>,
     pub sandbox_policy: &'a SandboxPolicy,
     pub codex_linux_sandbox_exe: &'a Option<PathBuf>,
     pub stdout_stream: Option<StdoutStream>,
@@ -1972,7 +1966,6 @@ async fn handle_container_exec_with_params(
             ExecInvokeArgs {
                 params: params.clone(),
                 sandbox_type,
-                ctrl_c: sess.ctrl_c.clone(),
                 sandbox_policy: &sess.sandbox_policy,
                 codex_linux_sandbox_exe: &sess.codex_linux_sandbox_exe,
                 stdout_stream: Some(StdoutStream {
@@ -2104,7 +2097,6 @@ async fn handle_sandbox_error(
                     ExecInvokeArgs {
                         params,
                         sandbox_type: SandboxType::None,
-                        ctrl_c: sess.ctrl_c.clone(),
                         sandbox_policy: &sess.sandbox_policy,
                         codex_linux_sandbox_exe: &sess.codex_linux_sandbox_exe,
                         stdout_stream: Some(StdoutStream {
@@ -2226,6 +2218,7 @@ async fn drain_to_completed(sess: &Session, sub_id: &str, prompt: &Prompt) -> Co
         let Some(event) = maybe_event else {
             return Err(CodexErr::Stream(
                 "stream closed before response.completed".into(),
+                None,
             ));
         };
         match event {
@@ -2243,6 +2236,7 @@ async fn drain_to_completed(sess: &Session, sub_id: &str, prompt: &Prompt) -> Co
                     None => {
                         return Err(CodexErr::Stream(
                             "token_usage was None in ResponseEvent::Completed".into(),
+                            None,
                         ));
                     }
                 };

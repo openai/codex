@@ -66,19 +66,19 @@ pub(crate) fn shimmer_spans(text: &str, frame_idx: usize) -> Vec<Span<'static>> 
                 .fg(Color::Rgb(level, level, level))
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(color_for_level(level))
+            color_for_level(level)
         };
         spans.push(Span::styled(ch.to_string(), style));
     }
     spans
 }
 
-fn color_for_level(level: u8) -> Color {
-    if level < 128 {
-        Color::DarkGray
-    } else if level < 192 {
-        Color::Gray
+fn color_for_level(level: u8) -> Style {
+    if level < 144 {
+        Style::default().add_modifier(Modifier::DIM)
+    } else if level < 208 {
+        Style::default()
     } else {
-        Color::White
+        Style::default().add_modifier(Modifier::BOLD)
     }
 }
