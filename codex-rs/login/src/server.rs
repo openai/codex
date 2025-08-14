@@ -65,7 +65,7 @@ pub fn run_server_blocking_with_notify(
         None => {
             return Err(io::Error::new(
                 io::ErrorKind::AddrInUse,
-                "Unable to determin the server port",
+                "Unable to determine the server port",
             ));
         }
     };
