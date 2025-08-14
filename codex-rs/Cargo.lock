@@ -752,6 +752,7 @@ dependencies = [
  "codex-core",
  "codex-ollama",
  "libc",
+ "core_test_support",
  "owo-colors",
  "predicates",
  "serde_json",
@@ -760,6 +761,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "wiremock",
 ]
 
 [[package]]
