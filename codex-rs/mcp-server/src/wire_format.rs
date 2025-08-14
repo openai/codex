@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 use std::fmt::Display;
+use std::path::PathBuf;
 
+use codex_core::protocol::FileChange;
+use codex_core::protocol::ReviewDecision;
 use mcp_types::RequestId;
 use serde::Deserialize;
 use serde::Serialize;
@@ -22,7 +25,7 @@ impl Display for ConversationId {
 /// Request from the client to the server.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "method", rename_all = "camelCase")]
-pub enum CodexRequest {
+pub enum ClientRequest {
     NewConversation {
         #[serde(rename = "id")]
         request_id: RequestId,
@@ -139,8 +142,63 @@ pub enum InputItem {
     /// Local image path provided by the user.  This will be converted to an
     /// `Image` variant (base64 data URL) during request serialization.
     LocalImage {
-        path: std::path::PathBuf,
+        path: PathBuf,
     },
+}
+
+// TODO(mbolin): Need test to ensure these constants match the enum variants.
+
+pub const APPLY_PATCH_APPROVAL_METHOD: &str = "applyPatchApproval";
+pub const EXEC_COMMAND_APPROVAL_METHOD: &str = "execCommandApproval";
+
+/// Request initiated from the server and sent to the client.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(tag = "method", rename_all = "camelCase")]
+pub enum ServerRequest {
+    /// Request to approve a patch.
+    ApplyPatchApproval {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: ApplyPatchApprovalParams,
+    },
+    /// Request to exec a command.
+    ExecCommandApproval {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: ExecCommandApprovalParams,
+    },
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ApplyPatchApprovalParams {
+    pub conversation_id: ConversationId,
+    pub file_changes: HashMap<PathBuf, FileChange>,
+    /// Optional explanatory reason (e.g. request for extra write access).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// When set, the agent is asking the user to allow writes under this root
+    /// for the remainder of the session (unclear if this is honored today).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grant_root: Option<PathBuf>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ExecCommandApprovalParams {
+    pub conversation_id: ConversationId,
+    pub command: Vec<String>,
+    pub cwd: PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ExecCommandApprovalResponse {
+    pub decision: ReviewDecision,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub struct ApplyPatchApprovalResponse {
+    pub decision: ReviewDecision,
 }
 
 #[allow(clippy::unwrap_used)]
@@ -152,7 +210,7 @@ mod tests {
 
     #[test]
     fn serialize_new_conversation() {
-        let request = CodexRequest::NewConversation {
+        let request = ClientRequest::NewConversation {
             request_id: RequestId::Integer(42),
             params: NewConversationParams {
                 model: Some("gpt-5".to_string()),
