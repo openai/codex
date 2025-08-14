@@ -104,7 +104,9 @@ fn install_network_seccomp_filter_on_current_thread() -> std::result::Result<(),
     deny_syscall(libc::SYS_sendto);
     deny_syscall(libc::SYS_sendmsg);
     deny_syscall(libc::SYS_sendmmsg);
-    deny_syscall(libc::SYS_recvfrom);
+    // NOTE: allowing recvfrom allows some tools like: `cargo clippy` to run
+    // with their socketpair + child processes for sub-proc management
+    // deny_syscall(libc::SYS_recvfrom);
     deny_syscall(libc::SYS_recvmsg);
     deny_syscall(libc::SYS_recvmmsg);
     deny_syscall(libc::SYS_getsockopt);
@@ -115,12 +117,12 @@ fn install_network_seccomp_filter_on_current_thread() -> std::result::Result<(),
     let unix_only_rule = SeccompRule::new(vec![SeccompCondition::new(
         0, // first argument (domain)
         SeccompCmpArgLen::Dword,
-        SeccompCmpOp::Eq,
+        SeccompCmpOp::Ne,
         libc::AF_UNIX as u64,
     )?])?;
 
-    rules.insert(libc::SYS_socket, vec![unix_only_rule]);
-    rules.insert(libc::SYS_socketpair, vec![]); // always deny (Unix can use socketpair but fine, keep open?)
+    rules.insert(libc::SYS_socket, vec![unix_only_rule.clone()]);
+    rules.insert(libc::SYS_socketpair, vec![unix_only_rule]); // always deny (Unix can use socketpair but fine, keep open?)
 
     let filter = SeccompFilter::new(
         rules,
@@ -140,4 +142,101 @@ fn install_network_seccomp_filter_on_current_thread() -> std::result::Result<(),
     apply_filter(&prog)?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #![expect(clippy::expect_used)]
+    use super::*;
+    use std::io;
+
+    #[test]
+    pub fn allow_unix_socketpair_recvfrom() {
+        let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec![],
+            network_access: false,
+            // Exclude tmp-related folders from writable roots because we need a
+            // folder that is writable by tests but that we intentionally disallow
+            // writing to in the sandbox.
+            exclude_tmpdir_env_var: true,
+            exclude_slash_tmp: true,
+        };
+        let cwd = std::env::current_dir().expect("cwd should exist");
+
+        apply_sandbox_policy_to_current_thread(&sandbox_policy, &cwd)
+            .expect("Failed to apply sandbox policy");
+
+        // SAFETY: we call libc to create an AF_UNIX datagram socketpair and use
+        // it entirely within this function.
+        unsafe {
+            let mut fds = [0i32; 2];
+            let r = libc::socketpair(libc::AF_UNIX, libc::SOCK_DGRAM, 0, fds.as_mut_ptr());
+            assert_eq!(
+                r,
+                0,
+                "socketpair(AF_UNIX, SOCK_DGRAM) failed: {}",
+                io::Error::last_os_error()
+            );
+
+            let msg = b"hello_unix";
+            // write() from one end (generic write is allowed)
+            let sent = libc::write(fds[0], msg.as_ptr() as *const libc::c_void, msg.len());
+            assert!(sent >= 0, "write() failed: {}", io::Error::last_os_error());
+
+            // recvfrom() on the other end. We don’t need the address for socketpair,
+            // so we pass null pointers for src address.
+            let mut buf = [0u8; 64];
+            let recvd = libc::recvfrom(
+                fds[1],
+                buf.as_mut_ptr() as *mut libc::c_void,
+                buf.len(),
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            );
+            assert!(
+                recvd >= 0,
+                "recvfrom() failed: {}",
+                io::Error::last_os_error()
+            );
+
+            let recvd_slice = &buf[..(recvd as usize)];
+            assert_eq!(
+                recvd_slice,
+                &msg[..],
+                "payload mismatch: sent {} bytes, got {} bytes",
+                msg.len(),
+                recvd
+            );
+
+            // Also exercise AF_UNIX stream socketpair quickly to ensure AF_UNIX in general works.
+            let mut sfds = [0i32; 2];
+            let sr = libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, sfds.as_mut_ptr());
+            assert_eq!(
+                sr,
+                0,
+                "socketpair(AF_UNIX, SOCK_STREAM) failed: {}",
+                io::Error::last_os_error()
+            );
+            let snt2 = libc::write(sfds[0], msg.as_ptr() as *const libc::c_void, msg.len());
+            assert!(
+                snt2 >= 0,
+                "write(stream) failed: {}",
+                io::Error::last_os_error()
+            );
+            let mut b2 = [0u8; 64];
+            let rcv2 = libc::recv(sfds[1], b2.as_mut_ptr() as *mut libc::c_void, b2.len(), 0);
+            assert!(
+                rcv2 >= 0,
+                "recv(stream) failed: {}",
+                io::Error::last_os_error()
+            );
+
+            // Clean up
+            let _ = libc::close(sfds[0]);
+            let _ = libc::close(sfds[1]);
+            let _ = libc::close(fds[0]);
+            let _ = libc::close(fds[1]);
+        }
+    }
 }
