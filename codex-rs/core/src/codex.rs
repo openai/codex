@@ -2057,8 +2057,7 @@ fn maybe_run_with_user_profile(
     sess: &Session,
     turn_context: &TurnContext,
 ) -> ExecParams {
-    let should_translate =
-        matches!(sess.user_shell, crate::shell::Shell::PowerShell(_))
+    let should_translate = matches!(sess.user_shell, crate::shell::Shell::PowerShell(_))
         || turn_context.shell_environment_policy.use_profile;
 
     if should_translate {
