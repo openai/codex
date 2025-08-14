@@ -38,7 +38,6 @@ use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::apply_patch::get_writable_roots;
 use crate::apply_patch::{self};
 use crate::client::ModelClient;
-use crate::client_common::EnvironmentContext;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::config::Config;
@@ -467,6 +466,10 @@ impl Session {
 
     pub(crate) fn get_approval_policy(&self) -> AskForApproval {
         self.approval_policy
+    }
+
+    pub(crate) fn get_sandbox_policy(&self) -> SandboxPolicy {
+        self.sandbox_policy.clone()
     }
 
     pub(crate) fn get_cwd(&self) -> &Path {
@@ -1241,11 +1244,7 @@ async fn run_turn(
         store: !sess.disable_response_storage,
         tools,
         base_instructions_override: sess.base_instructions.clone(),
-        environment_context: Some(EnvironmentContext {
-            cwd: sess.cwd.clone(),
-            approval_policy: sess.approval_policy,
-            sandbox_policy: sess.sandbox_policy.clone(),
-        }),
+        environment_context: Some(sess.into()),
     };
 
     let mut retries = 0;
