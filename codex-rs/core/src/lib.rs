@@ -17,6 +17,7 @@ pub mod config;
 pub mod config_profile;
 pub mod config_types;
 mod conversation_history;
+mod environment_context;
 pub mod error;
 pub mod exec;
 pub mod exec_env;

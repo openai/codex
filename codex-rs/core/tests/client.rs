@@ -373,11 +373,11 @@ async fn includes_user_instructions_message_in_request() {
             .contains("be nice")
     );
     assert_message_role(&request_body["input"][0], "user");
-    assert_message_starts_with(&request_body["input"][0], "<environment_context>\n\n");
-    assert_message_ends_with(&request_body["input"][0], "</environment_context>");
+    assert_message_starts_with(&request_body["input"][0], "<user_instructions>");
+    assert_message_ends_with(&request_body["input"][0], "</user_instructions>");
     assert_message_role(&request_body["input"][1], "user");
-    assert_message_starts_with(&request_body["input"][1], "<user_instructions>\n\n");
-    assert_message_ends_with(&request_body["input"][1], "</user_instructions>");
+    assert_message_starts_with(&request_body["input"][1], "<environment_context>");
+    assert_message_ends_with(&request_body["input"][1], "</environment_context>");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
