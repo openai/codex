@@ -143,6 +143,10 @@ impl StreamController {
         };
         let cfg = self.config.clone();
         let state = self.state_mut(kind);
+        // Record that at least one delta was received for this stream
+        if !delta.is_empty() {
+            state.has_seen_delta = true;
+        }
         state.collector.push_delta(delta);
         if delta.contains('\n') {
             let newly_completed = state.collector.commit_complete_lines(&cfg);
@@ -279,19 +283,23 @@ impl StreamController {
     ) -> bool {
         self.begin(kind, sink);
 
-        if !message.is_empty() {
-            // normalize to end with newline
-            let mut msg = message.to_owned();
-            if !msg.ends_with('\n') {
-                msg.push('\n');
-            }
-
-            // replace while preserving already committed count
+        {
             let state = self.state_mut(kind);
-            let committed = state.collector.committed_count();
-            state
-                .collector
-                .replace_with_and_mark_committed(&msg, committed);
+            // Only inject the final full message if we have not seen any deltas for this stream.
+            // If deltas were received, rely on the collector's existing buffer to avoid duplication.
+            if !state.has_seen_delta && !message.is_empty() {
+                // normalize to end with newline
+                let mut msg = message.to_owned();
+                if !msg.ends_with('\n') {
+                    msg.push('\n');
+                }
+
+                // replace while preserving already committed count
+                let committed = state.collector.committed_count();
+                state
+                    .collector
+                    .replace_with_and_mark_committed(&msg, committed);
+            }
         }
 
         self.finalize(kind, immediate, sink)

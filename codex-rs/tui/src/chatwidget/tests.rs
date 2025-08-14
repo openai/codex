@@ -327,46 +327,6 @@ async fn binary_size_transcript_matches_ideal_fixture() {
 }
 
 #[test]
-fn final_longer_answer_after_single_char_delta_is_complete() {
-    let (mut chat, rx, _op_rx) = make_chatwidget_manual();
-
-    // Simulate a stray delta without newline (e.g., punctuation).
-    chat.handle_codex_event(Event {
-        id: "sub-x".into(),
-        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta: "?".into() }),
-    });
-
-    // Now send the full final answer with no newline.
-    let full = "Hi! How can I help with codex-rs today? Want me to explore the repo, run tests, or work on a specific change?";
-    chat.handle_codex_event(Event {
-        id: "sub-x".into(),
-        msg: EventMsg::AgentMessage(AgentMessageEvent {
-            message: full.into(),
-        }),
-    });
-
-    // Drain and assert the full message appears in history.
-    let cells = drain_insert_history(&rx);
-    let mut found = false;
-    for lines in &cells {
-        let s = lines
-            .iter()
-            .flat_map(|l| l.spans.iter())
-            .map(|sp| sp.content.clone())
-            .collect::<String>();
-        if s.contains(full) {
-            found = true;
-            break;
-        }
-    }
-    assert!(
-        found,
-        "expected full final message to be flushed to history, cells={:?}",
-        cells.len()
-    );
-}
-
-#[test]
 fn apply_patch_events_emit_history_cells() {
     let (mut chat, rx, _op_rx) = make_chatwidget_manual();
 
