@@ -380,20 +380,6 @@ impl Session {
             state.history.record_items(&restored_items);
         }
 
-        // record the initial user instructions and environment context, regardless of whether we restored items
-        if let Some(user_instructions) = user_instructions.clone() {
-            state
-                .history
-                .record_items(&[Prompt::format_user_instructions_message(&user_instructions)]);
-        }
-        state
-            .history
-            .record_items(&[ResponseItem::from(EnvironmentContext::new(
-                cwd.clone(),
-                approval_policy,
-                sandbox_policy.clone(),
-            ))]);
-
         let writable_roots = get_writable_roots(&cwd);
 
         let (mcp_connection_manager, failed_clients) =
@@ -449,6 +435,20 @@ impl Session {
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         });
 
+        // record the initial user instructions and environment context, regardless of whether we restored items.
+        if let Some(user_instructions) = sess.get_user_instructions().clone() {
+            sess.record_conversation_items(&[Prompt::format_user_instructions_message(
+                &user_instructions,
+            )])
+            .await;
+        }
+        sess.record_conversation_items(&[ResponseItem::from(EnvironmentContext::new(
+            sess.get_cwd().to_path_buf(),
+            sess.get_approval_policy(),
+            sess.get_sandbox_policy().clone(),
+        ))])
+        .await;
+
         // Gather history metadata for SessionConfiguredEvent.
         let (history_log_id, history_entry_count) =
             crate::message_history::history_metadata(&config).await;
@@ -483,6 +483,14 @@ impl Session {
 
     pub(crate) fn get_cwd(&self) -> &Path {
         &self.cwd
+    }
+
+    pub(crate) fn get_user_instructions(&self) -> Option<String> {
+        self.base_instructions.clone()
+    }
+
+    pub(crate) fn get_sandbox_policy(&self) -> &SandboxPolicy {
+        &self.sandbox_policy
     }
 
     fn resolve_path(&self, path: Option<String>) -> PathBuf {
