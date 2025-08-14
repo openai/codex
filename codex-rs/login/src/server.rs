@@ -1,6 +1,4 @@
 use std::io::{self};
-use std::net::SocketAddr;
-use std::net::TcpListener;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -18,75 +16,76 @@ use crate::pkce::PkceCodes;
 use crate::pkce::generate_pkce;
 
 const DEFAULT_ISSUER: &str = "https://auth.openai.com";
+const DEFAULT_PORT: u16 = 1455;
 
 #[derive(Debug, Clone)]
 pub struct ServerOptions<'a> {
     pub codex_home: &'a Path,
     pub client_id: &'a str,
     pub issuer: &'a str,
-    pub port_start: u16,
-    pub port_end: u16,
+    pub port: u16,
     pub open_browser: bool,
     pub force_state: Option<String>,
 }
 
 impl<'a> ServerOptions<'a> {
-    pub fn with_env_defaults(codex_home: &'a Path, client_id: &'a str) -> Self {
-        let port_start = std::env::var("CODEX_LOGIN_PORT_START")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(1455);
-        let port_end = std::env::var("CODEX_LOGIN_PORT_END")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(1499);
+    pub fn new(codex_home: &'a Path, client_id: &'a str) -> Self {
         Self {
             codex_home,
             client_id,
             issuer: DEFAULT_ISSUER,
-            port_start,
-            port_end,
+            port: DEFAULT_PORT,
             open_browser: true,
             force_state: None,
         }
     }
 }
 
+#[allow(dead_code)]
 pub fn run_server_blocking(opts: ServerOptions) -> io::Result<()> {
     run_server_blocking_with_notify(opts, None, None)
 }
 
+pub struct LoginServerInfo {
+    pub auth_url: String,
+    pub actual_port: u16,
+}
+
 pub fn run_server_blocking_with_notify(
     opts: ServerOptions,
-    notify_login_url: Option<std::sync::mpsc::Sender<String>>,
+    notify_started: Option<std::sync::mpsc::Sender<LoginServerInfo>>,
     shutdown_flag: Option<Arc<AtomicBool>>,
 ) -> io::Result<()> {
-    let bind_addr = bind_local_port(opts.port_start, opts.port_end)?;
-    let redirect_uri = format!("http://localhost:{}/auth/callback", bind_addr.port());
     let pkce = generate_pkce();
     let state = opts.force_state.clone().unwrap_or_else(generate_state);
 
+    let server = Server::http(format!("127.0.0.1:{}", opts.port)).map_err(io::Error::other)?;
+    let actual_port = match server.server_addr().to_ip() {
+        Some(addr) => addr.port(),
+        None => {
+            return Err(io::Error::new(
+                io::ErrorKind::AddrInUse,
+                "Unable to determine the server port",
+            ));
+        }
+    };
+
+    let redirect_uri = format!("http://localhost:{actual_port}/auth/callback");
     let auth_url = build_authorize_url(opts.issuer, opts.client_id, &redirect_uri, &pkce, &state);
 
-    if let Some(tx) = &notify_login_url {
-        let _ = tx.send(auth_url.clone());
+    if let Some(tx) = &notify_started {
+        let _ = tx.send(LoginServerInfo {
+            auth_url: auth_url.clone(),
+            actual_port,
+        });
     }
 
-    if notify_login_url.is_none() {
-        eprintln!(
-            "Starting local login server on http://localhost:{}.\nIf your browser did not open, navigate to this URL to authenticate:\n\n{}",
-            bind_addr.port(),
-            auth_url
-        );
-    }
     if opts.open_browser {
         let _ = webbrowser::open(&auth_url);
     }
 
-    let server = Server::http(bind_addr).map_err(io::Error::other)?;
-    let should_exit = shutdown_flag.unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
-
-    while !should_exit.load(Ordering::SeqCst) {
+    let shutdown_flag = shutdown_flag.unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
+    while !shutdown_flag.load(Ordering::SeqCst) {
         let req = match server.recv() {
             Ok(r) => r,
             Err(e) => return Err(io::Error::other(e)),
@@ -152,7 +151,7 @@ pub fn run_server_blocking_with_notify(
                         }
 
                         let success_url = compose_success_url(
-                            bind_addr.port(),
+                            actual_port,
                             opts.issuer,
                             &tokens.id_token,
                             &tokens.access_token,
@@ -192,7 +191,7 @@ pub fn run_server_blocking_with_notify(
                     resp.add_header(h);
                 }
                 let _ = req.respond(resp);
-                should_exit.store(true, Ordering::SeqCst);
+                shutdown_flag.store(true, Ordering::SeqCst);
             }
             _ => {
                 let _ = req.respond(Response::from_string("Not Found").with_status_code(404));
@@ -201,24 +200,6 @@ pub fn run_server_blocking_with_notify(
     }
 
     Ok(())
-}
-
-fn bind_local_port(start: u16, end: u16) -> io::Result<SocketAddr> {
-    for port in start..=end {
-        if let Ok(listener) = TcpListener::bind(("127.0.0.1", port)) {
-            let addr = listener.local_addr()?;
-            // hand listener to tiny_http by creating Server::http(addr)
-            drop(listener);
-            return Ok(addr);
-        }
-    }
-    if start == end {
-        return Err(io::Error::new(
-            io::ErrorKind::AddrInUse,
-            "requested port is in use",
-        ));
-    }
-    Err(io::Error::other("no free port found"))
 }
 
 fn build_authorize_url(

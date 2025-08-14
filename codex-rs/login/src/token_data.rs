@@ -6,7 +6,10 @@ use thiserror::Error;
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Default)]
 pub struct TokenData {
     /// Flat info parsed from the JWT in auth.json.
-    #[serde(deserialize_with = "deserialize_id_token")]
+    #[serde(
+        deserialize_with = "deserialize_id_token",
+        serialize_with = "serialize_id_token"
+    )]
     pub id_token: IdTokenInfo,
 
     /// This is a JWT.
@@ -36,6 +39,7 @@ pub struct IdTokenInfo {
     /// (e.g., "free", "plus", "pro", "business", "enterprise", "edu").
     /// (Note: ae has not verified that those are the exact values.)
     pub(crate) chatgpt_plan_type: Option<PlanType>,
+    pub raw_jwt: String,
 }
 
 impl IdTokenInfo {
@@ -126,57 +130,23 @@ pub(crate) fn parse_id_token(id_token: &str) -> Result<IdTokenInfo, IdTokenInfoE
     Ok(IdTokenInfo {
         email: claims.email,
         chatgpt_plan_type: claims.auth.and_then(|a| a.chatgpt_plan_type),
+        raw_jwt: id_token.to_string(),
     })
 }
 
-/// deserializer used by `TokenData.id_token`.
-///
-/// Why accept both a raw JWT string and an object?
-/// - Python flow (historical): The original Python login helper wrote
-///   `tokens.id_token` as a compact JWT string in `$CODEX_HOME/auth.json`.
-///   Readers parsed the claims when loading.
-/// - Current Rust flow: Code in this repo may serialize `TokenData` via Serde,
-///   which emits the already-parsed `IdTokenInfo` claims object for
-///   `tokens.id_token`.
-///
-/// To support both the current Rust code and the earlier Python-written files
-/// without forcing users to re‑login, this deserializer accepts either shape
-/// and normalizes it into `IdTokenInfo`:
-/// - If the value is a string, treat it as a JWT and parse claims.
-/// - If the value is an object, deserialize it directly as `IdTokenInfo`.
-///
-/// Any other type results in a deserialization error.
 fn deserialize_id_token<'de, D>(deserializer: D) -> Result<IdTokenInfo, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
-    struct IdTokenVisitor;
+    let s = String::deserialize(deserializer)?;
+    parse_id_token(&s).map_err(serde::de::Error::custom)
+}
 
-    impl<'de> serde::de::Visitor<'de> for IdTokenVisitor {
-        type Value = IdTokenInfo;
-
-        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-            f.write_str("a JWT string or an object with id token claims")
-        }
-
-        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-        where
-            E: serde::de::Error,
-        {
-            parse_id_token(v).map_err(serde::de::Error::custom)
-        }
-
-        fn visit_map<A>(self, map: A) -> Result<Self::Value, A::Error>
-        where
-            A: serde::de::MapAccess<'de>,
-        {
-            // Delegate to IdTokenInfo's Deserialize impl to support objects written by newer flows.
-            let de = serde::de::value::MapAccessDeserializer::new(map);
-            IdTokenInfo::deserialize(de)
-        }
-    }
-
-    deserializer.deserialize_any(IdTokenVisitor)
+fn serialize_id_token<S>(id_token: &IdTokenInfo, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(&id_token.raw_jwt)
 }
 
 #[cfg(test)]

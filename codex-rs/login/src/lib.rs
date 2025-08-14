@@ -16,15 +16,16 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
+pub use crate::server::LoginServerInfo;
+pub use crate::server::ServerOptions;
+pub use crate::server::run_server_blocking;
+pub use crate::server::run_server_blocking_with_notify;
 pub use crate::token_data::TokenData;
 use crate::token_data::parse_id_token;
 
 mod pkce;
-mod token_data;
-pub mod login_server {
-    pub use crate::server::*;
-}
 mod server;
+mod token_data;
 
 pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 pub const OPENAI_API_KEY_ENV_VAR: &str = "OPENAI_API_KEY";
@@ -276,7 +277,7 @@ impl SpawnedLogin {
 }
 
 pub fn spawn_login_with_chatgpt(codex_home: &Path) -> std::io::Result<SpawnedLogin> {
-    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    let (tx, rx) = std::sync::mpsc::channel::<LoginServerInfo>();
     let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let done = Arc::new(Mutex::new(None::<bool>));
     let url = Arc::new(Mutex::new(None::<String>));
@@ -287,13 +288,8 @@ pub fn spawn_login_with_chatgpt(codex_home: &Path) -> std::io::Result<SpawnedLog
     let shutdown_clone = shutdown.clone();
     let done_clone = done.clone();
     std::thread::spawn(move || {
-        let opts =
-            crate::login_server::ServerOptions::with_env_defaults(&codex_home_buf, &client_id);
-        let res = crate::login_server::run_server_blocking_with_notify(
-            opts,
-            Some(tx),
-            Some(shutdown_clone),
-        );
+        let opts = ServerOptions::new(&codex_home_buf, &client_id);
+        let res = run_server_blocking_with_notify(opts, Some(tx), Some(shutdown_clone));
         let success = res.is_ok();
         if let Ok(mut lock) = done_clone.lock() {
             *lock = Some(success);
@@ -304,7 +300,7 @@ pub fn spawn_login_with_chatgpt(codex_home: &Path) -> std::io::Result<SpawnedLog
     std::thread::spawn(move || {
         if let Ok(u) = rx.recv() {
             if let Ok(mut lock) = url_clone.lock() {
-                *lock = Some(u);
+                *lock = Some(u.auth_url);
             }
         }
     });
@@ -316,12 +312,12 @@ pub fn spawn_login_with_chatgpt(codex_home: &Path) -> std::io::Result<SpawnedLog
     })
 }
 
-pub async fn login_with_chatgpt(codex_home: &Path, _capture_output: bool) -> std::io::Result<()> {
+pub async fn login_with_chatgpt(codex_home: &Path) -> std::io::Result<()> {
     let client_id = CLIENT_ID;
     let codex_home = codex_home.to_path_buf();
     tokio::task::spawn_blocking(move || {
-        let opts = crate::login_server::ServerOptions::with_env_defaults(&codex_home, client_id);
-        crate::login_server::run_server_blocking(opts)
+        let opts = ServerOptions::new(&codex_home, client_id);
+        run_server_blocking_with_notify(opts, None, None)
     })
     .await
     .map_err(std::io::Error::other)??;
@@ -479,9 +475,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
+    async fn roundtrip_auth_dot_json() {
         let codex_home = tempdir().unwrap();
         write_auth_file(
+            AuthFileParams {
+                openai_api_key: None,
+                chatgpt_plan_type: "pro".to_string(),
+            },
+            codex_home.path(),
+        )
+        .expect("failed to write auth file");
+
+        let file = get_auth_file(codex_home.path());
+        let auth_dot_json = try_read_auth_json(&file).unwrap();
+        write_auth_json(&file, &auth_dot_json).unwrap();
+
+        let same_auth_dot_json = try_read_auth_json(&file).unwrap();
+        assert_eq!(auth_dot_json, same_auth_dot_json);
+    }
+
+    #[tokio::test]
+    async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
+        let codex_home = tempdir().unwrap();
+        let fake_jwt = write_auth_file(
             AuthFileParams {
                 openai_api_key: None,
                 chatgpt_plan_type: "pro".to_string(),
@@ -508,6 +524,7 @@ mod tests {
                     id_token: IdTokenInfo {
                         email: Some("user@example.com".to_string()),
                         chatgpt_plan_type: Some(PlanType::Known(KnownPlan::Pro)),
+                        raw_jwt: fake_jwt,
                     },
                     access_token: "test-access-token".to_string(),
                     refresh_token: "test-refresh-token".to_string(),
@@ -529,7 +546,7 @@ mod tests {
     #[tokio::test]
     async fn pro_account_with_api_key_still_uses_chatgpt_auth() {
         let codex_home = tempdir().unwrap();
-        write_auth_file(
+        let fake_jwt = write_auth_file(
             AuthFileParams {
                 openai_api_key: Some("sk-test-key".to_string()),
                 chatgpt_plan_type: "pro".to_string(),
@@ -556,6 +573,7 @@ mod tests {
                     id_token: IdTokenInfo {
                         email: Some("user@example.com".to_string()),
                         chatgpt_plan_type: Some(PlanType::Known(KnownPlan::Pro)),
+                        raw_jwt: fake_jwt,
                     },
                     access_token: "test-access-token".to_string(),
                     refresh_token: "test-refresh-token".to_string(),
@@ -603,7 +621,7 @@ mod tests {
         chatgpt_plan_type: String,
     }
 
-    fn write_auth_file(params: AuthFileParams, codex_home: &Path) -> std::io::Result<()> {
+    fn write_auth_file(params: AuthFileParams, codex_home: &Path) -> std::io::Result<String> {
         let auth_file = get_auth_file(codex_home);
         // Create a minimal valid JWT for the id_token field.
         #[derive(Serialize)]
@@ -641,7 +659,9 @@ mod tests {
             "last_refresh": LAST_REFRESH,
         });
         let auth_json = serde_json::to_string_pretty(&auth_json_data)?;
-        std::fs::write(auth_file, auth_json)
+        std::fs::write(auth_file, auth_json)?;
+
+        Ok(fake_jwt)
     }
 
     #[test]
