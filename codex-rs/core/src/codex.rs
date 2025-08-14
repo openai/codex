@@ -227,7 +227,6 @@ pub(crate) struct Session {
     /// instead of `std::env::current_dir()`.
     cwd: PathBuf,
     base_instructions: Option<String>,
-    user_instructions: Option<String>,
     approval_policy: AskForApproval,
     sandbox_policy: SandboxPolicy,
     shell_environment_policy: ShellEnvironmentPolicy,
@@ -379,19 +378,19 @@ impl Session {
         };
         if let Some(restored_items) = restored_items {
             state.history.record_items(&restored_items);
-        } else {
-            // if we have not restored items, we need to record the initial user instructions and environment context
-            if let Some(user_instructions) = user_instructions.clone() {
-                state
-                    .history
-                    .record_items(&[Prompt::format_user_instructions_message(&user_instructions)]);
-            }
+        }
+
+        // record the initial user instructions and environment context, regardless of whether we restored items
+        if let Some(user_instructions) = user_instructions.clone() {
             state
                 .history
-                .record_items(&[Prompt::format_environment_context_message(
-                    &EnvironmentContext::new(cwd.clone(), approval_policy, sandbox_policy.clone()),
-                )]);
+                .record_items(&[Prompt::format_user_instructions_message(&user_instructions)]);
         }
+        state
+            .history
+            .record_items(&[Prompt::format_environment_context_message(
+                &EnvironmentContext::new(cwd.clone(), approval_policy, sandbox_policy.clone()),
+            )]);
 
         let writable_roots = get_writable_roots(&cwd);
 
@@ -432,7 +431,6 @@ impl Session {
                 config.include_plan_tool,
             ),
             tx_event: tx_event.clone(),
-            user_instructions,
             base_instructions,
             approval_policy,
             sandbox_policy,
@@ -479,10 +477,6 @@ impl Session {
 
     pub(crate) fn get_approval_policy(&self) -> AskForApproval {
         self.approval_policy
-    }
-
-    pub(crate) fn get_sandbox_policy(&self) -> &SandboxPolicy {
-        &self.sandbox_policy
     }
 
     pub(crate) fn get_cwd(&self) -> &Path {
