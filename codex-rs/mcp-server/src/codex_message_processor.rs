@@ -306,13 +306,14 @@ async fn apply_bespoke_event_handling(
     let Event { id: event_id, msg } = event;
     match msg {
         EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
-            call_id: _,
+            call_id,
             changes,
             reason,
             grant_root,
         }) => {
             let params = ApplyPatchApprovalParams {
                 conversation_id,
+                call_id,
                 file_changes: changes,
                 reason,
                 grant_root,
@@ -327,13 +328,14 @@ async fn apply_bespoke_event_handling(
             });
         }
         EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
-            call_id: _,
+            call_id,
             command,
             cwd,
             reason,
         }) => {
             let params = ExecCommandApprovalParams {
                 conversation_id,
+                call_id,
                 command,
                 cwd,
                 reason,
