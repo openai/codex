@@ -72,7 +72,6 @@ pub fn run_server_blocking_with_notify(
         let _ = tx.send(auth_url.clone());
     }
 
-    // Only print the verbose banner when not embedded (e.g., CLI mode).
     if notify_login_url.is_none() {
         eprintln!(
             "Starting local login server on http://localhost:{}.\nIf your browser did not open, navigate to this URL to authenticate:\n\n{}",
@@ -310,7 +309,6 @@ fn persist_tokens(
     access_token: Option<String>,
     refresh_token: Option<String>,
 ) -> io::Result<()> {
-    // Reuse existing AuthDotJson layout and writer to minimize changes.
     let auth_file = get_auth_file(codex_home);
     if let Some(parent) = auth_file.parent() {
         if !parent.exists() {
@@ -406,16 +404,30 @@ fn jwt_auth_claims(jwt: &str) -> serde_json::Map<String, serde_json::Value> {
     let mut parts = jwt.split('.');
     let (_h, payload_b64, _s) = match (parts.next(), parts.next(), parts.next()) {
         (Some(h), Some(p), Some(s)) if !h.is_empty() && !p.is_empty() && !s.is_empty() => (h, p, s),
-        _ => return serde_json::Map::new(),
+        _ => {
+            eprintln!("Invalid JWT format while extracting claims");
+            return serde_json::Map::new();
+        }
     };
-    if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload_b64) {
-        if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&bytes) {
-            if let Some(obj) = v
-                .get_mut("https://api.openai.com/auth")
-                .and_then(|x| x.as_object_mut())
-            {
-                return obj.clone();
+    match base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload_b64) {
+        Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
+            Ok(mut v) => {
+                if let Some(obj) = v
+                    .get_mut("https://api.openai.com/auth")
+                    .and_then(|x| x.as_object_mut())
+                {
+                    return obj.clone();
+                }
+                eprintln!(
+                    "JWT payload missing expected 'https://api.openai.com/auth' object"
+                );
             }
+            Err(e) => {
+                eprintln!("Failed to parse JWT JSON payload: {e}");
+            }
+        },
+        Err(e) => {
+            eprintln!("Failed to base64url-decode JWT payload: {e}");
         }
     }
     serde_json::Map::new()
