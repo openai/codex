@@ -581,7 +581,6 @@ impl ChatWidget<'_> {
         // Reset redraw flag for this dispatch
         self.needs_redraw = false;
         let Event { id, msg } = event;
-        tracing::warn!("handle_codex_event: {:?}", msg);
 
         match msg {
             EventMsg::AgentMessageDelta(_)
