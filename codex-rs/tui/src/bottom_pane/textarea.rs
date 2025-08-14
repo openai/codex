@@ -1444,6 +1444,10 @@ mod tests {
         for _case in 0..10_000 {
             let mut ta = TextArea::new();
             let mut state = TextAreaState::default();
+            // Track element payloads we insert. Payloads use characters '[' and ']' which
+            // are not produced by rand_grapheme(), avoiding accidental collisions.
+            let mut elem_texts: Vec<String> = Vec::new();
+            let mut next_elem_id: usize = 0;
             // Start with a random base string
             let base_len = rng.gen_range(0..30);
             let mut base = String::new();
@@ -1471,7 +1475,7 @@ mod tests {
                 }
 
                 // Pick an operation
-                match rng.gen_range(0..14) {
+                match rng.gen_range(0..18) {
                     0 => {
                         // insert small random string at cursor
                         let len = rng.gen_range(0..6);
@@ -1499,12 +1503,24 @@ mod tests {
                             s.push_str(&rand_grapheme(&mut rng));
                         }
                         let before = ta.text().len();
+                        // If the chosen range intersects an element, replace_range will expand to
+                        // element boundaries, so the naive size delta assertion does not hold.
+                        let intersects_element = elem_texts.iter().any(|payload| {
+                            if let Some(pstart) = ta.text().find(payload) {
+                                let pend = pstart + payload.len();
+                                pstart < end && pend > start
+                            } else {
+                                false
+                            }
+                        });
                         ta.replace_range(start..end, &s);
-                        let after = ta.text().len();
-                        assert_eq!(
-                            after as isize,
-                            before as isize + (s.len() as isize) - ((end - start) as isize)
-                        );
+                        if !intersects_element {
+                            let after = ta.text().len();
+                            assert_eq!(
+                                after as isize,
+                                before as isize + (s.len() as isize) - ((end - start) as isize)
+                            );
+                        }
                     }
                     2 => ta.delete_backward(rng.gen_range(0..=3)),
                     3 => ta.delete_forward(rng.gen_range(0..=3)),
@@ -1517,6 +1533,66 @@ mod tests {
                     10 => ta.move_cursor_down(),
                     11 => ta.move_cursor_to_beginning_of_line(true),
                     12 => ta.move_cursor_to_end_of_line(true),
+                    13 => {
+                        // Insert an element with a unique sentinel payload
+                        let payload =
+                            format!("[[EL#{}:{}]]", next_elem_id, rng.gen_range(1000..9999));
+                        next_elem_id += 1;
+                        ta.insert_element(&payload);
+                        elem_texts.push(payload);
+                    }
+                    14 => {
+                        // Try inserting inside an existing element (should clamp to boundary)
+                        if let Some(payload) = elem_texts.choose(&mut rng).cloned() {
+                            if let Some(start) = ta.text().find(&payload) {
+                                let end = start + payload.len();
+                                if end - start > 2 {
+                                    let pos = rng.gen_range(start + 1..end - 1);
+                                    let ins = rand_grapheme(&mut rng);
+                                    ta.insert_str_at(pos, &ins);
+                                }
+                            }
+                        }
+                    }
+                    15 => {
+                        // Replace a range that intersects an element -> whole element should be replaced
+                        if let Some(payload) = elem_texts.choose(&mut rng).cloned() {
+                            if let Some(start) = ta.text().find(&payload) {
+                                let end = start + payload.len();
+                                // Create an intersecting range [start-δ, end-δ2)
+                                let mut s = start.saturating_sub(rng.gen_range(0..=2));
+                                let mut e = (end + rng.gen_range(0..=2)).min(ta.text().len());
+                                // Align to char boundaries to satisfy String::replace_range contract
+                                let txt = ta.text();
+                                while s > 0 && !txt.is_char_boundary(s) {
+                                    s -= 1;
+                                }
+                                while e < txt.len() && !txt.is_char_boundary(e) {
+                                    e += 1;
+                                }
+                                if s < e {
+                                    // Small replacement text
+                                    let mut srep = String::new();
+                                    for _ in 0..rng.gen_range(0..=2) {
+                                        srep.push_str(&rand_grapheme(&mut rng));
+                                    }
+                                    ta.replace_range(s..e, &srep);
+                                }
+                            }
+                        }
+                    }
+                    16 => {
+                        // Try setting the cursor to a position inside an element; it should clamp out
+                        if let Some(payload) = elem_texts.choose(&mut rng).cloned() {
+                            if let Some(start) = ta.text().find(&payload) {
+                                let end = start + payload.len();
+                                if end - start > 2 {
+                                    let pos = rng.gen_range(start + 1..end - 1);
+                                    ta.set_cursor(pos);
+                                }
+                            }
+                        }
+                    }
                     _ => {
                         // Jump to word boundaries
                         if rng.gen_bool(0.5) {
@@ -1531,6 +1607,21 @@ mod tests {
 
                 // Sanity invariants
                 assert!(ta.cursor() <= ta.text().len());
+
+                // Element invariants
+                for payload in &elem_texts {
+                    if let Some(start) = ta.text().find(payload) {
+                        let end = start + payload.len();
+                        // 1) Text inside elements matches the initially set payload
+                        assert_eq!(&ta.text()[start..end], payload);
+                        // 2) Cursor is never strictly inside an element
+                        let c = ta.cursor();
+                        assert!(
+                            c <= start || c >= end,
+                            "cursor inside element: {start}..{end} at {c}"
+                        );
+                    }
+                }
 
                 // Render and compute cursor positions; ensure they are in-bounds and do not panic
                 let area = Rect::new(0, 0, width, height);
