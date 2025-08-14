@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::codex_message_processor::CodexMessageProcessor;
 use crate::codex_tool_config::CodexToolCallParam;
 use crate::codex_tool_config::CodexToolCallReplyParam;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_param;
@@ -14,6 +15,7 @@ use crate::mcp_protocol::ToolCallResponseResult;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::tool_handlers::create_conversation::handle_create_conversation;
 use crate::tool_handlers::send_message::handle_send_message;
+use crate::wire_format::CodexRequest;
 
 use codex_core::ConversationManager;
 use codex_core::config::Config as CodexConfig;
@@ -40,6 +42,7 @@ use tokio::task;
 use uuid::Uuid;
 
 pub(crate) struct MessageProcessor {
+    codex_message_processor: CodexMessageProcessor,
     outgoing: Arc<OutgoingMessageSender>,
     initialized: bool,
     codex_linux_sandbox_exe: Option<PathBuf>,
@@ -55,11 +58,19 @@ impl MessageProcessor {
         outgoing: OutgoingMessageSender,
         codex_linux_sandbox_exe: Option<PathBuf>,
     ) -> Self {
+        let outgoing = Arc::new(outgoing);
+        let conversation_manager = Arc::new(ConversationManager::default());
+        let codex_message_processor = CodexMessageProcessor::new(
+            conversation_manager.clone(),
+            outgoing.clone(),
+            codex_linux_sandbox_exe.clone(),
+        );
         Self {
-            outgoing: Arc::new(outgoing),
+            codex_message_processor,
+            outgoing,
             initialized: false,
             codex_linux_sandbox_exe,
-            conversation_manager: Arc::new(ConversationManager::default()),
+            conversation_manager,
             running_requests_id_to_codex_uuid: Arc::new(Mutex::new(HashMap::new())),
             running_session_ids: Arc::new(Mutex::new(HashSet::new())),
         }
@@ -78,6 +89,17 @@ impl MessageProcessor {
     }
 
     pub(crate) async fn process_request(&mut self, request: JSONRPCRequest) {
+        if let Ok(request_json) = serde_json::to_value(request.clone())
+            && let Ok(codex_request) = serde_json::from_value::<CodexRequest>(request_json)
+        {
+            // If the request is a Codex request, handle it with the Codex
+            // message processor.
+            self.codex_message_processor
+                .process_request(codex_request)
+                .await;
+            return;
+        }
+
         // Hold on to the ID so we can respond.
         let request_id = request.id.clone();
 
