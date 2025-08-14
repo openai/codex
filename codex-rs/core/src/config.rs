@@ -588,7 +588,7 @@ impl Config {
                 needs_special_apply_patch_instructions: false,
                 supports_reasoning_summaries,
                 uses_local_shell_tool: false,
-                uses_apply_patch_tool: true,
+                uses_apply_patch_tool: false,
             }
         });
 

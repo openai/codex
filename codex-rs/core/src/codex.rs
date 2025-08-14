@@ -1730,7 +1730,6 @@ async fn handle_function_call(
                 .await
         }
         "apply_patch" => {
-            // Parse function arguments: expect a single string field `patch`.
             let args = match serde_json::from_str::<ApplyPatchToolArgs>(&arguments) {
                 Ok(a) => a,
                 Err(e) => {

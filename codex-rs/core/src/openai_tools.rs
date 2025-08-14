@@ -313,7 +313,7 @@ It is important to remember:
         strict: false,
         parameters: JsonSchema::Object {
             properties,
-            required: Some(vec!["patch".to_string()]),
+            required: Some(vec!["input".to_string()]),
             additional_properties: Some(false),
         },
     })
