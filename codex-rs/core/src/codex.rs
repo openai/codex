@@ -1606,6 +1606,7 @@ async fn handle_response_item(
                 for item in content {
                     let text = match item {
                         ReasoningItemContent::ReasoningText { text } => text,
+                        ReasoningItemContent::Text { text } => text,
                     };
                     let event = Event {
                         id: sub_id.to_string(),
