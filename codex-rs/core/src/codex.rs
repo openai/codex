@@ -381,16 +381,16 @@ impl Session {
             state.history.record_items(&restored_items);
         } else {
             // if we have not restored items, we need to record the initial user instructions and environment context
-            state.history.record_items(&[
-                Prompt::format_user_instructions_message(
-                    user_instructions.as_deref().unwrap_or(""),
-                ),
-                Prompt::format_environment_context_message(&EnvironmentContext::new(
-                    cwd.clone(),
-                    approval_policy,
-                    sandbox_policy.clone(),
-                )),
-            ]);
+            if let Some(user_instructions) = user_instructions.clone() {
+                state
+                    .history
+                    .record_items(&[Prompt::format_user_instructions_message(&user_instructions)]);
+            }
+            state
+                .history
+                .record_items(&[Prompt::format_environment_context_message(
+                    &EnvironmentContext::new(cwd.clone(), approval_policy, sandbox_policy.clone()),
+                )]);
         }
 
         let writable_roots = get_writable_roots(&cwd);
