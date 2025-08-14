@@ -18,7 +18,7 @@ pub async fn login_with_chatgpt(codex_home: &Path) -> std::io::Result<()> {
     let (tx, rx) = mpsc::channel::<LoginServerInfo>();
     let client_id = CLIENT_ID;
     let codex_home = codex_home.to_path_buf();
-    let url_printer = tokio::spawn(async move {
+    tokio::spawn(async move {
         match rx.recv() {
             Ok(LoginServerInfo {
                 auth_url,
@@ -42,7 +42,6 @@ pub async fn login_with_chatgpt(codex_home: &Path) -> std::io::Result<()> {
     .map_err(std::io::Error::other)??;
 
     eprintln!("Successfully logged in");
-    drop(url_printer);
     Ok(())
 }
 

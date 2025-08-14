@@ -252,8 +252,7 @@ pub fn logout(codex_home: &Path) -> std::io::Result<bool> {
     }
 }
 
-/// Represents a running login subprocess. The child can be killed by holding
-/// the mutex and calling `cancel()`.
+/// Represents a running login server. The server can be stopped by calling `cancel()` on SpawnedLogin.
 #[derive(Debug, Clone)]
 pub struct SpawnedLogin {
     url: Arc<Mutex<Option<String>>>,
