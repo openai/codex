@@ -44,7 +44,9 @@ use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::InputResult;
 use crate::exec_command::strip_bash_lc_and_escape;
+use crate::history_cell;
 use crate::history_cell::CommandOutput;
+use crate::history_cell::ExecCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PatchEventType;
 // streaming internals are provided by crate::streaming and crate::markdown_stream
@@ -68,7 +70,7 @@ pub(crate) struct ChatWidget<'a> {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
     bottom_pane: BottomPane<'a>,
-    active_exec_cell: Option<HistoryCell>,
+    active_exec_cell: Option<ExecCell>,
     config: Config,
     initial_user_message: Option<UserMessage>,
     total_token_usage: TokenUsage,
@@ -123,7 +125,7 @@ impl ChatWidget<'_> {
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
-        self.add_to_history(HistoryCell::new_session_info(&self.config, event, true));
+        self.add_to_history(&history_cell::new_session_info(&self.config, event, true));
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
         }
@@ -195,14 +197,14 @@ impl ChatWidget<'_> {
     }
 
     fn on_error(&mut self, message: String) {
-        self.add_to_history(HistoryCell::new_error_event(message));
+        self.add_to_history(&history_cell::new_error_event(message));
         self.bottom_pane.set_task_running(false);
         self.stream.clear_all();
         self.mark_needs_redraw();
     }
 
     fn on_plan_update(&mut self, update: codex_core::plan_tool::UpdatePlanArgs) {
-        self.add_to_history(HistoryCell::new_plan_update(update));
+        self.add_to_history(&history_cell::new_plan_update(update));
     }
 
     fn on_exec_approval_request(&mut self, id: String, ev: ExecApprovalRequestEvent) {
@@ -237,7 +239,7 @@ impl ChatWidget<'_> {
     }
 
     fn on_patch_apply_begin(&mut self, event: PatchApplyBeginEvent) {
-        self.add_to_history(HistoryCell::new_patch_event(
+        self.add_to_history(&history_cell::new_patch_event(
             PatchEventType::ApplyBegin {
                 auto_approved: event.auto_approved,
             },
@@ -372,7 +374,7 @@ impl ChatWidget<'_> {
             self.active_exec_cell = None;
             let pending = std::mem::take(&mut self.pending_exec_completions);
             for (command, parsed, output) in pending {
-                self.add_to_history(HistoryCell::new_completed_exec_command(
+                self.add_to_history(&history_cell::new_completed_exec_command(
                     command, parsed, output,
                 ));
             }
@@ -384,9 +386,9 @@ impl ChatWidget<'_> {
         event: codex_core::protocol::PatchApplyEndEvent,
     ) {
         if event.success {
-            self.add_to_history(HistoryCell::new_patch_apply_success(event.stdout));
+            self.add_to_history(&history_cell::new_patch_apply_success(event.stdout));
         } else {
-            self.add_to_history(HistoryCell::new_patch_apply_failure(event.stderr));
+            self.add_to_history(&history_cell::new_patch_apply_failure(event.stderr));
         }
     }
 
@@ -402,7 +404,7 @@ impl ChatWidget<'_> {
                 .map(|r| format!("\n{r}"))
                 .unwrap_or_default()
         );
-        self.add_to_history(HistoryCell::new_background_event(text));
+        self.add_to_history(&history_cell::new_background_event(text));
 
         let request = ApprovalRequest::Exec {
             id,
@@ -419,7 +421,7 @@ impl ChatWidget<'_> {
         ev: ApplyPatchApprovalRequestEvent,
     ) {
         self.flush_answer_stream_with_separator();
-        self.add_to_history(HistoryCell::new_patch_event(
+        self.add_to_history(&history_cell::new_patch_event(
             PatchEventType::ApprovalRequest,
             ev.changes.clone(),
         ));
@@ -446,11 +448,11 @@ impl ChatWidget<'_> {
         );
         // Accumulate parsed commands into a single active Exec cell so they stack
         match self.active_exec_cell.as_mut() {
-            Some(HistoryCell::Exec(exec)) => {
+            Some(exec) => {
                 exec.parsed.extend(ev.parsed_cmd);
             }
             _ => {
-                self.active_exec_cell = Some(HistoryCell::new_active_exec_command(
+                self.active_exec_cell = Some(history_cell::new_active_exec_command(
                     ev.command,
                     ev.parsed_cmd,
                 ));
@@ -463,11 +465,11 @@ impl ChatWidget<'_> {
 
     pub(crate) fn handle_mcp_begin_now(&mut self, ev: McpToolCallBeginEvent) {
         self.flush_answer_stream_with_separator();
-        self.add_to_history(HistoryCell::new_active_mcp_tool_call(ev.invocation));
+        self.add_to_history(&history_cell::new_active_mcp_tool_call(ev.invocation));
     }
     pub(crate) fn handle_mcp_end_now(&mut self, ev: McpToolCallEndEvent) {
         self.flush_answer_stream_with_separator();
-        self.add_to_history(HistoryCell::new_completed_mcp_tool_call(
+        self.add_to_history(&*history_cell::new_completed_mcp_tool_call(
             80,
             ev.invocation,
             ev.duration,
@@ -564,14 +566,14 @@ impl ChatWidget<'_> {
     fn flush_active_exec_cell(&mut self) {
         if let Some(active) = self.active_exec_cell.take() {
             self.app_event_tx
-                .send(AppEvent::InsertHistory(active.plain_lines()));
+                .send(AppEvent::InsertHistory(active.display_lines()));
         }
     }
 
-    fn add_to_history(&mut self, cell: HistoryCell) {
+    fn add_to_history(&mut self, cell: &dyn HistoryCell) {
         self.flush_active_exec_cell();
         self.app_event_tx
-            .send(AppEvent::InsertHistory(cell.plain_lines()));
+            .send(AppEvent::InsertHistory(cell.display_lines()));
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
@@ -607,7 +609,7 @@ impl ChatWidget<'_> {
 
         // Only show the text portion in conversation history.
         if !text.is_empty() {
-            self.add_to_history(HistoryCell::new_user_prompt(text.clone()));
+            self.add_to_history(&history_cell::new_user_prompt(text.clone()));
         }
     }
 
@@ -680,18 +682,18 @@ impl ChatWidget<'_> {
     }
 
     pub(crate) fn add_diff_output(&mut self, diff_output: String) {
-        self.add_to_history(HistoryCell::new_diff_output(diff_output.clone()));
+        self.add_to_history(&history_cell::new_diff_output(diff_output.clone()));
     }
 
     pub(crate) fn add_status_output(&mut self) {
-        self.add_to_history(HistoryCell::new_status_output(
+        self.add_to_history(&history_cell::new_status_output(
             &self.config,
             &self.total_token_usage,
         ));
     }
 
     pub(crate) fn add_prompts_output(&mut self) {
-        self.add_to_history(HistoryCell::new_prompts_output());
+        self.add_to_history(&history_cell::new_prompts_output());
     }
 
     /// Forward file-search results to the bottom pane.
