@@ -167,7 +167,6 @@ impl BottomPane<'_> {
         self.request_redraw();
     }
 
-
     pub(crate) fn show_ctrl_c_quit_hint(&mut self) {
         self.ctrl_c_quit_hint = true;
         self.composer
