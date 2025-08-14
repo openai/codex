@@ -35,6 +35,7 @@ use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::time::Duration;
+use std::time::Instant;
 use tracing::error;
 
 #[derive(Clone)]
@@ -78,10 +79,16 @@ pub(crate) struct ExecCell {
     pub(crate) command: Vec<String>,
     pub(crate) parsed: Vec<ParsedCommand>,
     pub(crate) output: Option<CommandOutput>,
+    start_time: Option<Instant>,
 }
 impl HistoryCell for ExecCell {
     fn display_lines(&self) -> Vec<Line<'static>> {
-        exec_command_lines(&self.command, &self.parsed, self.output.as_ref())
+        exec_command_lines(
+            &self.command,
+            &self.parsed,
+            self.output.as_ref(),
+            self.start_time,
+        )
     }
 }
 
@@ -199,7 +206,12 @@ pub(crate) fn new_active_exec_command(
     command: Vec<String>,
     parsed: Vec<ParsedCommand>,
 ) -> ExecCell {
-    new_exec_cell(command, parsed, None)
+    ExecCell {
+        command,
+        parsed,
+        output: None,
+        start_time: Some(Instant::now()),
+    }
 }
 
 pub(crate) fn new_completed_exec_command(
@@ -207,41 +219,53 @@ pub(crate) fn new_completed_exec_command(
     parsed: Vec<ParsedCommand>,
     output: CommandOutput,
 ) -> ExecCell {
-    new_exec_cell(command, parsed, Some(output))
-}
-
-fn new_exec_cell(
-    command: Vec<String>,
-    parsed: Vec<ParsedCommand>,
-    output: Option<CommandOutput>,
-) -> ExecCell {
     ExecCell {
         command,
         parsed,
-        output,
+        output: Some(output),
+        start_time: None,
     }
+}
+
+fn exec_duration(start: Instant) -> String {
+    format!("{}s", start.elapsed().as_secs())
 }
 
 fn exec_command_lines(
     command: &[String],
     parsed: &[ParsedCommand],
     output: Option<&CommandOutput>,
+    start_time: Option<Instant>,
 ) -> Vec<Line<'static>> {
     match parsed.is_empty() {
-        true => new_exec_command_generic(command, output),
-        false => new_parsed_command(parsed, output),
+        true => new_exec_command_generic(command, output, start_time),
+        false => new_parsed_command(parsed, output, start_time),
     }
 }
-
 fn new_parsed_command(
     parsed_commands: &[ParsedCommand],
     output: Option<&CommandOutput>,
+    start_time: Option<Instant>,
 ) -> Vec<Line<'static>> {
-    let mut lines: Vec<Line> = vec![match output {
-        None => Line::from("⚙︎ Working".magenta().bold()),
-        Some(o) if o.exit_code == 0 => Line::from("✓ Completed".green().bold()),
-        Some(o) => Line::from(format!("✗ Failed (exit {})", o.exit_code).red().bold()),
-    }];
+    let mut lines: Vec<Line> = Vec::new();
+    match output {
+        None => {
+            let mut spans = vec!["⚙︎ Working".magenta().bold()];
+            if let Some(st) = start_time {
+                let dur = exec_duration(st);
+                spans.push(format!(" • {dur}").dim());
+            }
+            lines.push(Line::from(spans));
+        }
+        Some(o) if o.exit_code == 0 => {
+            lines.push(Line::from("✓ Completed".green().bold()));
+        }
+        Some(o) => {
+            lines.push(Line::from(
+                format!("✗ Failed (exit {})", o.exit_code).red().bold(),
+            ));
+        }
+    };
 
     for (i, parsed) in parsed_commands.iter().enumerate() {
         let text = match parsed {
@@ -282,17 +306,27 @@ fn new_parsed_command(
 fn new_exec_command_generic(
     command: &[String],
     output: Option<&CommandOutput>,
+    start_time: Option<Instant>,
 ) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let command_escaped = strip_bash_lc_and_escape(command);
     let mut cmd_lines = command_escaped.lines();
     if let Some(first) = cmd_lines.next() {
-        lines.push(Line::from(vec![
-            "⚡ Running ".to_string().magenta(),
-            first.to_string().into(),
-        ]));
+        let mut spans: Vec<Span> = vec!["⚡ Running".magenta()];
+        if let Some(st) = start_time {
+            let dur = exec_duration(st);
+            spans.push(format!(" • {dur}").dim());
+        }
+        spans.push(" ".into());
+        spans.push(first.to_string().into());
+        lines.push(Line::from(spans));
     } else {
-        lines.push(Line::from("⚡ Running".to_string().magenta()));
+        let mut spans: Vec<Span> = vec!["⚡ Running".magenta()];
+        if let Some(st) = start_time {
+            let dur = exec_duration(st);
+            spans.push(format!(" • {dur}").dim());
+        }
+        lines.push(Line::from(spans));
     }
     for cont in cmd_lines {
         lines.push(Line::from(cont.to_string()));
@@ -866,7 +900,7 @@ mod tests {
         let parsed = vec![ParsedCommand::Unknown {
             cmd: "printf 'foo\nbar'".to_string(),
         }];
-        let lines = exec_command_lines(&[], &parsed, None);
+        let lines = exec_command_lines(&[], &parsed, None, None);
         assert!(lines.len() >= 3);
         assert_eq!(lines[1].spans[0].content, "  └ ");
         assert_eq!(lines[2].spans[0].content, "    ");
