@@ -2,6 +2,7 @@
 
 use assert_cmd::Command as AssertCommand;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use serde_json::Value;
 use std::time::Duration;
 use std::time::Instant;
 use tempfile::TempDir;
@@ -212,7 +213,6 @@ async fn responses_api_stream_cli() {
     assert!(stdout.contains("fixture hello"));
 }
 
-/// End-to-end: create a session (writes rollout), verify the file, then resume and confirm append.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn integration_creates_and_checks_session_file() {
     // Honor sandbox network restrictions for CI parity with the other tests.
@@ -260,66 +260,45 @@ async fn integration_creates_and_checks_session_file() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    // Wait for sessions dir to appear.
+    // 5. Sessions are written asynchronously; wait briefly for the directory to appear.
     let sessions_dir = home.path().join("sessions");
-    let dir_deadline = Instant::now() + Duration::from_secs(5);
-    while !sessions_dir.exists() && Instant::now() < dir_deadline {
+    let start = Instant::now();
+    while !sessions_dir.exists() && start.elapsed() < Duration::from_secs(3) {
         std::thread::sleep(Duration::from_millis(50));
     }
-    assert!(sessions_dir.exists(), "sessions directory never appeared");
 
-    // Find the session file that contains `marker`.
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let mut matching_path: Option<std::path::PathBuf> = None;
-    while Instant::now() < deadline && matching_path.is_none() {
-        for entry in WalkDir::new(&sessions_dir) {
-            let entry = match entry {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-            if !entry.file_type().is_file() {
-                continue;
-            }
-            if !entry.file_name().to_string_lossy().ends_with(".jsonl") {
-                continue;
-            }
+    // 6. Scan all session files and find the one that contains our marker.
+    let mut matching_files = vec![];
+    for entry in WalkDir::new(&sessions_dir) {
+        let entry = entry.unwrap();
+        if entry.file_type().is_file() && entry.file_name().to_string_lossy().ends_with(".jsonl") {
             let path = entry.path();
-            let Ok(content) = std::fs::read_to_string(path) else {
-                continue;
-            };
+            let content = std::fs::read_to_string(path).unwrap();
             let mut lines = content.lines();
-            if lines.next().is_none() {
-                continue;
-            }
+            // Skip SessionMeta (first line)
+            let _ = lines.next();
             for line in lines {
-                if line.trim().is_empty() {
-                    continue;
-                }
-                let item: serde_json::Value = match serde_json::from_str(line) {
-                    Ok(v) => v,
-                    Err(_) => continue,
-                };
-                if item.get("type").and_then(|t| t.as_str()) == Some("message") {
-                    if let Some(c) = item.get("content") {
-                        if c.to_string().contains(&marker) {
-                            matching_path = Some(path.to_path_buf());
+                let item: Value = serde_json::from_str(line).unwrap();
+                if let Some("message") = item.get("type").and_then(|t| t.as_str()) {
+                    if let Some(content) = item.get("content") {
+                        if content.to_string().contains(&marker) {
+                            matching_files.push(path.to_owned());
                             break;
                         }
                     }
                 }
             }
         }
-        if matching_path.is_none() {
-            std::thread::sleep(Duration::from_millis(50));
-        }
     }
+    assert_eq!(
+        matching_files.len(),
+        1,
+        "Expected exactly one session file containing the marker, found {}",
+        matching_files.len()
+    );
+    let path = &matching_files[0];
 
-    let path = match matching_path {
-        Some(p) => p,
-        None => panic!("No session file containing the marker was found"),
-    };
-
-    // Basic sanity checks on location and metadata.
+    // 7. Verify directory structure: sessions/YYYY/MM/DD/filename.jsonl
     let rel = match path.strip_prefix(&sessions_dir) {
         Ok(r) => r,
         Err(_) => panic!("session file should live under sessions/"),
@@ -348,6 +327,7 @@ async fn integration_creates_and_checks_session_file() {
         day.len() == 2 && day.chars().all(|c| c.is_ascii_digit()),
         "Day dir not zero-padded 2-digit numeric: {day}"
     );
+    // Range checks (best-effort; won't fail on leading zeros)
     if let Ok(m) = month.parse::<u8>() {
         assert!((1..=12).contains(&m), "Month out of range: {m}");
     }
@@ -355,32 +335,23 @@ async fn integration_creates_and_checks_session_file() {
         assert!((1..=31).contains(&d), "Day out of range: {d}");
     }
 
-    let content =
-        std::fs::read_to_string(&path).unwrap_or_else(|_| panic!("Failed to read session file"));
+    // 8. Parse SessionMeta line and basic sanity checks.
+    let content = std::fs::read_to_string(path).unwrap();
     let mut lines = content.lines();
-    let meta_line = lines
-        .next()
-        .ok_or("missing session meta line")
-        .unwrap_or_else(|_| panic!("missing session meta line"));
-    let meta: serde_json::Value = serde_json::from_str(meta_line)
-        .unwrap_or_else(|_| panic!("Failed to parse session meta line as JSON"));
+    let meta: Value = serde_json::from_str(lines.next().unwrap()).unwrap();
     assert!(meta.get("id").is_some(), "SessionMeta missing id");
     assert!(
         meta.get("timestamp").is_some(),
         "SessionMeta missing timestamp"
     );
 
+    // 9. Confirm at least one message contains the marker.
     let mut found_message = false;
     for line in lines {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let Ok(item) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
-        if item.get("type").and_then(|t| t.as_str()) == Some("message") {
-            if let Some(c) = item.get("content") {
-                if c.to_string().contains(&marker) {
+        let item: Value = serde_json::from_str(line).unwrap();
+        if item.get("type").map(|t| t == "message").unwrap_or(false) {
+            if let Some(content) = item.get("content") {
+                if content.to_string().contains(&marker) {
                     found_message = true;
                     break;
                 }
@@ -391,64 +362,7 @@ async fn integration_creates_and_checks_session_file() {
         found_message,
         "No message found in session file containing the marker"
     );
-
-    // Second run: resume and append.
-    let orig_len = content.lines().count();
-    let marker2 = format!("integration-resume-{}", Uuid::new_v4());
-    let prompt2 = format!("echo {marker2}");
-    // Cross‑platform safe resume override.  On Windows, backslashes in a TOML string must be escaped
-    // or the parse will fail and the raw literal (including quotes) may be preserved all the way down
-    // to Config, which in turn breaks resume because the path is invalid. Normalize to forward slashes
-    // to sidestep the issue.
-    let resume_path_str = path.to_string_lossy().replace('\\', "/");
-    let resume_override = format!("experimental_resume=\"{resume_path_str}\"");
-    let mut cmd2 = AssertCommand::new("cargo");
-    cmd2.arg("run")
-        .arg("-p")
-        .arg("codex-cli")
-        .arg("--quiet")
-        .arg("--")
-        .arg("exec")
-        .arg("--skip-git-repo-check")
-        .arg("-c")
-        .arg(&resume_override)
-        .arg("-C")
-        .arg(env!("CARGO_MANIFEST_DIR"))
-        .arg(&prompt2);
-    cmd2.env("CODEX_HOME", home.path())
-        .env("OPENAI_API_KEY", "dummy")
-        .env("CODEX_RS_SSE_FIXTURE", &fixture)
-        .env("OPENAI_BASE_URL", "http://unused.local");
-
-    let output2 = cmd2.output().unwrap();
-    assert!(output2.status.success(), "resume codex-cli run failed");
-
-    // The rollout writer runs on a background async task; give it a moment to flush.
-    let mut new_len = orig_len;
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut content2 = String::new();
-    while Instant::now() < deadline {
-        if let Ok(c) = std::fs::read_to_string(&path) {
-            let count = c.lines().count();
-            if count > orig_len {
-                content2 = c;
-                new_len = count;
-                break;
-            }
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    if content2.is_empty() {
-        // last attempt
-        content2 = std::fs::read_to_string(&path).unwrap();
-        new_len = content2.lines().count();
-    }
-    assert!(new_len > orig_len, "rollout file did not grow after resume");
-    assert!(content2.contains(&marker), "rollout lost original marker");
-    assert!(
-        content2.contains(&marker2),
-        "rollout missing resumed marker"
-    );
+    // No resume on second run; resume feature removed.
 }
 
 /// Integration test to verify git info is collected and recorded in session files.

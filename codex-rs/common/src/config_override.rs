@@ -64,11 +64,7 @@ impl CliConfigOverrides {
                 // `-c model=o3` without the quotes.
                 let value: Value = match parse_toml_value(value_str) {
                     Ok(v) => v,
-                    Err(_) => {
-                        // Strip leading/trailing quotes if present
-                        let trimmed = value_str.trim().trim_matches(|c| c == '"' || c == '\'');
-                        Value::String(trimmed.to_string())
-                    }
+                    Err(_) => Value::String(value_str.to_string()),
                 };
 
                 Ok((key.to_string(), value))

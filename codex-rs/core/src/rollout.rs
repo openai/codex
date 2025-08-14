@@ -1,13 +1,11 @@
-//! Persist Codex session rollouts (.jsonl) so sessions can be replayed or inspected later.
+//! Functionality to persist a Codex conversation rollout to disk.
 
 use std::fs::File;
 use std::fs::{self};
 use std::io::Error as IoError;
-use std::path::Path;
 
 use serde::Deserialize;
 use serde::Serialize;
-use serde_json::Value;
 use time::OffsetDateTime;
 use time::format_description::FormatItem;
 use time::macros::format_description;
@@ -15,7 +13,6 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc::Sender;
 use tokio::sync::mpsc::{self};
 use tokio::sync::oneshot;
-use tracing::info;
 use tracing::warn;
 use uuid::Uuid;
 
@@ -24,6 +21,7 @@ use crate::git_info::GitInfo;
 use crate::git_info::collect_git_info;
 use crate::models::ResponseItem;
 
+/// Folder inside `~/.codex` that holds saved rollouts.
 const SESSIONS_SUBDIR: &str = "sessions";
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -41,28 +39,6 @@ struct SessionMetaWithGit {
     git: Option<GitInfo>,
 }
 
-#[derive(Serialize, Deserialize, Default, Clone)]
-pub struct SessionStateSnapshot {}
-
-#[derive(Serialize, Deserialize, Default, Clone)]
-pub struct SavedSession {
-    pub session: SessionMeta,
-    #[serde(default)]
-    pub items: Vec<ResponseItem>,
-    #[serde(default)]
-    pub state: SessionStateSnapshot,
-    pub session_id: Uuid,
-}
-
-/// Records all [`ResponseItem`]s for a session and flushes them to disk after
-/// every update.
-///
-/// Rollouts are recorded as JSONL and can be inspected with tools such as:
-///
-/// ```ignore
-/// $ jq -C . ~/.codex/sessions/rollout-2025-05-07T17-24-21-5973b6c0-94b8-487b-a530-2aeb6098ae0e.jsonl
-/// $ fx ~/.codex/sessions/rollout-2025-05-07T17-24-21-5973b6c0-94b8-487b-a530-2aeb6098ae0e.jsonl
-/// ```
 #[derive(Clone)]
 pub(crate) struct RolloutRecorder {
     tx: Sender<RolloutCmd>,
@@ -70,7 +46,6 @@ pub(crate) struct RolloutRecorder {
 
 enum RolloutCmd {
     AddItems(Vec<ResponseItem>),
-    UpdateState(SessionStateSnapshot),
     Shutdown { ack: oneshot::Sender<()> },
 }
 
@@ -89,6 +64,7 @@ impl RolloutRecorder {
             timestamp,
         } = create_log_file(config, uuid)?;
 
+        // Build the static session metadata JSON first.
         let timestamp_format: &[FormatItem] = format_description!(
             "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"
         );
@@ -121,8 +97,10 @@ impl RolloutRecorder {
         Ok(Self { tx })
     }
 
+    /// Append `items` to the rollout file.
     pub(crate) async fn record_items(&self, items: &[ResponseItem]) -> std::io::Result<()> {
-        let mut filtered = Vec::new();
+        // Filter out items we should not serialize.
+        let mut filtered: Vec<ResponseItem> = Vec::new();
         for item in items {
             match item {
                 // Note that function calls may look a bit strange if they are
@@ -131,12 +109,8 @@ impl RolloutRecorder {
                 ResponseItem::Message { .. }
                 | ResponseItem::LocalShellCall { .. }
                 | ResponseItem::FunctionCall { .. }
-                | ResponseItem::FunctionCallOutput { .. }
-                | ResponseItem::Reasoning { .. } => filtered.push(item.clone()),
-                ResponseItem::Other => {
-                    // These should never be serialized.
-                    continue;
-                }
+                | ResponseItem::FunctionCallOutput { .. } => filtered.push(item.clone()),
+                ResponseItem::Reasoning { .. } | ResponseItem::Other => {}
             }
         }
         if filtered.is_empty() {
@@ -146,84 +120,6 @@ impl RolloutRecorder {
             .send(RolloutCmd::AddItems(filtered))
             .await
             .map_err(|e| IoError::other(format!("failed to queue rollout items: {e}")))
-    }
-
-    pub(crate) async fn record_state(&self, state: SessionStateSnapshot) -> std::io::Result<()> {
-        self.tx
-            .send(RolloutCmd::UpdateState(state))
-            .await
-            .map_err(|e| IoError::other(format!("failed to queue rollout state: {e}")))
-    }
-
-    pub async fn resume(
-        path: &Path,
-        cwd: std::path::PathBuf,
-    ) -> std::io::Result<(Self, SavedSession)> {
-        info!("Resuming rollout from {path:?}");
-        let text = tokio::fs::read_to_string(path).await?;
-        let mut lines = text.lines();
-        let meta_line = lines
-            .next()
-            .ok_or_else(|| IoError::other("empty session file"))?;
-        let session: SessionMeta = serde_json::from_str(meta_line)
-            .map_err(|e| IoError::other(format!("failed to parse session meta: {e}")))?;
-        let mut items = Vec::new();
-        let mut state = SessionStateSnapshot::default();
-
-        for line in lines {
-            if line.trim().is_empty() {
-                continue;
-            }
-            let v: Value = match serde_json::from_str(line) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            if v.get("record_type")
-                .and_then(|rt| rt.as_str())
-                .map(|s| s == "state")
-                .unwrap_or(false)
-            {
-                if let Ok(s) = serde_json::from_value::<SessionStateSnapshot>(v.clone()) {
-                    state = s
-                }
-                continue;
-            }
-            match serde_json::from_value::<ResponseItem>(v.clone()) {
-                Ok(item) => match item {
-                    ResponseItem::Message { .. }
-                    | ResponseItem::LocalShellCall { .. }
-                    | ResponseItem::FunctionCall { .. }
-                    | ResponseItem::FunctionCallOutput { .. }
-                    | ResponseItem::Reasoning { .. } => items.push(item),
-                    ResponseItem::Other => {}
-                },
-                Err(e) => {
-                    warn!("failed to parse item: {v:?}, error: {e}");
-                }
-            }
-        }
-
-        let saved = SavedSession {
-            session: session.clone(),
-            items: items.clone(),
-            state: state.clone(),
-            session_id: session.id,
-        };
-
-        let file = std::fs::OpenOptions::new()
-            .append(true)
-            .read(true)
-            .open(path)?;
-
-        let (tx, rx) = mpsc::channel::<RolloutCmd>(256);
-        tokio::task::spawn(rollout_writer(
-            tokio::fs::File::from_std(file),
-            rx,
-            None,
-            cwd,
-        ));
-        info!("Resumed rollout successfully from {path:?}");
-        Ok((Self { tx }, saved))
     }
 
     pub async fn shutdown(&self) -> std::io::Result<()> {
@@ -316,27 +212,12 @@ async fn rollout_writer(
                         ResponseItem::Message { .. }
                         | ResponseItem::LocalShellCall { .. }
                         | ResponseItem::FunctionCall { .. }
-                        | ResponseItem::FunctionCallOutput { .. }
-                        | ResponseItem::Reasoning { .. } => {
+                        | ResponseItem::FunctionCallOutput { .. } => {
                             writer.write_line(&item).await?;
                         }
-                        ResponseItem::Other => {}
+                        ResponseItem::Reasoning { .. } | ResponseItem::Other => {}
                     }
                 }
-            }
-            RolloutCmd::UpdateState(state) => {
-                #[derive(Serialize)]
-                struct StateLine<'a> {
-                    record_type: &'static str,
-                    #[serde(flatten)]
-                    state: &'a SessionStateSnapshot,
-                }
-                writer
-                    .write_line(&StateLine {
-                        record_type: "state",
-                        state: &state,
-                    })
-                    .await?;
             }
             RolloutCmd::Shutdown { ack } => {
                 let _ = ack.send(());

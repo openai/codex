@@ -79,10 +79,6 @@ pub enum Op {
         /// `ConfigureSession` operation so that the business-logic layer can
         /// operate deterministically.
         cwd: std::path::PathBuf,
-
-        /// Path to a rollout file to resume from.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        resume_path: Option<std::path::PathBuf>,
     },
 
     /// Abort current task.

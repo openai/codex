@@ -125,9 +125,6 @@ pub struct CodexSpawnOk {
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
     pub async fn spawn(config: Config, auth: Option<CodexAuth>) -> CodexResult<CodexSpawnOk> {
-        // experimental resume path (undocumented)
-        let resume_path = config.experimental_resume.clone();
-        info!("resume_path: {resume_path:?}");
         let (tx_sub, rx_sub) = async_channel::bounded(64);
         let (tx_event, rx_event) = async_channel::unbounded();
 
@@ -145,7 +142,6 @@ impl Codex {
             disable_response_storage: config.disable_response_storage,
             notify: config.notify.clone(),
             cwd: config.cwd.clone(),
-            resume_path: resume_path.clone(),
         };
 
         let config = Arc::new(config);
@@ -354,27 +350,25 @@ impl Session {
         state.approved_commands.insert(cmd);
     }
 
-    /// Records items to both the rollout and the chat completions/ZDR
-    /// transcript, if enabled.
+    /// Records items to both the rollout and the in-memory conversation
+    /// history, if enabled.
     async fn record_conversation_items(&self, items: &[ResponseItem]) {
         debug!("Recording items for conversation: {items:?}");
-        self.record_state_snapshot(items).await;
-
+        self.record_rollout_items(items).await;
         self.state.lock().unwrap().history.record_items(items);
     }
 
-    async fn record_state_snapshot(&self, items: &[ResponseItem]) {
-        let snapshot = { crate::rollout::SessionStateSnapshot {} };
-
+    /// Append the given items to the session's rollout transcript (if enabled)
+    /// and persist them to disk.
+    async fn record_rollout_items(&self, items: &[ResponseItem]) {
+        // Clone the recorder outside of the mutex so we don't hold the lock
+        // across an await point (MutexGuard is not Send).
         let recorder = {
             let guard = self.rollout.lock().unwrap();
             guard.as_ref().cloned()
         };
 
         if let Some(rec) = recorder {
-            if let Err(e) = rec.record_state(snapshot).await {
-                error!("failed to record rollout state: {e:#}");
-            }
             if let Err(e) = rec.record_items(items).await {
                 error!("failed to record rollout items: {e:#}");
             }
@@ -709,12 +703,13 @@ impl AgentTask {
 }
 
 async fn submission_loop(
-    mut session_id: Uuid,
+    session_id: Uuid,
     config: Arc<Config>,
     auth: Option<CodexAuth>,
     rx_sub: Receiver<Submission>,
     tx_event: Sender<Event>,
 ) {
+    // session_id is provided by the caller (spawn)
     let mut sess: Option<Arc<Session>> = None;
     // shorthand - send an event when there is no active session
     let send_no_session_event = |sub_id: String| async {
@@ -754,11 +749,8 @@ async fn submission_loop(
                 disable_response_storage,
                 notify,
                 cwd,
-                resume_path,
             } => {
-                debug!(
-                    "Configuring session: model={model}; provider={provider:?}; resume={resume_path:?}"
-                );
+                debug!("Configuring session: model={model}; provider={provider:?}");
                 if !cwd.is_absolute() {
                     let message = format!("cwd is not absolute: {cwd:?}");
                     error!(message);
@@ -771,39 +763,19 @@ async fn submission_loop(
                     }
                     return;
                 }
-                // Optionally resume an existing rollout.
-                let mut restored_items: Option<Vec<ResponseItem>> = None;
-                let rollout_recorder: Option<RolloutRecorder> =
-                    if let Some(path) = resume_path.as_ref() {
-                        match RolloutRecorder::resume(path, cwd.clone()).await {
-                            Ok((rec, saved)) => {
-                                session_id = saved.session_id;
-                                if !saved.items.is_empty() {
-                                    restored_items = Some(saved.items);
-                                }
-                                Some(rec)
-                            }
-                            Err(e) => {
-                                warn!("failed to resume rollout from {path:?}: {e}");
-                                None
-                            }
-                        }
-                    } else {
+                // Attempt to create a RolloutRecorder before moving the
+                // `user_instructions` value into the Session struct.
+                let rollout_recorder = match RolloutRecorder::new(
+                    &config,
+                    session_id,
+                    user_instructions.clone(),
+                )
+                .await
+                {
+                    Ok(r) => Some(r),
+                    Err(e) => {
+                        warn!("failed to initialise rollout recorder: {e}");
                         None
-                    };
-
-                let rollout_recorder = match rollout_recorder {
-                    Some(rec) => Some(rec),
-                    None => {
-                        match RolloutRecorder::new(&config, session_id, user_instructions.clone())
-                            .await
-                        {
-                            Ok(r) => Some(r),
-                            Err(e) => {
-                                warn!("failed to initialise rollout recorder: {e}");
-                                None
-                            }
-                        }
                     }
                 };
 
@@ -885,14 +857,6 @@ async fn submission_loop(
                     show_raw_agent_reasoning: config.show_raw_agent_reasoning,
                 }));
 
-                // Patch restored state into the newly created session.
-                if let Some(sess_arc) = &sess {
-                    if restored_items.is_some() {
-                        let mut st = sess_arc.state.lock().unwrap();
-                        st.history.record_items(restored_items.unwrap().iter());
-                    }
-                }
-
                 // Gather history metadata for SessionConfiguredEvent.
                 let (history_log_id, history_entry_count) =
                     crate::message_history::history_metadata(&config).await;
@@ -961,8 +925,6 @@ async fn submission_loop(
                 }
             }
             Op::AddToHistory { text } => {
-                // TODO: What should we do if we got AddToHistory before ConfigureSession?
-                // currently, if ConfigureSession has resume path, this history will be ignored
                 let id = session_id;
                 let config = config.clone();
                 tokio::spawn(async move {
