@@ -31,7 +31,3 @@ url = "2"
 [dev-dependencies]
 pretty_assertions = "1.4.1"
 tempfile = "3"
-
-[[bin]]
-name = "codex-login-server"
-path = "src/bin/codex-login-server.rs"
