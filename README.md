@@ -597,7 +597,7 @@ If you want to add a new feature or change the behavior of an existing one, plea
 ### Review process
 
 1. One maintainer will be assigned as a primary reviewer.
-2. If your PR adds a new feature that was not previously discussed and approved, we may choose to close your PR (cee [Contributing](#contributing)).
+2. If your PR adds a new feature that was not previously discussed and approved, we may choose to close your PR (see [Contributing](#contributing)).
 3. We may ask for changes - please do not take this personally. We value the work, but we also value consistency and long-term maintainability.
 5. When there is consensus that the PR meets the bar, a maintainer will squash-and-merge.
 
