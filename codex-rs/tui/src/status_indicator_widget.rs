@@ -327,7 +327,7 @@ mod tests {
     }
 
     #[test]
-    fn spinner_is_rendered() {
+    fn header_starts_at_expected_position() {
         let (tx_raw, _rx) = channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut w = StatusIndicatorWidget::new(tx);
@@ -339,9 +339,6 @@ mod tests {
         w.render_ref(area, &mut buf);
 
         let ch = buf[(2, 0)].symbol().chars().next().unwrap_or(' ');
-        assert!(
-            matches!(ch, '·' | '•' | '●'),
-            "expected spinner char at col 2: {ch:?}"
-        );
+        assert_eq!(ch, 'W', "expected Working header at col 2: {ch:?}");
     }
 }
