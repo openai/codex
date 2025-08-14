@@ -182,6 +182,7 @@ impl ChatWidget<'_> {
         }
         // Mark task stopped and request redraw now that all content is in history.
         self.bottom_pane.set_task_running(false);
+        self.running_commands.clear();
         self.mark_needs_redraw();
     }
 
@@ -198,6 +199,7 @@ impl ChatWidget<'_> {
     fn on_error(&mut self, message: String) {
         self.add_to_history(&history_cell::new_error_event(message));
         self.bottom_pane.set_task_running(false);
+        self.running_commands.clear();
         self.stream.clear_all();
         self.mark_needs_redraw();
     }
@@ -473,6 +475,7 @@ impl ChatWidget<'_> {
     fn interrupt_running_task(&mut self) {
         if self.bottom_pane.is_task_running() {
             self.active_exec_cell = None;
+            self.running_commands.clear();
             self.bottom_pane.clear_ctrl_c_quit_hint();
             self.submit_op(Op::Interrupt);
             self.bottom_pane.set_task_running(false);
