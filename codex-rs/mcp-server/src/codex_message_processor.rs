@@ -34,6 +34,8 @@ use crate::wire_format::EXEC_COMMAND_APPROVAL_METHOD;
 use crate::wire_format::ExecCommandApprovalParams;
 use crate::wire_format::ExecCommandApprovalResponse;
 use crate::wire_format::InputItem as WireInputItem;
+use crate::wire_format::InterruptConversationParams;
+use crate::wire_format::InterruptConversationResponse;
 use crate::wire_format::NewConversationParams;
 use crate::wire_format::NewConversationResponse;
 use crate::wire_format::RemoveConversationListenerParams;
@@ -75,6 +77,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::SendUserMessage { request_id, params } => {
                 self.send_user_message(request_id, params).await;
+            }
+            ClientRequest::InterruptConversation { request_id, params } => {
+                self.interrupt_conversation(request_id, params).await;
             }
             ClientRequest::AddConversationListener { request_id, params } => {
                 self.add_conversation_listener(request_id, params).await;
@@ -161,6 +166,35 @@ impl CodexMessageProcessor {
         // Acknowledge with an empty result.
         self.outgoing
             .send_response(request_id, SendUserMessageResponse {})
+            .await;
+    }
+
+    async fn interrupt_conversation(
+        &mut self,
+        request_id: RequestId,
+        params: InterruptConversationParams,
+    ) {
+        let InterruptConversationParams { conversation_id } = params;
+        let Ok(conversation) = self
+            .conversation_manager
+            .get_conversation(conversation_id.0)
+            .await
+        else {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!("conversation not found: {conversation_id}"),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        };
+
+        let _ = conversation.submit(Op::Interrupt).await;
+
+        // Apparently CodexConversation does not send an ack for Op::Interrupt,
+        // so we can reply to the request right away.
+        self.outgoing
+            .send_response(request_id, InterruptConversationResponse {})
             .await;
     }
 
