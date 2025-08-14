@@ -15,6 +15,7 @@ use mcp_test_support::McpProcess;
 use mcp_test_support::create_final_assistant_message_sse_response;
 use mcp_test_support::create_mock_chat_completions_server;
 use mcp_test_support::create_shell_sse_response;
+use mcp_types::JSONRPCNotification;
 use mcp_types::JSONRPCResponse;
 use mcp_types::RequestId;
 use pretty_assertions::assert_eq;
@@ -123,10 +124,26 @@ async fn test_codex_jsonrpc_conversation_flow() {
     let SendUserMessageResponse {} = to_response::<SendUserMessageResponse>(send_user_resp)
         .expect("deserialize sendUserMessage response");
 
-    // Give the server time to process the user's request.
-    tokio::time::sleep(std::time::Duration::from_millis(5_000)).await;
-
-    // Could verify that some notifications were received?
+    // Verify the task_finished notification is received.
+    // Note this also ensures that the final request to the server was made.
+    let task_finished_notification: JSONRPCNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+    )
+    .await
+    .expect("task_finished_notification timeout")
+    .expect("task_finished_notification resp");
+    let serde_json::Value::Object(map) = task_finished_notification
+        .params
+        .expect("notification should have params")
+    else {
+        panic!("task_finished_notification should have params");
+    };
+    assert_eq!(
+        map.get("conversationId")
+            .expect("should have conversationId"),
+        &serde_json::Value::String(conversation_id.to_string())
+    );
 
     // 4) removeConversationListener
     let remove_listener_id = mcp

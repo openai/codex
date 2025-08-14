@@ -15,7 +15,7 @@ use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::json_to_toml::json_to_toml;
 use crate::outgoing_message::OutgoingMessageSender;
-use crate::outgoing_message::OutgoingNotificationMeta;
+use crate::outgoing_message::OutgoingNotification;
 use crate::wire_format::AddConversationListenerParams;
 use crate::wire_format::AddConversationSubscriptionResponse;
 use crate::wire_format::CodexRequest;
@@ -176,7 +176,6 @@ impl CodexMessageProcessor {
         self.conversation_listeners
             .insert(subscription_id, cancel_tx);
         let outgoing_for_task = self.outgoing.clone();
-        let add_listener_request_id = request_id.clone();
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -193,10 +192,24 @@ impl CodexMessageProcessor {
                             }
                         };
 
-                        outgoing_for_task.send_event_as_notification(
-                            &event,
-                            Some(OutgoingNotificationMeta::new(Some(add_listener_request_id.clone()))),
-                        )
+                        let method = format!("codex/event/{}", event.msg);
+                        let mut params = match serde_json::to_value(event) {
+                            Ok(serde_json::Value::Object(map)) => map,
+                            Ok(_) => {
+                                tracing::error!("event did not serialize to an object");
+                                continue;
+                            }
+                            Err(err) => {
+                                tracing::error!("failed to serialize event: {err}");
+                                continue;
+                            }
+                        };
+                        params.insert("conversationId".to_string(), conversation_id.to_string().into());
+
+                        outgoing_for_task.send_notification(OutgoingNotification {
+                            method,
+                            params: Some(params.into()),
+                        })
                         .await;
                     }
                 }

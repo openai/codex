@@ -114,14 +114,19 @@ impl OutgoingMessageSender {
             event_json
         };
 
-        let outgoing_message = OutgoingMessage::Notification(OutgoingNotification {
+        self.send_notification(OutgoingNotification {
             method: "codex/event".to_string(),
             params: Some(params.clone()),
-        });
-        let _ = self.sender.send(outgoing_message).await;
+        })
+        .await;
 
         self.send_event_as_notification_new_schema(event, Some(params.clone()))
             .await;
+    }
+
+    pub(crate) async fn send_notification(&self, notification: OutgoingNotification) {
+        let outgoing_message = OutgoingMessage::Notification(notification);
+        let _ = self.sender.send(outgoing_message).await;
     }
 
     // should be backwards compatible.
