@@ -1,6 +1,5 @@
 use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use crate::environment_context::EnvironmentContext;
 use crate::error::Result;
 use crate::model_family::ModelFamily;
 use crate::models::ContentItem;
@@ -24,12 +23,7 @@ const BASE_INSTRUCTIONS: &str = include_str!("../prompt.md");
 const USER_INSTRUCTIONS_START: &str = "<user_instructions>\n\n";
 const USER_INSTRUCTIONS_END: &str = "\n\n</user_instructions>";
 
-/// wraps environment context message in a tag for the model to parse more easily.
-pub(crate) const ENVIRONMENT_CONTEXT_START: &str = "<environment_context>\n\n";
-pub(crate) const ENVIRONMENT_CONTEXT_END: &str = "\n\n</environment_context>";
-
-/// API request payload for a single model turn. Also contains formatting logic for
-/// various messages within the conversation, to keep the logic in one place
+/// API request payload for a single model turn
 #[derive(Default, Debug, Clone)]
 pub struct Prompt {
     /// Conversation context input items.
@@ -61,17 +55,6 @@ impl Prompt {
 
     pub(crate) fn get_formatted_input(&self) -> Vec<ResponseItem> {
         self.input.clone()
-    }
-
-    /// Creates a formatted environment context message from an EnvironmentContext.
-    pub(crate) fn format_environment_context_message(ec: &EnvironmentContext) -> ResponseItem {
-        ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: format!("{ENVIRONMENT_CONTEXT_START}{ec}{ENVIRONMENT_CONTEXT_END}"),
-            }],
-        }
     }
 
     /// Creates a formatted user instructions message from a string

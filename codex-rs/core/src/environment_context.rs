@@ -2,7 +2,6 @@ use serde::Deserialize;
 use serde::Serialize;
 use strum_macros::Display as DeriveDisplay;
 
-use crate::codex::Session;
 use crate::config_types::SandboxMode;
 use crate::models::ContentItem;
 use crate::models::ResponseItem;

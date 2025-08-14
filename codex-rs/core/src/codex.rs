@@ -388,9 +388,11 @@ impl Session {
         }
         state
             .history
-            .record_items(&[Prompt::format_environment_context_message(
-                &EnvironmentContext::new(cwd.clone(), approval_policy, sandbox_policy.clone()),
-            )]);
+            .record_items(&[ResponseItem::from(EnvironmentContext::new(
+                cwd.clone(),
+                approval_policy,
+                sandbox_policy.clone(),
+            ))]);
 
         let writable_roots = get_writable_roots(&cwd);
 
