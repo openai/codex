@@ -1160,10 +1160,79 @@ pub fn parse_command_impl(command: &[String]) -> Vec<ParsedCommand> {
     // so summaries reflect the order they will run.
 
     // Map each pipeline segment to its parsed summary.
-    parts
+    let mut commands: Vec<ParsedCommand> = parts
         .iter()
         .map(|tokens| summarize_main_tokens(tokens))
-        .collect()
+        .collect();
+
+    while let Some(next) = simplify_once(&commands) {
+        commands = next;
+    }
+
+    commands
+}
+
+fn simplify_once(commands: &[ParsedCommand]) -> Option<Vec<ParsedCommand>> {
+    if commands.len() <= 1 {
+        return None;
+    }
+
+    // echo ... && ...rest => ...rest
+    if let ParsedCommand::Unknown { cmd } = &commands[0] {
+        if shlex_split(cmd).is_some_and(|t| t.first().map(|s| s.as_str()) == Some("echo")) {
+            return Some(commands[1..].to_vec());
+        }
+    }
+
+    // cd foo && [any Test command] => [any Test command]
+    if let Some(idx) = commands.iter().position(|pc| match pc {
+        ParsedCommand::Unknown { cmd } => {
+            shlex_split(cmd).is_some_and(|t| t.first().map(|s| s.as_str()) == Some("cd"))
+        }
+        _ => false,
+    }) {
+        if commands
+            .iter()
+            .skip(idx + 1)
+            .any(|pc| matches!(pc, ParsedCommand::Test { .. }))
+        {
+            let mut out = Vec::with_capacity(commands.len() - 1);
+            out.extend_from_slice(&commands[..idx]);
+            out.extend_from_slice(&commands[idx + 1..]);
+            return Some(out);
+        }
+    }
+
+    // cmd || true => cmd
+    if let Some(idx) = commands.iter().position(|pc| match pc {
+        ParsedCommand::Noop { cmd } => cmd == "true",
+        _ => false,
+    }) {
+        let mut out = Vec::with_capacity(commands.len() - 1);
+        out.extend_from_slice(&commands[..idx]);
+        out.extend_from_slice(&commands[idx + 1..]);
+        return Some(out);
+    }
+
+    // nl -[any_flags] && ...rest => ...rest
+    if let Some(idx) = commands.iter().position(|pc| match pc {
+        ParsedCommand::Unknown { cmd } => {
+            if let Some(tokens) = shlex_split(cmd) {
+                tokens.first().is_some_and(|s| s.as_str() == "nl")
+                    && tokens.iter().skip(1).all(|t| t.starts_with('-'))
+            } else {
+                false
+            }
+        }
+        _ => false,
+    }) {
+        let mut out = Vec::with_capacity(commands.len() - 1);
+        out.extend_from_slice(&commands[..idx]);
+        out.extend_from_slice(&commands[idx + 1..]);
+        return Some(out);
+    }
+
+    None
 }
 
 /// Validates that this is a `sed -n 123,123p` command.
