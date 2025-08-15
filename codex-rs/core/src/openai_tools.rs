@@ -43,6 +43,7 @@ pub enum ConfigShellToolType {
 pub struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
     pub plan_tool: bool,
+    pub apply_patch_tool: bool,
 }
 
 impl ToolsConfig {
@@ -51,6 +52,7 @@ impl ToolsConfig {
         approval_policy: AskForApproval,
         sandbox_policy: SandboxPolicy,
         include_plan_tool: bool,
+        include_apply_patch_tool: bool,
     ) -> Self {
         let mut shell_type = if model_family.uses_local_shell_tool {
             ConfigShellToolType::LocalShell
@@ -66,6 +68,7 @@ impl ToolsConfig {
         Self {
             shell_type,
             plan_tool: include_plan_tool,
+            apply_patch_tool: include_apply_patch_tool || model_family.uses_apply_patch_tool,
         }
     }
 }
@@ -230,6 +233,87 @@ The shell tool is used to execute shell commands.
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["command".to_string()]),
+            additional_properties: Some(false),
+        },
+    })
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct ApplyPatchToolArgs {
+    pub(crate) input: String,
+}
+
+fn create_apply_patch_tool() -> OpenAiTool {
+    // Minimal schema: one required string argument containing the patch body
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "input".to_string(),
+        JsonSchema::String {
+            description: Some(r#"The entire contents of the apply_patch command"#.to_string()),
+        },
+    );
+
+    OpenAiTool::Function(ResponsesApiTool {
+        name: "apply_patch".to_string(),
+        description: r#"Use this tool to edit files.
+Your patch language is a stripped‑down, file‑oriented diff format designed to be easy to parse and safe to apply. You can think of it as a high‑level envelope:
+
+**_ Begin Patch
+[ one or more file sections ]
+_** End Patch
+
+Within that envelope, you get a sequence of file operations.
+You MUST include a header to specify the action you are taking.
+Each operation starts with one of three headers:
+
+**_ Add File: <path> - create a new file. Every following line is a + line (the initial contents).
+_** Delete File: <path> - remove an existing file. Nothing follows.
+\*\*\* Update File: <path> - patch an existing file in place (optionally with a rename).
+
+May be immediately followed by \*\*\* Move to: <new path> if you want to rename the file.
+Then one or more “hunks”, each introduced by @@ (optionally followed by a hunk header).
+Within a hunk each line starts with:
+
+- for inserted text,
+
+* for removed text, or
+  space ( ) for context.
+  At the end of a truncated hunk you can emit \*\*\* End of File.
+
+Patch := Begin { FileOp } End
+Begin := "**_ Begin Patch" NEWLINE
+End := "_** End Patch" NEWLINE
+FileOp := AddFile | DeleteFile | UpdateFile
+AddFile := "**_ Add File: " path NEWLINE { "+" line NEWLINE }
+DeleteFile := "_** Delete File: " path NEWLINE
+UpdateFile := "**_ Update File: " path NEWLINE [ MoveTo ] { Hunk }
+MoveTo := "_** Move to: " newPath NEWLINE
+Hunk := "@@" [ header ] NEWLINE { HunkLine } [ "*** End of File" NEWLINE ]
+HunkLine := (" " | "-" | "+") text NEWLINE
+
+A full patch can combine several operations:
+
+**_ Begin Patch
+_** Add File: hello.txt
++Hello world
+**_ Update File: src/app.py
+_** Move to: src/main.py
+@@ def greet():
+-print("Hi")
++print("Hello, world!")
+**_ Delete File: obsolete.txt
+_** End Patch
+
+It is important to remember:
+
+- You must include a header with your intended action (Add/Delete/Update)
+- You must prefix new lines with `+` even when creating a new file
+"#
+        .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["input".to_string()]),
             additional_properties: Some(false),
         },
     })
@@ -455,6 +539,10 @@ pub(crate) fn get_openai_tools(
         tools.push(PLAN_TOOL.clone());
     }
 
+    if config.apply_patch_tool {
+        tools.push(create_apply_patch_tool());
+    }
+
     if let Some(mcp_tools) = mcp_tools {
         for (name, tool) in mcp_tools {
             match mcp_tool_to_openai_tool(name.clone(), tool.clone()) {
@@ -508,6 +596,7 @@ mod tests {
             AskForApproval::Never,
             SandboxPolicy::ReadOnly,
             true,
+            model_family.uses_apply_patch_tool,
         );
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
@@ -522,6 +611,7 @@ mod tests {
             AskForApproval::Never,
             SandboxPolicy::ReadOnly,
             true,
+            model_family.uses_apply_patch_tool,
         );
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
@@ -536,6 +626,7 @@ mod tests {
             AskForApproval::Never,
             SandboxPolicy::ReadOnly,
             false,
+            model_family.uses_apply_patch_tool,
         );
         let tools = get_openai_tools(
             &config,
@@ -629,6 +720,7 @@ mod tests {
             AskForApproval::Never,
             SandboxPolicy::ReadOnly,
             false,
+            model_family.uses_apply_patch_tool,
         );
 
         let tools = get_openai_tools(
@@ -684,6 +776,7 @@ mod tests {
             AskForApproval::Never,
             SandboxPolicy::ReadOnly,
             false,
+            model_family.uses_apply_patch_tool,
         );
 
         let tools = get_openai_tools(
@@ -734,6 +827,7 @@ mod tests {
             AskForApproval::Never,
             SandboxPolicy::ReadOnly,
             false,
+            model_family.uses_apply_patch_tool,
         );
 
         let tools = get_openai_tools(
@@ -787,6 +881,7 @@ mod tests {
             AskForApproval::Never,
             SandboxPolicy::ReadOnly,
             false,
+            model_family.uses_apply_patch_tool,
         );
 
         let tools = get_openai_tools(

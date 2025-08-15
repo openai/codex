@@ -52,6 +52,7 @@ pub(crate) async fn handle_create_conversation(
         codex_linux_sandbox_exe: None,
         base_instructions,
         include_plan_tool: None,
+        include_apply_patch_tool: None,
         disable_response_storage: None,
         show_raw_agent_reasoning: None,
     };

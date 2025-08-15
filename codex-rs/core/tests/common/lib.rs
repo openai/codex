@@ -47,6 +47,26 @@ pub fn load_sse_fixture(path: impl AsRef<std::path::Path>) -> String {
         .collect()
 }
 
+pub fn load_sse_fixture_with_id_from_str(raw: &str, id: &str) -> String {
+    let replaced = raw.replace("__ID__", id);
+    let events: Vec<serde_json::Value> =
+        serde_json::from_str(&replaced).expect("parse JSON fixture");
+    events
+        .into_iter()
+        .map(|e| {
+            let kind = e
+                .get("type")
+                .and_then(|v| v.as_str())
+                .expect("fixture event missing type");
+            if e.as_object().map(|o| o.len() == 1).unwrap_or(false) {
+                format!("event: {kind}\n\n")
+            } else {
+                format!("event: {kind}\ndata: {e}\n\n")
+            }
+        })
+        .collect()
+}
+
 /// Same as [`load_sse_fixture`], but replaces the placeholder `__ID__` in the
 /// fixture template with the supplied identifier before parsing. This lets a
 /// single JSON template be reused by multiple tests that each need a unique

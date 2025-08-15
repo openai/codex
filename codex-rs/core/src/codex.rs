@@ -67,6 +67,7 @@ use crate::models::ReasoningItemReasoningSummary;
 use crate::models::ResponseInputItem;
 use crate::models::ResponseItem;
 use crate::models::ShellToolCallParams;
+use crate::openai_tools::ApplyPatchToolArgs;
 use crate::openai_tools::ToolsConfig;
 use crate::openai_tools::get_openai_tools;
 use crate::parse_command::parse_command;
@@ -455,6 +456,7 @@ impl Session {
                 approval_policy,
                 sandbox_policy.clone(),
                 config.include_plan_tool,
+                config.include_apply_patch_tool,
             ),
             tx_event: tx_event.clone(),
             user_instructions,
@@ -1725,6 +1727,30 @@ async fn handle_function_call(
                 }
             };
             handle_container_exec_with_params(params, sess, turn_diff_tracker, sub_id, call_id)
+                .await
+        }
+        "apply_patch" => {
+            let args = match serde_json::from_str::<ApplyPatchToolArgs>(&arguments) {
+                Ok(a) => a,
+                Err(e) => {
+                    return ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: FunctionCallOutputPayload {
+                            content: format!("failed to parse function arguments: {e}"),
+                            success: None,
+                        },
+                    };
+                }
+            };
+            let exec_params = ExecParams {
+                command: vec!["apply_patch".to_string(), args.input.clone()],
+                cwd: sess.cwd.clone(),
+                timeout_ms: None,
+                env: HashMap::new(),
+                with_escalated_permissions: None,
+                justification: None,
+            };
+            handle_container_exec_with_params(exec_params, sess, turn_diff_tracker, sub_id, call_id)
                 .await
         }
         "update_plan" => handle_update_plan(sess, arguments, sub_id, call_id).await,
