@@ -59,6 +59,7 @@ use crate::streaming::controller::AppEventHistorySink;
 use crate::streaming::controller::StreamController;
 use codex_core::ConversationManager;
 use codex_file_search::FileMatch;
+use uuid::Uuid;
 
 // Track information about an in-flight exec command.
 struct RunningCommand {
@@ -86,6 +87,7 @@ pub(crate) struct ChatWidget<'a> {
     interrupts: InterruptManager,
     // Whether a redraw is needed after handling the current event
     needs_redraw: bool,
+    session_id: Option<Uuid>,
 }
 
 struct UserMessage {
@@ -125,6 +127,7 @@ impl ChatWidget<'_> {
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
+        self.session_id = Some(event.session_id);
         self.add_to_history(&history_cell::new_session_info(&self.config, event, true));
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
@@ -528,6 +531,7 @@ impl ChatWidget<'_> {
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
             needs_redraw: false,
+            session_id: None,
         }
     }
 
@@ -675,6 +679,7 @@ impl ChatWidget<'_> {
         self.add_to_history(&history_cell::new_status_output(
             &self.config,
             &self.total_token_usage,
+            &self.session_id,
         ));
     }
 
