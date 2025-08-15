@@ -1,5 +1,4 @@
 use codex_login::CLIENT_ID;
-use codex_login::LoginServer;
 use codex_login::ServerOptions;
 use codex_login::run_login_server;
 use crossterm::event::KeyCode;
@@ -27,6 +26,9 @@ use crate::onboarding::onboarding_screen::StepStateProvider;
 use crate::shimmer::FrameTicker;
 use crate::shimmer::shimmer_spans;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use std::thread::JoinHandle;
 
 use super::onboarding_screen::StepState;
@@ -45,14 +47,15 @@ pub(crate) enum SignInState {
 #[derive(Debug)]
 /// Used to manage the lifecycle of SpawnedLogin and FrameTicker and ensure they get cleaned up.
 pub(crate) struct ContinueInBrowserState {
-    login_server: Option<LoginServer>,
-    login_wait_handle: Option<JoinHandle<()>>,
+    auth_url: String,
+    shutdown_flag: Option<Arc<AtomicBool>>,
+    _login_wait_handle: Option<JoinHandle<()>>,
     _frame_ticker: Option<FrameTicker>,
 }
 impl Drop for ContinueInBrowserState {
     fn drop(&mut self) {
-        if let Some(server) = &self.login_server {
-            server.cancel();
+        if let Some(flag) = &self.shutdown_flag {
+            flag.store(true, Ordering::SeqCst);
         }
     }
 }
@@ -188,12 +191,12 @@ impl AuthModeWidget {
         let mut lines = vec![Line::from(spans), Line::from("")];
 
         if let SignInState::ChatGptContinueInBrowser(state) = &self.sign_in_state {
-            if let Some(LoginServer { auth_url, .. }) = &state.login_server {
+            if !state.auth_url.is_empty() {
                 lines.push(Line::from("  If the link doesn't open automatically, open the following link to authenticate:"));
                 lines.push(Line::from(vec![
                     Span::raw("  "),
                     Span::styled(
-                        auth_url,
+                        state.auth_url.as_str(),
                         Style::default()
                             .fg(LIGHT_BLUE)
                             .add_modifier(Modifier::UNDERLINED),
@@ -293,10 +296,13 @@ impl AuthModeWidget {
         let server = run_login_server(opts, None);
         match server {
             Ok(child) => {
+                let auth_url = child.auth_url.clone();
+                let shutdown_flag = child.shutdown_flag.clone();
                 self.sign_in_state =
                     SignInState::ChatGptContinueInBrowser(ContinueInBrowserState {
-                        login_server: Some(child),
-                        login_wait_handle: Some(self.spawn_completion_poller(child)),
+                        auth_url,
+                        shutdown_flag: Some(shutdown_flag),
+                        _login_wait_handle: Some(self.spawn_completion_poller(child)),
                         _frame_ticker: Some(FrameTicker::new(self.event_tx.clone())),
                     });
                 self.event_tx.send(AppEvent::RequestRedraw);

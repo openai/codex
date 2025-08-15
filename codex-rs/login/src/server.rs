@@ -47,7 +47,6 @@ pub struct LoginServer {
     pub auth_url: String,
     pub actual_port: u16,
     pub server_handle: thread::JoinHandle<io::Result<()>>,
-
     pub shutdown_flag: Arc<AtomicBool>,
 }
 
