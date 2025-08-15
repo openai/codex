@@ -529,6 +529,8 @@ pub(crate) fn new_status_output(
 
     // 👤 Account (only if ChatGPT tokens exist), shown under the first block
     let auth_file = get_auth_file(&config.codex_home);
+    let env_api_key = std::env::var("OPENAI_API_KEY").ok().filter(|s| !s.is_empty());
+    
     if let Ok(auth) = try_read_auth_json(&auth_file) {
         if let Some(tokens) = auth.tokens.clone() {
             lines.push(Line::from(vec!["👤 ".into(), "Account".bold()]));
@@ -539,23 +541,55 @@ pub(crate) fn new_status_output(
                 lines.push(Line::from(vec!["  • Login: ".into(), email.clone().into()]));
             }
 
-            match auth.openai_api_key.as_deref() {
-                Some(key) if !key.is_empty() => {
-                    lines.push(Line::from(
-                        "  • Using API key. Run codex login to use ChatGPT plan",
-                    ));
-                }
-                _ => {
-                    let plan_text = info
-                        .get_chatgpt_plan_type()
-                        .map(|s| title_case(&s))
-                        .unwrap_or_else(|| "Unknown".to_string());
-                    lines.push(Line::from(vec!["  • Plan: ".into(), plan_text.into()]));
+            // Check if environment variable is overriding ChatGPT login
+            if let Some(_) = env_api_key {
+                lines.push(Line::from(vec![
+                    "  • ".into(),
+                    "⚠️ Warning: ".yellow().bold(),
+                    "OPENAI_API_KEY environment variable is overriding ChatGPT login".into(),
+                ]));
+                lines.push(Line::from(
+                    "    Remove OPENAI_API_KEY from environment or .env file to use ChatGPT plan",
+                ));
+            } else {
+                match auth.openai_api_key.as_deref() {
+                    Some(key) if !key.is_empty() => {
+                        lines.push(Line::from(
+                            "  • Using API key. Run codex login to use ChatGPT plan",
+                        ));
+                    }
+                    _ => {
+                        let plan_text = info
+                            .get_chatgpt_plan_type()
+                            .map(|s| title_case(&s))
+                            .unwrap_or_else(|| "Unknown".to_string());
+                        lines.push(Line::from(vec!["  • Plan: ".into(), plan_text.into()]));
+                        lines.push(Line::from(vec![
+                            "  • Credential source: ".into(),
+                            "ChatGPT authentication".green().into(),
+                        ]));
+                    }
                 }
             }
 
             lines.push(Line::from(""));
+        } else if let Some(_) = env_api_key {
+            // No ChatGPT tokens but OPENAI_API_KEY is set
+            lines.push(Line::from(vec!["👤 ".into(), "Account".bold()]));
+            lines.push(Line::from(vec![
+                "  • Credential source: ".into(),
+                "OPENAI_API_KEY environment variable".yellow().into(),
+            ]));
+            lines.push(Line::from(""));
         }
+    } else if let Some(_) = env_api_key {
+        // No auth.json but OPENAI_API_KEY is set
+        lines.push(Line::from(vec!["👤 ".into(), "Account".bold()]));
+        lines.push(Line::from(vec![
+            "  • Credential source: ".into(),
+            "OPENAI_API_KEY environment variable".yellow().into(),
+        ]));
+        lines.push(Line::from(""));
     }
 
     // 🧠 Model

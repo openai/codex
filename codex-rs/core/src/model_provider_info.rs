@@ -95,15 +95,20 @@ impl ModelProviderInfo {
         client: &'a reqwest::Client,
         auth: &Option<CodexAuth>,
     ) -> crate::error::Result<reqwest::RequestBuilder> {
-        let effective_auth = match self.api_key() {
-            Ok(Some(key)) => Some(CodexAuth::from_api_key(&key)),
-            Ok(None) => auth.clone(),
-            Err(err) => {
-                if auth.is_some() {
-                    auth.clone()
-                } else {
-                    return Err(err);
+        let effective_auth = if let Some(auth) = auth {
+            match auth.mode {
+                AuthMode::ChatGPT => auth.clone(),
+                AuthMode::ApiKey => match self.api_key() {
+                    Ok(Some(key)) => Some(CodexAuth::from_api_key(&key)),
+                    Ok(None) => auth.clone(),
+                    Err(err) => return Err(err),
                 }
+            }
+        } else {
+            match self.api_key() {
+                Ok(Some(key)) => Some(CodexAuth::from_api_key(&key)),
+                Ok(None) => None,
+                Err(err) => return Err(err),
             }
         };
 
