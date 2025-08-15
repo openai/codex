@@ -924,6 +924,7 @@ dependencies = [
  "strum 0.27.2",
  "strum_macros 0.27.2",
  "supports-color",
+ "tempfile",
  "textwrap 0.16.2",
  "tokio",
  "tracing",

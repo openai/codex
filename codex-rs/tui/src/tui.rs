@@ -23,23 +23,7 @@ pub type Tui = Terminal<CrosstermBackend<Stdout>>;
 
 /// Initialize the terminal (inline viewport; history stays in normal scrollback)
 pub fn init(_config: &Config) -> Result<Tui> {
-    execute!(stdout(), EnableBracketedPaste)?;
-
-    enable_raw_mode()?;
-    // Enable keyboard enhancement flags so modifiers for keys like Enter are disambiguated.
-    // chat_composer.rs is using a keyboard event listener to enter for any modified keys
-    // to create a new line that require this.
-    // Some terminals (notably legacy Windows consoles) do not support
-    // keyboard enhancement flags. Attempt to enable them, but continue
-    // gracefully if unsupported.
-    let _ = execute!(
-        stdout(),
-        PushKeyboardEnhancementFlags(
-            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-                | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
-                | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
-        )
-    );
+    set_modes()?;
     set_panic_hook();
 
     // Clear screen and move cursor to top-left before drawing UI
@@ -53,13 +37,27 @@ pub fn init(_config: &Config) -> Result<Tui> {
 fn set_panic_hook() {
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
-        let _ = restore(); // ignore any errors as we are already failing
+        let _ = restore_modes(); // ignore any errors as we are already failing
         hook(panic_info);
     }));
 }
 
+pub fn set_modes() -> Result<()> {
+    execute!(stdout(), EnableBracketedPaste)?;
+    enable_raw_mode()?;
+    let _ = execute!(
+        stdout(),
+        PushKeyboardEnhancementFlags(
+            KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+        )
+    );
+    Ok(())
+}
+
 /// Restore the terminal to its original state
-pub fn restore() -> Result<()> {
+pub fn restore_modes() -> Result<()> {
     // Pop may fail on platforms that didn't support the push; ignore errors.
     let _ = execute!(stdout(), PopKeyboardEnhancementFlags);
     execute!(stdout(), DisableBracketedPaste)?;

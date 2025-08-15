@@ -5,6 +5,7 @@ use ratatui::text::Line;
 use std::time::Duration;
 
 use crate::app::ChatWidgetArgs;
+use crate::history_cell::HistoryCell;
 use crate::slash_command::SlashCommand;
 
 #[allow(clippy::large_enum_variant)]
@@ -51,7 +52,8 @@ pub(crate) enum AppEvent {
         matches: Vec<FileMatch>,
     },
 
-    InsertHistory(Vec<Line<'static>>),
+    InsertHistoryLines(Vec<Line<'static>>),
+    InsertHistoryCell(Box<dyn HistoryCell>),
 
     StartCommitAnimation,
     StopCommitAnimation,

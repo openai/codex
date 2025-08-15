@@ -29,6 +29,7 @@ use ratatui::widgets::Wrap;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::exec_command::strip_bash_lc_and_escape;
+use crate::history_cell;
 
 /// Request coming from the agent that needs user approval.
 pub(crate) enum ApprovalRequest {
@@ -109,7 +110,7 @@ pub(crate) struct UserApprovalWidget<'a> {
     done: bool,
 }
 
-fn to_command_display<'a>(
+pub fn to_command_display<'a>(
     first_line: Vec<Span<'a>>,
     cmd: String,
     last_line: Vec<Span<'a>>,
@@ -258,77 +259,9 @@ impl UserApprovalWidget<'_> {
     }
 
     fn send_decision_with_feedback(&mut self, decision: ReviewDecision, feedback: String) {
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        match &self.approval_request {
-            ApprovalRequest::Exec { command, .. } => {
-                let cmd = strip_bash_lc_and_escape(command);
-                let mut cmd_span: Span = cmd.clone().into();
-                cmd_span.style = cmd_span.style.add_modifier(Modifier::DIM);
-
-                // Result line based on decision.
-                match decision {
-                    ReviewDecision::Approved => {
-                        lines.extend(to_command_display(
-                            vec![
-                                "✔ ".fg(Color::Green),
-                                "You ".into(),
-                                "approved".bold(),
-                                " codex to run ".into(),
-                            ],
-                            cmd,
-                            vec![" this time".bold()],
-                        ));
-                    }
-                    ReviewDecision::ApprovedForSession => {
-                        lines.extend(to_command_display(
-                            vec![
-                                "✔ ".fg(Color::Green),
-                                "You ".into(),
-                                "approved".bold(),
-                                "codex to run ".into(),
-                            ],
-                            cmd,
-                            vec![" every time this session".bold()],
-                        ));
-                    }
-                    ReviewDecision::Denied => {
-                        lines.extend(to_command_display(
-                            vec![
-                                "✗ ".fg(Color::Red),
-                                "You ".into(),
-                                "did not approve".bold(),
-                                " codex to run ".into(),
-                            ],
-                            cmd,
-                            vec![],
-                        ));
-                    }
-                    ReviewDecision::Abort => {
-                        lines.extend(to_command_display(
-                            vec![
-                                "✗ ".fg(Color::Red),
-                                "You ".into(),
-                                "canceled".bold(),
-                                " the request to run ".into(),
-                            ],
-                            cmd,
-                            vec![],
-                        ));
-                    }
-                }
-            }
-            ApprovalRequest::ApplyPatch { .. } => {
-                lines.push(Line::from(format!("patch approval decision: {decision:?}")));
-            }
-        }
-        if !feedback.trim().is_empty() {
-            lines.push(Line::from("feedback:"));
-            for l in feedback.lines() {
-                lines.push(Line::from(l.to_string()));
-            }
-        }
-        lines.push(Line::from(""));
-        self.app_event_tx.send(AppEvent::InsertHistory(lines));
+        self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+            history_cell::new_exec_approval_decision(&self.approval_request, decision, feedback),
+        )));
 
         let op = match &self.approval_request {
             ApprovalRequest::Exec { id, .. } => Op::ExecApproval {

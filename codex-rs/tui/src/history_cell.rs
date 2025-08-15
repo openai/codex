@@ -2,8 +2,11 @@ use crate::colors::LIGHT_BLUE;
 use crate::diff_render::create_diff_summary;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
+use crate::markdown::append_markdown;
 use crate::slash_command::SlashCommand;
 use crate::text_formatting::format_and_truncate_tool_result;
+use crate::user_approval_widget::ApprovalRequest;
+use crate::user_approval_widget::to_command_display;
 use base64::Engine;
 use codex_ansi_escape::ansi_escape_line;
 use codex_common::create_config_summary_entries;
@@ -15,6 +18,7 @@ use codex_core::plan_tool::StepStatus;
 use codex_core::plan_tool::UpdatePlanArgs;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpInvocation;
+use codex_core::protocol::ReviewDecision;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TokenUsage;
@@ -39,7 +43,7 @@ use std::time::Instant;
 use tracing::error;
 use uuid::Uuid;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct CommandOutput {
     pub(crate) exit_code: i32,
     pub(crate) stdout: String,
@@ -54,8 +58,12 @@ pub(crate) enum PatchEventType {
 /// Represents an event to display in the conversation history. Returns its
 /// `Vec<Line<'static>>` representation to make it easier to display in a
 /// scrollable list.
-pub(crate) trait HistoryCell {
+pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync {
     fn display_lines(&self) -> Vec<Line<'static>>;
+
+    fn transcript_lines(&self) -> Vec<Line<'static>> {
+        self.display_lines()
+    }
 
     fn desired_height(&self, width: u16) -> u16 {
         Paragraph::new(Text::from(self.display_lines()))
@@ -66,6 +74,7 @@ pub(crate) trait HistoryCell {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct PlainHistoryCell {
     lines: Vec<Line<'static>>,
 }
@@ -76,6 +85,22 @@ impl HistoryCell for PlainHistoryCell {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct TranscriptOnlyHistoryCell {
+    lines: Vec<Line<'static>>,
+}
+
+impl HistoryCell for TranscriptOnlyHistoryCell {
+    fn display_lines(&self) -> Vec<Line<'static>> {
+        vec![]
+    }
+
+    fn transcript_lines(&self) -> Vec<Line<'static>> {
+        self.lines.clone()
+    }
+}
+
+#[derive(Debug)]
 pub(crate) struct ExecCell {
     pub(crate) command: Vec<String>,
     pub(crate) parsed: Vec<ParsedCommand>,
@@ -101,7 +126,8 @@ impl WidgetRef for &ExecCell {
     }
 }
 
-struct CompletedMcpToolCallWithImageOutput {
+#[derive(Debug)]
+pub(crate) struct CompletedMcpToolCallWithImageOutput {
     _image: DynamicImage,
 }
 impl HistoryCell for CompletedMcpToolCallWithImageOutput {
@@ -343,7 +369,7 @@ pub(crate) fn new_active_mcp_tool_call(invocation: McpInvocation) -> PlainHistor
 
 /// If the first content is an image, return a new cell with the image.
 /// TODO(rgwood-dd): Handle images properly even if they're not the first result.
-fn try_new_completed_mcp_tool_call_with_image_output(
+pub fn try_new_completed_mcp_tool_call_with_image_output(
     result: &Result<mcp_types::CallToolResult, String>,
 ) -> Option<CompletedMcpToolCallWithImageOutput> {
     match result {
@@ -387,11 +413,7 @@ pub(crate) fn new_completed_mcp_tool_call(
     duration: Duration,
     success: bool,
     result: Result<mcp_types::CallToolResult, String>,
-) -> Box<dyn HistoryCell> {
-    if let Some(cell) = try_new_completed_mcp_tool_call_with_image_output(&result) {
-        return Box::new(cell);
-    }
-
+) -> PlainHistoryCell {
     let duration = format_duration(duration);
     let status_str = if success { "success" } else { "failed" };
     let title_line = Line::from(vec![
@@ -459,7 +481,7 @@ pub(crate) fn new_completed_mcp_tool_call(
         }
     };
 
-    Box::new(PlainHistoryCell { lines })
+    PlainHistoryCell { lines }
 }
 
 pub(crate) fn new_diff_output(message: String) -> PlainHistoryCell {
@@ -893,6 +915,94 @@ fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
         Span::raw(")"),
     ];
     Line::from(invocation_spans)
+}
+
+pub(crate) fn new_exec_approval_decision(
+    approval_request: &ApprovalRequest,
+    decision: codex_core::protocol::ReviewDecision,
+    feedback: String,
+) -> PlainHistoryCell {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    match approval_request {
+        ApprovalRequest::Exec { command, .. } => {
+            let cmd = strip_bash_lc_and_escape(command);
+            let mut cmd_span: Span = cmd.clone().into();
+            cmd_span.style = cmd_span.style.add_modifier(Modifier::DIM);
+
+            // Result line based on decision.
+            match decision {
+                ReviewDecision::Approved => {
+                    lines.extend(to_command_display(
+                        vec![
+                            "✔ ".fg(Color::Green),
+                            "You ".into(),
+                            "approved".bold(),
+                            " codex to run ".into(),
+                        ],
+                        cmd,
+                        vec![" this time".bold()],
+                    ));
+                }
+                ReviewDecision::ApprovedForSession => {
+                    lines.extend(to_command_display(
+                        vec![
+                            "✔ ".fg(Color::Green),
+                            "You ".into(),
+                            "approved".bold(),
+                            "codex to run ".into(),
+                        ],
+                        cmd,
+                        vec![" every time this session".bold()],
+                    ));
+                }
+                ReviewDecision::Denied => {
+                    lines.extend(to_command_display(
+                        vec![
+                            "✗ ".fg(Color::Red),
+                            "You ".into(),
+                            "did not approve".bold(),
+                            " codex to run ".into(),
+                        ],
+                        cmd,
+                        vec![],
+                    ));
+                }
+                ReviewDecision::Abort => {
+                    lines.extend(to_command_display(
+                        vec![
+                            "✗ ".fg(Color::Red),
+                            "You ".into(),
+                            "canceled".bold(),
+                            " the request to run ".into(),
+                        ],
+                        cmd,
+                        vec![],
+                    ));
+                }
+            }
+        }
+        ApprovalRequest::ApplyPatch { .. } => {
+            lines.push(Line::from(format!("patch approval decision: {decision:?}")));
+        }
+    }
+    if !feedback.trim().is_empty() {
+        lines.push(Line::from("feedback:"));
+        for l in feedback.lines() {
+            lines.push(Line::from(l.to_string()));
+        }
+    }
+    PlainHistoryCell { lines }
+}
+
+pub(crate) fn new_reasoning_block(
+    full_reasoning_buffer: String,
+    config: &Config,
+) -> TranscriptOnlyHistoryCell {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::from("thinking".magenta().italic()));
+    append_markdown(&full_reasoning_buffer, &mut lines, config);
+    lines.push(Line::from(""));
+    TranscriptOnlyHistoryCell { lines }
 }
 
 #[cfg(test)]

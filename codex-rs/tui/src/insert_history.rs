@@ -109,6 +109,13 @@ pub fn insert_history_lines_to_writer<B, W>(
     }
 }
 
+pub fn write_lines(writer: &mut impl Write, lines: Vec<Line>) {
+    for line in lines {
+        queue!(writer, Print("\r\n")).ok();
+        write_spans(writer, line.iter()).ok();
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SetScrollRegion(pub std::ops::Range<u16>);
 

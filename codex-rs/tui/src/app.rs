@@ -3,6 +3,7 @@ use crate::app_event_sender::AppEventSender;
 use crate::chatwidget::ChatWidget;
 use crate::file_search::FileSearchManager;
 use crate::get_git_diff::get_git_diff;
+use crate::insert_history::write_lines;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
 use crate::onboarding::onboarding_screen::OnboardingScreen;
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
@@ -22,7 +23,9 @@ use crossterm::terminal::supports_keyboard_enhancement;
 use ratatui::layout::Offset;
 use ratatui::prelude::Backend;
 use ratatui::text::Line;
+use std::io::Write;
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -31,6 +34,7 @@ use std::sync::mpsc::channel;
 use std::thread;
 use std::time::Duration;
 use std::time::Instant;
+use tempfile::NamedTempFile;
 
 /// Time window for debouncing redraw requests.
 const REDRAW_DEBOUNCE: Duration = Duration::from_millis(1);
@@ -61,6 +65,7 @@ pub(crate) struct App<'a> {
     file_search: FileSearchManager,
 
     pending_history_lines: Vec<Line<'static>>,
+    transcript: Vec<Line<'static>>,
 
     enhanced_keys_supported: bool,
 
@@ -70,6 +75,7 @@ pub(crate) struct App<'a> {
     /// Channel to schedule one-shot animation frames; coalesced by a single
     /// scheduler thread.
     frame_schedule_tx: std::sync::mpsc::Sender<Instant>,
+    event_reader_enabled: Arc<AtomicBool>,
 }
 
 /// Aggregate parameters needed to create a `ChatWidget`, as creation may be
@@ -93,6 +99,7 @@ impl App<'_> {
 
         let (app_event_tx, app_event_rx) = channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
+        let event_reader_enabled = Arc::new(AtomicBool::new(true));
 
         let enhanced_keys_supported = supports_keyboard_enhancement().unwrap_or(false);
 
@@ -100,8 +107,13 @@ impl App<'_> {
         // re-publishing the events as AppEvents, as appropriate.
         {
             let app_event_tx = app_event_tx.clone();
+            let events_enabled = event_reader_enabled.clone();
             std::thread::spawn(move || {
                 loop {
+                    if !events_enabled.load(Ordering::Relaxed) {
+                        std::thread::sleep(Duration::from_millis(50));
+                        continue;
+                    }
                     // This timeout is necessary to avoid holding the event lock
                     // that crossterm::event::read() acquires. In particular,
                     // reading the cursor position (crossterm::cursor::position())
@@ -215,6 +227,7 @@ impl App<'_> {
             server: conversation_manager,
             app_event_tx,
             pending_history_lines: Vec::new(),
+            transcript: Vec::new(),
             app_event_rx,
             app_state,
             config,
@@ -222,6 +235,7 @@ impl App<'_> {
             enhanced_keys_supported,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             frame_schedule_tx: frame_tx,
+            event_reader_enabled,
         }
     }
 
@@ -235,8 +249,14 @@ impl App<'_> {
 
         while let Ok(event) = self.app_event_rx.recv() {
             match event {
-                AppEvent::InsertHistory(lines) => {
+                AppEvent::InsertHistoryLines(lines) => {
+                    self.transcript.extend(lines.clone());
                     self.pending_history_lines.extend(lines);
+                    self.app_event_tx.send(AppEvent::RequestRedraw);
+                }
+                AppEvent::InsertHistoryCell(cell) => {
+                    self.transcript.extend(cell.transcript_lines());
+                    self.pending_history_lines.extend(cell.display_lines());
                     self.app_event_tx.send(AppEvent::RequestRedraw);
                 }
                 AppEvent::RequestRedraw => {
@@ -298,6 +318,28 @@ impl App<'_> {
                                 self.suspend(terminal)?;
                             }
                             // No-op on non-Unix platforms.
+                        }
+                        KeyEvent {
+                            code: KeyCode::Char('t'),
+                            modifiers: crossterm::event::KeyModifiers::CONTROL,
+                            kind: KeyEventKind::Press,
+                            ..
+                        } => {
+                            self.event_reader_enabled.store(false, Ordering::Relaxed);
+                            let mut tmp = NamedTempFile::new()?;
+                            write_lines(tmp.as_file_mut(), self.transcript.clone());
+                            tmp.flush().ok();
+                            let path = tmp.into_temp_path();
+                            tui::restore_modes()?;
+                            let _ = Command::new("less")
+                                .arg("-R")
+                                .arg("+G")
+                                .arg(path.as_os_str())
+                                .status();
+                            let _ = path.close();
+                            tui::set_modes()?;
+                            self.event_reader_enabled.store(true, Ordering::Relaxed);
+                            self.app_event_tx.send(AppEvent::RequestRedraw);
                         }
                         KeyEvent {
                             code: KeyCode::Char('d'),
@@ -499,7 +541,7 @@ impl App<'_> {
 
     #[cfg(unix)]
     fn suspend(&mut self, terminal: &mut tui::Tui) -> Result<()> {
-        tui::restore()?;
+        tui::restore_modes()?;
         // SAFETY: Unix-only code path. We intentionally send SIGTSTP to the
         // current process group (pid 0) to trigger standard job-control
         // suspension semantics. This FFI does not involve any raw pointers,
