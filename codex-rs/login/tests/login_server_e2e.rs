@@ -1,12 +1,11 @@
-#![expect(clippy::unwrap_used)]
+#![allow(clippy::unwrap_used)]
 use std::net::SocketAddr;
 use std::net::TcpListener;
 use std::thread;
 
 use base64::Engine;
-use codex_login::LoginServerInfo;
 use codex_login::ServerOptions;
-use codex_login::run_server_blocking_with_notify;
+use codex_login::run_login_server;
 use tempfile::tempdir;
 
 // See spawn.rs for details
@@ -94,21 +93,16 @@ fn end_to_end_login_flow_persists_auth_json() {
     // Run server in background
     let server_home = codex_home.clone();
 
-    let (tx, rx) = std::sync::mpsc::channel::<LoginServerInfo>();
-    let server_thread = thread::spawn(move || {
-        let opts = ServerOptions {
-            codex_home: &server_home,
-            client_id: codex_login::CLIENT_ID,
-            issuer: &issuer,
-            port: 0,
-            open_browser: false,
-            force_state: Some(state),
-        };
-        run_server_blocking_with_notify(opts, Some(tx), None).unwrap();
-    });
-
-    let server_info = rx.recv().unwrap();
-    let login_port = server_info.actual_port;
+    let opts = ServerOptions {
+        codex_home: server_home,
+        client_id: codex_login::CLIENT_ID.to_string(),
+        issuer,
+        port: 0,
+        open_browser: false,
+        force_state: Some(state),
+    };
+    let server = run_login_server(opts, None).unwrap();
+    let login_port = server.actual_port;
 
     // Simulate browser callback, and follow redirect to /success
     let client = reqwest::blocking::Client::builder()
@@ -120,9 +114,7 @@ fn end_to_end_login_flow_persists_auth_json() {
     assert!(resp.status().is_success());
 
     // Wait for server shutdown
-    server_thread
-        .join()
-        .unwrap_or_else(|_| panic!("server thread panicked"));
+    server.block_until_done().unwrap();
 
     // Validate auth.json
     let auth_path = codex_home.join("auth.json");
@@ -159,30 +151,23 @@ fn creates_missing_codex_home_dir() {
 
     // Run server in background
     let server_home = codex_home.clone();
-    let (tx, rx) = std::sync::mpsc::channel::<LoginServerInfo>();
-    let server_thread = thread::spawn(move || {
-        let opts = ServerOptions {
-            codex_home: &server_home,
-            client_id: codex_login::CLIENT_ID,
-            issuer: &issuer,
-            port: 0,
-            open_browser: false,
-            force_state: Some(state),
-        };
-        run_server_blocking_with_notify(opts, Some(tx), None).unwrap()
-    });
-
-    let server_info = rx.recv().unwrap();
-    let login_port = server_info.actual_port;
+    let opts = ServerOptions {
+        codex_home: server_home,
+        client_id: codex_login::CLIENT_ID.to_string(),
+        issuer,
+        port: 0,
+        open_browser: false,
+        force_state: Some(state),
+    };
+    let server = run_login_server(opts, None).unwrap();
+    let login_port = server.actual_port;
 
     let client = reqwest::blocking::Client::new();
     let url = format!("http://127.0.0.1:{login_port}/auth/callback?code=abc&state=state2");
     let resp = client.get(&url).send().unwrap();
     assert!(resp.status().is_success());
 
-    server_thread
-        .join()
-        .unwrap_or_else(|_| panic!("server thread panicked"));
+    server.block_until_done().unwrap();
 
     let auth_path = codex_home.join("auth.json");
     assert!(
