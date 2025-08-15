@@ -8,7 +8,6 @@ use crate::safety::assess_patch_safety;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
 use std::collections::HashMap;
-use std::path::Path;
 use std::path::PathBuf;
 
 pub const CODEX_APPLY_PATCH_ARG1: &str = "--codex-run-as-apply-patch";
@@ -45,12 +44,10 @@ pub(crate) async fn apply_patch(
     call_id: &str,
     action: ApplyPatchAction,
 ) -> InternalApplyPatchInvocation {
-    let writable_roots_snapshot = sess.get_writable_roots().to_vec();
-
     match assess_patch_safety(
         &action,
         sess.get_approval_policy(),
-        &writable_roots_snapshot,
+        sess.get_sandbox_policy(),
         sess.get_cwd(),
     ) {
         SafetyCheck::AutoApprove { .. } => {
@@ -123,31 +120,4 @@ pub(crate) fn convert_apply_patch_to_protocol(
         result.insert(path.clone(), protocol_change);
     }
     result
-}
-
-pub(crate) fn get_writable_roots(cwd: &Path) -> Vec<PathBuf> {
-    let mut writable_roots = Vec::new();
-    if cfg!(target_os = "macos") {
-        // On macOS, $TMPDIR is private to the user.
-        writable_roots.push(std::env::temp_dir());
-
-        // Allow pyenv to update its shims directory. Without this, any tool
-        // that happens to be managed by `pyenv` will fail with an error like:
-        //
-        //   pyenv: cannot rehash: $HOME/.pyenv/shims isn't writable
-        //
-        // which is emitted every time `pyenv` tries to run `rehash` (for
-        // example, after installing a new Python package that drops an entry
-        // point). Although the sandbox is intentionally read‑only by default,
-        // writing to the user's local `pyenv` directory is safe because it
-        // is already user‑writable and scoped to the current user account.
-        if let Ok(home_dir) = std::env::var("HOME") {
-            let pyenv_dir = PathBuf::from(home_dir).join(".pyenv");
-            writable_roots.push(pyenv_dir);
-        }
-    }
-
-    writable_roots.push(cwd.to_path_buf());
-
-    writable_roots
 }
