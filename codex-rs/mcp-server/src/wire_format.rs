@@ -2,12 +2,12 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::path::PathBuf;
 
-use codex_core::config_types::ReasoningEffort;
-use codex_core::config_types::ReasoningSummary;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::ReviewDecision;
 use codex_core::protocol::SandboxPolicy;
+use codex_core::protocol_config_types::ReasoningEffort;
+use codex_core::protocol_config_types::ReasoningSummary;
 use mcp_types::RequestId;
 use serde::Deserialize;
 use serde::Serialize;

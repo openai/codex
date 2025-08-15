@@ -209,6 +209,7 @@ pub enum ReasoningEffort {
     /// Automatically use "high" during task planning and falls back
     /// to the default for subsequent turns.
     Auto,
+    Minimal,
     Low,
     #[default]
     Medium,
@@ -230,4 +231,28 @@ pub enum ReasoningSummary {
     Detailed,
     /// Option to disable reasoning summaries.
     None,
+}
+
+// Conversions from protocol enums to core config enums used where protocol
+// values are supplied by clients and core needs its internal representations.
+impl From<codex_protocol::config_types::ReasoningEffort> for ReasoningEffort {
+    fn from(v: codex_protocol::config_types::ReasoningEffort) -> Self {
+        match v {
+            codex_protocol::config_types::ReasoningEffort::Low => ReasoningEffort::Low,
+            codex_protocol::config_types::ReasoningEffort::Medium => ReasoningEffort::Medium,
+            codex_protocol::config_types::ReasoningEffort::High => ReasoningEffort::High,
+            codex_protocol::config_types::ReasoningEffort::None => ReasoningEffort::None,
+        }
+    }
+}
+
+impl From<codex_protocol::config_types::ReasoningSummary> for ReasoningSummary {
+    fn from(v: codex_protocol::config_types::ReasoningSummary) -> Self {
+        match v {
+            codex_protocol::config_types::ReasoningSummary::Auto => ReasoningSummary::Auto,
+            codex_protocol::config_types::ReasoningSummary::Concise => ReasoningSummary::Concise,
+            codex_protocol::config_types::ReasoningSummary::Detailed => ReasoningSummary::Detailed,
+            codex_protocol::config_types::ReasoningSummary::None => ReasoningSummary::None,
+        }
+    }
 }

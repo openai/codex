@@ -193,7 +193,7 @@ pub struct WritableRoot {
 }
 
 impl WritableRoot {
-    pub(crate) fn is_path_writable(&self, path: &Path) -> bool {
+    pub fn is_path_writable(&self, path: &Path) -> bool {
         // Check if the path is under the root.
         if !path.starts_with(&self.root) {
             return false;

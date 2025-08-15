@@ -1,9 +1,6 @@
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
-use serde::Deserialize;
-use serde::Serialize;
-
 use crate::codex::Session;
 use crate::models::FunctionCallOutputPayload;
 use crate::models::ResponseInputItem;
@@ -13,29 +10,13 @@ use crate::openai_tools::ResponsesApiTool;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 
+// Use the canonical plan tool types from the protocol crate to ensure
+// type-identity matches events transported via `codex_protocol`.
+pub use codex_protocol::plan_tool::PlanItemArg;
+pub use codex_protocol::plan_tool::StepStatus;
+pub use codex_protocol::plan_tool::UpdatePlanArgs;
+
 // Types for the TODO tool arguments matching codex-vscode/todo-mcp/src/main.rs
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum StepStatus {
-    Pending,
-    InProgress,
-    Completed,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PlanItemArg {
-    pub step: String,
-    pub status: StepStatus,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct UpdatePlanArgs {
-    #[serde(default)]
-    pub explanation: Option<String>,
-    pub plan: Vec<PlanItemArg>,
-}
 
 pub(crate) static PLAN_TOOL: LazyLock<OpenAiTool> = LazyLock::new(|| {
     let mut plan_item_props = BTreeMap::new();
