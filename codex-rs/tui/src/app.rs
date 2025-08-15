@@ -522,6 +522,10 @@ impl App<'_> {
     }
 
     fn draw_next_frame(&mut self, terminal: &mut tui::Tui) -> Result<()> {
+        if matches!(self.app_state, AppState::Onboarding { .. }) {
+            terminal.clear()?;
+        }
+
         let screen_size = terminal.size()?;
         let last_known_screen_size = terminal.last_known_screen_size;
         if screen_size != last_known_screen_size {
