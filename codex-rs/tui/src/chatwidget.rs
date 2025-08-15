@@ -659,8 +659,17 @@ impl ChatWidget<'_> {
         self.app_event_tx.send(AppEvent::RequestRedraw);
     }
 
+    pub(crate) fn add_diff_in_progress(&mut self) {
+        self.bottom_pane.set_task_running(true);
+        self.bottom_pane
+            .update_status_text("computing diff".to_string());
+        self.request_redraw();
+    }
+
     pub(crate) fn add_diff_output(&mut self, diff_output: String) {
-        self.add_to_history(&history_cell::new_diff_output(diff_output.clone()));
+        self.bottom_pane.set_task_running(false);
+        self.add_to_history(&history_cell::new_diff_output(diff_output));
+        self.mark_needs_redraw();
     }
 
     pub(crate) fn add_status_output(&mut self) {

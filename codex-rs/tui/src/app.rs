@@ -345,6 +345,11 @@ impl App<'_> {
                     AppState::Chat { widget } => widget.submit_op(op),
                     AppState::Onboarding { .. } => {}
                 },
+                AppEvent::DiffResult(text) => {
+                    if let AppState::Chat { widget } = &mut self.app_state {
+                        widget.add_diff_output(text);
+                    }
+                }
                 AppEvent::DispatchCommand(command) => match command {
                     SlashCommand::New => {
                         // User accepted – switch to chat view.
@@ -382,25 +387,24 @@ impl App<'_> {
                         break;
                     }
                     SlashCommand::Diff => {
-                        let (is_git_repo, diff_text) = match get_git_diff() {
-                            Ok(v) => v,
-                            Err(e) => {
-                                let msg = format!("Failed to compute diff: {e}");
-                                if let AppState::Chat { widget } = &mut self.app_state {
-                                    widget.add_diff_output(msg);
-                                }
-                                continue;
-                            }
-                        };
-
                         if let AppState::Chat { widget } = &mut self.app_state {
-                            let text = if is_git_repo {
-                                diff_text
-                            } else {
-                                "`/diff` — _not inside a git repository_".to_string()
-                            };
-                            widget.add_diff_output(text);
+                            widget.add_diff_in_progress();
                         }
+
+                        let tx = self.app_event_tx.clone();
+                        tokio::spawn(async move {
+                            let text = match get_git_diff().await {
+                                Ok((is_git_repo, diff_text)) => {
+                                    if is_git_repo {
+                                        diff_text
+                                    } else {
+                                        "`/diff` — _not inside a git repository_".to_string()
+                                    }
+                                }
+                                Err(e) => format!("Failed to compute diff: {e}"),
+                            };
+                            tx.send(AppEvent::DiffResult(text));
+                        });
                     }
                     SlashCommand::Mention => {
                         if let AppState::Chat { widget } = &mut self.app_state {
