@@ -1,18 +1,19 @@
+use serde::{Deserialize, Serialize};
 use shlex;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct ZshShell {
     shell_path: String,
     zshrc_path: String,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct PowerShellShell {
-    /// Executable name or path, e.g. "pwsh" or "powershell.exe".
-    exe: String,
+    exe: String, // Executable name or path, e.g. "pwsh" or "powershell.exe".
+    bash_exe_fallback: Option<String>, // In case the model generates a bash command.
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub enum Shell {
     Zsh(ZshShell),
     PowerShell(PowerShellShell),
@@ -41,19 +42,40 @@ impl Shell {
                 Some(result)
             }
             Shell::PowerShell(ps) => {
-                let mut result = vec![ps.exe.clone()];
-                result.push("-NoProfile".to_string());
-                result.push("-Command".to_string());
-
-                let joined = strip_bash_lc(&command)
-                    .or_else(|| shlex::try_join(command.iter().map(|s| s.as_str())).ok());
-
-                if let Some(script) = joined {
-                    result.push(script);
-                    Some(result)
-                } else {
-                    None
+                // If model generated a bash command, prefer a detected bash fallback
+                if let Some(script) = strip_bash_lc(&command) {
+                    if let Some(bash) = &ps.bash_exe_fallback {
+                        return Some(vec![bash.clone(), "-lc".to_string(), script]);
+                    }
+                    // No bash fallback → run the script under PowerShell.
+                    // It will likely fail (except for some simple commands), but the error
+                    // should give a clue to the model that it's running under PowerShell if
+                    // it hasn't realized it already from the environment context.
+                    return Some(vec![
+                        ps.exe.clone(),
+                        "-NoProfile".to_string(),
+                        "-Command".to_string(),
+                        script,
+                    ]);
                 }
+
+                // Not a bash command. If model did not generate a PowerShell command,
+                // turn it into a PowerShell command.
+                let first = command.get(0).map(String::as_str);
+                if first != Some(ps.exe.as_str()) {
+                    if let Ok(joined) = shlex::try_join(command.iter().map(|s| s.as_str())) {
+                        return Some(vec![
+                            ps.exe.clone(),
+                            "-NoProfile".to_string(),
+                            "-Command".to_string(),
+                            joined,
+                        ]);
+                    }
+                    return None;
+                }
+
+                // Model generated a PowerShell command. Run it.
+                Some(command)
             }
             Shell::Unknown => None,
         }
@@ -137,14 +159,28 @@ pub async fn default_user_shell() -> Shell {
         .await
         .map(|o| o.status.success())
         .unwrap_or(false);
+    let bash_exe = if Command::new("bash.exe")
+        .arg("--version")
+        .output()
+        .await
+        .ok()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+    {
+        Some("bash.exe".to_string())
+    } else {
+        None
+    };
 
     if has_pwsh {
         Shell::PowerShell(PowerShellShell {
             exe: "pwsh.exe".to_string(),
+            bash_exe_fallback: bash_exe,
         })
     } else {
         Shell::PowerShell(PowerShellShell {
             exe: "powershell.exe".to_string(),
+            bash_exe_fallback: bash_exe,
         })
     }
 }
@@ -296,27 +332,57 @@ mod tests_windows {
     use super::*;
 
     #[test]
-    fn test_powershell_strips_bash_lc() {
-        let shell = Shell::PowerShell(PowerShellShell {
-            exe: "pwsh.exe".to_string(),
-        });
-
-        let input = vec![
-            "bash".to_string(),
-            "-lc".to_string(),
-            "echo hello".to_string(),
+    fn test_format_default_shell_invocation_powershell() {
+        let cases = vec![
+            (
+                Shell::PowerShell(PowerShellShell {
+                    exe: "pwsh.exe".to_string(),
+                    bash_exe_fallback: None,
+                }),
+                vec!["bash", "-lc", "echo hello"],
+                vec!["pwsh.exe", "-NoProfile", "-Command", "echo hello"],
+            ),
+            (
+                Shell::PowerShell(PowerShellShell {
+                    exe: "powershell.exe".to_string(),
+                    bash_exe_fallback: None,
+                }),
+                vec!["bash", "-lc", "echo hello"],
+                vec!["powershell.exe", "-NoProfile", "-Command", "echo hello"],
+            ),
+            (
+                Shell::PowerShell(PowerShellShell {
+                    exe: "pwsh.exe".to_string(),
+                    bash_exe_fallback: Some("bash.exe".to_string()),
+                }),
+                vec!["bash", "-lc", "echo hello"],
+                vec!["bash.exe", "-lc", "echo hello"],
+            ),
+            (
+                Shell::PowerShell(PowerShellShell {
+                    exe: "pwsh.exe".to_string(),
+                    bash_exe_fallback: Some("bash.exe".to_string()),
+                }),
+                vec!["echo hello"],
+                vec!["pwsh.exe", "-NoProfile", "-Command", "'echo hello'"],
+            ),
+            (
+                Shell::PowerShell(PowerShellShell {
+                    exe: "pwsh.exe".to_string(),
+                    bash_exe_fallback: Some("bash.exe".to_string()),
+                }),
+                vec!["pwsh.exe", "-NoProfile", "-Command", "echo hello"],
+                vec!["pwsh.exe", "-NoProfile", "-Command", "echo hello"],
+            ),
         ];
 
-        let out = shell.format_default_shell_invocation(input);
-
-        assert_eq!(
-            out,
-            Some(vec![
-                "pwsh.exe".to_string(),
-                "-NoProfile".to_string(),
-                "-Command".to_string(),
-                "echo hello".to_string()
-            ])
-        );
+        for (shell, input, expected_cmd) in cases {
+            let actual_cmd = shell
+                .format_default_shell_invocation(input.iter().map(|s| s.to_string()).collect());
+            assert_eq!(
+                actual_cmd,
+                Some(expected_cmd.iter().map(|s| s.to_string()).collect())
+            );
+        }
     }
 }

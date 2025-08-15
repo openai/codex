@@ -8,6 +8,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort;
 use codex_core::protocol_config_types::ReasoningSummary;
+use codex_core::shell::default_user_shell;
 use codex_login::CodexAuth;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
@@ -85,10 +86,15 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
     let requests = server.received_requests().await.unwrap();
     assert_eq!(requests.len(), 2, "expected two POST requests");
 
-    let expected_env_text = format!(
-        "<environment_context>\nCurrent working directory: {}\nApproval policy: on-request\nSandbox mode: read-only\nNetwork access: restricted\n</environment_context>",
+    let expected_env_text_base = format!(
+        "<environment_context>\nCurrent working directory: {}\nApproval policy: on-request\nSandbox mode: read-only\nNetwork access: restricted\n",
         cwd.path().to_string_lossy()
     );
+    let shell = default_user_shell().await;
+    let expected_env_text = match shell.name() {
+        Some(name) => format!("{expected_env_text_base}Shell: {name}\n</environment_context>"),
+        None => format!("{expected_env_text_base}</environment_context>"),
+    };
     let expected_ui_text =
         "<user_instructions>\n\nbe consistent and helpful\n\n</user_instructions>";
 

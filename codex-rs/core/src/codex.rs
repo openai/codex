@@ -2052,7 +2052,7 @@ pub struct ExecInvokeArgs<'a> {
     pub stdout_stream: Option<StdoutStream>,
 }
 
-fn maybe_run_with_user_profile(
+fn maybe_translate_shell_command(
     params: ExecParams,
     sess: &Session,
     turn_context: &TurnContext,
@@ -2231,7 +2231,7 @@ async fn handle_container_exec_with_params(
         ),
     };
 
-    let params = maybe_run_with_user_profile(params, sess, turn_context);
+    let params = maybe_translate_shell_command(params, sess, turn_context);
     let output_result = sess
         .run_exec_with_events(
             turn_diff_tracker,
