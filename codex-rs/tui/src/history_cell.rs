@@ -811,28 +811,19 @@ pub(crate) fn new_patch_apply_success(stdout: String) -> PlainHistoryCell {
             let status = raw.chars().next();
             let rest = raw.get(2..).unwrap_or("");
 
-            match status {
-                Some('M') => lines.push(Line::from(vec![
-                    prefix.into(),
-                    "M ".red(),
-                    rest.to_string().dim(),
-                ])),
-                Some('A') => lines.push(Line::from(vec![
-                    prefix.into(),
-                    "A ".green(),
-                    rest.to_string().dim(),
-                ])),
-                Some('D') => lines.push(Line::from(vec![
-                    prefix.into(),
-                    "D ".red(),
-                    rest.to_string().dim(),
-                ])),
-                _ => {
-                    // Fallback: dim the whole line if it doesn't match the pattern
-                    let s = format!("{prefix}{raw}");
-                    lines.push(ansi_escape_line(&s).dim());
-                }
-            }
+            let status_span = match status {
+                Some('M') => "M".red(),
+                Some('A') => "A".green(),
+                Some('D') => "D".red(),
+                Some(other) => other.to_string().into(),
+                None => "".into(),
+            };
+
+            lines.push(Line::from(vec![
+                prefix.into(),
+                status_span,
+                rest.to_string().into(),
+            ]));
         }
         let remaining = iter.count();
         if remaining > 0 {
