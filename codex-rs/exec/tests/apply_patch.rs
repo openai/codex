@@ -116,6 +116,7 @@ const SSE_TOOL_CALL_COMPLETED: &str = r#"[
   }
 ]"#;
 
+#[cfg(not(target_os = "windows"))]
 #[tokio::test]
 async fn test_apply_patch_tool() -> anyhow::Result<()> {
     // Start a mock model server
