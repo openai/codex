@@ -765,7 +765,6 @@ pub fn log_dir(cfg: &Config) -> std::io::Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
     use crate::config_types::HistoryPersistence;
 
     use super::*;

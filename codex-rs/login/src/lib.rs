@@ -427,7 +427,6 @@ pub struct AuthDotJson {
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::expect_used, clippy::unwrap_used)]
     use super::*;
     use crate::token_data::IdTokenInfo;
     use crate::token_data::KnownPlan;

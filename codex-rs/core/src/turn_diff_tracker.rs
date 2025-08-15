@@ -466,7 +466,6 @@ fn is_windows_drive_or_unc_root(p: &std::path::Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
     use super::*;
     use pretty_assertions::assert_eq;
     use tempfile::tempdir;

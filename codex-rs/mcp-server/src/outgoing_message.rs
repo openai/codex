@@ -101,7 +101,7 @@ impl OutgoingMessageSender {
         event: &Event,
         meta: Option<OutgoingNotificationMeta>,
     ) {
-        #[allow(clippy::expect_used)]
+        #[expect(clippy::expect_used)]
         let event_json = serde_json::to_value(event).expect("Event must serialize");
 
         let params = if let Ok(params) = serde_json::to_value(OutgoingNotificationParams {
@@ -244,8 +244,6 @@ pub(crate) struct OutgoingError {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
-
     use codex_core::protocol::EventMsg;
     use codex_core::protocol::SessionConfiguredEvent;
     use pretty_assertions::assert_eq;

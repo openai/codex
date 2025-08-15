@@ -1,6 +1,4 @@
 #![cfg(unix)]
-#![expect(clippy::expect_used)]
-
 use codex_core::protocol::SandboxPolicy;
 use codex_core::spawn::StdioPolicy;
 use std::collections::HashMap;
@@ -180,6 +178,7 @@ async fn allow_unix_socketpair_recvfrom() {
 
 const IN_SANDBOX_ENV_VAR: &str = "IN_SANDBOX";
 
+#[expect(clippy::expect_used)]
 pub async fn run_code_under_sandbox<F, Fut>(
     test_selector: &str,
     policy: &SandboxPolicy,

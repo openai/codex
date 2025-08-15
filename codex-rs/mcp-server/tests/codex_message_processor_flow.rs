@@ -1,5 +1,3 @@
-#![allow(clippy::expect_used, clippy::unwrap_used)]
-
 use std::path::Path;
 
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;

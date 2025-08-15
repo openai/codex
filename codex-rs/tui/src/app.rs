@@ -188,7 +188,7 @@ impl App<'_> {
                         }
                     }
 
-                    #[allow(clippy::expect_used)]
+                    #[expect(clippy::expect_used)]
                     let deadline = next_deadline.expect("deadline set");
                     let now = Instant::now();
                     let timeout = if deadline > now {

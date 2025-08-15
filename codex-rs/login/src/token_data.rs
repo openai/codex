@@ -155,7 +155,6 @@ mod tests {
     use serde::Serialize;
 
     #[test]
-    #[expect(clippy::expect_used, clippy::unwrap_used)]
     fn id_token_info_parses_email_and_plan() {
         #[derive(Serialize)]
         struct Header {
