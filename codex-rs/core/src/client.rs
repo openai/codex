@@ -133,6 +133,42 @@ impl ModelClient {
 
     /// Implementation for the OpenAI *Responses* experimental API.
     async fn stream_responses(&self, prompt: &Prompt) -> Result<ResponseStream> {
+        // Test-only hook: inject a minimal stream with a web_search_request function call.
+        if matches!(std::env::var("CODEX_RS_TEST_INJECT_WEB_SEARCH_REQUEST").ok().as_deref(), Some("1")) {
+            use tokio::sync::mpsc;
+            let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(64);
+            let created = serde_json::json!({
+                "type": "response.created",
+                "response": {"id": "resp_injected"}
+            });
+            let fn_call = serde_json::json!({
+                "type": "response.output_item.done",
+                "item": {
+                    "type": "function_call",
+                    "name": "web_search_request",
+                    "call_id": "call1",
+                    "arguments": "{\"query\":\"hello\"}"
+                }
+            });
+            let completed = serde_json::json!({
+                "type": "response.completed",
+                "response": {"id": "resp_injected", "output": []}
+            });
+            let events = vec![created, fn_call, completed];
+            let mut body = String::new();
+            for e in events {
+                let kind = e.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                if e.as_object().map(|o| o.len() == 1).unwrap_or(false) {
+                    body.push_str(&format!("event: {kind}\n\n"));
+                } else {
+                    body.push_str(&format!("event: {kind}\ndata: {e}\n\n"));
+                }
+            }
+            let timeout = self.provider.stream_idle_timeout();
+            let stream = tokio_util::io::ReaderStream::new(std::io::Cursor::new(body)).map_err(CodexErr::Io);
+            tokio::spawn(process_sse(stream, tx_event, timeout));
+            return Ok(ResponseStream { rx_event });
+        }
         if let Some(path) = &*CODEX_RS_SSE_FIXTURE {
             // short circuit for tests
             warn!(path, "Streaming from fixture");

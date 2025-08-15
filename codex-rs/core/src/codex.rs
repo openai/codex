@@ -1420,6 +1420,47 @@ async fn run_turn(
                 return Err(e);
             }
             Err(e) => {
+                // One-shot graceful fallback whenever a turn with native web_search fails for any reason.
+                let prompt_has_web_search = prompt
+                    .tools
+                    .iter()
+                    .any(|t| matches!(t, OpenAiTool::WebSearch { .. }));
+                                if prompt_has_web_search {
+
+                    // Inform UI and retry without native web search.
+                    sess
+                        .notify_background_event(
+                            &sub_id,
+                            "web search attempt failed; continuing without web",
+                        )
+                        .await;
+                    let tools_no_web: Vec<OpenAiTool> = prompt
+                        .tools
+                        .iter()
+                        .filter(|t| !matches!(t, OpenAiTool::WebSearch { .. }))
+                        .cloned()
+                        .collect();
+                    // Prepend a system hint so the model informs the user about the fallback.
+                    let mut input_with_hint = Vec::with_capacity(prompt.input.len() + 1);
+                    input_with_hint.push(ResponseItem::Message {
+                        id: None,
+                        role: "assistant".to_string(),
+                        content: vec![ContentItem::OutputText {
+                            text: "Web search isn't available right now; I'll continue without browsing.".to_string(),
+                        }],
+                    });
+                    input_with_hint.extend(prompt.input.clone());
+                    let prompt_no_web = Prompt {
+                        input: input_with_hint,
+                        store: prompt.store,
+                        tools: tools_no_web,
+                        base_instructions_override: prompt.base_instructions_override.clone(),
+                    };
+                    match try_run_turn(sess, turn_diff_tracker, &sub_id, &prompt_no_web).await {
+                        Ok(output) => return Ok(output),
+                        Err(e2) => return Err(e2),
+                    }
+                }
                 // Use the configured provider-specific stream retry budget.
                 let max_retries = turn_context.client.get_provider().stream_max_retries();
                 if retries < max_retries {
@@ -1444,9 +1485,15 @@ async fn run_turn(
                     .await;
 
                     tokio::time::sleep(delay).await;
-                } else {
-                    return Err(e);
+                    continue;
                 }
+
+                // Retries exhausted: bail out with last error code so callers can handle it.
+                let status = match e {
+                    CodexErr::RetryLimit(status) => status,
+                    _ => reqwest::StatusCode::SERVICE_UNAVAILABLE,
+                };
+                return Err(CodexErr::RetryLimit(status));
             }
         }
     }
