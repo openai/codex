@@ -511,7 +511,7 @@ impl Session {
             turn_context.cwd.to_path_buf(),
             turn_context.approval_policy,
             turn_context.sandbox_policy.clone(),
-            default_shell.clone(),
+            sess.user_shell.clone(),
         )));
         sess.record_conversation_items(&conversation_items).await;
 

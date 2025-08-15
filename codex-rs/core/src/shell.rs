@@ -62,7 +62,7 @@ impl Shell {
 
                 // Not a bash command. If model did not generate a PowerShell command,
                 // turn it into a PowerShell command.
-                let first = command.get(0).map(String::as_str);
+                let first = command.first().map(String::as_str);
                 if first != Some(ps.exe.as_str()) {
                     if let Ok(joined) = shlex::try_join(command.iter().map(|s| s.as_str())) {
                         return Some(vec![
