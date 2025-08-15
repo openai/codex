@@ -809,7 +809,7 @@ pub(crate) fn new_patch_apply_success(stdout: String) -> PlainHistoryCell {
             // Subsequent lines should look like: "M path/to/file".
             // Colorize the status letter like `git status` (e.g., M red).
             let status = raw.chars().next();
-            let rest = raw.get(2..).unwrap_or("");
+            let rest = raw.get(1..).unwrap_or("");
 
             let status_span = match status {
                 Some('M') => "M".red(),
@@ -822,7 +822,7 @@ pub(crate) fn new_patch_apply_success(stdout: String) -> PlainHistoryCell {
             lines.push(Line::from(vec![
                 prefix.into(),
                 status_span,
-                rest.to_string().into(),
+                ansi_escape_line(rest).to_string().into(),
             ]));
         }
         let remaining = iter.count();
