@@ -55,6 +55,7 @@ use crate::exec::process_exec_tool_call;
 use crate::exec_env::create_env;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_tool_call::handle_mcp_tool_call;
+use crate::model_family::find_family_for_model;
 use crate::models::ContentItem;
 use crate::models::FunctionCallOutputPayload;
 use crate::models::LocalShellAction;
@@ -998,6 +999,64 @@ async fn submission_loop(
                     // no current task, spawn a new one
                     let task =
                         AgentTask::spawn(sess.clone(), Arc::clone(&turn_context), sub.id, items);
+                    sess.set_task(task);
+                }
+            }
+            Op::UserTurn {
+                items,
+                cwd,
+                approval_policy,
+                sandbox_policy,
+                model,
+                effort,
+                summary,
+            } => {
+                // attempt to inject input into current task
+                if let Err(items) = sess.inject_input(items) {
+                    // Derive a fresh TurnContext for this turn using the provided overrides.
+                    let provider = turn_context.client.get_provider();
+
+                    // Derive a model family for the requested model; fall back to the session's.
+                    let model_family = find_family_for_model(&model)
+                        .unwrap_or_else(|| config.model_family.clone());
+
+                    // Create a per‑turn Config clone with the requested model/family.
+                    let mut per_turn_config = (*config).clone();
+                    per_turn_config.model = model.clone();
+                    per_turn_config.model_family = model_family.clone();
+
+                    // Build a new client with per‑turn reasoning settings.
+                    // Reuse the same provider and session id; auth defaults to env/API key.
+                    let client = ModelClient::new(
+                        Arc::new(per_turn_config),
+                        None,
+                        provider,
+                        effort,
+                        summary,
+                        sess.session_id,
+                    );
+
+                    let fresh_turn_context = TurnContext {
+                        client,
+                        tools_config: ToolsConfig::new(
+                            &model_family,
+                            approval_policy,
+                            sandbox_policy.clone(),
+                            config.include_plan_tool,
+                            config.include_apply_patch_tool,
+                        ),
+                        user_instructions: turn_context.user_instructions.clone(),
+                        base_instructions: turn_context.base_instructions.clone(),
+                        approval_policy,
+                        sandbox_policy,
+                        shell_environment_policy: turn_context.shell_environment_policy.clone(),
+                        cwd,
+                        disable_response_storage: turn_context.disable_response_storage,
+                    };
+
+                    // no current task, spawn a new one with the per‑turn context
+                    let task =
+                        AgentTask::spawn(sess.clone(), Arc::new(fresh_turn_context), sub.id, items);
                     sess.set_task(task);
                 }
             }

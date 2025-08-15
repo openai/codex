@@ -17,6 +17,8 @@ use serde_bytes::ByteBuf;
 use strum_macros::Display;
 use uuid::Uuid;
 
+use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
+use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::message_history::HistoryEntry;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
@@ -44,6 +46,33 @@ pub enum Op {
     UserInput {
         /// User input items, see `InputItem`
         items: Vec<InputItem>,
+    },
+
+    /// Similar to [`Op::UserInput`], but contains additional context required
+    /// for a turn of a [`crate::codex_conversation::CodexConversation`].
+    UserTurn {
+        /// User input items, see `InputItem`
+        items: Vec<InputItem>,
+
+        /// `cwd` to use with the [`SandboxPolicy`] and potentially tool calls
+        /// such as `local_shell`.
+        cwd: PathBuf,
+
+        /// Policy to use for command approval.
+        approval_policy: AskForApproval,
+
+        /// Policy to use for tool calls such as `local_shell`.
+        sandbox_policy: SandboxPolicy,
+
+        /// Must be a valid model slug for the [`crate::client::ModelClient`]
+        /// associated with this conversation.
+        model: String,
+
+        /// Will only be honored if the model is configured to use reasoning.
+        effort: ReasoningEffortConfig,
+
+        /// Will only be honored if the model is configured to use reasoning.
+        summary: ReasoningSummaryConfig,
     },
 
     /// Approve a command execution
