@@ -23,7 +23,6 @@ use crate::colors::LIGHT_BLUE;
 use crate::colors::SUCCESS_GREEN;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
 use crate::onboarding::onboarding_screen::StepStateProvider;
-use crate::shimmer::FrameTicker;
 use crate::shimmer::shimmer_spans;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -45,12 +44,11 @@ pub(crate) enum SignInState {
 }
 
 #[derive(Debug)]
-/// Used to manage the lifecycle of SpawnedLogin and FrameTicker and ensure they get cleaned up.
+/// Used to manage the lifecycle of SpawnedLogin and ensure it gets cleaned up.
 pub(crate) struct ContinueInBrowserState {
     auth_url: String,
     shutdown_flag: Option<Arc<AtomicBool>>,
     _login_wait_handle: Option<JoinHandle<()>>,
-    _frame_ticker: Option<FrameTicker>,
 }
 impl Drop for ContinueInBrowserState {
     fn drop(&mut self) {
@@ -185,9 +183,13 @@ impl AuthModeWidget {
     }
 
     fn render_continue_in_browser(&self, area: Rect, buf: &mut Buffer) {
-        let idx = self.current_frame();
         let mut spans = vec![Span::from("> ")];
-        spans.extend(shimmer_spans("Finish signing in via your browser", idx));
+        // Schedule a follow-up frame to keep the shimmer animation going.
+        self.event_tx
+            .send(AppEvent::ScheduleFrameIn(std::time::Duration::from_millis(
+                100,
+            )));
+        spans.extend(shimmer_spans("Finish signing in via your browser"));
         let mut lines = vec![Line::from(spans), Line::from("")];
 
         if let SignInState::ChatGptContinueInBrowser(state) = &self.sign_in_state {
@@ -303,7 +305,6 @@ impl AuthModeWidget {
                         auth_url,
                         shutdown_flag: Some(shutdown_flag),
                         _login_wait_handle: Some(self.spawn_completion_poller(child)),
-                        _frame_ticker: Some(FrameTicker::new(self.event_tx.clone())),
                     });
                 self.event_tx.send(AppEvent::RequestRedraw);
             }
@@ -336,16 +337,6 @@ impl AuthModeWidget {
                 )));
             }
         })
-    }
-
-    fn current_frame(&self) -> usize {
-        // Derive frame index from wall-clock time to avoid storing animation state.
-        // 100ms per frame to match the previous ticker cadence.
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
-        (now_ms / 100) as usize
     }
 }
 

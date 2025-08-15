@@ -751,6 +751,7 @@ dependencies = [
  "codex-common",
  "codex-core",
  "codex-ollama",
+ "libc",
  "owo-colors",
  "predicates",
  "serde_json",

@@ -32,7 +32,6 @@ pub(crate) enum CancellationEvent {
 pub(crate) use chat_composer::ChatComposer;
 pub(crate) use chat_composer::InputResult;
 
-use crate::status_indicator_widget::StatusIndicatorWidget;
 use approval_modal_view::ApprovalModalView;
 use status_indicator_view::StatusIndicatorView;
 
@@ -49,11 +48,6 @@ pub(crate) struct BottomPane<'a> {
     has_input_focus: bool,
     is_task_running: bool,
     ctrl_c_quit_hint: bool,
-
-    /// Optional live, multi‑line status/"live cell" rendered directly above
-    /// the composer while a task is running. Unlike `active_view`, this does
-    /// not replace the composer; it augments it.
-    live_status: Option<StatusIndicatorWidget>,
 
     /// True if the active view is the StatusIndicatorView that replaces the
     /// composer during a running task.
@@ -81,27 +75,18 @@ impl BottomPane<'_> {
             has_input_focus: params.has_input_focus,
             is_task_running: false,
             ctrl_c_quit_hint: false,
-            live_status: None,
             status_view_active: false,
         }
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
-        let overlay_status_h = self
-            .live_status
-            .as_ref()
-            .map(|s| s.desired_height(width))
-            .unwrap_or(0);
-
         let view_height = if let Some(view) = self.active_view.as_ref() {
             view.desired_height(width)
         } else {
             self.composer.desired_height(width)
         };
 
-        overlay_status_h
-            .saturating_add(view_height)
-            .saturating_add(Self::BOTTOM_PAD_LINES)
+        view_height.saturating_add(Self::BOTTOM_PAD_LINES)
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
@@ -182,44 +167,6 @@ impl BottomPane<'_> {
         self.request_redraw();
     }
 
-    /// Update the status indicator text. Prefer replacing the composer with
-    /// the StatusIndicatorView so the input pane shows a single-line status
-    /// like: `▌ Working waiting for model`.
-    pub(crate) fn update_status_text(&mut self, text: String) {
-        let mut handled_by_view = false;
-        if let Some(view) = self.active_view.as_mut() {
-            if matches!(
-                view.update_status_text(text.clone()),
-                bottom_pane_view::ConditionalUpdate::NeedsRedraw
-            ) {
-                handled_by_view = true;
-            }
-        } else {
-            let mut v = StatusIndicatorView::new(self.app_event_tx.clone());
-            v.update_text(text.clone());
-            self.active_view = Some(Box::new(v));
-            self.status_view_active = true;
-            handled_by_view = true;
-        }
-
-        // Fallback: if the current active view did not consume status updates
-        // and no modal view is active, present an overlay above the composer.
-        // If a modal is active, do NOT render the overlay to avoid drawing
-        // over the dialog.
-        if !handled_by_view && self.active_view.is_none() {
-            if self.live_status.is_none() {
-                self.live_status = Some(StatusIndicatorWidget::new(self.app_event_tx.clone()));
-            }
-            if let Some(status) = &mut self.live_status {
-                status.update_text(text);
-            }
-        } else if !handled_by_view {
-            // Ensure any previous overlay is cleared when a modal becomes active.
-            self.live_status = None;
-        }
-        self.request_redraw();
-    }
-
     pub(crate) fn show_ctrl_c_quit_hint(&mut self) {
         self.ctrl_c_quit_hint = true;
         self.composer
@@ -252,7 +199,6 @@ impl BottomPane<'_> {
             }
             self.request_redraw();
         } else {
-            self.live_status = None;
             // Drop the status view when a task completes, but keep other
             // modal views (e.g. approval dialogs).
             if let Some(mut view) = self.active_view.take() {
@@ -302,8 +248,6 @@ impl BottomPane<'_> {
         // Otherwise create a new approval modal overlay.
         let modal = ApprovalModalView::new(request, self.app_event_tx.clone());
         self.active_view = Some(Box::new(modal));
-        // Hide any overlay status while a modal is visible.
-        self.live_status = None;
         self.status_view_active = false;
         self.request_redraw()
     }
@@ -342,46 +286,31 @@ impl BottomPane<'_> {
 
 impl WidgetRef for &BottomPane<'_> {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let mut y_offset = 0u16;
-        if let Some(status) = &self.live_status {
-            let live_h = status
-                .desired_height(area.width)
-                .min(area.height.saturating_sub(y_offset));
-            if live_h > 0 {
-                let live_rect = Rect {
-                    x: area.x,
-                    y: area.y + y_offset,
-                    width: area.width,
-                    height: live_h,
-                };
-                status.render_ref(live_rect, buf);
-                y_offset = y_offset.saturating_add(live_h);
-            }
-        }
-
         if let Some(view) = &self.active_view {
-            if y_offset < area.height {
-                // Reserve bottom padding lines; keep at least 1 line for the view.
-                let avail = area.height - y_offset;
+            // Reserve bottom padding lines; keep at least 1 line for the view.
+            let avail = area.height;
+            if avail > 0 {
                 let pad = BottomPane::BOTTOM_PAD_LINES.min(avail.saturating_sub(1));
                 let view_rect = Rect {
                     x: area.x,
-                    y: area.y + y_offset,
+                    y: area.y,
                     width: area.width,
                     height: avail - pad,
                 };
                 view.render(view_rect, buf);
             }
-        } else if y_offset < area.height {
-            let composer_rect = Rect {
-                x: area.x,
-                y: area.y + y_offset,
-                width: area.width,
-                // Reserve bottom padding
-                height: (area.height - y_offset)
-                    - BottomPane::BOTTOM_PAD_LINES.min((area.height - y_offset).saturating_sub(1)),
-            };
-            (&self.composer).render_ref(composer_rect, buf);
+        } else {
+            let avail = area.height;
+            if avail > 0 {
+                let composer_rect = Rect {
+                    x: area.x,
+                    y: area.y,
+                    width: area.width,
+                    // Reserve bottom padding
+                    height: avail - BottomPane::BOTTOM_PAD_LINES.min(avail.saturating_sub(1)),
+                };
+                (&self.composer).render_ref(composer_rect, buf);
+            }
         }
     }
 }
@@ -431,10 +360,8 @@ mod tests {
 
         // Create an approval modal (active view).
         pane.push_approval_request(exec_request());
-        // Attempt to update status; this should NOT create an overlay while modal is visible.
-        pane.update_status_text("running command".to_string());
 
-        // Render and verify the top row does not include the Working header overlay.
+        // Render and verify the top row does not include an overlay.
         let area = Rect::new(0, 0, 60, 6);
         let mut buf = Buffer::empty(area);
         (&pane).render_ref(area, &mut buf);
@@ -445,7 +372,7 @@ mod tests {
         }
         assert!(
             !r0.contains("Working"),
-            "overlay Working header should not render above modal"
+            "overlay should not render above modal"
         );
     }
 
@@ -461,7 +388,6 @@ mod tests {
 
         // Start a running task so the status indicator replaces the composer.
         pane.set_task_running(true);
-        pane.update_status_text("waiting for model".to_string());
 
         // Push an approval modal (e.g., command approval) which should hide the status view.
         pane.push_approval_request(exec_request());
@@ -511,11 +437,6 @@ mod tests {
 
         // Begin a task: show initial status.
         pane.set_task_running(true);
-        pane.update_status_text("waiting for model".to_string());
-
-        // As a long-running command begins (post-approval), ensure the status
-        // indicator is visible while we wait for the command to run.
-        pane.update_status_text("running command".to_string());
 
         // Allow some frames so the animation thread ticks.
         std::thread::sleep(std::time::Duration::from_millis(120));
@@ -547,7 +468,6 @@ mod tests {
 
         // Activate spinner (status view replaces composer) with no live ring.
         pane.set_task_running(true);
-        pane.update_status_text("waiting for model".to_string());
 
         // Use height == desired_height; expect 1 status row at top and 2 bottom padding rows.
         let height = pane.desired_height(30);
@@ -598,7 +518,6 @@ mod tests {
         });
 
         pane.set_task_running(true);
-        pane.update_status_text("waiting for model".to_string());
 
         // Height=2 → pad shrinks to 1; bottom row is blank, top row has spinner.
         let area2 = Rect::new(0, 0, 20, 2);

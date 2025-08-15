@@ -15,7 +15,7 @@ use crate::mcp_protocol::ToolCallResponseResult;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::tool_handlers::create_conversation::handle_create_conversation;
 use crate::tool_handlers::send_message::handle_send_message;
-use crate::wire_format::CodexRequest;
+use crate::wire_format::ClientRequest;
 
 use codex_core::ConversationManager;
 use codex_core::config::Config as CodexConfig;
@@ -23,7 +23,7 @@ use codex_core::protocol::Submission;
 use mcp_types::CallToolRequest;
 use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
-use mcp_types::ClientRequest;
+use mcp_types::ClientRequest as McpClientRequest;
 use mcp_types::ContentBlock;
 use mcp_types::JSONRPCError;
 use mcp_types::JSONRPCErrorError;
@@ -90,7 +90,7 @@ impl MessageProcessor {
 
     pub(crate) async fn process_request(&mut self, request: JSONRPCRequest) {
         if let Ok(request_json) = serde_json::to_value(request.clone())
-            && let Ok(codex_request) = serde_json::from_value::<CodexRequest>(request_json)
+            && let Ok(codex_request) = serde_json::from_value::<ClientRequest>(request_json)
         {
             // If the request is a Codex request, handle it with the Codex
             // message processor.
@@ -103,7 +103,7 @@ impl MessageProcessor {
         // Hold on to the ID so we can respond.
         let request_id = request.id.clone();
 
-        let client_request = match ClientRequest::try_from(request) {
+        let client_request = match McpClientRequest::try_from(request) {
             Ok(client_request) => client_request,
             Err(e) => {
                 tracing::warn!("Failed to convert request: {e}");
@@ -113,43 +113,43 @@ impl MessageProcessor {
 
         // Dispatch to a dedicated handler for each request type.
         match client_request {
-            ClientRequest::InitializeRequest(params) => {
+            McpClientRequest::InitializeRequest(params) => {
                 self.handle_initialize(request_id, params).await;
             }
-            ClientRequest::PingRequest(params) => {
+            McpClientRequest::PingRequest(params) => {
                 self.handle_ping(request_id, params).await;
             }
-            ClientRequest::ListResourcesRequest(params) => {
+            McpClientRequest::ListResourcesRequest(params) => {
                 self.handle_list_resources(params);
             }
-            ClientRequest::ListResourceTemplatesRequest(params) => {
+            McpClientRequest::ListResourceTemplatesRequest(params) => {
                 self.handle_list_resource_templates(params);
             }
-            ClientRequest::ReadResourceRequest(params) => {
+            McpClientRequest::ReadResourceRequest(params) => {
                 self.handle_read_resource(params);
             }
-            ClientRequest::SubscribeRequest(params) => {
+            McpClientRequest::SubscribeRequest(params) => {
                 self.handle_subscribe(params);
             }
-            ClientRequest::UnsubscribeRequest(params) => {
+            McpClientRequest::UnsubscribeRequest(params) => {
                 self.handle_unsubscribe(params);
             }
-            ClientRequest::ListPromptsRequest(params) => {
+            McpClientRequest::ListPromptsRequest(params) => {
                 self.handle_list_prompts(params);
             }
-            ClientRequest::GetPromptRequest(params) => {
+            McpClientRequest::GetPromptRequest(params) => {
                 self.handle_get_prompt(params);
             }
-            ClientRequest::ListToolsRequest(params) => {
+            McpClientRequest::ListToolsRequest(params) => {
                 self.handle_list_tools(request_id, params).await;
             }
-            ClientRequest::CallToolRequest(params) => {
+            McpClientRequest::CallToolRequest(params) => {
                 self.handle_call_tool(request_id, params).await;
             }
-            ClientRequest::SetLevelRequest(params) => {
+            McpClientRequest::SetLevelRequest(params) => {
                 self.handle_set_level(params);
             }
-            ClientRequest::CompleteRequest(params) => {
+            McpClientRequest::CompleteRequest(params) => {
                 self.handle_complete(params);
             }
         }

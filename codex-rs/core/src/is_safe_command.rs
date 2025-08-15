@@ -162,7 +162,6 @@ fn is_valid_sed_n_arg(arg: Option<&str>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
     use super::*;
 
     fn vec_str(args: &[&str]) -> Vec<String> {

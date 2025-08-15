@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 use crate::codex::Codex;
 use crate::codex::CodexSpawnOk;
+use crate::codex::INITIAL_SUBMIT_ID;
 use crate::codex_conversation::CodexConversation;
 use crate::config::Config;
 use crate::error::CodexErr;
@@ -52,7 +53,6 @@ impl ConversationManager {
     ) -> CodexResult<NewConversation> {
         let CodexSpawnOk {
             codex,
-            init_id,
             session_id: conversation_id,
         } = Codex::spawn(config, auth).await?;
 
@@ -64,7 +64,7 @@ impl ConversationManager {
             Event {
                 id,
                 msg: EventMsg::SessionConfigured(session_configured),
-            } if id == init_id => session_configured,
+            } if id == INITIAL_SUBMIT_ID => session_configured,
             _ => {
                 return Err(CodexErr::SessionConfiguredNotFirstEvent);
             }

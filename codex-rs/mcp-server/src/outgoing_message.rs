@@ -101,7 +101,7 @@ impl OutgoingMessageSender {
         event: &Event,
         meta: Option<OutgoingNotificationMeta>,
     ) {
-        #[allow(clippy::expect_used)]
+        #[expect(clippy::expect_used)]
         let event_json = serde_json::to_value(event).expect("Event must serialize");
 
         let params = if let Ok(params) = serde_json::to_value(OutgoingNotificationParams {
@@ -114,14 +114,19 @@ impl OutgoingMessageSender {
             event_json
         };
 
-        let outgoing_message = OutgoingMessage::Notification(OutgoingNotification {
+        self.send_notification(OutgoingNotification {
             method: "codex/event".to_string(),
             params: Some(params.clone()),
-        });
-        let _ = self.sender.send(outgoing_message).await;
+        })
+        .await;
 
         self.send_event_as_notification_new_schema(event, Some(params.clone()))
             .await;
+    }
+
+    pub(crate) async fn send_notification(&self, notification: OutgoingNotification) {
+        let outgoing_message = OutgoingMessage::Notification(notification);
+        let _ = self.sender.send(outgoing_message).await;
     }
 
     // should be backwards compatible.
@@ -239,8 +244,6 @@ pub(crate) struct OutgoingError {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
-
     use codex_core::protocol::EventMsg;
     use codex_core::protocol::SessionConfiguredEvent;
     use pretty_assertions::assert_eq;

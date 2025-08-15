@@ -28,7 +28,7 @@ impl EventProcessor for EventProcessorWithJsonOutput {
             .into_iter()
             .map(|(key, value)| (key.to_string(), value))
             .collect::<HashMap<String, String>>();
-        #[allow(clippy::expect_used)]
+        #[expect(clippy::expect_used)]
         let config_json =
             serde_json::to_string(&entries).expect("Failed to serialize config summary to JSON");
         println!("{config_json}");

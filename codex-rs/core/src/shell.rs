@@ -98,7 +98,6 @@ mod tests {
     use std::process::Command;
 
     #[tokio::test]
-    #[expect(clippy::unwrap_used)]
     async fn test_current_shell_detects_zsh() {
         let shell = Command::new("sh")
             .arg("-c")
@@ -129,7 +128,6 @@ mod tests {
         assert_eq!(actual_cmd, None);
     }
 
-    #[expect(clippy::unwrap_used)]
     #[tokio::test]
     async fn test_run_with_profile_escaping_and_execution() {
         let shell_path = "/bin/zsh";

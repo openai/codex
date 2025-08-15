@@ -1,5 +1,3 @@
-#![allow(clippy::expect_used, clippy::unwrap_used)]
-
 use std::path::Path;
 
 use mcp_test_support::McpProcess;

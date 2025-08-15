@@ -374,6 +374,33 @@ impl McpProcess {
         }
     }
 
+    pub async fn read_stream_until_notification_message(
+        &mut self,
+        method: &str,
+    ) -> anyhow::Result<JSONRPCNotification> {
+        loop {
+            let message = self.read_jsonrpc_message().await?;
+            eprint!("message: {message:?}");
+
+            match message {
+                JSONRPCMessage::Notification(notification) => {
+                    if notification.method == method {
+                        return Ok(notification);
+                    }
+                }
+                JSONRPCMessage::Request(_) => {
+                    anyhow::bail!("unexpected JSONRPCMessage::Request: {message:?}");
+                }
+                JSONRPCMessage::Error(_) => {
+                    anyhow::bail!("unexpected JSONRPCMessage::Error: {message:?}");
+                }
+                JSONRPCMessage::Response(_) => {
+                    anyhow::bail!("unexpected JSONRPCMessage::Response: {message:?}");
+                }
+            }
+        }
+    }
+
     pub async fn read_stream_until_configured_response_message(
         &mut self,
     ) -> anyhow::Result<String> {
