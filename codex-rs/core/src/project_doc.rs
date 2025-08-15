@@ -13,6 +13,7 @@
 
 use crate::config::Config;
 use std::path::Path;
+use std::path::PathBuf;
 use tokio::io::AsyncReadExt;
 use tracing::error;
 
@@ -26,12 +27,19 @@ const PROJECT_DOC_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
 /// Combines `Config::instructions` and `AGENTS.md` (if present) into a single
 /// string of instructions.
 pub(crate) async fn get_user_instructions(config: &Config) -> Option<String> {
-    match find_project_doc(config).await {
-        Ok(Some(project_doc)) => match &config.user_instructions {
-            Some(original_instructions) => Some(format!(
-                "{original_instructions}{PROJECT_DOC_SEPARATOR}{project_doc}"
-            )),
-            None => Some(project_doc),
+    match find_project_doc(&config.cwd).await {
+        Ok(Some(path)) => match read_limited(&path, config.project_doc_max_bytes).await {
+            Ok(Some(project_doc)) => match &config.user_instructions {
+                Some(original_instructions) => Some(format!(
+                    "{original_instructions}{PROJECT_DOC_SEPARATOR}{project_doc}"
+                )),
+                None => Some(project_doc),
+            },
+            Ok(None) => config.user_instructions.clone(),
+            Err(e) => {
+                error!("error trying to read project doc: {e:#}");
+                config.user_instructions.clone()
+            }
         },
         Ok(None) => config.user_instructions.clone(),
         Err(e) => {
@@ -41,25 +49,31 @@ pub(crate) async fn get_user_instructions(config: &Config) -> Option<String> {
     }
 }
 
-/// Attempt to locate and load the project documentation. Currently, the search
-/// starts from `Config::cwd`, but if we may want to consider other directories
-/// in the future, e.g., additional writable directories in the `SandboxPolicy`.
-///
-/// On success returns `Ok(Some(contents))`. If no documentation file is found
-/// the function returns `Ok(None)`. Unexpected I/O failures bubble up as
-/// `Err` so callers can decide how to handle them.
-async fn find_project_doc(config: &Config) -> std::io::Result<Option<String>> {
-    let max_bytes = config.project_doc_max_bytes;
+// Same as `find_project_doc` but sync.
+pub fn find_project_doc_sync(cwd: &Path) -> std::io::Result<Option<PathBuf>> {
+    let cwd = cwd.to_path_buf();
+    let handle = tokio::runtime::Handle::current();
+    #[allow(clippy::expect_used)]
+    std::thread::spawn(move || handle.block_on(async { find_project_doc(&cwd).await }))
+        .join()
+        .expect("join should not fail")
+}
 
-    // Attempt to load from the working directory first.
-    if let Some(doc) = load_first_candidate(&config.cwd, CANDIDATE_FILENAMES, max_bytes).await? {
-        return Ok(Some(doc));
+/// Attempt to locate the project documentation file.
+///
+/// On success returns `Ok(Some(path))`. If no documentation file is found the
+/// function returns `Ok(None)`. Unexpected I/O failures bubble up as `Err` so
+/// callers can decide how to handle them.
+pub(crate) async fn find_project_doc(cwd: &Path) -> std::io::Result<Option<PathBuf>> {
+    // Attempt to locate the file in the working directory first.
+    if let Some(path) = find_candidate_in_dir(cwd).await? {
+        return Ok(Some(path));
     }
 
     // Walk up towards the filesystem root, stopping once we encounter the Git
     // repository root. The presence of **either** a `.git` *file* or
     // *directory* counts.
-    let mut dir = config.cwd.clone();
+    let mut dir = cwd.to_path_buf();
 
     // Canonicalize the path so that we do not end up in an infinite loop when
     // `cwd` contains `..` components.
@@ -77,9 +91,8 @@ async fn find_project_doc(config: &Config) -> std::io::Result<Option<String>> {
         };
 
         if git_exists {
-            // We are at the repo root – attempt one final load.
-            if let Some(doc) = load_first_candidate(&dir, CANDIDATE_FILENAMES, max_bytes).await? {
-                return Ok(Some(doc));
+            if let Some(path) = find_candidate_in_dir(&dir).await? {
+                return Ok(Some(path));
             }
             break;
         }
@@ -90,46 +103,48 @@ async fn find_project_doc(config: &Config) -> std::io::Result<Option<String>> {
     Ok(None)
 }
 
-/// Attempt to load the first candidate file found in `dir`. Returns the file
-/// contents (truncated if it exceeds `max_bytes`) when successful.
-async fn load_first_candidate(
-    dir: &Path,
-    names: &[&str],
-    max_bytes: usize,
-) -> std::io::Result<Option<String>> {
-    for name in names {
+async fn find_candidate_in_dir(dir: &Path) -> std::io::Result<Option<PathBuf>> {
+    for name in CANDIDATE_FILENAMES {
         let candidate = dir.join(name);
-
-        let file = match tokio::fs::File::open(&candidate).await {
+        match tokio::fs::metadata(&candidate).await {
+            Ok(_) => return Ok(Some(candidate)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
             Err(e) => return Err(e),
-            Ok(f) => f,
-        };
-
-        let size = file.metadata().await?.len();
-
-        let reader = tokio::io::BufReader::new(file);
-        let mut data = Vec::with_capacity(std::cmp::min(size as usize, max_bytes));
-        let mut limited = reader.take(max_bytes as u64);
-        limited.read_to_end(&mut data).await?;
-
-        if size as usize > max_bytes {
-            tracing::warn!(
-                "Project doc `{}` exceeds {max_bytes} bytes - truncating.",
-                candidate.display(),
-            );
         }
-
-        let contents = String::from_utf8_lossy(&data).to_string();
-        if contents.trim().is_empty() {
-            // Empty file – treat as not found.
-            continue;
-        }
-
-        return Ok(Some(contents));
     }
 
     Ok(None)
+}
+
+/// Read the project documentation from `path`, returning the contents truncated
+/// to `max_bytes`. Empty files are treated as absent.
+async fn read_limited(path: &Path, max_bytes: usize) -> std::io::Result<Option<String>> {
+    let file = match tokio::fs::File::open(path).await {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+        Ok(f) => f,
+    };
+
+    let size = file.metadata().await?.len();
+
+    let reader = tokio::io::BufReader::new(file);
+    let mut data = Vec::with_capacity(std::cmp::min(size as usize, max_bytes));
+    let mut limited = reader.take(max_bytes as u64);
+    limited.read_to_end(&mut data).await?;
+
+    if size as usize > max_bytes {
+        tracing::warn!(
+            "Project doc `{}` exceeds {max_bytes} bytes - truncating.",
+            path.display(),
+        );
+    }
+
+    let contents = String::from_utf8_lossy(&data).to_string();
+    if contents.trim().is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(contents))
 }
 
 #[cfg(test)]

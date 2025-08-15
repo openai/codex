@@ -44,6 +44,7 @@ lazy_static = "1"
 once_cell = "1"
 mcp-types = { path = "../mcp-types" }
 path-clean = "1.0.1"
+pathdiff = "0.2"
 ratatui = { version = "0.29.0", features = [
     "scrolling-regions",
     "unstable-rendered-line-info",

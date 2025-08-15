@@ -13,6 +13,7 @@ use codex_core::parse_command::ParsedCommand;
 use codex_core::plan_tool::PlanItemArg;
 use codex_core::plan_tool::StepStatus;
 use codex_core::plan_tool::UpdatePlanArgs;
+use codex_core::project_doc::find_project_doc_sync;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SandboxPolicy;
@@ -24,6 +25,7 @@ use image::DynamicImage;
 use image::ImageReader;
 use mcp_types::EmbeddedResourceResource;
 use mcp_types::ResourceLink;
+use pathdiff::diff_paths;
 use ratatui::prelude::*;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
@@ -155,7 +157,9 @@ pub(crate) fn new_session_info(
             None => config.cwd.display().to_string(),
         };
 
-        let lines: Vec<Line<'static>> = vec![
+        let agents_path = find_project_doc_sync(&config.cwd).unwrap_or_default();
+
+        let mut lines: Vec<Line<'static>> = vec![
             Line::from(vec![
                 Span::raw(">_ ").dim(),
                 Span::styled(
@@ -164,15 +168,38 @@ pub(crate) fn new_session_info(
                 ),
                 Span::raw(format!(" {cwd_str}")).dim(),
             ]),
-            Line::from("".dim()),
-            Line::from(" To get started, describe a task or try one of these commands:".dim()),
-            Line::from("".dim()),
-            Line::from(format!(" /init - {}", SlashCommand::Init.description()).dim()),
-            Line::from(format!(" /status - {}", SlashCommand::Status.description()).dim()),
-            Line::from(format!(" /diff - {}", SlashCommand::Diff.description()).dim()),
-            Line::from(format!(" /prompts - {}", SlashCommand::Prompts.description()).dim()),
-            Line::from("".dim()),
+            Line::from(""),
         ];
+        if let Some(p) = &agents_path {
+            let instructions_display_path = diff_paths(p, &config.cwd)
+                .map(|rel| rel.display().to_string())
+                .unwrap_or_else(|| p.display().to_string());
+            lines.push(Line::from(vec![
+                " Found ".dim(),
+                instructions_display_path.into(),
+                ".".dim(),
+            ]));
+            lines.push(Line::from(""));
+        }
+        lines.push(Line::from(
+            " To get started, describe a task or try one of these commands:".dim(),
+        ));
+        lines.push(Line::from(""));
+        if agents_path.is_none() {
+            lines.push(Line::from(
+                format!(" /init - {}", SlashCommand::Init.description()).dim(),
+            ));
+        }
+        lines.push(Line::from(
+            format!(" /status - {}", SlashCommand::Status.description()).dim(),
+        ));
+        lines.push(Line::from(
+            format!(" /diff - {}", SlashCommand::Diff.description()).dim(),
+        ));
+        lines.push(Line::from(
+            format!(" /prompts - {}", SlashCommand::Prompts.description()).dim(),
+        ));
+        lines.push(Line::from("".dim()));
         PlainHistoryCell { lines }
     } else if config.model == model {
         PlainHistoryCell { lines: Vec::new() }
