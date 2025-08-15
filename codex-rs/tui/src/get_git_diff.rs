@@ -20,12 +20,13 @@ pub(crate) async fn get_git_diff() -> io::Result<(bool, String)> {
         return Ok((false, String::new()));
     }
 
-    // 1. Diff for tracked files.
-    let tracked_diff = run_git_capture_diff(&["diff", "--color"]).await?;
-
-    // 2. Determine untracked files.
-    let untracked_output =
-        run_git_capture_stdout(&["ls-files", "--others", "--exclude-standard"]).await?;
+    // Run tracked diff and untracked file listing in parallel.
+    let (tracked_diff_res, untracked_output_res) = tokio::join!(
+        run_git_capture_diff(&["diff", "--color"]),
+        run_git_capture_stdout(&["ls-files", "--others", "--exclude-standard"]),
+    );
+    let tracked_diff = tracked_diff_res?;
+    let untracked_output = untracked_output_res?;
 
     let mut untracked_diff = String::new();
     let null_device: &Path = if cfg!(windows) {
@@ -34,26 +35,26 @@ pub(crate) async fn get_git_diff() -> io::Result<(bool, String)> {
         Path::new("/dev/null")
     };
 
+    let null_path = null_device.to_str().unwrap_or("/dev/null").to_string();
+    let mut join_set: tokio::task::JoinSet<io::Result<String>> = tokio::task::JoinSet::new();
     for file in untracked_output
         .split('\n')
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        // Use `git diff --no-index` to generate a diff against the null device.
-        let args = [
-            "diff",
-            "--color",
-            "--no-index",
-            "--",
-            null_device.to_str().unwrap_or("/dev/null"),
-            file,
-        ];
-
-        match run_git_capture_diff(&args).await {
-            Ok(diff) => untracked_diff.push_str(&diff),
-            // If the file disappeared between ls-files and diff we ignore the error.
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-            Err(err) => return Err(err),
+        let null_path = null_path.clone();
+        let file = file.to_string();
+        join_set.spawn(async move {
+            let args = ["diff", "--color", "--no-index", "--", &null_path, &file];
+            run_git_capture_diff(&args).await
+        });
+    }
+    while let Some(res) = join_set.join_next().await {
+        match res {
+            Ok(Ok(diff)) => untracked_diff.push_str(&diff),
+            Ok(Err(err)) if err.kind() == io::ErrorKind::NotFound => {}
+            Ok(Err(err)) => return Err(err),
+            Err(_) => {}
         }
     }
 
