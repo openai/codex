@@ -474,4 +474,46 @@ impl McpProcess {
         }))
         .await
     }
+
+    /// Reads notifications until a legacy TaskComplete event is observed:
+    /// Method "codex/event" with params.msg.type == "task_complete".
+    pub async fn read_stream_until_legacy_task_complete_notification(
+        &mut self,
+    ) -> anyhow::Result<JSONRPCNotification> {
+        loop {
+            let message = self.read_jsonrpc_message().await?;
+            eprint!("message: {message:?}");
+
+            match message {
+                JSONRPCMessage::Notification(notification) => {
+                    let is_match = if notification.method == "codex/event" {
+                        if let Some(params) = &notification.params {
+                            params
+                                .get("msg")
+                                .and_then(|m| m.get("type"))
+                                .and_then(|t| t.as_str())
+                                == Some("task_complete")
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+
+                    if is_match {
+                        return Ok(notification);
+                    }
+                }
+                JSONRPCMessage::Request(_) => {
+                    anyhow::bail!("unexpected JSONRPCMessage::Request: {message:?}");
+                }
+                JSONRPCMessage::Error(_) => {
+                    anyhow::bail!("unexpected JSONRPCMessage::Error: {message:?}");
+                }
+                JSONRPCMessage::Response(_) => {
+                    anyhow::bail!("unexpected JSONRPCMessage::Response: {message:?}");
+                }
+            }
+        }
+    }
 }
