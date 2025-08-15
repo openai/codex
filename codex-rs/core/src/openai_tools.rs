@@ -470,7 +470,6 @@ pub(crate) fn get_openai_tools(
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used)]
 mod tests {
     use crate::model_family::find_family_for_model;
     use mcp_types::ToolInputSchema;

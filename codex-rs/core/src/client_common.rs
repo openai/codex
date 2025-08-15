@@ -187,7 +187,6 @@ impl Stream for ResponseStream {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
     use crate::model_family::find_family_for_model;
 
     use super::*;

@@ -1,6 +1,4 @@
 #![cfg(target_os = "linux")]
-#![expect(clippy::unwrap_used, clippy::expect_used)]
-
 use codex_core::config_types::ShellEnvironmentPolicy;
 use codex_core::error::CodexErr;
 use codex_core::error::SandboxErr;
@@ -35,7 +33,7 @@ fn create_env_from_core_vars() -> HashMap<String, String> {
     create_env(&policy)
 }
 
-#[allow(clippy::print_stdout)]
+#[expect(clippy::print_stdout, clippy::expect_used, clippy::unwrap_used)]
 async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
     let params = ExecParams {
         command: cmd.iter().map(|elm| elm.to_string()).collect(),
@@ -132,6 +130,7 @@ async fn test_timeout() {
 /// does NOT succeed (i.e. returns a non‑zero exit code) **unless** the binary
 /// is missing in which case we silently treat it as an accepted skip so the
 /// suite remains green on leaner CI images.
+#[expect(clippy::expect_used)]
 async fn assert_network_blocked(cmd: &[&str]) {
     let cwd = std::env::current_dir().expect("cwd should exist");
     let params = ExecParams {

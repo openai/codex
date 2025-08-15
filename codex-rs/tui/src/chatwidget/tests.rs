@@ -1,5 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, unnameable_test_items)]
-
 use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
