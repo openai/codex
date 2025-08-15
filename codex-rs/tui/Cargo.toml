@@ -33,6 +33,7 @@ codex-common = { path = "../common", features = [
     "sandbox_summary",
 ] }
 codex-core = { path = "../core" }
+codex-protocol = { path = "../protocol" }
 codex-file-search = { path = "../file-search" }
 codex-login = { path = "../login" }
 codex-ollama = { path = "../ollama" }

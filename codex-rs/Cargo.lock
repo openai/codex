@@ -695,6 +695,7 @@ dependencies = [
  "codex-apply-patch",
  "codex-login",
  "codex-mcp-client",
+ "codex-protocol",
  "core_test_support",
  "dirs",
  "env-flags",
@@ -890,6 +891,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-protocol"
+version = "0.0.0"
+dependencies = [
+ "mcp-types",
+ "serde",
+ "serde_bytes",
+ "serde_json",
+ "strum 0.27.2",
+ "strum_macros 0.27.2",
+ "uuid",
+]
+
+[[package]]
 name = "codex-tui"
 version = "0.0.0"
 dependencies = [
@@ -904,6 +918,7 @@ dependencies = [
  "codex-file-search",
  "codex-login",
  "codex-ollama",
+ "codex-protocol",
  "color-eyre",
  "crossterm",
  "diffy",
