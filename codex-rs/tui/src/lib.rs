@@ -295,7 +295,6 @@ fn restore() {
     }
 }
 
-#[allow(clippy::unwrap_used)]
 fn should_show_login_screen(config: &Config) -> bool {
     if config.model_provider.requires_openai_auth {
         // Reading the OpenAI API key is an async operation because it may need

@@ -1,4 +1,4 @@
-#![allow(clippy::unwrap_used)]
+#![expect(clippy::unwrap_used)]
 use std::net::SocketAddr;
 use std::net::TcpListener;
 use std::thread;

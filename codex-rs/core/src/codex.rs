@@ -1,5 +1,5 @@
 // Poisoned mutex should fail the program
-#![allow(clippy::unwrap_used)]
+#![expect(clippy::unwrap_used)]
 
 use std::borrow::Cow;
 use std::collections::HashMap;

@@ -182,7 +182,6 @@ impl ChatComposerHistory {
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::expect_used)]
     use super::*;
     use crate::app_event::AppEvent;
     use codex_core::protocol::Op;

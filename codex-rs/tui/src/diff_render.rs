@@ -357,7 +357,6 @@ fn style_del() -> Style {
     Style::default().fg(Color::Red)
 }
 
-#[allow(clippy::expect_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
