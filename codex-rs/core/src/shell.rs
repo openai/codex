@@ -1,4 +1,5 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
+use serde::Serialize;
 use shlex;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
