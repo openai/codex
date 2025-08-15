@@ -117,10 +117,11 @@ jobs:
           dest="dist/${{ matrix.target }}"
 
           # For compatibility with environments that lack the `zstd` tool we
-          # additionally create a `.tar.gz` alongside every single binary that
-          # we publish. The end result is:
+          # additionally create a `.tar.gz` and `.zip` alongside every single
+          # binary that we publish. The end result is:
           #   codex-<target>.zst          (existing)
           #   codex-<target>.tar.gz       (new)
+          #   codex-<target>.zip
 
           # 1. Produce a .tar.gz for every file in the directory *before* we
           #    run `zstd --rm`, because that flag deletes the original files.
@@ -128,12 +129,17 @@ jobs:
             base="$(basename "$f")"
             # Skip files that are already archives (shouldn't happen, but be
             # safe).
-            if [[ "$base" == *.tar.gz ]]; then
+            if [[ "$base" == *.tar.gz || "$base" == *.zip ]]; then
               continue
             fi
 
             # Create per-binary tar.gz
             tar -C "$dest" -czf "$dest/${base}.tar.gz" "$base"
+
+            # Create per-binary zip archive
+            # Must run from inside the dest dir so 7z won't
+            # embed the directory path inside the zip.
+            (cd "$dest" && 7z a "${base}.zip" "$base")
 
             # Also create .zst (existing behaviour) *and* remove the original
             # uncompressed binary to keep the directory small.
