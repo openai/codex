@@ -2,8 +2,12 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::path::PathBuf;
 
+use codex_core::config_types::ReasoningEffort;
+use codex_core::config_types::ReasoningSummary;
+use codex_core::protocol::AskForApproval;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::ReviewDecision;
+use codex_core::protocol::SandboxPolicy;
 use mcp_types::RequestId;
 use serde::Deserialize;
 use serde::Serialize;
@@ -35,6 +39,11 @@ pub enum ClientRequest {
         #[serde(rename = "id")]
         request_id: RequestId,
         params: SendUserMessageParams,
+    },
+    SendUserTurn {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: SendUserTurnParams,
     },
     InterruptConversation {
         #[serde(rename = "id")]
@@ -119,6 +128,23 @@ pub struct SendUserMessageParams {
     pub conversation_id: ConversationId,
     pub items: Vec<InputItem>,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SendUserTurnParams {
+    pub conversation_id: ConversationId,
+    pub items: Vec<InputItem>,
+    pub cwd: PathBuf,
+    pub approval_policy: AskForApproval,
+    pub sandbox_policy: SandboxPolicy,
+    pub model: String,
+    pub effort: ReasoningEffort,
+    pub summary: ReasoningSummary,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SendUserTurnResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]

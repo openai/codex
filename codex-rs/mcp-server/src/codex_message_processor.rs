@@ -42,6 +42,8 @@ use crate::wire_format::RemoveConversationListenerParams;
 use crate::wire_format::RemoveConversationSubscriptionResponse;
 use crate::wire_format::SendUserMessageParams;
 use crate::wire_format::SendUserMessageResponse;
+use crate::wire_format::SendUserTurnParams;
+use crate::wire_format::SendUserTurnResponse;
 use codex_core::protocol::InputItem as CoreInputItem;
 use codex_core::protocol::Op;
 
@@ -77,6 +79,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::SendUserMessage { request_id, params } => {
                 self.send_user_message(request_id, params).await;
+            }
+            ClientRequest::SendUserTurn { request_id, params } => {
+                self.send_user_turn(request_id, params).await;
             }
             ClientRequest::InterruptConversation { request_id, params } => {
                 self.interrupt_conversation(request_id, params).await;
@@ -166,6 +171,58 @@ impl CodexMessageProcessor {
         // Acknowledge with an empty result.
         self.outgoing
             .send_response(request_id, SendUserMessageResponse {})
+            .await;
+    }
+
+    async fn send_user_turn(&self, request_id: RequestId, params: SendUserTurnParams) {
+        let SendUserTurnParams {
+            conversation_id,
+            items,
+            cwd,
+            approval_policy,
+            sandbox_policy,
+            model,
+            effort,
+            summary,
+        } = params;
+
+        let Ok(conversation) = self
+            .conversation_manager
+            .get_conversation(conversation_id.0)
+            .await
+        else {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!("conversation not found: {conversation_id}"),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        };
+
+        let mapped_items: Vec<CoreInputItem> = items
+            .into_iter()
+            .map(|item| match item {
+                WireInputItem::Text { text } => CoreInputItem::Text { text },
+                WireInputItem::Image { image_url } => CoreInputItem::Image { image_url },
+                WireInputItem::LocalImage { path } => CoreInputItem::LocalImage { path },
+            })
+            .collect();
+
+        let _ = conversation
+            .submit(Op::UserTurn {
+                items: mapped_items,
+                cwd,
+                approval_policy,
+                sandbox_policy,
+                model,
+                effort,
+                summary,
+            })
+            .await;
+
+        self.outgoing
+            .send_response(request_id, SendUserTurnResponse {})
             .await;
     }
 

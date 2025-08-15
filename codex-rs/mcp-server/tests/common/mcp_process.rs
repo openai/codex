@@ -22,6 +22,7 @@ use codex_mcp_server::wire_format::AddConversationListenerParams;
 use codex_mcp_server::wire_format::NewConversationParams;
 use codex_mcp_server::wire_format::RemoveConversationListenerParams;
 use codex_mcp_server::wire_format::SendUserMessageParams;
+use codex_mcp_server::wire_format::SendUserTurnParams;
 
 use mcp_types::CallToolRequestParams;
 use mcp_types::ClientCapabilities;
@@ -279,6 +280,15 @@ impl McpProcess {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("removeConversationListener", params)
             .await
+    }
+
+    /// Send a `sendUserTurn` JSON-RPC request.
+    pub async fn send_send_user_turn_request(
+        &mut self,
+        params: SendUserTurnParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("sendUserTurn", params).await
     }
 
     async fn send_request(
