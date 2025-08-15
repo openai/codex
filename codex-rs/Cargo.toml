@@ -10,6 +10,7 @@ members = [
     "execpolicy",
     "file-search",
     "linux-sandbox",
+    "lmstudio",
     "login",
     "mcp-client",
     "mcp-server",

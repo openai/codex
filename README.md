@@ -273,6 +273,14 @@ base_url = "http://localhost:11434/v1"
 
 The `base_url` will have `/chat/completions` appended to it to build the full URL for the request.
 
+For LM Studio, you can use the following configuration:
+
+```toml
+[model_providers.lmstudio]
+name = "LM Studio"
+base_url = "http://localhost:1234/v1"
+```
+
 For providers that also require an `Authorization` header of the form `Bearer: SECRET`, an `env_key` can be specified, which indicates the environment variable to read to use as the value of `SECRET` when making a request:
 
 ```toml
@@ -318,15 +326,28 @@ This way, you can specify one command-line argument (.e.g., `--profile o3`, `--p
 
 </details>
 
-Codex can run fully locally against an OpenAI-compatible OSS host (like Ollama) using the `--oss` flag:
+Codex can run fully locally against an OpenAI-compatible OSS host (like LM Studio or Ollama) using the `--oss` flag:
 
 - Interactive UI:
   - codex --oss
-- Non-interactive (programmatic) mode:
-  - echo "Refactor utils" | codex exec --oss
+- Non-interactive (programmatic) mode (Make sure you either have a oss provider configured or pass `--local-provider`):
+  - echo "Refactor utils" | codex exec --oss # With pre-configured OSS provider
+  - echo "Refactor utils" | codex exec --oss --local-provider=lmstudio # With LM Studio specified
+
+You can also specify which local provider to use with the `--local-provider` flag:
+
+- codex --oss --local-provider=lmstudio
+- codex --oss --local-provider=ollama
+
+You can set the default local provider in your `~/.codex/config.toml` file:
+
+```toml
+oss_provider="lmstudio" # or "ollama"
+```
+
 
 Model selection when using `--oss`:
-
+`
 - If you omit `-m/--model`, Codex defaults to -m gpt-oss:20b and will verify it exists locally (downloading if needed).
 - To pick a different size, pass one of:
   - -m "gpt-oss:20b"
