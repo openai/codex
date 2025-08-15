@@ -4,42 +4,24 @@ use codex_core::config::ConfigOverrides;
 use codex_login::AuthMode;
 use codex_login::CLIENT_ID;
 use codex_login::CodexAuth;
-use codex_login::LoginServerInfo;
 use codex_login::OPENAI_API_KEY_ENV_VAR;
 use codex_login::ServerOptions;
 use codex_login::login_with_api_key;
 use codex_login::logout;
-use codex_login::run_server_blocking_with_notify;
+use codex_login::run_login_server;
 use std::env;
-use std::path::Path;
-use std::sync::mpsc;
+use std::path::PathBuf;
 
-pub async fn login_with_chatgpt(codex_home: &Path) -> std::io::Result<()> {
-    let (tx, rx) = mpsc::channel::<LoginServerInfo>();
-    let client_id = CLIENT_ID;
-    let codex_home = codex_home.to_path_buf();
-    tokio::spawn(async move {
-        match rx.recv() {
-            Ok(LoginServerInfo {
-                auth_url,
-                actual_port,
-            }) => {
-                eprintln!(
-                    "Starting local login server on http://localhost:{actual_port}.\nIf your browser did not open, navigate to this URL to authenticate:\n\n{auth_url}",
-                );
-            }
-            _ => {
-                tracing::error!("Failed to receive login server info");
-            }
-        }
-    });
+pub async fn login_with_chatgpt(codex_home: PathBuf) -> std::io::Result<()> {
+    let opts = ServerOptions::new(codex_home, CLIENT_ID.to_string());
+    let server = run_login_server(opts, None)?;
 
-    tokio::task::spawn_blocking(move || {
-        let opts = ServerOptions::new(&codex_home, client_id);
-        run_server_blocking_with_notify(opts, Some(tx), None)
-    })
-    .await
-    .map_err(std::io::Error::other)??;
+    eprintln!(
+        "Starting local login server on http://localhost:{}.\nIf your browser did not open, navigate to this URL to authenticate:\n\n{}",
+        server.actual_port, server.auth_url,
+    );
+
+    server.block_until_done()?;
 
     eprintln!("Successfully logged in");
     Ok(())
@@ -48,7 +30,7 @@ pub async fn login_with_chatgpt(codex_home: &Path) -> std::io::Result<()> {
 pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides);
 
-    match login_with_chatgpt(&config.codex_home).await {
+    match login_with_chatgpt(config.codex_home).await {
         Ok(_) => {
             eprintln!("Successfully logged in");
             std::process::exit(0);
