@@ -41,4 +41,8 @@ pub(crate) trait BottomPaneView<'a> {
     ) -> Option<ApprovalRequest> {
         Some(request)
     }
+
+    /// Optional hook for views that expose a live status line. Views that do not
+    /// support this can ignore the call.
+    fn update_status_text(&mut self, _text: String) {}
 }
