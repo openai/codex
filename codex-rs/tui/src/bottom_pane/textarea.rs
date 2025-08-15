@@ -801,7 +801,7 @@ impl TextArea {
         }
     }
 
-    #[allow(clippy::unwrap_used)]
+    #[expect(clippy::unwrap_used)]
     fn wrapped_lines(&self, width: u16) -> Ref<'_, Vec<Range<usize>>> {
         // Ensure cache is ready (potentially mutably borrow, then drop)
         {
@@ -926,7 +926,6 @@ impl TextArea {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     // crossterm types are intentionally not imported here to avoid unused warnings
@@ -1432,7 +1431,6 @@ mod tests {
         // Seed the RNG based on the current day in Pacific Time (PST/PDT). This
         // keeps the fuzz test deterministic within a day while still varying
         // day-to-day to improve coverage.
-        #[allow(clippy::unwrap_used)]
         let pst_today_seed: u64 = (chrono::Utc::now() - chrono::Duration::hours(8))
             .date_naive()
             .and_hms_opt(0, 0, 0)

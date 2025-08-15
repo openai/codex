@@ -69,6 +69,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     needs: changed
+    # Keep job-level if to avoid spinning up runners when not needed
     if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
     defaults:
       run:
@@ -166,3 +167,27 @@ jobs:
         run: |
           echo "One or more checks failed (clippy, build, or test). See logs for details."
           exit 1
+
+  # --- Gatherer job that you mark as the ONLY required status -----------------
+  results:
+    name: CI results (required)
+    needs: [changed, general, lint_build_test]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Summarize
+        shell: bash
+        run: |
+          echo "general: ${{ needs.general.result }}"
+          echo "matrix : ${{ needs.lint_build_test.result }}"
+
+          # If nothing relevant changed (PR touching only root README, etc.),
+          # declare success regardless of other jobs.
+          if [[ '${{ needs.changed.outputs.codex }}' != 'true' && '${{ needs.changed.outputs.workflows }}' != 'true' && '${{ github.event_name }}' != 'push' ]]; then
+            echo 'No relevant changes -> CI not required.'
+            exit 0
+          fi
+
+          # Otherwise require the jobs to have succeeded
+          [[ '${{ needs.general.result }}' == 'success' ]] || { echo 'general failed'; exit 1; }
+          [[ '${{ needs.lint_build_test.result }}' == 'success' ]] || { echo 'matrix failed'; exit 1; }

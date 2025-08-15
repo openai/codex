@@ -245,7 +245,6 @@ fn is_write_patch_constrained_to_writable_paths(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
     use super::*;
 
     #[test]

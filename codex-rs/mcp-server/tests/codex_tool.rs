@@ -304,7 +304,7 @@ async fn test_codex_tool_passes_base_instructions() {
 }
 
 async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
-    #![allow(clippy::unwrap_used)]
+    #![expect(clippy::unwrap_used)]
 
     let server =
         create_mock_chat_completions_server(vec![create_final_assistant_message_sse_response(

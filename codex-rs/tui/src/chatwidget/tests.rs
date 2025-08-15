@@ -1,5 +1,3 @@
-#![allow(clippy::unwrap_used, clippy::expect_used, unnameable_test_items)]
-
 use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -143,6 +141,7 @@ fn make_chatwidget_manual() -> (
         task_complete_pending: false,
         interrupts: InterruptManager::new(),
         needs_redraw: false,
+        session_id: None,
     };
     (widget, rx, op_rx)
 }

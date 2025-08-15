@@ -427,7 +427,6 @@ fn parse_update_file_chunk(
 }
 
 #[test]
-#[allow(clippy::unwrap_used)]
 fn test_parse_patch() {
     assert_eq!(
         parse_patch_text("bad", ParseMode::Strict),

@@ -281,7 +281,6 @@ fn is_valid_mcp_server_name(server_name: &str) -> bool {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use mcp_types::ToolInputSchema;
