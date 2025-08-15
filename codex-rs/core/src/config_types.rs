@@ -206,6 +206,9 @@ impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
 pub enum ReasoningEffort {
+    /// Automatically use "high" during task planning and falls back
+    /// to the default for subsequent turns.
+    Auto,
     Low,
     #[default]
     Medium,

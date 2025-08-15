@@ -38,6 +38,7 @@ use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::config::Config;
 use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
+use crate::config_types::ReasoningEffort;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::conversation_history::ConversationHistory;
@@ -225,6 +226,7 @@ struct State {
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
     pending_input: Vec<ResponseInputItem>,
     history: ConversationHistory,
+    planning_active: bool,
 }
 
 /// Context for an initialized model agent
@@ -265,6 +267,8 @@ pub(crate) struct TurnContext {
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) disable_response_storage: bool,
     pub(crate) tools_config: ToolsConfig,
+    pub(crate) requested_effort: ReasoningEffortConfig,
+    pub(crate) requested_summary: ReasoningSummaryConfig,
 }
 
 impl TurnContext {
@@ -462,14 +466,7 @@ impl Session {
 
         // Now that `session_id` is final (may have been updated by resume),
         // construct the model client.
-        let client = ModelClient::new(
-            config.clone(),
-            auth.clone(),
-            provider.clone(),
-            model_reasoning_effort,
-            model_reasoning_summary,
-            session_id,
-        );
+        let client = ModelClient::new(config.clone(), auth.clone(), provider.clone(), session_id);
         let turn_context = TurnContext {
             client,
             tools_config: ToolsConfig::new(
@@ -486,6 +483,8 @@ impl Session {
             shell_environment_policy: config.shell_environment_policy.clone(),
             cwd,
             disable_response_storage,
+            requested_effort: model_reasoning_effort,
+            requested_summary: model_reasoning_summary,
         };
         let sess = Arc::new(Session {
             session_id,
@@ -530,6 +529,20 @@ impl Session {
         }
 
         Ok((sess, turn_context))
+    }
+
+    pub fn mark_planning_started(&self) {
+        debug!("Starting planning mode");
+        self.state.lock_unchecked().planning_active = true;
+    }
+
+    pub fn mark_planning_completed(&self) {
+        debug!("Ending planning mode");
+        self.state.lock_unchecked().planning_active = false;
+    }
+
+    pub fn is_planning_active(&self) -> bool {
+        self.state.lock_unchecked().planning_active
     }
 
     pub fn set_task(&self, task: AgentTask) {
@@ -852,6 +865,9 @@ impl Session {
     fn abort(&self) {
         info!("Aborting existing session");
         let mut state = self.state.lock_unchecked();
+        // Ensure planning mode is disabled on abort so reasoning high
+        // does not carry over unexpectedly to the next task.
+        state.planning_active = false;
         state.pending_approvals.clear();
         state.pending_input.clear();
         if let Some(task) = state.current_task.take() {
@@ -1031,8 +1047,6 @@ async fn submission_loop(
                         Arc::new(per_turn_config),
                         None,
                         provider,
-                        effort,
-                        summary,
                         sess.session_id,
                     );
 
@@ -1052,6 +1066,8 @@ async fn submission_loop(
                         shell_environment_policy: turn_context.shell_environment_policy.clone(),
                         cwd,
                         disable_response_storage: turn_context.disable_response_storage,
+                        requested_effort: effort,
+                        requested_summary: summary,
                     };
 
                     // no current task, spawn a new one with the per‑turn context
@@ -1194,6 +1210,8 @@ async fn run_task(
     if sess.tx_event.send(event).await.is_err() {
         return;
     }
+    // Each task starts in planning mode to boost reasoning effort.
+    sess.mark_planning_started();
 
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
     sess.record_conversation_items(&[initial_input_for_turn.clone().into()])
@@ -1504,7 +1522,24 @@ async fn try_run_turn(
         })
     };
 
-    let mut stream = turn_context.client.clone().stream(&prompt).await?;
+    // Resolve effective effort for this turn.
+    // If Auto: use High during planning; Medium afterwards. Otherwise use explicit.
+    let effective_effort = match turn_context.requested_effort {
+        ReasoningEffort::Auto => {
+            if sess.is_planning_active() {
+                ReasoningEffort::High
+            } else {
+                ReasoningEffort::Medium
+            }
+        }
+        other => other,
+    };
+
+    let mut stream = turn_context
+        .client
+        .clone()
+        .stream(&prompt, effective_effort, turn_context.requested_summary)
+        .await?;
 
     let mut output = Vec::new();
     loop {
@@ -1555,6 +1590,12 @@ async fn try_run_turn(
                         })
                         .await
                         .ok();
+                }
+
+                // Planning phase ends after the first planning turn completes
+                // (or immediately after a plan update tool call in this turn).
+                if sess.is_planning_active() {
+                    sess.mark_planning_completed();
                 }
 
                 let unified_diff = turn_diff_tracker.get_unified_diff();
@@ -1878,7 +1919,11 @@ async fn handle_function_call(
             )
             .await
         }
-        "update_plan" => handle_update_plan(sess, arguments, sub_id, call_id).await,
+        "update_plan" => {
+            // Planning tool call completes the planning phase.
+            sess.mark_planning_completed();
+            handle_update_plan(sess, arguments, sub_id, call_id).await
+        }
         _ => {
             match sess.mcp_connection_manager.parse_tool_name(&name) {
                 Some((server, tool_name)) => {
@@ -2382,7 +2427,16 @@ async fn drain_to_completed(
     sub_id: &str,
     prompt: &Prompt,
 ) -> CodexResult<()> {
-    let mut stream = turn_context.client.clone().stream(prompt).await?;
+    // Compact/summarization isn’t planning; if Auto, use Medium; else explicit per-turn effort.
+    let effective_effort = match turn_context.requested_effort {
+        ReasoningEffort::Auto => ReasoningEffort::Medium,
+        other => other,
+    };
+    let mut stream = turn_context
+        .client
+        .clone()
+        .stream(prompt, effective_effort, turn_context.requested_summary)
+        .await?;
     loop {
         let maybe_event = stream.next().await;
         let Some(event) = maybe_event else {

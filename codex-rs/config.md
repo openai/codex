@@ -222,12 +222,15 @@ If the model name starts with `"o"` (as in `"o3"` or `"o4-mini"`) or `"codex"`, 
 - `"low"`
 - `"medium"` (default)
 - `"high"`
+- `"auto"` (uses high for task planning and default for implementation)
 
 To disable reasoning, set `model_reasoning_effort` to `"none"` in your config:
 
 ```toml
 model_reasoning_effort = "none"  # disable reasoning
 ```
+
+When set to `"auto"`, Codex temporarily boosts reasoning effort to `"high"` during the initial task planning phase (i.e., while creating the plan with `update_plan`) and then switches back to the default setting (`"medium"`) for subsequent implementation turns.
 
 ## model_reasoning_summary
 

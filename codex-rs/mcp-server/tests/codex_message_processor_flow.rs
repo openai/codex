@@ -28,6 +28,12 @@ use serde::de::DeserializeOwned;
 use std::env;
 use tempfile::TempDir;
 use tokio::time::timeout;
+use wiremock::Mock;
+use wiremock::MockServer;
+use wiremock::ResponseTemplate;
+use wiremock::matchers::body_string_contains;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -373,4 +379,218 @@ stream_max_retries = 0
 "#
         ),
     )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_send_user_turn_responses_effort_respected() {
+    if env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+        );
+        return;
+    }
+
+    let tmp = TempDir::new().expect("tmp dir");
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home).expect("create codex home dir");
+    let working_directory = tmp.path().join("workdir");
+    std::fs::create_dir(&working_directory).expect("create working directory");
+
+    // SSE for first request triggers update_plan, then completes.
+    let update_plan_args = serde_json::json!({
+        "plan": [{"step": "Do the thing", "status": "in_progress"}]
+    })
+    .to_string();
+    let sse_first = {
+        let item = serde_json::json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "function_call",
+                "id": "call-1",
+                "call_id": "call-1",
+                "name": "update_plan",
+                "arguments": update_plan_args,
+            }
+        })
+        .to_string();
+        let completed = serde_json::json!({
+            "type": "response.completed",
+            "response": { "id": "r1" }
+        })
+        .to_string();
+        format!("data: {item}\n\ndata: {completed}\n\n")
+    };
+
+    // SSE for second request: minimal completed turn.
+    let sse_second = {
+        let created = serde_json::json!({
+            "type": "response.created",
+            "response": {}
+        })
+        .to_string();
+        let completed = serde_json::json!({
+            "type": "response.completed",
+            "response": { "id": "r2" }
+        })
+        .to_string();
+        format!("data: {created}\n\ndata: {completed}\n\n")
+    };
+
+    // Wire up a mock Responses server expecting two calls.
+    let server = MockServer::start().await;
+    // Second call matcher: will include function_call_output in body.
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(body_string_contains("\"function_call_output\""))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_raw(sse_second.clone(), "text/event-stream"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    // First call matcher: initial user input.
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(body_string_contains("\"input_text\""))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_raw(sse_first.clone(), "text/event-stream"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // Write a minimal config.toml pointing at the Responses API mock.
+    let config_toml = codex_home.join("config.toml");
+    std::fs::write(
+        &config_toml,
+        format!(
+            r#"
+model = "mock-model"
+approval_policy = "never"
+model_supports_reasoning_summaries = true
+
+model_provider = "mock_provider"
+
+[model_providers.mock_provider]
+name = "Mock provider for test"
+base_url = "{}/v1"
+wire_api = "responses"
+request_max_retries = 0
+stream_max_retries = 0
+"#,
+            server.uri()
+        ),
+    )
+    .expect("write config");
+
+    // Start MCP server and initialize.
+    let mut mcp = McpProcess::new(&codex_home).await.expect("spawn mcp");
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize())
+        .await
+        .expect("init timeout")
+        .expect("init error");
+
+    // newConversation (use working_directory)
+    let new_conv_id = mcp
+        .send_new_conversation_request(NewConversationParams {
+            cwd: Some(working_directory.to_string_lossy().into_owned()),
+            ..Default::default()
+        })
+        .await
+        .expect("send newConversation");
+    let new_conv_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(new_conv_id)),
+    )
+    .await
+    .expect("newConversation timeout")
+    .expect("newConversation resp");
+    let NewConversationResponse {
+        conversation_id, ..
+    } = to_response::<NewConversationResponse>(new_conv_resp)
+        .expect("deserialize newConversation response");
+
+    // addConversationListener
+    let add_listener_id = mcp
+        .send_add_conversation_listener_request(AddConversationListenerParams { conversation_id })
+        .await
+        .expect("send addConversationListener");
+    let _add_listener_resp: AddConversationSubscriptionResponse = to_response(
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(add_listener_id)),
+        )
+        .await
+        .expect("addConversationListener timeout")
+        .expect("addConversationListener resp"),
+    )
+    .expect("deserialize addConversationListener response");
+
+    // Send a user turn with explicit effort=high; this should be respected for all requests in this task.
+    let send_turn_id = mcp
+        .send_send_user_turn_request(SendUserTurnParams {
+            conversation_id,
+            items: vec![codex_mcp_server::wire_format::InputItem::Text {
+                text: "plan then do".to_string(),
+            }],
+            cwd: working_directory.clone(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            model: "mock-model".to_string(),
+            effort: ReasoningEffort::High,
+            summary: ReasoningSummary::Auto,
+        })
+        .await
+        .expect("send sendUserTurn");
+    let _send_turn_resp: SendUserTurnResponse = to_response::<SendUserTurnResponse>(
+        timeout(
+            DEFAULT_READ_TIMEOUT,
+            mcp.read_stream_until_response_message(RequestId::Integer(send_turn_id)),
+        )
+        .await
+        .expect("sendUserTurn timeout")
+        .expect("sendUserTurn resp"),
+    )
+    .expect("deserialize sendUserTurn response");
+
+    // Wait for task completion.
+    let _ = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_notification_message("codex/event/task_complete"),
+    )
+    .await
+    .expect("task_complete timeout")
+    .expect("task_complete notification");
+
+    // Inspect the two /v1/responses requests and assert reasoning.effort = "high" on both.
+    let requests = server.received_requests().await.expect("received requests");
+
+    assert!(requests.len() >= 2, "expected at least 2 requests");
+    let (first_req, second_req) =
+        if String::from_utf8_lossy(&requests[0].body).contains("\"function_call_output\"") {
+            (&requests[1], &requests[0])
+        } else {
+            (&requests[0], &requests[1])
+        };
+
+    let first_body: serde_json::Value = serde_json::from_slice(&first_req.body).unwrap();
+    let second_body: serde_json::Value = serde_json::from_slice(&second_req.body).unwrap();
+
+    let first_effort = first_body
+        .get("reasoning")
+        .and_then(|v| v.get("effort"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let second_effort = second_body
+        .get("reasoning")
+        .and_then(|v| v.get("effort"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    assert_eq!(first_effort, "high", "per-turn effort should be respected");
+    assert_eq!(second_effort, "high", "per-turn effort should persist");
 }
