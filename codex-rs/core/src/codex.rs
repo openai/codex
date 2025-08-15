@@ -1062,6 +1062,7 @@ async fn submission_loop(
                             sandbox_policy.clone(),
                             config.include_plan_tool,
                             config.include_apply_patch_tool,
+                            config.tools_web_search_request,
                         ),
                         user_instructions: turn_context.user_instructions.clone(),
                         base_instructions: turn_context.base_instructions.clone(),
@@ -1456,7 +1457,7 @@ async fn run_turn(
                         tools: tools_no_web,
                         base_instructions_override: prompt.base_instructions_override.clone(),
                     };
-                    match try_run_turn(sess, turn_diff_tracker, &sub_id, &prompt_no_web).await {
+                    match try_run_turn(sess, turn_context, turn_diff_tracker, &sub_id, &prompt_no_web).await {
                         Ok(output) => return Ok(output),
                         Err(e2) => return Err(e2),
                     }
@@ -1980,7 +1981,7 @@ async fn handle_function_call(
                 msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
                     call_id: call_id.clone(),
                     command: vec!["web_search".to_string(), query.clone()],
-                    cwd: sess.get_cwd().to_path_buf(),
+                    cwd: turn_context.cwd.clone(),
                     reason: Some("Request to perform a web search".to_string()),
                 }),
             };
