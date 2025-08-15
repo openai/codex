@@ -94,6 +94,7 @@ pub(crate) struct Reasoning {
 #[derive(Debug, Serialize, Default, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum OpenAiReasoningEffort {
+    Minimal,
     Low,
     #[default]
     Medium,
@@ -103,6 +104,7 @@ pub(crate) enum OpenAiReasoningEffort {
 impl From<ReasoningEffortConfig> for Option<OpenAiReasoningEffort> {
     fn from(effort: ReasoningEffortConfig) -> Self {
         match effort {
+            ReasoningEffortConfig::Minimal => Some(OpenAiReasoningEffort::Minimal),
             ReasoningEffortConfig::Low => Some(OpenAiReasoningEffort::Low),
             ReasoningEffortConfig::Medium => Some(OpenAiReasoningEffort::Medium),
             ReasoningEffortConfig::High => Some(OpenAiReasoningEffort::High),
