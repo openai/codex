@@ -161,6 +161,9 @@ pub struct Config {
     /// model family's default preference.
     pub include_apply_patch_tool: bool,
 
+    /// Enable the per-call web search request tool. Off by default; can be enabled via --search CLI.
+    pub tools_web_search_request: bool,
+
     /// The value for the `originator` header included with Responses API requests.
     pub internal_originator: Option<String>,
 }
@@ -409,11 +412,20 @@ pub struct ConfigToml {
     pub internal_originator: Option<String>,
 
     pub projects: Option<HashMap<String, ProjectConfig>>,
+
+    /// Nested tools section for feature toggles
+    pub tools: Option<ToolsToml>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ProjectConfig {
     pub trust_level: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Clone, Default)]
+pub struct ToolsToml {
+    #[serde(default)]
+    pub web_search_request: Option<bool>,
 }
 
 impl ConfigToml {
@@ -472,6 +484,7 @@ impl ConfigToml {
         }
     }
 }
+
 
 /// Optional overrides for user configuration (e.g., from CLI flags).
 #[derive(Default, Debug, Clone)]
@@ -552,7 +565,7 @@ impl Config {
             })?
             .clone();
 
-        let shell_environment_policy = cfg.shell_environment_policy.into();
+        let shell_environment_policy = cfg.shell_environment_policy.clone().into();
 
         let resolved_cwd = {
             use std::env;
@@ -573,7 +586,14 @@ impl Config {
             }
         };
 
-        let history = cfg.history.unwrap_or_default();
+        let history = cfg.history.clone().unwrap_or_default();
+
+        // Compute feature flags before moving fields out of cfg
+        let tools_web_search_request = cfg
+            .tools
+            .as_ref()
+            .and_then(|t| t.web_search_request)
+            .unwrap_or(false);
 
         let model = model
             .or(config_profile.model)
@@ -646,7 +666,7 @@ impl Config {
             codex_home,
             history,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
-            tui: cfg.tui.unwrap_or_default(),
+            tui: cfg.tui.clone().unwrap_or_default(),
             codex_linux_sandbox_exe,
 
             hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(false),
@@ -665,12 +685,13 @@ impl Config {
 
             chatgpt_base_url: config_profile
                 .chatgpt_base_url
-                .or(cfg.chatgpt_base_url)
+                .or(cfg.chatgpt_base_url.clone())
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
 
             experimental_resume,
             include_plan_tool: include_plan_tool.unwrap_or(false),
             include_apply_patch_tool: include_apply_patch_tool_val,
+            tools_web_search_request,
             internal_originator: cfg.internal_originator,
         };
         Ok(config)
@@ -1035,6 +1056,7 @@ disable_response_storage = true
                 base_instructions: None,
                 include_plan_tool: false,
                 include_apply_patch_tool: false,
+                tools_web_search_request: false,
                 internal_originator: None,
             },
             o3_profile_config
@@ -1087,6 +1109,7 @@ disable_response_storage = true
             base_instructions: None,
             include_plan_tool: false,
             include_apply_patch_tool: false,
+            tools_web_search_request: false,
             internal_originator: None,
         };
 
@@ -1154,6 +1177,7 @@ disable_response_storage = true
             base_instructions: None,
             include_plan_tool: false,
             include_apply_patch_tool: false,
+            tools_web_search_request: false,
             internal_originator: None,
         };
 
