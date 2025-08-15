@@ -43,7 +43,6 @@ use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::InputResult;
-use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell;
 use crate::history_cell::CommandOutput;
 use crate::history_cell::ExecCell;
@@ -391,17 +390,6 @@ impl ChatWidget<'_> {
 
     pub(crate) fn handle_exec_approval_now(&mut self, id: String, ev: ExecApprovalRequestEvent) {
         self.flush_answer_stream_with_separator();
-        // Log a background summary immediately so the history is chronological.
-        let cmdline = strip_bash_lc_and_escape(&ev.command);
-        let text = format!(
-            "command requires approval:\n$ {cmdline}{reason}",
-            reason = ev
-                .reason
-                .as_ref()
-                .map(|r| format!("\n{r}"))
-                .unwrap_or_default()
-        );
-        self.add_to_history(&history_cell::new_background_event(text));
 
         let request = ApprovalRequest::Exec {
             id,

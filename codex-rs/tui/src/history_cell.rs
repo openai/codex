@@ -136,14 +136,6 @@ fn pretty_provider_name(id: &str) -> String {
     }
 }
 
-pub(crate) fn new_background_event(message: String) -> PlainHistoryCell {
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(Line::from("event".dim()));
-    lines.extend(message.lines().map(|line| ansi_escape_line(line).dim()));
-    lines.push(Line::from(""));
-    PlainHistoryCell { lines }
-}
-
 pub(crate) fn new_session_info(
     config: &Config,
     event: SessionConfiguredEvent,
