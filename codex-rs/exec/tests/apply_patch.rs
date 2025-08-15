@@ -3,16 +3,9 @@
 use anyhow::Context;
 use assert_cmd::prelude::*;
 use codex_core::CODEX_APPLY_PATCH_ARG1;
-use core_test_support::load_sse_fixture_with_id_from_str;
 use std::fs;
 use std::process::Command;
-use tempfile::TempDir;
 use tempfile::tempdir;
-use wiremock::Mock;
-use wiremock::MockServer;
-use wiremock::ResponseTemplate;
-use wiremock::matchers::method;
-use wiremock::matchers::path;
 
 /// While we may add an `apply-patch` subcommand to the `codex` CLI multitool
 /// at some point, we must ensure that the smaller `codex-exec` CLI can still
@@ -47,7 +40,18 @@ fn test_standalone_exec_cli_can_use_apply_patch() -> anyhow::Result<()> {
     Ok(())
 }
 
-const SSE_TOOL_CALL_ADD: &str = r#"[
+#[cfg(not(target_os = "windows"))]
+#[tokio::test]
+async fn test_apply_patch_tool() -> anyhow::Result<()> {
+    use core_test_support::load_sse_fixture_with_id_from_str;
+    use tempfile::TempDir;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+
+    const SSE_TOOL_CALL_ADD: &str = r#"[
   {
     "type": "response.output_item.done",
     "item": {
@@ -73,7 +77,7 @@ const SSE_TOOL_CALL_ADD: &str = r#"[
   }
 ]"#;
 
-const SSE_TOOL_CALL_UPDATE: &str = r#"[
+    const SSE_TOOL_CALL_UPDATE: &str = r#"[
   {
     "type": "response.output_item.done",
     "item": {
@@ -99,7 +103,7 @@ const SSE_TOOL_CALL_UPDATE: &str = r#"[
   }
 ]"#;
 
-const SSE_TOOL_CALL_COMPLETED: &str = r#"[
+    const SSE_TOOL_CALL_COMPLETED: &str = r#"[
   {
     "type": "response.completed",
     "response": {
@@ -116,9 +120,6 @@ const SSE_TOOL_CALL_COMPLETED: &str = r#"[
   }
 ]"#;
 
-#[cfg(not(target_os = "windows"))]
-#[tokio::test]
-async fn test_apply_patch_tool() -> anyhow::Result<()> {
     // Start a mock model server
     let server = MockServer::start().await;
 
