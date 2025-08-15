@@ -1,5 +1,4 @@
 use chrono::DateTime;
-
 use chrono::Utc;
 use serde::Deserialize;
 use serde::Serialize;
@@ -9,27 +8,25 @@ use std::fs::OpenOptions;
 use std::fs::remove_file;
 use std::io::Read;
 use std::io::Write;
-use std::io::{self};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::Child;
-use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
-use tempfile::NamedTempFile;
-use tokio::process::Command;
 
+pub use crate::server::LoginServer;
+pub use crate::server::ServerOptions;
+pub use crate::server::run_login_server;
 pub use crate::token_data::TokenData;
 use crate::token_data::parse_id_token;
 
+mod pkce;
+mod server;
 mod token_data;
 
-const SOURCE_FOR_PYTHON_SERVER: &str = include_str!("./login_with_chatgpt.py");
-
-const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 pub const OPENAI_API_KEY_ENV_VAR: &str = "OPENAI_API_KEY";
 
 #[derive(Clone, Debug, PartialEq, Copy)]
@@ -254,139 +251,6 @@ pub fn logout(codex_home: &Path) -> std::io::Result<bool> {
     }
 }
 
-/// Represents a running login subprocess. The child can be killed by holding
-/// the mutex and calling `kill()`.
-#[derive(Debug, Clone)]
-pub struct SpawnedLogin {
-    pub child: Arc<Mutex<Child>>,
-    pub stdout: Arc<Mutex<Vec<u8>>>,
-    pub stderr: Arc<Mutex<Vec<u8>>>,
-}
-
-impl SpawnedLogin {
-    /// Returns the login URL, if one has been emitted by the login subprocess.
-    ///
-    /// The Python helper prints the URL to stderr; we capture it and extract
-    /// the last whitespace-separated token that starts with "http".
-    pub fn get_login_url(&self) -> Option<String> {
-        self.stderr
-            .lock()
-            .ok()
-            .and_then(|buffer| String::from_utf8(buffer.clone()).ok())
-            .and_then(|output| {
-                output
-                    .split_whitespace()
-                    .filter(|part| part.starts_with("http"))
-                    .next_back()
-                    .map(|s| s.to_string())
-            })
-    }
-}
-
-// Helpers for streaming child output into shared buffers
-struct AppendWriter {
-    buf: Arc<Mutex<Vec<u8>>>,
-}
-
-impl Write for AppendWriter {
-    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
-        if let Ok(mut b) = self.buf.lock() {
-            b.extend_from_slice(data);
-        }
-        Ok(data.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-fn spawn_pipe_reader<R: Read + Send + 'static>(mut reader: R, buf: Arc<Mutex<Vec<u8>>>) {
-    std::thread::spawn(move || {
-        let _ = io::copy(&mut reader, &mut AppendWriter { buf });
-    });
-}
-
-/// Spawn the ChatGPT login Python server as a child process and return a handle to its process.
-pub fn spawn_login_with_chatgpt(codex_home: &Path) -> std::io::Result<SpawnedLogin> {
-    let script_path = write_login_script_to_disk()?;
-    let mut cmd = std::process::Command::new("python3");
-    cmd.arg(&script_path)
-        .env("CODEX_HOME", codex_home)
-        .env("CODEX_CLIENT_ID", CLIENT_ID)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    let mut child = cmd.spawn()?;
-
-    let stdout_buf = Arc::new(Mutex::new(Vec::new()));
-    let stderr_buf = Arc::new(Mutex::new(Vec::new()));
-
-    if let Some(out) = child.stdout.take() {
-        spawn_pipe_reader(out, stdout_buf.clone());
-    }
-    if let Some(err) = child.stderr.take() {
-        spawn_pipe_reader(err, stderr_buf.clone());
-    }
-
-    Ok(SpawnedLogin {
-        child: Arc::new(Mutex::new(child)),
-        stdout: stdout_buf,
-        stderr: stderr_buf,
-    })
-}
-
-/// Run `python3 -c {{SOURCE_FOR_PYTHON_SERVER}}` with the CODEX_HOME
-/// environment variable set to the provided `codex_home` path. If the
-/// subprocess exits 0, read the OPENAI_API_KEY property out of
-/// CODEX_HOME/auth.json and return Ok(OPENAI_API_KEY). Otherwise, return Err
-/// with any information from the subprocess.
-///
-/// If `capture_output` is true, the subprocess's output will be captured and
-/// recorded in memory. Otherwise, the subprocess's output will be sent to the
-/// current process's stdout/stderr.
-pub async fn login_with_chatgpt(codex_home: &Path, capture_output: bool) -> std::io::Result<()> {
-    let script_path = write_login_script_to_disk()?;
-    let child = Command::new("python3")
-        .arg(&script_path)
-        .env("CODEX_HOME", codex_home)
-        .env("CODEX_CLIENT_ID", CLIENT_ID)
-        .stdin(Stdio::null())
-        .stdout(if capture_output {
-            Stdio::piped()
-        } else {
-            Stdio::inherit()
-        })
-        .stderr(if capture_output {
-            Stdio::piped()
-        } else {
-            Stdio::inherit()
-        })
-        .spawn()?;
-
-    let output = child.wait_with_output().await?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(std::io::Error::other(format!(
-            "login_with_chatgpt subprocess failed: {stderr}"
-        )))
-    }
-}
-
-fn write_login_script_to_disk() -> std::io::Result<PathBuf> {
-    // Write the embedded Python script to a file to avoid very long
-    // command-line arguments (Windows error 206).
-    let mut tmp = NamedTempFile::new()?;
-    tmp.write_all(SOURCE_FOR_PYTHON_SERVER.as_bytes())?;
-    tmp.flush()?;
-
-    let (_file, path) = tmp.keep()?;
-    Ok(path)
-}
-
 pub fn login_with_api_key(codex_home: &Path, api_key: &str) -> std::io::Result<()> {
     let auth_dot_json = AuthDotJson {
         openai_api_key: Some(api_key.to_string()),
@@ -503,7 +367,6 @@ pub struct AuthDotJson {
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::expect_used, clippy::unwrap_used)]
     use super::*;
     use crate::token_data::IdTokenInfo;
     use crate::token_data::KnownPlan;
@@ -538,9 +401,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
+    async fn roundtrip_auth_dot_json() {
         let codex_home = tempdir().unwrap();
         write_auth_file(
+            AuthFileParams {
+                openai_api_key: None,
+                chatgpt_plan_type: "pro".to_string(),
+            },
+            codex_home.path(),
+        )
+        .expect("failed to write auth file");
+
+        let file = get_auth_file(codex_home.path());
+        let auth_dot_json = try_read_auth_json(&file).unwrap();
+        write_auth_json(&file, &auth_dot_json).unwrap();
+
+        let same_auth_dot_json = try_read_auth_json(&file).unwrap();
+        assert_eq!(auth_dot_json, same_auth_dot_json);
+    }
+
+    #[tokio::test]
+    async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
+        let codex_home = tempdir().unwrap();
+        let fake_jwt = write_auth_file(
             AuthFileParams {
                 openai_api_key: None,
                 chatgpt_plan_type: "pro".to_string(),
@@ -567,6 +450,7 @@ mod tests {
                     id_token: IdTokenInfo {
                         email: Some("user@example.com".to_string()),
                         chatgpt_plan_type: Some(PlanType::Known(KnownPlan::Pro)),
+                        raw_jwt: fake_jwt,
                     },
                     access_token: "test-access-token".to_string(),
                     refresh_token: "test-refresh-token".to_string(),
@@ -588,7 +472,7 @@ mod tests {
     #[tokio::test]
     async fn pro_account_with_api_key_still_uses_chatgpt_auth() {
         let codex_home = tempdir().unwrap();
-        write_auth_file(
+        let fake_jwt = write_auth_file(
             AuthFileParams {
                 openai_api_key: Some("sk-test-key".to_string()),
                 chatgpt_plan_type: "pro".to_string(),
@@ -615,6 +499,7 @@ mod tests {
                     id_token: IdTokenInfo {
                         email: Some("user@example.com".to_string()),
                         chatgpt_plan_type: Some(PlanType::Known(KnownPlan::Pro)),
+                        raw_jwt: fake_jwt,
                     },
                     access_token: "test-access-token".to_string(),
                     refresh_token: "test-refresh-token".to_string(),
@@ -662,7 +547,7 @@ mod tests {
         chatgpt_plan_type: String,
     }
 
-    fn write_auth_file(params: AuthFileParams, codex_home: &Path) -> std::io::Result<()> {
+    fn write_auth_file(params: AuthFileParams, codex_home: &Path) -> std::io::Result<String> {
         let auth_file = get_auth_file(codex_home);
         // Create a minimal valid JWT for the id_token field.
         #[derive(Serialize)]
@@ -700,7 +585,9 @@ mod tests {
             "last_refresh": LAST_REFRESH,
         });
         let auth_json = serde_json::to_string_pretty(&auth_json_data)?;
-        std::fs::write(auth_file, auth_json)
+        std::fs::write(auth_file, auth_json)?;
+
+        Ok(fake_jwt)
     }
 
     #[test]

@@ -1,5 +1,4 @@
 #![cfg(target_os = "macos")]
-#![expect(clippy::unwrap_used, clippy::expect_used)]
 
 use std::collections::HashMap;
 
@@ -24,6 +23,7 @@ fn skip_test() -> bool {
     false
 }
 
+#[expect(clippy::expect_used)]
 async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput> {
     let sandbox_type = get_platform_sandbox().expect("should be able to get sandbox type");
     assert_eq!(sandbox_type, SandboxType::MacosSeatbelt);
@@ -68,7 +68,6 @@ async fn truncates_output_lines() {
     let tmp = TempDir::new().expect("should be able to create temp dir");
     let cmd = vec!["seq", "300"];
 
-    #[expect(clippy::unwrap_used)]
     let output = run_test_cmd(tmp, cmd).await.unwrap();
 
     let expected_output = (1..=256)

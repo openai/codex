@@ -697,7 +697,6 @@ pub struct Chunk {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
     use super::*;
 
     /// Serialize Event to verify that its JSON representation has the expected

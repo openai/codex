@@ -187,6 +187,9 @@ pub enum ServerRequest {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct ApplyPatchApprovalParams {
     pub conversation_id: ConversationId,
+    /// Use to correlate this with [codex_core::protocol::PatchApplyBeginEvent]
+    /// and [codex_core::protocol::PatchApplyEndEvent].
+    pub call_id: String,
     pub file_changes: HashMap<PathBuf, FileChange>,
     /// Optional explanatory reason (e.g. request for extra write access).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -200,6 +203,9 @@ pub struct ApplyPatchApprovalParams {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct ExecCommandApprovalParams {
     pub conversation_id: ConversationId,
+    /// Use to correlate this with [codex_core::protocol::ExecCommandBeginEvent]
+    /// and [codex_core::protocol::ExecCommandEndEvent].
+    pub call_id: String,
     pub command: Vec<String>,
     pub cwd: PathBuf,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -216,7 +222,6 @@ pub struct ApplyPatchApprovalResponse {
     pub decision: ReviewDecision,
 }
 
-#[allow(clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
     use super::*;

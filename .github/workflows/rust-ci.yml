@@ -1,29 +1,60 @@
 name: rust-ci
 on:
-  pull_request:
-    branches:
-      - main
-    paths:
-      - "codex-rs/**"
-      - ".github/**"
+  pull_request: {}
   push:
     branches:
       - main
-
   workflow_dispatch:
 
-# For CI, we build in debug (`--profile dev`) rather than release mode so we
-# get signal faster.
+# CI builds in debug (dev) for faster signal.
 
 jobs:
-  # CI that don't need specific targets
+  # --- Detect what changed (always runs) -------------------------------------
+  changed:
+    name: Detect changed areas
+    runs-on: ubuntu-24.04
+    outputs:
+      codex: ${{ steps.detect.outputs.codex }}
+      workflows: ${{ steps.detect.outputs.workflows }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Detect changed paths (no external action)
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+            BASE_SHA='${{ github.event.pull_request.base.sha }}'
+            echo "Base SHA: $BASE_SHA"
+            # List files changed between base and current HEAD (merge-base aware)
+            mapfile -t files < <(git diff --name-only --no-renames "$BASE_SHA"...HEAD)
+          else
+            # On push / manual runs, default to running everything
+            files=("codex-rs/force" ".github/force")
+          fi
+
+          codex=false
+          workflows=false
+          for f in "${files[@]}"; do
+            [[ $f == codex-rs/* ]] && codex=true
+            [[ $f == .github/* ]] && workflows=true
+          done
+
+          echo "codex=$codex" >> "$GITHUB_OUTPUT"
+          echo "workflows=$workflows" >> "$GITHUB_OUTPUT"
+
+  # --- CI that doesn't need specific targets ---------------------------------
   general:
     name: Format / etc
     runs-on: ubuntu-24.04
+    needs: changed
+    if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
     defaults:
       run:
         working-directory: codex-rs
-
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.88
@@ -32,11 +63,14 @@ jobs:
       - name: cargo fmt
         run: cargo fmt -- --config imports_granularity=Item --check
 
-  # CI to validate on different os/targets
+  # --- CI to validate on different os/targets --------------------------------
   lint_build_test:
     name: ${{ matrix.runner }} - ${{ matrix.target }}${{ matrix.profile == 'release' && ' (release)' || '' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+    needs: changed
+    # Keep job-level if to avoid spinning up runners when not needed
+    if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
     defaults:
       run:
         working-directory: codex-rs
@@ -44,8 +78,6 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Note: While Codex CLI does not support Windows today, we include
-        # Windows in CI to ensure the code at least builds there.
         include:
           - runner: macos-14
             target: aarch64-apple-darwin
@@ -113,7 +145,9 @@ jobs:
         id: build
         if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' && matrix.profile != 'release' }}
         continue-on-error: true
-        run: find . -name Cargo.toml -mindepth 2 -maxdepth 2 -print0 | xargs -0 -n1 -I{} bash -c 'cd "$(dirname "{}")" && cargo build --profile ${{ matrix.profile }}'
+        run: |
+          find . -name Cargo.toml -mindepth 2 -maxdepth 2 -print0 \
+            | xargs -0 -n1 -I{} bash -c 'cd "$(dirname "{}")" && cargo build --profile ${{ matrix.profile }}'
 
       - name: cargo test
         id: test
@@ -133,3 +167,27 @@ jobs:
         run: |
           echo "One or more checks failed (clippy, build, or test). See logs for details."
           exit 1
+
+  # --- Gatherer job that you mark as the ONLY required status -----------------
+  results:
+    name: CI results (required)
+    needs: [changed, general, lint_build_test]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Summarize
+        shell: bash
+        run: |
+          echo "general: ${{ needs.general.result }}"
+          echo "matrix : ${{ needs.lint_build_test.result }}"
+
+          # If nothing relevant changed (PR touching only root README, etc.),
+          # declare success regardless of other jobs.
+          if [[ '${{ needs.changed.outputs.codex }}' != 'true' && '${{ needs.changed.outputs.workflows }}' != 'true' && '${{ github.event_name }}' != 'push' ]]; then
+            echo 'No relevant changes -> CI not required.'
+            exit 0
+          fi
+
+          # Otherwise require the jobs to have succeeded
+          [[ '${{ needs.general.result }}' == 'success' ]] || { echo 'general failed'; exit 1; }
+          [[ '${{ needs.lint_build_test.result }}' == 'success' ]] || { echo 'matrix failed'; exit 1; }

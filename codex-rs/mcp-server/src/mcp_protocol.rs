@@ -293,8 +293,6 @@ pub enum ClientNotification {
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use std::path::PathBuf;
 
