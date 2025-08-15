@@ -22,6 +22,7 @@ use codex_mcp_server::wire_format::AddConversationListenerParams;
 use codex_mcp_server::wire_format::NewConversationParams;
 use codex_mcp_server::wire_format::RemoveConversationListenerParams;
 use codex_mcp_server::wire_format::SendUserMessageParams;
+use codex_mcp_server::wire_format::SendUserTurnParams;
 
 use mcp_types::CallToolRequestParams;
 use mcp_types::ClientCapabilities;
@@ -281,6 +282,15 @@ impl McpProcess {
             .await
     }
 
+    /// Send a `sendUserTurn` JSON-RPC request.
+    pub async fn send_send_user_turn_request(
+        &mut self,
+        params: SendUserTurnParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("sendUserTurn", params).await
+    }
+
     async fn send_request(
         &mut self,
         method: &str,
@@ -473,5 +483,47 @@ impl McpProcess {
             params,
         }))
         .await
+    }
+
+    /// Reads notifications until a legacy TaskComplete event is observed:
+    /// Method "codex/event" with params.msg.type == "task_complete".
+    pub async fn read_stream_until_legacy_task_complete_notification(
+        &mut self,
+    ) -> anyhow::Result<JSONRPCNotification> {
+        loop {
+            let message = self.read_jsonrpc_message().await?;
+            eprint!("message: {message:?}");
+
+            match message {
+                JSONRPCMessage::Notification(notification) => {
+                    let is_match = if notification.method == "codex/event" {
+                        if let Some(params) = &notification.params {
+                            params
+                                .get("msg")
+                                .and_then(|m| m.get("type"))
+                                .and_then(|t| t.as_str())
+                                == Some("task_complete")
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
+
+                    if is_match {
+                        return Ok(notification);
+                    }
+                }
+                JSONRPCMessage::Request(_) => {
+                    anyhow::bail!("unexpected JSONRPCMessage::Request: {message:?}");
+                }
+                JSONRPCMessage::Error(_) => {
+                    anyhow::bail!("unexpected JSONRPCMessage::Error: {message:?}");
+                }
+                JSONRPCMessage::Response(_) => {
+                    anyhow::bail!("unexpected JSONRPCMessage::Response: {message:?}");
+                }
+            }
+        }
     }
 }

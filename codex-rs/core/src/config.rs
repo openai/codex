@@ -156,6 +156,11 @@ pub struct Config {
     /// Include an experimental plan tool that the model can use to update its current plan and status of each step.
     pub include_plan_tool: bool,
 
+    /// Include the `apply_patch` tool for models that benefit from invoking
+    /// file edits as a structured tool call. When unset, this falls back to the
+    /// model family's default preference.
+    pub include_apply_patch_tool: bool,
+
     /// The value for the `originator` header included with Responses API requests.
     pub internal_originator: Option<String>,
 }
@@ -480,6 +485,7 @@ pub struct ConfigOverrides {
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub base_instructions: Option<String>,
     pub include_plan_tool: Option<bool>,
+    pub include_apply_patch_tool: Option<bool>,
     pub disable_response_storage: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
 }
@@ -505,6 +511,7 @@ impl Config {
             codex_linux_sandbox_exe,
             base_instructions,
             include_plan_tool,
+            include_apply_patch_tool,
             disable_response_storage,
             show_raw_agent_reasoning,
         } = overrides;
@@ -581,6 +588,7 @@ impl Config {
                 needs_special_apply_patch_instructions: false,
                 supports_reasoning_summaries,
                 uses_local_shell_tool: false,
+                uses_apply_patch_tool: false,
             }
         });
 
@@ -606,6 +614,9 @@ impl Config {
         let file_base_instructions =
             Self::get_base_instructions(experimental_instructions_path, &resolved_cwd)?;
         let base_instructions = base_instructions.or(file_base_instructions);
+
+        let include_apply_patch_tool_val =
+            include_apply_patch_tool.unwrap_or(model_family.uses_apply_patch_tool);
 
         let config = Self {
             model,
@@ -659,6 +670,7 @@ impl Config {
 
             experimental_resume,
             include_plan_tool: include_plan_tool.unwrap_or(false),
+            include_apply_patch_tool: include_apply_patch_tool_val,
             internal_originator: cfg.internal_originator,
         };
         Ok(config)
@@ -1022,6 +1034,7 @@ disable_response_storage = true
                 experimental_resume: None,
                 base_instructions: None,
                 include_plan_tool: false,
+                include_apply_patch_tool: false,
                 internal_originator: None,
             },
             o3_profile_config
@@ -1073,6 +1086,7 @@ disable_response_storage = true
             experimental_resume: None,
             base_instructions: None,
             include_plan_tool: false,
+            include_apply_patch_tool: false,
             internal_originator: None,
         };
 
@@ -1139,6 +1153,7 @@ disable_response_storage = true
             experimental_resume: None,
             base_instructions: None,
             include_plan_tool: false,
+            include_apply_patch_tool: false,
             internal_originator: None,
         };
 
