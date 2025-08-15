@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use codex_core::config::Config;
-use codex_core::parse_command::ParsedCommand;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -25,6 +25,7 @@ use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol::TurnDiffEvent;
+use codex_protocol::parse_command::ParsedCommand;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use ratatui::buffer::Buffer;
@@ -42,8 +43,9 @@ use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::InputResult;
-use crate::exec_command::strip_bash_lc_and_escape;
+use crate::history_cell;
 use crate::history_cell::CommandOutput;
+use crate::history_cell::ExecCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PatchEventType;
 // streaming internals are provided by crate::streaming and crate::markdown_stream
@@ -54,7 +56,9 @@ mod agent;
 use self::agent::spawn_agent;
 use crate::streaming::controller::AppEventHistorySink;
 use crate::streaming::controller::StreamController;
+use codex_core::ConversationManager;
 use codex_file_search::FileMatch;
+use uuid::Uuid;
 
 // Track information about an in-flight exec command.
 struct RunningCommand {
@@ -66,7 +70,7 @@ pub(crate) struct ChatWidget<'a> {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
     bottom_pane: BottomPane<'a>,
-    active_exec_cell: Option<HistoryCell>,
+    active_exec_cell: Option<ExecCell>,
     config: Config,
     initial_user_message: Option<UserMessage>,
     total_token_usage: TokenUsage,
@@ -82,6 +86,7 @@ pub(crate) struct ChatWidget<'a> {
     interrupts: InterruptManager,
     // Whether a redraw is needed after handling the current event
     needs_redraw: bool,
+    session_id: Option<Uuid>,
 }
 
 struct UserMessage {
@@ -121,7 +126,8 @@ impl ChatWidget<'_> {
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
-        self.add_to_history(HistoryCell::new_session_info(&self.config, event, true));
+        self.session_id = Some(event.session_id);
+        self.add_to_history(&history_cell::new_session_info(&self.config, event, true));
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
         }
@@ -131,6 +137,7 @@ impl ChatWidget<'_> {
     fn on_agent_message(&mut self, message: String) {
         let sink = AppEventHistorySink(self.app_event_tx.clone());
         let finished = self.stream.apply_final_answer(&message, &sink);
+        self.last_stream_kind = Some(StreamKind::Answer);
         self.handle_if_stream_finished(finished);
         self.mark_needs_redraw();
     }
@@ -143,9 +150,10 @@ impl ChatWidget<'_> {
         self.handle_streaming_delta(StreamKind::Reasoning, delta);
     }
 
-    fn on_agent_reasoning_final(&mut self) {
+    fn on_agent_reasoning_final(&mut self, text: String) {
         let sink = AppEventHistorySink(self.app_event_tx.clone());
-        let finished = self.stream.finalize(StreamKind::Reasoning, false, &sink);
+        let finished = self.stream.apply_final_reasoning(&text, &sink);
+        self.last_stream_kind = Some(StreamKind::Reasoning);
         self.handle_if_stream_finished(finished);
         self.mark_needs_redraw();
     }
@@ -160,7 +168,6 @@ impl ChatWidget<'_> {
     fn on_task_started(&mut self) {
         self.bottom_pane.clear_ctrl_c_quit_hint();
         self.bottom_pane.set_task_running(true);
-        self.set_waiting_for_model_status();
         self.stream.reset_headers_for_new_turn();
         self.last_stream_kind = None;
         self.mark_needs_redraw();
@@ -177,6 +184,7 @@ impl ChatWidget<'_> {
         }
         // Mark task stopped and request redraw now that all content is in history.
         self.bottom_pane.set_task_running(false);
+        self.running_commands.clear();
         self.mark_needs_redraw();
     }
 
@@ -191,14 +199,15 @@ impl ChatWidget<'_> {
     }
 
     fn on_error(&mut self, message: String) {
-        self.add_to_history(HistoryCell::new_error_event(message));
+        self.add_to_history(&history_cell::new_error_event(message));
         self.bottom_pane.set_task_running(false);
+        self.running_commands.clear();
         self.stream.clear_all();
         self.mark_needs_redraw();
     }
 
     fn on_plan_update(&mut self, update: codex_core::plan_tool::UpdatePlanArgs) {
-        self.add_to_history(HistoryCell::new_plan_update(update));
+        self.add_to_history(&history_cell::new_plan_update(update));
     }
 
     fn on_exec_approval_request(&mut self, id: String, ev: ExecApprovalRequestEvent) {
@@ -233,7 +242,7 @@ impl ChatWidget<'_> {
     }
 
     fn on_patch_apply_begin(&mut self, event: PatchApplyBeginEvent) {
-        self.add_to_history(HistoryCell::new_patch_event(
+        self.add_to_history(&history_cell::new_patch_event(
             PatchEventType::ApplyBegin {
                 auto_approved: event.auto_approved,
             },
@@ -333,15 +342,8 @@ impl ChatWidget<'_> {
     }
 
     #[inline]
-    fn set_waiting_for_model_status(&mut self) {
-        self.bottom_pane
-            .update_status_text("waiting for model".to_string());
-    }
-
-    #[inline]
     fn handle_streaming_delta(&mut self, kind: StreamKind, delta: String) {
         let sink = AppEventHistorySink(self.app_event_tx.clone());
-        self.set_waiting_for_model_status();
         self.stream.begin(kind, &sink);
         self.last_stream_kind = Some(kind);
         self.stream.push_and_maybe_commit(&delta, &sink);
@@ -368,7 +370,7 @@ impl ChatWidget<'_> {
             self.active_exec_cell = None;
             let pending = std::mem::take(&mut self.pending_exec_completions);
             for (command, parsed, output) in pending {
-                self.add_to_history(HistoryCell::new_completed_exec_command(
+                self.add_to_history(&history_cell::new_completed_exec_command(
                     command, parsed, output,
                 ));
             }
@@ -380,25 +382,14 @@ impl ChatWidget<'_> {
         event: codex_core::protocol::PatchApplyEndEvent,
     ) {
         if event.success {
-            self.add_to_history(HistoryCell::new_patch_apply_success(event.stdout));
+            self.add_to_history(&history_cell::new_patch_apply_success(event.stdout));
         } else {
-            self.add_to_history(HistoryCell::new_patch_apply_failure(event.stderr));
+            self.add_to_history(&history_cell::new_patch_apply_failure(event.stderr));
         }
     }
 
     pub(crate) fn handle_exec_approval_now(&mut self, id: String, ev: ExecApprovalRequestEvent) {
         self.flush_answer_stream_with_separator();
-        // Log a background summary immediately so the history is chronological.
-        let cmdline = strip_bash_lc_and_escape(&ev.command);
-        let text = format!(
-            "command requires approval:\n$ {cmdline}{reason}",
-            reason = ev
-                .reason
-                .as_ref()
-                .map(|r| format!("\n{r}"))
-                .unwrap_or_default()
-        );
-        self.add_to_history(HistoryCell::new_background_event(text));
 
         let request = ApprovalRequest::Exec {
             id,
@@ -415,7 +406,7 @@ impl ChatWidget<'_> {
         ev: ApplyPatchApprovalRequestEvent,
     ) {
         self.flush_answer_stream_with_separator();
-        self.add_to_history(HistoryCell::new_patch_event(
+        self.add_to_history(&history_cell::new_patch_event(
             PatchEventType::ApprovalRequest,
             ev.changes.clone(),
         ));
@@ -431,8 +422,6 @@ impl ChatWidget<'_> {
 
     pub(crate) fn handle_exec_begin_now(&mut self, ev: ExecCommandBeginEvent) {
         // Ensure the status indicator is visible while the command runs.
-        self.bottom_pane
-            .update_status_text("running command".to_string());
         self.running_commands.insert(
             ev.call_id.clone(),
             RunningCommand {
@@ -442,11 +431,11 @@ impl ChatWidget<'_> {
         );
         // Accumulate parsed commands into a single active Exec cell so they stack
         match self.active_exec_cell.as_mut() {
-            Some(HistoryCell::Exec(exec)) => {
+            Some(exec) => {
                 exec.parsed.extend(ev.parsed_cmd);
             }
             _ => {
-                self.active_exec_cell = Some(HistoryCell::new_active_exec_command(
+                self.active_exec_cell = Some(history_cell::new_active_exec_command(
                     ev.command,
                     ev.parsed_cmd,
                 ));
@@ -459,11 +448,11 @@ impl ChatWidget<'_> {
 
     pub(crate) fn handle_mcp_begin_now(&mut self, ev: McpToolCallBeginEvent) {
         self.flush_answer_stream_with_separator();
-        self.add_to_history(HistoryCell::new_active_mcp_tool_call(ev.invocation));
+        self.add_to_history(&history_cell::new_active_mcp_tool_call(ev.invocation));
     }
     pub(crate) fn handle_mcp_end_now(&mut self, ev: McpToolCallEndEvent) {
         self.flush_answer_stream_with_separator();
-        self.add_to_history(HistoryCell::new_completed_mcp_tool_call(
+        self.add_to_history(&*history_cell::new_completed_mcp_tool_call(
             80,
             ev.invocation,
             ev.duration,
@@ -477,6 +466,7 @@ impl ChatWidget<'_> {
     fn interrupt_running_task(&mut self) {
         if self.bottom_pane.is_task_running() {
             self.active_exec_cell = None;
+            self.running_commands.clear();
             self.bottom_pane.clear_ctrl_c_quit_hint();
             self.submit_op(Op::Interrupt);
             self.bottom_pane.set_task_running(false);
@@ -498,12 +488,13 @@ impl ChatWidget<'_> {
 
     pub(crate) fn new(
         config: Config,
+        conversation_manager: Arc<ConversationManager>,
         app_event_tx: AppEventSender,
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
         enhanced_keys_supported: bool,
     ) -> Self {
-        let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone());
+        let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
 
         Self {
             app_event_tx: app_event_tx.clone(),
@@ -528,6 +519,7 @@ impl ChatWidget<'_> {
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
             needs_redraw: false,
+            session_id: None,
         }
     }
 
@@ -559,14 +551,14 @@ impl ChatWidget<'_> {
     fn flush_active_exec_cell(&mut self) {
         if let Some(active) = self.active_exec_cell.take() {
             self.app_event_tx
-                .send(AppEvent::InsertHistory(active.plain_lines()));
+                .send(AppEvent::InsertHistory(active.display_lines()));
         }
     }
 
-    fn add_to_history(&mut self, cell: HistoryCell) {
+    fn add_to_history(&mut self, cell: &dyn HistoryCell) {
         self.flush_active_exec_cell();
         self.app_event_tx
-            .send(AppEvent::InsertHistory(cell.plain_lines()));
+            .send(AppEvent::InsertHistory(cell.display_lines()));
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
@@ -602,7 +594,7 @@ impl ChatWidget<'_> {
 
         // Only show the text portion in conversation history.
         if !text.is_empty() {
-            self.add_to_history(HistoryCell::new_user_prompt(text.clone()));
+            self.add_to_history(&history_cell::new_user_prompt(text.clone()));
         }
     }
 
@@ -616,7 +608,7 @@ impl ChatWidget<'_> {
             | EventMsg::AgentReasoningDelta(_)
             | EventMsg::ExecCommandOutputDelta(_) => {}
             _ => {
-                tracing::info!("handle_codex_event: {:?}", msg);
+                tracing::trace!("handle_codex_event: {:?}", msg);
             }
         }
 
@@ -630,9 +622,9 @@ impl ChatWidget<'_> {
             | EventMsg::AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent {
                 delta,
             }) => self.on_agent_reasoning_delta(delta),
-            EventMsg::AgentReasoning(AgentReasoningEvent { .. })
-            | EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { .. }) => {
-                self.on_agent_reasoning_final()
+            EventMsg::AgentReasoning(AgentReasoningEvent { text })
+            | EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text }) => {
+                self.on_agent_reasoning_final(text)
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
             EventMsg::TaskStarted => self.on_task_started(),
@@ -663,13 +655,6 @@ impl ChatWidget<'_> {
         }
     }
 
-    /// Update the live log preview while a task is running.
-    pub(crate) fn update_latest_log(&mut self, line: String) {
-        if self.bottom_pane.is_task_running() {
-            self.bottom_pane.update_status_text(line);
-        }
-    }
-
     fn request_redraw(&mut self) {
         self.app_event_tx.send(AppEvent::RequestRedraw);
     }
@@ -688,14 +673,15 @@ impl ChatWidget<'_> {
     }
 
     pub(crate) fn add_status_output(&mut self) {
-        self.add_to_history(HistoryCell::new_status_output(
+        self.add_to_history(&history_cell::new_status_output(
             &self.config,
             &self.total_token_usage,
+            &self.session_id,
         ));
     }
 
     pub(crate) fn add_prompts_output(&mut self) {
-        self.add_to_history(HistoryCell::new_prompts_output());
+        self.add_to_history(&history_cell::new_prompts_output());
     }
 
     /// Forward file-search results to the bottom pane.

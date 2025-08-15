@@ -15,9 +15,11 @@ use tracing::error;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
+mod codex_message_processor;
 mod codex_tool_config;
 mod codex_tool_runner;
 mod conversation_loop;
+mod error_code;
 mod exec_approval;
 mod json_to_toml;
 pub mod mcp_protocol;
@@ -25,6 +27,7 @@ pub(crate) mod message_processor;
 mod outgoing_message;
 mod patch_approval;
 pub(crate) mod tool_handlers;
+pub mod wire_format;
 
 use crate::message_processor::MessageProcessor;
 use crate::outgoing_message::OutgoingMessage;

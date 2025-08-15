@@ -132,7 +132,6 @@ fn parse_plain_command_from_node(cmd: tree_sitter::Node, src: &str) -> Option<Ve
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
     use super::*;
 
     fn parse_seq(src: &str) -> Option<Vec<Vec<String>>> {

@@ -35,7 +35,7 @@ const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 /// Test that a shell command that is not on the "trusted" list triggers an
 /// elicitation request to the MCP and that sending the approval runs the
 /// command, as expected.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_shell_command_approval_triggers_elicitation() {
     if env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
@@ -113,6 +113,16 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
             })?,
         )
         .await?;
+
+    // Verify task_complete notification arrives before the tool call completes.
+    #[expect(clippy::expect_used)]
+    let _task_complete = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp_process.read_stream_until_legacy_task_complete_notification(),
+    )
+    .await
+    .expect("task_complete_notification timeout")
+    .expect("task_complete_notification resp");
 
     // Verify the original `codex` tool call completes and that `git init` ran
     // successfully.
@@ -304,7 +314,7 @@ async fn test_codex_tool_passes_base_instructions() {
 }
 
 async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
-    #![allow(clippy::unwrap_used)]
+    #![expect(clippy::unwrap_used)]
 
     let server =
         create_mock_chat_completions_server(vec![create_final_assistant_message_sse_response(

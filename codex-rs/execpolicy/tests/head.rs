@@ -1,4 +1,3 @@
-#![expect(clippy::expect_used)]
 use codex_execpolicy::ArgMatcher;
 use codex_execpolicy::ArgType;
 use codex_execpolicy::Error;
@@ -13,6 +12,7 @@ use codex_execpolicy::get_default_policy;
 
 extern crate codex_execpolicy;
 
+#[expect(clippy::expect_used)]
 fn setup() -> Policy {
     get_default_policy().expect("failed to load default policy")
 }

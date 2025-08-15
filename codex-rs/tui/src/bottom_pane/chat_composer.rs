@@ -166,7 +166,7 @@ impl ChatComposer {
         let char_count = pasted.chars().count();
         if char_count > LARGE_PASTE_CHAR_THRESHOLD {
             let placeholder = format!("[Pasted Content {char_count} chars]");
-            self.textarea.insert_str(&placeholder);
+            self.textarea.insert_element(&placeholder);
             self.pending_pastes.push((placeholder, pasted));
         } else {
             self.textarea.insert_str(&pasted);
@@ -532,17 +532,6 @@ impl ChatComposer {
 
     /// Handle generic Input events that modify the textarea content.
     fn handle_input_basic(&mut self, input: KeyEvent) -> (InputResult, bool) {
-        // Special handling for backspace on placeholders
-        if let KeyEvent {
-            code: KeyCode::Backspace,
-            ..
-        } = input
-        {
-            if self.try_remove_placeholder_at_cursor() {
-                return (InputResult::None, true);
-            }
-        }
-
         // Normal input handling
         self.textarea.input(input);
         let text_after = self.textarea.text();
@@ -552,34 +541,6 @@ impl ChatComposer {
             .retain(|(placeholder, _)| text_after.contains(placeholder));
 
         (InputResult::None, true)
-    }
-
-    /// Attempts to remove a placeholder if the cursor is at the end of one.
-    /// Returns true if a placeholder was removed.
-    fn try_remove_placeholder_at_cursor(&mut self) -> bool {
-        let p = self.textarea.cursor();
-        let text = self.textarea.text();
-
-        // Find any placeholder that ends at the cursor position
-        let placeholder_to_remove = self.pending_pastes.iter().find_map(|(ph, _)| {
-            if p < ph.len() {
-                return None;
-            }
-            let potential_ph_start = p - ph.len();
-            if text[potential_ph_start..p] == *ph {
-                Some(ph.clone())
-            } else {
-                None
-            }
-        });
-
-        if let Some(placeholder) = placeholder_to_remove {
-            self.textarea.replace_range(p - placeholder.len()..p, "");
-            self.pending_pastes.retain(|(ph, _)| ph != &placeholder);
-            true
-        } else {
-            false
-        }
     }
 
     /// Synchronize `self.command_popup` with the current text in the
@@ -731,15 +692,15 @@ impl WidgetRef for &ChatComposer {
                     .render_ref(bottom_line_rect, buf);
             }
         }
+        let border_style = if self.has_focus {
+            Style::default().fg(Color::Cyan)
+        } else {
+            Style::default().add_modifier(Modifier::DIM)
+        };
         Block::default()
-            .border_style(Style::default().dim())
             .borders(Borders::LEFT)
             .border_type(BorderType::QuadrantOutside)
-            .border_style(Style::default().fg(if self.has_focus {
-                Color::Cyan
-            } else {
-                Color::Gray
-            }))
+            .border_style(border_style)
             .render_ref(
                 Rect::new(textarea_rect.x, textarea_rect.y, 1, textarea_rect.height),
                 buf,
