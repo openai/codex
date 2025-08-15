@@ -1069,8 +1069,8 @@ async fn submission_loop(
                         shell_environment_policy: turn_context.shell_environment_policy.clone(),
                         cwd,
                         disable_response_storage: turn_context.disable_response_storage,
-                        requested_effort: effort,
-                        requested_summary: summary,
+                        requested_effort: effort.into(),
+                        requested_summary: summary.into(),
                     };
 
                     // no current task, spawn a new one with the per‑turn context
