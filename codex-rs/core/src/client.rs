@@ -609,8 +609,6 @@ fn try_parse_retry_after(err: &Error) -> Option<Duration> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
-
     use super::*;
     use serde_json::json;
     use tokio::sync::mpsc;

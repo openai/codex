@@ -99,9 +99,6 @@ async fn run_git_command_with_timeout(args: &[&str], cwd: &Path) -> Option<std::
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
-    #![allow(clippy::unwrap_used)]
-
     use super::*;
 
     use std::fs;

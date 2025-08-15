@@ -41,5 +41,6 @@ tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 
 [dev-dependencies]
 assert_cmd = "2"
+libc = "0.2"
 predicates = "3"
 tempfile = "3.13.0"

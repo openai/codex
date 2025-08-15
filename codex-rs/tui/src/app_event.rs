@@ -2,6 +2,7 @@ use codex_core::protocol::Event;
 use codex_file_search::FileMatch;
 use crossterm::event::KeyEvent;
 use ratatui::text::Line;
+use std::time::Duration;
 
 use crate::app::ChatWidgetArgs;
 use crate::slash_command::SlashCommand;
@@ -17,6 +18,10 @@ pub(crate) enum AppEvent {
     /// Actually draw the next frame.
     Redraw,
 
+    /// Schedule a one-shot animation frame roughly after the given duration.
+    /// Multiple requests are coalesced by the central frame scheduler.
+    ScheduleFrameIn(Duration),
+
     KeyEvent(KeyEvent),
 
     /// Text pasted from the terminal clipboard.
@@ -28,9 +33,6 @@ pub(crate) enum AppEvent {
     /// Forward an `Op` to the Agent. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
     CodexOp(codex_core::protocol::Op),
-
-    /// Latest formatted log line emitted by `tracing`.
-    LatestLog(String),
 
     /// Dispatch a recognized slash command from the UI (composer) to the app
     /// layer so it can be handled centrally.

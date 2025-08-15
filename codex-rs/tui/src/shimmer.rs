@@ -1,51 +1,35 @@
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
+use std::sync::OnceLock;
 use std::time::Duration;
+use std::time::Instant;
 
 use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::text::Span;
 
-use crate::app_event::AppEvent;
-use crate::app_event_sender::AppEventSender;
+static PROCESS_START: OnceLock<Instant> = OnceLock::new();
 
-#[derive(Debug)]
-pub(crate) struct FrameTicker {
-    running: Arc<AtomicBool>,
+fn elapsed_since_start() -> Duration {
+    let start = PROCESS_START.get_or_init(Instant::now);
+    start.elapsed()
 }
 
-impl FrameTicker {
-    pub(crate) fn new(app_event_tx: AppEventSender) -> Self {
-        let running = Arc::new(AtomicBool::new(true));
-        let running_clone = running.clone();
-        let app_event_tx_clone = app_event_tx.clone();
-        std::thread::spawn(move || {
-            while running_clone.load(Ordering::Relaxed) {
-                std::thread::sleep(Duration::from_millis(100));
-                app_event_tx_clone.send(AppEvent::RequestRedraw);
-            }
-        });
-        Self { running }
-    }
-}
-
-impl Drop for FrameTicker {
-    fn drop(&mut self) {
-        self.running.store(false, Ordering::Relaxed);
-    }
-}
-
-pub(crate) fn shimmer_spans(text: &str, frame_idx: usize) -> Vec<Span<'static>> {
+pub(crate) fn shimmer_spans(text: &str) -> Vec<Span<'static>> {
     let chars: Vec<char> = text.chars().collect();
+    if chars.is_empty() {
+        return Vec::new();
+    }
+    // Use time-based sweep synchronized to process start.
     let padding = 10usize;
     let period = chars.len() + padding * 2;
-    let pos = frame_idx % period;
+    let sweep_seconds = 2.5f32;
+    let pos_f =
+        (elapsed_since_start().as_secs_f32() % sweep_seconds) / sweep_seconds * (period as f32);
+    let pos = pos_f as usize;
     let has_true_color = supports_color::on_cached(supports_color::Stream::Stdout)
         .map(|level| level.has_16m)
         .unwrap_or(false);
-    let band_half_width = 6.0;
+    let band_half_width = 3.0;
 
     let mut spans: Vec<Span<'static>> = Vec::with_capacity(chars.len());
     for (i, ch) in chars.iter().enumerate() {

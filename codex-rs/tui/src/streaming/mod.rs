@@ -11,6 +11,7 @@ pub(crate) enum StreamKind {
 pub(crate) struct StreamState {
     pub(crate) collector: MarkdownStreamCollector,
     pub(crate) streamer: AnimatedLineStreamer,
+    pub(crate) has_seen_delta: bool,
 }
 
 impl StreamState {
@@ -18,11 +19,13 @@ impl StreamState {
         Self {
             collector: MarkdownStreamCollector::new(),
             streamer: AnimatedLineStreamer::new(),
+            has_seen_delta: false,
         }
     }
     pub(crate) fn clear(&mut self) {
         self.collector.clear();
         self.streamer.clear();
+        self.has_seen_delta = false;
     }
     pub(crate) fn step(&mut self) -> crate::markdown_stream::StepResult {
         self.streamer.step()

@@ -236,7 +236,6 @@ mod tests {
     #[test]
     fn verify_codex_tool_json_schema() {
         let tool = create_tool_for_codex_tool_call_param();
-        #[expect(clippy::expect_used)]
         let tool_json = serde_json::to_value(&tool).expect("tool serializes");
         let expected_tool_json = serde_json::json!({
           "name": "codex",
@@ -305,7 +304,6 @@ mod tests {
     #[test]
     fn verify_codex_tool_reply_json_schema() {
         let tool = create_tool_for_codex_tool_call_reply_param();
-        #[expect(clippy::expect_used)]
         let tool_json = serde_json::to_value(&tool).expect("tool serializes");
         let expected_tool_json = serde_json::json!({
           "description": "Continue a Codex session by providing the session id and prompt.",

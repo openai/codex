@@ -122,7 +122,6 @@ fn create_seatbelt_command_args(
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::expect_used)]
     use super::MACOS_SEATBELT_BASE_POLICY;
     use super::create_seatbelt_command_args;
     use crate::protocol::SandboxPolicy;
