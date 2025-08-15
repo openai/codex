@@ -269,9 +269,9 @@ fn push_wrapped_diff_line(
     let mut remaining_text: &str = text;
 
     // Reserve a fixed number of spaces after the line number so that content starts
-    // at a consistent column. The sign ("+"/"-") is rendered as part of the content
-    // and colored with the same foreground as the edited text, not as a separate
-    // dimmed column.
+    // at a consistent column. Content includes a 1-character diff sign prefix
+    // ("+"/"-" for inserts/deletes, or a space for context lines) so alignment
+    // stays consistent across all diff lines.
     let gap_after_ln = SPACES_AFTER_LINE_NUMBER.saturating_sub(ln_str.len());
     let first_prefix_cols = indent.len() + ln_str.len() + gap_after_ln;
     let cont_prefix_cols = indent.len() + ln_str.len() + gap_after_ln;
@@ -306,14 +306,10 @@ fn push_wrapped_diff_line(
             spans.push(RtSpan::raw(indent));
             spans.push(RtSpan::styled(ln_str.clone(), style_dim()));
             spans.push(RtSpan::raw(" ".repeat(gap_after_ln)));
-
-            // Prefix the content with the sign if it is an insertion or deletion, and color
-            // the sign and content with the same foreground as the edited text.
-            let display_chunk = match sign_opt {
-                Some(sign_char) => format!("{sign_char}{chunk}"),
-                None => chunk.to_string(),
-            };
-
+            // Always include a sign character at the start of the displayed chunk
+            // ('+' for insert, '-' for delete, ' ' for context) so gutters align.
+            let sign_char = sign_opt.unwrap_or(' ');
+            let display_chunk = format!("{sign_char}{chunk}");
             let content_span = match line_style {
                 Some(style) => RtSpan::styled(display_chunk, style),
                 None => RtSpan::raw(display_chunk),
@@ -326,8 +322,9 @@ fn push_wrapped_diff_line(
             lines.push(line);
             first = false;
         } else {
+            // Continuation lines keep a space for the sign column so content aligns
             let hang_prefix = format!(
-                "{indent}{}{}",
+                "{indent}{}{} ",
                 " ".repeat(ln_str.len()),
                 " ".repeat(gap_after_ln)
             );
