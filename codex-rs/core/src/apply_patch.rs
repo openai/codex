@@ -1,4 +1,5 @@
 use crate::codex::Session;
+use crate::codex::TurnContext;
 use crate::models::FunctionCallOutputPayload;
 use crate::models::ResponseInputItem;
 use crate::protocol::FileChange;
@@ -40,15 +41,16 @@ impl From<ResponseInputItem> for InternalApplyPatchInvocation {
 
 pub(crate) async fn apply_patch(
     sess: &Session,
+    turn_context: &TurnContext,
     sub_id: &str,
     call_id: &str,
     action: ApplyPatchAction,
 ) -> InternalApplyPatchInvocation {
     match assess_patch_safety(
         &action,
-        sess.get_approval_policy(),
-        sess.get_sandbox_policy(),
-        sess.get_cwd(),
+        turn_context.approval_policy,
+        &turn_context.sandbox_policy,
+        &turn_context.cwd,
     ) {
         SafetyCheck::AutoApprove { .. } => {
             InternalApplyPatchInvocation::DelegateToExec(ApplyPatchExec {
