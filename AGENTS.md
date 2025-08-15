@@ -11,3 +11,19 @@ In the codex-rs folder where the rust code lives:
 Before finalizing a change to `codex-rs`, run `just fmt` (in `codex-rs` directory) to format the code and `just fix` (in `codex-rs` directory) to fix any linter issues in the code. Additionally, run the tests:
 1. Run the test for the specific project that was changed. For example, if changes were made in `codex-rs/tui`, run `cargo test -p codex-tui`.
 2. Once those pass, if any changes were made in common, core, or protocol, run the complete test suite with `cargo test --all-features`.
+
+## Snapshot tests
+
+This repo uses snapshot tests (via `insta`), especially in `codex-rs/tui`, to validate rendered output. When UI or text output changes intentionally, update the snapshots as follows:
+
+- Run tests to generate any updated snapshots:
+  - `cargo test -p codex-tui`
+- Check what’s pending:
+  - `cargo insta pending-snapshots -p codex-tui`
+- Review changes by reading the generated `*.snap.new` files directly in the repo, or preview a specific file:
+  - `cargo insta show -p codex-tui path/to/file.snap.new`
+- Only if you intend to accept all new snapshots in this crate, run:
+  - `cargo insta accept -p codex-tui`
+
+If you don’t have the tool:
+- `cargo install cargo-insta`
