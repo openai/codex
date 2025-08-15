@@ -798,8 +798,41 @@ pub(crate) fn new_patch_apply_success(stdout: String) -> PlainHistoryCell {
         let mut iter = stdout.lines();
         for (i, raw) in iter.by_ref().take(TOOL_CALL_MAX_LINES).enumerate() {
             let prefix = if i == 0 { "  └ " } else { "    " };
-            let s = format!("{prefix}{raw}");
-            lines.push(ansi_escape_line(&s).dim());
+
+            // First line is the header; dim it entirely.
+            if i == 0 {
+                let s = format!("{prefix}{raw}");
+                lines.push(ansi_escape_line(&s).dim());
+                continue;
+            }
+
+            // Subsequent lines should look like: "M path/to/file".
+            // Colorize the status letter like `git status` (e.g., M red).
+            let status = raw.chars().next();
+            let rest = raw.get(2..).unwrap_or("");
+
+            match status {
+                Some('M') => lines.push(Line::from(vec![
+                    prefix.into(),
+                    "M ".red(),
+                    rest.to_string().dim(),
+                ])),
+                Some('A') => lines.push(Line::from(vec![
+                    prefix.into(),
+                    "A ".green(),
+                    rest.to_string().dim(),
+                ])),
+                Some('D') => lines.push(Line::from(vec![
+                    prefix.into(),
+                    "D ".red(),
+                    rest.to_string().dim(),
+                ])),
+                _ => {
+                    // Fallback: dim the whole line if it doesn't match the pattern
+                    let s = format!("{prefix}{raw}");
+                    lines.push(ansi_escape_line(&s).dim());
+                }
+            }
         }
         let remaining = iter.count();
         if remaining > 0 {

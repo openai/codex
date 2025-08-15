@@ -11,3 +11,12 @@ In the codex-rs folder where the rust code lives:
 Before finalizing a change to `codex-rs`, run `just fmt` (in `codex-rs` directory) to format the code and `just fix` (in `codex-rs` directory) to fix any linter issues in the code. Additionally, run the tests:
 1. Run the test for the specific project that was changed. For example, if changes were made in `codex-rs/tui`, run `cargo test -p codex-tui`.
 2. Once those pass, if any changes were made in common, core, or protocol, run the complete test suite with `cargo test --all-features`.
+
+# TUI code conventions
+
+- Use concise styling helpers from ratatui’s Stylize trait.
+  - Basic spans: use "text".into()
+  - Styled spans: use "text".red(), "text".green(), "text".magenta(), "text".dim(), etc.
+  - Prefer these over constructing styles with `Span::styled` and `Style` directly.
+  - Example: patch summary file lines
+    - Desired: vec!["  └ ".into(), "M".red(), " ".dim(), "tui/src/app.rs".dim()]
