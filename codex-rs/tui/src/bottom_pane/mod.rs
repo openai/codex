@@ -210,6 +210,19 @@ impl BottomPane<'_> {
         }
     }
 
+    /// Update the live status text shown while a task is running.
+    /// If a modal view is active (i.e., not the status indicator), this is a no‑op.
+    pub(crate) fn update_status_text(&mut self, text: String) {
+        if !self.is_task_running || !self.status_view_active {
+            return;
+        }
+        if let Some(mut view) = self.active_view.take() {
+            view.update_status_text(text);
+            self.active_view = Some(view);
+            self.request_redraw();
+        }
+    }
+
     pub(crate) fn composer_is_empty(&self) -> bool {
         self.composer.is_empty()
     }

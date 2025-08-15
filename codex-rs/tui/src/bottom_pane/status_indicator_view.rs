@@ -43,4 +43,8 @@ impl BottomPaneView<'_> for StatusIndicatorView {
             self.view.interrupt();
         }
     }
+
+    fn update_status_text(&mut self, text: String) {
+        self.update_text(text);
+    }
 }
