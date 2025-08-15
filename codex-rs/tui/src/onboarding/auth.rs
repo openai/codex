@@ -44,11 +44,7 @@ pub(crate) struct ContinueInBrowserState {
 impl Drop for ContinueInBrowserState {
     fn drop(&mut self) {
         if let Some(child) = &self.login_child {
-            if let Ok(mut locked) = child.child.lock() {
-                // Best-effort terminate and reap the child to avoid zombies.
-                let _ = locked.kill();
-                let _ = locked.wait();
-            }
+            child.cancel();
         }
     }
 }
@@ -321,32 +317,16 @@ impl AuthModeWidget {
     }
 
     fn spawn_completion_poller(&self, child: codex_login::SpawnedLogin) {
-        let child_arc = child.child.clone();
-        let stderr_buf = child.stderr.clone();
         let event_tx = self.event_tx.clone();
         std::thread::spawn(move || {
             loop {
-                let done = {
-                    if let Ok(mut locked) = child_arc.lock() {
-                        match locked.try_wait() {
-                            Ok(Some(status)) => Some(status.success()),
-                            Ok(None) => None,
-                            Err(_) => Some(false),
-                        }
-                    } else {
-                        Some(false)
-                    }
-                };
-                if let Some(success) = done {
+                if let Some(success) = child.get_auth_result() {
                     if success {
                         event_tx.send(AppEvent::OnboardingAuthComplete(Ok(())));
                     } else {
-                        let err = stderr_buf
-                            .lock()
-                            .ok()
-                            .and_then(|b| String::from_utf8(b.clone()).ok())
-                            .unwrap_or_else(|| "login_with_chatgpt subprocess failed".to_string());
-                        event_tx.send(AppEvent::OnboardingAuthComplete(Err(err)));
+                        event_tx.send(AppEvent::OnboardingAuthComplete(Err(
+                            "login failed".to_string()
+                        )));
                     }
                     break;
                 }
