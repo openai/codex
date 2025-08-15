@@ -16,10 +16,9 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
 
-pub use crate::server::LoginServerInfo;
+pub use crate::server::LoginServer;
 pub use crate::server::ServerOptions;
-pub use crate::server::run_server_blocking;
-pub use crate::server::run_server_blocking_with_notify;
+pub use crate::server::run_login_server;
 pub use crate::token_data::TokenData;
 use crate::token_data::parse_id_token;
 
@@ -250,65 +249,6 @@ pub fn logout(codex_home: &Path) -> std::io::Result<bool> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
         Err(err) => Err(err),
     }
-}
-
-/// Represents a running login server. The server can be stopped by calling `cancel()` on SpawnedLogin.
-#[derive(Debug, Clone)]
-pub struct SpawnedLogin {
-    url: Arc<Mutex<Option<String>>>,
-    done: Arc<Mutex<Option<bool>>>,
-    shutdown: Arc<std::sync::atomic::AtomicBool>,
-}
-
-impl SpawnedLogin {
-    pub fn get_login_url(&self) -> Option<String> {
-        self.url.lock().ok().and_then(|u| u.clone())
-    }
-
-    pub fn get_auth_result(&self) -> Option<bool> {
-        self.done.lock().ok().and_then(|d| *d)
-    }
-
-    pub fn cancel(&self) {
-        self.shutdown
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-    }
-}
-
-pub fn spawn_login_with_chatgpt(codex_home: &Path) -> std::io::Result<SpawnedLogin> {
-    let (tx, rx) = std::sync::mpsc::channel::<LoginServerInfo>();
-    let shutdown = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let done = Arc::new(Mutex::new(None::<bool>));
-    let url = Arc::new(Mutex::new(None::<String>));
-
-    let codex_home_buf = codex_home.to_path_buf();
-    let client_id = CLIENT_ID.to_string();
-
-    let shutdown_clone = shutdown.clone();
-    let done_clone = done.clone();
-    std::thread::spawn(move || {
-        let opts = ServerOptions::new(&codex_home_buf, &client_id);
-        let res = run_server_blocking_with_notify(opts, Some(tx), Some(shutdown_clone));
-        let success = res.is_ok();
-        if let Ok(mut lock) = done_clone.lock() {
-            *lock = Some(success);
-        }
-    });
-
-    let url_clone = url.clone();
-    std::thread::spawn(move || {
-        if let Ok(u) = rx.recv() {
-            if let Ok(mut lock) = url_clone.lock() {
-                *lock = Some(u.auth_url);
-            }
-        }
-    });
-
-    Ok(SpawnedLogin {
-        url,
-        done,
-        shutdown,
-    })
 }
 
 pub fn login_with_api_key(codex_home: &Path, api_key: &str) -> std::io::Result<()> {
