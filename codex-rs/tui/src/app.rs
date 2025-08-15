@@ -40,6 +40,10 @@ pub(crate) struct App {
     file_search: FileSearchManager,
 
     transcript_lines: Vec<Line<'static>>,
+    pending_history_lines: Vec<Line<'static>>,
+
+    /// True until at least one non-blank line has been inserted into history.
+    history_is_empty: bool,
 
     // Transcript overlay state
     transcript_overlay: Option<TranscriptApp>,
@@ -83,6 +87,8 @@ impl App {
             server: conversation_manager,
             app_event_tx,
             chat_widget,
+            pending_history_lines: Vec::new(),
+            history_is_empty: true,
             config,
             file_search,
             enhanced_keys_supported,

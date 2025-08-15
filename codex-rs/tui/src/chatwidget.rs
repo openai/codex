@@ -105,6 +105,7 @@ pub(crate) struct ChatWidget {
     full_reasoning_buffer: String,
     session_id: Option<Uuid>,
     frame_requester: FrameRequester,
+    last_history_was_exec: bool,
 }
 
 struct UserMessage {
@@ -376,6 +377,9 @@ impl ChatWidget {
                 self.bottom_pane.set_task_running(false);
                 self.task_complete_pending = false;
             }
+            // A completed stream indicates non-exec content was just inserted.
+            // Reset the exec header grouping so the next exec shows its header.
+            self.last_history_was_exec = false;
             self.flush_interrupt_queue();
         }
     }
@@ -408,9 +412,15 @@ impl ChatWidget {
             self.active_exec_cell = None;
             let pending = std::mem::take(&mut self.pending_exec_completions);
             for (command, parsed, output) in pending {
-                self.add_to_history(history_cell::new_completed_exec_command(
-                    command, parsed, output,
-                ));
+                let include_header = !self.last_history_was_exec;
+                let cell = history_cell::new_completed_exec_command(
+                    command,
+                    parsed,
+                    output,
+                    include_header,
+                );
+                self.add_to_history(cell);
+                self.last_history_was_exec = true;
             }
         }
     }
@@ -473,9 +483,11 @@ impl ChatWidget {
                 exec.parsed.extend(ev.parsed_cmd);
             }
             _ => {
+                let include_header = !self.last_history_was_exec;
                 self.active_exec_cell = Some(history_cell::new_active_exec_command(
                     ev.command,
                     ev.parsed_cmd,
+                    include_header,
                 ));
             }
         }
@@ -565,6 +577,7 @@ impl ChatWidget {
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             session_id: None,
+            last_history_was_exec: false,
         }
     }
 
@@ -694,6 +707,7 @@ impl ChatWidget {
 
     fn flush_active_exec_cell(&mut self) {
         if let Some(active) = self.active_exec_cell.take() {
+            self.last_history_was_exec = true;
             self.app_event_tx
                 .send(AppEvent::InsertHistoryCell(Box::new(active)));
         }
@@ -701,6 +715,7 @@ impl ChatWidget {
 
     fn add_to_history(&mut self, cell: impl HistoryCell + 'static) {
         self.flush_active_exec_cell();
+        self.last_history_was_exec = false;
         self.app_event_tx
             .send(AppEvent::InsertHistoryCell(Box::new(cell)));
     }

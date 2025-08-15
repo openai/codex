@@ -154,6 +154,7 @@ fn make_chatwidget_manual() -> (
         full_reasoning_buffer: String::new(),
         session_id: None,
         frame_requester: crate::tui::FrameRequester::test_dummy(),
+        last_history_was_exec: false,
     };
     (widget, rx, op_rx)
 }
@@ -247,8 +248,12 @@ fn exec_history_cell_shows_working_then_completed() {
     );
     let blob = lines_to_single_string(&cells[0]);
     assert!(
-        blob.contains("Completed"),
-        "expected completed exec cell to show Completed header: {blob:?}"
+        blob.contains('✓'),
+        "expected completed exec cell to show success marker: {blob:?}"
+    );
+    assert!(
+        blob.contains("echo done"),
+        "expected command text to be present: {blob:?}"
     );
 }
 
@@ -292,9 +297,72 @@ fn exec_history_cell_shows_working_then_failed() {
     );
     let blob = lines_to_single_string(&cells[0]);
     assert!(
-        blob.contains("Failed (exit 2)"),
-        "expected completed exec cell to show Failed header with exit code: {blob:?}"
+        blob.contains('✗'),
+        "expected failure marker present: {blob:?}"
     );
+    assert!(
+        blob.contains("false"),
+        "expected command text present: {blob:?}"
+    );
+}
+
+#[test]
+fn exec_history_extends_previous_when_consecutive() {
+    let (mut chat, rx, _op_rx) = make_chatwidget_manual();
+
+    // First command
+    chat.handle_codex_event(Event {
+        id: "call-a".into(),
+        msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+            call_id: "call-a".into(),
+            command: vec!["bash".into(), "-lc".into(), "echo one".into()],
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            parsed_cmd: vec![codex_core::parse_command::ParsedCommand::Unknown {
+                cmd: "echo one".into(),
+            }],
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "call-a".into(),
+        msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+            call_id: "call-a".into(),
+            stdout: "one".into(),
+            stderr: String::new(),
+            exit_code: 0,
+            duration: std::time::Duration::from_millis(5),
+        }),
+    });
+    let first_cells = drain_insert_history(&rx);
+    assert_eq!(first_cells.len(), 1, "first exec should insert history");
+
+    // Second command
+    chat.handle_codex_event(Event {
+        id: "call-b".into(),
+        msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+            call_id: "call-b".into(),
+            command: vec!["bash".into(), "-lc".into(), "echo two".into()],
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            parsed_cmd: vec![codex_core::parse_command::ParsedCommand::Unknown {
+                cmd: "echo two".into(),
+            }],
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "call-b".into(),
+        msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+            call_id: "call-b".into(),
+            stdout: "two".into(),
+            stderr: String::new(),
+            exit_code: 0,
+            duration: std::time::Duration::from_millis(5),
+        }),
+    });
+    let second_cells = drain_insert_history(&rx);
+    assert_eq!(second_cells.len(), 1, "second exec should extend history");
+    let first_blob = lines_to_single_string(&first_cells[0]);
+    let second_blob = lines_to_single_string(&second_cells[0]);
+    assert!(first_blob.contains('✓'));
+    assert!(second_blob.contains("echo two"));
 }
 
 #[tokio::test(flavor = "current_thread")]

@@ -94,8 +94,16 @@ impl BottomPane {
         } else {
             self.composer.desired_height(width)
         };
-
-        view_height.saturating_add(Self::BOTTOM_PAD_LINES)
+        // Always add a top spacer when the composer is visible or when the
+        // status indicator view is active. Avoid adding it above other modals.
+        let top_pad = if self.active_view.is_none() || self.status_view_active {
+            1
+        } else {
+            0
+        };
+        view_height
+            .saturating_add(Self::BOTTOM_PAD_LINES)
+            .saturating_add(top_pad)
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
@@ -106,7 +114,23 @@ impl BottomPane {
         if self.active_view.is_some() {
             None
         } else {
-            self.composer.cursor_pos(area)
+            let avail = area.height;
+            if avail == 0 {
+                return None;
+            }
+            // Mirror render: one-line top spacer above the composer, plus
+            // reserved bottom padding lines, shrinking pad to preserve at
+            // least one line of composer when space is tight.
+            let top_pad: u16 = 1;
+            let bottom_pad =
+                BottomPane::BOTTOM_PAD_LINES.min(avail.saturating_sub(1).saturating_sub(top_pad));
+            let composer_rect = Rect {
+                x: area.x,
+                y: area.y.saturating_add(top_pad),
+                width: area.width,
+                height: avail.saturating_sub(top_pad + bottom_pad),
+            };
+            self.composer.cursor_pos(composer_rect)
         }
     }
 
@@ -346,16 +370,28 @@ impl BottomPane {
 
 impl WidgetRef for &BottomPane {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+        // Top spacer applies above the composer and the status indicator.
+        // For other modals, render flush to the top.
+        let mut top_pad = 1;
         if let Some(view) = &self.active_view {
             // Reserve bottom padding lines; keep at least 1 line for the view.
             let avail = area.height;
             if avail > 0 {
-                let pad = BottomPane::BOTTOM_PAD_LINES.min(avail.saturating_sub(1));
+                // Ensure at least one row for the view when space is tiny.
+                if self.status_view_active && avail == 1 {
+                    top_pad = 0;
+                }
+                let pad = if self.status_view_active {
+                    BottomPane::BOTTOM_PAD_LINES
+                        .min(avail.saturating_sub(1).saturating_sub(top_pad))
+                } else {
+                    BottomPane::BOTTOM_PAD_LINES.min(avail.saturating_sub(1))
+                };
                 let view_rect = Rect {
                     x: area.x,
-                    y: area.y,
+                    y: area.y.saturating_add(top_pad),
                     width: area.width,
-                    height: avail - pad,
+                    height: avail.saturating_sub(pad + top_pad),
                 };
                 view.render(view_rect, buf);
             }
@@ -364,10 +400,13 @@ impl WidgetRef for &BottomPane {
             if avail > 0 {
                 let composer_rect = Rect {
                     x: area.x,
-                    y: area.y,
+                    y: area.y.saturating_add(top_pad),
                     width: area.width,
-                    // Reserve bottom padding
-                    height: avail - BottomPane::BOTTOM_PAD_LINES.min(avail.saturating_sub(1)),
+                    // Reserve top pad (when running) and bottom padding
+                    height: avail
+                        - BottomPane::BOTTOM_PAD_LINES
+                            .min(avail.saturating_sub(1).saturating_sub(top_pad))
+                        - top_pad,
                 };
                 (&self.composer).render_ref(composer_rect, buf);
             }
@@ -478,13 +517,13 @@ mod tests {
         let area = Rect::new(0, 0, 40, 3);
         let mut buf = Buffer::empty(area);
         (&pane).render_ref(area, &mut buf);
-        let mut row0 = String::new();
+        let mut row1 = String::new();
         for x in 0..area.width {
-            row0.push(buf[(x, 0)].symbol().chars().next().unwrap_or(' '));
+            row1.push(buf[(x, 1)].symbol().chars().next().unwrap_or(' '));
         }
         assert!(
-            row0.contains("Working"),
-            "expected Working header after denial: {row0:?}"
+            row1.contains("Working"),
+            "expected Working header after denial on row 1: {row1:?}"
         );
 
         // Drain the channel to avoid unused warnings.
@@ -509,14 +548,14 @@ mod tests {
         // Allow some frames so the animation thread ticks.
         std::thread::sleep(std::time::Duration::from_millis(120));
 
-        // Render and confirm the line contains the "Working" header.
+        // Render and confirm row 1 contains the "Working" header.
         let area = Rect::new(0, 0, 40, 3);
         let mut buf = Buffer::empty(area);
         (&pane).render_ref(area, &mut buf);
 
         let mut row0 = String::new();
         for x in 0..area.width {
-            row0.push(buf[(x, 0)].symbol().chars().next().unwrap_or(' '));
+            row0.push(buf[(x, 1)].symbol().chars().next().unwrap_or(' '));
         }
         assert!(
             row0.contains("Working"),
@@ -549,12 +588,12 @@ mod tests {
         let mut buf = Buffer::empty(area);
         (&pane).render_ref(area, &mut buf);
 
-        // Top row contains the status header
+        // Row 1 contains the status header (row 0 is the spacer)
         let mut top = String::new();
         for x in 0..area.width {
-            top.push(buf[(x, 0)].symbol().chars().next().unwrap_or(' '));
+            top.push(buf[(x, 1)].symbol().chars().next().unwrap_or(' '));
         }
-        assert_eq!(buf[(0, 0)].symbol().chars().next().unwrap_or(' '), '▌');
+        assert_eq!(buf[(0, 1)].symbol().chars().next().unwrap_or(' '), '▌');
         assert!(
             top.contains("Working"),
             "expected Working header on top row: {top:?}"
@@ -591,7 +630,7 @@ mod tests {
 
         pane.set_task_running(true);
 
-        // Height=2 → pad shrinks to 1; bottom row is blank, top row has spinner.
+        // Height=2 → with spacer, spinner on row 1; no bottom padding.
         let area2 = Rect::new(0, 0, 20, 2);
         let mut buf2 = Buffer::empty(area2);
         (&pane).render_ref(area2, &mut buf2);
@@ -601,13 +640,10 @@ mod tests {
             row0.push(buf2[(x, 0)].symbol().chars().next().unwrap_or(' '));
             row1.push(buf2[(x, 1)].symbol().chars().next().unwrap_or(' '));
         }
+        assert!(row0.trim().is_empty(), "expected spacer on row 0: {row0:?}");
         assert!(
-            row0.contains("Working"),
-            "expected Working header on row 0: {row0:?}"
-        );
-        assert!(
-            row1.trim().is_empty(),
-            "expected bottom padding on row 1: {row1:?}"
+            row1.contains("Working"),
+            "expected Working on row 1: {row1:?}"
         );
 
         // Height=1 → no padding; single row is the spinner.

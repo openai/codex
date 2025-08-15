@@ -104,6 +104,7 @@ pub(crate) struct ExecCell {
     pub(crate) parsed: Vec<ParsedCommand>,
     pub(crate) output: Option<CommandOutput>,
     start_time: Option<Instant>,
+    include_header: bool,
 }
 impl HistoryCell for ExecCell {
     fn display_lines(&self) -> Vec<Line<'static>> {
@@ -112,15 +113,25 @@ impl HistoryCell for ExecCell {
             &self.parsed,
             self.output.as_ref(),
             self.start_time,
+            self.include_header,
         )
     }
 }
 
 impl WidgetRef for &ExecCell {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+        if area.height == 0 {
+            return;
+        }
+        let content_area = Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: area.height,
+        };
         Paragraph::new(Text::from(self.display_lines()))
             .wrap(Wrap { trim: false })
-            .render(area, buf);
+            .render(content_area, buf);
     }
 }
 
@@ -131,8 +142,8 @@ struct CompletedMcpToolCallWithImageOutput {
 impl HistoryCell for CompletedMcpToolCallWithImageOutput {
     fn display_lines(&self) -> Vec<Line<'static>> {
         vec![
-            Line::from("tool result (image output omitted)"),
             Line::from(""),
+            Line::from("tool result (image output omitted)"),
         ]
     }
 }
@@ -179,6 +190,7 @@ pub(crate) fn new_session_info(
         };
 
         let lines: Vec<Line<'static>> = vec![
+            Line::from(Span::from("")),
             Line::from(vec![
                 Span::raw(">_ ").dim(),
                 Span::styled(
@@ -194,17 +206,16 @@ pub(crate) fn new_session_info(
             Line::from(format!(" /status - {}", SlashCommand::Status.description()).dim()),
             Line::from(format!(" /approvals - {}", SlashCommand::Approvals.description()).dim()),
             Line::from(format!(" /model - {}", SlashCommand::Model.description()).dim()),
-            Line::from("".dim()),
         ];
         PlainHistoryCell { lines }
     } else if config.model == model {
         PlainHistoryCell { lines: Vec::new() }
     } else {
         let lines = vec![
+            Line::from(""),
             Line::from("model changed:".magenta().bold()),
             Line::from(format!("requested: {}", config.model)),
             Line::from(format!("used: {model}")),
-            Line::from(""),
         ];
         PlainHistoryCell { lines }
     }
@@ -212,9 +223,9 @@ pub(crate) fn new_session_info(
 
 pub(crate) fn new_user_prompt(message: String) -> PlainHistoryCell {
     let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::from(""));
     lines.push(Line::from("user".cyan().bold()));
     lines.extend(message.lines().map(|l| Line::from(l.to_string())));
-    lines.push(Line::from(""));
 
     PlainHistoryCell { lines }
 }
@@ -222,12 +233,14 @@ pub(crate) fn new_user_prompt(message: String) -> PlainHistoryCell {
 pub(crate) fn new_active_exec_command(
     command: Vec<String>,
     parsed: Vec<ParsedCommand>,
+    include_header: bool,
 ) -> ExecCell {
     ExecCell {
         command,
         parsed,
         output: None,
         start_time: Some(Instant::now()),
+        include_header,
     }
 }
 
@@ -235,17 +248,15 @@ pub(crate) fn new_completed_exec_command(
     command: Vec<String>,
     parsed: Vec<ParsedCommand>,
     output: CommandOutput,
+    include_header: bool,
 ) -> ExecCell {
     ExecCell {
         command,
         parsed,
         output: Some(output),
         start_time: None,
+        include_header,
     }
-}
-
-fn exec_duration(start: Instant) -> String {
-    format!("{}s", start.elapsed().as_secs())
 }
 
 fn exec_command_lines(
@@ -253,10 +264,11 @@ fn exec_command_lines(
     parsed: &[ParsedCommand],
     output: Option<&CommandOutput>,
     start_time: Option<Instant>,
+    include_header: bool,
 ) -> Vec<Line<'static>> {
     match parsed.is_empty() {
-        true => new_exec_command_generic(command, output, start_time),
-        false => new_parsed_command(command, parsed, output, start_time),
+        true => new_exec_command_generic(command, output, start_time, include_header),
+        false => new_parsed_command(command, parsed, output, start_time, include_header),
     }
 }
 fn new_parsed_command(
@@ -264,47 +276,31 @@ fn new_parsed_command(
     parsed_commands: &[ParsedCommand],
     output: Option<&CommandOutput>,
     start_time: Option<Instant>,
+    include_header: bool,
 ) -> Vec<Line<'static>> {
     let mut lines: Vec<Line> = Vec::new();
-    match output {
-        None => {
-            let mut spans = vec!["⚙︎ Working".magenta().bold()];
-            if let Some(st) = start_time {
-                let dur = exec_duration(st);
-                spans.push(format!(" • {dur}").dim());
-            }
-            lines.push(Line::from(spans));
-        }
-        Some(o) if o.exit_code == 0 => {
-            lines.push(Line::from(vec!["✓".green(), " Completed".into()]));
-        }
-        Some(o) => {
-            lines.push(Line::from(vec![
-                "✗".red(),
-                format!(" Failed (exit {})", o.exit_code).into(),
-            ]));
-        }
-    };
-
-    // Optionally include the complete, unaltered command from the model.
-    if std::env::var("SHOW_FULL_COMMANDS")
-        .map(|v| !v.is_empty())
-        .unwrap_or(false)
-    {
-        let full_cmd = shlex_try_join(command.iter().map(|s| s.as_str()))
-            .unwrap_or_else(|_| command.join(" "));
-        lines.push(Line::from(vec![
-            Span::styled("  └ ", Style::default().add_modifier(Modifier::DIM)),
-            Span::styled(
-                full_cmd,
-                Style::default()
-                    .add_modifier(Modifier::DIM)
-                    .add_modifier(Modifier::ITALIC),
-            ),
-        ]));
+    // Leading spacer and header line above command list
+    if include_header {
+        lines.push(Line::from(""));
+        lines.push(Line::from(">_".magenta()));
     }
 
-    for (i, parsed) in parsed_commands.iter().enumerate() {
+    // Determine the leading status marker: spinner while running, ✓ on success, ✗ on failure.
+    let status_marker: Span<'static> = match output {
+        None => {
+            // Animated braille spinner – choose frame based on elapsed time.
+            const FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+            let idx = start_time
+                .map(|st| ((st.elapsed().as_millis() / 100) as usize) % FRAMES.len())
+                .unwrap_or(0);
+            let ch = FRAMES[idx];
+            Span::raw(format!("{ch}"))
+        }
+        Some(o) if o.exit_code == 0 => Span::styled("✓", Style::default().fg(Color::Green)),
+        Some(_) => Span::styled("✗", Style::default().fg(Color::Red)),
+    };
+
+    for parsed in parsed_commands.iter() {
         let text = match parsed {
             ParsedCommand::Read { name, .. } => format!("📖 {name}"),
             ParsedCommand::ListFiles { cmd, path } => match path {
@@ -323,19 +319,25 @@ fn new_parsed_command(
             ParsedCommand::Unknown { cmd } => format!("⌨️ {cmd}"),
             ParsedCommand::Noop { cmd } => format!("🔄 {cmd}"),
         };
-
-        let first_prefix = if i == 0 { "  └ " } else { "    " };
+        // Prefix: two spaces, marker, space. Continuations align under the text block.
         for (j, line_text) in text.lines().enumerate() {
-            let prefix = if j == 0 { first_prefix } else { "    " };
-            lines.push(Line::from(vec![
-                Span::styled(prefix, Style::default().add_modifier(Modifier::DIM)),
-                line_text.to_string().dim(),
-            ]));
+            if j == 0 {
+                lines.push(Line::from(vec![
+                    "  ".into(),
+                    status_marker.clone(),
+                    " ".into(),
+                    line_text.to_string().light_blue(),
+                ]));
+            } else {
+                lines.push(Line::from(vec![
+                    "    ".into(),
+                    line_text.to_string().light_blue(),
+                ]));
+            }
         }
     }
 
     lines.extend(output_lines(output, true, false));
-    lines.push(Line::from(""));
 
     lines
 }
@@ -344,29 +346,44 @@ fn new_exec_command_generic(
     command: &[String],
     output: Option<&CommandOutput>,
     start_time: Option<Instant>,
+    include_header: bool,
 ) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
-    let command_escaped = strip_bash_lc_and_escape(command);
-    let mut cmd_lines = command_escaped.lines();
-    if let Some(first) = cmd_lines.next() {
-        let mut spans: Vec<Span> = vec!["⚡ Running".magenta()];
-        if let Some(st) = start_time {
-            let dur = exec_duration(st);
-            spans.push(format!(" • {dur}").dim());
-        }
-        spans.push(" ".into());
-        spans.push(first.to_string().into());
-        lines.push(Line::from(spans));
-    } else {
-        let mut spans: Vec<Span> = vec!["⚡ Running".magenta()];
-        if let Some(st) = start_time {
-            let dur = exec_duration(st);
-            spans.push(format!(" • {dur}").dim());
-        }
-        lines.push(Line::from(spans));
+    // Leading spacer and header line above command list
+    if include_header {
+        lines.push(Line::from(""));
+        lines.push(Line::from(">_".magenta()));
     }
-    for cont in cmd_lines {
-        lines.push(Line::from(cont.to_string()));
+    let command_escaped = strip_bash_lc_and_escape(command);
+
+    // Determine marker: spinner while running, ✓/✗ when completed
+    let status_marker: Span<'static> = match output {
+        None => {
+            const FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+            let idx = start_time
+                .map(|st| ((st.elapsed().as_millis() / 100) as usize) % FRAMES.len())
+                .unwrap_or(0);
+            let ch = FRAMES[idx];
+            Span::raw(format!("{ch}"))
+        }
+        Some(o) if o.exit_code == 0 => Span::styled("✓", Style::default().fg(Color::Green)),
+        Some(_) => Span::styled("✗", Style::default().fg(Color::Red)),
+    };
+
+    for (i, line) in command_escaped.lines().enumerate() {
+        if i == 0 {
+            lines.push(Line::from(vec![
+                Span::raw("  "),
+                status_marker.clone(),
+                Span::raw(" "),
+                Span::raw(line.to_string()),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                Span::styled("    ", Style::default().add_modifier(Modifier::DIM)),
+                Span::raw(line.to_string()),
+            ]));
+        }
     }
 
     lines.extend(output_lines(output, false, true));
@@ -377,9 +394,9 @@ fn new_exec_command_generic(
 pub(crate) fn new_active_mcp_tool_call(invocation: McpInvocation) -> PlainHistoryCell {
     let title_line = Line::from(vec!["tool".magenta(), " running...".dim()]);
     let lines: Vec<Line> = vec![
+        Line::from(""),
         title_line,
         format_mcp_invocation(invocation.clone()),
-        Line::from(""),
     ];
 
     PlainHistoryCell { lines }
@@ -489,8 +506,6 @@ pub(crate) fn new_completed_mcp_tool_call(
                     ));
                 }
             }
-
-            lines.push(Line::from(""));
         }
         Err(e) => {
             lines.push(Line::from(vec![
@@ -503,6 +518,8 @@ pub(crate) fn new_completed_mcp_tool_call(
         }
     };
 
+    // Leading blank separator at the start of this cell
+    lines.insert(0, Line::from(""));
     Box::new(PlainHistoryCell { lines })
 }
 
@@ -512,6 +529,7 @@ pub(crate) fn new_status_output(
     session_id: &Option<Uuid>,
 ) -> PlainHistoryCell {
     let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::from(""));
     lines.push(Line::from("/status".magenta()));
 
     let config_entries = create_config_summary_entries(config);
@@ -595,8 +613,6 @@ pub(crate) fn new_status_output(
             agents_list.join(", ").into(),
         ]));
     }
-
-    lines.push(Line::from(""));
 
     // 👤 Account (only if ChatGPT tokens exist), shown under the first block
     let auth_file = get_auth_file(&config.codex_home);
@@ -688,13 +704,13 @@ pub(crate) fn new_status_output(
         usage.blended_total().to_string().into(),
     ]));
 
-    lines.push(Line::from(""));
     PlainHistoryCell { lines }
 }
 
 /// Render a summary of configured MCP servers from the current `Config`.
 pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
     let lines: Vec<Line<'static>> = vec![
+        Line::from(""),
         Line::from("/mcp".magenta()),
         Line::from(""),
         Line::from(vec!["🔌  ".into(), "MCP Tools".bold()]),
@@ -709,7 +725,6 @@ pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
             " to configure them.".into(),
         ])
         .style(Style::default().add_modifier(Modifier::DIM)),
-        Line::from(""),
     ];
 
     PlainHistoryCell { lines }
@@ -782,7 +797,7 @@ pub(crate) fn new_mcp_tools_output(
 }
 
 pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
-    let lines: Vec<Line<'static>> = vec![vec!["🖐 ".red().bold(), message.into()].into(), "".into()];
+    let lines: Vec<Line<'static>> = vec!["".into(), vec!["🖐 ".red().bold(), message.into()].into()];
     PlainHistoryCell { lines }
 }
 
@@ -797,6 +812,8 @@ pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlainHistoryCell {
     let UpdatePlanArgs { explanation, plan } = update;
 
     let mut lines: Vec<Line<'static>> = Vec::new();
+    // Leading blank for separation
+    lines.push(Line::from(""));
     // Header with progress summary
     let total = plan.len();
     let completed = plan
@@ -887,8 +904,6 @@ pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlainHistoryCell {
         }
     }
 
-    lines.push(Line::from(""));
-
     PlainHistoryCell { lines }
 }
 
@@ -908,16 +923,16 @@ pub(crate) fn new_patch_event(
             auto_approved: false,
         } => {
             let lines: Vec<Line<'static>> = vec![
-                Line::from("✏️ Applying patch".magenta().bold()),
                 Line::from(""),
+                Line::from("✏️ Applying patch".magenta().bold()),
             ];
             return PlainHistoryCell { lines };
         }
     };
 
     let mut lines: Vec<Line<'static>> = create_diff_summary(title, &changes, event_type);
-
-    lines.push(Line::from(""));
+    // Add leading blank separator for the cell
+    lines.insert(0, Line::from(""));
 
     PlainHistoryCell { lines }
 }
@@ -940,8 +955,8 @@ pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
         ));
     }
 
-    lines.push(Line::from(""));
-
+    // Leading blank separator
+    lines.insert(0, Line::from(""));
     PlainHistoryCell { lines }
 }
 
@@ -988,9 +1003,8 @@ pub(crate) fn new_patch_apply_success(stdout: String) -> PlainHistoryCell {
             lines.push(Line::from(format!("... +{remaining} lines")).dim());
         }
     }
-
-    lines.push(Line::from(""));
-
+    // Leading blank separator
+    lines.insert(0, Line::from(""));
     PlainHistoryCell { lines }
 }
 
@@ -1096,9 +1110,14 @@ mod tests {
         let parsed = vec![ParsedCommand::Unknown {
             cmd: "printf 'foo\nbar'".to_string(),
         }];
-        let lines = exec_command_lines(&[], &parsed, None, None);
-        assert!(lines.len() >= 3);
-        assert_eq!(lines[1].spans[0].content, "  └ ");
-        assert_eq!(lines[2].spans[0].content, "    ");
+        let lines = exec_command_lines(&[], &parsed, None, None, true);
+        assert!(lines.len() >= 4);
+        // Leading spacer then header line
+        assert!(lines[0].spans.is_empty() || lines[0].spans[0].content.is_empty());
+        assert_eq!(lines[1].spans[0].content, ">_");
+        // First rendered command line starts with two-space + marker.
+        assert_eq!(lines[2].spans[0].content, "  ");
+        // Continuation lines align under the text block.
+        assert_eq!(lines[3].spans[0].content, "    ");
     }
 }
