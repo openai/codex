@@ -141,6 +141,7 @@ fn make_chatwidget_manual() -> (
         task_complete_pending: false,
         interrupts: InterruptManager::new(),
         needs_redraw: false,
+        session_id: None,
     };
     (widget, rx, op_rx)
 }
