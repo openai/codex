@@ -36,6 +36,8 @@ use crate::wire_format::ExecCommandApprovalResponse;
 use crate::wire_format::InputItem as WireInputItem;
 use crate::wire_format::InterruptConversationParams;
 use crate::wire_format::InterruptConversationResponse;
+use crate::wire_format::LOGIN_CHATGPT_COMPLETE_EVENT;
+use crate::wire_format::LoginChatGptCompleteNotification;
 use crate::wire_format::LoginChatGptResponse;
 use crate::wire_format::NewConversationParams;
 use crate::wire_format::NewConversationResponse;
@@ -57,7 +59,6 @@ pub(crate) struct CodexMessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     codex_linux_sandbox_exe: Option<PathBuf>,
     conversation_listeners: HashMap<Uuid, oneshot::Sender<()>>,
-    login_server: Option<codex_login::LoginServer>,
 }
 
 impl CodexMessageProcessor {
@@ -71,7 +72,6 @@ impl CodexMessageProcessor {
             outgoing,
             codex_linux_sandbox_exe,
             conversation_listeners: HashMap::new(),
-            login_server: None,
         }
     }
 
@@ -123,33 +123,40 @@ impl CodexMessageProcessor {
         let outgoing = self.outgoing.clone();
         match run_login_server(opts, None) {
             Ok(server) => {
-                self.login_server = Some(server.clone());
+                let login_attempt_id = Uuid::new_v4();
+                outgoing
+                    .send_response(
+                        request_id,
+                        LoginChatGptResponse {
+                            login_id: login_attempt_id,
+                        },
+                    )
+                    .await;
+
                 tokio::spawn(async move {
+                    // Move ownership of server into blocking task; block_until_done consumes it.
                     let result =
                         tokio::task::spawn_blocking(move || server.block_until_done()).await;
-                    match result {
-                        Ok(Ok(())) => {
-                            outgoing
-                                .send_response(request_id, LoginChatGptResponse {})
-                                .await;
-                        }
-                        Ok(Err(err)) => {
-                            let error = JSONRPCErrorError {
-                                code: INTERNAL_ERROR_CODE,
-                                message: format!("login server error: {err}"),
-                                data: None,
-                            };
-                            outgoing.send_error(request_id, error).await;
-                        }
-                        Err(join_err) => {
-                            let error = JSONRPCErrorError {
-                                code: INTERNAL_ERROR_CODE,
-                                message: format!("failed to join login server thread: {join_err}"),
-                                data: None,
-                            };
-                            outgoing.send_error(request_id, error).await;
-                        }
-                    }
+                    let (success, error_msg) = match result {
+                        Ok(Ok(())) => (true, None),
+                        Ok(Err(err)) => (false, Some(format!("login server error: {err}"))),
+                        Err(join_err) => (
+                            false,
+                            Some(format!("failed to join login server thread: {join_err}")),
+                        ),
+                    };
+                    let notification = LoginChatGptCompleteNotification {
+                        login_id: login_attempt_id,
+                        success,
+                        error: error_msg,
+                    };
+                    let params = serde_json::to_value(&notification).ok();
+                    outgoing
+                        .send_notification(OutgoingNotification {
+                            method: LOGIN_CHATGPT_COMPLETE_EVENT.to_string(),
+                            params,
+                        })
+                        .await;
                 });
             }
             Err(err) => {

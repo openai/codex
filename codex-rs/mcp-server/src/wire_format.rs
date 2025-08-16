@@ -128,7 +128,21 @@ pub struct RemoveConversationSubscriptionResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct LoginChatGptResponse {}
+pub struct LoginChatGptResponse {
+    pub login_id: Uuid,
+}
+
+// Event name for notifying client of login completion or failure.
+pub const LOGIN_CHATGPT_COMPLETE_EVENT: &str = "codex/event/login_chatgpt_complete";
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginChatGptCompleteNotification {
+    pub login_id: Uuid,
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -292,6 +306,54 @@ mod tests {
                 }
             }),
             serde_json::to_value(&request).unwrap(),
+        );
+    }
+
+    #[test]
+    fn serialize_login_chatgpt_response() {
+        let resp = LoginChatGptResponse {
+            login_id: Uuid::nil(),
+        };
+        let value = serde_json::to_value(&resp).unwrap();
+        // Field names should be camelCase.
+        assert_eq!(
+            value,
+            json!({
+                "loginId": Uuid::nil(),
+            })
+        );
+    }
+
+    #[test]
+    fn serialize_login_chatgpt_result_notification() {
+        let notif = LoginChatGptCompleteNotification {
+            login_id: Uuid::nil(),
+            success: false,
+            error: Some("boom".to_string()),
+        };
+        let value = serde_json::to_value(&notif).unwrap();
+        assert_eq!(
+            value,
+            json!({
+                "loginId": Uuid::nil(),
+                "success": false,
+                "error": "boom"
+            })
+        );
+
+        // When error is None, it should be omitted.
+        let notif2 = LoginChatGptCompleteNotification {
+            login_id: Uuid::nil(),
+            success: true,
+            error: None,
+        };
+        let value2 = serde_json::to_value(&notif2).unwrap();
+        assert_eq!(
+            value2,
+            json!({
+                "loginId": Uuid::nil(),
+                "success": true,
+            })
         );
     }
 }
