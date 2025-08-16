@@ -1,6 +1,4 @@
-use std::io::Write;
 use std::io::{self};
-use std::net::TcpStream;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -126,25 +124,13 @@ pub fn run_login_server(
     let (done_tx, done_rx) = mpsc::channel::<()>();
 
     if let Some(timeout) = opts.login_timeout {
-        let shutdown_flag_for_timer = shutdown_flag.clone();
-        let timeout_flag_for_timer = timeout_flag.clone();
-
-        // Spawn watcher that only wakes when either done is signaled or timeout elapses.
-        thread::spawn(move || {
-            if done_rx.recv_timeout(timeout).is_err() {
-                // Timeout elapsed, so shut down the server.
-                if shutdown_flag_for_timer
-                    .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                    .is_ok()
-                {
-                    timeout_flag_for_timer.store(true, Ordering::SeqCst);
-                    if let Ok(mut stream) = TcpStream::connect(format!("127.0.0.1:{actual_port}")) {
-                        // Nudge server by issuing a minimal HTTP request.
-                        let _ = stream.write_all(b"GET /__timeout__ HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
-                    }
-                }
-            }
-        });
+        spawn_timeout_watcher(
+            done_rx,
+            timeout,
+            shutdown_flag.clone(),
+            timeout_flag.clone(),
+            server.clone(),
+        );
     }
 
     let server_for_thread = server.clone();
@@ -152,7 +138,15 @@ pub fn run_login_server(
         while !shutdown_flag.load(Ordering::SeqCst) {
             let req = match server_for_thread.recv() {
                 Ok(r) => r,
-                Err(e) => return Err(io::Error::other(e)),
+                Err(e) => {
+                    // If we've been asked to shut down, break gracefully so that
+                    // we can report timeout or cancellation status uniformly.
+                    if shutdown_flag.load(Ordering::SeqCst) {
+                        break;
+                    } else {
+                        return Err(io::Error::other(e));
+                    }
+                }
             };
 
             let url_raw = req.url().to_string();
@@ -285,6 +279,29 @@ pub fn run_login_server(
         shutdown_flag: shutdown_flag_clone,
         server,
     })
+}
+
+/// Spawns a detached thread that waits for either a completion signal on `done_rx`
+/// or the specified `timeout` to elapse. If the timeout elapses first it marks
+/// the `shutdown_flag`, records `timeout_flag`, and unblocks the HTTP server so
+/// that the main server loop can exit promptly.
+fn spawn_timeout_watcher(
+    done_rx: mpsc::Receiver<()>,
+    timeout: Duration,
+    shutdown_flag: Arc<AtomicBool>,
+    timeout_flag: Arc<AtomicBool>,
+    server: Arc<Server>,
+) {
+    thread::spawn(move || {
+        if done_rx.recv_timeout(timeout).is_err()
+            && shutdown_flag
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+        {
+            timeout_flag.store(true, Ordering::SeqCst);
+            server.unblock();
+        }
+    });
 }
 
 fn build_authorize_url(
