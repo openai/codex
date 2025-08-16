@@ -147,15 +147,16 @@ impl CodexMessageProcessor {
             ..LoginServerOptions::new(config.codex_home.clone(), CLIENT_ID.to_string())
         };
 
-        // Local enum to unify success & error paths so we have a single send at the end.
         enum LoginChatGptReply {
             Response(LoginChatGptResponse),
             Error(JSONRPCErrorError),
         }
+
         let reply = match run_login_server(opts, None) {
             Ok(server) => {
-                let login_attempt_id = Uuid::new_v4();
-                // Replace existing active login if present (cancelling the old one first).
+                let login_id = Uuid::new_v4();
+
+                // Replace active login if present.
                 {
                     let mut guard = self.active_login.lock().await;
                     if let Some(existing) = guard.take() {
@@ -163,12 +164,12 @@ impl CodexMessageProcessor {
                     }
                     *guard = Some(ActiveLogin {
                         shutdown_handle: server.cancel_handle(),
-                        login_id: login_attempt_id,
+                        login_id,
                     });
                 }
 
                 let response = LoginChatGptResponse {
-                    login_id: login_attempt_id,
+                    login_id,
                     auth_url: server.auth_url.clone(),
                 };
 
@@ -187,7 +188,7 @@ impl CodexMessageProcessor {
                         ),
                     };
                     let notification = LoginChatGptCompleteNotification {
-                        login_id: login_attempt_id,
+                        login_id,
                         success,
                         error: error_msg,
                     };
@@ -198,9 +199,10 @@ impl CodexMessageProcessor {
                             params,
                         })
                         .await;
-                    // Clear the active login if it matches this attempt (may have been replaced / cancelled already).
+
+                    // Clear the active login if it matches this attempt. It may have been replaced or cancelled.
                     let mut guard = active_login.lock().await;
-                    if guard.as_ref().map(|l| l.login_id) == Some(login_attempt_id) {
+                    if guard.as_ref().map(|l| l.login_id) == Some(login_id) {
                         *guard = None;
                     }
                 });
@@ -229,7 +231,7 @@ impl CodexMessageProcessor {
                 if let Some(active) = guard.take() {
                     active.cancel();
                 }
-                drop(guard); // release before awaiting send_response
+                drop(guard);
                 self.outgoing
                     .send_response(
                         request_id,
