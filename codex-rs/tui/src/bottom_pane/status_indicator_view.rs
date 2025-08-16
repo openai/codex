@@ -23,9 +23,17 @@ impl StatusIndicatorView {
     pub fn update_text(&mut self, text: String) {
         self.view.update_text(text);
     }
+
+    pub fn update_header(&mut self, header: String) {
+        self.view.update_header(header);
+    }
 }
 
 impl BottomPaneView<'_> for StatusIndicatorView {
+    fn update_status_header(&mut self, header: String) {
+        self.update_header(header);
+    }
+
     fn should_hide_when_task_is_done(&mut self) -> bool {
         true
     }

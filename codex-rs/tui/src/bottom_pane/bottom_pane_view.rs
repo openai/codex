@@ -28,6 +28,11 @@ pub(crate) trait BottomPaneView<'a> {
     /// Render the view: this will be displayed in place of the composer.
     fn render(&self, area: Rect, buf: &mut Buffer);
 
+    /// Update the status indicator animated header. Default no-op.
+    fn update_status_header(&mut self, _header: String) {
+        // no-op
+    }
+
     /// Called when task completes to check if the view should be hidden.
     fn should_hide_when_task_is_done(&mut self) -> bool {
         false
