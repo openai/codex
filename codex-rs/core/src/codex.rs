@@ -509,6 +509,7 @@ impl Session {
             turn_context.cwd.to_path_buf(),
             turn_context.approval_policy,
             turn_context.sandbox_policy.clone(),
+            sess.user_shell.clone(),
         )));
         sess.record_conversation_items(&conversation_items).await;
 
@@ -1957,16 +1958,19 @@ pub struct ExecInvokeArgs<'a> {
     pub stdout_stream: Option<StdoutStream>,
 }
 
-fn maybe_run_with_user_profile(
+fn maybe_translate_shell_command(
     params: ExecParams,
     sess: &Session,
     turn_context: &TurnContext,
 ) -> ExecParams {
-    if turn_context.shell_environment_policy.use_profile {
-        let command = sess
+    let should_translate = matches!(sess.user_shell, crate::shell::Shell::PowerShell(_))
+        || turn_context.shell_environment_policy.use_profile;
+
+    if should_translate {
+        if let Some(command) = sess
             .user_shell
-            .format_default_shell_invocation(params.command.clone());
-        if let Some(command) = command {
+            .format_default_shell_invocation(params.command.clone())
+        {
             return ExecParams { command, ..params };
         }
     }
@@ -2133,7 +2137,7 @@ async fn handle_container_exec_with_params(
         ),
     };
 
-    let params = maybe_run_with_user_profile(params, sess, turn_context);
+    let params = maybe_translate_shell_command(params, sess, turn_context);
     let output_result = sess
         .run_exec_with_events(
             turn_diff_tracker,
