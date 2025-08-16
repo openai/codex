@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
@@ -95,25 +96,32 @@ pub fn run_login_server(
     let shutdown_flag = shutdown_flag.unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
     let shutdown_flag_clone = shutdown_flag.clone();
     let timeout_flag = Arc::new(AtomicBool::new(false));
+
+    // Channel used to signal completion to timeout watcher.
+    let (done_tx, done_rx) = mpsc::channel::<()>();
+
     if let Some(timeout) = opts.login_timeout {
         let shutdown_flag_for_timer = shutdown_flag.clone();
         let timeout_flag_for_timer = timeout_flag.clone();
 
+        // Spawn watcher that only wakes when either done is signaled or timeout elapses.
         thread::spawn(move || {
-            thread::sleep(timeout);
-            if shutdown_flag_for_timer
-                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok()
-            {
-                // We won the race to time out (server not already shut down by success or cancel).
-                timeout_flag_for_timer.store(true, Ordering::SeqCst);
-                // Nudge server.recv() by issuing a minimal HTTP request so tiny_http returns.
-                if let Ok(mut stream) = TcpStream::connect(format!("127.0.0.1:{actual_port}")) {
-                    let _ = stream.write_all(b"GET /__timeout__ HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+            if done_rx.recv_timeout(timeout).is_err() {
+                // Timeout elapsed, so shut down the server.
+                if shutdown_flag_for_timer
+                    .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                    .is_ok()
+                {
+                    timeout_flag_for_timer.store(true, Ordering::SeqCst);
+                    if let Ok(mut stream) = TcpStream::connect(format!("127.0.0.1:{actual_port}")) {
+                        // Nudge server by issuing a minimal HTTP request.
+                        let _ = stream.write_all(b"GET /__timeout__ HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+                    }
                 }
             }
         });
     }
+
     let server_handle = thread::spawn(move || {
         while !shutdown_flag.load(Ordering::SeqCst) {
             let req = match server.recv() {
@@ -223,6 +231,9 @@ pub fn run_login_server(
                     }
                     let _ = req.respond(resp);
                     shutdown_flag.store(true, Ordering::SeqCst);
+
+                    // Signal completion to timeout watcher.
+                    let _ = done_tx.send(());
                     return Ok(());
                 }
                 _ => {
@@ -230,6 +241,10 @@ pub fn run_login_server(
                 }
             }
         }
+
+        // Signal completion to timeout watcher.
+        let _ = done_tx.send(());
+
         if timeout_flag.load(Ordering::SeqCst) {
             Err(io::Error::other("Login timed out"))
         } else {
