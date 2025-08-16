@@ -95,15 +95,15 @@ impl ModelProviderInfo {
         client: &'a reqwest::Client,
         auth: &Option<CodexAuth>,
     ) -> crate::error::Result<reqwest::RequestBuilder> {
-        let effective_auth = match self.api_key() {
-            Ok(Some(key)) => Some(CodexAuth::from_api_key(&key)),
-            Ok(None) => auth.clone(),
-            Err(err) => {
-                if auth.is_some() {
-                    auth.clone()
-                } else {
-                    return Err(err);
-                }
+        let effective_auth = if let Some(auth) = auth {
+            // Priority 1: Use existing auth (ChatGPT or configured API key)
+            auth.clone()
+        } else {
+            // Priority 2: Fall back to environment variable only if no auth is configured
+            match self.api_key() {
+                Ok(Some(key)) => Some(CodexAuth::from_api_key(&key)),
+                Ok(None) => None,
+                Err(err) => return Err(err),
             }
         };
 

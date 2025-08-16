@@ -546,35 +546,86 @@ pub(crate) fn new_status_output(
 
     lines.push(Line::from(""));
 
-    // 👤 Account (only if ChatGPT tokens exist), shown under the first block
+    // 👤 Account (display authentication status)
     let auth_file = get_auth_file(&config.codex_home);
+    let env_api_key = std::env::var("OPENAI_API_KEY").ok().filter(|s| !s.is_empty());
+    
     if let Ok(auth) = try_read_auth_json(&auth_file) {
         if let Some(tokens) = auth.tokens.clone() {
             lines.push(Line::from(vec!["👤 ".into(), "Account".bold()]));
-            lines.push(Line::from("  • Signed in with ChatGPT"));
-
+            
             let info = tokens.id_token;
             if let Some(email) = &info.email {
                 lines.push(Line::from(vec!["  • Login: ".into(), email.clone().into()]));
             }
 
-            match auth.openai_api_key.as_deref() {
-                Some(key) if !key.is_empty() => {
-                    lines.push(Line::from(
-                        "  • Using API key. Run codex login to use ChatGPT plan",
-                    ));
-                }
-                _ => {
-                    let plan_text = info
-                        .get_chatgpt_plan_type()
-                        .map(|s| title_case(&s))
-                        .unwrap_or_else(|| "Unknown".to_string());
-                    lines.push(Line::from(vec!["  • Plan: ".into(), plan_text.into()]));
-                }
+            // Show plan information for ChatGPT auth
+            let plan_text = info
+                .get_chatgpt_plan_type()
+                .map(|s| title_case(&s))
+                .unwrap_or_else(|| "Unknown".to_string());
+            lines.push(Line::from(vec!["  • Plan: ".into(), plan_text.into()]));
+            
+            // Clear credential source indication
+            lines.push(Line::from(vec![
+                "  • Credential source: ".into(),
+                "ChatGPT authentication (Priority 1)".green().bold(),
+            ]));
+            
+            // Show if environment variable exists but is being ignored
+            if let Some(_) = env_api_key {
+                lines.push(Line::from(vec![
+                    "  • ".into(),
+                    "ℹ️ Note: ".cyan(),
+                    "OPENAI_API_KEY found but not used (ChatGPT auth has priority)".into(),
+                ]));
             }
 
             lines.push(Line::from(""));
+        } else if let Some(api_key) = auth.openai_api_key.as_deref().filter(|k| !k.is_empty()) {
+            // API key in auth.json but no ChatGPT tokens
+            lines.push(Line::from(vec!["👤 ".into(), "Account".bold()]));
+            lines.push(Line::from(vec![
+                "  • Credential source: ".into(),
+                "API key from auth.json (Priority 2)".yellow().bold(),
+            ]));
+            lines.push(Line::from(
+                "  • Run 'codex login' to use ChatGPT plan instead",
+            ));
+            
+            // Show if environment variable exists but is being ignored
+            if let Some(_) = env_api_key {
+                lines.push(Line::from(vec![
+                    "  • ".into(),
+                    "ℹ️ Note: ".cyan(),
+                    "OPENAI_API_KEY found but not used (auth.json has priority)".into(),
+                ]));
+            }
+            
+            lines.push(Line::from(""));
+        } else if let Some(_) = env_api_key {
+            // No ChatGPT tokens and no API key in auth.json, but OPENAI_API_KEY is set
+            lines.push(Line::from(vec!["👤 ".into(), "Account".bold()]));
+            lines.push(Line::from(vec![
+                "  • Credential source: ".into(),
+                "OPENAI_API_KEY environment variable (Priority 3)".yellow(),
+            ]));
+            lines.push(Line::from(
+                "  • Run 'codex login' to use ChatGPT authentication instead",
+            ));
+            lines.push(Line::from(""));
         }
+    } else if let Some(_) = env_api_key {
+        // No auth.json but OPENAI_API_KEY is set
+        lines.push(Line::from(vec!["👤 ".into(), "Account".bold()]));
+        lines.push(Line::from(vec![
+            "  • Credential source: ".into(),
+            "OPENAI_API_KEY environment variable (Priority 3)".yellow(),
+        ]));
+        lines.push(Line::from(
+            "  • Run 'codex login' to use ChatGPT authentication instead",
+        ));
+        lines.push(Line::from(""));
     }
 
     // 🧠 Model
