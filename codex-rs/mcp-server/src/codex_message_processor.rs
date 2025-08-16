@@ -1,6 +1,4 @@
 use std::collections::HashMap;
-use std::io::Write;
-use std::net::TcpStream;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -57,7 +55,6 @@ use codex_login::CLIENT_ID;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::run_login_server;
 use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering as AtomicOrdering;
 
 // Duration before a ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -70,14 +67,7 @@ struct ActiveLogin {
 
 impl ActiveLogin {
     fn cancel(&self) {
-        self.shutdown_flag.store(true, AtomicOrdering::SeqCst);
-
-        // Poke the server so that blocking recv() returns and notices shutdown flag.
-        if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", self.actual_port)) {
-            let _ = stream.write_all(
-                b"GET /__cancel__ HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
-            );
-        }
+        codex_login::shutdown(&self.shutdown_flag, self.actual_port);
     }
 }
 

@@ -65,7 +65,18 @@ impl LoginServer {
     }
 
     pub fn cancel(&self) {
-        self.shutdown_flag.store(true, Ordering::SeqCst);
+        shutdown(&self.shutdown_flag, self.actual_port);
+    }
+}
+
+/// Set the shutdown flag and poke the HTTP listener so that a blocking `recv()` returns.
+/// Exposed so callers that no longer hold a full `LoginServer` (e.g., only cloned the flag)
+/// can still trigger a prompt shutdown without duplicating implementation details.
+pub fn shutdown(flag: &AtomicBool, port: u16) {
+    flag.store(true, Ordering::SeqCst);
+    if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) {
+        let _ = stream
+            .write_all(b"GET /__cancel__ HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
     }
 }
 
