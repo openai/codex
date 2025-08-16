@@ -65,6 +65,20 @@ const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 struct ActiveLogin {
     shutdown_flag: Arc<AtomicBool>,
     actual_port: u16,
+    login_id: Uuid,
+}
+
+impl ActiveLogin {
+    fn cancel(&self) {
+        self.shutdown_flag.store(true, AtomicOrdering::SeqCst);
+
+        // Poke the server so that blocking recv() returns and notices shutdown flag.
+        if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", self.actual_port)) {
+            let _ = stream.write_all(
+                b"GET /__cancel__ HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+            );
+        }
+    }
 }
 
 /// Handles JSON-RPC messages for Codex conversations.
@@ -73,7 +87,7 @@ pub(crate) struct CodexMessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     codex_linux_sandbox_exe: Option<PathBuf>,
     conversation_listeners: HashMap<Uuid, oneshot::Sender<()>>,
-    active_logins: Arc<Mutex<HashMap<Uuid, ActiveLogin>>>,
+    active_login: Arc<Mutex<Option<ActiveLogin>>>,
 }
 
 impl CodexMessageProcessor {
@@ -87,7 +101,7 @@ impl CodexMessageProcessor {
             outgoing,
             codex_linux_sandbox_exe,
             conversation_listeners: HashMap::new(),
-            active_logins: Arc::new(Mutex::new(HashMap::new())),
+            active_login: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -154,15 +168,18 @@ impl CodexMessageProcessor {
                 let login_attempt_id = Uuid::new_v4();
                 let shutdown_flag = server.shutdown_flag.clone();
                 let port = server.actual_port;
-
-                // Record shutdown flag & port for later cancellation before notifying client.
-                self.active_logins.lock().await.insert(
-                    login_attempt_id,
-                    ActiveLogin {
+                // Replace existing active login if present (cancelling the old one first).
+                {
+                    let mut guard = self.active_login.lock().await;
+                    if let Some(existing) = guard.take() {
+                        existing.cancel();
+                    }
+                    *guard = Some(ActiveLogin {
                         shutdown_flag: shutdown_flag.clone(),
                         actual_port: port,
-                    },
-                );
+                        login_id: login_attempt_id,
+                    });
+                }
 
                 let response = LoginChatGptResponse {
                     login_id: login_attempt_id,
@@ -171,7 +188,7 @@ impl CodexMessageProcessor {
 
                 // Spawn background task to monitor completion.
                 let outgoing_clone = self.outgoing.clone();
-                let active_logins = self.active_logins.clone();
+                let active_login = self.active_login.clone();
                 tokio::spawn(async move {
                     let result =
                         tokio::task::spawn_blocking(move || server.block_until_done()).await;
@@ -195,9 +212,11 @@ impl CodexMessageProcessor {
                             params,
                         })
                         .await;
-                    // Remove from map if still present (may have been removed by cancel).
-                    let mut map = active_logins.lock().await;
-                    map.remove(&login_attempt_id);
+                    // Clear the active login if it matches this attempt (may have been replaced / cancelled already).
+                    let mut guard = active_login.lock().await;
+                    if guard.as_ref().map(|l| l.login_id) == Some(login_attempt_id) {
+                        *guard = None;
+                    }
                 });
 
                 LoginChatGptReply::Response(response)
@@ -218,19 +237,13 @@ impl CodexMessageProcessor {
     }
 
     async fn cancel_login_chatgpt(&mut self, request_id: RequestId, login_id: Uuid) {
-        let active = {
-            let mut map = self.active_logins.lock().await;
-            map.remove(&login_id)
-        };
-        match active {
-            Some(active) => {
-                active.shutdown_flag.store(true, AtomicOrdering::SeqCst);
-                // Poke the server so that blocking recv() returns and notices shutdown flag.
-                if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", active.actual_port)) {
-                    let _ = stream.write_all(
-                        b"GET /__cancel__ HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
-                    );
+        let mut guard = self.active_login.lock().await;
+        match guard.as_ref().map(|l| l.login_id) {
+            Some(current_id) if current_id == login_id => {
+                if let Some(active) = guard.take() {
+                    active.cancel();
                 }
+                drop(guard); // release before awaiting send_response
                 self.outgoing
                     .send_response(
                         request_id,
@@ -238,7 +251,8 @@ impl CodexMessageProcessor {
                     )
                     .await;
             }
-            None => {
+            _ => {
+                drop(guard);
                 let error = JSONRPCErrorError {
                     code: INVALID_REQUEST_ERROR_CODE,
                     message: format!("login id not found: {login_id}"),
