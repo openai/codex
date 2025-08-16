@@ -75,6 +75,7 @@ tui-markdown = "0.3.3"
 unicode-segmentation = "1.12.0"
 unicode-width = "0.1"
 uuid = "1"
+rand = "0.9"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -84,5 +85,5 @@ libc = "0.2"
 chrono = { version = "0.4", features = ["serde"] }
 insta = "1.43.1"
 pretty_assertions = "1"
-rand = "0.8"
+rand = "0.9"
 vt100 = "0.16.2"
