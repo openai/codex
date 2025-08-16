@@ -138,18 +138,24 @@ impl CodexMessageProcessor {
                 }
             };
 
-        let mut opts = LoginServerOptions::new(config.codex_home.clone(), CLIENT_ID.to_string());
-        opts.open_browser = false;
-        opts.login_timeout = Some(LOGIN_CHATGPT_TIMEOUT);
+        let opts = LoginServerOptions {
+            open_browser: false,
+            login_timeout: Some(LOGIN_CHATGPT_TIMEOUT),
+            ..LoginServerOptions::new(config.codex_home.clone(), CLIENT_ID.to_string())
+        };
 
-        let outgoing = self.outgoing.clone();
-        match run_login_server(opts, None) {
+        // Local enum to unify success & error paths so we have a single send at the end.
+        enum LoginChatGptReply {
+            Response(LoginChatGptResponse),
+            Error(JSONRPCErrorError),
+        }
+        let reply = match run_login_server(opts, None) {
             Ok(server) => {
                 let login_attempt_id = Uuid::new_v4();
                 let shutdown_flag = server.shutdown_flag.clone();
                 let port = server.actual_port;
 
-                // Record shutdown flag & port for later cancellation.
+                // Record shutdown flag & port for later cancellation before notifying client.
                 self.active_logins.lock().await.insert(
                     login_attempt_id,
                     ActiveLogin {
@@ -157,16 +163,14 @@ impl CodexMessageProcessor {
                         actual_port: port,
                     },
                 );
-                outgoing
-                    .send_response(
-                        request_id,
-                        LoginChatGptResponse {
-                            login_id: login_attempt_id,
-                            auth_url: server.auth_url.clone(),
-                        },
-                    )
-                    .await;
-                let outgoing_clone = outgoing.clone();
+
+                let response = LoginChatGptResponse {
+                    login_id: login_attempt_id,
+                    auth_url: server.auth_url.clone(),
+                };
+
+                // Spawn background task to monitor completion.
+                let outgoing_clone = self.outgoing.clone();
                 let active_logins = self.active_logins.clone();
                 tokio::spawn(async move {
                     let result =
@@ -195,15 +199,21 @@ impl CodexMessageProcessor {
                     let mut map = active_logins.lock().await;
                     map.remove(&login_attempt_id);
                 });
+
+                LoginChatGptReply::Response(response)
             }
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("failed to start login server: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
+            Err(err) => LoginChatGptReply::Error(JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to start login server: {err}"),
+                data: None,
+            }),
+        };
+
+        match reply {
+            LoginChatGptReply::Response(resp) => {
+                self.outgoing.send_response(request_id, resp).await
             }
+            LoginChatGptReply::Error(err) => self.outgoing.send_error(request_id, err).await,
         }
     }
 
