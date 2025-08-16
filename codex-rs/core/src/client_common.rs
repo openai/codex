@@ -104,6 +104,8 @@ pub(crate) enum OpenAiReasoningEffort {
 impl From<ReasoningEffortConfig> for Option<OpenAiReasoningEffort> {
     fn from(effort: ReasoningEffortConfig) -> Self {
         match effort {
+            // In "auto" mode, default to medium unless overridden by caller.
+            ReasoningEffortConfig::Auto => Some(OpenAiReasoningEffort::Medium),
             ReasoningEffortConfig::Minimal => Some(OpenAiReasoningEffort::Minimal),
             ReasoningEffortConfig::Low => Some(OpenAiReasoningEffort::Low),
             ReasoningEffortConfig::Medium => Some(OpenAiReasoningEffort::Medium),

@@ -8,6 +8,7 @@ use walkdir::WalkDir;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::body_string_contains;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
@@ -167,6 +168,159 @@ async fn exec_cli_applies_experimental_instructions_file() {
         instructions.contains(marker),
         "instructions did not contain custom marker; got: {instructions}"
     );
+}
+
+/// Verifies that when `model_reasoning_effort = "auto"`:
+/// - The first turn (planning) sends `reasoning.effort = "high"`
+/// - The immediate follow-up turn (after an `update_plan` tool call) sends `"medium"`
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_reasoning_effort_planning_then_medium() {
+    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+        );
+        return;
+    }
+
+    // Prepare SSE for first request: emit an update_plan function call then complete the response.
+    let update_plan_args = serde_json::json!({
+        "plan": [{"step": "First step", "status": "in_progress"}]
+    })
+    .to_string();
+
+    let sse_first = {
+        let item = serde_json::json!({
+            "type": "response.output_item.done",
+            "item": {
+                "type": "function_call",
+                "id": "call-1",
+                "call_id": "call-1",
+                "name": "update_plan",
+                "arguments": update_plan_args,
+            }
+        })
+        .to_string();
+        let completed = serde_json::json!({
+            "type": "response.completed",
+            "response": { "id": "r1" }
+        })
+        .to_string();
+        format!("data: {item}\n\ndata: {completed}\n\n")
+    };
+
+    // SSE for the second request: minimal completed turn (no extra items needed).
+    let sse_second = {
+        let created = serde_json::json!({
+            "type": "response.created",
+            "response": {}
+        })
+        .to_string();
+        let completed = serde_json::json!({
+            "type": "response.completed",
+            "response": { "id": "r2" }
+        })
+        .to_string();
+        format!("data: {created}\n\ndata: {completed}\n\n")
+    };
+
+    // Start mock server and register two expectations for /v1/responses.
+    let server = MockServer::start().await;
+
+    // Second call matcher: body should contain a function_call_output (response to update_plan).
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(body_string_contains("\"function_call_output\""))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_raw(sse_second.clone(), "text/event-stream"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    // First call matcher: initial user input (contains input_text) and no function_call_output yet.
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(body_string_contains("\"input_text\""))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_raw(sse_first.clone(), "text/event-stream"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let provider_override = format!(
+        "model_providers.mock={{ name = \"mock\", base_url = \"{}/v1\", env_key = \"PATH\", wire_api = \"responses\" }}",
+        server.uri()
+    );
+
+    let home = TempDir::new().unwrap();
+    let mut cmd = AssertCommand::new("cargo");
+    cmd.arg("run")
+        .arg("-p")
+        .arg("codex-cli")
+        .arg("--quiet")
+        .arg("--")
+        .arg("exec")
+        .arg("--skip-git-repo-check")
+        .arg("-c")
+        .arg(&provider_override)
+        .arg("-c")
+        .arg("model_provider=\"mock\"")
+        .arg("-c")
+        .arg("model_reasoning_effort=\"auto\"")
+        .arg("-C")
+        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg("hello?\n");
+    cmd.env("CODEX_HOME", home.path())
+        .env("OPENAI_API_KEY", "dummy");
+
+    let output = cmd.output().unwrap();
+    println!("Status: {}", output.status);
+    println!("Stdout:\n{}", String::from_utf8_lossy(&output.stdout));
+    println!("Stderr:\n{}", String::from_utf8_lossy(&output.stderr));
+    assert!(output.status.success());
+
+    // We expect exactly two requests – inspect their reasoning.effort values.
+    let requests = server.received_requests().await.unwrap();
+    assert!(
+        requests.len() >= 2,
+        "expected at least two /v1/responses requests; got {}",
+        requests.len()
+    );
+
+    // Identify first and second by presence of function_call_output in the body.
+    let (first_req, second_req) =
+        if String::from_utf8_lossy(&requests[0].body).contains("\"function_call_output\"") {
+            (&requests[1], &requests[0])
+        } else {
+            (&requests[0], &requests[1])
+        };
+
+    let first_body: serde_json::Value = serde_json::from_slice(&first_req.body).unwrap();
+    let second_body: serde_json::Value = serde_json::from_slice(&second_req.body).unwrap();
+
+    let first_effort = first_body
+        .get("reasoning")
+        .and_then(|v| v.get("effort"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let second_effort = second_body
+        .get("reasoning")
+        .and_then(|v| v.get("effort"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    assert_eq!(
+        first_effort, "high",
+        "initial planning turn should use high"
+    );
+    assert_eq!(second_effort, "medium", "follow-up turn should use medium");
+
+    server.verify().await;
 }
 
 /// Tests streaming responses through the CLI using a local SSE fixture file.

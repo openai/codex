@@ -63,8 +63,6 @@ pub struct ModelClient {
     client: reqwest::Client,
     provider: ModelProviderInfo,
     session_id: Uuid,
-    effort: ReasoningEffortConfig,
-    summary: ReasoningSummaryConfig,
 }
 
 impl ModelClient {
@@ -72,8 +70,6 @@ impl ModelClient {
         config: Arc<Config>,
         auth: Option<CodexAuth>,
         provider: ModelProviderInfo,
-        effort: ReasoningEffortConfig,
-        summary: ReasoningSummaryConfig,
         session_id: Uuid,
     ) -> Self {
         Self {
@@ -82,17 +78,20 @@ impl ModelClient {
             client: reqwest::Client::new(),
             provider,
             session_id,
-            effort,
-            summary,
         }
     }
 
     /// Dispatches to either the Responses or Chat implementation depending on
-    /// the provider config.  Public callers always invoke `stream()` – the
+    /// the provider config. Public callers always invoke `stream()` – the
     /// specialised helpers are private to avoid accidental misuse.
-    pub async fn stream(&self, prompt: &Prompt) -> Result<ResponseStream> {
+    pub async fn stream(
+        &self,
+        prompt: &Prompt,
+        effort: ReasoningEffortConfig,
+        summary: ReasoningSummaryConfig,
+    ) -> Result<ResponseStream> {
         match self.provider.wire_api {
-            WireApi::Responses => self.stream_responses(prompt).await,
+            WireApi::Responses => self.stream_responses(prompt, effort, summary).await,
             WireApi::Chat => {
                 // Create the raw streaming connection first.
                 let response_stream = stream_chat_completions(
@@ -132,7 +131,12 @@ impl ModelClient {
     }
 
     /// Implementation for the OpenAI *Responses* experimental API.
-    async fn stream_responses(&self, prompt: &Prompt) -> Result<ResponseStream> {
+    async fn stream_responses(
+        &self,
+        prompt: &Prompt,
+        effort: ReasoningEffortConfig,
+        summary: ReasoningSummaryConfig,
+    ) -> Result<ResponseStream> {
         if let Some(path) = &*CODEX_RS_SSE_FIXTURE {
             // short circuit for tests
             warn!(path, "Streaming from fixture");
@@ -147,11 +151,8 @@ impl ModelClient {
 
         let full_instructions = prompt.get_full_instructions(&self.config.model_family);
         let tools_json = create_tools_json_for_responses_api(&prompt.tools)?;
-        let reasoning = create_reasoning_param_for_request(
-            &self.config.model_family,
-            self.effort,
-            self.summary,
-        );
+        let reasoning =
+            create_reasoning_param_for_request(&self.config.model_family, effort, summary);
 
         // Request encrypted COT if we are not storing responses,
         // otherwise reasoning items will be referenced by ID
