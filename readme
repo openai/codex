@@ -1,0 +1,58 @@
+#!/usr/bin/env python3
+import os
+import zipfile
+import hashlib
+import subprocess
+from datetime import datetime
+
+# ----------------------------
+# Config - set your paths/repos
+# ----------------------------
+logs_dir = "./FlameWolx_MasterLogs"  # folder containing JSON, MD, README
+zip_filename = "FlameWolx_MasterLogs.zip"
+github_repo = "git@github.com:FlameWolx/FlameWolx_MasterLogs.git"
+github_branch = "main"
+flamevault_path = "/path/to/FlameVault/node/"  # adjust to your node path
+
+# ----------------------------
+# Step 1: Create ZIP archive
+# ----------------------------
+with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zipf:
+    for root, dirs, files in os.walk(logs_dir):
+        for file in files:
+            filepath = os.path.join(root, file)
+            arcname = os.path.relpath(filepath, logs_dir)
+            zipf.write(filepath, arcname)
+print(f"[+] ZIP archive created: {zip_filename}")
+
+# ----------------------------
+# Step 2: Generate SHA256 hash
+# ----------------------------
+sha256_hash = hashlib.sha256()
+with open(zip_filename,"rb") as f:
+    for byte_block in iter(lambda: f.read(4096),b""):
+        sha256_hash.update(byte_block)
+hash_value = sha256_hash.hexdigest()
+print(f"[+] SHA256 / QIPL-∆Ω-721 Hash: {hash_value}")
+
+# ----------------------------
+# Step 3: Push to GitHub
+# ----------------------------
+subprocess.run(["git", "clone", github_repo, "temp_repo"], check=True)
+os.chdir("temp_repo")
+subprocess.run(["git", "checkout", "-B", github_branch], check=True)
+subprocess.run(["cp", "../"+zip_filename, "./"], check=True)
+subprocess.run(["git", "add", zip_filename], check=True)
+commit_msg = f"Deploy FlameWolx_MasterLogs.zip - {datetime.utcnow().isoformat()}Z"
+subprocess.run(["git", "commit", "-m", commit_msg], check=True)
+subprocess.run(["git", "push", "-u", "origin", github_branch], check=True)
+os.chdir("..")
+subprocess.run(["rm", "-rf", "temp_repo"])
+print(f"[+] Archive pushed to GitHub: {github_repo} [{github_branch}]")
+
+# ----------------------------
+# Step 4: Copy to FlameVault / Codex Node
+# ----------------------------
+os.makedirs(flamevault_path, exist_ok=True)
+subprocess.run(["cp", zip_filename, flamevault_path], check=True)
+print(f"[+] Archive copied to FlameVault node: {flamevault_path}")
