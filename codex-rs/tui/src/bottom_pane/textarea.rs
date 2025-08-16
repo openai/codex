@@ -26,12 +26,21 @@ pub(crate) struct TextArea {
     wrap_cache: RefCell<Option<WrapCache>>,
     preferred_col: Option<usize>,
     elements: Vec<TextElement>,
+    kill_buffer: String,
+    undo_stack: Vec<UndoState>,
 }
 
 #[derive(Debug, Clone)]
 struct WrapCache {
     width: u16,
     lines: Vec<Range<usize>>,
+}
+
+#[derive(Debug, Clone)]
+struct UndoState {
+    text: String,
+    cursor_pos: usize,
+    elements: Vec<TextElement>,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -48,6 +57,8 @@ impl TextArea {
             wrap_cache: RefCell::new(None),
             preferred_col: None,
             elements: Vec::new(),
+            kill_buffer: String::new(),
+            undo_stack: Vec::new(),
         }
     }
 
@@ -57,6 +68,8 @@ impl TextArea {
         self.wrap_cache.replace(None);
         self.preferred_col = None;
         self.elements.clear();
+        self.kill_buffer.clear();
+        self.undo_stack.clear();
     }
 
     pub fn text(&self) -> &str {
@@ -68,6 +81,7 @@ impl TextArea {
     }
 
     pub fn insert_str_at(&mut self, pos: usize, text: &str) {
+        self.push_undo_state();
         let pos = self.clamp_pos_for_insertion(pos);
         self.text.insert_str(pos, text);
         self.wrap_cache.replace(None);
@@ -84,6 +98,7 @@ impl TextArea {
     }
 
     fn replace_range_raw(&mut self, range: std::ops::Range<usize>, text: &str) {
+        self.push_undo_state();
         assert!(range.start <= range.end);
         let start = range.start.clamp(0, self.text.len());
         let end = range.end.clamp(0, self.text.len());
@@ -114,6 +129,14 @@ impl TextArea {
 
         // Ensure cursor is not inside an element
         self.cursor_pos = self.clamp_pos_to_nearest_boundary(self.cursor_pos);
+    }
+
+    fn push_undo_state(&mut self) {
+        self.undo_stack.push(UndoState {
+            text: self.text.clone(),
+            cursor_pos: self.cursor_pos,
+            elements: self.elements.clone(),
+        });
     }
 
     pub fn cursor(&self) -> usize {
@@ -279,6 +302,20 @@ impl TextArea {
             } => {
                 self.kill_to_end_of_line();
             }
+            KeyEvent {
+                code: KeyCode::Char('y'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                self.yank();
+            }
+            KeyEvent {
+                code: KeyCode::Char('_' | '\u{1f}'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                self.undo();
+            }
 
             // Cursor movement
             KeyEvent {
@@ -411,17 +448,25 @@ impl TextArea {
 
     pub fn delete_backward_word(&mut self) {
         let start = self.beginning_of_previous_word();
+        let removed = self.text[start..self.cursor_pos].to_string();
         self.replace_range(start..self.cursor_pos, "");
+        if !removed.is_empty() {
+            self.kill_buffer = removed;
+        }
     }
 
     pub fn kill_to_end_of_line(&mut self) {
         let eol = self.end_of_current_line();
         if self.cursor_pos == eol {
             if eol < self.text.len() {
+                let removed = self.text[self.cursor_pos..eol + 1].to_string();
                 self.replace_range(self.cursor_pos..eol + 1, "");
+                self.kill_buffer = removed;
             }
         } else {
+            let removed = self.text[self.cursor_pos..eol].to_string();
             self.replace_range(self.cursor_pos..eol, "");
+            self.kill_buffer = removed;
         }
     }
 
@@ -429,10 +474,31 @@ impl TextArea {
         let bol = self.beginning_of_current_line();
         if self.cursor_pos == bol {
             if bol > 0 {
+                let removed = self.text[bol - 1..bol].to_string();
                 self.replace_range(bol - 1..bol, "");
+                self.kill_buffer = removed;
             }
         } else {
+            let removed = self.text[bol..self.cursor_pos].to_string();
             self.replace_range(bol..self.cursor_pos, "");
+            self.kill_buffer = removed;
+        }
+    }
+
+    pub fn yank(&mut self) {
+        if !self.kill_buffer.is_empty() {
+            let ins = self.kill_buffer.clone();
+            self.insert_str(&ins);
+        }
+    }
+
+    pub fn undo(&mut self) {
+        if let Some(state) = self.undo_stack.pop() {
+            self.text = state.text;
+            self.cursor_pos = state.cursor_pos.min(self.text.len());
+            self.elements = state.elements;
+            self.wrap_cache.replace(None);
+            self.preferred_col = None;
         }
     }
 
@@ -1096,6 +1162,34 @@ mod tests {
         t.kill_to_beginning_of_line();
         assert_eq!(t.text(), "abcdef");
         assert_eq!(t.cursor(), 3);
+    }
+
+    #[test]
+    fn yank_restores_last_kill() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let mut t = ta_with("hello world");
+        t.set_cursor(5);
+        t.kill_to_end_of_line();
+        t.input(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL));
+        assert_eq!(t.text(), "hello world");
+        assert_eq!(t.cursor(), 11);
+    }
+
+    #[test]
+    fn undo_reverts_last_change() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let mut t = ta_with("hello");
+        t.set_cursor(5);
+        t.insert_str("!");
+        t.input(KeyEvent::new(KeyCode::Char('_'), KeyModifiers::CONTROL));
+        assert_eq!(t.text(), "hello");
+        assert_eq!(t.cursor(), 5);
     }
 
     #[test]
