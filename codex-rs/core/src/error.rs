@@ -1,8 +1,10 @@
 use reqwest::StatusCode;
 use serde_json;
 use std::io;
+use std::time::Duration;
 use thiserror::Error;
 use tokio::task::JoinError;
+use uuid::Uuid;
 
 pub type Result<T> = std::result::Result<T, CodexErr>;
 
@@ -41,8 +43,16 @@ pub enum CodexErr {
     /// handshake has succeeded but **before** it finished emitting `response.completed`.
     ///
     /// The Session loop treats this as a transient error and will automatically retry the turn.
+    ///
+    /// Optionally includes the requested delay before retrying the turn.
     #[error("stream disconnected before completion: {0}")]
-    Stream(String),
+    Stream(String, Option<Duration>),
+
+    #[error("no conversation with id: {0}")]
+    ConversationNotFound(Uuid),
+
+    #[error("session configured event was not the first event in the stream")]
+    SessionConfiguredNotFirstEvent,
 
     /// Returned by run_command_stream when the spawned child process timed out (10s).
     #[error("timeout waiting for child process to exit")]
@@ -61,6 +71,17 @@ pub enum CodexErr {
     /// Unexpected HTTP status code.
     #[error("unexpected status {0}: {1}")]
     UnexpectedStatus(StatusCode, String),
+
+    #[error("{0}")]
+    UsageLimitReached(UsageLimitReachedError),
+
+    #[error(
+        "To use Codex with your ChatGPT plan, upgrade to Plus: https://openai.com/chatgpt/pricing."
+    )]
+    UsageNotIncluded,
+
+    #[error("We're currently experiencing high demand, which may cause temporary errors.")]
+    InternalServerError,
 
     /// Retry limit exceeded.
     #[error("exceeded retry limit, last status: {0}")]
@@ -105,6 +126,30 @@ pub enum CodexErr {
 }
 
 #[derive(Debug)]
+pub struct UsageLimitReachedError {
+    pub plan_type: Option<String>,
+}
+
+impl std::fmt::Display for UsageLimitReachedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(plan_type) = &self.plan_type
+            && plan_type == "plus"
+        {
+            write!(
+                f,
+                "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing), or wait for limits to reset (every 5h and every week.)."
+            )?;
+        } else {
+            write!(
+                f,
+                "You've hit your usage limit. Limits reset every 5h and every week."
+            )?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
 pub struct EnvVarError {
     /// Name of the environment variable that is missing.
     pub var: String,
@@ -130,5 +175,48 @@ impl CodexErr {
     /// `anyhow::Error::downcast_ref` but works directly on our concrete enum.
     pub fn downcast_ref<T: std::any::Any>(&self) -> Option<&T> {
         (self as &dyn std::any::Any).downcast_ref::<T>()
+    }
+}
+
+pub fn get_error_message_ui(e: &CodexErr) -> String {
+    match e {
+        CodexErr::Sandbox(SandboxErr::Denied(_, _, stderr)) => stderr.to_string(),
+        _ => e.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn usage_limit_reached_error_formats_plus_plan() {
+        let err = UsageLimitReachedError {
+            plan_type: Some("plus".to_string()),
+        };
+        assert_eq!(
+            err.to_string(),
+            "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing), or wait for limits to reset (every 5h and every week.)."
+        );
+    }
+
+    #[test]
+    fn usage_limit_reached_error_formats_default_when_none() {
+        let err = UsageLimitReachedError { plan_type: None };
+        assert_eq!(
+            err.to_string(),
+            "You've hit your usage limit. Limits reset every 5h and every week."
+        );
+    }
+
+    #[test]
+    fn usage_limit_reached_error_formats_default_for_other_plans() {
+        let err = UsageLimitReachedError {
+            plan_type: Some("pro".to_string()),
+        };
+        assert_eq!(
+            err.to_string(),
+            "You've hit your usage limit. Limits reset every 5h and every week."
+        );
     }
 }

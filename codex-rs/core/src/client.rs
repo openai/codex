@@ -1,10 +1,14 @@
 use std::io::BufRead;
 use std::path::Path;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use bytes::Bytes;
+use codex_login::AuthMode;
+use codex_login::CodexAuth;
 use eventsource_stream::Eventsource;
 use futures::prelude::*;
+use regex_lite::Regex;
 use reqwest::StatusCode;
 use serde::Deserialize;
 use serde::Serialize;
@@ -29,18 +33,33 @@ use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::error::CodexErr;
 use crate::error::Result;
+use crate::error::UsageLimitReachedError;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::models::ResponseItem;
 use crate::openai_tools::create_tools_json_for_responses_api;
 use crate::protocol::TokenUsage;
+use crate::user_agent::get_codex_user_agent;
 use crate::util::backoff;
 use std::sync::Arc;
 
-#[derive(Clone)]
+#[derive(Debug, Deserialize)]
+struct ErrorResponse {
+    error: Error,
+}
+
+#[derive(Debug, Deserialize)]
+struct Error {
+    r#type: Option<String>,
+    code: Option<String>,
+    message: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct ModelClient {
     config: Arc<Config>,
+    auth: Option<CodexAuth>,
     client: reqwest::Client,
     provider: ModelProviderInfo,
     session_id: Uuid,
@@ -51,6 +70,7 @@ pub struct ModelClient {
 impl ModelClient {
     pub fn new(
         config: Arc<Config>,
+        auth: Option<CodexAuth>,
         provider: ModelProviderInfo,
         effort: ReasoningEffortConfig,
         summary: ReasoningSummaryConfig,
@@ -58,6 +78,7 @@ impl ModelClient {
     ) -> Self {
         Self {
             config,
+            auth,
             client: reqwest::Client::new(),
             provider,
             session_id,
@@ -76,7 +97,7 @@ impl ModelClient {
                 // Create the raw streaming connection first.
                 let response_stream = stream_chat_completions(
                     prompt,
-                    &self.config.model,
+                    &self.config.model_family,
                     &self.client,
                     &self.provider,
                 )
@@ -85,7 +106,11 @@ impl ModelClient {
                 // Wrap it with the aggregation adapter so callers see *only*
                 // the final assistant message per turn (matching the
                 // behaviour of the Responses API).
-                let mut aggregated = response_stream.aggregate();
+                let mut aggregated = if self.config.show_raw_agent_reasoning {
+                    crate::chat_completions::AggregatedChatStream::streaming_mode(response_stream)
+                } else {
+                    response_stream.aggregate()
+                };
 
                 // Bridge the aggregated stream back into a standard
                 // `ResponseStream` by forwarding events through a channel.
@@ -114,43 +139,94 @@ impl ModelClient {
             return stream_from_fixture(path, self.provider.clone()).await;
         }
 
-        let full_instructions = prompt.get_full_instructions(&self.config.model);
-        let tools_json = create_tools_json_for_responses_api(prompt, &self.config.model)?;
-        let reasoning = create_reasoning_param_for_request(&self.config, self.effort, self.summary);
+        let auth = self.auth.clone();
+
+        let auth_mode = auth.as_ref().map(|a| a.mode);
+
+        let store = prompt.store && auth_mode != Some(AuthMode::ChatGPT);
+
+        let full_instructions = prompt.get_full_instructions(&self.config.model_family);
+        let tools_json = create_tools_json_for_responses_api(&prompt.tools)?;
+        let reasoning = create_reasoning_param_for_request(
+            &self.config.model_family,
+            self.effort,
+            self.summary,
+        );
+
+        // Request encrypted COT if we are not storing responses,
+        // otherwise reasoning items will be referenced by ID
+        let include: Vec<String> = if !store && reasoning.is_some() {
+            vec!["reasoning.encrypted_content".to_string()]
+        } else {
+            vec![]
+        };
+
+        let input_with_instructions = prompt.get_formatted_input();
+
         let payload = ResponsesApiRequest {
             model: &self.config.model,
             instructions: &full_instructions,
-            input: &prompt.input,
+            input: &input_with_instructions,
             tools: &tools_json,
             tool_choice: "auto",
             parallel_tool_calls: false,
             reasoning,
-            previous_response_id: prompt.prev_id.clone(),
-            store: prompt.store,
-            // TODO: make this configurable
+            store,
             stream: true,
+            include,
+            prompt_cache_key: Some(self.session_id.to_string()),
         };
-
-        trace!(
-            "POST to {}: {}",
-            self.provider.get_full_url(),
-            serde_json::to_string(&payload)?
-        );
 
         let mut attempt = 0;
         let max_retries = self.provider.request_max_retries();
+
+        trace!(
+            "POST to {}: {}",
+            self.provider.get_full_url(&auth),
+            serde_json::to_string(&payload)?
+        );
+
         loop {
             attempt += 1;
 
-            let req_builder = self
+            let mut req_builder = self
                 .provider
-                .create_request_builder(&self.client)?
+                .create_request_builder(&self.client, &auth)
+                .await?;
+
+            req_builder = req_builder
                 .header("OpenAI-Beta", "responses=experimental")
                 .header("session_id", self.session_id.to_string())
                 .header(reqwest::header::ACCEPT, "text/event-stream")
                 .json(&payload);
 
+            if let Some(auth) = auth.as_ref()
+                && auth.mode == AuthMode::ChatGPT
+                && let Some(account_id) = auth.get_account_id()
+            {
+                req_builder = req_builder.header("chatgpt-account-id", account_id);
+            }
+
+            let originator = self
+                .config
+                .internal_originator
+                .as_deref()
+                .unwrap_or("codex_cli_rs");
+            req_builder = req_builder.header("originator", originator);
+            req_builder = req_builder.header("User-Agent", get_codex_user_agent(Some(originator)));
+
             let res = req_builder.send().await;
+            if let Ok(resp) = &res {
+                trace!(
+                    "Response status: {}, request-id: {}",
+                    resp.status(),
+                    resp.headers()
+                        .get("x-request-id")
+                        .map(|v| v.to_str().unwrap_or_default())
+                        .unwrap_or_default()
+                );
+            }
+
             match res {
                 Ok(resp) if resp.status().is_success() => {
                     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
@@ -167,6 +243,14 @@ impl ModelClient {
                 }
                 Ok(res) => {
                     let status = res.status();
+
+                    // Pull out Retry‑After header if present.
+                    let retry_after_secs = res
+                        .headers()
+                        .get(reqwest::header::RETRY_AFTER)
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|s| s.parse::<u64>().ok());
+
                     // The OpenAI Responses endpoint returns structured JSON bodies even for 4xx/5xx
                     // errors. When we bubble early with only the HTTP status the caller sees an opaque
                     // "unexpected status 400 Bad Request" which makes debugging nearly impossible.
@@ -180,16 +264,33 @@ impl ModelClient {
                         return Err(CodexErr::UnexpectedStatus(status, body));
                     }
 
-                    if attempt > max_retries {
-                        return Err(CodexErr::RetryLimit(status));
+                    if status == StatusCode::TOO_MANY_REQUESTS {
+                        let body = res.json::<ErrorResponse>().await.ok();
+                        if let Some(ErrorResponse {
+                            error:
+                                Error {
+                                    r#type: Some(error_type),
+                                    ..
+                                },
+                        }) = body
+                        {
+                            if error_type == "usage_limit_reached" {
+                                return Err(CodexErr::UsageLimitReached(UsageLimitReachedError {
+                                    plan_type: auth.and_then(|a| a.get_plan_type()),
+                                }));
+                            } else if error_type == "usage_not_included" {
+                                return Err(CodexErr::UsageNotIncluded);
+                            }
+                        }
                     }
 
-                    // Pull out Retry‑After header if present.
-                    let retry_after_secs = res
-                        .headers()
-                        .get(reqwest::header::RETRY_AFTER)
-                        .and_then(|v| v.to_str().ok())
-                        .and_then(|s| s.parse::<u64>().ok());
+                    if attempt > max_retries {
+                        if status == StatusCode::INTERNAL_SERVER_ERROR {
+                            return Err(CodexErr::InternalServerError);
+                        }
+
+                        return Err(CodexErr::RetryLimit(status));
+                    }
 
                     let delay = retry_after_secs
                         .map(|s| Duration::from_millis(s * 1_000))
@@ -273,13 +374,14 @@ async fn process_sse<S>(
     // If the stream stays completely silent for an extended period treat it as disconnected.
     // The response id returned from the "complete" message.
     let mut response_completed: Option<ResponseCompleted> = None;
+    let mut response_error: Option<CodexErr> = None;
 
     loop {
         let sse = match timeout(idle_timeout, stream.next()).await {
             Ok(Some(Ok(sse))) => sse,
             Ok(Some(Err(e))) => {
                 debug!("SSE Error: {e:#}");
-                let event = CodexErr::Stream(e.to_string());
+                let event = CodexErr::Stream(e.to_string(), None);
                 let _ = tx_event.send(Err(event)).await;
                 return;
             }
@@ -297,9 +399,10 @@ async fn process_sse<S>(
                     }
                     None => {
                         let _ = tx_event
-                            .send(Err(CodexErr::Stream(
+                            .send(Err(response_error.unwrap_or(CodexErr::Stream(
                                 "stream closed before response.completed".into(),
-                            )))
+                                None,
+                            ))))
                             .await;
                     }
                 }
@@ -307,11 +410,16 @@ async fn process_sse<S>(
             }
             Err(_) => {
                 let _ = tx_event
-                    .send(Err(CodexErr::Stream("idle timeout waiting for SSE".into())))
+                    .send(Err(CodexErr::Stream(
+                        "idle timeout waiting for SSE".into(),
+                        None,
+                    )))
                     .await;
                 return;
             }
         };
+
+        trace!("SSE event: {}", sse.data);
 
         let event: SseEvent = match serde_json::from_str(&sse.data) {
             Ok(event) => event,
@@ -321,7 +429,6 @@ async fn process_sse<S>(
             }
         };
 
-        trace!(?event, "SSE event");
         match event.kind.as_str() {
             // Individual output item finalised. Forward immediately so the
             // rest of the agent can stream assistant text/functions *live*
@@ -369,9 +476,40 @@ async fn process_sse<S>(
                     }
                 }
             }
+            "response.reasoning_text.delta" => {
+                if let Some(delta) = event.delta {
+                    let event = ResponseEvent::ReasoningContentDelta(delta);
+                    if tx_event.send(Ok(event)).await.is_err() {
+                        return;
+                    }
+                }
+            }
             "response.created" => {
                 if event.response.is_some() {
                     let _ = tx_event.send(Ok(ResponseEvent::Created {})).await;
+                }
+            }
+            "response.failed" => {
+                if let Some(resp_val) = event.response {
+                    response_error = Some(CodexErr::Stream(
+                        "response.failed event received".to_string(),
+                        None,
+                    ));
+
+                    let error = resp_val.get("error");
+
+                    if let Some(error) = error {
+                        match serde_json::from_value::<Error>(error.clone()) {
+                            Ok(error) => {
+                                let delay = try_parse_retry_after(&error);
+                                let message = error.message.unwrap_or_default();
+                                response_error = Some(CodexErr::Stream(message, delay));
+                            }
+                            Err(e) => {
+                                debug!("failed to parse ErrorResponse: {e}");
+                            }
+                        }
+                    }
                 }
             }
             // Final response completed – includes array of output items & id
@@ -392,12 +530,18 @@ async fn process_sse<S>(
             | "response.function_call_arguments.delta"
             | "response.in_progress"
             | "response.output_item.added"
-            | "response.output_text.done"
-            | "response.reasoning_summary_part.added"
-            | "response.reasoning_summary_text.done" => {
-                // Currently, we ignore these events, but we handle them
+            | "response.output_text.done" => {
+                // Currently, we ignore this event, but we handle it
                 // separately to skip the logging message in the `other` case.
             }
+            "response.reasoning_summary_part.added" => {
+                // Boundary between reasoning summary sections (e.g., titles).
+                let event = ResponseEvent::ReasoningSummaryPartAdded;
+                if tx_event.send(Ok(event)).await.is_err() {
+                    return;
+                }
+            }
+            "response.reasoning_summary_text.done" => {}
             other => debug!(other, "sse event"),
         }
     }
@@ -429,10 +573,42 @@ async fn stream_from_fixture(
     Ok(ResponseStream { rx_event })
 }
 
+fn rate_limit_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+
+    #[expect(clippy::unwrap_used)]
+    RE.get_or_init(|| Regex::new(r"Please try again in (\d+(?:\.\d+)?)(s|ms)").unwrap())
+}
+
+fn try_parse_retry_after(err: &Error) -> Option<Duration> {
+    if err.code != Some("rate_limit_exceeded".to_string()) {
+        return None;
+    }
+
+    // parse the Please try again in 1.898s format using regex
+    let re = rate_limit_regex();
+    if let Some(message) = &err.message
+        && let Some(captures) = re.captures(message)
+    {
+        let seconds = captures.get(1);
+        let unit = captures.get(2);
+
+        if let (Some(value), Some(unit)) = (seconds, unit) {
+            let value = value.as_str().parse::<f64>().ok()?;
+            let unit = unit.as_str();
+
+            if unit == "s" {
+                return Some(Duration::from_secs_f64(value));
+            } else if unit == "ms" {
+                return Some(Duration::from_millis(value as u64));
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
-
     use super::*;
     use serde_json::json;
     use tokio::sync::mpsc;
@@ -534,7 +710,7 @@ mod tests {
 
         let provider = ModelProviderInfo {
             name: "test".to_string(),
-            base_url: "https://test.com".to_string(),
+            base_url: Some("https://test.com".to_string()),
             env_key: Some("TEST_API_KEY".to_string()),
             env_key_instructions: None,
             wire_api: WireApi::Responses,
@@ -544,6 +720,7 @@ mod tests {
             request_max_retries: Some(0),
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
+            requires_openai_auth: false,
         };
 
         let events = collect_events(
@@ -593,7 +770,7 @@ mod tests {
         let sse1 = format!("event: response.output_item.done\ndata: {item1}\n\n");
         let provider = ModelProviderInfo {
             name: "test".to_string(),
-            base_url: "https://test.com".to_string(),
+            base_url: Some("https://test.com".to_string()),
             env_key: Some("TEST_API_KEY".to_string()),
             env_key_instructions: None,
             wire_api: WireApi::Responses,
@@ -603,6 +780,7 @@ mod tests {
             request_max_retries: Some(0),
             stream_max_retries: Some(0),
             stream_idle_timeout_ms: Some(1000),
+            requires_openai_auth: false,
         };
 
         let events = collect_events(&[sse1.as_bytes()], provider).await;
@@ -612,8 +790,44 @@ mod tests {
         matches!(events[0], Ok(ResponseEvent::OutputItemDone(_)));
 
         match &events[1] {
-            Err(CodexErr::Stream(msg)) => {
+            Err(CodexErr::Stream(msg, _)) => {
                 assert_eq!(msg, "stream closed before response.completed")
+            }
+            other => panic!("unexpected second event: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn error_when_error_event() {
+        let raw_error = r#"{"type":"response.failed","sequence_number":3,"response":{"id":"resp_689bcf18d7f08194bf3440ba62fe05d803fee0cdac429894","object":"response","created_at":1755041560,"status":"failed","background":false,"error":{"code":"rate_limit_exceeded","message":"Rate limit reached for gpt-5 in organization org-AAA on tokens per min (TPM): Limit 30000, Used 22999, Requested 12528. Please try again in 11.054s. Visit https://platform.openai.com/account/rate-limits to learn more."}, "usage":null,"user":null,"metadata":{}}}"#;
+
+        let sse1 = format!("event: response.failed\ndata: {raw_error}\n\n");
+        let provider = ModelProviderInfo {
+            name: "test".to_string(),
+            base_url: Some("https://test.com".to_string()),
+            env_key: Some("TEST_API_KEY".to_string()),
+            env_key_instructions: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: Some(0),
+            stream_max_retries: Some(0),
+            stream_idle_timeout_ms: Some(1000),
+            requires_openai_auth: false,
+        };
+
+        let events = collect_events(&[sse1.as_bytes()], provider).await;
+
+        assert_eq!(events.len(), 1);
+
+        match &events[0] {
+            Err(CodexErr::Stream(msg, delay)) => {
+                assert_eq!(
+                    msg,
+                    "Rate limit reached for gpt-5 in organization org-AAA on tokens per min (TPM): Limit 30000, Used 22999, Requested 12528. Please try again in 11.054s. Visit https://platform.openai.com/account/rate-limits to learn more."
+                );
+                assert_eq!(*delay, Some(Duration::from_secs_f64(11.054)));
             }
             other => panic!("unexpected second event: {other:?}"),
         }
@@ -695,7 +909,7 @@ mod tests {
 
             let provider = ModelProviderInfo {
                 name: "test".to_string(),
-                base_url: "https://test.com".to_string(),
+                base_url: Some("https://test.com".to_string()),
                 env_key: Some("TEST_API_KEY".to_string()),
                 env_key_instructions: None,
                 wire_api: WireApi::Responses,
@@ -705,6 +919,7 @@ mod tests {
                 request_max_retries: Some(0),
                 stream_max_retries: Some(0),
                 stream_idle_timeout_ms: Some(1000),
+                requires_openai_auth: false,
             };
 
             let out = run_sse(evs, provider).await;
@@ -715,5 +930,28 @@ mod tests {
                 case.name
             );
         }
+    }
+
+    #[test]
+    fn test_try_parse_retry_after() {
+        let err = Error {
+            r#type: None,
+            message: Some("Rate limit reached for gpt-5 in organization org- on tokens per min (TPM): Limit 1, Used 1, Requested 19304. Please try again in 28ms. Visit https://platform.openai.com/account/rate-limits to learn more.".to_string()),
+            code: Some("rate_limit_exceeded".to_string()),
+        };
+
+        let delay = try_parse_retry_after(&err);
+        assert_eq!(delay, Some(Duration::from_millis(28)));
+    }
+
+    #[test]
+    fn test_try_parse_retry_after_no_delay() {
+        let err = Error {
+            r#type: None,
+            message: Some("Rate limit reached for gpt-5 in organization <ORG> on tokens per min (TPM): Limit 30000, Used 6899, Requested 24050. Please try again in 1.898s. Visit https://platform.openai.com/account/rate-limits to learn more.".to_string()),
+            code: Some("rate_limit_exceeded".to_string()),
+        };
+        let delay = try_parse_retry_after(&err);
+        assert_eq!(delay, Some(Duration::from_secs_f64(1.898)));
     }
 }

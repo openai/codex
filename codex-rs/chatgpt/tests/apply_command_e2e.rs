@@ -1,5 +1,3 @@
-#![expect(clippy::expect_used)]
-
 use codex_chatgpt::apply_command::apply_diff_from_task;
 use codex_chatgpt::get_task::GetTaskResponse;
 use std::path::Path;
@@ -10,8 +8,13 @@ use tokio::process::Command;
 async fn create_temp_git_repo() -> anyhow::Result<TempDir> {
     let temp_dir = TempDir::new()?;
     let repo_path = temp_dir.path();
+    let envs = vec![
+        ("GIT_CONFIG_GLOBAL", "/dev/null"),
+        ("GIT_CONFIG_NOSYSTEM", "1"),
+    ];
 
     let output = Command::new("git")
+        .envs(envs.clone())
         .args(["init"])
         .current_dir(repo_path)
         .output()
@@ -25,12 +28,14 @@ async fn create_temp_git_repo() -> anyhow::Result<TempDir> {
     }
 
     Command::new("git")
+        .envs(envs.clone())
         .args(["config", "user.email", "test@example.com"])
         .current_dir(repo_path)
         .output()
         .await?;
 
     Command::new("git")
+        .envs(envs.clone())
         .args(["config", "user.name", "Test User"])
         .current_dir(repo_path)
         .output()
@@ -39,12 +44,14 @@ async fn create_temp_git_repo() -> anyhow::Result<TempDir> {
     std::fs::write(repo_path.join("README.md"), "# Test Repo\n")?;
 
     Command::new("git")
+        .envs(envs.clone())
         .args(["add", "README.md"])
         .current_dir(repo_path)
         .output()
         .await?;
 
     let output = Command::new("git")
+        .envs(envs.clone())
         .args(["commit", "-m", "Initial commit"])
         .current_dir(repo_path)
         .output()
@@ -78,17 +85,7 @@ async fn test_apply_command_creates_fibonacci_file() {
         .await
         .expect("Failed to load fixture");
 
-    let original_dir = std::env::current_dir().expect("Failed to get current dir");
-    std::env::set_current_dir(repo_path).expect("Failed to change directory");
-    struct DirGuard(std::path::PathBuf);
-    impl Drop for DirGuard {
-        fn drop(&mut self) {
-            let _ = std::env::set_current_dir(&self.0);
-        }
-    }
-    let _guard = DirGuard(original_dir);
-
-    apply_diff_from_task(task_response)
+    apply_diff_from_task(task_response, Some(repo_path.to_path_buf()))
         .await
         .expect("Failed to apply diff from task");
 
@@ -173,7 +170,7 @@ console.log(fib(10));
         .await
         .expect("Failed to load fixture");
 
-    let apply_result = apply_diff_from_task(task_response).await;
+    let apply_result = apply_diff_from_task(task_response, Some(repo_path.to_path_buf())).await;
 
     assert!(
         apply_result.is_err(),

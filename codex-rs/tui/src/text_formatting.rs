@@ -102,7 +102,6 @@ pub(crate) fn truncate_text(text: &str, max_graphemes: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
     use super::*;
     use pretty_assertions::assert_eq;
 

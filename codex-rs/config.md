@@ -17,7 +17,7 @@ Both the `--config` flag and the `config.toml` file support the following option
 The model that Codex should use.
 
 ```toml
-model = "o3"  # overrides the default of "codex-mini-latest"
+model = "o3"  # overrides the default of "gpt-5"
 ```
 
 ## model_providers
@@ -110,12 +110,15 @@ stream_idle_timeout_ms = 300000    # 5m idle timeout
 ```
 
 #### request_max_retries
+
 How many times Codex will retry a failed HTTP request to the model provider. Defaults to `4`.
 
 #### stream_max_retries
+
 Number of times Codex will attempt to reconnect when a streaming response is interrupted. Defaults to `10`.
 
 #### stream_idle_timeout_ms
+
 How long Codex will wait for activity on a streaming response before treating the connection as lost. Defaults to `300_000` (5 minutes).
 
 ## model_provider
@@ -145,12 +148,20 @@ Determines when the user should be prompted to approve whether Codex can execute
 approval_policy = "untrusted"
 ```
 
+If you want to be notified whenever a command fails, use "on-failure":
 ```toml
 # If the command fails when run in the sandbox, Codex asks for permission to
 # retry the command outside the sandbox.
 approval_policy = "on-failure"
 ```
 
+If you want the model to run until it decides that it needs to ask you for escalated permissions, use "on-request":
+```toml
+# The model decides when to escalate
+approval_policy = "on-request"
+```
+
+Alternatively, you can have the model run until it is done, and never ask to run a command with escalated permissions:
 ```toml
 # User is never prompted: if the command fails, Codex will automatically try
 # something out. Note the `exec` subcommand always uses this mode.
@@ -202,7 +213,7 @@ Users can specify config values at multiple levels. Order of precedence is as fo
 1. custom command-line argument, e.g., `--model o3`
 2. as part of a profile, where the `--profile` is specified via a CLI (or in the config file itself)
 3. as an entry in `config.toml`, e.g., `model = "o3"`
-4. the default value that comes with Codex CLI (i.e., Codex CLI defaults to `codex-mini-latest`)
+4. the default value that comes with Codex CLI (i.e., Codex CLI defaults to `gpt-5`)
 
 ## model_reasoning_effort
 
@@ -256,15 +267,20 @@ disk, but attempts to write a file or access the network will be blocked.
 
 A more relaxed policy is `workspace-write`. When specified, the current working directory for the Codex task will be writable (as well as `$TMPDIR` on macOS). Note that the CLI defaults to using the directory where it was spawned as `cwd`, though this can be overridden using `--cwd/-C`.
 
+On macOS (and soon Linux), all writable roots (including `cwd`) that contain a `.git/` folder _as an immediate child_ will configure the `.git/` folder to be read-only while the rest of the Git repository will be writable. This means that commands like `git commit` will fail, by default (as it entails writing to `.git/`), and will require Codex to ask for permission.
+
 ```toml
 # same as `--sandbox workspace-write`
 sandbox_mode = "workspace-write"
 
 # Extra settings that only apply when `sandbox = "workspace-write"`.
 [sandbox_workspace_write]
-# By default, only the cwd for the Codex session will be writable (and $TMPDIR
-# on macOS), but you can specify additional writable folders in this array.
-writable_roots = ["/tmp"]
+# By default, the cwd for the Codex session will be writable as well as $TMPDIR
+# (if set) and /tmp (if it exists). Setting the respective options to `true`
+# will override those defaults.
+exclude_tmpdir_env_var = false
+exclude_slash_tmp = false
+
 # Allow the command being run inside the sandbox to make outbound network
 # requests. Disabled by default.
 network_access = false
@@ -323,12 +339,11 @@ disable_response_storage = true
 
 ## shell_environment_policy
 
-Codex spawns subprocesses (e.g. when executing a `local_shell` tool-call suggested by the assistant). By default it passes **only a minimal core subset** of your environment to those subprocesses to avoid leaking credentials. You can tune this behavior via the **`shell_environment_policy`** block in
-`config.toml`:
+Codex spawns subprocesses (e.g. when executing a `local_shell` tool-call suggested by the assistant). By default it now passes **your full environment** to those subprocesses. You can tune this behavior via the **`shell_environment_policy`** block in `config.toml`:
 
 ```toml
 [shell_environment_policy]
-# inherit can be "core" (default), "all", or "none"
+# inherit can be "all" (default), "core", or "none"
 inherit = "core"
 # set to true to *skip* the filter for `"*KEY*"` and `"*TOKEN*"`
 ignore_default_excludes = false
@@ -342,7 +357,7 @@ include_only = ["PATH", "HOME"]
 
 | Field                     | Type                       | Default | Description                                                                                                                                     |
 | ------------------------- | -------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `inherit`                 | string                     | `core`  | Starting template for the environment:<br>`core` (`HOME`, `PATH`, `USER`, …), `all` (clone full parent env), or `none` (start empty).           |
+| `inherit`                 | string                     | `all`   | Starting template for the environment:<br>`all` (clone full parent env), `core` (`HOME`, `PATH`, `USER`, …), or `none` (start empty).           |
 | `ignore_default_excludes` | boolean                    | `false` | When `false`, Codex removes any var whose **name** contains `KEY`, `SECRET`, or `TOKEN` (case-insensitive) before other rules run.              |
 | `exclude`                 | array&lt;string&gt;        | `[]`    | Case-insensitive glob patterns to drop after the default filter.<br>Examples: `"AWS_*"`, `"AZURE_*"`.                                           |
 | `set`                     | table&lt;string,string&gt; | `{}`    | Explicit key/value overrides or additions – always win over inherited values.                                                                   |
@@ -478,6 +493,19 @@ Setting `hide_agent_reasoning` to `true` suppresses these events in **both** the
 hide_agent_reasoning = true   # defaults to false
 ```
 
+## show_raw_agent_reasoning
+
+Surfaces the model’s raw chain-of-thought ("raw reasoning content") when available.
+
+Notes:
+- Only takes effect if the selected model/provider actually emits raw reasoning content. Many models do not. When unsupported, this option has no visible effect.
+- Raw reasoning may include intermediate thoughts or sensitive context. Enable only if acceptable for your workflow.
+
+Example:
+```toml
+show_raw_agent_reasoning = true  # defaults to false
+```
+
 ## model_context_window
 
 The size of the context window for the model, in tokens.
@@ -498,14 +526,5 @@ Options that are specific to the TUI.
 
 ```toml
 [tui]
-# This will make it so that Codex does not try to process mouse events, which
-# means your Terminal's native drag-to-text to text selection and copy/paste
-# should work. The tradeoff is that Codex will not receive any mouse events, so
-# it will not be possible to use the mouse to scroll conversation history.
-#
-# Note that most terminals support holding down a modifier key when using the
-# mouse to support text selection. For example, even if Codex mouse capture is
-# enabled (i.e., this is set to `false`), you can still hold down alt while
-# dragging the mouse to select text.
-disable_mouse_capture = true  # defaults to `false`
+# More to come here
 ```

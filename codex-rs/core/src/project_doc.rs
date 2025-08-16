@@ -27,16 +27,16 @@ const PROJECT_DOC_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
 /// string of instructions.
 pub(crate) async fn get_user_instructions(config: &Config) -> Option<String> {
     match find_project_doc(config).await {
-        Ok(Some(project_doc)) => match &config.instructions {
+        Ok(Some(project_doc)) => match &config.user_instructions {
             Some(original_instructions) => Some(format!(
                 "{original_instructions}{PROJECT_DOC_SEPARATOR}{project_doc}"
             )),
             None => Some(project_doc),
         },
-        Ok(None) => config.instructions.clone(),
+        Ok(None) => config.user_instructions.clone(),
         Err(e) => {
             error!("error trying to find project doc: {e:#}");
-            config.instructions.clone()
+            config.user_instructions.clone()
         }
     }
 }
@@ -134,8 +134,6 @@ async fn load_first_candidate(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
-
     use super::*;
     use crate::config::ConfigOverrides;
     use crate::config::ConfigToml;
@@ -159,7 +157,7 @@ mod tests {
         config.cwd = root.path().to_path_buf();
         config.project_doc_max_bytes = limit;
 
-        config.instructions = instructions.map(ToOwned::to_owned);
+        config.user_instructions = instructions.map(ToOwned::to_owned);
         config
     }
 

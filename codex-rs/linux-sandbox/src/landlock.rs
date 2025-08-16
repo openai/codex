@@ -36,7 +36,11 @@ pub(crate) fn apply_sandbox_policy_to_current_thread(
     }
 
     if !sandbox_policy.has_full_disk_write_access() {
-        let writable_roots = sandbox_policy.get_writable_roots_with_cwd(cwd);
+        let writable_roots = sandbox_policy
+            .get_writable_roots_with_cwd(cwd)
+            .into_iter()
+            .map(|writable_root| writable_root.root)
+            .collect();
         install_filesystem_landlock_rules_on_current_thread(writable_roots)?;
     }
 
@@ -100,7 +104,9 @@ fn install_network_seccomp_filter_on_current_thread() -> std::result::Result<(),
     deny_syscall(libc::SYS_sendto);
     deny_syscall(libc::SYS_sendmsg);
     deny_syscall(libc::SYS_sendmmsg);
-    deny_syscall(libc::SYS_recvfrom);
+    // NOTE: allowing recvfrom allows some tools like: `cargo clippy` to run
+    // with their socketpair + child processes for sub-proc management
+    // deny_syscall(libc::SYS_recvfrom);
     deny_syscall(libc::SYS_recvmsg);
     deny_syscall(libc::SYS_recvmmsg);
     deny_syscall(libc::SYS_getsockopt);
@@ -111,12 +117,12 @@ fn install_network_seccomp_filter_on_current_thread() -> std::result::Result<(),
     let unix_only_rule = SeccompRule::new(vec![SeccompCondition::new(
         0, // first argument (domain)
         SeccompCmpArgLen::Dword,
-        SeccompCmpOp::Eq,
+        SeccompCmpOp::Ne,
         libc::AF_UNIX as u64,
     )?])?;
 
-    rules.insert(libc::SYS_socket, vec![unix_only_rule]);
-    rules.insert(libc::SYS_socketpair, vec![]); // always deny (Unix can use socketpair but fine, keep open?)
+    rules.insert(libc::SYS_socket, vec![unix_only_rule.clone()]);
+    rules.insert(libc::SYS_socketpair, vec![unix_only_rule]); // always deny (Unix can use socketpair but fine, keep open?)
 
     let filter = SeccompFilter::new(
         rules,

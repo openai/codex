@@ -18,7 +18,9 @@ export async function runCodex(
   const tempDirPath = await mkdtemp(join(tmpdir(), "codex-"));
   const lastMessageOutput = join(tempDirPath, "codex-prompt.md");
 
-  const args = ["/usr/local/bin/codex-exec"];
+  // Use the unified CLI and its `exec` subcommand instead of the old
+  // standalone `codex-exec` binary.
+  const args = ["/usr/local/bin/codex", "exec"];
 
   const inputCodexArgs = ctx.tryGet("INPUT_CODEX_ARGS")?.trim();
   if (inputCodexArgs) {

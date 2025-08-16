@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # flake8: noqa: E501
 
+import argparse
 import json
 import subprocess
 import sys
@@ -13,10 +14,13 @@ from pathlib import Path
 # Helper first so it is defined when other functions call it.
 from typing import Any, Literal
 
-SCHEMA_VERSION = "2025-03-26"
+SCHEMA_VERSION = "2025-06-18"
 JSONRPC_VERSION = "2.0"
 
 STANDARD_DERIVE = "#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]\n"
+STANDARD_HASHABLE_DERIVE = (
+    "#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Hash, Eq)]\n"
+)
 
 # Will be populated with the schema's `definitions` map in `main()` so that
 # helper functions (for example `define_any_of`) can perform look-ups while
@@ -26,19 +30,27 @@ DEFINITIONS: dict[str, Any] = {}
 CLIENT_REQUEST_TYPE_NAMES: list[str] = []
 # Concrete *Notification types that make up the ServerNotification enum.
 SERVER_NOTIFICATION_TYPE_NAMES: list[str] = []
+# Enum types that will need a `allow(clippy::large_enum_variant)` annotation in
+# order to compile without warnings.
+LARGE_ENUMS = {"ServerResult"}
 
 
 def main() -> int:
-    num_args = len(sys.argv)
-    if num_args == 1:
-        schema_file = (
-            Path(__file__).resolve().parent / "schema" / SCHEMA_VERSION / "schema.json"
-        )
-    elif num_args == 2:
-        schema_file = Path(sys.argv[1])
-    else:
-        print("Usage: python3 codegen.py <schema.json>")
-        return 1
+    parser = argparse.ArgumentParser(
+        description="Embed, cluster and analyse text prompts via the OpenAI API.",
+    )
+
+    default_schema_file = (
+        Path(__file__).resolve().parent / "schema" / SCHEMA_VERSION / "schema.json"
+    )
+    parser.add_argument(
+        "schema_file",
+        nargs="?",
+        default=default_schema_file,
+        help="schema.json file to process",
+    )
+    args = parser.parse_args()
+    schema_file = args.schema_file
 
     lib_rs = Path(__file__).resolve().parent / "src/lib.rs"
 
@@ -197,6 +209,8 @@ def add_definition(name: str, definition: dict[str, Any], out: list[str]) -> Non
         if name.endswith("Result"):
             out.extend(f"impl From<{name}> for serde_json::Value {{\n")
             out.append(f"    fn from(value: {name}) -> Self {{\n")
+            out.append("        // Leave this as it should never fail\n")
+            out.append("        #[expect(clippy::unwrap_used)]\n")
             out.append("        serde_json::to_value(value).unwrap()\n")
             out.append("    }\n")
             out.append("}\n\n")
@@ -211,20 +225,7 @@ def add_definition(name: str, definition: dict[str, Any], out: list[str]) -> Non
     any_of = definition.get("anyOf", [])
     if any_of:
         assert isinstance(any_of, list)
-        if name == "JSONRPCMessage":
-            # Special case for JSONRPCMessage because its definition in the
-            # JSON schema does not quite match how we think about this type
-            # definition in Rust.
-            deep_copied_any_of = json.loads(json.dumps(any_of))
-            deep_copied_any_of[2] = {
-                "$ref": "#/definitions/JSONRPCBatchRequest",
-            }
-            deep_copied_any_of[5] = {
-                "$ref": "#/definitions/JSONRPCBatchResponse",
-            }
-            out.extend(define_any_of(name, deep_copied_any_of, description))
-        else:
-            out.extend(define_any_of(name, any_of, description))
+        out.extend(define_any_of(name, any_of, description))
         return
 
     type_prop = definition.get("type", None)
@@ -393,7 +394,7 @@ def define_string_enum(
 
 
 def define_untagged_enum(name: str, type_list: list[str], out: list[str]) -> None:
-    out.append(STANDARD_DERIVE)
+    out.append(STANDARD_HASHABLE_DERIVE)
     out.append("#[serde(untagged)]\n")
     out.append(f"pub enum {name} {{\n")
     for simple_type in type_list:
@@ -439,6 +440,8 @@ def define_any_of(
     if serde := get_serde_annotation_for_anyof_type(name):
         out.append(serde + "\n")
 
+    if name in LARGE_ENUMS:
+        out.append("#[allow(clippy::large_enum_variant)]\n")
     out.append(f"pub enum {name} {{\n")
 
     if name == "ClientRequest":
@@ -596,6 +599,8 @@ def rust_prop_name(name: str, is_optional: bool) -> RustProp:
         prop_name = "r#type"
     elif name == "ref":
         prop_name = "r#ref"
+    elif name == "enum":
+        prop_name = "r#enum"
     elif snake_case := to_snake_case(name):
         prop_name = snake_case
         is_rename = True

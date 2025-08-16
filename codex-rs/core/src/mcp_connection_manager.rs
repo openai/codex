@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::ffi::OsString;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -18,6 +19,7 @@ use mcp_types::ClientCapabilities;
 use mcp_types::Implementation;
 use mcp_types::Tool;
 
+use serde_json::json;
 use sha1::Digest;
 use sha1::Sha1;
 use tokio::task::JoinSet;
@@ -126,7 +128,12 @@ impl McpConnectionManager {
 
             join_set.spawn(async move {
                 let McpServerConfig { command, args, env } = cfg;
-                let client_res = McpClient::new_stdio_client(command, args, env).await;
+                let client_res = McpClient::new_stdio_client(
+                    command.into(),
+                    args.into_iter().map(OsString::from).collect(),
+                    env,
+                )
+                .await;
                 match client_res {
                     Ok(client) => {
                         // Initialize the client.
@@ -135,10 +142,14 @@ impl McpConnectionManager {
                                 experimental: None,
                                 roots: None,
                                 sampling: None,
+                                // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
+                                // indicates this should be an empty object.
+                                elicitation: Some(json!({})),
                             },
                             client_info: Implementation {
                                 name: "codex-mcp-client".to_owned(),
                                 version: env!("CARGO_PKG_VERSION").to_owned(),
+                                title: Some("Codex".into()),
                             },
                             protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_owned(),
                         };
@@ -270,7 +281,6 @@ fn is_valid_mcp_server_name(server_name: &str) -> bool {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use mcp_types::ToolInputSchema;
@@ -288,6 +298,8 @@ mod tests {
                     r#type: "object".to_string(),
                 },
                 name: tool_name.to_string(),
+                output_schema: None,
+                title: None,
             },
         }
     }

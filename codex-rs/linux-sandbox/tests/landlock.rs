@@ -1,6 +1,4 @@
 #![cfg(target_os = "linux")]
-#![expect(clippy::unwrap_used, clippy::expect_used)]
-
 use codex_core::config_types::ShellEnvironmentPolicy;
 use codex_core::error::CodexErr;
 use codex_core::error::SandboxErr;
@@ -11,9 +9,7 @@ use codex_core::exec_env::create_env;
 use codex_core::protocol::SandboxPolicy;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 use tempfile::NamedTempFile;
-use tokio::sync::Notify;
 
 // At least on GitHub CI, the arm64 tests appear to need longer timeouts.
 
@@ -37,35 +33,41 @@ fn create_env_from_core_vars() -> HashMap<String, String> {
     create_env(&policy)
 }
 
-#[allow(clippy::print_stdout)]
+#[expect(clippy::print_stdout, clippy::expect_used, clippy::unwrap_used)]
 async fn run_cmd(cmd: &[&str], writable_roots: &[PathBuf], timeout_ms: u64) {
     let params = ExecParams {
         command: cmd.iter().map(|elm| elm.to_string()).collect(),
         cwd: std::env::current_dir().expect("cwd should exist"),
         timeout_ms: Some(timeout_ms),
         env: create_env_from_core_vars(),
+        with_escalated_permissions: None,
+        justification: None,
     };
 
     let sandbox_policy = SandboxPolicy::WorkspaceWrite {
         writable_roots: writable_roots.to_vec(),
         network_access: false,
+        // Exclude tmp-related folders from writable roots because we need a
+        // folder that is writable by tests but that we intentionally disallow
+        // writing to in the sandbox.
+        exclude_tmpdir_env_var: true,
+        exclude_slash_tmp: true,
     };
     let sandbox_program = env!("CARGO_BIN_EXE_codex-linux-sandbox");
     let codex_linux_sandbox_exe = Some(PathBuf::from(sandbox_program));
-    let ctrl_c = Arc::new(Notify::new());
     let res = process_exec_tool_call(
         params,
         SandboxType::LinuxSeccomp,
-        ctrl_c,
         &sandbox_policy,
         &codex_linux_sandbox_exe,
+        None,
     )
     .await
     .unwrap();
 
     if res.exit_code != 0 {
-        println!("stdout:\n{}", res.stdout);
-        println!("stderr:\n{}", res.stderr);
+        println!("stdout:\n{}", res.stdout.text);
+        println!("stderr:\n{}", res.stderr.text);
         panic!("exit code: {}", res.exit_code);
     }
 }
@@ -128,6 +130,7 @@ async fn test_timeout() {
 /// does NOT succeed (i.e. returns a non‑zero exit code) **unless** the binary
 /// is missing in which case we silently treat it as an accepted skip so the
 /// suite remains green on leaner CI images.
+#[expect(clippy::expect_used)]
 async fn assert_network_blocked(cmd: &[&str]) {
     let cwd = std::env::current_dir().expect("cwd should exist");
     let params = ExecParams {
@@ -137,23 +140,24 @@ async fn assert_network_blocked(cmd: &[&str]) {
         // do not stall the suite.
         timeout_ms: Some(NETWORK_TIMEOUT_MS),
         env: create_env_from_core_vars(),
+        with_escalated_permissions: None,
+        justification: None,
     };
 
     let sandbox_policy = SandboxPolicy::new_read_only_policy();
-    let ctrl_c = Arc::new(Notify::new());
     let sandbox_program = env!("CARGO_BIN_EXE_codex-linux-sandbox");
     let codex_linux_sandbox_exe: Option<PathBuf> = Some(PathBuf::from(sandbox_program));
     let result = process_exec_tool_call(
         params,
         SandboxType::LinuxSeccomp,
-        ctrl_c,
         &sandbox_policy,
         &codex_linux_sandbox_exe,
+        None,
     )
     .await;
 
     let (exit_code, stdout, stderr) = match result {
-        Ok(output) => (output.exit_code, output.stdout, output.stderr),
+        Ok(output) => (output.exit_code, output.stdout.text, output.stderr.text),
         Err(CodexErr::Sandbox(SandboxErr::Denied(exit_code, stdout, stderr))) => {
             (exit_code, stdout, stderr)
         }
