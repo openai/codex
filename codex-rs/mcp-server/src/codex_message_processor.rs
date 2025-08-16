@@ -53,21 +53,20 @@ use codex_core::protocol::InputItem as CoreInputItem;
 use codex_core::protocol::Op;
 use codex_login::CLIENT_ID;
 use codex_login::ServerOptions as LoginServerOptions;
+use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
-use std::sync::atomic::AtomicBool;
 
 // Duration before a ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 struct ActiveLogin {
-    shutdown_flag: Arc<AtomicBool>,
-    actual_port: u16,
+    shutdown_handle: ShutdownHandle,
     login_id: Uuid,
 }
 
 impl ActiveLogin {
     fn cancel(&self) {
-        codex_login::shutdown(&self.shutdown_flag, self.actual_port);
+        self.shutdown_handle.cancel();
     }
 }
 
@@ -156,8 +155,6 @@ impl CodexMessageProcessor {
         let reply = match run_login_server(opts, None) {
             Ok(server) => {
                 let login_attempt_id = Uuid::new_v4();
-                let shutdown_flag = server.shutdown_flag.clone();
-                let port = server.actual_port;
                 // Replace existing active login if present (cancelling the old one first).
                 {
                     let mut guard = self.active_login.lock().await;
@@ -165,8 +162,7 @@ impl CodexMessageProcessor {
                         existing.cancel();
                     }
                     *guard = Some(ActiveLogin {
-                        shutdown_flag: shutdown_flag.clone(),
-                        actual_port: port,
+                        shutdown_handle: server.cancel_handle(),
                         login_id: login_attempt_id,
                     });
                 }
