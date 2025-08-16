@@ -3,6 +3,7 @@ use std::io::Write;
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use codex_core::CodexConversation;
 use codex_core::ConversationManager;
@@ -58,15 +59,15 @@ use codex_login::run_login_server;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering as AtomicOrdering;
 
-// Time before a ChatGPT login attempt is abandoned.
-const LOGIN_CHATGPT_TIMEOUT_MINUTES: u64 = 10;
+// Duration before a ChatGPT login attempt is abandoned.
+const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
-/// Handles JSON-RPC messages for Codex conversations.
 struct ActiveLogin {
     shutdown_flag: Arc<AtomicBool>,
     actual_port: u16,
 }
 
+/// Handles JSON-RPC messages for Codex conversations.
 pub(crate) struct CodexMessageProcessor {
     conversation_manager: Arc<ConversationManager>,
     outgoing: Arc<OutgoingMessageSender>,
@@ -139,7 +140,7 @@ impl CodexMessageProcessor {
 
         let mut opts = LoginServerOptions::new(config.codex_home.clone(), CLIENT_ID.to_string());
         opts.open_browser = false;
-        opts.login_timeout_secs = Some(LOGIN_CHATGPT_TIMEOUT_MINUTES * 60);
+        opts.login_timeout = Some(LOGIN_CHATGPT_TIMEOUT);
 
         let outgoing = self.outgoing.clone();
         match run_login_server(opts, None) {
@@ -207,8 +208,11 @@ impl CodexMessageProcessor {
     }
 
     async fn cancel_login_chatgpt(&mut self, request_id: RequestId, login_id: Uuid) {
-        let mut map = self.active_logins.lock().await;
-        match map.remove(&login_id) {
+        let active = {
+            let mut map = self.active_logins.lock().await;
+            map.remove(&login_id)
+        };
+        match active {
             Some(active) => {
                 active.shutdown_flag.store(true, AtomicOrdering::SeqCst);
                 // Poke the server so that blocking recv() returns and notices shutdown flag.

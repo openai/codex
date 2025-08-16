@@ -30,7 +30,7 @@ pub struct ServerOptions {
     pub port: u16,
     pub open_browser: bool,
     pub force_state: Option<String>,
-    pub login_timeout_secs: Option<u64>,
+    pub login_timeout: Option<Duration>,
 }
 
 impl ServerOptions {
@@ -42,7 +42,7 @@ impl ServerOptions {
             port: DEFAULT_PORT,
             open_browser: true,
             force_state: None,
-            login_timeout_secs: None,
+            login_timeout: None,
         }
     }
 }
@@ -95,16 +95,18 @@ pub fn run_login_server(
     let shutdown_flag = shutdown_flag.unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
     let shutdown_flag_clone = shutdown_flag.clone();
     let timeout_flag = Arc::new(AtomicBool::new(false));
-    if let Some(secs) = opts.login_timeout_secs {
+    if let Some(timeout) = opts.login_timeout {
         let shutdown_flag_for_timer = shutdown_flag.clone();
         let timeout_flag_for_timer = timeout_flag.clone();
 
         thread::spawn(move || {
-            thread::sleep(Duration::from_secs(secs));
-            if !shutdown_flag_for_timer.load(Ordering::SeqCst) {
+            thread::sleep(timeout);
+            if shutdown_flag_for_timer
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                // We won the race to time out (server not already shut down by success or cancel).
                 timeout_flag_for_timer.store(true, Ordering::SeqCst);
-                shutdown_flag_for_timer.store(true, Ordering::SeqCst);
-
                 // Nudge server.recv() by issuing a minimal HTTP request so tiny_http returns.
                 if let Ok(mut stream) = TcpStream::connect(format!("127.0.0.1:{actual_port}")) {
                     let _ = stream.write_all(b"GET /__timeout__ HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
