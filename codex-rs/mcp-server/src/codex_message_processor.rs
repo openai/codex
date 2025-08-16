@@ -46,6 +46,7 @@ use crate::wire_format::SendUserTurnParams;
 use crate::wire_format::SendUserTurnResponse;
 use codex_core::protocol::InputItem as CoreInputItem;
 use codex_core::protocol::Op;
+use tokio::sync::Mutex;
 
 /// Handles JSON-RPC messages for Codex conversations.
 pub(crate) struct CodexMessageProcessor {
@@ -53,6 +54,8 @@ pub(crate) struct CodexMessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     codex_linux_sandbox_exe: Option<PathBuf>,
     conversation_listeners: HashMap<Uuid, oneshot::Sender<()>>,
+    // Queue of pending interrupt requests per conversation. We reply when TurnAborted arrives.
+    pending_interrupts: Arc<Mutex<HashMap<Uuid, Vec<RequestId>>>>,
 }
 
 impl CodexMessageProcessor {
@@ -66,6 +69,7 @@ impl CodexMessageProcessor {
             outgoing,
             codex_linux_sandbox_exe,
             conversation_listeners: HashMap::new(),
+            pending_interrupts: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -246,13 +250,14 @@ impl CodexMessageProcessor {
             return;
         };
 
-        let _ = conversation.submit(Op::Interrupt).await;
+        // Record the pending interrupt so we can reply when TurnAborted arrives.
+        {
+            let mut map = self.pending_interrupts.lock().await;
+            map.entry(conversation_id.0).or_default().push(request_id);
+        }
 
-        // Apparently CodexConversation does not send an ack for Op::Interrupt,
-        // so we can reply to the request right away.
-        self.outgoing
-            .send_response(request_id, InterruptConversationResponse {})
-            .await;
+        // Submit the interrupt; we'll respond upon TurnAborted.
+        let _ = conversation.submit(Op::Interrupt).await;
     }
 
     async fn add_conversation_listener(
@@ -280,6 +285,7 @@ impl CodexMessageProcessor {
         self.conversation_listeners
             .insert(subscription_id, cancel_tx);
         let outgoing_for_task = self.outgoing.clone();
+        let pending_interrupts = self.pending_interrupts.clone();
         tokio::spawn(async move {
             loop {
                 tokio::select! {
@@ -320,7 +326,7 @@ impl CodexMessageProcessor {
                         })
                         .await;
 
-                        apply_bespoke_event_handling(event, conversation_id, conversation.clone(), outgoing_for_task.clone()).await;
+                        apply_bespoke_event_handling(event.clone(), conversation_id, conversation.clone(), outgoing_for_task.clone(), pending_interrupts.clone()).await;
                     }
                 }
             }
@@ -359,6 +365,7 @@ async fn apply_bespoke_event_handling(
     conversation_id: ConversationId,
     conversation: Arc<CodexConversation>,
     outgoing: Arc<OutgoingMessageSender>,
+    pending_interrupts: Arc<Mutex<HashMap<Uuid, Vec<RequestId>>>>,
 ) {
     let Event { id: event_id, msg } = event;
     match msg {
@@ -407,6 +414,22 @@ async fn apply_bespoke_event_handling(
                 on_exec_approval_response(event_id, rx, conversation).await;
             });
         }
+        // If this is a TurnAborted, reply to any pending interrupt requests.
+        EventMsg::TurnAborted(reason) => {
+            let pending = {
+                let mut map = pending_interrupts.lock().await;
+                map.remove(&conversation_id.0).unwrap_or_default()
+            };
+            if !pending.is_empty() {
+                let response = InterruptConversationResponse {
+                    abort_reason: reason,
+                };
+                for rid in pending {
+                    outgoing.send_response(rid, response.clone()).await;
+                }
+            }
+        }
+
         _ => {}
     }
 }

@@ -39,7 +39,7 @@ pub struct Submission {
 #[non_exhaustive]
 pub enum Op {
     /// Abort current task.
-    /// This server sends no corresponding Event
+    /// This server sends [`EventMsg::TurnAborted`] in response.
     Interrupt,
 
     /// Input from the user
@@ -422,6 +422,8 @@ pub enum EventMsg {
 
     PlanUpdate(UpdatePlanArgs),
 
+    TurnAborted(TurnAbortReason),
+
     /// Notification that the agent is shutting down.
     ShutdownComplete,
 }
@@ -743,6 +745,12 @@ pub struct Chunk {
     pub orig_index: u32,
     pub deleted_lines: Vec<String>,
     pub inserted_lines: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub enum TurnAbortReason {
+    Interrupted,
+    Replaced,
 }
 
 #[cfg(test)]

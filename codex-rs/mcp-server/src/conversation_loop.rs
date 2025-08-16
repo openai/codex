@@ -52,7 +52,6 @@ pub async fn run_conversation_loop(
                             call_id,
                         )
                         .await;
-                        continue;
                     }
                     EventMsg::Error(_) => {
                         error!("Codex runtime error");
@@ -75,7 +74,6 @@ pub async fn run_conversation_loop(
                             event.id.clone(),
                         )
                         .await;
-                        continue;
                     }
                     EventMsg::TaskComplete(_) => {}
                     EventMsg::SessionConfigured(_) => {
@@ -107,6 +105,7 @@ pub async fn run_conversation_loop(
                     | EventMsg::PatchApplyEnd(_)
                     | EventMsg::GetHistoryEntryResponse(_)
                     | EventMsg::PlanUpdate(_)
+                    | EventMsg::TurnAborted(_)
                     | EventMsg::ShutdownComplete => {
                         // For now, we do not do anything extra for these
                         // events. Note that
