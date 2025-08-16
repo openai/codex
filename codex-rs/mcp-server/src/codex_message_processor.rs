@@ -58,6 +58,9 @@ use codex_login::run_login_server;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering as AtomicOrdering;
 
+// Time before a ChatGPT login attempt is abandoned.
+const LOGIN_CHATGPT_TIMEOUT_MINUTES: u64 = 10;
+
 /// Handles JSON-RPC messages for Codex conversations.
 struct ActiveLogin {
     shutdown_flag: Arc<AtomicBool>,
@@ -136,12 +139,15 @@ impl CodexMessageProcessor {
 
         let mut opts = LoginServerOptions::new(config.codex_home.clone(), CLIENT_ID.to_string());
         opts.open_browser = false;
+        opts.login_timeout_secs = Some(LOGIN_CHATGPT_TIMEOUT_MINUTES * 60);
+
         let outgoing = self.outgoing.clone();
         match run_login_server(opts, None) {
             Ok(server) => {
                 let login_attempt_id = Uuid::new_v4();
                 let shutdown_flag = server.shutdown_flag.clone();
                 let port = server.actual_port;
+
                 // Record shutdown flag & port for later cancellation.
                 self.active_logins.lock().await.insert(
                     login_attempt_id,
@@ -166,7 +172,7 @@ impl CodexMessageProcessor {
                         tokio::task::spawn_blocking(move || server.block_until_done()).await;
                     let (success, error_msg) = match result {
                         Ok(Ok(())) => (true, None),
-                        Ok(Err(err)) => (false, Some(format!("login server error: {err}"))),
+                        Ok(Err(err)) => (false, Some(format!("Login server error: {err}"))),
                         Err(join_err) => (
                             false,
                             Some(format!("failed to join login server thread: {join_err}")),
