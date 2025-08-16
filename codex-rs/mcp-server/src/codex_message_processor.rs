@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::io::Write;
+use std::net::TcpStream;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -14,6 +16,7 @@ use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ReviewDecision;
 use mcp_types::JSONRPCErrorError;
 use mcp_types::RequestId;
+use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tracing::error;
 use uuid::Uuid;
@@ -36,6 +39,9 @@ use crate::wire_format::ExecCommandApprovalResponse;
 use crate::wire_format::InputItem as WireInputItem;
 use crate::wire_format::InterruptConversationParams;
 use crate::wire_format::InterruptConversationResponse;
+use crate::wire_format::LOGIN_CHATGPT_COMPLETE_EVENT;
+use crate::wire_format::LoginChatGptCompleteNotification;
+use crate::wire_format::LoginChatGptResponse;
 use crate::wire_format::NewConversationParams;
 use crate::wire_format::NewConversationResponse;
 use crate::wire_format::RemoveConversationListenerParams;
@@ -46,13 +52,27 @@ use crate::wire_format::SendUserTurnParams;
 use crate::wire_format::SendUserTurnResponse;
 use codex_core::protocol::InputItem as CoreInputItem;
 use codex_core::protocol::Op;
+use codex_login::CLIENT_ID;
+use codex_login::ServerOptions as LoginServerOptions;
+use codex_login::run_login_server;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering as AtomicOrdering;
+
+// Time before a ChatGPT login attempt is abandoned.
+const LOGIN_CHATGPT_TIMEOUT_MINUTES: u64 = 10;
 
 /// Handles JSON-RPC messages for Codex conversations.
+struct ActiveLogin {
+    shutdown_flag: Arc<AtomicBool>,
+    actual_port: u16,
+}
+
 pub(crate) struct CodexMessageProcessor {
     conversation_manager: Arc<ConversationManager>,
     outgoing: Arc<OutgoingMessageSender>,
     codex_linux_sandbox_exe: Option<PathBuf>,
     conversation_listeners: HashMap<Uuid, oneshot::Sender<()>>,
+    active_logins: Arc<Mutex<HashMap<Uuid, ActiveLogin>>>,
 }
 
 impl CodexMessageProcessor {
@@ -66,6 +86,7 @@ impl CodexMessageProcessor {
             outgoing,
             codex_linux_sandbox_exe,
             conversation_listeners: HashMap::new(),
+            active_logins: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -91,6 +112,125 @@ impl CodexMessageProcessor {
             }
             ClientRequest::RemoveConversationListener { request_id, params } => {
                 self.remove_conversation_listener(request_id, params).await;
+            }
+            ClientRequest::LoginChatGpt { request_id } => {
+                self.login_chatgpt(request_id).await;
+            }
+            ClientRequest::CancelLoginChatGpt { request_id, params } => {
+                self.cancel_login_chatgpt(request_id, params.login_id).await;
+            }
+        }
+    }
+
+    async fn login_chatgpt(&mut self, request_id: RequestId) {
+        let config =
+            match Config::load_with_cli_overrides(Default::default(), ConfigOverrides::default()) {
+                Ok(cfg) => cfg,
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!("error loading config for login: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
+
+        let mut opts = LoginServerOptions::new(config.codex_home.clone(), CLIENT_ID.to_string());
+        opts.open_browser = false;
+        opts.login_timeout_secs = Some(LOGIN_CHATGPT_TIMEOUT_MINUTES * 60);
+
+        let outgoing = self.outgoing.clone();
+        match run_login_server(opts, None) {
+            Ok(server) => {
+                let login_attempt_id = Uuid::new_v4();
+                let shutdown_flag = server.shutdown_flag.clone();
+                let port = server.actual_port;
+
+                // Record shutdown flag & port for later cancellation.
+                self.active_logins.lock().await.insert(
+                    login_attempt_id,
+                    ActiveLogin {
+                        shutdown_flag: shutdown_flag.clone(),
+                        actual_port: port,
+                    },
+                );
+                outgoing
+                    .send_response(
+                        request_id,
+                        LoginChatGptResponse {
+                            login_id: login_attempt_id,
+                            auth_url: server.auth_url.clone(),
+                        },
+                    )
+                    .await;
+                let outgoing_clone = outgoing.clone();
+                let active_logins = self.active_logins.clone();
+                tokio::spawn(async move {
+                    let result =
+                        tokio::task::spawn_blocking(move || server.block_until_done()).await;
+                    let (success, error_msg) = match result {
+                        Ok(Ok(())) => (true, None),
+                        Ok(Err(err)) => (false, Some(format!("Login server error: {err}"))),
+                        Err(join_err) => (
+                            false,
+                            Some(format!("failed to join login server thread: {join_err}")),
+                        ),
+                    };
+                    let notification = LoginChatGptCompleteNotification {
+                        login_id: login_attempt_id,
+                        success,
+                        error: error_msg,
+                    };
+                    let params = serde_json::to_value(&notification).ok();
+                    outgoing_clone
+                        .send_notification(OutgoingNotification {
+                            method: LOGIN_CHATGPT_COMPLETE_EVENT.to_string(),
+                            params,
+                        })
+                        .await;
+                    // Remove from map if still present (may have been removed by cancel).
+                    let mut map = active_logins.lock().await;
+                    map.remove(&login_attempt_id);
+                });
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to start login server: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn cancel_login_chatgpt(&mut self, request_id: RequestId, login_id: Uuid) {
+        let mut map = self.active_logins.lock().await;
+        match map.remove(&login_id) {
+            Some(active) => {
+                active.shutdown_flag.store(true, AtomicOrdering::SeqCst);
+                // Poke the server so that blocking recv() returns and notices shutdown flag.
+                if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", active.actual_port)) {
+                    let _ = stream.write_all(
+                        b"GET /__cancel__ HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+                    );
+                }
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        crate::wire_format::CancelLoginChatGptResponse {},
+                    )
+                    .await;
+            }
+            None => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("login id not found: {login_id}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
             }
         }
     }

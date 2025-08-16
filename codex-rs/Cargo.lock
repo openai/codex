@@ -855,6 +855,7 @@ dependencies = [
  "assert_cmd",
  "codex-arg0",
  "codex-core",
+ "codex-login",
  "mcp-types",
  "mcp_test_support",
  "pretty_assertions",

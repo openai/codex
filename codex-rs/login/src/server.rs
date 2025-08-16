@@ -1,10 +1,13 @@
+use std::io::Write;
 use std::io::{self};
+use std::net::TcpStream;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::thread;
+use std::time::Duration;
 
 use crate::AuthDotJson;
 use crate::get_auth_file;
@@ -27,6 +30,7 @@ pub struct ServerOptions {
     pub port: u16,
     pub open_browser: bool,
     pub force_state: Option<String>,
+    pub login_timeout_secs: Option<u64>,
 }
 
 impl ServerOptions {
@@ -38,6 +42,7 @@ impl ServerOptions {
             port: DEFAULT_PORT,
             open_browser: true,
             force_state: None,
+            login_timeout_secs: None,
         }
     }
 }
@@ -89,6 +94,24 @@ pub fn run_login_server(
     }
     let shutdown_flag = shutdown_flag.unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
     let shutdown_flag_clone = shutdown_flag.clone();
+    let timeout_flag = Arc::new(AtomicBool::new(false));
+    if let Some(secs) = opts.login_timeout_secs {
+        let shutdown_flag_for_timer = shutdown_flag.clone();
+        let timeout_flag_for_timer = timeout_flag.clone();
+
+        thread::spawn(move || {
+            thread::sleep(Duration::from_secs(secs));
+            if !shutdown_flag_for_timer.load(Ordering::SeqCst) {
+                timeout_flag_for_timer.store(true, Ordering::SeqCst);
+                shutdown_flag_for_timer.store(true, Ordering::SeqCst);
+
+                // Nudge server.recv() by issuing a minimal HTTP request so tiny_http returns.
+                if let Ok(mut stream) = TcpStream::connect(format!("127.0.0.1:{actual_port}")) {
+                    let _ = stream.write_all(b"GET /__timeout__ HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+                }
+            }
+        });
+    }
     let server_handle = thread::spawn(move || {
         while !shutdown_flag.load(Ordering::SeqCst) {
             let req = match server.recv() {
@@ -205,7 +228,11 @@ pub fn run_login_server(
                 }
             }
         }
-        Err(io::Error::other("Login flow was not completed"))
+        if timeout_flag.load(Ordering::SeqCst) {
+            Err(io::Error::other("Login timed out"))
+        } else {
+            Err(io::Error::other("Login was not completed"))
+        }
     });
 
     Ok(LoginServer {
