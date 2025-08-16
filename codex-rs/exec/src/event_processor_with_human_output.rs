@@ -282,10 +282,10 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             EventMsg::ExecCommandOutputDelta(_) => {}
             EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id,
-                stdout,
-                stderr,
+                aggregated_output,
                 duration,
                 exit_code,
+                ..
             }) => {
                 let exec_command = self.call_id_to_command.remove(&call_id);
                 let (duration, call) = if let Some(ExecCommandBegin { command, .. }) = exec_command
@@ -298,8 +298,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     ("".to_string(), format!("exec('{call_id}')"))
                 };
 
-                let output = if exit_code == 0 { stdout } else { stderr };
-                let truncated_output = output
+                let truncated_output = aggregated_output
                     .lines()
                     .take(MAX_OUTPUT_LINES_FOR_EXEC_TOOL_CALL)
                     .collect::<Vec<_>>()

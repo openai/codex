@@ -153,6 +153,7 @@ pub async fn process_exec_tool_call(
                 exit_code,
                 stdout,
                 stderr,
+                aggregated_output: raw_output.aggregated_output.from_utf8_lossy(),
                 duration,
             })
         }
@@ -193,6 +194,7 @@ pub struct RawExecToolCallOutput {
     pub exit_status: ExitStatus,
     pub stdout: StreamOutput<Vec<u8>>,
     pub stderr: StreamOutput<Vec<u8>>,
+    pub aggregated_output: StreamOutput<Vec<u8>>,
 }
 
 impl StreamOutput<String> {
@@ -213,11 +215,31 @@ impl StreamOutput<Vec<u8>> {
     }
 }
 
+#[inline]
+fn copy_capped(
+    dst: &mut Vec<u8>,
+    src: &[u8],
+    remaining_bytes: &mut usize,
+    remaining_lines: &mut usize,
+) {
+    for &b in src {
+        if *remaining_bytes == 0 || *remaining_lines == 0 {
+            break;
+        }
+        dst.push(b);
+        *remaining_bytes = remaining_bytes.saturating_sub(1);
+        if b == b'\n' {
+            *remaining_lines = remaining_lines.saturating_sub(1);
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ExecToolCallOutput {
     pub exit_code: i32,
     pub stdout: StreamOutput<String>,
     pub stderr: StreamOutput<String>,
+    pub aggregated_output: StreamOutput<String>,
     pub duration: Duration,
 }
 
@@ -273,12 +295,15 @@ pub(crate) async fn consume_truncated_output(
         ))
     })?;
 
+    let (agg_tx, agg_rx) = async_channel::unbounded::<Vec<u8>>();
+
     let stdout_handle = tokio::spawn(read_capped(
         BufReader::new(stdout_reader),
         MAX_STREAM_OUTPUT,
         MAX_STREAM_OUTPUT_LINES,
         stdout_stream.clone(),
         false,
+        Some(agg_tx.clone()),
     ));
     let stderr_handle = tokio::spawn(read_capped(
         BufReader::new(stderr_reader),
@@ -286,6 +311,7 @@ pub(crate) async fn consume_truncated_output(
         MAX_STREAM_OUTPUT_LINES,
         stdout_stream.clone(),
         true,
+        Some(agg_tx.clone()),
     ));
 
     let exit_status = tokio::select! {
@@ -310,10 +336,37 @@ pub(crate) async fn consume_truncated_output(
     let stdout = stdout_handle.await??;
     let stderr = stderr_handle.await??;
 
+    drop(agg_tx);
+
+    let mut combined_buf = Vec::with_capacity(MAX_STREAM_OUTPUT.min(8 * 1024));
+    let mut remaining_bytes = MAX_STREAM_OUTPUT;
+    let mut remaining_lines = MAX_STREAM_OUTPUT_LINES;
+    while let Ok(chunk) = agg_rx.recv().await {
+        if remaining_bytes == 0 || remaining_lines == 0 {
+            continue;
+        }
+        copy_capped(
+            &mut combined_buf,
+            &chunk,
+            &mut remaining_bytes,
+            &mut remaining_lines,
+        );
+    }
+    let truncated = remaining_lines == 0 || remaining_bytes == 0;
+    let aggregated_output = StreamOutput {
+        text: combined_buf,
+        truncated_after_lines: if truncated {
+            Some((MAX_STREAM_OUTPUT_LINES - remaining_lines) as u32)
+        } else {
+            None
+        },
+    };
+
     Ok(RawExecToolCallOutput {
         exit_status,
         stdout,
         stderr,
+        aggregated_output,
     })
 }
 
@@ -323,6 +376,7 @@ async fn read_capped<R: AsyncRead + Unpin + Send + 'static>(
     max_lines: usize,
     stream: Option<StdoutStream>,
     is_stderr: bool,
+    aggregate_tx: Option<Sender<Vec<u8>>>,
 ) -> io::Result<StreamOutput<Vec<u8>>> {
     let mut buf = Vec::with_capacity(max_output.min(8 * 1024));
     let mut tmp = [0u8; 8192];
@@ -355,20 +409,17 @@ async fn read_capped<R: AsyncRead + Unpin + Send + 'static>(
             let _ = stream.tx_event.send(event).await;
         }
 
-        // Copy into the buffer only while we still have byte and line budget.
+        if let Some(tx) = &aggregate_tx {
+            let _ = tx.send(tmp[..n].to_vec()).await;
+        }
+
         if remaining_bytes > 0 && remaining_lines > 0 {
-            let mut copy_len = 0;
-            for &b in &tmp[..n] {
-                if remaining_bytes == 0 || remaining_lines == 0 {
-                    break;
-                }
-                copy_len += 1;
-                remaining_bytes -= 1;
-                if b == b'\n' {
-                    remaining_lines -= 1;
-                }
-            }
-            buf.extend_from_slice(&tmp[..copy_len]);
+            copy_capped(
+                &mut buf,
+                &tmp[..n],
+                &mut remaining_bytes,
+                &mut remaining_lines,
+            );
         }
         // Continue reading to EOF to avoid back-pressure, but discard once caps are hit.
     }

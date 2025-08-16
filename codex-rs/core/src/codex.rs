@@ -702,6 +702,7 @@ impl Session {
         let ExecToolCallOutput {
             stdout,
             stderr,
+            aggregated_output,
             duration,
             exit_code,
         } = output;
@@ -710,6 +711,11 @@ impl Session {
         const MAX_STREAM_OUTPUT: usize = 5 * 1024; // 5KiB
         let stdout = stdout.text.chars().take(MAX_STREAM_OUTPUT).collect();
         let stderr = stderr.text.chars().take(MAX_STREAM_OUTPUT).collect();
+        let aggregated_output = aggregated_output
+            .text
+            .chars()
+            .take(MAX_STREAM_OUTPUT)
+            .collect();
 
         let msg = if is_apply_patch {
             EventMsg::PatchApplyEnd(PatchApplyEndEvent {
@@ -723,6 +729,7 @@ impl Session {
                 call_id: call_id.to_string(),
                 stdout,
                 stderr,
+                aggregated_output,
                 duration: *duration,
                 exit_code: *exit_code,
             })
@@ -782,6 +789,7 @@ impl Session {
                     exit_code: -1,
                     stdout: StreamOutput::new(String::new()),
                     stderr: StreamOutput::new(get_error_message_ui(e)),
+                    aggregated_output: StreamOutput::new(get_error_message_ui(e)),
                     duration: Duration::default(),
                 };
                 &output_stderr
@@ -2326,9 +2334,9 @@ async fn handle_sandbox_error(
 fn format_exec_output(exec_output: ExecToolCallOutput) -> String {
     let ExecToolCallOutput {
         exit_code,
-        stdout,
-        stderr,
+        aggregated_output,
         duration,
+        ..
     } = exec_output;
 
     #[derive(Serialize)]
@@ -2346,11 +2354,8 @@ fn format_exec_output(exec_output: ExecToolCallOutput) -> String {
     // round to 1 decimal place
     let duration_seconds = ((duration.as_secs_f32()) * 10.0).round() / 10.0;
 
-    let is_success = exit_code == 0;
-    let output = if is_success { stdout } else { stderr };
-
-    let mut formatted_output = output.text;
-    if let Some(truncated_after_lines) = output.truncated_after_lines {
+    let mut formatted_output = aggregated_output.text;
+    if let Some(truncated_after_lines) = aggregated_output.truncated_after_lines {
         formatted_output.push_str(&format!(
             "\n\n[Output truncated after {truncated_after_lines} lines: too many lines or bytes.]",
         ));
