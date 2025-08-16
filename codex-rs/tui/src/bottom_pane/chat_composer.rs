@@ -258,6 +258,11 @@ impl ChatComposer {
                     if !starts_with_cmd {
                         self.textarea.set_text(&format!("/{} ", cmd.command()));
                     }
+                    // After completing the command, move cursor to the end.
+                    if !self.textarea.text().is_empty() {
+                        let end = self.textarea.text().len();
+                        self.textarea.set_cursor(end);
+                    }
                 }
                 (InputResult::None, true)
             }
