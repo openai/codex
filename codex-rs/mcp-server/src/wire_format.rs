@@ -135,6 +135,8 @@ pub struct RemoveConversationSubscriptionResponse {}
 #[serde(rename_all = "camelCase")]
 pub struct LoginChatGptResponse {
     pub login_id: Uuid,
+    /// URL the client should open in a browser to initiate the OAuth flow.
+    pub auth_url: String,
 }
 
 // Event name for notifying client of login completion or failure.
@@ -328,6 +330,7 @@ mod tests {
     fn serialize_login_chatgpt_response() {
         let resp = LoginChatGptResponse {
             login_id: Uuid::nil(),
+            auth_url: "https://example.com".to_string(),
         };
         let value = serde_json::to_value(&resp).unwrap();
         // Field names should be camelCase.
@@ -335,6 +338,7 @@ mod tests {
             value,
             json!({
                 "loginId": Uuid::nil(),
+                "authUrl": "https://example.com",
             })
         );
     }

@@ -135,10 +135,7 @@ impl CodexMessageProcessor {
             };
 
         let mut opts = LoginServerOptions::new(config.codex_home.clone(), CLIENT_ID.to_string());
-        // Optionally disable browser launch when running headless (set CODEX_LOGIN_DISABLE_BROWSER env var).
-        if std::env::var("CODEX_LOGIN_DISABLE_BROWSER").is_ok() {
-            opts.open_browser = false;
-        }
+        opts.open_browser = false;
         let outgoing = self.outgoing.clone();
         match run_login_server(opts, None) {
             Ok(server) => {
@@ -158,6 +155,7 @@ impl CodexMessageProcessor {
                         request_id,
                         LoginChatGptResponse {
                             login_id: login_attempt_id,
+                            auth_url: server.auth_url.clone(),
                         },
                     )
                     .await;
