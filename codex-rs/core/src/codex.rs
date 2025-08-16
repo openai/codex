@@ -535,7 +535,7 @@ impl Session {
     pub fn set_task(&self, task: AgentTask) {
         let mut state = self.state.lock_unchecked();
         if let Some(current_task) = state.current_task.take() {
-            current_task.abort();
+            current_task.abort(true);
         }
         state.current_task = Some(task);
     }
@@ -852,13 +852,13 @@ impl Session {
             .await
     }
 
-    fn abort(&self) {
+    fn abort(&self, show_message: bool) {
         info!("Aborting existing session");
         let mut state = self.state.lock_unchecked();
         state.pending_approvals.clear();
         state.pending_input.clear();
         if let Some(task) = state.current_task.take() {
-            task.abort();
+            task.abort(show_message);
         }
     }
 
@@ -894,7 +894,7 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        self.abort();
+        self.abort(true);
     }
 }
 
@@ -964,19 +964,35 @@ impl AgentTask {
         }
     }
 
-    fn abort(self) {
+    fn abort(self, show_message: bool) {
         if !self.handle.is_finished() {
             self.handle.abort();
-            let event = Event {
-                id: self.sub_id,
-                msg: EventMsg::Error(ErrorEvent {
-                    message: " Turn interrupted".to_string(),
-                }),
-            };
-            let tx_event = self.sess.tx_event.clone();
-            tokio::spawn(async move {
-                tx_event.send(event).await.ok();
-            });
+            if show_message {
+                let event = Event {
+                    id: self.sub_id,
+                    msg: EventMsg::Error(ErrorEvent {
+                        message: " Turn interrupted".to_string(),
+                    }),
+                };
+                let tx_event = self.sess.tx_event.clone();
+                tokio::spawn(async move {
+                    tx_event.send(event).await.ok();
+                });
+            } else {
+                let sess = self.sess.clone();
+                let sub_id = self.sub_id;
+                let tx_event = sess.tx_event.clone();
+                tokio::spawn(async move {
+                    sess.remove_task(&sub_id);
+                    let event = Event {
+                        id: sub_id,
+                        msg: EventMsg::TaskComplete(TaskCompleteEvent {
+                            last_agent_message: None,
+                        }),
+                    };
+                    tx_event.send(event).await.ok();
+                });
+            }
         }
     }
 }
@@ -994,7 +1010,7 @@ async fn submission_loop(
         debug!(?sub, "Submission");
         match sub.op {
             Op::Interrupt => {
-                sess.abort();
+                sess.abort(true);
             }
             Op::UserInput { items } => {
                 // attempt to inject input into current task
@@ -1065,13 +1081,13 @@ async fn submission_loop(
             }
             Op::ExecApproval { id, decision } => match decision {
                 ReviewDecision::Abort => {
-                    sess.abort();
+                    sess.abort(false);
                 }
                 other => sess.notify_approval(&id, other),
             },
             Op::PatchApproval { id, decision } => match decision {
                 ReviewDecision::Abort => {
-                    sess.abort();
+                    sess.abort(false);
                 }
                 other => sess.notify_approval(&id, other),
             },
