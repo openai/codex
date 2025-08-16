@@ -1,6 +1,7 @@
 use std::io::Result;
 use std::io::Stdout;
 use std::io::stdout;
+use std::env;
 
 use codex_core::config::Config;
 use crossterm::cursor::MoveTo;
@@ -11,6 +12,7 @@ use crossterm::event::PopKeyboardEnhancementFlags;
 use crossterm::event::PushKeyboardEnhancementFlags;
 use crossterm::terminal::Clear;
 use crossterm::terminal::ClearType;
+use crossterm::terminal::SetTitle;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::disable_raw_mode;
@@ -42,8 +44,19 @@ pub fn init(_config: &Config) -> Result<Tui> {
     );
     set_panic_hook();
 
-    // Clear screen and move cursor to top-left before drawing UI
-    execute!(stdout(), Clear(ClearType::All), MoveTo(0, 0))?;
+    // Set terminal title and clear screen and move cursor to top-left before drawing UI
+    let current_dir = env::current_dir()
+        .ok()
+        .and_then(|path| path.file_name().map(|name| name.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| "Unknown".to_string());
+    let title = format!("Codex CLI | {}", current_dir);
+    
+    execute!(
+        stdout(),
+        SetTitle(&title),
+        Clear(ClearType::All),
+        MoveTo(0, 0)
+    )?;
 
     let backend = CrosstermBackend::new(stdout());
     let tui = Terminal::with_options(backend)?;
