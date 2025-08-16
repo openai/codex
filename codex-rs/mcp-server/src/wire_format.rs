@@ -60,6 +60,10 @@ pub enum ClientRequest {
         request_id: RequestId,
         params: RemoveConversationListenerParams,
     },
+    LoginChatGpt {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
@@ -121,6 +125,10 @@ pub struct AddConversationSubscriptionResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoveConversationSubscriptionResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginChatGptResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]

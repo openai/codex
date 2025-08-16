@@ -50,6 +50,22 @@ pub struct LoginServer {
     pub shutdown_flag: Arc<AtomicBool>,
 }
 
+use std::mem::ManuallyDrop;
+
+impl Clone for LoginServer {
+    fn clone(&self) -> Self {
+        LoginServer {
+            auth_url: self.auth_url.clone(),
+            actual_port: self.actual_port,
+            // The thread handle cannot be cloned; use ManuallyDrop to prevent double-drop.
+            server_handle: unsafe {
+                ManuallyDrop::into_inner(ManuallyDrop::new(std::ptr::read(&self.server_handle)))
+            },
+            shutdown_flag: self.shutdown_flag.clone(),
+        }
+    }
+}
+
 impl LoginServer {
     pub fn block_until_done(self) -> io::Result<()> {
         #[expect(clippy::expect_used)]

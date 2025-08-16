@@ -36,6 +36,7 @@ use crate::wire_format::ExecCommandApprovalResponse;
 use crate::wire_format::InputItem as WireInputItem;
 use crate::wire_format::InterruptConversationParams;
 use crate::wire_format::InterruptConversationResponse;
+use crate::wire_format::LoginChatGptResponse;
 use crate::wire_format::NewConversationParams;
 use crate::wire_format::NewConversationResponse;
 use crate::wire_format::RemoveConversationListenerParams;
@@ -46,6 +47,9 @@ use crate::wire_format::SendUserTurnParams;
 use crate::wire_format::SendUserTurnResponse;
 use codex_core::protocol::InputItem as CoreInputItem;
 use codex_core::protocol::Op;
+use codex_login::CLIENT_ID;
+use codex_login::ServerOptions as LoginServerOptions;
+use codex_login::run_login_server;
 
 /// Handles JSON-RPC messages for Codex conversations.
 pub(crate) struct CodexMessageProcessor {
@@ -53,6 +57,7 @@ pub(crate) struct CodexMessageProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     codex_linux_sandbox_exe: Option<PathBuf>,
     conversation_listeners: HashMap<Uuid, oneshot::Sender<()>>,
+    login_server: Option<codex_login::LoginServer>,
 }
 
 impl CodexMessageProcessor {
@@ -66,6 +71,7 @@ impl CodexMessageProcessor {
             outgoing,
             codex_linux_sandbox_exe,
             conversation_listeners: HashMap::new(),
+            login_server: None,
         }
     }
 
@@ -91,6 +97,68 @@ impl CodexMessageProcessor {
             }
             ClientRequest::RemoveConversationListener { request_id, params } => {
                 self.remove_conversation_listener(request_id, params).await;
+            }
+            ClientRequest::LoginChatGpt { request_id } => {
+                self.login_chatgpt(request_id).await;
+            }
+        }
+    }
+
+    async fn login_chatgpt(&mut self, request_id: RequestId) {
+        let config =
+            match Config::load_with_cli_overrides(Default::default(), ConfigOverrides::default()) {
+                Ok(cfg) => cfg,
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!("error loading config for login: {err}"),
+                        data: None,
+                    };
+                    self.outgoing.send_error(request_id, error).await;
+                    return;
+                }
+            };
+
+        let opts = LoginServerOptions::new(config.codex_home.clone(), CLIENT_ID.to_string());
+        let outgoing = self.outgoing.clone();
+        match run_login_server(opts, None) {
+            Ok(server) => {
+                self.login_server = Some(server.clone());
+                tokio::spawn(async move {
+                    let result =
+                        tokio::task::spawn_blocking(move || server.block_until_done()).await;
+                    match result {
+                        Ok(Ok(())) => {
+                            outgoing
+                                .send_response(request_id, LoginChatGptResponse {})
+                                .await;
+                        }
+                        Ok(Err(err)) => {
+                            let error = JSONRPCErrorError {
+                                code: INTERNAL_ERROR_CODE,
+                                message: format!("login server error: {err}"),
+                                data: None,
+                            };
+                            outgoing.send_error(request_id, error).await;
+                        }
+                        Err(join_err) => {
+                            let error = JSONRPCErrorError {
+                                code: INTERNAL_ERROR_CODE,
+                                message: format!("failed to join login server thread: {join_err}"),
+                                data: None,
+                            };
+                            outgoing.send_error(request_id, error).await;
+                        }
+                    }
+                });
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to start login server: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
             }
         }
     }
