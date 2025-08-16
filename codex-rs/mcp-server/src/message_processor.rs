@@ -397,17 +397,35 @@ impl MessageProcessor {
     }
 
     async fn handle_tool_call_codex(&self, id: RequestId, arguments: Option<serde_json::Value>) {
-        let (initial_prompt, config): (String, CodexConfig) = match arguments {
-            Some(json_val) => match serde_json::from_value::<CodexToolCallParam>(json_val) {
-                Ok(tool_cfg) => match tool_cfg.into_config(self.codex_linux_sandbox_exe.clone()) {
-                    Ok(cfg) => cfg,
+        let (initial_prompt, config, session_id_raw): (String, CodexConfig, Option<String>) =
+            match arguments {
+                Some(json_val) => match serde_json::from_value::<CodexToolCallParam>(json_val) {
+                    Ok(tool_cfg) => {
+                        match tool_cfg.into_config(self.codex_linux_sandbox_exe.clone()) {
+                            Ok(cfg) => cfg,
+                            Err(e) => {
+                                let result = CallToolResult {
+                                    content: vec![ContentBlock::TextContent(TextContent {
+                                        r#type: "text".to_owned(),
+                                        text: format!(
+                                            "Failed to load Codex configuration from overrides: {e}"
+                                        ),
+                                        annotations: None,
+                                    })],
+                                    is_error: Some(true),
+                                    structured_content: None,
+                                };
+                                self.send_response::<mcp_types::CallToolRequest>(id, result)
+                                    .await;
+                                return;
+                            }
+                        }
+                    }
                     Err(e) => {
                         let result = CallToolResult {
                             content: vec![ContentBlock::TextContent(TextContent {
                                 r#type: "text".to_owned(),
-                                text: format!(
-                                    "Failed to load Codex configuration from overrides: {e}"
-                                ),
+                                text: format!("Failed to parse configuration for Codex tool: {e}"),
                                 annotations: None,
                             })],
                             is_error: Some(true),
@@ -418,13 +436,15 @@ impl MessageProcessor {
                         return;
                     }
                 },
-                Err(e) => {
+                None => {
                     let result = CallToolResult {
                         content: vec![ContentBlock::TextContent(TextContent {
-                            r#type: "text".to_owned(),
-                            text: format!("Failed to parse configuration for Codex tool: {e}"),
-                            annotations: None,
-                        })],
+                        r#type: "text".to_string(),
+                        text:
+                            "Missing arguments for codex tool-call; the `prompt` field is required."
+                                .to_string(),
+                        annotations: None,
+                    })],
                         is_error: Some(true),
                         structured_content: None,
                     };
@@ -432,22 +452,34 @@ impl MessageProcessor {
                         .await;
                     return;
                 }
-            },
-            None => {
-                let result = CallToolResult {
-                    content: vec![ContentBlock::TextContent(TextContent {
-                        r#type: "text".to_string(),
-                        text:
-                            "Missing arguments for codex tool-call; the `prompt` field is required."
-                                .to_string(),
-                        annotations: None,
-                    })],
-                    is_error: Some(true),
-                    structured_content: None,
+            };
+
+        // Parse optional session_id when provided.
+        let session_id: Option<Uuid> = match session_id_raw {
+            None => None,
+            Some(s) => {
+                let parsed = if let Some(stripped) = s.strip_prefix("urn:uuid:") {
+                    Uuid::parse_str(stripped)
+                } else {
+                    Uuid::parse_str(&s)
                 };
-                self.send_response::<mcp_types::CallToolRequest>(id, result)
-                    .await;
-                return;
+                match parsed {
+                    Ok(u) => Some(u),
+                    Err(e) => {
+                        let result = CallToolResult {
+                            content: vec![ContentBlock::TextContent(TextContent {
+                                r#type: "text".to_owned(),
+                                text: format!("Invalid session_id: {e}"),
+                                annotations: None,
+                            })],
+                            is_error: Some(true),
+                            structured_content: None,
+                        };
+                        self.send_response::<mcp_types::CallToolRequest>(id, result)
+                            .await;
+                        return;
+                    }
+                }
             }
         };
 
@@ -467,6 +499,7 @@ impl MessageProcessor {
                 outgoing,
                 conversation_manager,
                 running_requests_id_to_codex_uuid,
+                session_id,
             )
             .await;
         });

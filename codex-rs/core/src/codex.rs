@@ -141,7 +141,11 @@ pub(crate) const INITIAL_SUBMIT_ID: &str = "";
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
-    pub async fn spawn(config: Config, auth: Option<CodexAuth>) -> CodexResult<CodexSpawnOk> {
+    pub async fn spawn(
+        config: Config,
+        auth: Option<CodexAuth>,
+        session_id: Option<Uuid>,
+    ) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(64);
         let (tx_event, rx_event) = async_channel::unbounded();
 
@@ -165,14 +169,19 @@ impl Codex {
             resume_path,
         };
 
-        // Generate a unique ID for the lifetime of this Codex session.
-        let (session, turn_context) =
-            Session::new(configure_session, config.clone(), auth, tx_event.clone())
-                .await
-                .map_err(|e| {
-                    error!("Failed to create session: {e:#}");
-                    CodexErr::InternalAgentDied
-                })?;
+        // Generate a unique ID for the lifetime of this Codex session, unless a custom ID was provided by the user.
+        let (session, turn_context) = Session::new(
+            configure_session,
+            config.clone(),
+            auth,
+            tx_event.clone(),
+            session_id,
+        )
+        .await
+        .map_err(|e| {
+            error!("Failed to create session: {e:#}");
+            CodexErr::InternalAgentDied
+        })?;
         let session_id = session.session_id;
 
         // This task will run until Op::Shutdown is received.
@@ -322,6 +331,7 @@ impl Session {
         config: Arc<Config>,
         auth: Option<CodexAuth>,
         tx_event: Sender<Event>,
+        session_id_override: Option<Uuid>,
     ) -> anyhow::Result<(Arc<Self>, TurnContext)> {
         let ConfigureSession {
             provider,
@@ -357,7 +367,7 @@ impl Session {
                     .await
                     .map(|(rec, saved)| (saved.session_id, Some(saved), rec)),
                 None => {
-                    let session_id = Uuid::new_v4();
+                    let session_id = session_id_override.unwrap_or_else(Uuid::new_v4);
                     RolloutRecorder::new(&config, session_id, user_instructions.clone())
                         .await
                         .map(|rec| (session_id, None, rec))
@@ -412,7 +422,7 @@ impl Session {
                 warn!("{message}");
 
                 RolloutResult {
-                    session_id: Uuid::new_v4(),
+                    session_id: session_id_override.unwrap_or_else(Uuid::new_v4),
                     rollout_recorder: None,
                     restored_items: None,
                 }

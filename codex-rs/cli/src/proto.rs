@@ -41,7 +41,7 @@ pub async fn run_main(opts: ProtoCli) -> anyhow::Result<()> {
         conversation_id: _,
         conversation,
         session_configured,
-    } = conversation_manager.new_conversation(config).await?;
+    } = conversation_manager.new_conversation(config, None).await?;
 
     // Simulate streaming the session_configured event.
     let synthetic_event = Event {

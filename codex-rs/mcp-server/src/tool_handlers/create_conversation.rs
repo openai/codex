@@ -82,7 +82,7 @@ pub(crate) async fn handle_create_conversation(
         session_configured,
     } = match message_processor
         .get_conversation_manager()
-        .new_conversation(cfg)
+        .new_conversation(cfg, None)
         .await
     {
         Ok(conv) => conv,

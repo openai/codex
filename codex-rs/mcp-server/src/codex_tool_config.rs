@@ -20,6 +20,10 @@ pub struct CodexToolCallParam {
     /// The *initial user prompt* to start the Codex conversation.
     pub prompt: String,
 
+    /// Optional client-provided session identifier. If omitted, a new UUID is generated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+
     /// Optional override for the model name (e.g. "o3", "o4-mini").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
@@ -136,9 +140,10 @@ impl CodexToolCallParam {
     pub fn into_config(
         self,
         codex_linux_sandbox_exe: Option<PathBuf>,
-    ) -> std::io::Result<(String, codex_core::config::Config)> {
+    ) -> std::io::Result<(String, codex_core::config::Config, Option<String>)> {
         let Self {
             prompt,
+            session_id,
             model,
             profile,
             cwd,
@@ -173,7 +178,7 @@ impl CodexToolCallParam {
 
         let cfg = codex_core::config::Config::load_with_cli_overrides(cli_overrides, overrides)?;
 
-        Ok((prompt, cfg))
+        Ok((prompt, cfg, session_id))
     }
 }
 
@@ -291,6 +296,10 @@ mod tests {
               },
               "base-instructions": {
                 "description": "The set of instructions to use instead of the default ones.",
+                "type": "string"
+              },
+              "session-id": {
+                "description": "Optional client-provided session ID (some clients must provide a valid UUIDv4 to be able to continue the conversation). If omitted, a new UUID is generated.",
                 "type": "string"
               },
             },
