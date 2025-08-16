@@ -30,6 +30,8 @@ pub(crate) enum OpenAiTool {
     Function(ResponsesApiTool),
     #[serde(rename = "local_shell")]
     LocalShell {},
+    #[serde(rename = "web_search")]
+    WebSearch {},
 }
 
 #[derive(Debug, Clone)]
@@ -44,6 +46,7 @@ pub struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
     pub plan_tool: bool,
     pub apply_patch_tool: bool,
+    pub web_search_request: bool,
 }
 
 impl ToolsConfig {
@@ -53,6 +56,7 @@ impl ToolsConfig {
         sandbox_policy: SandboxPolicy,
         include_plan_tool: bool,
         include_apply_patch_tool: bool,
+        include_web_search_request: bool,
     ) -> Self {
         let mut shell_type = if model_family.uses_local_shell_tool {
             ConfigShellToolType::LocalShell
@@ -69,6 +73,7 @@ impl ToolsConfig {
             shell_type,
             plan_tool: include_plan_tool,
             apply_patch_tool: include_apply_patch_tool || model_family.uses_apply_patch_tool,
+            web_search_request: include_web_search_request,
         }
     }
 }
@@ -319,6 +324,27 @@ It is important to remember:
     })
 }
 
+fn create_web_search_request_tool() -> OpenAiTool {
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "query".to_string(),
+        JsonSchema::String {
+            description: Some("The search query".to_string()),
+        },
+    );
+    OpenAiTool::Function(ResponsesApiTool {
+        name: "web_search_request".to_string(),
+        description: "Request user approval to perform a web search with the given query".to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["query".to_string()]),
+            additional_properties: Some(false),
+        },
+    })
+}
+
+
 /// Returns JSON values that are compatible with Function Calling in the
 /// Responses API:
 /// https://platform.openai.com/docs/guides/function-calling?api-mode=responses
@@ -543,6 +569,11 @@ pub(crate) fn get_openai_tools(
         tools.push(create_apply_patch_tool());
     }
 
+    // Include the web search approval-request tool only when enabled via config/CLI.
+    if config.web_search_request {
+        tools.push(create_web_search_request_tool());
+    }
+
     if let Some(mcp_tools) = mcp_tools {
         for (name, tool) in mcp_tools {
             match mcp_tool_to_openai_tool(name.clone(), tool.clone()) {
@@ -571,6 +602,7 @@ mod tests {
             .map(|tool| match tool {
                 OpenAiTool::Function(ResponsesApiTool { name, .. }) => name,
                 OpenAiTool::LocalShell {} => "local_shell",
+                OpenAiTool::WebSearch {} => "web_search",
             })
             .collect::<Vec<_>>();
 
@@ -597,10 +629,11 @@ mod tests {
             SandboxPolicy::ReadOnly,
             true,
             model_family.uses_apply_patch_tool,
+            true,
         );
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
-        assert_eq_tool_names(&tools, &["local_shell", "update_plan"]);
+        assert_eq_tool_names(&tools, &["local_shell", "update_plan", "web_search_request"]);
     }
 
     #[test]
@@ -612,10 +645,11 @@ mod tests {
             SandboxPolicy::ReadOnly,
             true,
             model_family.uses_apply_patch_tool,
+            true,
         );
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
-        assert_eq_tool_names(&tools, &["shell", "update_plan"]);
+        assert_eq_tool_names(&tools, &["shell", "update_plan", "web_search_request"]);
     }
 
     #[test]
@@ -627,6 +661,7 @@ mod tests {
             SandboxPolicy::ReadOnly,
             false,
             model_family.uses_apply_patch_tool,
+            true,
         );
         let tools = get_openai_tools(
             &config,
@@ -649,8 +684,8 @@ mod tests {
                                     "number_property": { "type": "number" },
                                 },
                                 "required": [
-                                    "string_property",
-                                    "number_property"
+                                    "string_property".to_string(),
+                                    "number_property".to_string()
                                 ],
                                 "additionalProperties": Some(false),
                             },
@@ -666,10 +701,10 @@ mod tests {
             )])),
         );
 
-        assert_eq_tool_names(&tools, &["shell", "test_server/do_something_cool"]);
+        assert_eq_tool_names(&tools, &["shell", "web_search_request", "test_server/do_something_cool"]);
 
         assert_eq!(
-            tools[1],
+            tools[2],
             OpenAiTool::Function(ResponsesApiTool {
                 name: "test_server/do_something_cool".to_string(),
                 parameters: JsonSchema::Object {
@@ -721,6 +756,7 @@ mod tests {
             SandboxPolicy::ReadOnly,
             false,
             model_family.uses_apply_patch_tool,
+            true,
         );
 
         let tools = get_openai_tools(
@@ -731,7 +767,7 @@ mod tests {
                     name: "search".to_string(),
                     input_schema: ToolInputSchema {
                         properties: Some(serde_json::json!({
-                            "query": {
+                            "string_argument": {
                                 "description": "search query"
                             }
                         })),
@@ -746,15 +782,15 @@ mod tests {
             )])),
         );
 
-        assert_eq_tool_names(&tools, &["shell", "dash/search"]);
+        assert_eq_tool_names(&tools, &["shell", "web_search_request", "dash/search"]);
 
         assert_eq!(
-            tools[1],
+            tools[2],
             OpenAiTool::Function(ResponsesApiTool {
                 name: "dash/search".to_string(),
                 parameters: JsonSchema::Object {
                     properties: BTreeMap::from([(
-                        "query".to_string(),
+                        "string_argument".to_string(),
                         JsonSchema::String {
                             description: Some("search query".to_string())
                         }
@@ -777,6 +813,7 @@ mod tests {
             SandboxPolicy::ReadOnly,
             false,
             model_family.uses_apply_patch_tool,
+            true,
         );
 
         let tools = get_openai_tools(
@@ -800,9 +837,9 @@ mod tests {
             )])),
         );
 
-        assert_eq_tool_names(&tools, &["shell", "dash/paginate"]);
+        assert_eq_tool_names(&tools, &["shell", "web_search_request", "dash/paginate"]);
         assert_eq!(
-            tools[1],
+            tools[2],
             OpenAiTool::Function(ResponsesApiTool {
                 name: "dash/paginate".to_string(),
                 parameters: JsonSchema::Object {
@@ -828,6 +865,7 @@ mod tests {
             SandboxPolicy::ReadOnly,
             false,
             model_family.uses_apply_patch_tool,
+            true,
         );
 
         let tools = get_openai_tools(
@@ -851,9 +889,9 @@ mod tests {
             )])),
         );
 
-        assert_eq_tool_names(&tools, &["shell", "dash/tags"]);
+        assert_eq_tool_names(&tools, &["shell", "web_search_request", "dash/tags"]);
         assert_eq!(
-            tools[1],
+            tools[2],
             OpenAiTool::Function(ResponsesApiTool {
                 name: "dash/tags".to_string(),
                 parameters: JsonSchema::Object {
@@ -882,6 +920,7 @@ mod tests {
             SandboxPolicy::ReadOnly,
             false,
             model_family.uses_apply_patch_tool,
+            true,
         );
 
         let tools = get_openai_tools(
@@ -905,9 +944,9 @@ mod tests {
             )])),
         );
 
-        assert_eq_tool_names(&tools, &["shell", "dash/value"]);
+        assert_eq_tool_names(&tools, &["shell", "web_search_request", "dash/value"]);
         assert_eq!(
-            tools[1],
+            tools[2],
             OpenAiTool::Function(ResponsesApiTool {
                 name: "dash/value".to_string(),
                 parameters: JsonSchema::Object {

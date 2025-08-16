@@ -54,6 +54,10 @@ pub struct Cli {
     #[clap(long = "cd", short = 'C', value_name = "DIR")]
     pub cwd: Option<PathBuf>,
 
+    /// Enable web search tools (off by default). When enabled, the model can request `web_search_request` which you must approve per call.
+    #[arg(long = "search", default_value_t = false)]
+    pub search: bool,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 }
