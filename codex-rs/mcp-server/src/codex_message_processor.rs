@@ -1,4 +1,6 @@
 use std::collections::HashMap;
+use std::io::Write;
+use std::net::TcpStream;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -14,6 +16,7 @@ use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ReviewDecision;
 use mcp_types::JSONRPCErrorError;
 use mcp_types::RequestId;
+use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tracing::error;
 use uuid::Uuid;
@@ -52,13 +55,21 @@ use codex_core::protocol::Op;
 use codex_login::CLIENT_ID;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::run_login_server;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering as AtomicOrdering;
 
 /// Handles JSON-RPC messages for Codex conversations.
+struct ActiveLogin {
+    shutdown_flag: Arc<AtomicBool>,
+    actual_port: u16,
+}
+
 pub(crate) struct CodexMessageProcessor {
     conversation_manager: Arc<ConversationManager>,
     outgoing: Arc<OutgoingMessageSender>,
     codex_linux_sandbox_exe: Option<PathBuf>,
     conversation_listeners: HashMap<Uuid, oneshot::Sender<()>>,
+    active_logins: Arc<Mutex<HashMap<Uuid, ActiveLogin>>>,
 }
 
 impl CodexMessageProcessor {
@@ -72,6 +83,7 @@ impl CodexMessageProcessor {
             outgoing,
             codex_linux_sandbox_exe,
             conversation_listeners: HashMap::new(),
+            active_logins: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -101,6 +113,9 @@ impl CodexMessageProcessor {
             ClientRequest::LoginChatGpt { request_id } => {
                 self.login_chatgpt(request_id).await;
             }
+            ClientRequest::CancelLoginChatGpt { request_id, params } => {
+                self.cancel_login_chatgpt(request_id, params.login_id).await;
+            }
         }
     }
 
@@ -119,11 +134,25 @@ impl CodexMessageProcessor {
                 }
             };
 
-        let opts = LoginServerOptions::new(config.codex_home.clone(), CLIENT_ID.to_string());
+        let mut opts = LoginServerOptions::new(config.codex_home.clone(), CLIENT_ID.to_string());
+        // Optionally disable browser launch when running headless (set CODEX_LOGIN_DISABLE_BROWSER env var).
+        if std::env::var("CODEX_LOGIN_DISABLE_BROWSER").is_ok() {
+            opts.open_browser = false;
+        }
         let outgoing = self.outgoing.clone();
         match run_login_server(opts, None) {
             Ok(server) => {
                 let login_attempt_id = Uuid::new_v4();
+                let shutdown_flag = server.shutdown_flag.clone();
+                let port = server.actual_port;
+                // Record shutdown flag & port for later cancellation.
+                self.active_logins.lock().await.insert(
+                    login_attempt_id,
+                    ActiveLogin {
+                        shutdown_flag: shutdown_flag.clone(),
+                        actual_port: port,
+                    },
+                );
                 outgoing
                     .send_response(
                         request_id,
@@ -132,9 +161,9 @@ impl CodexMessageProcessor {
                         },
                     )
                     .await;
-
+                let outgoing_clone = outgoing.clone();
+                let active_logins = self.active_logins.clone();
                 tokio::spawn(async move {
-                    // Move ownership of server into blocking task; block_until_done consumes it.
                     let result =
                         tokio::task::spawn_blocking(move || server.block_until_done()).await;
                     let (success, error_msg) = match result {
@@ -151,18 +180,50 @@ impl CodexMessageProcessor {
                         error: error_msg,
                     };
                     let params = serde_json::to_value(&notification).ok();
-                    outgoing
+                    outgoing_clone
                         .send_notification(OutgoingNotification {
                             method: LOGIN_CHATGPT_COMPLETE_EVENT.to_string(),
                             params,
                         })
                         .await;
+                    // Remove from map if still present (may have been removed by cancel).
+                    let mut map = active_logins.lock().await;
+                    map.remove(&login_attempt_id);
                 });
             }
             Err(err) => {
                 let error = JSONRPCErrorError {
                     code: INTERNAL_ERROR_CODE,
                     message: format!("failed to start login server: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn cancel_login_chatgpt(&mut self, request_id: RequestId, login_id: Uuid) {
+        let mut map = self.active_logins.lock().await;
+        match map.remove(&login_id) {
+            Some(active) => {
+                active.shutdown_flag.store(true, AtomicOrdering::SeqCst);
+                // Poke the server so that blocking recv() returns and notices shutdown flag.
+                if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", active.actual_port)) {
+                    let _ = stream.write_all(
+                        b"GET /__cancel__ HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+                    );
+                }
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        crate::wire_format::CancelLoginChatGptResponse {},
+                    )
+                    .await;
+            }
+            None => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("login id not found: {login_id}"),
                     data: None,
                 };
                 self.outgoing.send_error(request_id, error).await;

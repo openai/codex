@@ -64,6 +64,11 @@ pub enum ClientRequest {
         #[serde(rename = "id")]
         request_id: RequestId,
     },
+    CancelLoginChatGpt {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: CancelLoginChatGptParams,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
@@ -143,6 +148,16 @@ pub struct LoginChatGptCompleteNotification {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelLoginChatGptParams {
+    pub login_id: Uuid,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelLoginChatGptResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -353,6 +368,24 @@ mod tests {
             json!({
                 "loginId": Uuid::nil(),
                 "success": true,
+            })
+        );
+    }
+
+    #[test]
+    fn serialize_cancel_login_chatgpt() {
+        let request = ClientRequest::CancelLoginChatGpt {
+            request_id: RequestId::Integer(7),
+            params: CancelLoginChatGptParams {
+                login_id: Uuid::nil(),
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(&request).unwrap(),
+            json!({
+                "method": "cancelLoginChatGpt",
+                "id": 7,
+                "params": { "loginId": Uuid::nil() }
             })
         );
     }
