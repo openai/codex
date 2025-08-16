@@ -2,15 +2,18 @@ use std::path::Path;
 use std::thread::sleep;
 use std::time::Duration;
 
-use codex_mcp_server::CodexToolCallParam;
+use codex_mcp_server::wire_format::ConversationId;
+use codex_mcp_server::wire_format::InputItem;
+use codex_mcp_server::wire_format::NewConversationParams;
+use codex_mcp_server::wire_format::NewConversationResponse;
+use codex_mcp_server::wire_format::SendUserMessageParams;
+use codex_mcp_server::wire_format::SendUserMessageResponse;
 use mcp_test_support::McpProcess;
 use mcp_test_support::create_final_assistant_message_sse_response;
 use mcp_test_support::create_mock_chat_completions_server;
-use mcp_types::JSONRPC_VERSION;
 use mcp_types::JSONRPCResponse;
 use mcp_types::RequestId;
 use pretty_assertions::assert_eq;
-use serde_json::json;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
@@ -39,63 +42,44 @@ async fn test_send_message_success() {
         .expect("init timed out")
         .expect("init failed");
 
-    // Kick off a Codex session so we have a valid session_id.
-    let codex_request_id = mcp_process
-        .send_codex_tool_call(CodexToolCallParam {
-            prompt: "Start a session".to_string(),
-            ..Default::default()
-        })
+    // Start a conversation using the new wire API.
+    let new_conv_id = mcp_process
+        .send_new_conversation_request(NewConversationParams::default())
         .await
-        .expect("send codex tool call");
-
-    // Wait for the session_configured event to get the session_id.
-    let session_id = mcp_process
-        .read_stream_until_configured_response_message()
-        .await
-        .expect("read session_configured");
-
-    // The original codex call will finish quickly given our mock; consume its response.
-    timeout(
+        .expect("send newConversation");
+    let new_conv_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp_process.read_stream_until_response_message(RequestId::Integer(codex_request_id)),
+        mcp_process.read_stream_until_response_message(RequestId::Integer(new_conv_id)),
     )
     .await
-    .expect("codex response timeout")
-    .expect("codex response error");
+    .expect("newConversation timeout")
+    .expect("newConversation resp");
+    let NewConversationResponse {
+        conversation_id, ..
+    } = to_response::<NewConversationResponse>(new_conv_resp)
+        .expect("deserialize newConversation response");
 
-    // Now exercise the send-user-message tool.
-    let send_msg_request_id = mcp_process
-        .send_user_message_tool_call("Hello again", &session_id)
+    // Now exercise sendUserMessage.
+    let send_id = mcp_process
+        .send_send_user_message_request(SendUserMessageParams {
+            conversation_id,
+            items: vec![InputItem::Text {
+                text: "Hello again".to_string(),
+            }],
+        })
         .await
-        .expect("send send-message tool call");
+        .expect("send sendUserMessage");
 
     let response: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp_process.read_stream_until_response_message(RequestId::Integer(send_msg_request_id)),
+        mcp_process.read_stream_until_response_message(RequestId::Integer(send_id)),
     )
     .await
-    .expect("send-user-message response timeout")
-    .expect("send-user-message response error");
+    .expect("sendUserMessage response timeout")
+    .expect("sendUserMessage response error");
 
-    assert_eq!(
-        JSONRPCResponse {
-            jsonrpc: JSONRPC_VERSION.into(),
-            id: RequestId::Integer(send_msg_request_id),
-            result: json!({
-                "content": [
-                    {
-                        "text": "{\"status\":\"ok\"}",
-                        "type": "text",
-                    }
-                ],
-                "isError": false,
-                "structuredContent": {
-                    "status": "ok"
-                }
-            }),
-        },
-        response
-    );
+    let _ok: SendUserMessageResponse = to_response::<SendUserMessageResponse>(response)
+        .expect("deserialize sendUserMessage response");
     // wait for the server to hear the user message
     sleep(Duration::from_secs(5));
 
@@ -113,24 +97,26 @@ async fn test_send_message_session_not_found() {
         .expect("timeout")
         .expect("init");
 
-    let unknown = uuid::Uuid::new_v4().to_string();
+    let unknown = ConversationId(uuid::Uuid::new_v4());
     let req_id = mcp
-        .send_user_message_tool_call("ping", &unknown)
+        .send_send_user_message_request(SendUserMessageParams {
+            conversation_id: unknown,
+            items: vec![InputItem::Text {
+                text: "ping".to_string(),
+            }],
+        })
         .await
-        .expect("send tool");
+        .expect("send sendUserMessage");
 
-    let resp: JSONRPCResponse = timeout(
+    // Expect an error response for unknown conversation.
+    let err = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+        mcp.read_stream_until_error_message(RequestId::Integer(req_id)),
     )
     .await
     .expect("timeout")
-    .expect("resp");
-
-    let result = resp.result.clone();
-    let content = result["content"][0]["text"].as_str().unwrap_or("");
-    assert!(content.contains("Session does not exist"));
-    assert_eq!(result["isError"], json!(true));
+    .expect("error");
+    assert_eq!(err.id, RequestId::Integer(req_id));
 }
 
 // ---------------------------------------------------------------------------
@@ -158,4 +144,10 @@ stream_max_retries = 0
 "#
         ),
     )
+}
+
+fn to_response<T: serde::de::DeserializeOwned>(response: JSONRPCResponse) -> anyhow::Result<T> {
+    let value = serde_json::to_value(response.result)?;
+    let codex_response = serde_json::from_value(value)?;
+    Ok(codex_response)
 }
