@@ -28,6 +28,7 @@ use codex_core::protocol::TurnDiffEvent;
 use codex_protocol::parse_command::ParsedCommand;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use rand::Rng;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
@@ -494,6 +495,8 @@ impl ChatWidget<'_> {
         initial_images: Vec<PathBuf>,
         enhanced_keys_supported: bool,
     ) -> Self {
+        let mut rng = rand::rng();
+        let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
 
         Self {
@@ -503,6 +506,7 @@ impl ChatWidget<'_> {
                 app_event_tx,
                 has_input_focus: true,
                 enhanced_keys_supported,
+                placeholder_text: placeholder,
             }),
             active_exec_cell: None,
             config: config.clone(),
@@ -659,8 +663,17 @@ impl ChatWidget<'_> {
         self.app_event_tx.send(AppEvent::RequestRedraw);
     }
 
+    pub(crate) fn add_diff_in_progress(&mut self) {
+        self.bottom_pane.set_task_running(true);
+        self.bottom_pane
+            .update_status_text("computing diff".to_string());
+        self.request_redraw();
+    }
+
     pub(crate) fn add_diff_output(&mut self, diff_output: String) {
-        self.add_to_history(&history_cell::new_diff_output(diff_output.clone()));
+        self.bottom_pane.set_task_running(false);
+        self.add_to_history(&history_cell::new_diff_output(diff_output));
+        self.mark_needs_redraw();
     }
 
     pub(crate) fn add_status_output(&mut self) {
@@ -669,10 +682,6 @@ impl ChatWidget<'_> {
             &self.total_token_usage,
             &self.session_id,
         ));
-    }
-
-    pub(crate) fn add_prompts_output(&mut self) {
-        self.add_to_history(&history_cell::new_prompts_output());
     }
 
     /// Forward file-search results to the bottom pane.
@@ -754,6 +763,15 @@ impl WidgetRef for &ChatWidget<'_> {
         }
     }
 }
+
+const EXAMPLE_PROMPTS: [&str; 6] = [
+    "Explain this codebase",
+    "Summarize recent commits",
+    "Implement {feature}",
+    "Find and fix a bug in @filename",
+    "Write tests for @filename",
+    "Improve documentation in @filename",
+];
 
 fn add_token_usage(current_usage: &TokenUsage, new_usage: &TokenUsage) -> TokenUsage {
     let cached_input_tokens = match (

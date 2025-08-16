@@ -170,7 +170,6 @@ pub(crate) fn new_session_info(
             Line::from(format!(" /init - {}", SlashCommand::Init.description()).dim()),
             Line::from(format!(" /status - {}", SlashCommand::Status.description()).dim()),
             Line::from(format!(" /diff - {}", SlashCommand::Diff.description()).dim()),
-            Line::from(format!(" /prompts - {}", SlashCommand::Prompts.description()).dim()),
             Line::from("".dim()),
         ];
         PlainHistoryCell { lines }
@@ -632,21 +631,6 @@ pub(crate) fn new_status_output(
     ]));
 
     lines.push(Line::from(""));
-    PlainHistoryCell { lines }
-}
-
-pub(crate) fn new_prompts_output() -> PlainHistoryCell {
-    let lines: Vec<Line<'static>> = vec![
-        Line::from("/prompts".magenta()),
-        Line::from(""),
-        Line::from(" 1. Explain this codebase"),
-        Line::from(" 2. Summarize recent commits"),
-        Line::from(" 3. Implement {feature}"),
-        Line::from(" 4. Find and fix a bug in @filename"),
-        Line::from(" 5. Write tests for @filename"),
-        Line::from(" 6. Improve documentation in @filename"),
-        Line::from(""),
-    ];
     PlainHistoryCell { lines }
 }
 
