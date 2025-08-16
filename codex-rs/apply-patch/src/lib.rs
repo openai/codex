@@ -42,6 +42,15 @@ impl From<std::io::Error> for ApplyPatchError {
     }
 }
 
+impl From<&std::io::Error> for ApplyPatchError {
+    fn from(err: &std::io::Error) -> Self {
+        ApplyPatchError::IoError(IoError {
+            context: "I/O error".to_string(),
+            source: std::io::Error::new(err.kind(), err.to_string()),
+        })
+    }
+}
+
 #[derive(Debug, Error)]
 #[error("{context}: {source}")]
 pub struct IoError {
@@ -58,16 +67,25 @@ impl PartialEq for IoError {
 
 #[derive(Debug, PartialEq)]
 pub enum MaybeApplyPatch {
-    Body(Vec<Hunk>),
+    Body(ApplyPatchArgs),
     ShellParseError(ExtractHeredocError),
     PatchParseError(ParseError),
     NotApplyPatch,
 }
 
+/// Both the raw PATCH argument to `apply_patch` as well as the PATCH argument
+/// parsed into hunks.
+#[derive(Debug, PartialEq)]
+pub struct ApplyPatchArgs {
+    pub patch: String,
+    pub hunks: Vec<Hunk>,
+}
+
 pub fn maybe_parse_apply_patch(argv: &[String]) -> MaybeApplyPatch {
+    const APPLY_PATCH_COMMANDS: [&str; 2] = ["apply_patch", "applypatch"];
     match argv {
-        [cmd, body] if cmd == "apply_patch" => match parse_patch(body) {
-            Ok(hunks) => MaybeApplyPatch::Body(hunks),
+        [cmd, body] if APPLY_PATCH_COMMANDS.contains(&cmd.as_str()) => match parse_patch(body) {
+            Ok(source) => MaybeApplyPatch::Body(source),
             Err(e) => MaybeApplyPatch::PatchParseError(e),
         },
         [bash, flag, script]
@@ -77,7 +95,7 @@ pub fn maybe_parse_apply_patch(argv: &[String]) -> MaybeApplyPatch {
         {
             match extract_heredoc_body_from_apply_patch_command(script) {
                 Ok(body) => match parse_patch(&body) {
-                    Ok(hunks) => MaybeApplyPatch::Body(hunks),
+                    Ok(source) => MaybeApplyPatch::Body(source),
                     Err(e) => MaybeApplyPatch::PatchParseError(e),
                 },
                 Err(e) => MaybeApplyPatch::ShellParseError(e),
@@ -116,11 +134,19 @@ pub enum MaybeApplyPatchVerified {
     NotApplyPatch,
 }
 
-#[derive(Debug, PartialEq)]
 /// ApplyPatchAction is the result of parsing an `apply_patch` command. By
 /// construction, all paths should be absolute paths.
+#[derive(Debug, PartialEq)]
 pub struct ApplyPatchAction {
     changes: HashMap<PathBuf, ApplyPatchFileChange>,
+
+    /// The raw patch argument that can be used with `apply_patch` as an exec
+    /// call. i.e., if the original arg was parsed in "lenient" mode with a
+    /// heredoc, this should be the value without the heredoc wrapper.
+    pub patch: String,
+
+    /// The working directory that was used to resolve relative paths in the patch.
+    pub cwd: PathBuf,
 }
 
 impl ApplyPatchAction {
@@ -140,8 +166,28 @@ impl ApplyPatchAction {
             panic!("path must be absolute");
         }
 
+        #[expect(clippy::expect_used)]
+        let filename = path
+            .file_name()
+            .expect("path should not be empty")
+            .to_string_lossy();
+        let patch = format!(
+            r#"*** Begin Patch
+*** Update File: {filename}
+@@
++ {content}
+*** End Patch"#,
+        );
         let changes = HashMap::from([(path.to_path_buf(), ApplyPatchFileChange::Add { content })]);
-        Self { changes }
+        #[expect(clippy::expect_used)]
+        Self {
+            changes,
+            cwd: path
+                .parent()
+                .expect("path should have parent")
+                .to_path_buf(),
+            patch,
+        }
     }
 }
 
@@ -149,7 +195,7 @@ impl ApplyPatchAction {
 /// patch.
 pub fn maybe_parse_apply_patch_verified(argv: &[String], cwd: &Path) -> MaybeApplyPatchVerified {
     match maybe_parse_apply_patch(argv) {
-        MaybeApplyPatch::Body(hunks) => {
+        MaybeApplyPatch::Body(ApplyPatchArgs { patch, hunks }) => {
             let mut changes = HashMap::new();
             for hunk in hunks {
                 let path = hunk.resolve_path(cwd);
@@ -183,7 +229,11 @@ pub fn maybe_parse_apply_patch_verified(argv: &[String], cwd: &Path) -> MaybeApp
                     }
                 }
             }
-            MaybeApplyPatchVerified::Body(ApplyPatchAction { changes })
+            MaybeApplyPatchVerified::Body(ApplyPatchAction {
+                changes,
+                patch,
+                cwd: cwd.to_path_buf(),
+            })
         }
         MaybeApplyPatch::ShellParseError(e) => MaybeApplyPatchVerified::ShellParseError(e),
         MaybeApplyPatch::PatchParseError(e) => MaybeApplyPatchVerified::CorrectnessError(e.into()),
@@ -264,7 +314,7 @@ pub fn apply_patch(
     stderr: &mut impl std::io::Write,
 ) -> Result<(), ApplyPatchError> {
     let hunks = match parse_patch(patch) {
-        Ok(hunks) => hunks,
+        Ok(source) => source.hunks,
         Err(e) => {
             match &e {
                 InvalidPatchError(message) => {
@@ -326,13 +376,21 @@ pub fn apply_hunks(
     match apply_hunks_to_files(hunks) {
         Ok(affected) => {
             print_summary(&affected, stdout).map_err(ApplyPatchError::from)?;
+            Ok(())
         }
         Err(err) => {
-            writeln!(stderr, "{err:?}").map_err(ApplyPatchError::from)?;
+            let msg = err.to_string();
+            writeln!(stderr, "{msg}").map_err(ApplyPatchError::from)?;
+            if let Some(io) = err.downcast_ref::<std::io::Error>() {
+                Err(ApplyPatchError::from(io))
+            } else {
+                Err(ApplyPatchError::IoError(IoError {
+                    context: msg,
+                    source: std::io::Error::other(err),
+                }))
+            }
         }
     }
-
-    Ok(())
 }
 
 /// Applies each parsed patch hunk to the filesystem.
@@ -624,8 +682,6 @@ pub fn print_summary(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
-
     use super::*;
     use pretty_assertions::assert_eq;
     use std::fs;
@@ -633,7 +689,7 @@ mod tests {
 
     /// Helper to construct a patch with the given body.
     fn wrap_patch(body: &str) -> String {
-        format!("*** Begin Patch\n{}\n*** End Patch", body)
+        format!("*** Begin Patch\n{body}\n*** End Patch")
     }
 
     fn strs_to_strings(strs: &[&str]) -> Vec<String> {
@@ -652,7 +708,7 @@ mod tests {
         ]);
 
         match maybe_parse_apply_patch(&args) {
-            MaybeApplyPatch::Body(hunks) => {
+            MaybeApplyPatch::Body(ApplyPatchArgs { hunks, patch: _ }) => {
                 assert_eq!(
                     hunks,
                     vec![Hunk::AddFile {
@@ -661,7 +717,32 @@ mod tests {
                     }]
                 );
             }
-            result => panic!("expected MaybeApplyPatch::Body got {:?}", result),
+            result => panic!("expected MaybeApplyPatch::Body got {result:?}"),
+        }
+    }
+
+    #[test]
+    fn test_literal_applypatch() {
+        let args = strs_to_strings(&[
+            "applypatch",
+            r#"*** Begin Patch
+*** Add File: foo
++hi
+*** End Patch
+"#,
+        ]);
+
+        match maybe_parse_apply_patch(&args) {
+            MaybeApplyPatch::Body(ApplyPatchArgs { hunks, patch: _ }) => {
+                assert_eq!(
+                    hunks,
+                    vec![Hunk::AddFile {
+                        path: PathBuf::from("foo"),
+                        contents: "hi\n".to_string()
+                    }]
+                );
+            }
+            result => panic!("expected MaybeApplyPatch::Body got {result:?}"),
         }
     }
 
@@ -679,7 +760,7 @@ PATCH"#,
         ]);
 
         match maybe_parse_apply_patch(&args) {
-            MaybeApplyPatch::Body(hunks) => {
+            MaybeApplyPatch::Body(ApplyPatchArgs { hunks, patch: _ }) => {
                 assert_eq!(
                     hunks,
                     vec![Hunk::AddFile {
@@ -688,7 +769,7 @@ PATCH"#,
                     }]
                 );
             }
-            result => panic!("expected MaybeApplyPatch::Body got {:?}", result),
+            result => panic!("expected MaybeApplyPatch::Body got {result:?}"),
         }
     }
 
@@ -954,7 +1035,7 @@ PATCH"#,
         ));
         let patch = parse_patch(&patch).unwrap();
 
-        let update_file_chunks = match patch.as_slice() {
+        let update_file_chunks = match patch.hunks.as_slice() {
             [Hunk::UpdateFile { chunks, .. }] => chunks,
             _ => panic!("Expected a single UpdateFile hunk"),
         };
@@ -992,7 +1073,7 @@ PATCH"#,
         ));
 
         let patch = parse_patch(&patch).unwrap();
-        let chunks = match patch.as_slice() {
+        let chunks = match patch.hunks.as_slice() {
             [Hunk::UpdateFile { chunks, .. }] => chunks,
             _ => panic!("Expected a single UpdateFile hunk"),
         };
@@ -1029,7 +1110,7 @@ PATCH"#,
         ));
 
         let patch = parse_patch(&patch).unwrap();
-        let chunks = match patch.as_slice() {
+        let chunks = match patch.hunks.as_slice() {
             [Hunk::UpdateFile { chunks, .. }] => chunks,
             _ => panic!("Expected a single UpdateFile hunk"),
         };
@@ -1064,7 +1145,7 @@ PATCH"#,
         ));
 
         let patch = parse_patch(&patch).unwrap();
-        let chunks = match patch.as_slice() {
+        let chunks = match patch.hunks.as_slice() {
             [Hunk::UpdateFile { chunks, .. }] => chunks,
             _ => panic!("Expected a single UpdateFile hunk"),
         };
@@ -1110,7 +1191,7 @@ PATCH"#,
 
         // Extract chunks then build the unified diff.
         let parsed = parse_patch(&patch).unwrap();
-        let chunks = match parsed.as_slice() {
+        let chunks = match parsed.hunks.as_slice() {
             [Hunk::UpdateFile { chunks, .. }] => chunks,
             _ => panic!("Expected a single UpdateFile hunk"),
         };
@@ -1193,7 +1274,29 @@ g
                         new_content: "updated session directory content\n".to_string(),
                     },
                 )]),
+                patch: argv[1].clone(),
+                cwd: session_dir.path().to_path_buf(),
             })
         );
+    }
+
+    #[test]
+    fn test_apply_patch_fails_on_write_error() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("readonly.txt");
+        fs::write(&path, "before\n").unwrap();
+        let mut perms = fs::metadata(&path).unwrap().permissions();
+        perms.set_readonly(true);
+        fs::set_permissions(&path, perms).unwrap();
+
+        let patch = wrap_patch(&format!(
+            "*** Update File: {}\n@@\n-before\n+after\n*** End Patch",
+            path.display()
+        ));
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let result = apply_patch(&patch, &mut stdout, &mut stderr);
+        assert!(result.is_err());
     }
 }

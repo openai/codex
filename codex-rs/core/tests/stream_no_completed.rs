@@ -3,15 +3,17 @@
 
 use std::time::Duration;
 
-use codex_core::Codex;
+use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
-use codex_core::exec::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
-mod test_support;
+use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_login::CodexAuth;
+use core_test_support::load_default_config_for_test;
+use core_test_support::load_sse_fixture;
+use core_test_support::load_sse_fixture_with_id;
 use tempfile::TempDir;
-use test_support::load_default_config_for_test;
 use tokio::time::timeout;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -22,22 +24,15 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 fn sse_incomplete() -> String {
-    // Only a single line; missing the completed event.
-    "event: response.output_item.done\n\n".to_string()
+    load_sse_fixture("tests/fixtures/incomplete_sse.json")
 }
 
 fn sse_completed(id: &str) -> String {
-    format!(
-        "event: response.completed\n\
-data: {{\"type\":\"response.completed\",\"response\":{{\"id\":\"{}\",\"output\":[]}}}}\n\n\n",
-        id
-    )
+    load_sse_fixture_with_id("tests/fixtures/completed_template.json", id)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn retries_on_early_close() {
-    #![allow(clippy::unwrap_used)]
-
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
             "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
@@ -73,36 +68,37 @@ async fn retries_on_early_close() {
         .mount(&server)
         .await;
 
-    // Environment
-    //
-    // As of Rust 2024 `std::env::set_var` has been made `unsafe` because
-    // mutating the process environment is inherently racy when other threads
-    // are running.  We therefore have to wrap every call in an explicit
-    // `unsafe` block.  These are limited to the test-setup section so the
-    // scope is very small and clearly delineated.
-
-    unsafe {
-        std::env::set_var("OPENAI_REQUEST_MAX_RETRIES", "0");
-        std::env::set_var("OPENAI_STREAM_MAX_RETRIES", "1");
-        std::env::set_var("OPENAI_STREAM_IDLE_TIMEOUT_MS", "2000");
-    }
+    // Configure retry behavior explicitly to avoid mutating process-wide
+    // environment variables.
 
     let model_provider = ModelProviderInfo {
         name: "openai".into(),
-        base_url: format!("{}/v1", server.uri()),
+        base_url: Some(format!("{}/v1", server.uri())),
         // Environment variable that should exist in the test environment.
         // ModelClient will return an error if the environment variable for the
         // provider is not set.
         env_key: Some("PATH".into()),
         env_key_instructions: None,
         wire_api: codex_core::WireApi::Responses,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        // exercise retry path: first attempt yields incomplete stream, so allow 1 retry
+        request_max_retries: Some(0),
+        stream_max_retries: Some(1),
+        stream_idle_timeout_ms: Some(2000),
+        requires_openai_auth: false,
     };
 
-    let ctrl_c = std::sync::Arc::new(tokio::sync::Notify::new());
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = model_provider;
-    let (codex, _init_id) = Codex::spawn(config, ctrl_c).await.unwrap();
+    let conversation_manager = ConversationManager::default();
+    let codex = conversation_manager
+        .new_conversation_with_auth(config, Some(CodexAuth::from_api_key("Test API Key")))
+        .await
+        .unwrap()
+        .conversation;
 
     codex
         .submit(Op::UserInput {

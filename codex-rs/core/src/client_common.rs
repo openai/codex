@@ -1,12 +1,15 @@
 use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::error::Result;
+use crate::model_family::ModelFamily;
+use crate::models::ContentItem;
 use crate::models::ResponseItem;
+use crate::openai_tools::OpenAiTool;
+use crate::protocol::TokenUsage;
 use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
 use futures::Stream;
 use serde::Serialize;
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
@@ -16,42 +19,68 @@ use tokio::sync::mpsc;
 /// with this content.
 const BASE_INSTRUCTIONS: &str = include_str!("../prompt.md");
 
-/// API request payload for a single model turn.
+/// wraps user instructions message in a tag for the model to parse more easily.
+const USER_INSTRUCTIONS_START: &str = "<user_instructions>\n\n";
+const USER_INSTRUCTIONS_END: &str = "\n\n</user_instructions>";
+
+/// API request payload for a single model turn
 #[derive(Default, Debug, Clone)]
 pub struct Prompt {
     /// Conversation context input items.
     pub input: Vec<ResponseItem>,
-    /// Optional previous response ID (when storage is enabled).
-    pub prev_id: Option<String>,
-    /// Optional instructions from the user to amend to the built-in agent
-    /// instructions.
-    pub user_instructions: Option<String>,
+
     /// Whether to store response on server side (disable_response_storage = !store).
     pub store: bool,
 
-    /// Additional tools sourced from external MCP servers. Note each key is
-    /// the "fully qualified" tool name (i.e., prefixed with the server name),
-    /// which should be reported to the model in place of Tool::name.
-    pub extra_tools: HashMap<String, mcp_types::Tool>,
+    /// Tools available to the model, including additional tools sourced from
+    /// external MCP servers.
+    pub tools: Vec<OpenAiTool>,
+
+    /// Optional override for the built-in BASE_INSTRUCTIONS.
+    pub base_instructions_override: Option<String>,
 }
 
 impl Prompt {
-    pub(crate) fn get_full_instructions(&self, model: &str) -> Cow<str> {
-        let mut sections: Vec<&str> = vec![BASE_INSTRUCTIONS];
-        if let Some(ref user) = self.user_instructions {
-            sections.push(user);
-        }
-        if model.starts_with("gpt-4.1") {
+    pub(crate) fn get_full_instructions(&self, model: &ModelFamily) -> Cow<'_, str> {
+        let base = self
+            .base_instructions_override
+            .as_deref()
+            .unwrap_or(BASE_INSTRUCTIONS);
+        let mut sections: Vec<&str> = vec![base];
+        if model.needs_special_apply_patch_instructions {
             sections.push(APPLY_PATCH_TOOL_INSTRUCTIONS);
         }
         Cow::Owned(sections.join("\n"))
+    }
+
+    pub(crate) fn get_formatted_input(&self) -> Vec<ResponseItem> {
+        self.input.clone()
+    }
+
+    /// Creates a formatted user instructions message from a string
+    pub(crate) fn format_user_instructions_message(ui: &str) -> ResponseItem {
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: format!("{USER_INSTRUCTIONS_START}{ui}{USER_INSTRUCTIONS_END}"),
+            }],
+        }
     }
 }
 
 #[derive(Debug)]
 pub enum ResponseEvent {
+    Created,
     OutputItemDone(ResponseItem),
-    Completed { response_id: String },
+    Completed {
+        response_id: String,
+        token_usage: Option<TokenUsage>,
+    },
+    OutputTextDelta(String),
+    ReasoningSummaryDelta(String),
+    ReasoningContentDelta(String),
+    ReasoningSummaryPartAdded,
 }
 
 #[derive(Debug, Serialize)]
@@ -65,6 +94,7 @@ pub(crate) struct Reasoning {
 #[derive(Debug, Serialize, Default, Clone, Copy)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum OpenAiReasoningEffort {
+    Minimal,
     Low,
     #[default]
     Medium,
@@ -74,6 +104,7 @@ pub(crate) enum OpenAiReasoningEffort {
 impl From<ReasoningEffortConfig> for Option<OpenAiReasoningEffort> {
     fn from(effort: ReasoningEffortConfig) -> Self {
         match effort {
+            ReasoningEffortConfig::Minimal => Some(OpenAiReasoningEffort::Minimal),
             ReasoningEffortConfig::Low => Some(OpenAiReasoningEffort::Low),
             ReasoningEffortConfig::Medium => Some(OpenAiReasoningEffort::Medium),
             ReasoningEffortConfig::High => Some(OpenAiReasoningEffort::High),
@@ -119,22 +150,22 @@ pub(crate) struct ResponsesApiRequest<'a> {
     pub(crate) tool_choice: &'static str,
     pub(crate) parallel_tool_calls: bool,
     pub(crate) reasoning: Option<Reasoning>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) previous_response_id: Option<String>,
     /// true when using the Responses API.
     pub(crate) store: bool,
     pub(crate) stream: bool,
+    pub(crate) include: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) prompt_cache_key: Option<String>,
 }
 
 pub(crate) fn create_reasoning_param_for_request(
-    model: &str,
+    model_family: &ModelFamily,
     effort: ReasoningEffortConfig,
     summary: ReasoningSummaryConfig,
 ) -> Option<Reasoning> {
-    let effort: Option<OpenAiReasoningEffort> = effort.into();
-    let effort = effort?;
-
-    if model_supports_reasoning_summaries(model) {
+    if model_family.supports_reasoning_summaries {
+        let effort: Option<OpenAiReasoningEffort> = effort.into();
+        let effort = effort?;
         Some(Reasoning {
             effort,
             summary: summary.into(),
@@ -142,22 +173,6 @@ pub(crate) fn create_reasoning_param_for_request(
     } else {
         None
     }
-}
-
-pub fn model_supports_reasoning_summaries(model: &str) -> bool {
-    // Currently, we hardcode this rule to decide whether enable reasoning.
-    // We expect reasoning to apply only to OpenAI models, but we do not want
-    // users to have to mess with their config to disable reasoning for models
-    // that do not support it, such as `gpt-4.1`.
-    //
-    // Though if a user is using Codex with non-OpenAI models that, say, happen
-    // to start with "o", then they can set `model_reasoning_effort = "none` in
-    // config.toml to disable reasoning.
-    //
-    // Ultimately, this should also be configurable in config.toml, but we
-    // need to have defaults that "just work." Perhaps we could have a
-    // "reasoning models pattern" as part of ModelProviderInfo?
-    model.starts_with("o") || model.starts_with("codex")
 }
 
 pub(crate) struct ResponseStream {
@@ -169,5 +184,23 @@ impl Stream for ResponseStream {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.rx_event.poll_recv(cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::model_family::find_family_for_model;
+
+    use super::*;
+
+    #[test]
+    fn get_full_instructions_no_user_content() {
+        let prompt = Prompt {
+            ..Default::default()
+        };
+        let expected = format!("{BASE_INSTRUCTIONS}\n{APPLY_PATCH_TOOL_INSTRUCTIONS}");
+        let model_family = find_family_for_model("gpt-4.1").expect("known model slug");
+        let full = prompt.get_full_instructions(&model_family);
+        assert_eq!(full, expected);
     }
 }

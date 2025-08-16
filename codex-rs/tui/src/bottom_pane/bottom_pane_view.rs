@@ -4,12 +4,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 
 use super::BottomPane;
-
-/// Type to use for a method that may require a redraw of the UI.
-pub(crate) enum ConditionalUpdate {
-    NeedsRedraw,
-    NoRedraw,
-}
+use super::CancellationEvent;
 
 /// Trait implemented by every view that can be shown in the bottom pane.
 pub(crate) trait BottomPaneView<'a> {
@@ -22,16 +17,16 @@ pub(crate) trait BottomPaneView<'a> {
         false
     }
 
-    /// Height required to render the view.
-    fn calculate_required_height(&self, area: &Rect) -> u16;
+    /// Handle Ctrl-C while this view is active.
+    fn on_ctrl_c(&mut self, _pane: &mut BottomPane<'a>) -> CancellationEvent {
+        CancellationEvent::Ignored
+    }
+
+    /// Return the desired height of the view.
+    fn desired_height(&self, width: u16) -> u16;
 
     /// Render the view: this will be displayed in place of the composer.
     fn render(&self, area: Rect, buf: &mut Buffer);
-
-    /// Update the status indicator text.
-    fn update_status_text(&mut self, _text: String) -> ConditionalUpdate {
-        ConditionalUpdate::NoRedraw
-    }
 
     /// Called when task completes to check if the view should be hidden.
     fn should_hide_when_task_is_done(&mut self) -> bool {
@@ -46,4 +41,8 @@ pub(crate) trait BottomPaneView<'a> {
     ) -> Option<ApprovalRequest> {
         Some(request)
     }
+
+    /// Optional hook for views that expose a live status line. Views that do not
+    /// support this can ignore the call.
+    fn update_status_text(&mut self, _text: String) {}
 }

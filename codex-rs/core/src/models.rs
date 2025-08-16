@@ -3,12 +3,13 @@ use std::collections::HashMap;
 use base64::Engine;
 use mcp_types::CallToolResult;
 use serde::Deserialize;
+use serde::Deserializer;
 use serde::Serialize;
 use serde::ser::Serializer;
 
 use crate::protocol::InputItem;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseInputItem {
     Message {
@@ -25,7 +26,7 @@ pub enum ResponseInputItem {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentItem {
     InputText { text: String },
@@ -33,16 +34,20 @@ pub enum ContentItem {
     OutputText { text: String },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseItem {
     Message {
+        id: Option<String>,
         role: String,
         content: Vec<ContentItem>,
     },
     Reasoning {
         id: String,
         summary: Vec<ReasoningItemReasoningSummary>,
+        #[serde(default, skip_serializing_if = "should_serialize_reasoning_content")]
+        content: Option<Vec<ReasoningItemContent>>,
+        encrypted_content: Option<String>,
     },
     LocalShellCall {
         /// Set when using the chat completions API.
@@ -53,6 +58,7 @@ pub enum ResponseItem {
         action: LocalShellAction,
     },
     FunctionCall {
+        id: Option<String>,
         name: String,
         // The Responses API returns the function call arguments as a *string* that contains
         // JSON, not as an already‑parsed object. We keep it as a raw string here and let
@@ -75,10 +81,23 @@ pub enum ResponseItem {
     Other,
 }
 
+fn should_serialize_reasoning_content(content: &Option<Vec<ReasoningItemContent>>) -> bool {
+    match content {
+        Some(content) => !content
+            .iter()
+            .any(|c| matches!(c, ReasoningItemContent::ReasoningText { .. })),
+        None => false,
+    }
+}
+
 impl From<ResponseInputItem> for ResponseItem {
     fn from(item: ResponseInputItem) -> Self {
         match item {
-            ResponseInputItem::Message { role, content } => Self::Message { role, content },
+            ResponseInputItem::Message { role, content } => Self::Message {
+                role,
+                content,
+                id: None,
+            },
             ResponseInputItem::FunctionCallOutput { call_id, output } => {
                 Self::FunctionCallOutput { call_id, output }
             }
@@ -99,7 +118,7 @@ impl From<ResponseInputItem> for ResponseItem {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum LocalShellStatus {
     Completed,
@@ -107,13 +126,13 @@ pub enum LocalShellStatus {
     Incomplete,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum LocalShellAction {
     Exec(LocalShellExecAction),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LocalShellExecAction {
     pub command: Vec<String>,
     pub timeout_ms: Option<u64>,
@@ -122,10 +141,17 @@ pub struct LocalShellExecAction {
     pub user: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ReasoningItemReasoningSummary {
     SummaryText { text: String },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ReasoningItemContent {
+    ReasoningText { text: String },
+    Text { text: String },
 }
 
 impl From<Vec<InputItem>> for ResponseInputItem {
@@ -145,7 +171,7 @@ impl From<Vec<InputItem>> for ResponseInputItem {
                                 .unwrap_or_else(|| "application/octet-stream".to_string());
                             let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
                             Some(ContentItem::InputImage {
-                                image_url: format!("data:{};base64,{}", mime, encoded),
+                                image_url: format!("data:{mime};base64,{encoded}"),
                             })
                         }
                         Err(err) => {
@@ -157,6 +183,7 @@ impl From<Vec<InputItem>> for ResponseInputItem {
                             None
                         }
                     },
+                    _ => None,
                 })
                 .collect::<Vec<ContentItem>>(),
         }
@@ -175,12 +202,15 @@ pub struct ShellToolCallParams {
     // The wire format uses `timeout`, which has ambiguous units, so we use
     // `timeout_ms` as the field name so it is clear in code.
     pub timeout_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub with_escalated_permissions: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub justification: Option<String>,
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct FunctionCallOutputPayload {
     pub content: String,
-    #[expect(dead_code)]
     pub success: Option<bool>,
 }
 
@@ -205,6 +235,19 @@ impl Serialize for FunctionCallOutputPayload {
     }
 }
 
+impl<'de> Deserialize<'de> for FunctionCallOutputPayload {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(FunctionCallOutputPayload {
+            content: s,
+            success: None,
+        })
+    }
+}
+
 // Implement Display so callers can treat the payload like a plain string when logging or doing
 // trivial substring checks in tests (existing tests call `.contains()` on the output). Display
 // returns the raw `content` field.
@@ -224,7 +267,6 @@ impl std::ops::Deref for FunctionCallOutputPayload {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
     use super::*;
 
     #[test]
@@ -274,6 +316,8 @@ mod tests {
                 command: vec!["ls".to_string(), "-l".to_string()],
                 workdir: Some("/tmp".to_string()),
                 timeout_ms: Some(1000),
+                with_escalated_permissions: None,
+                justification: None,
             },
             params
         );

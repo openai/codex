@@ -1,20 +1,24 @@
 [workspace]
-resolver = "2"
 members = [
     "ansi-escape",
     "apply-patch",
+    "arg0",
     "cli",
     "common",
     "core",
     "exec",
     "execpolicy",
+    "file-search",
     "linux-sandbox",
     "login",
     "mcp-client",
     "mcp-server",
     "mcp-types",
+    "ollama",
+    "protocol",
     "tui",
 ]
+resolver = "2"
 
 [workspace.package]
 version = "0.0.0"
@@ -36,3 +40,10 @@ lto = "fat"
 # Because we bundle some of these executables with the TypeScript CLI, we
 # remove everything to make the binary as small as possible.
 strip = "symbols"
+
+# See https://github.com/openai/codex/issues/1411 for details.
+codegen-units = 1
+
+[patch.crates-io]
+# ratatui = { path = "../../ratatui" }
+ratatui = { git = "https://github.com/nornagon/ratatui", branch = "nornagon-v0.29.0-patch" }

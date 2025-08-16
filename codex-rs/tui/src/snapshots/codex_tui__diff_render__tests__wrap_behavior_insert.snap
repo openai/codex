@@ -1,0 +1,13 @@
+---
+source: tui/src/diff_render.rs
+assertion_line: 380
+expression: terminal.backend()
+---
+"    1     +this is a very long line that should wrap across multiple terminal col         "
+"           umns and continue                                                              "
+"                                                                                          "
+"                                                                                          "
+"                                                                                          "
+"                                                                                          "
+"                                                                                          "
+"                                                                                          "

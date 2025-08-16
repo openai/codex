@@ -1,7 +1,7 @@
 [package]
+edition = "2024"
 name = "codex-tui"
 version = { workspace = true }
-edition = "2024"
 
 [[bin]]
 name = "codex-tui"
@@ -11,34 +11,55 @@ path = "src/main.rs"
 name = "codex_tui"
 path = "src/lib.rs"
 
+[features]
+# Enable vt100-based tests (emulator) when running with `--features vt100-tests`.
+vt100-tests = []
+# Gate verbose debug logging inside the TUI implementation.
+debug-logs = []
+
 [lints]
 workspace = true
 
 [dependencies]
 anyhow = "1"
 base64 = "0.22.1"
+chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 codex-ansi-escape = { path = "../ansi-escape" }
+codex-arg0 = { path = "../arg0" }
+codex-common = { path = "../common", features = [
+    "cli",
+    "elapsed",
+    "sandbox_summary",
+] }
 codex-core = { path = "../core" }
-codex-common = { path = "../common", features = ["cli", "elapsed"] }
-codex-linux-sandbox = { path = "../linux-sandbox" }
+codex-protocol = { path = "../protocol" }
+codex-file-search = { path = "../file-search" }
 codex-login = { path = "../login" }
+codex-ollama = { path = "../ollama" }
 color-eyre = "0.6.3"
 crossterm = { version = "0.28.1", features = ["bracketed-paste"] }
+diffy = "0.4.2"
 image = { version = "^0.25.6", default-features = false, features = ["jpeg"] }
 lazy_static = "1"
+once_cell = "1"
 mcp-types = { path = "../mcp-types" }
 path-clean = "1.0.1"
 ratatui = { version = "0.29.0", features = [
-    "unstable-widget-ref",
+    "scrolling-regions",
     "unstable-rendered-line-info",
+    "unstable-widget-ref",
 ] }
 ratatui-image = "8.0.0"
 regex-lite = "0.1"
+reqwest = { version = "0.12", features = ["json"] }
+serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 shlex = "1.3.0"
-strum = "0.27.1"
-strum_macros = "0.27.1"
+strum = "0.27.2"
+strum_macros = "0.27.2"
+supports-color = "3.0.2"
+textwrap = "0.16.2"
 tokio = { version = "1", features = [
     "io-std",
     "macros",
@@ -49,11 +70,20 @@ tokio = { version = "1", features = [
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-appender = "0.2.3"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
-tui-input = "0.11.1"
+tui-input = "0.14.0"
 tui-markdown = "0.3.3"
-tui-textarea = "0.7.0"
 unicode-segmentation = "1.12.0"
+unicode-width = "0.1"
 uuid = "1"
+rand = "0.9"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 
 [dev-dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+insta = "1.43.1"
 pretty_assertions = "1"
+rand = "0.9"
+vt100 = "0.16.2"

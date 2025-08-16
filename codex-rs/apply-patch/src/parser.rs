@@ -22,6 +22,7 @@
 //!
 //! The parser below is a little more lenient than the explicit spec and allows for
 //! leading/trailing whitespace around patch markers.
+use crate::ApplyPatchArgs;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -102,7 +103,7 @@ pub struct UpdateFileChunk {
     pub is_end_of_file: bool,
 }
 
-pub fn parse_patch(patch: &str) -> Result<Vec<Hunk>, ParseError> {
+pub fn parse_patch(patch: &str) -> Result<ApplyPatchArgs, ParseError> {
     let mode = if PARSE_IN_STRICT_MODE {
         ParseMode::Strict
     } else {
@@ -150,7 +151,7 @@ enum ParseMode {
     Lenient,
 }
 
-fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<Vec<Hunk>, ParseError> {
+fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<ApplyPatchArgs, ParseError> {
     let lines: Vec<&str> = patch.trim().lines().collect();
     let lines: &[&str] = match check_patch_boundaries_strict(&lines) {
         Ok(()) => &lines,
@@ -173,7 +174,8 @@ fn parse_patch_text(patch: &str, mode: ParseMode) -> Result<Vec<Hunk>, ParseErro
         line_number += hunk_lines;
         remaining_lines = &remaining_lines[hunk_lines..]
     }
-    Ok(hunks)
+    let patch = lines.join("\n");
+    Ok(ApplyPatchArgs { hunks, patch })
 }
 
 /// Checks the start and end lines of the patch text for `apply_patch`,
@@ -455,8 +457,10 @@ fn test_parse_patch() {
             "*** Begin Patch\n\
              *** End Patch",
             ParseMode::Strict
-        ),
-        Ok(Vec::new())
+        )
+        .unwrap()
+        .hunks,
+        Vec::new()
     );
     assert_eq!(
         parse_patch_text(
@@ -472,8 +476,10 @@ fn test_parse_patch() {
              +    return 123\n\
              *** End Patch",
             ParseMode::Strict
-        ),
-        Ok(vec![
+        )
+        .unwrap()
+        .hunks,
+        vec![
             AddFile {
                 path: PathBuf::from("path/add.py"),
                 contents: "abc\ndef\n".to_string()
@@ -491,7 +497,7 @@ fn test_parse_patch() {
                     is_end_of_file: false
                 }]
             }
-        ])
+        ]
     );
     // Update hunk followed by another hunk (Add File).
     assert_eq!(
@@ -504,8 +510,10 @@ fn test_parse_patch() {
              +content\n\
              *** End Patch",
             ParseMode::Strict
-        ),
-        Ok(vec![
+        )
+        .unwrap()
+        .hunks,
+        vec![
             UpdateFile {
                 path: PathBuf::from("file.py"),
                 move_path: None,
@@ -520,7 +528,7 @@ fn test_parse_patch() {
                 path: PathBuf::from("other.py"),
                 contents: "content\n".to_string()
             }
-        ])
+        ]
     );
 
     // Update hunk without an explicit @@ header for the first chunk should parse.
@@ -533,8 +541,10 @@ fn test_parse_patch() {
 +bar
 *** End Patch"#,
             ParseMode::Strict
-        ),
-        Ok(vec![UpdateFile {
+        )
+        .unwrap()
+        .hunks,
+        vec![UpdateFile {
             path: PathBuf::from("file2.py"),
             move_path: None,
             chunks: vec![UpdateFileChunk {
@@ -543,7 +553,7 @@ fn test_parse_patch() {
                 new_lines: vec!["import foo".to_string(), "bar".to_string()],
                 is_end_of_file: false,
             }],
-        }])
+        }]
     );
 }
 
@@ -574,7 +584,10 @@ fn test_parse_patch_lenient() {
     );
     assert_eq!(
         parse_patch_text(&patch_text_in_heredoc, ParseMode::Lenient),
-        Ok(expected_patch.clone())
+        Ok(ApplyPatchArgs {
+            hunks: expected_patch.clone(),
+            patch: patch_text.to_string()
+        })
     );
 
     let patch_text_in_single_quoted_heredoc = format!("<<'EOF'\n{patch_text}\nEOF\n");
@@ -584,7 +597,10 @@ fn test_parse_patch_lenient() {
     );
     assert_eq!(
         parse_patch_text(&patch_text_in_single_quoted_heredoc, ParseMode::Lenient),
-        Ok(expected_patch.clone())
+        Ok(ApplyPatchArgs {
+            hunks: expected_patch.clone(),
+            patch: patch_text.to_string()
+        })
     );
 
     let patch_text_in_double_quoted_heredoc = format!("<<\"EOF\"\n{patch_text}\nEOF\n");
@@ -594,7 +610,10 @@ fn test_parse_patch_lenient() {
     );
     assert_eq!(
         parse_patch_text(&patch_text_in_double_quoted_heredoc, ParseMode::Lenient),
-        Ok(expected_patch.clone())
+        Ok(ApplyPatchArgs {
+            hunks: expected_patch.clone(),
+            patch: patch_text.to_string()
+        })
     );
 
     let patch_text_in_mismatched_quotes_heredoc = format!("<<\"EOF'\n{patch_text}\nEOF\n");

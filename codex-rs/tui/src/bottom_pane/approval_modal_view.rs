@@ -9,6 +9,7 @@ use crate::user_approval_widget::UserApprovalWidget;
 
 use super::BottomPane;
 use super::BottomPaneView;
+use super::CancellationEvent;
 
 /// Modal overlay asking the user to approve/deny a sequence of requests.
 pub(crate) struct ApprovalModalView<'a> {
@@ -46,12 +47,18 @@ impl<'a> BottomPaneView<'a> for ApprovalModalView<'a> {
         self.maybe_advance();
     }
 
+    fn on_ctrl_c(&mut self, _pane: &mut BottomPane<'a>) -> CancellationEvent {
+        self.current.on_ctrl_c();
+        self.queue.clear();
+        CancellationEvent::Handled
+    }
+
     fn is_complete(&self) -> bool {
         self.current.is_complete() && self.queue.is_empty()
     }
 
-    fn calculate_required_height(&self, area: &Rect) -> u16 {
-        self.current.get_height(area)
+    fn desired_height(&self, width: u16) -> u16 {
+        self.current.desired_height(width)
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
@@ -61,5 +68,41 @@ impl<'a> BottomPaneView<'a> for ApprovalModalView<'a> {
     fn try_consume_approval_request(&mut self, req: ApprovalRequest) -> Option<ApprovalRequest> {
         self.enqueue_request(req);
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_event::AppEvent;
+    use std::sync::mpsc::channel;
+
+    fn make_exec_request() -> ApprovalRequest {
+        ApprovalRequest::Exec {
+            id: "test".to_string(),
+            command: vec!["echo".to_string(), "hi".to_string()],
+            reason: None,
+        }
+    }
+
+    #[test]
+    fn ctrl_c_aborts_and_clears_queue() {
+        let (tx_raw, _rx) = channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let first = make_exec_request();
+        let mut view = ApprovalModalView::new(first, tx);
+        view.enqueue_request(make_exec_request());
+
+        let (tx_raw2, _rx2) = channel::<AppEvent>();
+        let mut pane = BottomPane::new(super::super::BottomPaneParams {
+            app_event_tx: AppEventSender::new(tx_raw2),
+            has_input_focus: true,
+            enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
+        });
+        assert_eq!(CancellationEvent::Handled, view.on_ctrl_c(&mut pane));
+        assert!(view.queue.is_empty());
+        assert!(view.current.is_complete());
+        assert!(view.is_complete());
     }
 }

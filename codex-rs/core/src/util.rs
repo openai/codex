@@ -1,32 +1,10 @@
-use std::sync::Arc;
+use std::path::Path;
 use std::time::Duration;
 
 use rand::Rng;
-use tokio::sync::Notify;
-use tracing::debug;
-
-use crate::config::Config;
 
 const INITIAL_DELAY_MS: u64 = 200;
-const BACKOFF_FACTOR: f64 = 1.3;
-
-/// Make a CancellationToken that is fulfilled when SIGINT occurs.
-pub fn notify_on_sigint() -> Arc<Notify> {
-    let notify = Arc::new(Notify::new());
-
-    tokio::spawn({
-        let notify = Arc::clone(&notify);
-        async move {
-            loop {
-                tokio::signal::ctrl_c().await.ok();
-                debug!("Keyboard interrupt");
-                notify.notify_waiters();
-            }
-        }
-    });
-
-    notify
-}
+const BACKOFF_FACTOR: f64 = 2.0;
 
 pub(crate) fn backoff(attempt: u64) -> Duration {
     let exp = BACKOFF_FACTOR.powi(attempt.saturating_sub(1) as i32);
@@ -47,8 +25,8 @@ pub(crate) fn backoff(attempt: u64) -> Duration {
 /// `git worktree add` where the checkout lives outside the main repository
 /// directory. If you need Codex to work from such a checkout simply pass the
 /// `--allow-no-git-exec` CLI flag that disables the repo requirement.
-pub fn is_inside_git_repo(config: &Config) -> bool {
-    let mut dir = config.cwd.to_path_buf();
+pub fn is_inside_git_repo(base_dir: &Path) -> bool {
+    let mut dir = base_dir.to_path_buf();
 
     loop {
         if dir.join(".git").exists() {

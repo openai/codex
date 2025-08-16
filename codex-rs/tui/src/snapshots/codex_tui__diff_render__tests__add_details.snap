@@ -1,0 +1,14 @@
+---
+source: tui/src/diff_render.rs
+expression: terminal.backend()
+---
+"proposed patch to 1 file (+2 -0)                                                "
+"  └ README.md (+2 -0)                                                           "
+"    1     +first line                                                           "
+"    2     +second line                                                          "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "

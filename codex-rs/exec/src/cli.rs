@@ -1,7 +1,6 @@
 use clap::Parser;
 use clap::ValueEnum;
 use codex_common::CliConfigOverrides;
-use codex_common::SandboxPermissionOption;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -15,16 +14,31 @@ pub struct Cli {
     #[arg(long, short = 'm')]
     pub model: Option<String>,
 
+    #[arg(long = "oss", default_value_t = false)]
+    pub oss: bool,
+
+    /// Select the sandbox policy to use when executing model-generated shell
+    /// commands.
+    #[arg(long = "sandbox", short = 's', value_enum)]
+    pub sandbox_mode: Option<codex_common::SandboxModeCliArg>,
+
     /// Configuration profile from config.toml to specify default options.
     #[arg(long = "profile", short = 'p')]
     pub config_profile: Option<String>,
 
-    /// Convenience alias for low-friction sandboxed automatic execution (network-disabled sandbox that can write to cwd and TMPDIR)
+    /// Convenience alias for low-friction sandboxed automatic execution (-a on-failure, --sandbox workspace-write).
     #[arg(long = "full-auto", default_value_t = false)]
     pub full_auto: bool,
 
-    #[clap(flatten)]
-    pub sandbox: SandboxPermissionOption,
+    /// Skip all confirmation prompts and execute commands without sandboxing.
+    /// EXTREMELY DANGEROUS. Intended solely for running in environments that are externally sandboxed.
+    #[arg(
+        long = "dangerously-bypass-approvals-and-sandbox",
+        alias = "yolo",
+        default_value_t = false,
+        conflicts_with = "full_auto"
+    )]
+    pub dangerously_bypass_approvals_and_sandbox: bool,
 
     /// Tell the agent to use the specified directory as its working root.
     #[clap(long = "cd", short = 'C', value_name = "DIR")]
@@ -40,6 +54,10 @@ pub struct Cli {
     /// Specifies color settings for use in the output.
     #[arg(long = "color", value_enum, default_value_t = Color::Auto)]
     pub color: Color,
+
+    /// Print events to stdout as JSONL.
+    #[arg(long = "json", default_value_t = false)]
+    pub json: bool,
 
     /// Specifies file where the last message from the agent should be written.
     #[arg(long = "output-last-message")]

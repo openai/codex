@@ -3,33 +3,50 @@ use crate::config_types::History;
 use crate::config_types::McpServerConfig;
 use crate::config_types::ReasoningEffort;
 use crate::config_types::ReasoningSummary;
+use crate::config_types::SandboxMode;
+use crate::config_types::SandboxWorkspaceWrite;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::config_types::ShellEnvironmentPolicyToml;
 use crate::config_types::Tui;
 use crate::config_types::UriBasedFileOpener;
-use crate::flags::OPENAI_DEFAULT_MODEL;
+use crate::model_family::ModelFamily;
+use crate::model_family::find_family_for_model;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::built_in_model_providers;
+use crate::openai_model_info::get_model_info;
 use crate::protocol::AskForApproval;
-use crate::protocol::SandboxPermission;
 use crate::protocol::SandboxPolicy;
 use dirs::home_dir;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
+use tempfile::NamedTempFile;
 use toml::Value as TomlValue;
+use toml_edit::DocumentMut;
+
+const OPENAI_DEFAULT_MODEL: &str = "gpt-5";
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
 /// the context window.
 pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 
+const CONFIG_TOML_FILE: &str = "config.toml";
+
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
     /// Optional override of model selection.
     pub model: String,
+
+    pub model_family: ModelFamily,
+
+    /// Size of the context window for the model, in tokens.
+    pub model_context_window: Option<u64>,
+
+    /// Maximum number of output tokens.
+    pub model_max_output_tokens: Option<u64>,
 
     /// Key into the model_providers map that specifies which provider to use.
     pub model_provider_id: String,
@@ -49,13 +66,20 @@ pub struct Config {
     /// users are only interested in the final agent responses.
     pub hide_agent_reasoning: bool,
 
+    /// When set to `true`, `AgentReasoningRawContentEvent` events will be shown in the UI/output.
+    /// Defaults to `false`.
+    pub show_raw_agent_reasoning: bool,
+
     /// Disable server-side response storage (sends the full conversation
     /// context with every request). Currently necessary for OpenAI customers
     /// who have opted into Zero Data Retention (ZDR).
     pub disable_response_storage: bool,
 
-    /// User-provided instructions from instructions.md.
-    pub instructions: Option<String>,
+    /// User-provided instructions from AGENTS.md.
+    pub user_instructions: Option<String>,
+
+    /// Base instructions override.
+    pub base_instructions: Option<String>,
 
     /// Optional external notifier command. When set, Codex will spawn this
     /// program after each completed *turn* (i.e. when the agent finishes
@@ -122,6 +146,23 @@ pub struct Config {
     /// If not "none", the value to use for `reasoning.summary` when making a
     /// request using the Responses API.
     pub model_reasoning_summary: ReasoningSummary,
+
+    /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
+    pub chatgpt_base_url: String,
+
+    /// Experimental rollout resume path (absolute path to .jsonl; undocumented).
+    pub experimental_resume: Option<PathBuf>,
+
+    /// Include an experimental plan tool that the model can use to update its current plan and status of each step.
+    pub include_plan_tool: bool,
+
+    /// Include the `apply_patch` tool for models that benefit from invoking
+    /// file edits as a structured tool call. When unset, this falls back to the
+    /// model family's default preference.
+    pub include_apply_patch_tool: bool,
+
+    /// The value for the `originator` header included with Responses API requests.
+    pub internal_originator: Option<String>,
 }
 
 impl Config {
@@ -160,10 +201,28 @@ impl Config {
     }
 }
 
+pub fn load_config_as_toml_with_cli_overrides(
+    codex_home: &Path,
+    cli_overrides: Vec<(String, TomlValue)>,
+) -> std::io::Result<ConfigToml> {
+    let mut root_value = load_config_as_toml(codex_home)?;
+
+    for (path, value) in cli_overrides.into_iter() {
+        apply_toml_override(&mut root_value, &path, value);
+    }
+
+    let cfg: ConfigToml = root_value.try_into().map_err(|e| {
+        tracing::error!("Failed to deserialize overridden config: {e}");
+        std::io::Error::new(std::io::ErrorKind::InvalidData, e)
+    })?;
+
+    Ok(cfg)
+}
+
 /// Read `CODEX_HOME/config.toml` and return it as a generic TOML value. Returns
 /// an empty TOML table when the file does not exist.
-fn load_config_as_toml(codex_home: &Path) -> std::io::Result<TomlValue> {
-    let config_path = codex_home.join("config.toml");
+pub fn load_config_as_toml(codex_home: &Path) -> std::io::Result<TomlValue> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
     match std::fs::read_to_string(&config_path) {
         Ok(contents) => match toml::from_str::<TomlValue>(&contents) {
             Ok(val) => Ok(val),
@@ -181,6 +240,35 @@ fn load_config_as_toml(codex_home: &Path) -> std::io::Result<TomlValue> {
             Err(e)
         }
     }
+}
+
+/// Patch `CODEX_HOME/config.toml` project state.
+/// Use with caution.
+pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Result<()> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    // Parse existing config if present; otherwise start a new document.
+    let mut doc = match std::fs::read_to_string(config_path.clone()) {
+        Ok(s) => s.parse::<DocumentMut>()?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => DocumentMut::new(),
+        Err(e) => return Err(e.into()),
+    };
+
+    // Mark the project as trusted. toml_edit is very good at handling
+    // missing properties
+    let project_key = project_path.to_string_lossy().to_string();
+    doc["projects"][project_key.as_str()]["trust_level"] = toml_edit::value("trusted");
+
+    // ensure codex_home exists
+    std::fs::create_dir_all(codex_home)?;
+
+    // create a tmp_file
+    let tmp_file = NamedTempFile::new_in(codex_home)?;
+    std::fs::write(tmp_file.path(), doc.to_string())?;
+
+    // atomically move the tmp file into config.toml
+    tmp_file.persist(config_path)?;
+
+    Ok(())
 }
 
 /// Apply a single dotted-path override onto a TOML value.
@@ -235,17 +323,23 @@ pub struct ConfigToml {
     /// Provider to use from the model_providers map.
     pub model_provider: Option<String>,
 
+    /// Size of the context window for the model, in tokens.
+    pub model_context_window: Option<u64>,
+
+    /// Maximum number of output tokens.
+    pub model_max_output_tokens: Option<u64>,
+
     /// Default approval policy for executing commands.
     pub approval_policy: Option<AskForApproval>,
 
     #[serde(default)]
     pub shell_environment_policy: ShellEnvironmentPolicyToml,
 
-    // The `default` attribute ensures that the field is treated as `None` when
-    // the key is omitted from the TOML. Without it, Serde treats the field as
-    // required because we supply a custom deserializer.
-    #[serde(default, deserialize_with = "deserialize_sandbox_permissions")]
-    pub sandbox_permissions: Option<Vec<SandboxPermission>>,
+    /// Sandbox mode to use.
+    pub sandbox_mode: Option<SandboxMode>,
+
+    /// Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`.
+    pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
 
     /// Disable server-side response storage (sends the full conversation
     /// context with every request). Currently necessary for OpenAI customers
@@ -292,33 +386,90 @@ pub struct ConfigToml {
     /// UI/output. Defaults to `false`.
     pub hide_agent_reasoning: Option<bool>,
 
+    /// When set to `true`, `AgentReasoningRawContentEvent` events will be shown in the UI/output.
+    /// Defaults to `false`.
+    pub show_raw_agent_reasoning: Option<bool>,
+
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
+
+    /// Override to force-enable reasoning summaries for the configured model.
+    pub model_supports_reasoning_summaries: Option<bool>,
+
+    /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
+    pub chatgpt_base_url: Option<String>,
+
+    /// Experimental rollout resume path (absolute path to .jsonl; undocumented).
+    pub experimental_resume: Option<PathBuf>,
+
+    /// Experimental path to a file whose contents replace the built-in BASE_INSTRUCTIONS.
+    pub experimental_instructions_file: Option<PathBuf>,
+
+    /// The value for the `originator` header included with Responses API requests.
+    pub internal_originator: Option<String>,
+
+    pub projects: Option<HashMap<String, ProjectConfig>>,
 }
 
-fn deserialize_sandbox_permissions<'de, D>(
-    deserializer: D,
-) -> Result<Option<Vec<SandboxPermission>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let permissions: Option<Vec<String>> = Option::deserialize(deserializer)?;
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ProjectConfig {
+    pub trust_level: Option<String>,
+}
 
-    match permissions {
-        Some(raw_permissions) => {
-            let base_path = find_codex_home().map_err(serde::de::Error::custom)?;
-
-            let converted = raw_permissions
-                .into_iter()
-                .map(|raw| {
-                    parse_sandbox_permission_with_base_path(&raw, base_path.clone())
-                        .map_err(serde::de::Error::custom)
-                })
-                .collect::<Result<Vec<_>, D::Error>>()?;
-
-            Ok(Some(converted))
+impl ConfigToml {
+    /// Derive the effective sandbox policy from the configuration.
+    fn derive_sandbox_policy(&self, sandbox_mode_override: Option<SandboxMode>) -> SandboxPolicy {
+        let resolved_sandbox_mode = sandbox_mode_override
+            .or(self.sandbox_mode)
+            .unwrap_or_default();
+        match resolved_sandbox_mode {
+            SandboxMode::ReadOnly => SandboxPolicy::new_read_only_policy(),
+            SandboxMode::WorkspaceWrite => match self.sandbox_workspace_write.as_ref() {
+                Some(SandboxWorkspaceWrite {
+                    writable_roots,
+                    network_access,
+                    exclude_tmpdir_env_var,
+                    exclude_slash_tmp,
+                }) => SandboxPolicy::WorkspaceWrite {
+                    writable_roots: writable_roots.clone(),
+                    network_access: *network_access,
+                    exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
+                    exclude_slash_tmp: *exclude_slash_tmp,
+                },
+                None => SandboxPolicy::new_workspace_write_policy(),
+            },
+            SandboxMode::DangerFullAccess => SandboxPolicy::DangerFullAccess,
         }
-        None => Ok(None),
+    }
+
+    pub fn is_cwd_trusted(&self, resolved_cwd: &Path) -> bool {
+        let projects = self.projects.clone().unwrap_or_default();
+
+        projects
+            .get(&resolved_cwd.to_string_lossy().to_string())
+            .map(|p| p.trust_level.clone().unwrap_or("".to_string()) == "trusted")
+            .unwrap_or(false)
+    }
+
+    pub fn get_config_profile(
+        &self,
+        override_profile: Option<String>,
+    ) -> Result<ConfigProfile, std::io::Error> {
+        let profile = override_profile.or_else(|| self.profile.clone());
+
+        match profile {
+            Some(key) => {
+                if let Some(profile) = self.profiles.get(key.as_str()) {
+                    return Ok(profile.clone());
+                }
+
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    format!("config profile `{key}` not found"),
+                ))
+            }
+            None => Ok(ConfigProfile::default()),
+        }
     }
 }
 
@@ -328,10 +479,15 @@ pub struct ConfigOverrides {
     pub model: Option<String>,
     pub cwd: Option<PathBuf>,
     pub approval_policy: Option<AskForApproval>,
-    pub sandbox_policy: Option<SandboxPolicy>,
+    pub sandbox_mode: Option<SandboxMode>,
     pub model_provider: Option<String>,
     pub config_profile: Option<String>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
+    pub base_instructions: Option<String>,
+    pub include_plan_tool: Option<bool>,
+    pub include_apply_patch_tool: Option<bool>,
+    pub disable_response_storage: Option<bool>,
+    pub show_raw_agent_reasoning: Option<bool>,
 }
 
 impl Config {
@@ -342,23 +498,28 @@ impl Config {
         overrides: ConfigOverrides,
         codex_home: PathBuf,
     ) -> std::io::Result<Self> {
-        let instructions = Self::load_instructions(Some(&codex_home));
+        let user_instructions = Self::load_instructions(Some(&codex_home));
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
         let ConfigOverrides {
             model,
             cwd,
             approval_policy,
-            sandbox_policy,
+            sandbox_mode,
             model_provider,
             config_profile: config_profile_key,
             codex_linux_sandbox_exe,
+            base_instructions,
+            include_plan_tool,
+            include_apply_patch_tool,
+            disable_response_storage,
+            show_raw_agent_reasoning,
         } = overrides;
 
-        let config_profile = match config_profile_key.or(cfg.profile) {
+        let config_profile = match config_profile_key.as_ref().or(cfg.profile.as_ref()) {
             Some(key) => cfg
                 .profiles
-                .get(&key)
+                .get(key)
                 .ok_or_else(|| {
                     std::io::Error::new(
                         std::io::ErrorKind::NotFound,
@@ -369,20 +530,7 @@ impl Config {
             None => ConfigProfile::default(),
         };
 
-        let sandbox_policy = match sandbox_policy {
-            Some(sandbox_policy) => sandbox_policy,
-            None => {
-                // Derive a SandboxPolicy from the permissions in the config.
-                match cfg.sandbox_permissions {
-                    // Note this means the user can explicitly set permissions
-                    // to the empty list in the config file, granting it no
-                    // permissions whatsoever.
-                    Some(permissions) => SandboxPolicy::from(permissions),
-                    // Default to read only rather than completely locked down.
-                    None => SandboxPolicy::new_read_only_policy(),
-                }
-            }
-        };
+        let sandbox_policy = cfg.derive_sandbox_policy(sandbox_mode);
 
         let mut model_providers = built_in_model_providers();
         // Merge user-defined providers into the built-in list.
@@ -427,11 +575,54 @@ impl Config {
 
         let history = cfg.history.unwrap_or_default();
 
+        let model = model
+            .or(config_profile.model)
+            .or(cfg.model)
+            .unwrap_or_else(default_model);
+        let model_family = find_family_for_model(&model).unwrap_or_else(|| {
+            let supports_reasoning_summaries =
+                cfg.model_supports_reasoning_summaries.unwrap_or(false);
+            ModelFamily {
+                slug: model.clone(),
+                family: model.clone(),
+                needs_special_apply_patch_instructions: false,
+                supports_reasoning_summaries,
+                uses_local_shell_tool: false,
+                uses_apply_patch_tool: false,
+            }
+        });
+
+        let openai_model_info = get_model_info(&model_family);
+        let model_context_window = cfg
+            .model_context_window
+            .or_else(|| openai_model_info.as_ref().map(|info| info.context_window));
+        let model_max_output_tokens = cfg.model_max_output_tokens.or_else(|| {
+            openai_model_info
+                .as_ref()
+                .map(|info| info.max_output_tokens)
+        });
+
+        let experimental_resume = cfg.experimental_resume;
+
+        // Load base instructions override from a file if specified. If the
+        // path is relative, resolve it against the effective cwd so the
+        // behaviour matches other path-like config values.
+        let experimental_instructions_path = config_profile
+            .experimental_instructions_file
+            .as_ref()
+            .or(cfg.experimental_instructions_file.as_ref());
+        let file_base_instructions =
+            Self::get_base_instructions(experimental_instructions_path, &resolved_cwd)?;
+        let base_instructions = base_instructions.or(file_base_instructions);
+
+        let include_apply_patch_tool_val =
+            include_apply_patch_tool.unwrap_or(model_family.uses_apply_patch_tool);
+
         let config = Self {
-            model: model
-                .or(config_profile.model)
-                .or(cfg.model)
-                .unwrap_or_else(default_model),
+            model,
+            model_family,
+            model_context_window,
+            model_max_output_tokens,
             model_provider_id,
             model_provider,
             cwd: resolved_cwd,
@@ -444,9 +635,11 @@ impl Config {
             disable_response_storage: config_profile
                 .disable_response_storage
                 .or(cfg.disable_response_storage)
+                .or(disable_response_storage)
                 .unwrap_or(false),
             notify: cfg.notify,
-            instructions,
+            user_instructions,
+            base_instructions,
             mcp_servers: cfg.mcp_servers,
             model_providers,
             project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(PROJECT_DOC_MAX_BYTES),
@@ -457,8 +650,28 @@ impl Config {
             codex_linux_sandbox_exe,
 
             hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(false),
-            model_reasoning_effort: cfg.model_reasoning_effort.unwrap_or_default(),
-            model_reasoning_summary: cfg.model_reasoning_summary.unwrap_or_default(),
+            show_raw_agent_reasoning: cfg
+                .show_raw_agent_reasoning
+                .or(show_raw_agent_reasoning)
+                .unwrap_or(false),
+            model_reasoning_effort: config_profile
+                .model_reasoning_effort
+                .or(cfg.model_reasoning_effort)
+                .unwrap_or_default(),
+            model_reasoning_summary: config_profile
+                .model_reasoning_summary
+                .or(cfg.model_reasoning_summary)
+                .unwrap_or_default(),
+
+            chatgpt_base_url: config_profile
+                .chatgpt_base_url
+                .or(cfg.chatgpt_base_url)
+                .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
+
+            experimental_resume,
+            include_plan_tool: include_plan_tool.unwrap_or(false),
+            include_apply_patch_tool: include_apply_patch_tool_val,
+            internal_originator: cfg.internal_originator,
         };
         Ok(config)
     }
@@ -469,7 +682,7 @@ impl Config {
             None => return None,
         };
 
-        p.push("instructions.md");
+        p.push("AGENTS.md");
         std::fs::read_to_string(&p).ok().and_then(|s| {
             let s = s.trim();
             if s.is_empty() {
@@ -478,6 +691,48 @@ impl Config {
                 Some(s.to_string())
             }
         })
+    }
+
+    fn get_base_instructions(
+        path: Option<&PathBuf>,
+        cwd: &Path,
+    ) -> std::io::Result<Option<String>> {
+        let p = match path.as_ref() {
+            None => return Ok(None),
+            Some(p) => p,
+        };
+
+        // Resolve relative paths against the provided cwd to make CLI
+        // overrides consistent regardless of where the process was launched
+        // from.
+        let full_path = if p.is_relative() {
+            cwd.join(p)
+        } else {
+            p.to_path_buf()
+        };
+
+        let contents = std::fs::read_to_string(&full_path).map_err(|e| {
+            std::io::Error::new(
+                e.kind(),
+                format!(
+                    "failed to read experimental instructions file {}: {e}",
+                    full_path.display()
+                ),
+            )
+        })?;
+
+        let s = contents.trim().to_string();
+        if s.is_empty() {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "experimental instructions file is empty: {}",
+                    full_path.display()
+                ),
+            ))
+        } else {
+            Ok(Some(s))
+        }
     }
 }
 
@@ -493,7 +748,7 @@ fn default_model() -> String {
 ///   function will Err if the path does not exist.
 /// - If `CODEX_HOME` is not set, this function does not verify that the
 ///   directory exists.
-fn find_codex_home() -> std::io::Result<PathBuf> {
+pub fn find_codex_home() -> std::io::Result<PathBuf> {
     // Honor the `CODEX_HOME` environment variable when it is set to allow users
     // (and tests) to override the default location.
     if let Ok(val) = std::env::var("CODEX_HOME") {
@@ -520,94 +775,13 @@ pub fn log_dir(cfg: &Config) -> std::io::Result<PathBuf> {
     Ok(p)
 }
 
-pub fn parse_sandbox_permission_with_base_path(
-    raw: &str,
-    base_path: PathBuf,
-) -> std::io::Result<SandboxPermission> {
-    use SandboxPermission::*;
-
-    if let Some(path) = raw.strip_prefix("disk-write-folder=") {
-        return if path.is_empty() {
-            Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "--sandbox-permission disk-write-folder=<PATH> requires a non-empty PATH",
-            ))
-        } else {
-            use path_absolutize::*;
-
-            let file = PathBuf::from(path);
-            let absolute_path = if file.is_relative() {
-                file.absolutize_from(base_path)
-            } else {
-                file.absolutize()
-            }
-            .map(|path| path.into_owned())?;
-            Ok(DiskWriteFolder {
-                folder: absolute_path,
-            })
-        };
-    }
-
-    match raw {
-        "disk-full-read-access" => Ok(DiskFullReadAccess),
-        "disk-write-platform-user-temp-folder" => Ok(DiskWritePlatformUserTempFolder),
-        "disk-write-platform-global-temp-folder" => Ok(DiskWritePlatformGlobalTempFolder),
-        "disk-write-cwd" => Ok(DiskWriteCwd),
-        "disk-full-write-access" => Ok(DiskFullWriteAccess),
-        "network-full-access" => Ok(NetworkFullAccess),
-        _ => Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            format!(
-                "`{raw}` is not a recognised permission.\nRun with `--help` to see the accepted values."
-            ),
-        )),
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
     use crate::config_types::HistoryPersistence;
 
     use super::*;
     use pretty_assertions::assert_eq;
     use tempfile::TempDir;
-
-    /// Verify that the `sandbox_permissions` field on `ConfigToml` correctly
-    /// differentiates between a value that is completely absent in the
-    /// provided TOML (i.e. `None`) and one that is explicitly specified as an
-    /// empty array (i.e. `Some(vec![])`). This ensures that downstream logic
-    /// that treats these two cases differently (default read-only policy vs a
-    /// fully locked-down sandbox) continues to function.
-    #[test]
-    fn test_sandbox_permissions_none_vs_empty_vec() {
-        // Case 1: `sandbox_permissions` key is *absent* from the TOML source.
-        let toml_source_without_key = "";
-        let cfg_without_key: ConfigToml = toml::from_str(toml_source_without_key)
-            .expect("TOML deserialization without key should succeed");
-        assert!(cfg_without_key.sandbox_permissions.is_none());
-
-        // Case 2: `sandbox_permissions` is present but set to an *empty array*.
-        let toml_source_with_empty = "sandbox_permissions = []";
-        let cfg_with_empty: ConfigToml = toml::from_str(toml_source_with_empty)
-            .expect("TOML deserialization with empty array should succeed");
-        assert_eq!(Some(vec![]), cfg_with_empty.sandbox_permissions);
-
-        // Case 3: `sandbox_permissions` contains a non-empty list of valid values.
-        let toml_source_with_values = r#"
-            sandbox_permissions = ["disk-full-read-access", "network-full-access"]
-        "#;
-        let cfg_with_values: ConfigToml = toml::from_str(toml_source_with_values)
-            .expect("TOML deserialization with valid permissions should succeed");
-
-        assert_eq!(
-            Some(vec![
-                SandboxPermission::DiskFullReadAccess,
-                SandboxPermission::NetworkFullAccess
-            ]),
-            cfg_with_values.sandbox_permissions
-        );
-    }
 
     #[test]
     fn test_toml_parsing() {
@@ -615,9 +789,8 @@ mod tests {
 [history]
 persistence = "save-all"
 "#;
-        let history_with_persistence_cfg: ConfigToml =
-            toml::from_str::<ConfigToml>(history_with_persistence)
-                .expect("TOML deserialization should succeed");
+        let history_with_persistence_cfg = toml::from_str::<ConfigToml>(history_with_persistence)
+            .expect("TOML deserialization should succeed");
         assert_eq!(
             Some(History {
                 persistence: HistoryPersistence::SaveAll,
@@ -631,9 +804,8 @@ persistence = "save-all"
 persistence = "none"
 "#;
 
-        let history_no_persistence_cfg: ConfigToml =
-            toml::from_str::<ConfigToml>(history_no_persistence)
-                .expect("TOML deserialization should succeed");
+        let history_no_persistence_cfg = toml::from_str::<ConfigToml>(history_no_persistence)
+            .expect("TOML deserialization should succeed");
         assert_eq!(
             Some(History {
                 persistence: HistoryPersistence::None,
@@ -643,20 +815,60 @@ persistence = "none"
         );
     }
 
-    /// Deserializing a TOML string containing an *invalid* permission should
-    /// fail with a helpful error rather than silently defaulting or
-    /// succeeding.
     #[test]
-    fn test_sandbox_permissions_illegal_value() {
-        let toml_bad = r#"sandbox_permissions = ["not-a-real-permission"]"#;
+    fn test_sandbox_config_parsing() {
+        let sandbox_full_access = r#"
+sandbox_mode = "danger-full-access"
 
-        let err = toml::from_str::<ConfigToml>(toml_bad)
-            .expect_err("Deserialization should fail for invalid permission");
+[sandbox_workspace_write]
+network_access = false  # This should be ignored.
+"#;
+        let sandbox_full_access_cfg = toml::from_str::<ConfigToml>(sandbox_full_access)
+            .expect("TOML deserialization should succeed");
+        let sandbox_mode_override = None;
+        assert_eq!(
+            SandboxPolicy::DangerFullAccess,
+            sandbox_full_access_cfg.derive_sandbox_policy(sandbox_mode_override)
+        );
 
-        // Make sure the error message contains the invalid value so users have
-        // useful feedback.
-        let msg = err.to_string();
-        assert!(msg.contains("not-a-real-permission"));
+        let sandbox_read_only = r#"
+sandbox_mode = "read-only"
+
+[sandbox_workspace_write]
+network_access = true  # This should be ignored.
+"#;
+
+        let sandbox_read_only_cfg = toml::from_str::<ConfigToml>(sandbox_read_only)
+            .expect("TOML deserialization should succeed");
+        let sandbox_mode_override = None;
+        assert_eq!(
+            SandboxPolicy::ReadOnly,
+            sandbox_read_only_cfg.derive_sandbox_policy(sandbox_mode_override)
+        );
+
+        let sandbox_workspace_write = r#"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+writable_roots = [
+    "/my/workspace",
+]
+exclude_tmpdir_env_var = true
+exclude_slash_tmp = true
+"#;
+
+        let sandbox_workspace_write_cfg = toml::from_str::<ConfigToml>(sandbox_workspace_write)
+            .expect("TOML deserialization should succeed");
+        let sandbox_mode_override = None;
+        assert_eq!(
+            SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![PathBuf::from("/my/workspace")],
+                network_access: false,
+                exclude_tmpdir_env_var: true,
+                exclude_slash_tmp: true,
+            },
+            sandbox_workspace_write_cfg.derive_sandbox_policy(sandbox_mode_override)
+        );
     }
 
     struct PrecedenceTestFixture {
@@ -681,8 +893,7 @@ persistence = "none"
     fn create_test_fixture() -> std::io::Result<PrecedenceTestFixture> {
         let toml = r#"
 model = "o3"
-approval_policy = "unless-allow-listed"
-sandbox_permissions = ["disk-full-read-access"]
+approval_policy = "untrusted"
 disable_response_storage = false
 
 # Can be used to determine which profile to use if not specified by
@@ -694,11 +905,16 @@ name = "OpenAI using Chat Completions"
 base_url = "https://api.openai.com/v1"
 env_key = "OPENAI_API_KEY"
 wire_api = "chat"
+request_max_retries = 4            # retry failed HTTP requests
+stream_max_retries = 10            # retry dropped SSE streams
+stream_idle_timeout_ms = 300000    # 5m idle timeout
 
 [profiles.o3]
 model = "o3"
 model_provider = "openai"
 approval_policy = "never"
+model_reasoning_effort = "high"
+model_reasoning_summary = "detailed"
 
 [profiles.gpt3]
 model = "gpt-3.5-turbo"
@@ -725,10 +941,17 @@ disable_response_storage = true
 
         let openai_chat_completions_provider = ModelProviderInfo {
             name: "OpenAI using Chat Completions".to_string(),
-            base_url: "https://api.openai.com/v1".to_string(),
+            base_url: Some("https://api.openai.com/v1".to_string()),
             env_key: Some("OPENAI_API_KEY".to_string()),
             wire_api: crate::WireApi::Chat,
             env_key_instructions: None,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: Some(4),
+            stream_max_retries: Some(10),
+            stream_idle_timeout_ms: Some(300_000),
+            requires_openai_auth: false,
         };
         let model_provider_map = {
             let mut model_provider_map = built_in_model_providers();
@@ -759,7 +982,7 @@ disable_response_storage = true
     ///
     /// 1. custom command-line argument, e.g. `--model o3`
     /// 2. as part of a profile, where the `--profile` is specified via a CLI
-    ///    (or in the config file itelf)
+    ///    (or in the config file itself)
     /// 3. as an entry in `config.toml`, e.g. `model = "o3"`
     /// 4. the default value for a required field defined in code, e.g.,
     ///    `crate::flags::OPENAI_DEFAULT_MODEL`
@@ -783,13 +1006,16 @@ disable_response_storage = true
         assert_eq!(
             Config {
                 model: "o3".to_string(),
+                model_family: find_family_for_model("o3").expect("known model slug"),
+                model_context_window: Some(200_000),
+                model_max_output_tokens: Some(100_000),
                 model_provider_id: "openai".to_string(),
                 model_provider: fixture.openai_provider.clone(),
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 disable_response_storage: false,
-                instructions: None,
+                user_instructions: None,
                 notify: None,
                 cwd: fixture.cwd(),
                 mcp_servers: HashMap::new(),
@@ -801,8 +1027,15 @@ disable_response_storage = true
                 tui: Tui::default(),
                 codex_linux_sandbox_exe: None,
                 hide_agent_reasoning: false,
-                model_reasoning_effort: ReasoningEffort::default(),
-                model_reasoning_summary: ReasoningSummary::default(),
+                show_raw_agent_reasoning: false,
+                model_reasoning_effort: ReasoningEffort::High,
+                model_reasoning_summary: ReasoningSummary::Detailed,
+                chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+                experimental_resume: None,
+                base_instructions: None,
+                include_plan_tool: false,
+                include_apply_patch_tool: false,
+                internal_originator: None,
             },
             o3_profile_config
         );
@@ -825,13 +1058,16 @@ disable_response_storage = true
         )?;
         let expected_gpt3_profile_config = Config {
             model: "gpt-3.5-turbo".to_string(),
+            model_family: find_family_for_model("gpt-3.5-turbo").expect("known model slug"),
+            model_context_window: Some(16_385),
+            model_max_output_tokens: Some(4_096),
             model_provider_id: "openai-chat-completions".to_string(),
             model_provider: fixture.openai_chat_completions_provider.clone(),
-            approval_policy: AskForApproval::UnlessAllowListed,
+            approval_policy: AskForApproval::UnlessTrusted,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             disable_response_storage: false,
-            instructions: None,
+            user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
             mcp_servers: HashMap::new(),
@@ -843,8 +1079,15 @@ disable_response_storage = true
             tui: Tui::default(),
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
+            show_raw_agent_reasoning: false,
             model_reasoning_effort: ReasoningEffort::default(),
             model_reasoning_summary: ReasoningSummary::default(),
+            chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            experimental_resume: None,
+            base_instructions: None,
+            include_plan_tool: false,
+            include_apply_patch_tool: false,
+            internal_originator: None,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -882,13 +1125,16 @@ disable_response_storage = true
         )?;
         let expected_zdr_profile_config = Config {
             model: "o3".to_string(),
+            model_family: find_family_for_model("o3").expect("known model slug"),
+            model_context_window: Some(200_000),
+            model_max_output_tokens: Some(100_000),
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
             approval_policy: AskForApproval::OnFailure,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             disable_response_storage: true,
-            instructions: None,
+            user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
             mcp_servers: HashMap::new(),
@@ -900,8 +1146,15 @@ disable_response_storage = true
             tui: Tui::default(),
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
+            show_raw_agent_reasoning: false,
             model_reasoning_effort: ReasoningEffort::default(),
             model_reasoning_summary: ReasoningSummary::default(),
+            chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            experimental_resume: None,
+            base_instructions: None,
+            include_plan_tool: false,
+            include_apply_patch_tool: false,
+            internal_originator: None,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);

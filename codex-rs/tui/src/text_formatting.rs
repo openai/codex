@@ -85,7 +85,7 @@ pub(crate) fn truncate_text(text: &str, max_graphemes: usize) -> String {
             let mut truncate_graphemes = text.grapheme_indices(true);
             if let Some((truncate_byte_index, _)) = truncate_graphemes.nth(max_graphemes - 3) {
                 let truncated = &text[..truncate_byte_index];
-                format!("{}...", truncated)
+                format!("{truncated}...")
             } else {
                 text.to_string()
             }
@@ -102,7 +102,6 @@ pub(crate) fn truncate_text(text: &str, max_graphemes: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
     use super::*;
     use pretty_assertions::assert_eq;
 
