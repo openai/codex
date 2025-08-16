@@ -205,13 +205,13 @@ pub async fn run_main(
         .with_target(false)
         .with_filter(env_filter());
 
+    let _ = tracing_subscriber::registry().with(file_layer).try_init();
+
     if cli.oss {
         codex_ollama::ensure_oss_ready(&config)
             .await
             .map_err(|e| std::io::Error::other(format!("OSS setup failed: {e}")))?;
     }
-
-    let _ = tracing_subscriber::registry().with(file_layer).try_init();
 
     #[allow(clippy::print_stderr)]
     #[cfg(not(debug_assertions))]
