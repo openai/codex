@@ -39,9 +39,14 @@ impl Default for ConversationManager {
 }
 
 impl ConversationManager {
-    pub async fn new_conversation(&self, config: Config) -> CodexResult<NewConversation> {
+    pub async fn new_conversation(
+        &self,
+        config: Config,
+        session_id: Option<Uuid>,
+    ) -> CodexResult<NewConversation> {
         let auth = CodexAuth::from_codex_home(&config.codex_home)?;
-        self.new_conversation_with_auth(config, auth).await
+        self.new_conversation_with_auth(config, auth, session_id)
+            .await
     }
 
     /// Used for integration tests: should not be used by ordinary business
@@ -50,11 +55,12 @@ impl ConversationManager {
         &self,
         config: Config,
         auth: Option<CodexAuth>,
+        session_id: Option<Uuid>,
     ) -> CodexResult<NewConversation> {
         let CodexSpawnOk {
             codex,
             session_id: conversation_id,
-        } = Codex::spawn(config, auth).await?;
+        } = Codex::spawn(config, auth, session_id).await?;
 
         // The first event must be `SessionInitialized`. Validate and forward it
         // to the caller so that they can display it in the conversation

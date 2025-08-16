@@ -44,12 +44,16 @@ pub async fn run_codex_tool_session(
     outgoing: Arc<OutgoingMessageSender>,
     conversation_manager: Arc<ConversationManager>,
     running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, Uuid>>>,
+    session_id: Option<Uuid>,
 ) {
     let NewConversation {
         conversation_id,
         conversation,
         session_configured,
-    } = match conversation_manager.new_conversation(config).await {
+    } = match conversation_manager
+        .new_conversation(config, session_id)
+        .await
+    {
         Ok(res) => res,
         Err(e) => {
             let result = CallToolResult {

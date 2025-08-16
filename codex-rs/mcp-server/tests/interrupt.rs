@@ -75,6 +75,7 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
         .send_codex_tool_call(CodexToolCallParam {
             cwd: None,
             prompt: "First Run: run `sleep 60`".to_string(),
+            session_id: None,
             model: None,
             profile: None,
             approval_policy: None,

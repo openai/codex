@@ -25,7 +25,7 @@ pub(crate) fn spawn_agent(
             conversation_id: _,
             conversation,
             session_configured,
-        } = match server.new_conversation(config).await {
+        } = match server.new_conversation(config, None).await {
             Ok(v) => v,
             Err(e) => {
                 // TODO: surface this error to the user.

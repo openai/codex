@@ -109,7 +109,11 @@ impl CodexMessageProcessor {
             }
         };
 
-        match self.conversation_manager.new_conversation(config).await {
+        match self
+            .conversation_manager
+            .new_conversation(config, None)
+            .await
+        {
             Ok(conversation_id) => {
                 let NewConversation {
                     conversation_id,
