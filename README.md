@@ -484,6 +484,18 @@ cargo clippy --tests
 cargo test
 ```
 
+To support offline installs, you can prefetch dependencies and commit the resulting cache:
+
+```bash
+# Populate the pnpm store with packages from pnpm-lock.yaml
+pnpm fetch
+
+# Commit the generated .pnpm-store directory or mirror your registry
+
+# Later, install using only cached packages
+pnpm install --offline
+```
+
 </details>
 
 ---
