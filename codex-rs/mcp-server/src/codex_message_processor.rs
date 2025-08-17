@@ -65,7 +65,7 @@ struct ActiveLogin {
 }
 
 impl ActiveLogin {
-    fn cancel(&self) {
+    fn drop(&self) {
         self.shutdown_handle.cancel();
     }
 }
@@ -160,7 +160,7 @@ impl CodexMessageProcessor {
                 {
                     let mut guard = self.active_login.lock().await;
                     if let Some(existing) = guard.take() {
-                        existing.cancel();
+                        existing.drop();
                     }
                     *guard = Some(ActiveLogin {
                         shutdown_handle: server.cancel_handle(),
@@ -226,28 +226,25 @@ impl CodexMessageProcessor {
 
     async fn cancel_login_chatgpt(&mut self, request_id: RequestId, login_id: Uuid) {
         let mut guard = self.active_login.lock().await;
-        match guard.as_ref().map(|l| l.login_id) {
-            Some(current_id) if current_id == login_id => {
-                if let Some(active) = guard.take() {
-                    active.cancel();
-                }
-                drop(guard);
-                self.outgoing
-                    .send_response(
-                        request_id,
-                        crate::wire_format::CancelLoginChatGptResponse {},
-                    )
-                    .await;
+        if guard.as_ref().map(|l| l.login_id) == Some(login_id) {
+            if let Some(active) = guard.take() {
+                active.drop();
             }
-            _ => {
-                drop(guard);
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("login id not found: {login_id}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-            }
+            drop(guard);
+            self.outgoing
+                .send_response(
+                    request_id,
+                    crate::wire_format::CancelLoginChatGptResponse {},
+                )
+                .await;
+        } else {
+            drop(guard);
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!("login id not found: {login_id}"),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
         }
     }
 
