@@ -20,7 +20,6 @@ use uuid::Uuid;
 use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::message_history::HistoryEntry;
-use crate::model_provider_info::ModelProviderInfo;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
 
@@ -39,52 +38,6 @@ pub struct Submission {
 #[allow(clippy::large_enum_variant)]
 #[non_exhaustive]
 pub enum Op {
-    /// Configure the model session.
-    ConfigureSession {
-        /// Provider identifier ("openai", "openrouter", ...).
-        provider: ModelProviderInfo,
-
-        /// If not specified, server will use its default model.
-        model: String,
-
-        model_reasoning_effort: ReasoningEffortConfig,
-        model_reasoning_summary: ReasoningSummaryConfig,
-
-        /// Model instructions that are appended to the base instructions.
-        user_instructions: Option<String>,
-
-        /// Base instructions override.
-        base_instructions: Option<String>,
-
-        /// When to escalate for approval for execution
-        approval_policy: AskForApproval,
-        /// How to sandbox commands executed in the system
-        sandbox_policy: SandboxPolicy,
-        /// Disable server-side response storage (send full context each request)
-        #[serde(default)]
-        disable_response_storage: bool,
-
-        /// Optional external notifier command tokens. Present only when the
-        /// client wants the agent to spawn a program after each completed
-        /// turn.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        #[serde(default)]
-        notify: Option<Vec<String>>,
-
-        /// Working directory that should be treated as the *root* of the
-        /// session. All relative paths supplied by the model as well as the
-        /// execution sandbox are resolved against this directory **instead**
-        /// of the process-wide current working directory. CLI front-ends are
-        /// expected to expand this to an absolute path before sending the
-        /// `ConfigureSession` operation so that the business-logic layer can
-        /// operate deterministically.
-        cwd: std::path::PathBuf,
-
-        /// Path to a rollout file to resume from.
-        #[serde(skip_serializing_if = "Option::is_none")]
-        resume_path: Option<std::path::PathBuf>,
-    },
-
     /// Abort current task.
     /// This server sends no corresponding Event
     Interrupt,
@@ -93,6 +46,33 @@ pub enum Op {
     UserInput {
         /// User input items, see `InputItem`
         items: Vec<InputItem>,
+    },
+
+    /// Similar to [`Op::UserInput`], but contains additional context required
+    /// for a turn of a [`crate::codex_conversation::CodexConversation`].
+    UserTurn {
+        /// User input items, see `InputItem`
+        items: Vec<InputItem>,
+
+        /// `cwd` to use with the [`SandboxPolicy`] and potentially tool calls
+        /// such as `local_shell`.
+        cwd: PathBuf,
+
+        /// Policy to use for command approval.
+        approval_policy: AskForApproval,
+
+        /// Policy to use for tool calls such as `local_shell`.
+        sandbox_policy: SandboxPolicy,
+
+        /// Must be a valid model slug for the [`crate::client::ModelClient`]
+        /// associated with this conversation.
+        model: String,
+
+        /// Will only be honored if the model is configured to use reasoning.
+        effort: ReasoningEffortConfig,
+
+        /// Will only be honored if the model is configured to use reasoning.
+        summary: ReasoningSummaryConfig,
     },
 
     /// Approve a command execution
@@ -205,8 +185,29 @@ pub enum SandboxPolicy {
 /// not modified by the agent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WritableRoot {
+    /// Absolute path, by construction.
     pub root: PathBuf,
+
+    /// Also absolute paths, by construction.
     pub read_only_subpaths: Vec<PathBuf>,
+}
+
+impl WritableRoot {
+    pub fn is_path_writable(&self, path: &Path) -> bool {
+        // Check if the path is under the root.
+        if !path.starts_with(&self.root) {
+            return false;
+        }
+
+        // Check if the path is under any of the read-only subpaths.
+        for subpath in &self.read_only_subpaths {
+            if path.starts_with(subpath) {
+                return false;
+            }
+        }
+
+        true
+    }
 }
 
 impl FromStr for SandboxPolicy {
@@ -723,7 +724,7 @@ pub enum ReviewDecision {
     Abort,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum FileChange {
     Add {
@@ -746,7 +747,6 @@ pub struct Chunk {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
     use super::*;
 
     /// Serialize Event to verify that its JSON representation has the expected

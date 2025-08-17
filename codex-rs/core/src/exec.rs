@@ -3,10 +3,8 @@ use std::os::unix::process::ExitStatusExt;
 
 use std::collections::HashMap;
 use std::io;
-use std::path::Path;
 use std::path::PathBuf;
 use std::process::ExitStatus;
-use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 
@@ -15,11 +13,11 @@ use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
 use tokio::io::BufReader;
 use tokio::process::Child;
-use tokio::sync::Notify;
 
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::error::SandboxErr;
+use crate::landlock::spawn_command_under_linux_sandbox;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandOutputDeltaEvent;
@@ -80,7 +78,6 @@ pub struct StdoutStream {
 pub async fn process_exec_tool_call(
     params: ExecParams,
     sandbox_type: SandboxType,
-    ctrl_c: Arc<Notify>,
     sandbox_policy: &SandboxPolicy,
     codex_linux_sandbox_exe: &Option<PathBuf>,
     stdout_stream: Option<StdoutStream>,
@@ -89,7 +86,7 @@ pub async fn process_exec_tool_call(
 
     let raw_output_result: std::result::Result<RawExecToolCallOutput, CodexErr> = match sandbox_type
     {
-        SandboxType::None => exec(params, sandbox_policy, ctrl_c, stdout_stream.clone()).await,
+        SandboxType::None => exec(params, sandbox_policy, stdout_stream.clone()).await,
         SandboxType::MacosSeatbelt => {
             let timeout = params.timeout_duration();
             let ExecParams {
@@ -103,7 +100,7 @@ pub async fn process_exec_tool_call(
                 env,
             )
             .await?;
-            consume_truncated_output(child, ctrl_c, timeout, stdout_stream.clone()).await
+            consume_truncated_output(child, timeout, stdout_stream.clone()).await
         }
         SandboxType::LinuxSeccomp => {
             let timeout = params.timeout_duration();
@@ -124,7 +121,7 @@ pub async fn process_exec_tool_call(
             )
             .await?;
 
-            consume_truncated_output(child, ctrl_c, timeout, stdout_stream).await
+            consume_truncated_output(child, timeout, stdout_stream).await
         }
     };
     let duration = start.elapsed();
@@ -164,65 +161,6 @@ pub async fn process_exec_tool_call(
             Err(err)
         }
     }
-}
-
-/// Spawn a shell tool command under the Linux Landlock+seccomp sandbox helper
-/// (codex-linux-sandbox).
-///
-/// Unlike macOS Seatbelt where we directly embed the policy text, the Linux
-/// helper accepts a list of `--sandbox-permission`/`-s` flags mirroring the
-/// public CLI. We convert the internal [`SandboxPolicy`] representation into
-/// the equivalent CLI options.
-pub async fn spawn_command_under_linux_sandbox<P>(
-    codex_linux_sandbox_exe: P,
-    command: Vec<String>,
-    sandbox_policy: &SandboxPolicy,
-    cwd: PathBuf,
-    stdio_policy: StdioPolicy,
-    env: HashMap<String, String>,
-) -> std::io::Result<Child>
-where
-    P: AsRef<Path>,
-{
-    let args = create_linux_sandbox_command_args(command, sandbox_policy, &cwd);
-    let arg0 = Some("codex-linux-sandbox");
-    spawn_child_async(
-        codex_linux_sandbox_exe.as_ref().to_path_buf(),
-        args,
-        arg0,
-        cwd,
-        sandbox_policy,
-        stdio_policy,
-        env,
-    )
-    .await
-}
-
-/// Converts the sandbox policy into the CLI invocation for `codex-linux-sandbox`.
-fn create_linux_sandbox_command_args(
-    command: Vec<String>,
-    sandbox_policy: &SandboxPolicy,
-    cwd: &Path,
-) -> Vec<String> {
-    #[expect(clippy::expect_used)]
-    let sandbox_policy_cwd = cwd.to_str().expect("cwd must be valid UTF-8").to_string();
-
-    #[expect(clippy::expect_used)]
-    let sandbox_policy_json =
-        serde_json::to_string(sandbox_policy).expect("Failed to serialize SandboxPolicy to JSON");
-
-    let mut linux_cmd: Vec<String> = vec![
-        sandbox_policy_cwd,
-        sandbox_policy_json,
-        // Separator so that command arguments starting with `-` are not parsed as
-        // options of the helper itself.
-        "--".to_string(),
-    ];
-
-    // Append the original tool command.
-    linux_cmd.extend(command);
-
-    linux_cmd
 }
 
 /// We don't have a fully deterministic way to tell if our command failed
@@ -286,7 +224,6 @@ pub struct ExecToolCallOutput {
 async fn exec(
     params: ExecParams,
     sandbox_policy: &SandboxPolicy,
-    ctrl_c: Arc<Notify>,
     stdout_stream: Option<StdoutStream>,
 ) -> Result<RawExecToolCallOutput> {
     let timeout = params.timeout_duration();
@@ -311,14 +248,13 @@ async fn exec(
         env,
     )
     .await?;
-    consume_truncated_output(child, ctrl_c, timeout, stdout_stream).await
+    consume_truncated_output(child, timeout, stdout_stream).await
 }
 
 /// Consumes the output of a child process, truncating it so it is suitable for
 /// use as the output of a `shell` tool call. Also enforces specified timeout.
 pub(crate) async fn consume_truncated_output(
     mut child: Child,
-    ctrl_c: Arc<Notify>,
     timeout: Duration,
     stdout_stream: Option<StdoutStream>,
 ) -> Result<RawExecToolCallOutput> {
@@ -352,7 +288,6 @@ pub(crate) async fn consume_truncated_output(
         true,
     ));
 
-    let interrupted = ctrl_c.notified();
     let exit_status = tokio::select! {
         result = tokio::time::timeout(timeout, child.wait()) => {
             match result {
@@ -366,7 +301,7 @@ pub(crate) async fn consume_truncated_output(
                 }
             }
         }
-        _ = interrupted => {
+        _ = tokio::signal::ctrl_c() => {
             child.start_kill()?;
             synthetic_exit_status(128 + SIGKILL_CODE)
         }

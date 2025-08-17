@@ -98,7 +98,6 @@ mod tests {
     use std::process::Command;
 
     #[tokio::test]
-    #[expect(clippy::unwrap_used)]
     async fn test_current_shell_detects_zsh() {
         let shell = Command::new("sh")
             .arg("-c")
@@ -129,7 +128,6 @@ mod tests {
         assert_eq!(actual_cmd, None);
     }
 
-    #[expect(clippy::unwrap_used)]
     #[tokio::test]
     async fn test_run_with_profile_escaping_and_execution() {
         let shell_path = "/bin/zsh";
@@ -167,9 +165,6 @@ mod tests {
         for (input, expected_cmd, expected_output) in cases {
             use std::collections::HashMap;
             use std::path::PathBuf;
-            use std::sync::Arc;
-
-            use tokio::sync::Notify;
 
             use crate::exec::ExecParams;
             use crate::exec::SandboxType;
@@ -219,7 +214,6 @@ mod tests {
                     justification: None,
                 },
                 SandboxType::None,
-                Arc::new(Notify::new()),
                 &SandboxPolicy::DangerFullAccess,
                 &None,
                 None,

@@ -55,7 +55,7 @@ pub enum ResponseItem {
     Reasoning {
         id: String,
         summary: Vec<ReasoningItemReasoningSummary>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(default, skip_serializing_if = "should_serialize_reasoning_content")]
         content: Option<Vec<ReasoningItemContent>>,
         encrypted_content: Option<String>,
     },
@@ -89,6 +89,15 @@ pub enum ResponseItem {
     },
     #[serde(other)]
     Other,
+}
+
+fn should_serialize_reasoning_content(content: &Option<Vec<ReasoningItemContent>>) -> bool {
+    match content {
+        Some(content) => !content
+            .iter()
+            .any(|c| matches!(c, ReasoningItemContent::ReasoningText { .. })),
+        None => false,
+    }
 }
 
 impl From<ResponseInputItem> for ResponseItem {
@@ -158,6 +167,7 @@ pub enum ReasoningItemReasoningSummary {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ReasoningItemContent {
     ReasoningText { text: String },
+    Text { text: String },
 }
 
 impl From<Vec<InputItem>> for ResponseInputItem {
@@ -189,6 +199,7 @@ impl From<Vec<InputItem>> for ResponseInputItem {
                             None
                         }
                     },
+                    _ => None,
                 })
                 .collect::<Vec<ContentItem>>(),
             timestamp: Some(generate_timestamp()),
@@ -283,7 +294,6 @@ pub fn generate_timestamp() -> String {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
     use super::*;
 
     #[test]
