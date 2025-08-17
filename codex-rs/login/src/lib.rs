@@ -18,6 +18,7 @@ use std::time::Duration;
 
 pub use crate::server::LoginServer;
 pub use crate::server::ServerOptions;
+pub use crate::server::ShutdownHandle;
 pub use crate::server::run_login_server;
 pub use crate::token_data::TokenData;
 use crate::token_data::parse_id_token;

@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 
 use crate::AuthDotJson;
 use crate::get_auth_file;
@@ -27,6 +29,7 @@ pub struct ServerOptions {
     pub port: u16,
     pub open_browser: bool,
     pub force_state: Option<String>,
+    pub login_timeout: Option<Duration>,
 }
 
 impl ServerOptions {
@@ -38,16 +41,17 @@ impl ServerOptions {
             port: DEFAULT_PORT,
             open_browser: true,
             force_state: None,
+            login_timeout: None,
         }
     }
 }
 
-#[derive(Debug)]
 pub struct LoginServer {
     pub auth_url: String,
     pub actual_port: u16,
     pub server_handle: thread::JoinHandle<io::Result<()>>,
     pub shutdown_flag: Arc<AtomicBool>,
+    pub server: Arc<Server>,
 }
 
 impl LoginServer {
@@ -59,8 +63,32 @@ impl LoginServer {
     }
 
     pub fn cancel(&self) {
-        self.shutdown_flag.store(true, Ordering::SeqCst);
+        shutdown(&self.shutdown_flag, &self.server);
     }
+
+    pub fn cancel_handle(&self) -> ShutdownHandle {
+        ShutdownHandle {
+            shutdown_flag: self.shutdown_flag.clone(),
+            server: self.server.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct ShutdownHandle {
+    shutdown_flag: Arc<AtomicBool>,
+    server: Arc<Server>,
+}
+
+impl ShutdownHandle {
+    pub fn cancel(&self) {
+        shutdown(&self.shutdown_flag, &self.server);
+    }
+}
+
+pub fn shutdown(shutdown_flag: &AtomicBool, server: &Server) {
+    shutdown_flag.store(true, Ordering::SeqCst);
+    server.unblock();
 }
 
 pub fn run_login_server(
@@ -80,6 +108,7 @@ pub fn run_login_server(
             ));
         }
     };
+    let server = Arc::new(server);
 
     let redirect_uri = format!("http://localhost:{actual_port}/auth/callback");
     let auth_url = build_authorize_url(&opts.issuer, &opts.client_id, &redirect_uri, &pkce, &state);
@@ -89,11 +118,35 @@ pub fn run_login_server(
     }
     let shutdown_flag = shutdown_flag.unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
     let shutdown_flag_clone = shutdown_flag.clone();
+    let timeout_flag = Arc::new(AtomicBool::new(false));
+
+    // Channel used to signal completion to timeout watcher.
+    let (done_tx, done_rx) = mpsc::channel::<()>();
+
+    if let Some(timeout) = opts.login_timeout {
+        spawn_timeout_watcher(
+            done_rx,
+            timeout,
+            shutdown_flag.clone(),
+            timeout_flag.clone(),
+            server.clone(),
+        );
+    }
+
+    let server_for_thread = server.clone();
     let server_handle = thread::spawn(move || {
         while !shutdown_flag.load(Ordering::SeqCst) {
-            let req = match server.recv() {
+            let req = match server_for_thread.recv() {
                 Ok(r) => r,
-                Err(e) => return Err(io::Error::other(e)),
+                Err(e) => {
+                    // If we've been asked to shut down, break gracefully so that
+                    // we can report timeout or cancellation status uniformly.
+                    if shutdown_flag.load(Ordering::SeqCst) {
+                        break;
+                    } else {
+                        return Err(io::Error::other(e));
+                    }
+                }
             };
 
             let url_raw = req.url().to_string();
@@ -198,6 +251,9 @@ pub fn run_login_server(
                     }
                     let _ = req.respond(resp);
                     shutdown_flag.store(true, Ordering::SeqCst);
+
+                    // Login has succeeded, so disarm the timeout watcher.
+                    let _ = done_tx.send(());
                     return Ok(());
                 }
                 _ => {
@@ -205,7 +261,15 @@ pub fn run_login_server(
                 }
             }
         }
-        Err(io::Error::other("Login flow was not completed"))
+
+        // Login has failed or timed out, so disarm the timeout watcher.
+        let _ = done_tx.send(());
+
+        if timeout_flag.load(Ordering::SeqCst) {
+            Err(io::Error::other("Login timed out"))
+        } else {
+            Err(io::Error::other("Login was not completed"))
+        }
     });
 
     Ok(LoginServer {
@@ -213,7 +277,31 @@ pub fn run_login_server(
         actual_port,
         server_handle,
         shutdown_flag: shutdown_flag_clone,
+        server,
     })
+}
+
+/// Spawns a detached thread that waits for either a completion signal on `done_rx`
+/// or the specified `timeout` to elapse. If the timeout elapses first it marks
+/// the `shutdown_flag`, records `timeout_flag`, and unblocks the HTTP server so
+/// that the main server loop can exit promptly.
+fn spawn_timeout_watcher(
+    done_rx: mpsc::Receiver<()>,
+    timeout: Duration,
+    shutdown_flag: Arc<AtomicBool>,
+    timeout_flag: Arc<AtomicBool>,
+    server: Arc<Server>,
+) {
+    thread::spawn(move || {
+        if done_rx.recv_timeout(timeout).is_err()
+            && shutdown_flag
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+        {
+            timeout_flag.store(true, Ordering::SeqCst);
+            server.unblock();
+        }
+    });
 }
 
 fn build_authorize_url(
