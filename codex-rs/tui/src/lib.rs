@@ -330,9 +330,8 @@ fn determine_repo_trust_state(
         // if the user has overridden either approval policy or sandbox mode,
         // skip the trust flow
         Ok(false)
-    } else if config_profile.approval_policy.is_some() {
+    } else if config_profile.approval_policy.is_some() || config_profile.sandbox_mode.is_some() {
         // if the user has specified settings in a config profile, skip the trust flow
-        // todo: profile sandbox mode?
         Ok(false)
     } else if config_toml.approval_policy.is_some() || config_toml.sandbox_mode.is_some() {
         // if the user has specified either approval policy or sandbox mode in config.toml

@@ -3,6 +3,8 @@ use std::path::PathBuf;
 
 use crate::config_types::ReasoningEffort;
 use crate::config_types::ReasoningSummary;
+use crate::config_types::SandboxMode;
+use crate::config_types::SandboxWorkspaceWrite;
 use crate::protocol::AskForApproval;
 
 /// Collection of common configuration options that a user can define as a unit
@@ -14,6 +16,8 @@ pub struct ConfigProfile {
     /// [`ModelProviderInfo`] to use.
     pub model_provider: Option<String>,
     pub approval_policy: Option<AskForApproval>,
+    pub sandbox_mode: Option<SandboxMode>,
+    pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
     pub disable_response_storage: Option<bool>,
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,

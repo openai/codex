@@ -418,26 +418,38 @@ pub struct ProjectConfig {
 
 impl ConfigToml {
     /// Derive the effective sandbox policy from the configuration.
-    fn derive_sandbox_policy(&self, sandbox_mode_override: Option<SandboxMode>) -> SandboxPolicy {
+    fn derive_sandbox_policy(
+        &self,
+        profile: &ConfigProfile,
+        sandbox_mode_override: Option<SandboxMode>,
+    ) -> SandboxPolicy {
         let resolved_sandbox_mode = sandbox_mode_override
+            .or(profile.sandbox_mode)
             .or(self.sandbox_mode)
             .unwrap_or_default();
+
         match resolved_sandbox_mode {
             SandboxMode::ReadOnly => SandboxPolicy::new_read_only_policy(),
-            SandboxMode::WorkspaceWrite => match self.sandbox_workspace_write.as_ref() {
-                Some(SandboxWorkspaceWrite {
-                    writable_roots,
-                    network_access,
-                    exclude_tmpdir_env_var,
-                    exclude_slash_tmp,
-                }) => SandboxPolicy::WorkspaceWrite {
-                    writable_roots: writable_roots.clone(),
-                    network_access: *network_access,
-                    exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
-                    exclude_slash_tmp: *exclude_slash_tmp,
-                },
-                None => SandboxPolicy::new_workspace_write_policy(),
-            },
+            SandboxMode::WorkspaceWrite => {
+                match profile
+                    .sandbox_workspace_write
+                    .as_ref()
+                    .or(self.sandbox_workspace_write.as_ref())
+                {
+                    Some(SandboxWorkspaceWrite {
+                        writable_roots,
+                        network_access,
+                        exclude_tmpdir_env_var,
+                        exclude_slash_tmp,
+                    }) => SandboxPolicy::WorkspaceWrite {
+                        writable_roots: writable_roots.clone(),
+                        network_access: *network_access,
+                        exclude_tmpdir_env_var: *exclude_tmpdir_env_var,
+                        exclude_slash_tmp: *exclude_slash_tmp,
+                    },
+                    None => SandboxPolicy::new_workspace_write_policy(),
+                }
+            }
             SandboxMode::DangerFullAccess => SandboxPolicy::DangerFullAccess,
         }
     }
@@ -530,7 +542,7 @@ impl Config {
             None => ConfigProfile::default(),
         };
 
-        let sandbox_policy = cfg.derive_sandbox_policy(sandbox_mode);
+        let sandbox_policy = cfg.derive_sandbox_policy(&config_profile, sandbox_mode);
 
         let mut model_providers = built_in_model_providers();
         // Merge user-defined providers into the built-in list.
@@ -826,9 +838,10 @@ network_access = false  # This should be ignored.
         let sandbox_full_access_cfg = toml::from_str::<ConfigToml>(sandbox_full_access)
             .expect("TOML deserialization should succeed");
         let sandbox_mode_override = None;
+        let profile = ConfigProfile::default();
         assert_eq!(
             SandboxPolicy::DangerFullAccess,
-            sandbox_full_access_cfg.derive_sandbox_policy(sandbox_mode_override)
+            sandbox_full_access_cfg.derive_sandbox_policy(&profile, sandbox_mode_override)
         );
 
         let sandbox_read_only = r#"
@@ -841,9 +854,10 @@ network_access = true  # This should be ignored.
         let sandbox_read_only_cfg = toml::from_str::<ConfigToml>(sandbox_read_only)
             .expect("TOML deserialization should succeed");
         let sandbox_mode_override = None;
+        let profile = ConfigProfile::default();
         assert_eq!(
             SandboxPolicy::ReadOnly,
-            sandbox_read_only_cfg.derive_sandbox_policy(sandbox_mode_override)
+            sandbox_read_only_cfg.derive_sandbox_policy(&profile, sandbox_mode_override)
         );
 
         let sandbox_workspace_write = r#"
@@ -860,6 +874,7 @@ exclude_slash_tmp = true
         let sandbox_workspace_write_cfg = toml::from_str::<ConfigToml>(sandbox_workspace_write)
             .expect("TOML deserialization should succeed");
         let sandbox_mode_override = None;
+        let profile = ConfigProfile::default();
         assert_eq!(
             SandboxPolicy::WorkspaceWrite {
                 writable_roots: vec![PathBuf::from("/my/workspace")],
@@ -867,7 +882,87 @@ exclude_slash_tmp = true
                 exclude_tmpdir_env_var: true,
                 exclude_slash_tmp: true,
             },
-            sandbox_workspace_write_cfg.derive_sandbox_policy(sandbox_mode_override)
+            sandbox_workspace_write_cfg.derive_sandbox_policy(&profile, sandbox_mode_override)
+        );
+    }
+
+    #[test]
+    fn test_profile_sandbox_precedence_over_top_level() {
+        let cfg_toml = r#"
+sandbox_mode = "read-only"
+
+[profiles.p]
+sandbox_mode = "danger-full-access"
+"#;
+        let cfg: ConfigToml =
+            toml::from_str::<ConfigToml>(cfg_toml).expect("TOML deserialization should succeed");
+        let profile = cfg
+            .get_config_profile(Some("p".to_string()))
+            .expect("Profile p should exist");
+        assert_eq!(
+            SandboxPolicy::DangerFullAccess,
+            cfg.derive_sandbox_policy(&profile, None)
+        );
+    }
+
+    #[test]
+    fn test_cli_override_precedence_over_profile_and_top() {
+        let cfg_toml = r#"
+sandbox_mode = "danger-full-access"
+
+[profiles.p]
+sandbox_mode = "workspace-write"
+
+[profiles.p.sandbox_workspace_write]
+writable_roots = [ "/w" ]
+exclude_tmpdir_env_var = true
+exclude_slash_tmp = true
+network_access = false
+"#;
+        let cfg: ConfigToml =
+            toml::from_str::<ConfigToml>(cfg_toml).expect("TOML deserialization should succeed");
+        let profile = cfg
+            .get_config_profile(Some("p".to_string()))
+            .expect("Profile p should exist");
+        assert_eq!(
+            SandboxPolicy::new_read_only_policy(),
+            cfg.derive_sandbox_policy(&profile, Some(SandboxMode::ReadOnly))
+        );
+    }
+
+    #[test]
+    fn test_profile_workspace_write_settings_precedence() {
+        let cfg_toml = r#"
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+writable_roots = [ "/top" ]
+exclude_tmpdir_env_var = false
+exclude_slash_tmp = false
+network_access = true
+
+[profiles.p]
+sandbox_mode = "workspace-write"
+
+[profiles.p.sandbox_workspace_write]
+writable_roots = [ "/p" ]
+exclude_tmpdir_env_var = true
+exclude_slash_tmp = true
+network_access = false
+"#;
+        let cfg: ConfigToml =
+            toml::from_str::<ConfigToml>(cfg_toml).expect("TOML deserialization should succeed");
+        let profile = cfg
+            .get_config_profile(Some("p".to_string()))
+            .expect("Profile p should exist");
+        assert_eq!(
+            SandboxPolicy::WorkspaceWrite {
+                writable_roots: vec![PathBuf::from("/p")],
+                network_access: false,
+                exclude_tmpdir_env_var: true,
+                exclude_slash_tmp: true,
+            },
+            cfg.derive_sandbox_policy(&profile, None),
         );
     }
 
