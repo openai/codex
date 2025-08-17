@@ -60,6 +60,15 @@ pub enum ClientRequest {
         request_id: RequestId,
         params: RemoveConversationListenerParams,
     },
+    LoginChatGpt {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+    },
+    CancelLoginChatGpt {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: CancelLoginChatGptParams,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
@@ -121,6 +130,36 @@ pub struct AddConversationSubscriptionResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoveConversationSubscriptionResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginChatGptResponse {
+    pub login_id: Uuid,
+    /// URL the client should open in a browser to initiate the OAuth flow.
+    pub auth_url: String,
+}
+
+// Event name for notifying client of login completion or failure.
+pub const LOGIN_CHATGPT_COMPLETE_EVENT: &str = "codex/event/login_chatgpt_complete";
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginChatGptCompleteNotification {
+    pub login_id: Uuid,
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelLoginChatGptParams {
+    pub login_id: Uuid,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelLoginChatGptResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
