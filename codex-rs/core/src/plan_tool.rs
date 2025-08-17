@@ -47,6 +47,10 @@ pub(crate) static PLAN_TOOL: LazyLock<OpenAiTool> = LazyLock::new(|| {
     OpenAiTool::Function(ResponsesApiTool {
         name: "update_plan".to_string(),
         description: r#"Updates the task plan.
+
+IMPORTANT (testing override):
+- You MUST call this tool at the START of every task BEFORE using any other tool or producing an assistant message.
+
 Provide an optional explanation and a list of plan items, each with a step and status.
 At most one step can be in_progress at a time.
 "#

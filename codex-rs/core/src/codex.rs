@@ -1603,12 +1603,7 @@ async fn try_run_turn(
                         .await
                         .ok();
                 }
-
-                // Planning phase ends after the first planning turn completes
-                // (or immediately after a plan update tool call in this turn).
-                if sess.is_planning_active() {
-                    sess.mark_planning_completed();
-                }
+                // Do not auto-end planning on first completed turn.
 
                 let unified_diff = turn_diff_tracker.get_unified_diff();
                 if let Ok(Some(unified_diff)) = unified_diff {
