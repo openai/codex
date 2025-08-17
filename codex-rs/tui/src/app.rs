@@ -188,7 +188,7 @@ impl App<'_> {
                         }
                     }
 
-                    #[allow(clippy::expect_used)]
+                    #[expect(clippy::expect_used)]
                     let deadline = next_deadline.expect("deadline set");
                     let now = Instant::now();
                     let timeout = if deadline > now {
@@ -345,6 +345,11 @@ impl App<'_> {
                     AppState::Chat { widget } => widget.submit_op(op),
                     AppState::Onboarding { .. } => {}
                 },
+                AppEvent::DiffResult(text) => {
+                    if let AppState::Chat { widget } = &mut self.app_state {
+                        widget.add_diff_output(text);
+                    }
+                }
                 AppEvent::DispatchCommand(command) => match command {
                     SlashCommand::New => {
                         // User accepted – switch to chat view.
@@ -382,25 +387,24 @@ impl App<'_> {
                         break;
                     }
                     SlashCommand::Diff => {
-                        let (is_git_repo, diff_text) = match get_git_diff() {
-                            Ok(v) => v,
-                            Err(e) => {
-                                let msg = format!("Failed to compute diff: {e}");
-                                if let AppState::Chat { widget } = &mut self.app_state {
-                                    widget.add_diff_output(msg);
-                                }
-                                continue;
-                            }
-                        };
-
                         if let AppState::Chat { widget } = &mut self.app_state {
-                            let text = if is_git_repo {
-                                diff_text
-                            } else {
-                                "`/diff` — _not inside a git repository_".to_string()
-                            };
-                            widget.add_diff_output(text);
+                            widget.add_diff_in_progress();
                         }
+
+                        let tx = self.app_event_tx.clone();
+                        tokio::spawn(async move {
+                            let text = match get_git_diff().await {
+                                Ok((is_git_repo, diff_text)) => {
+                                    if is_git_repo {
+                                        diff_text
+                                    } else {
+                                        "`/diff` — _not inside a git repository_".to_string()
+                                    }
+                                }
+                                Err(e) => format!("Failed to compute diff: {e}"),
+                            };
+                            tx.send(AppEvent::DiffResult(text));
+                        });
                     }
                     SlashCommand::Mention => {
                         if let AppState::Chat { widget } = &mut self.app_state {
@@ -410,11 +414,6 @@ impl App<'_> {
                     SlashCommand::Status => {
                         if let AppState::Chat { widget } = &mut self.app_state {
                             widget.add_status_output();
-                        }
-                    }
-                    SlashCommand::Prompts => {
-                        if let AppState::Chat { widget } = &mut self.app_state {
-                            widget.add_prompts_output();
                         }
                     }
                     #[cfg(debug_assertions)]
@@ -522,6 +521,10 @@ impl App<'_> {
     }
 
     fn draw_next_frame(&mut self, terminal: &mut tui::Tui) -> Result<()> {
+        if matches!(self.app_state, AppState::Onboarding { .. }) {
+            terminal.clear()?;
+        }
+
         let screen_size = terminal.size()?;
         let last_known_screen_size = terminal.last_known_screen_size;
         if screen_size != last_known_screen_size {

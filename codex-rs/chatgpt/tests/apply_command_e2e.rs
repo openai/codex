@@ -1,5 +1,3 @@
-#![expect(clippy::expect_used)]
-
 use codex_chatgpt::apply_command::apply_diff_from_task;
 use codex_chatgpt::get_task::GetTaskResponse;
 use std::path::Path;

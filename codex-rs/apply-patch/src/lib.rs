@@ -166,7 +166,7 @@ impl ApplyPatchAction {
             panic!("path must be absolute");
         }
 
-        #[allow(clippy::expect_used)]
+        #[expect(clippy::expect_used)]
         let filename = path
             .file_name()
             .expect("path should not be empty")
@@ -179,7 +179,7 @@ impl ApplyPatchAction {
 *** End Patch"#,
         );
         let changes = HashMap::from([(path.to_path_buf(), ApplyPatchFileChange::Add { content })]);
-        #[allow(clippy::expect_used)]
+        #[expect(clippy::expect_used)]
         Self {
             changes,
             cwd: path
@@ -682,8 +682,6 @@ pub fn print_summary(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
-
     use super::*;
     use pretty_assertions::assert_eq;
     use std::fs;

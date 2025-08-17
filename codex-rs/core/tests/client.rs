@@ -1,5 +1,3 @@
-#![allow(clippy::expect_used, clippy::unwrap_used)]
-
 use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
 use codex_core::NewConversation;
@@ -27,10 +25,12 @@ fn sse_completed(id: &str) -> String {
     load_sse_fixture_with_id("tests/fixtures/completed_template.json", id)
 }
 
+#[expect(clippy::unwrap_used)]
 fn assert_message_role(request_body: &serde_json::Value, role: &str) {
     assert_eq!(request_body["role"].as_str().unwrap(), role);
 }
 
+#[expect(clippy::expect_used)]
 fn assert_message_starts_with(request_body: &serde_json::Value, text: &str) {
     let content = request_body["content"][0]["text"]
         .as_str()
@@ -42,6 +42,7 @@ fn assert_message_starts_with(request_body: &serde_json::Value, text: &str) {
     );
 }
 
+#[expect(clippy::expect_used)]
 fn assert_message_ends_with(request_body: &serde_json::Value, text: &str) {
     let content = request_body["content"][0]["text"]
         .as_str()
@@ -55,8 +56,6 @@ fn assert_message_ends_with(request_body: &serde_json::Value, text: &str) {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn includes_session_id_and_model_headers_in_request() {
-    #![allow(clippy::unwrap_used)]
-
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
             "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
@@ -129,8 +128,6 @@ async fn includes_session_id_and_model_headers_in_request() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn includes_base_instructions_override_in_request() {
-    #![allow(clippy::unwrap_used)]
-
     // Mock server
     let server = MockServer::start().await;
 
@@ -187,8 +184,6 @@ async fn includes_base_instructions_override_in_request() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn originator_config_override_is_used() {
-    #![allow(clippy::unwrap_used)]
-
     // Mock server
     let server = MockServer::start().await;
 
@@ -238,8 +233,6 @@ async fn originator_config_override_is_used() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chatgpt_auth_sends_correct_request() {
-    #![allow(clippy::unwrap_used)]
-
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
             "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
@@ -320,8 +313,6 @@ async fn chatgpt_auth_sends_correct_request() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn includes_user_instructions_message_in_request() {
-    #![allow(clippy::unwrap_used)]
-
     let server = MockServer::start().await;
 
     let first = ResponseTemplate::new(200)
@@ -382,8 +373,6 @@ async fn includes_user_instructions_message_in_request() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn azure_overrides_assign_properties_used_for_responses_url() {
-    #![allow(clippy::unwrap_used)]
-
     let existing_env_var_with_random_value = if cfg!(windows) { "USERNAME" } else { "USER" };
 
     // Mock server
@@ -460,8 +449,6 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn env_var_overrides_loaded_auth() {
-    #![allow(clippy::unwrap_used)]
-
     let existing_env_var_with_random_value = if cfg!(windows) { "USERNAME" } else { "USER" };
 
     // Mock server

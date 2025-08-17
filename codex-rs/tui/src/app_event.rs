@@ -51,6 +51,9 @@ pub(crate) enum AppEvent {
         matches: Vec<FileMatch>,
     },
 
+    /// Result of computing a `/diff` command.
+    DiffResult(String),
+
     InsertHistory(Vec<Line<'static>>),
 
     StartCommitAnimation,

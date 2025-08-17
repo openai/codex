@@ -53,7 +53,7 @@ impl OllamaClient {
 
     /// Build a client from a provider definition and verify the server is reachable.
     async fn try_from_provider(provider: &ModelProviderInfo) -> io::Result<Self> {
-        #![allow(clippy::expect_used)]
+        #![expect(clippy::expect_used)]
         let base_url = provider
             .base_url
             .as_ref()
@@ -235,7 +235,6 @@ impl OllamaClient {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
     use super::*;
 
     // Happy-path tests using a mock HTTP server; skip if sandbox network is disabled.

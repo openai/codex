@@ -19,6 +19,7 @@ chrono = { version = "0.4", features = ["serde"] }
 codex-apply-patch = { path = "../apply-patch" }
 codex-login = { path = "../login" }
 codex-mcp-client = { path = "../mcp-client" }
+codex-protocol = { path = "../protocol" }
 dirs = "6"
 env-flags = "0.1.1"
 eventsource-stream = "0.2.3"

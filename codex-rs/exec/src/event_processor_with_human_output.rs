@@ -191,7 +191,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     self.answer_started = true;
                 }
                 print!("{delta}");
-                #[allow(clippy::expect_used)]
+                #[expect(clippy::expect_used)]
                 std::io::stdout().flush().expect("could not flush stdout");
             }
             EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta }) => {
@@ -207,7 +207,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     self.reasoning_started = true;
                 }
                 print!("{delta}");
-                #[allow(clippy::expect_used)]
+                #[expect(clippy::expect_used)]
                 std::io::stdout().flush().expect("could not flush stdout");
             }
             EventMsg::AgentReasoningSectionBreak(_) => {
@@ -215,7 +215,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     return CodexStatus::Running;
                 }
                 println!();
-                #[allow(clippy::expect_used)]
+                #[expect(clippy::expect_used)]
                 std::io::stdout().flush().expect("could not flush stdout");
             }
             EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text }) => {
@@ -224,7 +224,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 }
                 if !self.raw_reasoning_started {
                     print!("{text}");
-                    #[allow(clippy::expect_used)]
+                    #[expect(clippy::expect_used)]
                     std::io::stdout().flush().expect("could not flush stdout");
                 } else {
                     println!();
@@ -241,7 +241,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     self.raw_reasoning_started = true;
                 }
                 print!("{delta}");
-                #[allow(clippy::expect_used)]
+                #[expect(clippy::expect_used)]
                 std::io::stdout().flush().expect("could not flush stdout");
             }
             EventMsg::AgentMessage(AgentMessageEvent { message }) => {

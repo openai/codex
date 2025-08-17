@@ -109,6 +109,34 @@ pub(crate) struct UserApprovalWidget<'a> {
     done: bool,
 }
 
+fn to_command_display<'a>(
+    first_line: Vec<Span<'a>>,
+    cmd: String,
+    last_line: Vec<Span<'a>>,
+) -> Vec<Line<'a>> {
+    let command_lines: Vec<Span> = cmd
+        .lines()
+        .map(|line| Span::from(line.to_string()).style(Style::new().add_modifier(Modifier::DIM)))
+        .collect();
+
+    let mut lines: Vec<Line<'a>> = vec![];
+
+    let mut first_line = first_line.clone();
+    if command_lines.len() == 1 {
+        first_line.push(command_lines[0].clone());
+        first_line.extend(last_line);
+    } else {
+        for line in command_lines {
+            lines.push(Line::from(vec![Span::from("    "), line]));
+        }
+        let last_line = last_line.clone();
+        lines.push(Line::from(last_line));
+    }
+    lines.insert(0, Line::from(first_line));
+
+    lines
+}
+
 impl UserApprovalWidget<'_> {
     pub(crate) fn new(approval_request: ApprovalRequest, app_event_tx: AppEventSender) -> Self {
         let confirmation_prompt = match &approval_request {
@@ -116,17 +144,13 @@ impl UserApprovalWidget<'_> {
                 command, reason, ..
             } => {
                 let cmd = strip_bash_lc_and_escape(command);
-                // Present a single-line summary without cwd: "codex wants to run: <cmd>"
-                let mut cmd_span: Span = cmd.clone().into();
-                cmd_span.style = cmd_span.style.add_modifier(Modifier::DIM);
-                let mut contents: Vec<Line> = vec![
-                    Line::from(vec![
-                        "? ".fg(Color::Blue),
-                        "Codex wants to run ".bold(),
-                        cmd_span,
-                    ]),
-                    Line::from(""),
-                ];
+                let mut contents: Vec<Line> = to_command_display(
+                    vec!["? ".fg(Color::Blue), "Codex wants to run ".bold()],
+                    cmd,
+                    vec![],
+                );
+
+                contents.push(Line::from(""));
                 if let Some(reason) = reason {
                     contents.push(Line::from(reason.clone().italic()));
                     contents.push(Line::from(""));
@@ -244,44 +268,52 @@ impl UserApprovalWidget<'_> {
                 // Result line based on decision.
                 match decision {
                     ReviewDecision::Approved => {
-                        lines.push(Line::from(vec![
-                            "✔ ".fg(Color::Green),
-                            "You ".into(),
-                            "approved".bold(),
-                            " codex to run ".into(),
-                            cmd_span,
-                            " ".into(),
-                            "this time".bold(),
-                        ]));
+                        lines.extend(to_command_display(
+                            vec![
+                                "✔ ".fg(Color::Green),
+                                "You ".into(),
+                                "approved".bold(),
+                                " codex to run ".into(),
+                            ],
+                            cmd,
+                            vec![" this time".bold()],
+                        ));
                     }
                     ReviewDecision::ApprovedForSession => {
-                        lines.push(Line::from(vec![
-                            "✔ ".fg(Color::Green),
-                            "You ".into(),
-                            "approved".bold(),
-                            " codex to run ".into(),
-                            cmd_span,
-                            " ".into(),
-                            "every time this session".bold(),
-                        ]));
+                        lines.extend(to_command_display(
+                            vec![
+                                "✔ ".fg(Color::Green),
+                                "You ".into(),
+                                "approved".bold(),
+                                "codex to run ".into(),
+                            ],
+                            cmd,
+                            vec![" every time this session".bold()],
+                        ));
                     }
                     ReviewDecision::Denied => {
-                        lines.push(Line::from(vec![
-                            "✗ ".fg(Color::Red),
-                            "You ".into(),
-                            "did not approve".bold(),
-                            " codex to run ".into(),
-                            cmd_span,
-                        ]));
+                        lines.extend(to_command_display(
+                            vec![
+                                "✗ ".fg(Color::Red),
+                                "You ".into(),
+                                "did not approve".bold(),
+                                " codex to run ".into(),
+                            ],
+                            cmd,
+                            vec![],
+                        ));
                     }
                     ReviewDecision::Abort => {
-                        lines.push(Line::from(vec![
-                            "✗ ".fg(Color::Red),
-                            "You ".into(),
-                            "canceled".bold(),
-                            " the request to run ".into(),
-                            cmd_span,
-                        ]));
+                        lines.extend(to_command_display(
+                            vec![
+                                "✗ ".fg(Color::Red),
+                                "You ".into(),
+                                "canceled".bold(),
+                                " the request to run ".into(),
+                            ],
+                            cmd,
+                            vec![],
+                        ));
                     }
                 }
             }

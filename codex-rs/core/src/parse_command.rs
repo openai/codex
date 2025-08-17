@@ -41,6 +41,24 @@ pub enum ParsedCommand {
     },
 }
 
+// Convert core's parsed command enum into the protocol's simplified type so
+// events can carry the canonical representation across process boundaries.
+impl From<ParsedCommand> for codex_protocol::parse_command::ParsedCommand {
+    fn from(v: ParsedCommand) -> Self {
+        use codex_protocol::parse_command::ParsedCommand as P;
+        match v {
+            ParsedCommand::Read { cmd, name } => P::Read { cmd, name },
+            ParsedCommand::ListFiles { cmd, path } => P::ListFiles { cmd, path },
+            ParsedCommand::Search { cmd, query, path } => P::Search { cmd, query, path },
+            ParsedCommand::Format { cmd, tool, targets } => P::Format { cmd, tool, targets },
+            ParsedCommand::Test { cmd } => P::Test { cmd },
+            ParsedCommand::Lint { cmd, tool, targets } => P::Lint { cmd, tool, targets },
+            ParsedCommand::Noop { cmd } => P::Noop { cmd },
+            ParsedCommand::Unknown { cmd } => P::Unknown { cmd },
+        }
+    }
+}
+
 fn shlex_join(tokens: &[String]) -> String {
     shlex_try_join(tokens.iter().map(|s| s.as_str()))
         .unwrap_or_else(|_| "<command included NUL byte>".to_string())

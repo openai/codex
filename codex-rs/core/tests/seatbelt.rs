@@ -1,5 +1,4 @@
 #![cfg(target_os = "macos")]
-#![expect(clippy::expect_used)]
 
 //! Tests for the macOS sandboxing that are specific to Seatbelt.
 //! Tests that apply to both Mac and Linux sandboxing should go in sandbox.rs.
@@ -160,6 +159,7 @@ async fn read_only_forbids_all_writes() {
         .await;
 }
 
+#[expect(clippy::expect_used)]
 fn create_test_scenario(tmp: &TempDir) -> TestScenario {
     let repo_parent = tmp.path().to_path_buf();
     let repo_root = repo_parent.join("repo");
@@ -177,6 +177,7 @@ fn create_test_scenario(tmp: &TempDir) -> TestScenario {
     }
 }
 
+#[expect(clippy::expect_used)]
 /// Note that `path` must be absolute.
 async fn touch(path: &Path, policy: &SandboxPolicy) -> bool {
     assert!(path.is_absolute(), "Path must be absolute: {path:?}");

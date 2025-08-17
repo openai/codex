@@ -9,7 +9,6 @@ use codex_ansi_escape::ansi_escape_line;
 use codex_common::create_config_summary_entries;
 use codex_common::elapsed::format_duration;
 use codex_core::config::Config;
-use codex_core::parse_command::ParsedCommand;
 use codex_core::plan_tool::PlanItemArg;
 use codex_core::plan_tool::StepStatus;
 use codex_core::plan_tool::UpdatePlanArgs;
@@ -20,6 +19,7 @@ use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TokenUsage;
 use codex_login::get_auth_file;
 use codex_login::try_read_auth_json;
+use codex_protocol::parse_command::ParsedCommand;
 use image::DynamicImage;
 use image::ImageReader;
 use mcp_types::EmbeddedResourceResource;
@@ -31,11 +31,14 @@ use ratatui::style::Style;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
+use shlex::try_join as shlex_try_join;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::time::Duration;
+use std::time::Instant;
 use tracing::error;
+use uuid::Uuid;
 
 #[derive(Clone)]
 pub(crate) struct CommandOutput {
@@ -78,10 +81,16 @@ pub(crate) struct ExecCell {
     pub(crate) command: Vec<String>,
     pub(crate) parsed: Vec<ParsedCommand>,
     pub(crate) output: Option<CommandOutput>,
+    start_time: Option<Instant>,
 }
 impl HistoryCell for ExecCell {
     fn display_lines(&self) -> Vec<Line<'static>> {
-        exec_command_lines(&self.command, &self.parsed, self.output.as_ref())
+        exec_command_lines(
+            &self.command,
+            &self.parsed,
+            self.output.as_ref(),
+            self.start_time,
+        )
     }
 }
 
@@ -128,14 +137,6 @@ fn pretty_provider_name(id: &str) -> String {
     }
 }
 
-pub(crate) fn new_background_event(message: String) -> PlainHistoryCell {
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(Line::from("event".dim()));
-    lines.extend(message.lines().map(|line| ansi_escape_line(line).dim()));
-    lines.push(Line::from(""));
-    PlainHistoryCell { lines }
-}
-
 pub(crate) fn new_session_info(
     config: &Config,
     event: SessionConfiguredEvent,
@@ -169,7 +170,6 @@ pub(crate) fn new_session_info(
             Line::from(format!(" /init - {}", SlashCommand::Init.description()).dim()),
             Line::from(format!(" /status - {}", SlashCommand::Status.description()).dim()),
             Line::from(format!(" /diff - {}", SlashCommand::Diff.description()).dim()),
-            Line::from(format!(" /prompts - {}", SlashCommand::Prompts.description()).dim()),
             Line::from("".dim()),
         ];
         PlainHistoryCell { lines }
@@ -199,7 +199,12 @@ pub(crate) fn new_active_exec_command(
     command: Vec<String>,
     parsed: Vec<ParsedCommand>,
 ) -> ExecCell {
-    new_exec_cell(command, parsed, None)
+    ExecCell {
+        command,
+        parsed,
+        output: None,
+        start_time: Some(Instant::now()),
+    }
 }
 
 pub(crate) fn new_completed_exec_command(
@@ -207,41 +212,72 @@ pub(crate) fn new_completed_exec_command(
     parsed: Vec<ParsedCommand>,
     output: CommandOutput,
 ) -> ExecCell {
-    new_exec_cell(command, parsed, Some(output))
-}
-
-fn new_exec_cell(
-    command: Vec<String>,
-    parsed: Vec<ParsedCommand>,
-    output: Option<CommandOutput>,
-) -> ExecCell {
     ExecCell {
         command,
         parsed,
-        output,
+        output: Some(output),
+        start_time: None,
     }
+}
+
+fn exec_duration(start: Instant) -> String {
+    format!("{}s", start.elapsed().as_secs())
 }
 
 fn exec_command_lines(
     command: &[String],
     parsed: &[ParsedCommand],
     output: Option<&CommandOutput>,
+    start_time: Option<Instant>,
 ) -> Vec<Line<'static>> {
     match parsed.is_empty() {
-        true => new_exec_command_generic(command, output),
-        false => new_parsed_command(parsed, output),
+        true => new_exec_command_generic(command, output, start_time),
+        false => new_parsed_command(command, parsed, output, start_time),
     }
 }
-
 fn new_parsed_command(
+    command: &[String],
     parsed_commands: &[ParsedCommand],
     output: Option<&CommandOutput>,
+    start_time: Option<Instant>,
 ) -> Vec<Line<'static>> {
-    let mut lines: Vec<Line> = vec![match output {
-        None => Line::from("⚙︎ Working".magenta().bold()),
-        Some(o) if o.exit_code == 0 => Line::from("✓ Completed".green().bold()),
-        Some(o) => Line::from(format!("✗ Failed (exit {})", o.exit_code).red().bold()),
-    }];
+    let mut lines: Vec<Line> = Vec::new();
+    match output {
+        None => {
+            let mut spans = vec!["⚙︎ Working".magenta().bold()];
+            if let Some(st) = start_time {
+                let dur = exec_duration(st);
+                spans.push(format!(" • {dur}").dim());
+            }
+            lines.push(Line::from(spans));
+        }
+        Some(o) if o.exit_code == 0 => {
+            lines.push(Line::from("✓ Completed".green().bold()));
+        }
+        Some(o) => {
+            lines.push(Line::from(
+                format!("✗ Failed (exit {})", o.exit_code).red().bold(),
+            ));
+        }
+    };
+
+    // Optionally include the complete, unaltered command from the model.
+    if std::env::var("SHOW_FULL_COMMANDS")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
+    {
+        let full_cmd = shlex_try_join(command.iter().map(|s| s.as_str()))
+            .unwrap_or_else(|_| command.join(" "));
+        lines.push(Line::from(vec![
+            Span::styled("  └ ", Style::default().add_modifier(Modifier::DIM)),
+            Span::styled(
+                full_cmd,
+                Style::default()
+                    .add_modifier(Modifier::DIM)
+                    .add_modifier(Modifier::ITALIC),
+            ),
+        ]));
+    }
 
     for (i, parsed) in parsed_commands.iter().enumerate() {
         let text = match parsed {
@@ -282,17 +318,27 @@ fn new_parsed_command(
 fn new_exec_command_generic(
     command: &[String],
     output: Option<&CommandOutput>,
+    start_time: Option<Instant>,
 ) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let command_escaped = strip_bash_lc_and_escape(command);
     let mut cmd_lines = command_escaped.lines();
     if let Some(first) = cmd_lines.next() {
-        lines.push(Line::from(vec![
-            "⚡ Running ".to_string().magenta(),
-            first.to_string().into(),
-        ]));
+        let mut spans: Vec<Span> = vec!["⚡ Running".magenta()];
+        if let Some(st) = start_time {
+            let dur = exec_duration(st);
+            spans.push(format!(" • {dur}").dim());
+        }
+        spans.push(" ".into());
+        spans.push(first.to_string().into());
+        lines.push(Line::from(spans));
     } else {
-        lines.push(Line::from("⚡ Running".to_string().magenta()));
+        let mut spans: Vec<Span> = vec!["⚡ Running".magenta()];
+        if let Some(st) = start_time {
+            let dur = exec_duration(st);
+            spans.push(format!(" • {dur}").dim());
+        }
+        lines.push(Line::from(spans));
     }
     for cont in cmd_lines {
         lines.push(Line::from(cont.to_string()));
@@ -449,7 +495,11 @@ pub(crate) fn new_diff_output(message: String) -> PlainHistoryCell {
     PlainHistoryCell { lines }
 }
 
-pub(crate) fn new_status_output(config: &Config, usage: &TokenUsage) -> PlainHistoryCell {
+pub(crate) fn new_status_output(
+    config: &Config,
+    usage: &TokenUsage,
+    session_id: &Option<Uuid>,
+) -> PlainHistoryCell {
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push(Line::from("/status".magenta()));
 
@@ -486,6 +536,13 @@ pub(crate) fn new_status_output(config: &Config, usage: &TokenUsage) -> PlainHis
         "  • Sandbox: ".into(),
         sandbox_name.into(),
     ]));
+
+    if let Some(session_id) = session_id {
+        lines.push(Line::from(vec![
+            "  • Session ID: ".into(),
+            session_id.to_string().into(),
+        ]));
+    }
 
     lines.push(Line::from(""));
 
@@ -574,21 +631,6 @@ pub(crate) fn new_status_output(config: &Config, usage: &TokenUsage) -> PlainHis
     ]));
 
     lines.push(Line::from(""));
-    PlainHistoryCell { lines }
-}
-
-pub(crate) fn new_prompts_output() -> PlainHistoryCell {
-    let lines: Vec<Line<'static>> = vec![
-        Line::from("/prompts".magenta()),
-        Line::from(""),
-        Line::from(" 1. Explain this codebase"),
-        Line::from(" 2. Summarize recent commits"),
-        Line::from(" 3. Implement {feature}"),
-        Line::from(" 4. Find and fix a bug in @filename"),
-        Line::from(" 5. Write tests for @filename"),
-        Line::from(" 6. Improve documentation in @filename"),
-        Line::from(""),
-    ];
     PlainHistoryCell { lines }
 }
 
@@ -760,8 +802,32 @@ pub(crate) fn new_patch_apply_success(stdout: String) -> PlainHistoryCell {
         let mut iter = stdout.lines();
         for (i, raw) in iter.by_ref().take(TOOL_CALL_MAX_LINES).enumerate() {
             let prefix = if i == 0 { "  └ " } else { "    " };
-            let s = format!("{prefix}{raw}");
-            lines.push(ansi_escape_line(&s).dim());
+
+            // First line is the header; dim it entirely.
+            if i == 0 {
+                let s = format!("{prefix}{raw}");
+                lines.push(ansi_escape_line(&s).dim());
+                continue;
+            }
+
+            // Subsequent lines should look like: "M path/to/file".
+            // Colorize the status letter like `git status` (e.g., M red).
+            let status = raw.chars().next();
+            let rest = raw.get(1..).unwrap_or("");
+
+            let status_span = match status {
+                Some('M') => "M".red(),
+                Some('A') => "A".green(),
+                Some('D') => "D".red(),
+                Some(other) => other.to_string().into(),
+                None => "".into(),
+            };
+
+            lines.push(Line::from(vec![
+                prefix.into(),
+                status_span,
+                ansi_escape_line(rest).to_string().into(),
+            ]));
         }
         let remaining = iter.count();
         if remaining > 0 {
@@ -866,7 +932,7 @@ mod tests {
         let parsed = vec![ParsedCommand::Unknown {
             cmd: "printf 'foo\nbar'".to_string(),
         }];
-        let lines = exec_command_lines(&[], &parsed, None);
+        let lines = exec_command_lines(&[], &parsed, None, None);
         assert!(lines.len() >= 3);
         assert_eq!(lines[1].spans[0].content, "  └ ");
         assert_eq!(lines[2].spans[0].content, "    ");

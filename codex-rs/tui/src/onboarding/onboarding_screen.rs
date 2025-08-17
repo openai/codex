@@ -2,6 +2,8 @@ use codex_core::util::is_inside_git_repo;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::prelude::Widget;
+use ratatui::widgets::Clear;
 use ratatui::widgets::WidgetRef;
 
 use codex_login::AuthMode;
@@ -113,6 +115,14 @@ impl OnboardingScreen {
                 Ok(()) => {
                     state.sign_in_state = SignInState::ChatGptSuccessMessage;
                     self.event_tx.send(AppEvent::RequestRedraw);
+                    let tx1 = self.event_tx.clone();
+                    let tx2 = self.event_tx.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(150));
+                        tx1.send(AppEvent::RequestRedraw);
+                        std::thread::sleep(std::time::Duration::from_millis(200));
+                        tx2.send(AppEvent::RequestRedraw);
+                    });
                 }
                 Err(e) => {
                     state.sign_in_state = SignInState::PickMode;
@@ -171,6 +181,7 @@ impl KeyboardHandler for OnboardingScreen {
 
 impl WidgetRef for &OnboardingScreen {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+        Clear.render(area, buf);
         // Render steps top-to-bottom, measuring each step's height dynamically.
         let mut y = area.y;
         let bottom = area.y.saturating_add(area.height);
@@ -218,6 +229,7 @@ impl WidgetRef for &OnboardingScreen {
                     width,
                     height: h,
                 };
+                Clear.render(target, buf);
                 step.render_ref(target, buf);
                 y = y.saturating_add(h);
             }

@@ -379,7 +379,6 @@ fn slice_line_spans(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
     use super::*;
 
     #[test]

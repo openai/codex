@@ -140,7 +140,6 @@ fn is_executable_file(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
     use tempfile::TempDir;
 
     use super::*;

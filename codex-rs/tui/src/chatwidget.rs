@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_core::config::Config;
-use codex_core::parse_command::ParsedCommand;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -26,8 +25,10 @@ use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol::TurnDiffEvent;
+use codex_protocol::parse_command::ParsedCommand;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use rand::Rng;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
@@ -43,7 +44,6 @@ use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::InputResult;
-use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell;
 use crate::history_cell::CommandOutput;
 use crate::history_cell::ExecCell;
@@ -59,6 +59,7 @@ use crate::streaming::controller::AppEventHistorySink;
 use crate::streaming::controller::StreamController;
 use codex_core::ConversationManager;
 use codex_file_search::FileMatch;
+use uuid::Uuid;
 
 // Track information about an in-flight exec command.
 struct RunningCommand {
@@ -86,6 +87,7 @@ pub(crate) struct ChatWidget<'a> {
     interrupts: InterruptManager,
     // Whether a redraw is needed after handling the current event
     needs_redraw: bool,
+    session_id: Option<Uuid>,
 }
 
 struct UserMessage {
@@ -125,6 +127,7 @@ impl ChatWidget<'_> {
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
+        self.session_id = Some(event.session_id);
         self.add_to_history(&history_cell::new_session_info(&self.config, event, true));
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
@@ -182,6 +185,7 @@ impl ChatWidget<'_> {
         }
         // Mark task stopped and request redraw now that all content is in history.
         self.bottom_pane.set_task_running(false);
+        self.running_commands.clear();
         self.mark_needs_redraw();
     }
 
@@ -198,6 +202,7 @@ impl ChatWidget<'_> {
     fn on_error(&mut self, message: String) {
         self.add_to_history(&history_cell::new_error_event(message));
         self.bottom_pane.set_task_running(false);
+        self.running_commands.clear();
         self.stream.clear_all();
         self.mark_needs_redraw();
     }
@@ -386,17 +391,6 @@ impl ChatWidget<'_> {
 
     pub(crate) fn handle_exec_approval_now(&mut self, id: String, ev: ExecApprovalRequestEvent) {
         self.flush_answer_stream_with_separator();
-        // Log a background summary immediately so the history is chronological.
-        let cmdline = strip_bash_lc_and_escape(&ev.command);
-        let text = format!(
-            "command requires approval:\n$ {cmdline}{reason}",
-            reason = ev
-                .reason
-                .as_ref()
-                .map(|r| format!("\n{r}"))
-                .unwrap_or_default()
-        );
-        self.add_to_history(&history_cell::new_background_event(text));
 
         let request = ApprovalRequest::Exec {
             id,
@@ -473,6 +467,7 @@ impl ChatWidget<'_> {
     fn interrupt_running_task(&mut self) {
         if self.bottom_pane.is_task_running() {
             self.active_exec_cell = None;
+            self.running_commands.clear();
             self.bottom_pane.clear_ctrl_c_quit_hint();
             self.submit_op(Op::Interrupt);
             self.bottom_pane.set_task_running(false);
@@ -500,6 +495,8 @@ impl ChatWidget<'_> {
         initial_images: Vec<PathBuf>,
         enhanced_keys_supported: bool,
     ) -> Self {
+        let mut rng = rand::rng();
+        let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
 
         Self {
@@ -509,6 +506,7 @@ impl ChatWidget<'_> {
                 app_event_tx,
                 has_input_focus: true,
                 enhanced_keys_supported,
+                placeholder_text: placeholder,
             }),
             active_exec_cell: None,
             config: config.clone(),
@@ -525,6 +523,7 @@ impl ChatWidget<'_> {
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
             needs_redraw: false,
+            session_id: None,
         }
     }
 
@@ -664,19 +663,25 @@ impl ChatWidget<'_> {
         self.app_event_tx.send(AppEvent::RequestRedraw);
     }
 
+    pub(crate) fn add_diff_in_progress(&mut self) {
+        self.bottom_pane.set_task_running(true);
+        self.bottom_pane
+            .update_status_text("computing diff".to_string());
+        self.request_redraw();
+    }
+
     pub(crate) fn add_diff_output(&mut self, diff_output: String) {
-        self.add_to_history(&history_cell::new_diff_output(diff_output.clone()));
+        self.bottom_pane.set_task_running(false);
+        self.add_to_history(&history_cell::new_diff_output(diff_output));
+        self.mark_needs_redraw();
     }
 
     pub(crate) fn add_status_output(&mut self) {
         self.add_to_history(&history_cell::new_status_output(
             &self.config,
             &self.total_token_usage,
+            &self.session_id,
         ));
-    }
-
-    pub(crate) fn add_prompts_output(&mut self) {
-        self.add_to_history(&history_cell::new_prompts_output());
     }
 
     /// Forward file-search results to the bottom pane.
@@ -758,6 +763,15 @@ impl WidgetRef for &ChatWidget<'_> {
         }
     }
 }
+
+const EXAMPLE_PROMPTS: [&str; 6] = [
+    "Explain this codebase",
+    "Summarize recent commits",
+    "Implement {feature}",
+    "Find and fix a bug in @filename",
+    "Write tests for @filename",
+    "Improve documentation in @filename",
+];
 
 fn add_token_usage(current_usage: &TokenUsage, new_usage: &TokenUsage) -> TokenUsage {
     let cached_input_tokens = match (
