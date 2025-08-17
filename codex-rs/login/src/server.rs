@@ -252,7 +252,7 @@ pub fn run_login_server(
                     let _ = req.respond(resp);
                     shutdown_flag.store(true, Ordering::SeqCst);
 
-                    // Signal completion to timeout watcher.
+                    // Login has succeeded, so disarm the timeout watcher.
                     let _ = done_tx.send(());
                     return Ok(());
                 }
@@ -262,7 +262,7 @@ pub fn run_login_server(
             }
         }
 
-        // Signal completion to timeout watcher.
+        // Login has failed or timed out, so disarm the timeout watcher.
         let _ = done_tx.send(());
 
         if timeout_flag.load(Ordering::SeqCst) {
