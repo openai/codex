@@ -84,3 +84,56 @@ impl From<EnvironmentContext> for ResponseItem {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::SandboxPolicy;
+
+    #[test]
+    fn test_environment_context_display_with_danger_full_access() {
+        // When --dangerously-bypass-approvals-and-sandbox flag is used,
+        // the sandbox_mode becomes DangerFullAccess
+        let ec = EnvironmentContext::new(
+            PathBuf::from("/test/path"),
+            AskForApproval::Never,
+            SandboxPolicy::DangerFullAccess,
+        );
+        
+        let output = format!("{}", ec);
+        
+        // Should NOT include "Sandbox mode" or "Network access" lines
+        assert!(
+            !output.contains("Sandbox mode"),
+            "Output should not contain 'Sandbox mode' when using --dangerously-bypass-approvals-and-sandbox"
+        );
+        assert!(
+            !output.contains("Network access"),
+            "Output should not contain 'Network access' when using --dangerously-bypass-approvals-and-sandbox"
+        );
+        
+        // Should still include working directory and approval policy
+        assert!(output.contains("Current working directory: /test/path"));
+        assert!(output.contains("Approval policy: never"));
+    }
+
+    #[test]
+    fn test_environment_context_display_with_sandbox_enabled() {
+        // When sandbox is enabled, the sandbox mode and network access should be displayed
+        let ec = EnvironmentContext::new(
+            PathBuf::from("/test/path"),
+            AskForApproval::OnRequest,
+            SandboxPolicy::ReadOnly,
+        );
+
+        let output = format!("{}", ec);
+
+        // Should include "Sandbox mode" and "Network access" lines
+        assert!(output.contains("Sandbox mode: read-only"));
+        assert!(output.contains("Network access: restricted"));
+
+        // Should still include working directory and approval policy
+        assert!(output.contains("Current working directory: /test/path"));
+        assert!(output.contains("Approval policy: on-request"));
+    }
+}
