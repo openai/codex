@@ -2783,6 +2783,7 @@ dependencies = [
  "codex-mcp-server",
  "mcp-types",
  "pretty_assertions",
+ "serde",
  "serde_json",
  "shlex",
  "tempfile",
