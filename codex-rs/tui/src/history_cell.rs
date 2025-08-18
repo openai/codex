@@ -656,7 +656,7 @@ pub(crate) fn new_mcp_tools_output(
     let mut lines: Vec<Line<'static>> = vec![
         Line::from("/mcp".magenta()),
         Line::from(""),
-        Line::from(vec!["🔌 ".into(), "MCP Tools".bold()]),
+        Line::from(vec!["🔌  ".into(), "MCP Tools".bold()]),
         Line::from(""),
     ];
 
@@ -692,6 +692,18 @@ pub(crate) fn new_mcp_tools_output(
             ]));
         }
 
+        if let Some(env) = cfg.env.as_ref() {
+            if !env.is_empty() {
+                let mut env_pairs: Vec<String> =
+                    env.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                env_pairs.sort();
+                lines.push(Line::from(vec![
+                    "    • Env: ".into(),
+                    env_pairs.join(" ").into(),
+                ]));
+            }
+        }
+
         if names.is_empty() {
             lines.push(Line::from("    • Tools: (none)"));
         } else {
@@ -702,43 +714,6 @@ pub(crate) fn new_mcp_tools_output(
         }
         lines.push(Line::from(""));
     }
-
-    // Deterministic ordering for testability
-    //    let mut keys: Vec<String> = config.mcp_servers.keys().cloned().collect();
-    //    keys.sort();
-    //
-    //    for key in keys {
-    //        if let Some(cfg) = config.mcp_servers.get(&key) {
-    //            // Name
-    //            lines.push(Line::from(vec!["  • Name: ".into(), key.clone().into()]));
-    //            // Command + args
-    //            let mut cmd_display = cfg.command.clone();
-    //            if !cfg.args.is_empty() {
-    //                let joined_args = cfg.args.join(" ");
-    //                cmd_display = format!("{cmd_display} {joined_args}");
-    //            }
-    //            lines.push(Line::from(vec![
-    //                "    • Command: ".into(),
-    //                cmd_display.into(),
-    //            ]));
-    //
-    //            // Env (if any) — show as k=v pairs
-    //            if let Some(env) = cfg.env.as_ref() {
-    //                if !env.is_empty() {
-    //                    let mut env_pairs: Vec<String> =
-    //                        env.iter().map(|(k, v)| format!("{k}={v}")).collect();
-    //                    env_pairs.sort();
-    //                    lines.push(Line::from(vec![
-    //                        "    • Env: ".into(),
-    //                        env_pairs.join(" ").into(),
-    //                    ]));
-    //                }
-    //            }
-    //
-    //            lines.push(Line::from(""));
-    //        }
-    //    }
-    //
 
     PlainHistoryCell { lines }
 }

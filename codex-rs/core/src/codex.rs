@@ -1212,7 +1212,7 @@ async fn submission_loop(
                     ),
                 };
                 if let Err(e) = tx_event.send(event).await {
-                    warn!("failed to send ListMcpToolsResponse event: {e}");
+                    warn!("failed to send McpListToolsResponse event: {e}");
                 }
             }
             Op::Compact => {

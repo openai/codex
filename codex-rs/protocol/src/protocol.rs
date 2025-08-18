@@ -137,7 +137,7 @@ pub enum Op {
     GetHistoryEntryRequest { offset: usize, log_id: u64 },
 
     /// Request the list of MCP tools available across all configured servers.
-    /// Reply is delivered via `EventMsg::ListMcpToolsResponse`.
+    /// Reply is delivered via `EventMsg::McpListToolsResponse`.
     ListMcpTools,
 
     /// Request the agent to summarize the current conversation context.
