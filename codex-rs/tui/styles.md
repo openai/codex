@@ -7,7 +7,7 @@
 # Foreground colors
 
 - **Default:** Most of the time, just use the default foreground color. `reset` can help get it back.
-- **Selection:** Use ANSI `blue`.
+- **Selection:** Use ANSI `blue`. (Ed & AE want to make this cyan too, but we'll do that in a followup since it's riskier in different themes.)
 - **User input tips and status indicators:** Use ANSI `cyan`.
 - **Success and additions:** Use ANSI `green`.
 - **Errors, failures and deletions:** Use ANSI `red`.
