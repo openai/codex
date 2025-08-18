@@ -29,12 +29,11 @@ use crate::client_common::ResponseStream;
 use crate::client_common::ResponsesApiRequest;
 use crate::client_common::create_reasoning_param_for_request;
 use crate::config::Config;
-use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
-use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::error::UsageLimitReachedError;
 use crate::flags::CODEX_RS_SSE_FIXTURE;
+use crate::model_family::ModelFamily;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::models::ResponseItem;
@@ -42,6 +41,8 @@ use crate::openai_tools::create_tools_json_for_responses_api;
 use crate::protocol::TokenUsage;
 use crate::user_agent::get_codex_user_agent;
 use crate::util::backoff;
+use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use std::sync::Arc;
 
 #[derive(Debug, Deserialize)]
@@ -310,6 +311,30 @@ impl ModelClient {
 
     pub fn get_provider(&self) -> ModelProviderInfo {
         self.provider.clone()
+    }
+
+    /// Returns the currently configured model slug.
+    pub fn get_model(&self) -> String {
+        self.config.model.clone()
+    }
+
+    /// Returns the currently configured model family.
+    pub fn get_model_family(&self) -> ModelFamily {
+        self.config.model_family.clone()
+    }
+
+    /// Returns the current reasoning effort setting.
+    pub fn get_reasoning_effort(&self) -> ReasoningEffortConfig {
+        self.effort
+    }
+
+    /// Returns the current reasoning summary setting.
+    pub fn get_reasoning_summary(&self) -> ReasoningSummaryConfig {
+        self.summary
+    }
+
+    pub fn get_auth(&self) -> Option<CodexAuth> {
+        self.auth.clone()
     }
 }
 
