@@ -9,7 +9,7 @@ use crate::codex_tool_config::create_tool_for_codex_tool_call_param;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_reply_param;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::OutgoingMessageSender;
-use crate::wire_format::ClientRequest;
+use codex_protocol::mcp_protocol::ClientRequest;
 
 use codex_core::ConversationManager;
 use codex_core::config::Config as CodexConfig;

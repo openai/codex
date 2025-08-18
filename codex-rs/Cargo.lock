@@ -665,6 +665,7 @@ dependencies = [
  "codex-exec",
  "codex-login",
  "codex-mcp-server",
+ "codex-protocol",
  "codex-tui",
  "serde_json",
  "tokio",
@@ -678,6 +679,7 @@ version = "0.0.0"
 dependencies = [
  "clap",
  "codex-core",
+ "codex-protocol",
  "serde",
  "toml 0.9.5",
 ]
@@ -752,6 +754,7 @@ dependencies = [
  "codex-common",
  "codex-core",
  "codex-ollama",
+ "codex-protocol",
  "core_test_support",
  "libc",
  "owo-colors",
@@ -856,6 +859,7 @@ dependencies = [
  "codex-arg0",
  "codex-core",
  "codex-login",
+ "codex-protocol",
  "mcp-types",
  "mcp_test_support",
  "pretty_assertions",
@@ -896,6 +900,7 @@ name = "codex-protocol"
 version = "0.0.0"
 dependencies = [
  "mcp-types",
+ "pretty_assertions",
  "serde",
  "serde_bytes",
  "serde_json",
@@ -2781,6 +2786,7 @@ dependencies = [
  "assert_cmd",
  "codex-core",
  "codex-mcp-server",
+ "codex-protocol",
  "mcp-types",
  "pretty_assertions",
  "serde",
