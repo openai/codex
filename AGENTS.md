@@ -12,6 +12,10 @@ Before finalizing a change to `codex-rs`, run `just fmt` (in `codex-rs` director
 1. Run the test for the specific project that was changed. For example, if changes were made in `codex-rs/tui`, run `cargo test -p codex-tui`.
 2. Once those pass, if any changes were made in common, core, or protocol, run the complete test suite with `cargo test --all-features`.
 
+## TUI style conventions
+
+See `codex-rs/tui/styles.md`.
+
 ## TUI code conventions
 
 - Use concise styling helpers from ratatui’s Stylize trait.

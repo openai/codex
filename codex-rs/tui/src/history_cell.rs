@@ -1,4 +1,3 @@
-use crate::colors::LIGHT_BLUE;
 use crate::diff_render::create_diff_summary;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
@@ -252,12 +251,13 @@ fn new_parsed_command(
             lines.push(Line::from(spans));
         }
         Some(o) if o.exit_code == 0 => {
-            lines.push(Line::from("✓ Completed".green().bold()));
+            lines.push(Line::from(vec!["✓".green(), " Completed".into()]));
         }
         Some(o) => {
-            lines.push(Line::from(
-                format!("✗ Failed (exit {})", o.exit_code).red().bold(),
-            ));
+            lines.push(Line::from(vec![
+                "✗".red(),
+                format!(" Failed (exit {})", o.exit_code).into(),
+            ]));
         }
     };
 
@@ -304,7 +304,7 @@ fn new_parsed_command(
             let prefix = if j == 0 { first_prefix } else { "    " };
             lines.push(Line::from(vec![
                 Span::styled(prefix, Style::default().add_modifier(Modifier::DIM)),
-                Span::styled(line_text.to_string(), Style::default().fg(LIGHT_BLUE)),
+                line_text.to_string().dim(),
             ]));
         }
     }

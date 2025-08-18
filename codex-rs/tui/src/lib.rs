@@ -2,6 +2,7 @@
 // The standalone `codex-tui` binary prints a short help message before the
 // alternate‑screen mode starts; that file opts‑out locally via `allow`.
 #![deny(clippy::print_stdout, clippy::print_stderr)]
+#![deny(clippy::disallowed_methods)]
 use app::App;
 use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_core::config::Config;
@@ -28,7 +29,6 @@ mod bottom_pane;
 mod chatwidget;
 mod citation_regex;
 mod cli;
-mod colors;
 mod common;
 pub mod custom_terminal;
 mod diff_render;
