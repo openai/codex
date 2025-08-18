@@ -224,8 +224,7 @@ impl AuthModeWidget {
             ])
             .style(Style::default().add_modifier(Modifier::DIM)),
             Line::from(""),
-            Line::from("  Codex can make mistakes")
-                .style(Style::default().fg(Color::White)),
+            Line::from("  Codex can make mistakes"),
             Line::from("  Review the code it writes and commands it runs")
                 .style(Style::default().add_modifier(Modifier::DIM)),
             Line::from(""),
