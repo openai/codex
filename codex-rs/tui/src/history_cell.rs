@@ -634,21 +634,6 @@ pub(crate) fn new_status_output(
     PlainHistoryCell { lines }
 }
 
-pub(crate) fn new_prompts_output() -> PlainHistoryCell {
-    let lines: Vec<Line<'static>> = vec![
-        Line::from("/prompts".magenta()),
-        Line::from(""),
-        Line::from(" 1. Explain this codebase"),
-        Line::from(" 2. Summarize recent commits"),
-        Line::from(" 3. Implement {feature}"),
-        Line::from(" 4. Find and fix a bug in @filename"),
-        Line::from(" 5. Write tests for @filename"),
-        Line::from(" 6. Improve documentation in @filename"),
-        Line::from(""),
-    ];
-    PlainHistoryCell { lines }
-}
-
 /// Render a summary of configured MCP servers from the current `Config`.
 pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
     let lines: Vec<Line<'static>> = vec![
