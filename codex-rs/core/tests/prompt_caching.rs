@@ -6,8 +6,8 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
-use codex_core::protocol_config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_core::protocol_config_types::ReasoningEffort;
+use codex_core::protocol_config_types::ReasoningSummary;
 use codex_login::CodexAuth;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
@@ -197,8 +197,8 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() {
                 exclude_slash_tmp: true,
             }),
             model: Some("o3".to_string()),
-            effort: Some(ReasoningEffortConfig::High),
-            summary: Some(ReasoningSummaryConfig::Detailed),
+            effort: Some(ReasoningEffort::High),
+            summary: Some(ReasoningSummary::Detailed),
         })
         .await
         .unwrap();
