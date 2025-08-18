@@ -29,8 +29,6 @@ use crate::client_common::ResponseStream;
 use crate::client_common::ResponsesApiRequest;
 use crate::client_common::create_reasoning_param_for_request;
 use crate::config::Config;
-use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
-use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::error::UsageLimitReachedError;
@@ -42,6 +40,8 @@ use crate::openai_tools::create_tools_json_for_responses_api;
 use crate::protocol::TokenUsage;
 use crate::user_agent::get_codex_user_agent;
 use crate::util::backoff;
+use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use std::sync::Arc;
 
 #[derive(Debug, Deserialize)]
