@@ -22,6 +22,7 @@
     - [Authenticate locally and copy your credentials to the "headless" machine](#authenticate-locally-and-copy-your-credentials-to-the-headless-machine)
     - [Connecting through VPS or remote](#connecting-through-vps-or-remote)
   - [Usage-based billing alternative: Use an OpenAI API key](#usage-based-billing-alternative-use-an-openai-api-key)
+    - [Forcing API-key mode (advanced)](#forcing-api-key-mode-advanced)
   - [Choosing Codex's level of autonomy](#choosing-codexs-level-of-autonomy)
     - [**1. Read/write**](#1-readwrite)
     - [**2. Read-only**](#2-read-only)
