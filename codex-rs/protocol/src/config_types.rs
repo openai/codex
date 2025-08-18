@@ -7,6 +7,7 @@ use strum_macros::Display;
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
 pub enum ReasoningEffort {
+    Minimal,
     Low,
     #[default]
     Medium,
