@@ -1,6 +1,6 @@
-<h1 align="center">OpenAI Codex CLI</h1>
+<h1 align="center">OpenAI Codex CLI - Test Branch Version</h1>
 
-<p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install codex</code></p>
+<p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install codex</code><br />This is a test modification that will create a merge conflict!</p>
 
 <p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.</br>If you are looking for the <em>cloud-based agent</em> from OpenAI, <strong>Codex Web</strong>, see <a href="https://chatgpt.com/codex">chatgpt.com/codex</a>.</p>
 
