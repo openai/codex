@@ -18,6 +18,8 @@ pub enum SlashCommand {
     Diff,
     Mention,
     Status,
+    /// Choose reasoning effort for the model
+    ReasoningEffort,
     Logout,
     Quit,
     #[cfg(debug_assertions)]
@@ -35,6 +37,9 @@ impl SlashCommand {
             SlashCommand::Diff => "show git diff (including untracked files)",
             SlashCommand::Mention => "mention a file",
             SlashCommand::Status => "show current session configuration and token usage",
+            SlashCommand::ReasoningEffort => {
+                "choose reasoning effort (or disable it) for this session"
+            }
             SlashCommand::Logout => "log out of Codex",
             #[cfg(debug_assertions)]
             SlashCommand::TestApproval => "test approval request",

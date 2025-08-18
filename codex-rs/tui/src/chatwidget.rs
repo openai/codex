@@ -35,6 +35,7 @@ use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
+use strum::IntoEnumIterator;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::debug;
 
@@ -44,6 +45,8 @@ use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::InputResult;
+use crate::bottom_pane::SelectionAction;
+use crate::bottom_pane::SelectionItem;
 use crate::history_cell;
 use crate::history_cell::CommandOutput;
 use crate::history_cell::ExecCell;
@@ -58,6 +61,7 @@ use self::agent::spawn_agent;
 use crate::streaming::controller::AppEventHistorySink;
 use crate::streaming::controller::StreamController;
 use codex_core::ConversationManager;
+use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_file_search::FileMatch;
 use uuid::Uuid;
 
@@ -683,6 +687,45 @@ impl ChatWidget<'_> {
             &self.total_token_usage,
             &self.session_id,
         ));
+    }
+
+    /// Open a popup to choose the reasoning effort for the current session/turn.
+    pub(crate) fn open_reasoning_effort_popup(&mut self) {
+        let current = self.config.model_reasoning_effort;
+        let options = ReasoningEffortConfig::iter().collect::<Vec<_>>();
+
+        let items: Vec<SelectionItem> = options
+            .iter()
+            .map(|&opt| {
+                let name = opt.to_string();
+                let is_current = opt == current;
+                let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                    tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                        cwd: None,
+                        approval_policy: None,
+                        sandbox_policy: None,
+                        model: None,
+                        effort: Some(opt),
+                        summary: None,
+                    }));
+                    tx.send(AppEvent::UpdateReasoningEffort(opt));
+                })];
+                let description = None;
+                SelectionItem {
+                    name,
+                    description,
+                    is_current,
+                    actions,
+                }
+            })
+            .collect();
+
+        self.bottom_pane.show_selection_view(items);
+    }
+
+    /// Set the reasoning effort in the widget's config copy.
+    pub(crate) fn set_reasoning_effort(&mut self, effort: ReasoningEffortConfig) {
+        self.config.model_reasoning_effort = effort;
     }
 
     /// Forward file-search results to the bottom pane.
