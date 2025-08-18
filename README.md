@@ -165,6 +165,26 @@ Notes:
 - This command only sets the key for your current terminal session, which we recommend. To set it for all future sessions, you can also add the `export` line to your shell's configuration file (e.g., `~/.zshrc`).
 - If you have signed in with ChatGPT, Codex will default to using your ChatGPT credits. If you wish to use your API key, use the `/logout` command to clear your ChatGPT authentication.
 
+#### Forcing API‑key mode (advanced)
+
+If you want Codex to always use your API key for requests (even when ChatGPT auth exists), set the following config flag:
+
+```toml
+# ~/.codex/config.toml
+always_use_api_key_signing = true
+```
+
+Or override ad‑hoc via CLI:
+
+```bash
+codex --config always_use_api_key_signing=true
+```
+
+Notes:
+
+- When this is true and an API key is available, the login screen is skipped.
+- When false (default), Codex prefers ChatGPT auth if present; with an API key also present, you’ll be offered the login screen with an option to continue using the API key.
+
 ### Choosing Codex's level of autonomy
 
 We always recommend running Codex in its default sandbox that gives you strong guardrails around what the agent can do. The default sandbox prevents it from editing files outside its workspace, or from accessing the network.
