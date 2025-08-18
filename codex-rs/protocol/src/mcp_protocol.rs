@@ -13,10 +13,11 @@ use crate::protocol::TurnAbortReason;
 use mcp_types::RequestId;
 use serde::Deserialize;
 use serde::Serialize;
+use ts_rs::TS;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(type = "string")]
 pub struct ConversationId(pub Uuid);
 
 impl Display for ConversationId {
@@ -26,7 +27,7 @@ impl Display for ConversationId {
 }
 
 /// Request from the client to the server.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(tag = "method", rename_all = "camelCase")]
 pub enum ClientRequest {
     NewConversation {
@@ -70,7 +71,7 @@ pub enum ClientRequest {
     },
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct NewConversationParams {
     /// Optional override for the model name (e.g. "o3", "o4-mini").
@@ -113,24 +114,24 @@ pub struct NewConversationParams {
     pub include_apply_patch_tool: Option<bool>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct NewConversationResponse {
     pub conversation_id: ConversationId,
     pub model: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AddConversationSubscriptionResponse {
     pub subscription_id: Uuid,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoveConversationSubscriptionResponse {}
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct LoginChatGptResponse {
     pub login_id: Uuid,
@@ -141,7 +142,7 @@ pub struct LoginChatGptResponse {
 // Event name for notifying client of login completion or failure.
 pub const LOGIN_CHATGPT_COMPLETE_EVENT: &str = "codex/event/login_chatgpt_complete";
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct LoginChatGptCompleteNotification {
     pub login_id: Uuid,
@@ -150,24 +151,24 @@ pub struct LoginChatGptCompleteNotification {
     pub error: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct CancelLoginChatGptParams {
     pub login_id: Uuid,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct CancelLoginChatGptResponse {}
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SendUserMessageParams {
     pub conversation_id: ConversationId,
     pub items: Vec<InputItem>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SendUserTurnParams {
     pub conversation_id: ConversationId,
@@ -180,39 +181,39 @@ pub struct SendUserTurnParams {
     pub summary: ReasoningSummary,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SendUserTurnResponse {}
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct InterruptConversationParams {
     pub conversation_id: ConversationId,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct InterruptConversationResponse {
     pub abort_reason: TurnAbortReason,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct SendUserMessageResponse {}
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct AddConversationListenerParams {
     pub conversation_id: ConversationId,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoveConversationListenerParams {
     pub subscription_id: Uuid,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
 #[serde(tag = "type", content = "data")]
 pub enum InputItem {
@@ -237,7 +238,7 @@ pub const APPLY_PATCH_APPROVAL_METHOD: &str = "applyPatchApproval";
 pub const EXEC_COMMAND_APPROVAL_METHOD: &str = "execCommandApproval";
 
 /// Request initiated from the server and sent to the client.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(tag = "method", rename_all = "camelCase")]
 pub enum ServerRequest {
     /// Request to approve a patch.
@@ -254,7 +255,7 @@ pub enum ServerRequest {
     },
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 pub struct ApplyPatchApprovalParams {
     pub conversation_id: ConversationId,
     /// Use to correlate this with [codex_core::protocol::PatchApplyBeginEvent]
@@ -270,7 +271,7 @@ pub struct ApplyPatchApprovalParams {
     pub grant_root: Option<PathBuf>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 pub struct ExecCommandApprovalParams {
     pub conversation_id: ConversationId,
     /// Use to correlate this with [codex_core::protocol::ExecCommandBeginEvent]
@@ -282,12 +283,12 @@ pub struct ExecCommandApprovalParams {
     pub reason: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 pub struct ExecCommandApprovalResponse {
     pub decision: ReviewDecision,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 pub struct ApplyPatchApprovalResponse {
     pub decision: ReviewDecision,
 }
