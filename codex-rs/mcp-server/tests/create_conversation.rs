@@ -1,12 +1,12 @@
 use std::path::Path;
 
-use codex_mcp_server::wire_format::AddConversationListenerParams;
-use codex_mcp_server::wire_format::AddConversationSubscriptionResponse;
-use codex_mcp_server::wire_format::InputItem;
-use codex_mcp_server::wire_format::NewConversationParams;
-use codex_mcp_server::wire_format::NewConversationResponse;
-use codex_mcp_server::wire_format::SendUserMessageParams;
-use codex_mcp_server::wire_format::SendUserMessageResponse;
+use codex_protocol::mcp_protocol::AddConversationListenerParams;
+use codex_protocol::mcp_protocol::AddConversationSubscriptionResponse;
+use codex_protocol::mcp_protocol::InputItem;
+use codex_protocol::mcp_protocol::NewConversationParams;
+use codex_protocol::mcp_protocol::NewConversationResponse;
+use codex_protocol::mcp_protocol::SendUserMessageParams;
+use codex_protocol::mcp_protocol::SendUserMessageResponse;
 use mcp_test_support::McpProcess;
 use mcp_test_support::create_final_assistant_message_sse_response;
 use mcp_test_support::create_mock_chat_completions_server;
