@@ -130,8 +130,8 @@ impl AuthModeWidget {
 
             let line1 = if is_selected {
                 Line::from(vec![
-                    format!("{} {}. ", caret, idx + 1).blue().dim(),
-                    text.to_string().blue(),
+                    format!("{} {}. ", caret, idx + 1).cyan().dim(),
+                    text.to_string().cyan(),
                 ])
             } else {
                 Line::from(format!("  {}. {text}", idx + 1))
@@ -139,7 +139,7 @@ impl AuthModeWidget {
 
             let line2 = if is_selected {
                 Line::from(format!("     {description}"))
-                    .fg(Color::Blue)
+                    .fg(Color::Cyan)
                     .add_modifier(Modifier::DIM)
             } else {
                 Line::from(format!("     {description}"))
@@ -163,6 +163,8 @@ impl AuthModeWidget {
         ));
         lines.push(Line::from(""));
         lines.push(
+            // AE: Following styles.md, this should probably be Cyan because it's a user input tip.
+            //     But leaving this for a future cleanup.
             Line::from("  Press Enter to continue")
                 .style(Style::default().add_modifier(Modifier::DIM)),
         );
@@ -194,7 +196,7 @@ impl AuthModeWidget {
                 lines.push(Line::from("  If the link doesn't open automatically, open the following link to authenticate:"));
                 lines.push(Line::from(vec![
                     Span::raw("  "),
-                    state.auth_url.as_str().blue().underlined(),
+                    state.auth_url.as_str().cyan().underlined(),
                 ]));
                 lines.push(Line::from(""));
             }
@@ -238,7 +240,7 @@ impl AuthModeWidget {
             ])
             .style(Style::default().add_modifier(Modifier::DIM)),
             Line::from(""),
-            Line::from("  Press Enter to continue").fg(Color::Blue),
+            Line::from("  Press Enter to continue").fg(Color::Cyan),
         ];
 
         Paragraph::new(lines)
@@ -267,7 +269,7 @@ impl AuthModeWidget {
             Line::from(
                 "  To use Codex with the OpenAI API, set OPENAI_API_KEY in your environment",
             )
-            .style(Style::default().fg(Color::Blue)),
+            .style(Style::default().fg(Color::Cyan)),
             Line::from(""),
             Line::from("  Press Enter to return")
                 .style(Style::default().add_modifier(Modifier::DIM)),
