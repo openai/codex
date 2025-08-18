@@ -12,12 +12,12 @@ use tokio::process::ChildStdout;
 use anyhow::Context;
 use assert_cmd::prelude::*;
 use codex_mcp_server::CodexToolCallParam;
-use codex_mcp_server::wire_format::AddConversationListenerParams;
-use codex_mcp_server::wire_format::InterruptConversationParams;
-use codex_mcp_server::wire_format::NewConversationParams;
-use codex_mcp_server::wire_format::RemoveConversationListenerParams;
-use codex_mcp_server::wire_format::SendUserMessageParams;
-use codex_mcp_server::wire_format::SendUserTurnParams;
+use codex_protocol::mcp_protocol::AddConversationListenerParams;
+use codex_protocol::mcp_protocol::InterruptConversationParams;
+use codex_protocol::mcp_protocol::NewConversationParams;
+use codex_protocol::mcp_protocol::RemoveConversationListenerParams;
+use codex_protocol::mcp_protocol::SendUserMessageParams;
+use codex_protocol::mcp_protocol::SendUserTurnParams;
 
 use mcp_types::CallToolRequestParams;
 use mcp_types::ClientCapabilities;
