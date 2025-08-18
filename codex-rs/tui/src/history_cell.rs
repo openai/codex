@@ -650,55 +650,110 @@ pub(crate) fn new_prompts_output() -> PlainHistoryCell {
 }
 
 /// Render a summary of configured MCP servers from the current `Config`.
-pub(crate) fn new_mcp_output(config: &Config) -> PlainHistoryCell {
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(Line::from("/mcp".magenta()));
-    lines.push(Line::from(""));
+pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
+    let lines: Vec<Line<'static>> = vec![
+        Line::from("/mcp".magenta()),
+        Line::from(""),
+        Line::from(vec!["🔌  ".into(), "MCP Tools".bold()]),
+        Line::from(""),
+        Line::from("  • No MCP servers configured.".italic()),
+        Line::from(""),
+    ];
 
-    // Header
-    lines.push(Line::from(vec!["🔌 ".into(), "MCP Connections".bold()]));
+    PlainHistoryCell { lines }
+}
 
-    if config.mcp_servers.is_empty() {
-        lines.push(Line::from("  • No MCP servers configured.".italic()));
+/// Render MCP tools grouped by connection using the fully-qualified tool names.
+pub(crate) fn new_mcp_tools_output(
+    config: &Config,
+    tools: std::collections::HashMap<String, mcp_types::Tool>,
+) -> PlainHistoryCell {
+    let mut lines: Vec<Line<'static>> = vec![
+        Line::from("/mcp".magenta()),
+        Line::from(""),
+        Line::from(vec!["🔌 ".into(), "MCP Tools".bold()]),
+        Line::from(""),
+    ];
+
+    if tools.is_empty() {
+        lines.push(Line::from("  • No MCP tools available.".italic()));
         lines.push(Line::from(""));
         return PlainHistoryCell { lines };
     }
 
-    // Deterministic ordering for testability
-    let mut keys: Vec<String> = config.mcp_servers.keys().cloned().collect();
-    keys.sort();
+    let mut servers: Vec<String> = config.mcp_servers.keys().cloned().collect();
+    servers.sort();
 
-    for key in keys {
-        if let Some(cfg) = config.mcp_servers.get(&key) {
-            // Name
-            lines.push(Line::from(vec!["  • Name: ".into(), key.clone().into()]));
-            // Command + args
-            let mut cmd_display = cfg.command.clone();
-            if !cfg.args.is_empty() {
-                let joined_args = cfg.args.join(" ");
-                cmd_display = format!("{cmd_display} {joined_args}");
-            }
+    for (server, cfg) in config.mcp_servers.iter() {
+        let prefix = format!("{server}__");
+        let mut names: Vec<String> = tools
+            .keys()
+            .filter(|k| k.starts_with(&prefix))
+            .map(|k| k[prefix.len()..].to_string())
+            .collect();
+        names.sort();
+
+        lines.push(Line::from(vec![
+            "  • Server: ".into(),
+            server.clone().into(),
+        ]));
+
+        if !cfg.command.is_empty() {
+            let cmd_display = format!("{} {}", cfg.command, cfg.args.join(" "));
+
             lines.push(Line::from(vec![
                 "    • Command: ".into(),
                 cmd_display.into(),
             ]));
-
-            // Env (if any) — show as k=v pairs
-            if let Some(env) = cfg.env.as_ref() {
-                if !env.is_empty() {
-                    let mut env_pairs: Vec<String> =
-                        env.iter().map(|(k, v)| format!("{k}={v}")).collect();
-                    env_pairs.sort();
-                    lines.push(Line::from(vec![
-                        "    • Env: ".into(),
-                        env_pairs.join(" ").into(),
-                    ]));
-                }
-            }
-
-            lines.push(Line::from(""));
         }
+
+        if names.is_empty() {
+            lines.push(Line::from("    • Tools: (none)"));
+        } else {
+            lines.push(Line::from(vec![
+                "    • Tools: ".into(),
+                names.join(", ").into(),
+            ]));
+        }
+        lines.push(Line::from(""));
     }
+
+    // Deterministic ordering for testability
+    //    let mut keys: Vec<String> = config.mcp_servers.keys().cloned().collect();
+    //    keys.sort();
+    //
+    //    for key in keys {
+    //        if let Some(cfg) = config.mcp_servers.get(&key) {
+    //            // Name
+    //            lines.push(Line::from(vec!["  • Name: ".into(), key.clone().into()]));
+    //            // Command + args
+    //            let mut cmd_display = cfg.command.clone();
+    //            if !cfg.args.is_empty() {
+    //                let joined_args = cfg.args.join(" ");
+    //                cmd_display = format!("{cmd_display} {joined_args}");
+    //            }
+    //            lines.push(Line::from(vec![
+    //                "    • Command: ".into(),
+    //                cmd_display.into(),
+    //            ]));
+    //
+    //            // Env (if any) — show as k=v pairs
+    //            if let Some(env) = cfg.env.as_ref() {
+    //                if !env.is_empty() {
+    //                    let mut env_pairs: Vec<String> =
+    //                        env.iter().map(|(k, v)| format!("{k}={v}")).collect();
+    //                    env_pairs.sort();
+    //                    lines.push(Line::from(vec![
+    //                        "    • Env: ".into(),
+    //                        env_pairs.join(" ").into(),
+    //                    ]));
+    //                }
+    //            }
+    //
+    //            lines.push(Line::from(""));
+    //        }
+    //    }
+    //
 
     PlainHistoryCell { lines }
 }
