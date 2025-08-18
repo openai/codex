@@ -59,10 +59,9 @@ pub struct LoginServer {
 
 impl LoginServer {
     pub fn block_until_done(self) -> io::Result<()> {
-        #[expect(clippy::expect_used)]
         self.server_handle
             .join()
-            .expect("can't join on the server thread")
+            .map_err(|err| io::Error::other(format!("login server thread panicked: {err:?}")))?
     }
 
     pub fn cancel(&self) {
