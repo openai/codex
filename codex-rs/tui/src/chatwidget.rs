@@ -685,6 +685,10 @@ impl ChatWidget<'_> {
         ));
     }
 
+    pub(crate) fn add_mcp_output(&mut self) {
+        self.add_to_history(&history_cell::new_mcp_output(&self.config));
+    }
+
     /// Forward file-search results to the bottom pane.
     pub(crate) fn apply_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
         self.bottom_pane.on_file_search_result(query, matches);

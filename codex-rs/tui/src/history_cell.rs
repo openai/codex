@@ -634,6 +634,75 @@ pub(crate) fn new_status_output(
     PlainHistoryCell { lines }
 }
 
+pub(crate) fn new_prompts_output() -> PlainHistoryCell {
+    let lines: Vec<Line<'static>> = vec![
+        Line::from("/prompts".magenta()),
+        Line::from(""),
+        Line::from(" 1. Explain this codebase"),
+        Line::from(" 2. Summarize recent commits"),
+        Line::from(" 3. Implement {feature}"),
+        Line::from(" 4. Find and fix a bug in @filename"),
+        Line::from(" 5. Write tests for @filename"),
+        Line::from(" 6. Improve documentation in @filename"),
+        Line::from(""),
+    ];
+    PlainHistoryCell { lines }
+}
+
+/// Render a summary of configured MCP servers from the current `Config`.
+pub(crate) fn new_mcp_output(config: &Config) -> PlainHistoryCell {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::from("/mcp".magenta()));
+    lines.push(Line::from(""));
+
+    // Header
+    lines.push(Line::from(vec!["🔌 ".into(), "MCP Connections".bold()]));
+
+    if config.mcp_servers.is_empty() {
+        lines.push(Line::from("  • No MCP servers configured.".italic()));
+        lines.push(Line::from(""));
+        return PlainHistoryCell { lines };
+    }
+
+    // Deterministic ordering for testability
+    let mut keys: Vec<String> = config.mcp_servers.keys().cloned().collect();
+    keys.sort();
+
+    for key in keys {
+        if let Some(cfg) = config.mcp_servers.get(&key) {
+            // Name
+            lines.push(Line::from(vec!["  • Name: ".into(), key.clone().into()]));
+            // Command + args
+            let mut cmd_display = cfg.command.clone();
+            if !cfg.args.is_empty() {
+                let joined_args = cfg.args.join(" ");
+                cmd_display = format!("{cmd_display} {joined_args}");
+            }
+            lines.push(Line::from(vec![
+                "    • Command: ".into(),
+                cmd_display.into(),
+            ]));
+
+            // Env (if any) — show as k=v pairs
+            if let Some(env) = cfg.env.as_ref() {
+                if !env.is_empty() {
+                    let mut env_pairs: Vec<String> =
+                        env.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                    env_pairs.sort();
+                    lines.push(Line::from(vec![
+                        "    • Env: ".into(),
+                        env_pairs.join(" ").into(),
+                    ]));
+                }
+            }
+
+            lines.push(Line::from(""));
+        }
+    }
+
+    PlainHistoryCell { lines }
+}
+
 pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
     let lines: Vec<Line<'static>> = vec![vec!["🖐 ".red().bold(), message.into()].into(), "".into()];
     PlainHistoryCell { lines }
