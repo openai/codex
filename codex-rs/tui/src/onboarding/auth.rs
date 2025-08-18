@@ -9,6 +9,7 @@ use ratatui::prelude::Widget;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
+use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
@@ -19,8 +20,6 @@ use codex_login::AuthMode;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
-use crate::colors::LIGHT_BLUE;
-use crate::colors::SUCCESS_GREEN;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
 use crate::onboarding::onboarding_screen::StepStateProvider;
 use crate::shimmer::shimmer_spans;
@@ -131,11 +130,8 @@ impl AuthModeWidget {
 
             let line1 = if is_selected {
                 Line::from(vec![
-                    Span::styled(
-                        format!("{} {}. ", caret, idx + 1),
-                        Style::default().fg(LIGHT_BLUE).add_modifier(Modifier::DIM),
-                    ),
-                    Span::styled(text.to_owned(), Style::default().fg(LIGHT_BLUE)),
+                    format!("{} {}. ", caret, idx + 1).blue().dim(),
+                    text.to_string().blue(),
                 ])
             } else {
                 Line::from(format!("  {}. {text}", idx + 1))
@@ -143,7 +139,8 @@ impl AuthModeWidget {
 
             let line2 = if is_selected {
                 Line::from(format!("     {description}"))
-                    .style(Style::default().fg(LIGHT_BLUE).add_modifier(Modifier::DIM))
+                    .fg(Color::Blue)
+                    .add_modifier(Modifier::DIM)
             } else {
                 Line::from(format!("     {description}"))
                     .style(Style::default().add_modifier(Modifier::DIM))
@@ -197,12 +194,7 @@ impl AuthModeWidget {
                 lines.push(Line::from("  If the link doesn't open automatically, open the following link to authenticate:"));
                 lines.push(Line::from(vec![
                     Span::raw("  "),
-                    Span::styled(
-                        state.auth_url.as_str(),
-                        Style::default()
-                            .fg(LIGHT_BLUE)
-                            .add_modifier(Modifier::UNDERLINED),
-                    ),
+                    state.auth_url.as_str().blue().underlined(),
                 ]));
                 lines.push(Line::from(""));
             }
@@ -218,8 +210,7 @@ impl AuthModeWidget {
 
     fn render_chatgpt_success_message(&self, area: Rect, buf: &mut Buffer) {
         let lines = vec![
-            Line::from("✓ Signed in with your ChatGPT account")
-                .style(Style::default().fg(SUCCESS_GREEN)),
+            Line::from("✓ Signed in with your ChatGPT account").fg(Color::Green),
             Line::from(""),
             Line::from("> Before you start:"),
             Line::from(""),
@@ -233,8 +224,7 @@ impl AuthModeWidget {
             ])
             .style(Style::default().add_modifier(Modifier::DIM)),
             Line::from(""),
-            Line::from("  Codex can make mistakes")
-                .style(Style::default().fg(Color::White)),
+            Line::from("  Codex can make mistakes"),
             Line::from("  Review the code it writes and commands it runs")
                 .style(Style::default().add_modifier(Modifier::DIM)),
             Line::from(""),
@@ -248,7 +238,7 @@ impl AuthModeWidget {
             ])
             .style(Style::default().add_modifier(Modifier::DIM)),
             Line::from(""),
-            Line::from("  Press Enter to continue").style(Style::default().fg(LIGHT_BLUE)),
+            Line::from("  Press Enter to continue").fg(Color::Blue),
         ];
 
         Paragraph::new(lines)
@@ -257,10 +247,7 @@ impl AuthModeWidget {
     }
 
     fn render_chatgpt_success(&self, area: Rect, buf: &mut Buffer) {
-        let lines = vec![
-            Line::from("✓ Signed in with your ChatGPT account")
-                .style(Style::default().fg(SUCCESS_GREEN)),
-        ];
+        let lines = vec![Line::from("✓ Signed in with your ChatGPT account").fg(Color::Green)];
 
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
@@ -268,8 +255,7 @@ impl AuthModeWidget {
     }
 
     fn render_env_var_found(&self, area: Rect, buf: &mut Buffer) {
-        let lines =
-            vec![Line::from("✓ Using OPENAI_API_KEY").style(Style::default().fg(SUCCESS_GREEN))];
+        let lines = vec![Line::from("✓ Using OPENAI_API_KEY").fg(Color::Green)];
 
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })

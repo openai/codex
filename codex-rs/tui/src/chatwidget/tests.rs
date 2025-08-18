@@ -124,6 +124,7 @@ fn make_chatwidget_manual() -> (
         app_event_tx: app_event_tx.clone(),
         has_input_focus: true,
         enhanced_keys_supported: false,
+        placeholder_text: "Ask Codex to do anything".to_string(),
     });
     let widget = ChatWidget {
         app_event_tx,
@@ -204,9 +205,12 @@ fn exec_history_cell_shows_working_then_completed() {
             call_id: "call-1".into(),
             command: vec!["bash".into(), "-lc".into(), "echo done".into()],
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            parsed_cmd: vec![codex_core::parse_command::ParsedCommand::Unknown {
-                cmd: "echo done".into(),
-            }],
+            parsed_cmd: vec![
+                codex_core::parse_command::ParsedCommand::Unknown {
+                    cmd: "echo done".into(),
+                }
+                .into(),
+            ],
         }),
     });
 
@@ -246,9 +250,12 @@ fn exec_history_cell_shows_working_then_failed() {
             call_id: "call-2".into(),
             command: vec!["bash".into(), "-lc".into(), "false".into()],
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            parsed_cmd: vec![codex_core::parse_command::ParsedCommand::Unknown {
-                cmd: "false".into(),
-            }],
+            parsed_cmd: vec![
+                codex_core::parse_command::ParsedCommand::Unknown {
+                    cmd: "false".into(),
+                }
+                .into(),
+            ],
         }),
     });
 

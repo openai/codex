@@ -21,10 +21,7 @@ pub async fn login_with_chatgpt(codex_home: PathBuf) -> std::io::Result<()> {
         server.actual_port, server.auth_url,
     );
 
-    server.block_until_done()?;
-
-    eprintln!("Successfully logged in");
-    Ok(())
+    server.block_until_done()
 }
 
 pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) -> ! {

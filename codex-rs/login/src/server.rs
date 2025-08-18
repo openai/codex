@@ -1,10 +1,13 @@
+use std::io::Cursor;
 use std::io::{self};
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 
 use crate::AuthDotJson;
 use crate::get_auth_file;
@@ -13,6 +16,8 @@ use crate::pkce::generate_pkce;
 use base64::Engine;
 use chrono::Utc;
 use rand::RngCore;
+use tiny_http::Header;
+use tiny_http::Request;
 use tiny_http::Response;
 use tiny_http::Server;
 
@@ -27,6 +32,7 @@ pub struct ServerOptions {
     pub port: u16,
     pub open_browser: bool,
     pub force_state: Option<String>,
+    pub login_timeout: Option<Duration>,
 }
 
 impl ServerOptions {
@@ -38,16 +44,17 @@ impl ServerOptions {
             port: DEFAULT_PORT,
             open_browser: true,
             force_state: None,
+            login_timeout: None,
         }
     }
 }
 
-#[derive(Debug)]
 pub struct LoginServer {
     pub auth_url: String,
     pub actual_port: u16,
     pub server_handle: thread::JoinHandle<io::Result<()>>,
     pub shutdown_flag: Arc<AtomicBool>,
+    pub server: Arc<Server>,
 }
 
 impl LoginServer {
@@ -59,8 +66,32 @@ impl LoginServer {
     }
 
     pub fn cancel(&self) {
-        self.shutdown_flag.store(true, Ordering::SeqCst);
+        shutdown(&self.shutdown_flag, &self.server);
     }
+
+    pub fn cancel_handle(&self) -> ShutdownHandle {
+        ShutdownHandle {
+            shutdown_flag: self.shutdown_flag.clone(),
+            server: self.server.clone(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct ShutdownHandle {
+    shutdown_flag: Arc<AtomicBool>,
+    server: Arc<Server>,
+}
+
+impl ShutdownHandle {
+    pub fn cancel(&self) {
+        shutdown(&self.shutdown_flag, &self.server);
+    }
+}
+
+pub fn shutdown(shutdown_flag: &AtomicBool, server: &Server) {
+    shutdown_flag.store(true, Ordering::SeqCst);
+    server.unblock();
 }
 
 pub fn run_login_server(
@@ -80,6 +111,7 @@ pub fn run_login_server(
             ));
         }
     };
+    let server = Arc::new(server);
 
     let redirect_uri = format!("http://localhost:{actual_port}/auth/callback");
     let auth_url = build_authorize_url(&opts.issuer, &opts.client_id, &redirect_uri, &pkce, &state);
@@ -89,123 +121,65 @@ pub fn run_login_server(
     }
     let shutdown_flag = shutdown_flag.unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
     let shutdown_flag_clone = shutdown_flag.clone();
+    let timeout_flag = Arc::new(AtomicBool::new(false));
+
+    // Channel used to signal completion to timeout watcher.
+    let (done_tx, done_rx) = mpsc::channel::<()>();
+
+    if let Some(timeout) = opts.login_timeout {
+        spawn_timeout_watcher(
+            done_rx,
+            timeout,
+            shutdown_flag.clone(),
+            timeout_flag.clone(),
+            server.clone(),
+        );
+    }
+
+    let server_for_thread = server.clone();
     let server_handle = thread::spawn(move || {
         while !shutdown_flag.load(Ordering::SeqCst) {
-            let req = match server.recv() {
+            let req = match server_for_thread.recv() {
                 Ok(r) => r,
-                Err(e) => return Err(io::Error::other(e)),
-            };
-
-            let url_raw = req.url().to_string();
-            let parsed_url = match url::Url::parse(&format!("http://localhost{url_raw}")) {
-                Ok(u) => u,
                 Err(e) => {
-                    eprintln!("URL parse error: {e}");
-                    let _ = req.respond(Response::from_string("Bad Request").with_status_code(400));
-                    continue;
+                    // If we've been asked to shut down, break gracefully so that
+                    // we can report timeout or cancellation status uniformly.
+                    if shutdown_flag.load(Ordering::SeqCst) {
+                        break;
+                    } else {
+                        return Err(io::Error::other(e));
+                    }
                 }
             };
-            let path = parsed_url.path().to_string();
 
-            match path.as_str() {
-                "/auth/callback" => {
-                    let params: std::collections::HashMap<String, String> =
-                        parsed_url.query_pairs().into_owned().collect();
-                    if params.get("state").map(String::as_str) != Some(state.as_str()) {
-                        let _ = req
-                            .respond(Response::from_string("State mismatch").with_status_code(400));
-                        continue;
-                    }
-                    let code = match params.get("code") {
-                        Some(c) if !c.is_empty() => c.clone(),
-                        _ => {
-                            let _ = req.respond(
-                                Response::from_string("Missing authorization code")
-                                    .with_status_code(400),
-                            );
-                            continue;
-                        }
-                    };
-
-                    match exchange_code_for_tokens(
-                        &opts.issuer,
-                        &opts.client_id,
-                        &redirect_uri,
-                        &pkce,
-                        &code,
-                    ) {
-                        Ok(tokens) => {
-                            // Obtain API key via token-exchange and persist
-                            let api_key =
-                                obtain_api_key(&opts.issuer, &opts.client_id, &tokens.id_token)
-                                    .ok();
-                            if let Err(err) = persist_tokens(
-                                &opts.codex_home,
-                                api_key.clone(),
-                                tokens.id_token.clone(),
-                                Some(tokens.access_token.clone()),
-                                Some(tokens.refresh_token.clone()),
-                            ) {
-                                eprintln!("Persist error: {err}");
-                                let _ = req.respond(
-                                    Response::from_string(format!(
-                                        "Unable to persist auth file: {err}"
-                                    ))
-                                    .with_status_code(500),
-                                );
-                                continue;
-                            }
-
-                            let success_url = compose_success_url(
-                                actual_port,
-                                &opts.issuer,
-                                &tokens.id_token,
-                                &tokens.access_token,
-                            );
-                            match tiny_http::Header::from_bytes(
-                                &b"Location"[..],
-                                success_url.as_bytes(),
-                            ) {
-                                Ok(h) => {
-                                    let response = tiny_http::Response::empty(302).with_header(h);
-                                    let _ = req.respond(response);
-                                }
-                                Err(_) => {
-                                    let _ = req.respond(
-                                        Response::from_string("Internal Server Error")
-                                            .with_status_code(500),
-                                    );
-                                }
-                            }
-                        }
-                        Err(err) => {
-                            eprintln!("Token exchange error: {err}");
-                            let _ = req.respond(
-                                Response::from_string(format!("Token exchange failed: {err}"))
-                                    .with_status_code(500),
-                            );
-                        }
-                    }
+            let response = process_request(&req, &opts, &redirect_uri, &pkce, actual_port, &state);
+            let is_login_complete = matches!(response, HandledRequest::ResponseAndExit(_));
+            match response {
+                HandledRequest::Response(r) | HandledRequest::ResponseAndExit(r) => {
+                    let _ = req.respond(r);
                 }
-                "/success" => {
-                    let body = include_str!("assets/success.html");
-                    let mut resp = Response::from_data(body.as_bytes());
-                    if let Ok(h) = tiny_http::Header::from_bytes(
-                        &b"Content-Type"[..],
-                        &b"text/html; charset=utf-8"[..],
-                    ) {
-                        resp.add_header(h);
-                    }
-                    let _ = req.respond(resp);
-                    shutdown_flag.store(true, Ordering::SeqCst);
-                    return Ok(());
-                }
-                _ => {
-                    let _ = req.respond(Response::from_string("Not Found").with_status_code(404));
+                HandledRequest::RedirectWithHeader(header) => {
+                    let redirect = Response::empty(302).with_header(header);
+                    let _ = req.respond(redirect);
                 }
             }
+
+            if is_login_complete {
+                shutdown_flag.store(true, Ordering::SeqCst);
+                // Login has succeeded, so disarm the timeout watcher.
+                let _ = done_tx.send(());
+                return Ok(());
+            }
         }
-        Err(io::Error::other("Login flow was not completed"))
+
+        // Login has failed or timed out, so disarm the timeout watcher.
+        let _ = done_tx.send(());
+
+        if timeout_flag.load(Ordering::SeqCst) {
+            Err(io::Error::other("Login timed out"))
+        } else {
+            Err(io::Error::other("Login was not completed"))
+        }
     });
 
     Ok(LoginServer {
@@ -213,7 +187,132 @@ pub fn run_login_server(
         actual_port,
         server_handle,
         shutdown_flag: shutdown_flag_clone,
+        server,
     })
+}
+
+enum HandledRequest {
+    Response(Response<Cursor<Vec<u8>>>),
+    RedirectWithHeader(Header),
+    ResponseAndExit(Response<Cursor<Vec<u8>>>),
+}
+
+fn process_request(
+    req: &Request,
+    opts: &ServerOptions,
+    redirect_uri: &str,
+    pkce: &PkceCodes,
+    actual_port: u16,
+    state: &str,
+) -> HandledRequest {
+    let url_raw = req.url().to_string();
+    let parsed_url = match url::Url::parse(&format!("http://localhost{url_raw}")) {
+        Ok(u) => u,
+        Err(e) => {
+            eprintln!("URL parse error: {e}");
+            return HandledRequest::Response(
+                Response::from_string("Bad Request").with_status_code(400),
+            );
+        }
+    };
+    let path = parsed_url.path().to_string();
+
+    match path.as_str() {
+        "/auth/callback" => {
+            let params: std::collections::HashMap<String, String> =
+                parsed_url.query_pairs().into_owned().collect();
+            if params.get("state").map(String::as_str) != Some(state) {
+                return HandledRequest::Response(
+                    Response::from_string("State mismatch").with_status_code(400),
+                );
+            }
+            let code = match params.get("code") {
+                Some(c) if !c.is_empty() => c.clone(),
+                _ => {
+                    return HandledRequest::Response(
+                        Response::from_string("Missing authorization code").with_status_code(400),
+                    );
+                }
+            };
+
+            match exchange_code_for_tokens(&opts.issuer, &opts.client_id, redirect_uri, pkce, &code)
+            {
+                Ok(tokens) => {
+                    // Obtain API key via token-exchange and persist
+                    let api_key =
+                        obtain_api_key(&opts.issuer, &opts.client_id, &tokens.id_token).ok();
+                    if let Err(err) = persist_tokens(
+                        &opts.codex_home,
+                        api_key.clone(),
+                        tokens.id_token.clone(),
+                        Some(tokens.access_token.clone()),
+                        Some(tokens.refresh_token.clone()),
+                    ) {
+                        eprintln!("Persist error: {err}");
+                        return HandledRequest::Response(
+                            Response::from_string(format!("Unable to persist auth file: {err}"))
+                                .with_status_code(500),
+                        );
+                    }
+
+                    let success_url = compose_success_url(
+                        actual_port,
+                        &opts.issuer,
+                        &tokens.id_token,
+                        &tokens.access_token,
+                    );
+                    match tiny_http::Header::from_bytes(&b"Location"[..], success_url.as_bytes()) {
+                        Ok(header) => HandledRequest::RedirectWithHeader(header),
+                        Err(_) => HandledRequest::Response(
+                            Response::from_string("Internal Server Error").with_status_code(500),
+                        ),
+                    }
+                }
+                Err(err) => {
+                    eprintln!("Token exchange error: {err}");
+                    HandledRequest::Response(
+                        Response::from_string(format!("Token exchange failed: {err}"))
+                            .with_status_code(500),
+                    )
+                }
+            }
+        }
+        "/success" => {
+            let body = include_str!("assets/success.html");
+            let mut resp = Response::from_data(body.as_bytes());
+            if let Ok(h) = tiny_http::Header::from_bytes(
+                &b"Content-Type"[..],
+                &b"text/html; charset=utf-8"[..],
+            ) {
+                resp.add_header(h);
+            }
+            HandledRequest::ResponseAndExit(resp)
+        }
+        _ => HandledRequest::Response(Response::from_string("Not Found").with_status_code(404)),
+    }
+}
+
+/// Spawns a detached thread that waits for either a completion signal on `done_rx`
+/// or the specified `timeout` to elapse. If the timeout elapses first it marks
+/// the `shutdown_flag`, records `timeout_flag`, and unblocks the HTTP server so
+/// that the main server loop can exit promptly.
+fn spawn_timeout_watcher(
+    done_rx: mpsc::Receiver<()>,
+    timeout: Duration,
+    shutdown_flag: Arc<AtomicBool>,
+    timeout_flag: Arc<AtomicBool>,
+    server: Arc<Server>,
+) {
+    thread::spawn(move || {
+        if done_rx.recv_timeout(timeout).is_err()
+            && shutdown_flag
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+        {
+            timeout_flag.store(true, Ordering::SeqCst);
+            server.unblock();
+        }
+    });
 }
 
 fn build_authorize_url(

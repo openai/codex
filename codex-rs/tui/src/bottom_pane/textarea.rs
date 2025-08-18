@@ -932,33 +932,33 @@ mod tests {
     use rand::prelude::*;
 
     fn rand_grapheme(rng: &mut rand::rngs::StdRng) -> String {
-        let r: u8 = rng.gen_range(0..100);
+        let r: u8 = rng.random_range(0..100);
         match r {
             0..=4 => "\n".to_string(),
             5..=12 => " ".to_string(),
-            13..=35 => (rng.gen_range(b'a'..=b'z') as char).to_string(),
-            36..=45 => (rng.gen_range(b'A'..=b'Z') as char).to_string(),
-            46..=52 => (rng.gen_range(b'0'..=b'9') as char).to_string(),
+            13..=35 => (rng.random_range(b'a'..=b'z') as char).to_string(),
+            36..=45 => (rng.random_range(b'A'..=b'Z') as char).to_string(),
+            46..=52 => (rng.random_range(b'0'..=b'9') as char).to_string(),
             53..=65 => {
                 // Some emoji (wide graphemes)
                 let choices = ["👍", "😊", "🐍", "🚀", "🧪", "🌟"];
-                choices[rng.gen_range(0..choices.len())].to_string()
+                choices[rng.random_range(0..choices.len())].to_string()
             }
             66..=75 => {
                 // CJK wide characters
                 let choices = ["漢", "字", "測", "試", "你", "好", "界", "编", "码"];
-                choices[rng.gen_range(0..choices.len())].to_string()
+                choices[rng.random_range(0..choices.len())].to_string()
             }
             76..=85 => {
                 // Combining mark sequences
-                let base = ["e", "a", "o", "n", "u"][rng.gen_range(0..5)];
+                let base = ["e", "a", "o", "n", "u"][rng.random_range(0..5)];
                 let marks = ["\u{0301}", "\u{0308}", "\u{0302}", "\u{0303}"];
-                format!("{}{}", base, marks[rng.gen_range(0..marks.len())])
+                format!("{base}{}", marks[rng.random_range(0..marks.len())])
             }
             86..=92 => {
                 // Some non-latin single codepoints (Greek, Cyrillic, Hebrew)
                 let choices = ["Ω", "β", "Ж", "ю", "ש", "م", "ह"];
-                choices[rng.gen_range(0..choices.len())].to_string()
+                choices[rng.random_range(0..choices.len())].to_string()
             }
             _ => {
                 // ZWJ sequences (single graphemes but multi-codepoint)
@@ -967,7 +967,7 @@ mod tests {
                     "👨\u{200D}💻", // man technologist
                     "🏳️\u{200D}🌈", // rainbow flag
                 ];
-                choices[rng.gen_range(0..choices.len())].to_string()
+                choices[rng.random_range(0..choices.len())].to_string()
             }
         }
     }
@@ -1447,7 +1447,7 @@ mod tests {
             let mut elem_texts: Vec<String> = Vec::new();
             let mut next_elem_id: usize = 0;
             // Start with a random base string
-            let base_len = rng.gen_range(0..30);
+            let base_len = rng.random_range(0..30);
             let mut base = String::new();
             for _ in 0..base_len {
                 base.push_str(&rand_grapheme(&mut rng));
@@ -1457,26 +1457,26 @@ mod tests {
             let mut boundaries: Vec<usize> = vec![0];
             boundaries.extend(ta.text().char_indices().map(|(i, _)| i).skip(1));
             boundaries.push(ta.text().len());
-            let init = boundaries[rng.gen_range(0..boundaries.len())];
+            let init = boundaries[rng.random_range(0..boundaries.len())];
             ta.set_cursor(init);
 
-            let mut width: u16 = rng.gen_range(1..=12);
-            let mut height: u16 = rng.gen_range(1..=4);
+            let mut width: u16 = rng.random_range(1..=12);
+            let mut height: u16 = rng.random_range(1..=4);
 
             for _step in 0..200 {
                 // Mostly stable width/height, occasionally change
-                if rng.gen_bool(0.1) {
-                    width = rng.gen_range(1..=12);
+                if rng.random_bool(0.1) {
+                    width = rng.random_range(1..=12);
                 }
-                if rng.gen_bool(0.1) {
-                    height = rng.gen_range(1..=4);
+                if rng.random_bool(0.1) {
+                    height = rng.random_range(1..=4);
                 }
 
                 // Pick an operation
-                match rng.gen_range(0..18) {
+                match rng.random_range(0..18) {
                     0 => {
                         // insert small random string at cursor
-                        let len = rng.gen_range(0..6);
+                        let len = rng.random_range(0..6);
                         let mut s = String::new();
                         for _ in 0..len {
                             s.push_str(&rand_grapheme(&mut rng));
@@ -1488,14 +1488,14 @@ mod tests {
                         let mut b: Vec<usize> = vec![0];
                         b.extend(ta.text().char_indices().map(|(i, _)| i).skip(1));
                         b.push(ta.text().len());
-                        let i1 = rng.gen_range(0..b.len());
-                        let i2 = rng.gen_range(0..b.len());
+                        let i1 = rng.random_range(0..b.len());
+                        let i2 = rng.random_range(0..b.len());
                         let (start, end) = if b[i1] <= b[i2] {
                             (b[i1], b[i2])
                         } else {
                             (b[i2], b[i1])
                         };
-                        let insert_len = rng.gen_range(0..=4);
+                        let insert_len = rng.random_range(0..=4);
                         let mut s = String::new();
                         for _ in 0..insert_len {
                             s.push_str(&rand_grapheme(&mut rng));
@@ -1520,8 +1520,8 @@ mod tests {
                             );
                         }
                     }
-                    2 => ta.delete_backward(rng.gen_range(0..=3)),
-                    3 => ta.delete_forward(rng.gen_range(0..=3)),
+                    2 => ta.delete_backward(rng.random_range(0..=3)),
+                    3 => ta.delete_forward(rng.random_range(0..=3)),
                     4 => ta.delete_backward_word(),
                     5 => ta.kill_to_beginning_of_line(),
                     6 => ta.kill_to_end_of_line(),
@@ -1534,7 +1534,7 @@ mod tests {
                     13 => {
                         // Insert an element with a unique sentinel payload
                         let payload =
-                            format!("[[EL#{}:{}]]", next_elem_id, rng.gen_range(1000..9999));
+                            format!("[[EL#{}:{}]]", next_elem_id, rng.random_range(1000..9999));
                         next_elem_id += 1;
                         ta.insert_element(&payload);
                         elem_texts.push(payload);
@@ -1545,7 +1545,7 @@ mod tests {
                             if let Some(start) = ta.text().find(&payload) {
                                 let end = start + payload.len();
                                 if end - start > 2 {
-                                    let pos = rng.gen_range(start + 1..end - 1);
+                                    let pos = rng.random_range(start + 1..end - 1);
                                     let ins = rand_grapheme(&mut rng);
                                     ta.insert_str_at(pos, &ins);
                                 }
@@ -1558,8 +1558,8 @@ mod tests {
                             if let Some(start) = ta.text().find(&payload) {
                                 let end = start + payload.len();
                                 // Create an intersecting range [start-δ, end-δ2)
-                                let mut s = start.saturating_sub(rng.gen_range(0..=2));
-                                let mut e = (end + rng.gen_range(0..=2)).min(ta.text().len());
+                                let mut s = start.saturating_sub(rng.random_range(0..=2));
+                                let mut e = (end + rng.random_range(0..=2)).min(ta.text().len());
                                 // Align to char boundaries to satisfy String::replace_range contract
                                 let txt = ta.text();
                                 while s > 0 && !txt.is_char_boundary(s) {
@@ -1571,7 +1571,7 @@ mod tests {
                                 if s < e {
                                     // Small replacement text
                                     let mut srep = String::new();
-                                    for _ in 0..rng.gen_range(0..=2) {
+                                    for _ in 0..rng.random_range(0..=2) {
                                         srep.push_str(&rand_grapheme(&mut rng));
                                     }
                                     ta.replace_range(s..e, &srep);
@@ -1585,7 +1585,7 @@ mod tests {
                             if let Some(start) = ta.text().find(&payload) {
                                 let end = start + payload.len();
                                 if end - start > 2 {
-                                    let pos = rng.gen_range(start + 1..end - 1);
+                                    let pos = rng.random_range(start + 1..end - 1);
                                     ta.set_cursor(pos);
                                 }
                             }
@@ -1593,7 +1593,7 @@ mod tests {
                     }
                     _ => {
                         // Jump to word boundaries
-                        if rng.gen_bool(0.5) {
+                        if rng.random_bool(0.5) {
                             let p = ta.beginning_of_previous_word();
                             ta.set_cursor(p);
                         } else {

@@ -2,12 +2,13 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::path::PathBuf;
 
-use codex_core::config_types::ReasoningEffort;
-use codex_core::config_types::ReasoningSummary;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::ReviewDecision;
 use codex_core::protocol::SandboxPolicy;
+use codex_core::protocol::TurnAbortReason;
+use codex_core::protocol_config_types::ReasoningEffort;
+use codex_core::protocol_config_types::ReasoningSummary;
 use mcp_types::RequestId;
 use serde::Deserialize;
 use serde::Serialize;
@@ -59,6 +60,15 @@ pub enum ClientRequest {
         #[serde(rename = "id")]
         request_id: RequestId,
         params: RemoveConversationListenerParams,
+    },
+    LoginChatGpt {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+    },
+    CancelLoginChatGpt {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: CancelLoginChatGptParams,
     },
 }
 
@@ -124,6 +134,36 @@ pub struct RemoveConversationSubscriptionResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct LoginChatGptResponse {
+    pub login_id: Uuid,
+    /// URL the client should open in a browser to initiate the OAuth flow.
+    pub auth_url: String,
+}
+
+// Event name for notifying client of login completion or failure.
+pub const LOGIN_CHATGPT_COMPLETE_EVENT: &str = "codex/event/login_chatgpt_complete";
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginChatGptCompleteNotification {
+    pub login_id: Uuid,
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelLoginChatGptParams {
+    pub login_id: Uuid,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CancelLoginChatGptResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct SendUserMessageParams {
     pub conversation_id: ConversationId,
     pub items: Vec<InputItem>,
@@ -152,9 +192,11 @@ pub struct InterruptConversationParams {
     pub conversation_id: ConversationId,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct InterruptConversationResponse {}
+pub struct InterruptConversationResponse {
+    pub abort_reason: TurnAbortReason,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]

@@ -39,7 +39,7 @@ pub struct Submission {
 #[non_exhaustive]
 pub enum Op {
     /// Abort current task.
-    /// This server sends no corresponding Event
+    /// This server sends [`EventMsg::TurnAborted`] in response.
     Interrupt,
 
     /// Input from the user
@@ -193,7 +193,7 @@ pub struct WritableRoot {
 }
 
 impl WritableRoot {
-    pub(crate) fn is_path_writable(&self, path: &Path) -> bool {
+    pub fn is_path_writable(&self, path: &Path) -> bool {
         // Check if the path is under the root.
         if !path.starts_with(&self.root) {
             return false;
@@ -421,6 +421,8 @@ pub enum EventMsg {
     GetHistoryEntryResponse(GetHistoryEntryResponseEvent),
 
     PlanUpdate(UpdatePlanArgs),
+
+    TurnAborted(TurnAbortedEvent),
 
     /// Notification that the agent is shutting down.
     ShutdownComplete,
@@ -743,6 +745,18 @@ pub struct Chunk {
     pub orig_index: u32,
     pub deleted_lines: Vec<String>,
     pub inserted_lines: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TurnAbortedEvent {
+    pub reason: TurnAbortReason,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnAbortReason {
+    Interrupted,
+    Replaced,
 }
 
 #[cfg(test)]

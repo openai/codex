@@ -14,6 +14,8 @@ use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
 use codex_login::CodexAuth;
+use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::protocol::TurnAbortedEvent;
 use futures::prelude::*;
 use mcp_types::CallToolResult;
 use serde::Serialize;
@@ -538,7 +540,7 @@ impl Session {
     pub fn set_task(&self, task: AgentTask) {
         let mut state = self.state.lock_unchecked();
         if let Some(current_task) = state.current_task.take() {
-            current_task.abort();
+            current_task.abort(TurnAbortReason::Replaced);
         }
         state.current_task = Some(task);
     }
@@ -680,7 +682,10 @@ impl Session {
                 call_id,
                 command: command_for_display.clone(),
                 cwd,
-                parsed_cmd: parse_command(&command_for_display),
+                parsed_cmd: parse_command(&command_for_display)
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
             }),
         };
         let event = Event {
@@ -852,13 +857,13 @@ impl Session {
             .await
     }
 
-    fn abort(&self) {
-        info!("Aborting existing session");
+    fn interrupt_task(&self) {
+        info!("interrupt received: abort current task, if any");
         let mut state = self.state.lock_unchecked();
         state.pending_approvals.clear();
         state.pending_input.clear();
         if let Some(task) = state.current_task.take() {
-            task.abort();
+            task.abort(TurnAbortReason::Interrupted);
         }
     }
 
@@ -909,7 +914,7 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        self.abort();
+        self.interrupt_task();
     }
 }
 
@@ -979,14 +984,13 @@ impl AgentTask {
         }
     }
 
-    fn abort(self) {
+    fn abort(self, reason: TurnAbortReason) {
+        // TOCTOU?
         if !self.handle.is_finished() {
             self.handle.abort();
             let event = Event {
                 id: self.sub_id,
-                msg: EventMsg::Error(ErrorEvent {
-                    message: " Turn interrupted".to_string(),
-                }),
+                msg: EventMsg::TurnAborted(TurnAbortedEvent { reason }),
             };
             let tx_event = self.sess.tx_event.clone();
             tokio::spawn(async move {
@@ -1009,7 +1013,7 @@ async fn submission_loop(
         debug!(?sub, "Submission");
         match sub.op {
             Op::Interrupt => {
-                sess.abort();
+                sess.interrupt_task();
             }
             Op::UserInput { items } => {
                 // attempt to inject input into current task
@@ -1049,8 +1053,8 @@ async fn submission_loop(
                         Arc::new(per_turn_config),
                         None,
                         provider,
-                        effort,
-                        summary,
+                        effort.into(),
+                        summary.into(),
                         sess.session_id,
                     );
 
@@ -1081,13 +1085,13 @@ async fn submission_loop(
             }
             Op::ExecApproval { id, decision } => match decision {
                 ReviewDecision::Abort => {
-                    sess.abort();
+                    sess.interrupt_task();
                 }
                 other => sess.notify_approval(&id, other),
             },
             Op::PatchApproval { id, decision } => match decision {
                 ReviewDecision::Abort => {
-                    sess.abort();
+                    sess.interrupt_task();
                 }
                 other => sess.notify_approval(&id, other),
             },
@@ -1121,7 +1125,13 @@ async fn submission_loop(
                             crate::protocol::GetHistoryEntryResponseEvent {
                                 offset,
                                 log_id,
-                                entry: entry_opt,
+                                entry: entry_opt.map(|e| {
+                                    codex_protocol::message_history::HistoryEntry {
+                                        session_id: e.session_id,
+                                        ts: e.ts,
+                                        text: e.text,
+                                    }
+                                }),
                             },
                         ),
                     };
@@ -1178,6 +1188,9 @@ async fn submission_loop(
                     warn!("failed to send Shutdown event: {e}");
                 }
                 break;
+            }
+            _ => {
+                // Ignore unknown ops; enum is non_exhaustive to allow extensions.
             }
         }
     }
