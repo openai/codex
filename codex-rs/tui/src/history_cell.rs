@@ -251,12 +251,13 @@ fn new_parsed_command(
             lines.push(Line::from(spans));
         }
         Some(o) if o.exit_code == 0 => {
-            lines.push(Line::from("✓ Completed".green().bold()));
+            lines.push(Line::from(vec!["✓".green(), " Completed".into()]));
         }
         Some(o) => {
-            lines.push(Line::from(
-                format!("✗ Failed (exit {})", o.exit_code).red().bold(),
-            ));
+            lines.push(Line::from(vec![
+                "✗".red(),
+                format!(" Failed (exit {})", o.exit_code).into(),
+            ]));
         }
     };
 
@@ -303,7 +304,7 @@ fn new_parsed_command(
             let prefix = if j == 0 { first_prefix } else { "    " };
             lines.push(Line::from(vec![
                 Span::styled(prefix, Style::default().add_modifier(Modifier::DIM)),
-                line_text.to_string().blue(),
+                line_text.to_string().dim(),
             ]));
         }
     }
