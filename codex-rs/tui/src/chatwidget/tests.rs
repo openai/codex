@@ -143,6 +143,8 @@ fn make_chatwidget_manual() -> (
         interrupts: InterruptManager::new(),
         needs_redraw: false,
         session_id: None,
+        optimize_mode_active: false,
+        optimize_result_buffer: String::new(),
     };
     (widget, rx, op_rx)
 }
@@ -237,6 +239,94 @@ fn exec_history_cell_shows_working_then_completed() {
         blob.contains("Completed"),
         "expected completed exec cell to show Completed header: {blob:?}"
     );
+}
+
+#[test]
+fn optimize_mode_token_count_does_not_change_context_left() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    // Set up a VT100 test terminal to capture footer (key hints + context left)
+    let width: u16 = 80;
+    let height: u16 = 6;
+    let viewport = ratatui::layout::Rect::new(0, 0, width, height);
+    let backend = ratatui::backend::TestBackend::new(width, height);
+    let mut terminal = crate::custom_terminal::Terminal::with_options(backend)
+        .expect("failed to construct terminal");
+    terminal.set_viewport_area(viewport);
+
+    // Ensure model has a finite context window so footer shows a context-left value.
+    chat.config.model_context_window = Some(100_000);
+    // Seed a real (non-ephemeral) token usage so footer shows a context-left value.
+    chat.handle_codex_event(Event {
+        id: "tok1".into(),
+        msg: EventMsg::TokenCount(TokenUsage {
+            input_tokens: 1_000,
+            cached_input_tokens: None,
+            output_tokens: 500,
+            reasoning_output_tokens: None,
+            total_tokens: 1_500,
+        }),
+    });
+
+    // Render once to initialize buffers.
+    terminal
+        .draw(|f| {
+            let area = ratatui::layout::Rect::new(0, 0, width, chat.desired_height(width));
+            f.render_widget_ref(&chat, area);
+        })
+        .unwrap();
+    let last_before = chat.last_token_usage.clone();
+    let total_before = chat.total_token_usage.clone();
+
+    // Simulate optimize mode being active and receiving a large TokenCount for the
+    // ephemeral optimize turn. This should NOT change the context-left display.
+    chat.optimize_mode_active = true;
+    chat.handle_codex_event(Event {
+        id: "tok2".into(),
+        msg: EventMsg::TokenCount(TokenUsage {
+            input_tokens: 50_000,
+            cached_input_tokens: None,
+            output_tokens: 25_000,
+            reasoning_output_tokens: None,
+            total_tokens: 75_000,
+        }),
+    });
+
+    terminal
+        .draw(|f| {
+            let area = ratatui::layout::Rect::new(0, 0, width, chat.desired_height(width));
+            f.render_widget_ref(&chat, area);
+        })
+        .unwrap();
+
+    // Assert that last_token_usage is unchanged (context-left depends on this),
+    // while total_token_usage increased (tokens used should count).
+    assert_eq!(
+        last_before.input_tokens, chat.last_token_usage.input_tokens,
+        "last_token_usage.input_tokens should not change during optimize mode"
+    );
+    assert!(
+        chat.total_token_usage.total_tokens > total_before.total_tokens,
+        "total token usage should increase to account for optimize turn"
+    );
+}
+
+fn extract_context_left_line(
+    term: &mut crate::custom_terminal::Terminal<ratatui::backend::TestBackend>,
+) -> Option<String> {
+    let area = term.viewport_area;
+    let buf = term.current_buffer_mut();
+    for y in 0..area.height {
+        let mut row = String::new();
+        for x in 0..area.width {
+            let ch = buf[(x, y)].symbol().chars().next().unwrap_or(' ');
+            row.push(ch);
+        }
+        if row.contains("context left") {
+            return Some(row);
+        }
+    }
+    None
 }
 
 #[test]

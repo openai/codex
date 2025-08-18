@@ -943,6 +943,26 @@ impl AgentTask {
         }
     }
 
+    fn spawn_ephemeral(
+        sess: Arc<Session>,
+        turn_context: Arc<TurnContext>,
+        sub_id: String,
+        input: Vec<InputItem>,
+    ) -> Self {
+        let handle = {
+            let sess = sess.clone();
+            let sub_id = sub_id.clone();
+            let tc = Arc::clone(&turn_context);
+            tokio::spawn(async move { run_task_ephemeral(sess, tc.as_ref(), sub_id, input).await })
+                .abort_handle()
+        };
+        Self {
+            sess,
+            sub_id,
+            handle,
+        }
+    }
+
     fn compact(
         sess: Arc<Session>,
         turn_context: Arc<TurnContext>,
@@ -1003,6 +1023,17 @@ async fn submission_loop(
                     // no current task, spawn a new one
                     let task =
                         AgentTask::spawn(sess.clone(), Arc::clone(&turn_context), sub.id, items);
+                    sess.set_task(task);
+                }
+            }
+            Op::EphemeralUserInput { items } => {
+                if let Err(items) = sess.inject_input(items) {
+                    let task = AgentTask::spawn_ephemeral(
+                        sess.clone(),
+                        Arc::clone(&turn_context),
+                        sub.id,
+                        items,
+                    );
                     sess.set_task(task);
                 }
             }
@@ -1587,7 +1618,6 @@ async fn try_run_turn(
                     let mut st = sess.state.lock_unchecked();
                     st.history.append_assistant_text(&delta);
                 }
-
                 let event = Event {
                     id: sub_id.to_string(),
                     msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
@@ -1621,6 +1651,181 @@ async fn try_run_turn(
             }
         }
     }
+}
+
+/// Ephemeral variant of `try_run_turn` that does not record assistant deltas
+/// to the in-memory conversation history. Token usage and streamed events are
+/// still emitted.
+async fn try_run_turn_ephemeral(
+    sess: &Session,
+    turn_context: &TurnContext,
+    turn_diff_tracker: &mut TurnDiffTracker,
+    sub_id: &str,
+    prompt: &Prompt,
+) -> CodexResult<Vec<ProcessedResponseItem>> {
+    let completed_call_ids = prompt
+        .input
+        .iter()
+        .filter_map(|ri| match ri {
+            ResponseItem::FunctionCallOutput { call_id, .. } => Some(call_id),
+            ResponseItem::LocalShellCall {
+                call_id: Some(call_id),
+                ..
+            } => Some(call_id),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+
+    let missing_calls = {
+        prompt
+            .input
+            .iter()
+            .filter_map(|ri| match ri {
+                ResponseItem::FunctionCall { call_id, .. } => Some(call_id),
+                ResponseItem::LocalShellCall {
+                    call_id: Some(call_id),
+                    ..
+                } => Some(call_id),
+                _ => None,
+            })
+            .filter_map(|call_id| {
+                if completed_call_ids.contains(&call_id) {
+                    None
+                } else {
+                    Some(call_id.clone())
+                }
+            })
+            .map(|call_id| ResponseItem::FunctionCallOutput {
+                call_id: call_id.clone(),
+                output: FunctionCallOutputPayload {
+                    content: "aborted".to_string(),
+                    success: Some(false),
+                },
+            })
+            .collect::<Vec<_>>()
+    };
+    let prompt: Cow<Prompt> = if missing_calls.is_empty() {
+        Cow::Borrowed(prompt)
+    } else {
+        let input = [missing_calls, prompt.input.clone()].concat();
+        Cow::Owned(Prompt {
+            input,
+            ..prompt.clone()
+        })
+    };
+
+    let mut stream = turn_context.client.clone().stream(&prompt).await?;
+    let mut output = Vec::new();
+    loop {
+        let event = stream.next().await;
+        let Some(event) = event else {
+            return Err(CodexErr::Stream(
+                "stream closed before response.completed".into(),
+                None,
+            ));
+        };
+        let event = match event {
+            Ok(ev) => ev,
+            Err(e) => return Err(e),
+        };
+        match event {
+            ResponseEvent::Created => {}
+            ResponseEvent::OutputItemDone(item) => {
+                let response = handle_response_item(
+                    sess,
+                    turn_context,
+                    turn_diff_tracker,
+                    sub_id,
+                    item.clone(),
+                )
+                .await?;
+                output.push(ProcessedResponseItem { item, response });
+            }
+            ResponseEvent::Completed { response_id: _, token_usage } => {
+                if let Some(token_usage) = token_usage {
+                    sess.tx_event
+                        .send(Event { id: sub_id.to_string(), msg: EventMsg::TokenCount(token_usage) })
+                        .await
+                        .ok();
+                }
+                let unified_diff = turn_diff_tracker.get_unified_diff();
+                if let Ok(Some(unified_diff)) = unified_diff {
+                    let msg = EventMsg::TurnDiff(TurnDiffEvent { unified_diff });
+                    let event = Event { id: sub_id.to_string(), msg };
+                    let _ = sess.tx_event.send(event).await;
+                }
+                return Ok(output);
+            }
+            ResponseEvent::OutputTextDelta(delta) => {
+                // Do not mutate in-memory conversation history for ephemeral turns.
+                let event = Event {
+                    id: sub_id.to_string(),
+                    msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
+                };
+                sess.tx_event.send(event).await.ok();
+            }
+            ResponseEvent::ReasoningSummaryDelta(delta) => {
+                let event = Event {
+                    id: sub_id.to_string(),
+                    msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta }),
+                };
+                sess.tx_event.send(event).await.ok();
+            }
+            ResponseEvent::ReasoningSummaryPartAdded => {
+                let event = Event { id: sub_id.to_string(), msg: EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {}) };
+                sess.tx_event.send(event).await.ok();
+            }
+            ResponseEvent::ReasoningContentDelta(delta) => {
+                if sess.show_raw_agent_reasoning {
+                    let event = Event { id: sub_id.to_string(), msg: EventMsg::AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent { delta }) };
+                    sess.tx_event.send(event).await.ok();
+                }
+            }
+        }
+    }
+}
+
+/// Run a single task without recording any input or output in the in-memory
+/// conversation history and without including prior history in the prompt.
+async fn run_task_ephemeral(
+    sess: Arc<Session>,
+    turn_context: &TurnContext,
+    sub_id: String,
+    input: Vec<InputItem>,
+) {
+    if input.is_empty() {
+        return;
+    }
+    let event = Event { id: sub_id.clone(), msg: EventMsg::TaskStarted };
+    if sess.tx_event.send(event).await.is_err() { return; }
+
+    let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
+
+    // Do not include conversation history; ephemeral turns are standalone.
+    let mut last_agent_message: Option<String> = None;
+    let mut turn_diff_tracker = TurnDiffTracker::new();
+    let turn_input: Vec<ResponseItem> = vec![initial_input_for_turn.clone().into()];
+
+    match try_run_turn_ephemeral(&sess, turn_context, &mut turn_diff_tracker, &sub_id, &Prompt {
+        input: turn_input,
+        store: !turn_context.disable_response_storage,
+        tools: get_openai_tools(&turn_context.tools_config, Some(sess.mcp_connection_manager.list_all_tools())),
+        base_instructions_override: turn_context.base_instructions.clone(),
+    }).await {
+        Ok(_out) => {
+            // Optionally compute last_agent_message by reading the last AgentMessage delivered, but
+            // for now leave None; UI receives AgentMessage events for display/handling.
+        }
+        Err(e) => {
+            info!("Ephemeral turn error: {e:#}");
+            let event = Event { id: sub_id.clone(), msg: EventMsg::Error(ErrorEvent { message: e.to_string() }) };
+            let _ = sess.tx_event.send(event).await;
+        }
+    }
+
+    sess.remove_task(&sub_id);
+    let event = Event { id: sub_id, msg: EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) };
+    let _ = sess.tx_event.send(event).await;
 }
 
 async fn run_compact_task(

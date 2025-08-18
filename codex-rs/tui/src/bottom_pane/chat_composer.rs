@@ -105,6 +105,29 @@ impl ChatComposer {
             }
     }
 
+    /// Retrieve the current composer text with any large-paste placeholders
+    /// replaced by their actual pasted contents, without mutating the UI state.
+    pub(crate) fn current_text_resolved(&self) -> String {
+        let mut text = self.textarea.text().to_string();
+        for (placeholder, actual) in &self.pending_pastes {
+            if text.contains(placeholder) {
+                text = text.replace(placeholder, actual);
+            }
+        }
+        text
+    }
+
+    /// Replace the composer text wholesale and reset cursor to start.
+    pub(crate) fn set_text(&mut self, text: &str) {
+        self.textarea.set_text(text);
+        self.textarea.set_cursor(0);
+        // Reset popups to avoid stale state against new text
+        self.active_popup = ActivePopup::None;
+        self.pending_pastes.clear();
+        self.dismissed_file_popup_token = None;
+        self.current_file_query = None;
+    }
+
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         let popup_height = match &self.active_popup {
             ActivePopup::Command(popup) => popup.calculate_required_height(),
@@ -657,6 +680,8 @@ impl WidgetRef for &ChatComposer {
                         Span::from(" send   "),
                         newline_hint_key.set_style(key_hint_style),
                         Span::from(" newline   "),
+                        "Ctrl+P".set_style(key_hint_style),
+                        Span::from(" optimize input   "),
                         "Ctrl+C".set_style(key_hint_style),
                         Span::from(" quit"),
                     ]

@@ -169,6 +169,17 @@ impl BottomPane<'_> {
         self.request_redraw();
     }
 
+    /// Get current composer text with large-paste placeholders resolved.
+    pub(crate) fn composer_text_resolved(&self) -> String {
+        self.composer.current_text_resolved()
+    }
+
+    /// Replace the composer text content.
+    pub(crate) fn set_composer_text(&mut self, text: &str) {
+        self.composer.set_text(text);
+        self.request_redraw();
+    }
+
     pub(crate) fn show_ctrl_c_quit_hint(&mut self) {
         self.ctrl_c_quit_hint = true;
         self.composer

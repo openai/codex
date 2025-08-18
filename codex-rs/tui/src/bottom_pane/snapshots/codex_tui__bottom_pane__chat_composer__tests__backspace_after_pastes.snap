@@ -1,5 +1,6 @@
 ---
 source: tui/src/bottom_pane/chat_composer.rs
+assertion_line: 1036
 expression: terminal.backend()
 ---
 "▌[Pasted Content 1002 chars][Pasted Content 1004 chars]                                             "
@@ -11,4 +12,4 @@ expression: terminal.backend()
 "▌                                                                                                   "
 "▌                                                                                                   "
 "▌                                                                                                   "
-" ⏎ send   Ctrl+J newline   Ctrl+C quit                                                              "
+" ⏎ send   Ctrl+J newline   Ctrl+P optimize input   Ctrl+C quit                                      "

@@ -48,6 +48,14 @@ pub enum Op {
         items: Vec<InputItem>,
     },
 
+    /// Input from the user that should NOT be recorded in the in-memory
+    /// conversation history. Useful for ephemeral helper features (e.g.,
+    /// optimizing composer text) that must not contaminate chat context.
+    EphemeralUserInput {
+        /// User input items, see `InputItem`
+        items: Vec<InputItem>,
+    },
+
     /// Similar to [`Op::UserInput`], but contains additional context required
     /// for a turn of a [`crate::codex_conversation::CodexConversation`].
     UserTurn {

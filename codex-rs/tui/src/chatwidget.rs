@@ -88,6 +88,9 @@ pub(crate) struct ChatWidget<'a> {
     // Whether a redraw is needed after handling the current event
     needs_redraw: bool,
     session_id: Option<Uuid>,
+    // Optimize mode (CTRL+P)
+    optimize_mode_active: bool,
+    optimize_result_buffer: String,
 }
 
 struct UserMessage {
@@ -136,22 +139,39 @@ impl ChatWidget<'_> {
     }
 
     fn on_agent_message(&mut self, message: String) {
-        let sink = AppEventHistorySink(self.app_event_tx.clone());
-        let finished = self.stream.apply_final_answer(&message, &sink);
-        self.last_stream_kind = Some(StreamKind::Answer);
-        self.handle_if_stream_finished(finished);
-        self.mark_needs_redraw();
+        if self.optimize_mode_active {
+            self.optimize_result_buffer = message;
+            self.last_stream_kind = Some(StreamKind::Answer);
+        } else {
+            let sink = AppEventHistorySink(self.app_event_tx.clone());
+            let finished = self.stream.apply_final_answer(&message, &sink);
+            self.last_stream_kind = Some(StreamKind::Answer);
+            self.handle_if_stream_finished(finished);
+            self.mark_needs_redraw();
+        }
     }
 
     fn on_agent_message_delta(&mut self, delta: String) {
-        self.handle_streaming_delta(StreamKind::Answer, delta);
+        if self.optimize_mode_active {
+            self.optimize_result_buffer.push_str(&delta);
+        } else {
+            self.handle_streaming_delta(StreamKind::Answer, delta);
+        }
     }
 
     fn on_agent_reasoning_delta(&mut self, delta: String) {
+        if self.optimize_mode_active {
+            // Ignore reasoning stream during optimize
+            return;
+        }
         self.handle_streaming_delta(StreamKind::Reasoning, delta);
     }
 
     fn on_agent_reasoning_final(&mut self, text: String) {
+        if self.optimize_mode_active {
+            // Ignore reasoning stream during optimize
+            return;
+        }
         let sink = AppEventHistorySink(self.app_event_tx.clone());
         let finished = self.stream.apply_final_reasoning(&text, &sink);
         self.last_stream_kind = Some(StreamKind::Reasoning);
@@ -175,36 +195,75 @@ impl ChatWidget<'_> {
     }
 
     fn on_task_complete(&mut self) {
-        // If a stream is currently active, finalize only that stream to flush any tail
-        // without emitting stray headers for other streams.
-        if self.stream.is_write_cycle_active() {
-            let sink = AppEventHistorySink(self.app_event_tx.clone());
-            if let Some(kind) = self.last_stream_kind {
-                let _ = self.stream.finalize(kind, true, &sink);
+        if self.optimize_mode_active {
+            let cleaned = sanitize_optimized_text(&self.optimize_result_buffer);
+            if cleaned.trim().is_empty() {
+                self.bottom_pane
+                    .update_status_text("optimization produced no content".to_string());
+            } else {
+                self.bottom_pane.set_composer_text(cleaned.trim());
             }
+            self.optimize_mode_active = false;
+            self.optimize_result_buffer.clear();
+            self.bottom_pane.set_task_running(false);
+            self.running_commands.clear();
+            self.mark_needs_redraw();
+        } else {
+            // If a stream is currently active, finalize only that stream to flush any tail
+            // without emitting stray headers for other streams.
+            if self.stream.is_write_cycle_active() {
+                let sink = AppEventHistorySink(self.app_event_tx.clone());
+                if let Some(kind) = self.last_stream_kind {
+                    let _ = self.stream.finalize(kind, true, &sink);
+                }
+            }
+            // Mark task stopped and request redraw now that all content is in history.
+            self.bottom_pane.set_task_running(false);
+            self.running_commands.clear();
+            self.mark_needs_redraw();
         }
-        // Mark task stopped and request redraw now that all content is in history.
-        self.bottom_pane.set_task_running(false);
-        self.running_commands.clear();
-        self.mark_needs_redraw();
     }
 
     fn on_token_count(&mut self, token_usage: TokenUsage) {
+        // Always add to the running total.
         self.total_token_usage = add_token_usage(&self.total_token_usage, &token_usage);
-        self.last_token_usage = token_usage;
-        self.bottom_pane.set_token_usage(
-            self.total_token_usage.clone(),
-            self.last_token_usage.clone(),
-            self.config.model_context_window,
-        );
+
+        // During optimize mode, do NOT let the ephemeral turn affect the
+        // context-left indicator. Keep showing the last real turn's usage
+        // while still updating the total tokens used.
+        if self.optimize_mode_active {
+            self.bottom_pane.set_token_usage(
+                self.total_token_usage.clone(),
+                self.last_token_usage.clone(),
+                self.config.model_context_window,
+            );
+        } else {
+            self.last_token_usage = token_usage;
+            self.bottom_pane.set_token_usage(
+                self.total_token_usage.clone(),
+                self.last_token_usage.clone(),
+                self.config.model_context_window,
+            );
+        }
     }
 
     fn on_error(&mut self, message: String) {
-        self.add_to_history(&history_cell::new_error_event(message));
-        self.bottom_pane.set_task_running(false);
-        self.running_commands.clear();
-        self.stream.clear_all();
-        self.mark_needs_redraw();
+        if self.optimize_mode_active {
+            self.bottom_pane
+                .update_status_text("optimization error. try again.".to_string());
+            self.bottom_pane.set_task_running(false);
+            self.optimize_mode_active = false;
+            self.optimize_result_buffer.clear();
+            self.running_commands.clear();
+            self.stream.clear_all();
+            self.mark_needs_redraw();
+        } else {
+            self.add_to_history(&history_cell::new_error_event(message));
+            self.bottom_pane.set_task_running(false);
+            self.running_commands.clear();
+            self.stream.clear_all();
+            self.mark_needs_redraw();
+        }
     }
 
     fn on_plan_update(&mut self, update: codex_core::plan_tool::UpdatePlanArgs) {
@@ -473,6 +532,10 @@ impl ChatWidget<'_> {
             self.bottom_pane.set_task_running(false);
             self.stream.clear_all();
             self.request_redraw();
+            if self.optimize_mode_active {
+                self.optimize_mode_active = false;
+                self.optimize_result_buffer.clear();
+            }
         }
     }
     fn layout_areas(&self, area: Rect) -> [Rect; 2] {
@@ -524,6 +587,8 @@ impl ChatWidget<'_> {
             interrupts: InterruptManager::new(),
             needs_redraw: false,
             session_id: None,
+            optimize_mode_active: false,
+            optimize_result_buffer: String::new(),
         }
     }
 
@@ -538,6 +603,20 @@ impl ChatWidget<'_> {
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
         if key_event.kind == KeyEventKind::Press {
             self.bottom_pane.clear_ctrl_c_quit_hint();
+        }
+
+        // CTRL+P hotkey → optimize input (only if composer has text and idle)
+        if let KeyEvent {
+            code: crossterm::event::KeyCode::Char('p'),
+            modifiers: crossterm::event::KeyModifiers::CONTROL,
+            kind: KeyEventKind::Press,
+            ..
+        } = key_event
+        {
+            if !self.bottom_pane.composer_is_empty() && !self.bottom_pane.is_task_running() {
+                self.start_optimize();
+                return;
+            }
         }
 
         match self.bottom_pane.handle_key_event(key_event) {
@@ -753,6 +832,72 @@ impl ChatWidget<'_> {
         let [_, bottom_pane_area] = self.layout_areas(area);
         self.bottom_pane.cursor_pos(bottom_pane_area)
     }
+
+    /// Trigger optimize flow using current composer content and reuse existing pipeline.
+    fn start_optimize(&mut self) {
+        let original = self.bottom_pane.composer_text_resolved();
+        if original.trim().is_empty() {
+            return;
+        }
+        self.bottom_pane.set_task_running(true);
+        self.bottom_pane
+            .update_status_text("optimizing input".to_string());
+
+        let prompt = format!(
+            "{}{}{}{}{}{}",
+            "Transform the following text into a single final instruction that is clear, specific, and outcome-oriented. ",
+            "Output ONLY the final instruction, with no labels, preamble, reasoning, or questions. ",
+            "Generate the output in the same language as the provided text. If helpful, you may use a brief outline.\n\n",
+            "Text:\n---\n",
+            original,
+            "\n---\n",
+        );
+
+        self.optimize_mode_active = true;
+        self.optimize_result_buffer.clear();
+
+        let items = vec![InputItem::Text { text: prompt }];
+        self.codex_op_tx
+            .send(Op::EphemeralUserInput { items })
+            .unwrap_or_else(|e| {
+                tracing::error!("failed to send optimize message: {e}");
+            });
+    }
+}
+
+/// Sanitize optimized output: remove common labels, code fences, and quotes.
+fn sanitize_optimized_text(s: &str) -> String {
+    let mut out = s.trim().to_string();
+    const PREFIXES: &[&str] = &[
+        "optimized input:",
+        "optimized:",
+        "optimize:",
+        "output:",
+        "hasil:",
+        "instruksi:",
+    ];
+    let mut lowered = out.to_lowercase();
+    loop {
+        let mut removed = false;
+        for p in PREFIXES {
+            if lowered.starts_with(p) {
+                out = out[p.len()..].trim_start().to_string();
+                lowered = out.to_lowercase();
+                removed = true;
+                break;
+            }
+        }
+        if !removed {
+            break;
+        }
+    }
+    // Remove surrounding straight quotes if present
+    if (out.starts_with('"') && out.ends_with('"'))
+        || (out.starts_with('\'') && out.ends_with('\''))
+    {
+        out = out[1..out.len().saturating_sub(1)].to_string();
+    }
+    out.trim().to_string()
 }
 
 impl WidgetRef for &ChatWidget<'_> {
