@@ -40,7 +40,8 @@ impl Default for ConversationManager {
 
 impl ConversationManager {
     pub async fn new_conversation(&self, config: Config) -> CodexResult<NewConversation> {
-        let auth = CodexAuth::from_codex_home(&config.codex_home)?;
+        let auth =
+            CodexAuth::from_codex_home(&config.codex_home, config.always_use_api_key_signing)?;
         self.new_conversation_with_auth(config, auth).await
     }
 

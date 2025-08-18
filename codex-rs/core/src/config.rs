@@ -163,6 +163,9 @@ pub struct Config {
 
     /// The value for the `originator` header included with Responses API requests.
     pub internal_originator: Option<String>,
+
+    /// If set to `true`, the API key will be signed with the `originator` header.
+    pub always_use_api_key_signing: bool,
 }
 
 impl Config {
@@ -409,6 +412,9 @@ pub struct ConfigToml {
     pub internal_originator: Option<String>,
 
     pub projects: Option<HashMap<String, ProjectConfig>>,
+
+    /// If set to `true`, the API key will be signed with the `originator` header.
+    pub always_use_api_key_signing: Option<bool>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -672,6 +678,7 @@ impl Config {
             include_plan_tool: include_plan_tool.unwrap_or(false),
             include_apply_patch_tool: include_apply_patch_tool_val,
             internal_originator: cfg.internal_originator,
+            always_use_api_key_signing: cfg.always_use_api_key_signing.unwrap_or(false),
         };
         Ok(config)
     }
@@ -1036,6 +1043,7 @@ disable_response_storage = true
                 include_plan_tool: false,
                 include_apply_patch_tool: false,
                 internal_originator: None,
+                always_use_api_key_signing: false,
             },
             o3_profile_config
         );
@@ -1088,6 +1096,7 @@ disable_response_storage = true
             include_plan_tool: false,
             include_apply_patch_tool: false,
             internal_originator: None,
+            always_use_api_key_signing: false,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -1155,6 +1164,7 @@ disable_response_storage = true
             include_plan_tool: false,
             include_apply_patch_tool: false,
             internal_originator: None,
+            always_use_api_key_signing: false,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);

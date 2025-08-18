@@ -23,7 +23,11 @@ pub struct TokenData {
 impl TokenData {
     /// Returns true if this is a plan that should use the traditional
     /// "metered" billing via an API key.
-    pub(crate) fn is_plan_that_should_use_api_key(&self) -> bool {
+    pub(crate) fn should_use_api_key(&self, always_use_api_key_signing: bool) -> bool {
+        if always_use_api_key_signing {
+            return true;
+        }
+
         self.id_token
             .chatgpt_plan_type
             .as_ref()

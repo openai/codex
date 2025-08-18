@@ -18,6 +18,7 @@ use ratatui::widgets::Wrap;
 
 use codex_login::AuthMode;
 
+use crate::LoginStatus;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
@@ -98,6 +99,7 @@ pub(crate) struct AuthModeWidget {
     pub error: Option<String>,
     pub sign_in_state: SignInState,
     pub codex_home: PathBuf,
+    pub login_status: LoginStatus,
 }
 
 impl AuthModeWidget {
@@ -155,10 +157,15 @@ impl AuthModeWidget {
             "Sign in with ChatGPT",
             "Usage included with Plus, Pro, and Team plans",
         ));
+        let api_key_label = if matches!(self.login_status, LoginStatus::ApiKey { .. }) {
+            "Continue using API key"
+        } else {
+            "Provide your own API key"
+        };
         lines.extend(create_mode_item(
             1,
             AuthMode::ApiKey,
-            "Provide your own API key",
+            api_key_label,
             "Pay for what you use",
         ));
         lines.push(Line::from(""));
@@ -306,11 +313,14 @@ impl AuthModeWidget {
 
     /// TODO: Read/write from the correct hierarchy config overrides + auth json + OPENAI_API_KEY.
     fn verify_api_key(&mut self) {
-        if std::env::var("OPENAI_API_KEY").is_err() {
-            self.sign_in_state = SignInState::EnvVarMissing;
-        } else {
+        if matches!(self.login_status, LoginStatus::ApiKey { .. }) {
+            // We already have an API key configured (e.g., from auth.json or env),
+            // so mark this step complete immediately.
             self.sign_in_state = SignInState::EnvVarFound;
+        } else {
+            self.sign_in_state = SignInState::EnvVarMissing;
         }
+
         self.event_tx.send(AppEvent::RequestRedraw);
     }
 

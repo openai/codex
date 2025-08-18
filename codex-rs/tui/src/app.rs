@@ -1,12 +1,13 @@
+use crate::LoginStatus;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::chatwidget::ChatWidget;
 use crate::file_search::FileSearchManager;
 use crate::get_git_diff::get_git_diff;
+use crate::get_login_status;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
 use crate::onboarding::onboarding_screen::OnboardingScreen;
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
-use crate::should_show_login_screen;
 use crate::slash_command::SlashCommand;
 use crate::tui;
 use codex_core::ConversationManager;
@@ -137,35 +138,44 @@ impl App<'_> {
             });
         }
 
-        let show_login_screen = should_show_login_screen(&config);
-        let app_state = if show_login_screen || show_trust_screen {
-            let chat_widget_args = ChatWidgetArgs {
-                config: config.clone(),
-                initial_prompt,
-                initial_images,
-                enhanced_keys_supported,
-            };
-            AppState::Onboarding {
-                screen: OnboardingScreen::new(OnboardingScreenArgs {
-                    event_tx: app_event_tx.clone(),
-                    codex_home: config.codex_home.clone(),
-                    cwd: config.cwd.clone(),
-                    show_login_screen,
-                    show_trust_screen,
-                    chat_widget_args,
-                }),
+        let login_status = get_login_status(&config);
+        let app_state = match login_status {
+            LoginStatus::None
+            | LoginStatus::ApiKey {
+                always_use_api_key_signing: false,
+            } => {
+                let chat_widget_args = ChatWidgetArgs {
+                    config: config.clone(),
+                    initial_prompt,
+                    initial_images,
+                    enhanced_keys_supported,
+                };
+                AppState::Onboarding {
+                    screen: OnboardingScreen::new(OnboardingScreenArgs {
+                        event_tx: app_event_tx.clone(),
+                        codex_home: config.codex_home.clone(),
+                        cwd: config.cwd.clone(),
+                        show_trust_screen,
+                        chat_widget_args,
+                        login_status,
+                    }),
+                }
             }
-        } else {
-            let chat_widget = ChatWidget::new(
-                config.clone(),
-                conversation_manager.clone(),
-                app_event_tx.clone(),
-                initial_prompt,
-                initial_images,
-                enhanced_keys_supported,
-            );
-            AppState::Chat {
-                widget: Box::new(chat_widget),
+            LoginStatus::ChatGPT
+            | LoginStatus::ApiKey {
+                always_use_api_key_signing: true,
+            } => {
+                let chat_widget = ChatWidget::new(
+                    config.clone(),
+                    conversation_manager.clone(),
+                    app_event_tx.clone(),
+                    initial_prompt,
+                    initial_images,
+                    enhanced_keys_supported,
+                );
+                AppState::Chat {
+                    widget: Box::new(chat_widget),
+                }
             }
         };
 
