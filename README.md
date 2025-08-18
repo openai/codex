@@ -657,6 +657,17 @@ Create a PR to update [`Formula/c/codex.rb`](https://github.com/Homebrew/homebre
 
 ---
 
+## Privacy Statement
+
+The general [OpenAI Privacy Policy](https://openai.com/policies/row-privacy-policy/) applies to Codex CLI usage.
+
+Local Execution Only: Codex CLI runs entirely on your machine. Your code remains local unless you explicitly opt to share or send something externally.
+
+Telemetry (Usage Metrics): Codex CLI does not collect or send telemetry by default. No data about your usage, configuration, or repository content is transmitted.
+
+> ❗️Important This privacy notice covers only the behavior of the contained Codex CLI source code. When you configure external AI backends (e.g., OpenAI’s API, Ollama, Azure, OpenRouter, or others), you should refer to those providers’ own privacy documentation for how they may handle your data.
+---
+
 ## Security & responsible AI
 
 Have you discovered a vulnerability or have concerns about model output? Please e-mail **security@openai.com** and we will respond promptly.
