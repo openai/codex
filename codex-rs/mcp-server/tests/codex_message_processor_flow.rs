@@ -20,11 +20,11 @@ use mcp_test_support::McpProcess;
 use mcp_test_support::create_final_assistant_message_sse_response;
 use mcp_test_support::create_mock_chat_completions_server;
 use mcp_test_support::create_shell_sse_response;
+use mcp_test_support::to_response;
 use mcp_types::JSONRPCNotification;
 use mcp_types::JSONRPCResponse;
 use mcp_types::RequestId;
 use pretty_assertions::assert_eq;
-use serde::de::DeserializeOwned;
 use std::env;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -166,12 +166,6 @@ async fn test_codex_jsonrpc_conversation_flow() {
     .expect("removeConversationListener resp");
     let RemoveConversationSubscriptionResponse {} =
         to_response(remove_listener_resp).expect("deserialize removeConversationListener response");
-}
-
-fn to_response<T: DeserializeOwned>(response: JSONRPCResponse) -> anyhow::Result<T> {
-    let value = serde_json::to_value(response.result)?;
-    let codex_response = serde_json::from_value(value)?;
-    Ok(codex_response)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

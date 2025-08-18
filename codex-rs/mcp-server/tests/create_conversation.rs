@@ -1,8 +1,16 @@
 use std::path::Path;
 
+use codex_mcp_server::wire_format::AddConversationListenerParams;
+use codex_mcp_server::wire_format::AddConversationSubscriptionResponse;
+use codex_mcp_server::wire_format::InputItem;
+use codex_mcp_server::wire_format::NewConversationParams;
+use codex_mcp_server::wire_format::NewConversationResponse;
+use codex_mcp_server::wire_format::SendUserMessageParams;
+use codex_mcp_server::wire_format::SendUserMessageResponse;
 use mcp_test_support::McpProcess;
 use mcp_test_support::create_final_assistant_message_sse_response;
 use mcp_test_support::create_mock_chat_completions_server;
+use mcp_test_support::to_response;
 use mcp_types::JSONRPCResponse;
 use mcp_types::RequestId;
 use pretty_assertions::assert_eq;
@@ -33,43 +41,64 @@ async fn test_conversation_create_and_send_message_ok() {
         .expect("init timeout")
         .expect("init failed");
 
-    // Create a conversation via the new tool.
-    let req_id = mcp
-        .send_conversation_create_tool_call("", "o3", "/repo")
+    // Create a conversation via the new JSON-RPC API.
+    let new_conv_id = mcp
+        .send_new_conversation_request(NewConversationParams {
+            model: Some("o3".to_string()),
+            ..Default::default()
+        })
         .await
-        .expect("send conversationCreate");
-
-    let resp: JSONRPCResponse = timeout(
+        .expect("send newConversation");
+    let new_conv_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(req_id)),
+        mcp.read_stream_until_response_message(RequestId::Integer(new_conv_id)),
     )
     .await
-    .expect("create response timeout")
-    .expect("create response error");
+    .expect("newConversation timeout")
+    .expect("newConversation resp");
+    let NewConversationResponse {
+        conversation_id,
+        model,
+    } = to_response::<NewConversationResponse>(new_conv_resp)
+        .expect("deserialize newConversation response");
+    assert_eq!(model, "o3");
 
-    // Structured content must include status=ok, a UUID conversation_id and the model we passed.
-    let sc = &resp.result["structuredContent"];
-    let conv_id = sc["conversation_id"].as_str().expect("uuid string");
-    assert!(!conv_id.is_empty());
-    assert_eq!(sc["model"], json!("o3"));
-
-    // Now send a message to the created conversation and expect an OK result.
-    let send_id = mcp
-        .send_user_message_tool_call("Hello", conv_id)
+    // Add a listener so we receive notifications for this conversation (not strictly required for this test).
+    let add_listener_id = mcp
+        .send_add_conversation_listener_request(AddConversationListenerParams { conversation_id })
         .await
-        .expect("send message");
+        .expect("send addConversationListener");
+    let _sub: AddConversationSubscriptionResponse =
+        to_response::<AddConversationSubscriptionResponse>(
+            timeout(
+                DEFAULT_READ_TIMEOUT,
+                mcp.read_stream_until_response_message(RequestId::Integer(add_listener_id)),
+            )
+            .await
+            .expect("addConversationListener timeout")
+            .expect("addConversationListener resp"),
+        )
+        .expect("deserialize addConversationListener response");
 
+    // Now send a user message via the wire API and expect an OK (empty object) result.
+    let send_id = mcp
+        .send_send_user_message_request(SendUserMessageParams {
+            conversation_id,
+            items: vec![InputItem::Text {
+                text: "Hello".to_string(),
+            }],
+        })
+        .await
+        .expect("send sendUserMessage");
     let send_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(send_id)),
     )
     .await
-    .expect("send response timeout")
-    .expect("send response error");
-    assert_eq!(
-        send_resp.result["structuredContent"],
-        json!({ "status": "ok" })
-    );
+    .expect("sendUserMessage timeout")
+    .expect("sendUserMessage resp");
+    let _ok: SendUserMessageResponse = to_response::<SendUserMessageResponse>(send_resp)
+        .expect("deserialize sendUserMessage response");
 
     // avoid race condition by waiting for the mock server to receive the chat.completions request
     let deadline = std::time::Instant::now() + DEFAULT_READ_TIMEOUT;
