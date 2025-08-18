@@ -6,6 +6,7 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::ReviewDecision;
 use codex_core::protocol::SandboxPolicy;
+use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol_config_types::ReasoningEffort;
 use codex_core::protocol_config_types::ReasoningSummary;
 use mcp_types::RequestId;
@@ -191,9 +192,11 @@ pub struct InterruptConversationParams {
     pub conversation_id: ConversationId,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
-pub struct InterruptConversationResponse {}
+pub struct InterruptConversationResponse {
+    pub abort_reason: TurnAbortReason,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
