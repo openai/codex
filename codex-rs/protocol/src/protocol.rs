@@ -75,6 +75,38 @@ pub enum Op {
         summary: ReasoningSummaryConfig,
     },
 
+    /// Override parts of the persistent turn context for subsequent turns.
+    ///
+    /// All fields are optional; when omitted, the existing value is preserved.
+    /// This does not enqueue any input – it only updates defaults used for
+    /// future `UserInput` turns.
+    OverrideTurnContext {
+        /// Updated `cwd` for sandbox/tool calls.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cwd: Option<PathBuf>,
+
+        /// Updated command approval policy.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        approval_policy: Option<AskForApproval>,
+
+        /// Updated sandbox policy for tool calls.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        sandbox_policy: Option<SandboxPolicy>,
+
+        /// Updated model slug. When set, the model family is derived
+        /// automatically.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model: Option<String>,
+
+        /// Updated reasoning effort (honored only for reasoning-capable models).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        effort: Option<ReasoningEffortConfig>,
+
+        /// Updated reasoning summary preference (honored only for reasoning-capable models).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        summary: Option<ReasoningSummaryConfig>,
+    },
+
     /// Approve a command execution
     ExecApproval {
         /// The id of the submission we are approving
