@@ -18,7 +18,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 
-use crate::colors::LIGHT_BLUE;
+// Use ANSI blue via Stylize helpers for highlights
 
 use crate::onboarding::onboarding_screen::KeyboardHandler;
 use crate::onboarding::onboarding_screen::StepStateProvider;
@@ -77,13 +77,7 @@ impl WidgetRef for &TrustDirectoryWidget {
             |idx: usize, option: TrustDirectorySelection, text: &str| -> Line<'static> {
                 let is_selected = self.highlighted == option;
                 if is_selected {
-                    Line::from(vec![
-                        Span::styled(
-                            format!("> {}. ", idx + 1),
-                            Style::default().fg(LIGHT_BLUE).add_modifier(Modifier::DIM),
-                        ),
-                        Span::styled(text.to_owned(), Style::default().fg(LIGHT_BLUE)),
-                    ])
+                    Line::from(format!("> {}. {text}", idx + 1)).blue()
                 } else {
                     Line::from(format!("  {}. {}", idx + 1, text))
                 }

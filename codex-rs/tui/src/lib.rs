@@ -28,7 +28,6 @@ mod bottom_pane;
 mod chatwidget;
 mod citation_regex;
 mod cli;
-mod colors;
 mod common;
 pub mod custom_terminal;
 mod diff_render;
