@@ -1,8 +1,10 @@
 use reqwest::StatusCode;
 use serde_json;
 use std::io;
+use std::time::Duration;
 use thiserror::Error;
 use tokio::task::JoinError;
+use uuid::Uuid;
 
 pub type Result<T> = std::result::Result<T, CodexErr>;
 
@@ -41,8 +43,16 @@ pub enum CodexErr {
     /// handshake has succeeded but **before** it finished emitting `response.completed`.
     ///
     /// The Session loop treats this as a transient error and will automatically retry the turn.
+    ///
+    /// Optionally includes the requested delay before retrying the turn.
     #[error("stream disconnected before completion: {0}")]
-    Stream(String),
+    Stream(String, Option<Duration>),
+
+    #[error("no conversation with id: {0}")]
+    ConversationNotFound(Uuid),
+
+    #[error("session configured event was not the first event in the stream")]
+    SessionConfiguredNotFirstEvent,
 
     /// Returned by run_command_stream when the spawned child process timed out (10s).
     #[error("timeout waiting for child process to exit")]

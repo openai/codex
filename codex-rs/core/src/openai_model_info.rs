@@ -15,7 +15,8 @@ pub(crate) struct ModelInfo {
 }
 
 pub(crate) fn get_model_info(model_family: &ModelFamily) -> Option<ModelInfo> {
-    match model_family.slug.as_str() {
+    let slug = model_family.slug.as_str();
+    match slug {
         // OSS models have a 128k shared token pool.
         // Arbitrarily splitting it: 3/4 input context, 1/4 output.
         // https://openai.com/index/gpt-oss-model-card/
@@ -78,6 +79,11 @@ pub(crate) fn get_model_info(model_family: &ModelFamily) -> Option<ModelInfo> {
         }),
 
         "gpt-5" => Some(ModelInfo {
+            context_window: 200_000,
+            max_output_tokens: 100_000,
+        }),
+
+        _ if slug.starts_with("codex-") => Some(ModelInfo {
             context_window: 200_000,
             max_output_tokens: 100_000,
         }),

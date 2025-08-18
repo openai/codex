@@ -1,8 +1,6 @@
 #![cfg(target_os = "macos")]
-#![expect(clippy::unwrap_used, clippy::expect_used)]
 
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use codex_core::exec::ExecParams;
 use codex_core::exec::ExecToolCallOutput;
@@ -11,7 +9,6 @@ use codex_core::exec::process_exec_tool_call;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::spawn::CODEX_SANDBOX_ENV_VAR;
 use tempfile::TempDir;
-use tokio::sync::Notify;
 
 use codex_core::error::Result;
 
@@ -26,6 +23,7 @@ fn skip_test() -> bool {
     false
 }
 
+#[expect(clippy::expect_used)]
 async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput> {
     let sandbox_type = get_platform_sandbox().expect("should be able to get sandbox type");
     assert_eq!(sandbox_type, SandboxType::MacosSeatbelt);
@@ -39,10 +37,9 @@ async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput
         justification: None,
     };
 
-    let ctrl_c = Arc::new(Notify::new());
     let policy = SandboxPolicy::new_read_only_policy();
 
-    process_exec_tool_call(params, sandbox_type, ctrl_c, &policy, &None, None).await
+    process_exec_tool_call(params, sandbox_type, &policy, &None, None).await
 }
 
 /// Command succeeds with exit code 0 normally
@@ -71,7 +68,6 @@ async fn truncates_output_lines() {
     let tmp = TempDir::new().expect("should be able to create temp dir");
     let cmd = vec!["seq", "300"];
 
-    #[expect(clippy::unwrap_used)]
     let output = run_test_cmd(tmp, cmd).await.unwrap();
 
     let expected_output = (1..=256)

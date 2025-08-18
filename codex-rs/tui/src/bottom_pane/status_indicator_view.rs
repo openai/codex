@@ -1,11 +1,13 @@
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::widgets::WidgetRef;
 
 use crate::app_event_sender::AppEventSender;
+use crate::bottom_pane::BottomPane;
 use crate::status_indicator_widget::StatusIndicatorWidget;
 
 use super::BottomPaneView;
-use super::bottom_pane_view::ConditionalUpdate;
 
 pub(crate) struct StatusIndicatorView {
     view: StatusIndicatorWidget,
@@ -24,11 +26,6 @@ impl StatusIndicatorView {
 }
 
 impl BottomPaneView<'_> for StatusIndicatorView {
-    fn update_status_text(&mut self, text: String) -> ConditionalUpdate {
-        self.update_text(text);
-        ConditionalUpdate::NeedsRedraw
-    }
-
     fn should_hide_when_task_is_done(&mut self) -> bool {
         true
     }
@@ -39,5 +36,15 @@ impl BottomPaneView<'_> for StatusIndicatorView {
 
     fn render(&self, area: ratatui::layout::Rect, buf: &mut Buffer) {
         self.view.render_ref(area, buf);
+    }
+
+    fn handle_key_event(&mut self, _pane: &mut BottomPane<'_>, key_event: KeyEvent) {
+        if key_event.code == KeyCode::Esc {
+            self.view.interrupt();
+        }
+    }
+
+    fn update_status_text(&mut self, text: String) {
+        self.update_text(text);
     }
 }

@@ -213,7 +213,9 @@ async fn process_chat_sse<S>(
         let sse = match timeout(idle_timeout, stream.next()).await {
             Ok(Some(Ok(ev))) => ev,
             Ok(Some(Err(e))) => {
-                let _ = tx_event.send(Err(CodexErr::Stream(e.to_string()))).await;
+                let _ = tx_event
+                    .send(Err(CodexErr::Stream(e.to_string(), None)))
+                    .await;
                 return;
             }
             Ok(None) => {
@@ -228,7 +230,10 @@ async fn process_chat_sse<S>(
             }
             Err(_) => {
                 let _ = tx_event
-                    .send(Err(CodexErr::Stream("idle timeout waiting for SSE".into())))
+                    .send(Err(CodexErr::Stream(
+                        "idle timeout waiting for SSE".into(),
+                        None,
+                    )))
                     .await;
                 return;
             }
@@ -586,6 +591,9 @@ where
                     }
                 }
                 Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryDelta(_)))) => {
+                    continue;
+                }
+                Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryPartAdded))) => {
                     continue;
                 }
             }

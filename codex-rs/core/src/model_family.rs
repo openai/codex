@@ -23,6 +23,10 @@ pub struct ModelFamily {
     // the model such that its description can be omitted.
     // See https://platform.openai.com/docs/guides/tools-local-shell
     pub uses_local_shell_tool: bool,
+
+    /// True if the model performs better when `apply_patch` is provided as
+    /// a tool call instead of just a bash command.
+    pub uses_apply_patch_tool: bool,
 }
 
 macro_rules! model_family {
@@ -36,6 +40,7 @@ macro_rules! model_family {
             needs_special_apply_patch_instructions: false,
             supports_reasoning_summaries: false,
             uses_local_shell_tool: false,
+            uses_apply_patch_tool: false,
         };
         // apply overrides
         $(
@@ -55,6 +60,7 @@ macro_rules! simple_model_family {
             needs_special_apply_patch_instructions: false,
             supports_reasoning_summaries: false,
             uses_local_shell_tool: false,
+            uses_apply_patch_tool: false,
         })
     }};
 }
@@ -78,15 +84,20 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             supports_reasoning_summaries: true,
             uses_local_shell_tool: true,
         )
+    } else if slug.starts_with("codex-") {
+        model_family!(
+            slug, slug,
+            supports_reasoning_summaries: true,
+        )
     } else if slug.starts_with("gpt-4.1") {
         model_family!(
             slug, "gpt-4.1",
             needs_special_apply_patch_instructions: true,
         )
+    } else if slug.starts_with("gpt-oss") {
+        model_family!(slug, "gpt-oss", uses_apply_patch_tool: true)
     } else if slug.starts_with("gpt-4o") {
         simple_model_family!(slug, "gpt-4o")
-    } else if slug.starts_with("gpt-oss") {
-        simple_model_family!(slug, "gpt-oss")
     } else if slug.starts_with("gpt-3.5") {
         simple_model_family!(slug, "gpt-3.5")
     } else if slug.starts_with("gpt-5") {

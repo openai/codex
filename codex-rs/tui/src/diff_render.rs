@@ -143,7 +143,7 @@ pub(crate) fn create_diff_summary(
         spans.push(RtSpan::raw(")"));
 
         let mut line = RtLine::from(spans);
-        let prefix = if idx == 0 { "  ⎿ " } else { "    " };
+        let prefix = if idx == 0 { "  └ " } else { "    " };
         line.spans.insert(0, prefix.into());
         line.spans
             .iter_mut()
@@ -269,14 +269,15 @@ fn push_wrapped_diff_line(
     let mut remaining_text: &str = text;
 
     // Reserve a fixed number of spaces after the line number so that content starts
-    // at a consistent column. The sign ("+"/"-") is rendered as part of the content
-    // with the same background as the edit, not as a separate dimmed column.
+    // at a consistent column. Content includes a 1-character diff sign prefix
+    // ("+"/"-" for inserts/deletes, or a space for context lines) so alignment
+    // stays consistent across all diff lines.
     let gap_after_ln = SPACES_AFTER_LINE_NUMBER.saturating_sub(ln_str.len());
     let first_prefix_cols = indent.len() + ln_str.len() + gap_after_ln;
     let cont_prefix_cols = indent.len() + ln_str.len() + gap_after_ln;
 
     let mut first = true;
-    let (sign_opt, bg_style) = match kind {
+    let (sign_opt, line_style) = match kind {
         DiffLineType::Insert => (Some('+'), Some(style_add())),
         DiffLineType::Delete => (Some('-'), Some(style_del())),
         DiffLineType::Context => (None, None),
@@ -305,32 +306,37 @@ fn push_wrapped_diff_line(
             spans.push(RtSpan::raw(indent));
             spans.push(RtSpan::styled(ln_str.clone(), style_dim()));
             spans.push(RtSpan::raw(" ".repeat(gap_after_ln)));
-
-            // Prefix the content with the sign if it is an insertion or deletion, and color
-            // the sign with the same background as the edited text.
-            let display_chunk = match sign_opt {
-                Some(sign_char) => format!("{sign_char}{chunk}"),
-                None => chunk.to_string(),
-            };
-
-            let content_span = match bg_style {
+            // Always include a sign character at the start of the displayed chunk
+            // ('+' for insert, '-' for delete, ' ' for context) so gutters align.
+            let sign_char = sign_opt.unwrap_or(' ');
+            let display_chunk = format!("{sign_char}{chunk}");
+            let content_span = match line_style {
                 Some(style) => RtSpan::styled(display_chunk, style),
                 None => RtSpan::raw(display_chunk),
             };
             spans.push(content_span);
-            lines.push(RtLine::from(spans));
+            let mut line = RtLine::from(spans);
+            if let Some(style) = line_style {
+                line.style = line.style.patch(style);
+            }
+            lines.push(line);
             first = false;
         } else {
+            // Continuation lines keep a space for the sign column so content aligns
             let hang_prefix = format!(
-                "{indent}{}{}",
+                "{indent}{}{} ",
                 " ".repeat(ln_str.len()),
                 " ".repeat(gap_after_ln)
             );
-            let content_span = match bg_style {
+            let content_span = match line_style {
                 Some(style) => RtSpan::styled(chunk.to_string(), style),
                 None => RtSpan::raw(chunk.to_string()),
             };
-            lines.push(RtLine::from(vec![RtSpan::raw(hang_prefix), content_span]));
+            let mut line = RtLine::from(vec![RtSpan::raw(hang_prefix), content_span]);
+            if let Some(style) = line_style {
+                line.style = line.style.patch(style);
+            }
+            lines.push(line);
         }
     }
     lines
@@ -341,30 +347,32 @@ fn style_dim() -> Style {
 }
 
 fn style_add() -> Style {
-    Style::default().bg(Color::Green)
+    Style::default().fg(Color::Green)
 }
 
 fn style_del() -> Style {
-    Style::default().bg(Color::Red)
+    Style::default().fg(Color::Red)
 }
 
-#[allow(clippy::expect_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::history_cell::HistoryCell;
-    use crate::text_block::TextBlock;
     use insta::assert_snapshot;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::text::Text;
+    use ratatui::widgets::Paragraph;
+    use ratatui::widgets::WidgetRef;
+    use ratatui::widgets::Wrap;
 
     fn snapshot_lines(name: &str, lines: Vec<RtLine<'static>>, width: u16, height: u16) {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
-        let cell = HistoryCell::PendingPatch {
-            view: TextBlock::new(lines),
-        };
         terminal
-            .draw(|f| f.render_widget_ref(&cell, f.area()))
+            .draw(|f| {
+                Paragraph::new(Text::from(lines))
+                    .wrap(Wrap { trim: false })
+                    .render_ref(f.area(), f.buffer_mut())
+            })
             .expect("draw");
         assert_snapshot!(name, terminal.backend());
     }

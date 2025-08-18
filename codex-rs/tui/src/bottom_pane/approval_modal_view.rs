@@ -75,14 +75,12 @@ impl<'a> BottomPaneView<'a> for ApprovalModalView<'a> {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
-    use std::path::PathBuf;
     use std::sync::mpsc::channel;
 
     fn make_exec_request() -> ApprovalRequest {
         ApprovalRequest::Exec {
             id: "test".to_string(),
             command: vec!["echo".to_string(), "hi".to_string()],
-            cwd: PathBuf::from("/tmp"),
             reason: None,
         }
     }
@@ -100,6 +98,7 @@ mod tests {
             app_event_tx: AppEventSender::new(tx_raw2),
             has_input_focus: true,
             enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
         });
         assert_eq!(CancellationEvent::Handled, view.on_ctrl_c(&mut pane));
         assert!(view.queue.is_empty());

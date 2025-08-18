@@ -322,7 +322,6 @@ pub fn create_oss_provider_with_base_url(base_url: &str) -> ModelProviderInfo {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
     use super::*;
     use pretty_assertions::assert_eq;
 

@@ -134,8 +134,6 @@ async fn load_first_candidate(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
-
     use super::*;
     use crate::config::ConfigOverrides;
     use crate::config::ConfigToml;

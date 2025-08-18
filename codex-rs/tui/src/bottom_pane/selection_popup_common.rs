@@ -93,9 +93,7 @@ pub(crate) fn render_rows(
                 spans.push(Span::raw("  "));
                 spans.push(Span::styled(
                     desc.clone(),
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::DIM),
+                    Style::default().add_modifier(Modifier::DIM),
                 ));
             }
 
@@ -118,7 +116,7 @@ pub(crate) fn render_rows(
             Block::default()
                 .borders(Borders::LEFT)
                 .border_type(BorderType::QuadrantOutside)
-                .border_style(Style::default().fg(Color::DarkGray)),
+                .border_style(Style::default().add_modifier(Modifier::DIM)),
         )
         .widths([Constraint::Percentage(100)]);
 

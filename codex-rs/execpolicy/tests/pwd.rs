@@ -1,4 +1,3 @@
-#![expect(clippy::expect_used)]
 extern crate codex_execpolicy;
 
 use std::vec;
@@ -12,6 +11,7 @@ use codex_execpolicy::PositionalArg;
 use codex_execpolicy::ValidExec;
 use codex_execpolicy::get_default_policy;
 
+#[expect(clippy::expect_used)]
 fn setup() -> Policy {
     get_default_policy().expect("failed to load default policy")
 }

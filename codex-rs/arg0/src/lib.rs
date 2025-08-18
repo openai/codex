@@ -82,10 +82,34 @@ where
     })
 }
 
+const ILLEGAL_ENV_VAR_PREFIX: &str = "CODEX_";
+
 /// Load env vars from ~/.codex/.env and `$(pwd)/.env`.
+///
+/// Security: Do not allow `.env` files to create or modify any variables
+/// with names starting with `CODEX_`.
 fn load_dotenv() {
     if let Ok(codex_home) = codex_core::config::find_codex_home() {
-        dotenvy::from_path(codex_home.join(".env")).ok();
+        if let Ok(iter) = dotenvy::from_path_iter(codex_home.join(".env")) {
+            set_filtered(iter);
+        }
     }
-    dotenvy::dotenv().ok();
+
+    if let Ok(iter) = dotenvy::dotenv_iter() {
+        set_filtered(iter);
+    }
+}
+
+/// Helper to set vars from a dotenvy iterator while filtering out `CODEX_` keys.
+fn set_filtered<I>(iter: I)
+where
+    I: IntoIterator<Item = Result<(String, String), dotenvy::Error>>,
+{
+    for (key, value) in iter.into_iter().flatten() {
+        if !key.to_ascii_uppercase().starts_with(ILLEGAL_ENV_VAR_PREFIX) {
+            // It is safe to call set_var() because our process is
+            // single-threaded at this point in its execution.
+            unsafe { std::env::set_var(&key, &value) };
+        }
+    }
 }

@@ -9,7 +9,6 @@ use codex_file_search::FileMatch;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::text::Line;
 use ratatui::widgets::WidgetRef;
 
 mod approval_modal_view;
@@ -18,7 +17,6 @@ mod chat_composer;
 mod chat_composer_history;
 mod command_popup;
 mod file_search_popup;
-mod live_ring_widget;
 mod popup_consts;
 mod scroll_state;
 mod selection_popup_common;
@@ -34,7 +32,6 @@ pub(crate) enum CancellationEvent {
 pub(crate) use chat_composer::ChatComposer;
 pub(crate) use chat_composer::InputResult;
 
-use crate::status_indicator_widget::StatusIndicatorWidget;
 use approval_modal_view::ApprovalModalView;
 use status_indicator_view::StatusIndicatorView;
 
@@ -52,15 +49,6 @@ pub(crate) struct BottomPane<'a> {
     is_task_running: bool,
     ctrl_c_quit_hint: bool,
 
-    /// Optional live, multi‑line status/"live cell" rendered directly above
-    /// the composer while a task is running. Unlike `active_view`, this does
-    /// not replace the composer; it augments it.
-    live_status: Option<StatusIndicatorWidget>,
-
-    /// Optional transient ring shown above the composer. This is a rendering-only
-    /// container used during development before we wire it to ChatWidget events.
-    live_ring: Option<live_ring_widget::LiveRingWidget>,
-
     /// True if the active view is the StatusIndicatorView that replaces the
     /// composer during a running task.
     status_view_active: bool,
@@ -70,6 +58,7 @@ pub(crate) struct BottomPaneParams {
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) has_input_focus: bool,
     pub(crate) enhanced_keys_supported: bool,
+    pub(crate) placeholder_text: String,
 }
 
 impl BottomPane<'_> {
@@ -81,46 +70,25 @@ impl BottomPane<'_> {
                 params.has_input_focus,
                 params.app_event_tx.clone(),
                 enhanced_keys_supported,
+                params.placeholder_text,
             ),
             active_view: None,
             app_event_tx: params.app_event_tx,
             has_input_focus: params.has_input_focus,
             is_task_running: false,
             ctrl_c_quit_hint: false,
-            live_status: None,
-            live_ring: None,
             status_view_active: false,
         }
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
-        let overlay_status_h = self
-            .live_status
-            .as_ref()
-            .map(|s| s.desired_height(width))
-            .unwrap_or(0);
-        let ring_h = self
-            .live_ring
-            .as_ref()
-            .map(|r| r.desired_height(width))
-            .unwrap_or(0);
-
         let view_height = if let Some(view) = self.active_view.as_ref() {
-            // Add a single blank spacer line between live ring and status view when active.
-            let spacer = if self.live_ring.is_some() && self.status_view_active {
-                1
-            } else {
-                0
-            };
-            spacer + view.desired_height(width)
+            view.desired_height(width)
         } else {
             self.composer.desired_height(width)
         };
 
-        overlay_status_h
-            .saturating_add(ring_h)
-            .saturating_add(view_height)
-            .saturating_add(Self::BOTTOM_PAD_LINES)
+        view_height.saturating_add(Self::BOTTOM_PAD_LINES)
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
@@ -201,44 +169,6 @@ impl BottomPane<'_> {
         self.request_redraw();
     }
 
-    /// Update the status indicator text. Prefer replacing the composer with
-    /// the StatusIndicatorView so the input pane shows a single-line status
-    /// like: `▌ Working waiting for model`.
-    pub(crate) fn update_status_text(&mut self, text: String) {
-        let mut handled_by_view = false;
-        if let Some(view) = self.active_view.as_mut() {
-            if matches!(
-                view.update_status_text(text.clone()),
-                bottom_pane_view::ConditionalUpdate::NeedsRedraw
-            ) {
-                handled_by_view = true;
-            }
-        } else {
-            let mut v = StatusIndicatorView::new(self.app_event_tx.clone());
-            v.update_text(text.clone());
-            self.active_view = Some(Box::new(v));
-            self.status_view_active = true;
-            handled_by_view = true;
-        }
-
-        // Fallback: if the current active view did not consume status updates
-        // and no modal view is active, present an overlay above the composer.
-        // If a modal is active, do NOT render the overlay to avoid drawing
-        // over the dialog.
-        if !handled_by_view && self.active_view.is_none() {
-            if self.live_status.is_none() {
-                self.live_status = Some(StatusIndicatorWidget::new(self.app_event_tx.clone()));
-            }
-            if let Some(status) = &mut self.live_status {
-                status.update_text(text);
-            }
-        } else if !handled_by_view {
-            // Ensure any previous overlay is cleared when a modal becomes active.
-            self.live_status = None;
-        }
-        self.request_redraw();
-    }
-
     pub(crate) fn show_ctrl_c_quit_hint(&mut self) {
         self.ctrl_c_quit_hint = true;
         self.composer
@@ -271,7 +201,6 @@ impl BottomPane<'_> {
             }
             self.request_redraw();
         } else {
-            self.live_status = None;
             // Drop the status view when a task completes, but keep other
             // modal views (e.g. approval dialogs).
             if let Some(mut view) = self.active_view.take() {
@@ -280,6 +209,19 @@ impl BottomPane<'_> {
                 }
                 self.status_view_active = false;
             }
+        }
+    }
+
+    /// Update the live status text shown while a task is running.
+    /// If a modal view is active (i.e., not the status indicator), this is a no‑op.
+    pub(crate) fn update_status_text(&mut self, text: String) {
+        if !self.is_task_running || !self.status_view_active {
+            return;
+        }
+        if let Some(mut view) = self.active_view.take() {
+            view.update_status_text(text);
+            self.active_view = Some(view);
+            self.request_redraw();
         }
     }
 
@@ -321,8 +263,6 @@ impl BottomPane<'_> {
         // Otherwise create a new approval modal overlay.
         let modal = ApprovalModalView::new(request, self.app_event_tx.clone());
         self.active_view = Some(Box::new(modal));
-        // Hide any overlay status while a modal is visible.
-        self.live_status = None;
         self.status_view_active = false;
         self.request_redraw()
     }
@@ -357,82 +297,35 @@ impl BottomPane<'_> {
         self.composer.on_file_search_result(query, matches);
         self.request_redraw();
     }
-
-    /// Set the rows and cap for the transient live ring overlay.
-    pub(crate) fn set_live_ring_rows(&mut self, max_rows: u16, rows: Vec<Line<'static>>) {
-        let mut w = live_ring_widget::LiveRingWidget::new();
-        w.set_max_rows(max_rows);
-        w.set_rows(rows);
-        self.live_ring = Some(w);
-    }
-
-    pub(crate) fn clear_live_ring(&mut self) {
-        self.live_ring = None;
-    }
-
-    // Removed restart_live_status_with_text – no longer used by the current streaming UI.
 }
 
 impl WidgetRef for &BottomPane<'_> {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let mut y_offset = 0u16;
-        if let Some(ring) = &self.live_ring {
-            let live_h = ring.desired_height(area.width).min(area.height);
-            if live_h > 0 {
-                let live_rect = Rect {
-                    x: area.x,
-                    y: area.y,
-                    width: area.width,
-                    height: live_h,
-                };
-                ring.render_ref(live_rect, buf);
-                y_offset = live_h;
-            }
-        }
-        // Spacer between live ring and status view when active
-        if self.live_ring.is_some() && self.status_view_active && y_offset < area.height {
-            // Leave one empty line
-            y_offset = y_offset.saturating_add(1);
-        }
-        if let Some(status) = &self.live_status {
-            let live_h = status
-                .desired_height(area.width)
-                .min(area.height.saturating_sub(y_offset));
-            if live_h > 0 {
-                let live_rect = Rect {
-                    x: area.x,
-                    y: area.y + y_offset,
-                    width: area.width,
-                    height: live_h,
-                };
-                status.render_ref(live_rect, buf);
-                y_offset = y_offset.saturating_add(live_h);
-            }
-        }
-
         if let Some(view) = &self.active_view {
-            if y_offset < area.height {
-                // Reserve bottom padding lines; keep at least 1 line for the view.
-                let avail = area.height - y_offset;
+            // Reserve bottom padding lines; keep at least 1 line for the view.
+            let avail = area.height;
+            if avail > 0 {
                 let pad = BottomPane::BOTTOM_PAD_LINES.min(avail.saturating_sub(1));
                 let view_rect = Rect {
                     x: area.x,
-                    y: area.y + y_offset,
+                    y: area.y,
                     width: area.width,
                     height: avail - pad,
                 };
                 view.render(view_rect, buf);
             }
-        } else if y_offset < area.height {
-            let composer_rect = Rect {
-                x: area.x,
-                y: area.y + y_offset,
-                width: area.width,
-                // Reserve bottom padding
-                height: (area.height - y_offset)
-                    - BottomPane::BOTTOM_PAD_LINES.min((area.height - y_offset).saturating_sub(1)),
-            };
-            (&self.composer).render_ref(composer_rect, buf);
+        } else {
+            let avail = area.height;
+            if avail > 0 {
+                let composer_rect = Rect {
+                    x: area.x,
+                    y: area.y,
+                    width: area.width,
+                    // Reserve bottom padding
+                    height: avail - BottomPane::BOTTOM_PAD_LINES.min(avail.saturating_sub(1)),
+                };
+                (&self.composer).render_ref(composer_rect, buf);
+            }
         }
     }
 }
@@ -443,15 +336,12 @@ mod tests {
     use crate::app_event::AppEvent;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
-    use ratatui::text::Line;
-    use std::path::PathBuf;
     use std::sync::mpsc::channel;
 
     fn exec_request() -> ApprovalRequest {
         ApprovalRequest::Exec {
             id: "1".to_string(),
             command: vec!["echo".into(), "ok".into()],
-            cwd: PathBuf::from("."),
             reason: None,
         }
     }
@@ -464,6 +354,7 @@ mod tests {
             app_event_tx: tx,
             has_input_focus: true,
             enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
         });
         pane.push_approval_request(exec_request());
         assert_eq!(CancellationEvent::Handled, pane.on_ctrl_c());
@@ -471,103 +362,7 @@ mod tests {
         assert_eq!(CancellationEvent::Ignored, pane.on_ctrl_c());
     }
 
-    #[test]
-    fn live_ring_renders_above_composer() {
-        let (tx_raw, _rx) = channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let mut pane = BottomPane::new(BottomPaneParams {
-            app_event_tx: tx,
-            has_input_focus: true,
-            enhanced_keys_supported: false,
-        });
-
-        // Provide 4 rows with max_rows=3; only the last 3 should be visible.
-        pane.set_live_ring_rows(
-            3,
-            vec![
-                Line::from("one".to_string()),
-                Line::from("two".to_string()),
-                Line::from("three".to_string()),
-                Line::from("four".to_string()),
-            ],
-        );
-
-        let area = Rect::new(0, 0, 10, 5);
-        let mut buf = Buffer::empty(area);
-        (&pane).render_ref(area, &mut buf);
-
-        // Extract the first 3 rows and assert they contain the last three lines.
-        let mut lines: Vec<String> = Vec::new();
-        for y in 0..3 {
-            let mut s = String::new();
-            for x in 0..area.width {
-                s.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
-            }
-            lines.push(s.trim_end().to_string());
-        }
-        assert_eq!(lines, vec!["two", "three", "four"]);
-    }
-
-    #[test]
-    fn status_indicator_visible_with_live_ring() {
-        let (tx_raw, _rx) = channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
-        let mut pane = BottomPane::new(BottomPaneParams {
-            app_event_tx: tx,
-            has_input_focus: true,
-            enhanced_keys_supported: false,
-        });
-
-        // Simulate task running which replaces composer with the status indicator.
-        pane.set_task_running(true);
-        pane.update_status_text("waiting for model".to_string());
-
-        // Provide 2 rows in the live ring (e.g., streaming CoT) and ensure the
-        // status indicator remains visible below them.
-        pane.set_live_ring_rows(
-            2,
-            vec![
-                Line::from("cot1".to_string()),
-                Line::from("cot2".to_string()),
-            ],
-        );
-
-        // Allow some frames so the dot animation is present.
-        std::thread::sleep(std::time::Duration::from_millis(120));
-
-        // Height should include both ring rows, 1 spacer, and the 1-line status.
-        let area = Rect::new(0, 0, 30, 4);
-        let mut buf = Buffer::empty(area);
-        (&pane).render_ref(area, &mut buf);
-
-        // Top two rows are the live ring.
-        let mut r0 = String::new();
-        let mut r1 = String::new();
-        for x in 0..area.width {
-            r0.push(buf[(x, 0)].symbol().chars().next().unwrap_or(' '));
-            r1.push(buf[(x, 1)].symbol().chars().next().unwrap_or(' '));
-        }
-        assert!(r0.contains("cot1"), "expected first live row: {r0:?}");
-        assert!(r1.contains("cot2"), "expected second live row: {r1:?}");
-
-        // Row 2 is the spacer (blank)
-        let mut r2 = String::new();
-        for x in 0..area.width {
-            r2.push(buf[(x, 2)].symbol().chars().next().unwrap_or(' '));
-        }
-        assert!(r2.trim().is_empty(), "expected blank spacer line: {r2:?}");
-
-        // Bottom row is the status line; it should contain the left bar and "Working".
-        let mut r3 = String::new();
-        for x in 0..area.width {
-            r3.push(buf[(x, 3)].symbol().chars().next().unwrap_or(' '));
-        }
-        assert_eq!(buf[(0, 3)].symbol().chars().next().unwrap_or(' '), '▌');
-        assert!(
-            r3.contains("Working"),
-            "expected Working header in status line: {r3:?}"
-        );
-    }
+    // live ring removed; related tests deleted.
 
     #[test]
     fn overlay_not_shown_above_approval_modal() {
@@ -577,14 +372,13 @@ mod tests {
             app_event_tx: tx,
             has_input_focus: true,
             enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
         });
 
         // Create an approval modal (active view).
         pane.push_approval_request(exec_request());
-        // Attempt to update status; this should NOT create an overlay while modal is visible.
-        pane.update_status_text("running command".to_string());
 
-        // Render and verify the top row does not include the Working header overlay.
+        // Render and verify the top row does not include an overlay.
         let area = Rect::new(0, 0, 60, 6);
         let mut buf = Buffer::empty(area);
         (&pane).render_ref(area, &mut buf);
@@ -595,7 +389,7 @@ mod tests {
         }
         assert!(
             !r0.contains("Working"),
-            "overlay Working header should not render above modal"
+            "overlay should not render above modal"
         );
     }
 
@@ -607,11 +401,11 @@ mod tests {
             app_event_tx: tx.clone(),
             has_input_focus: true,
             enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
         });
 
         // Start a running task so the status indicator replaces the composer.
         pane.set_task_running(true);
-        pane.update_status_text("waiting for model".to_string());
 
         // Push an approval modal (e.g., command approval) which should hide the status view.
         pane.push_approval_request(exec_request());
@@ -657,15 +451,11 @@ mod tests {
             app_event_tx: tx,
             has_input_focus: true,
             enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
         });
 
         // Begin a task: show initial status.
         pane.set_task_running(true);
-        pane.update_status_text("waiting for model".to_string());
-
-        // As a long-running command begins (post-approval), ensure the status
-        // indicator is visible while we wait for the command to run.
-        pane.update_status_text("running command".to_string());
 
         // Allow some frames so the animation thread ticks.
         std::thread::sleep(std::time::Duration::from_millis(120));
@@ -693,11 +483,11 @@ mod tests {
             app_event_tx: tx,
             has_input_focus: true,
             enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
         });
 
         // Activate spinner (status view replaces composer) with no live ring.
         pane.set_task_running(true);
-        pane.update_status_text("waiting for model".to_string());
 
         // Use height == desired_height; expect 1 status row at top and 2 bottom padding rows.
         let height = pane.desired_height(30);
@@ -745,10 +535,10 @@ mod tests {
             app_event_tx: tx,
             has_input_focus: true,
             enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
         });
 
         pane.set_task_running(true);
-        pane.update_status_text("waiting for model".to_string());
 
         // Height=2 → pad shrinks to 1; bottom row is blank, top row has spinner.
         let area2 = Rect::new(0, 0, 20, 2);

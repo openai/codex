@@ -31,7 +31,6 @@ use crate::bottom_pane::textarea::TextAreaState;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
 
-const BASE_PLACEHOLDER_TEXT: &str = "Ask Codex to do anything";
 /// If the pasted content exceeds this number of characters, replace it with a
 /// placeholder in the UI.
 const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
@@ -61,6 +60,7 @@ pub(crate) struct ChatComposer {
     pending_pastes: Vec<(String, String)>,
     token_usage_info: Option<TokenUsageInfo>,
     has_focus: bool,
+    placeholder_text: String,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -75,6 +75,7 @@ impl ChatComposer {
         has_input_focus: bool,
         app_event_tx: AppEventSender,
         enhanced_keys_supported: bool,
+        placeholder_text: String,
     ) -> Self {
         let use_shift_enter_hint = enhanced_keys_supported;
 
@@ -91,6 +92,7 @@ impl ChatComposer {
             pending_pastes: Vec::new(),
             token_usage_info: None,
             has_focus: has_input_focus,
+            placeholder_text,
         }
     }
 
@@ -166,7 +168,7 @@ impl ChatComposer {
         let char_count = pasted.chars().count();
         if char_count > LARGE_PASTE_CHAR_THRESHOLD {
             let placeholder = format!("[Pasted Content {char_count} chars]");
-            self.textarea.insert_str(&placeholder);
+            self.textarea.insert_element(&placeholder);
             self.pending_pastes.push((placeholder, pasted));
         } else {
             self.textarea.insert_str(&pasted);
@@ -532,17 +534,6 @@ impl ChatComposer {
 
     /// Handle generic Input events that modify the textarea content.
     fn handle_input_basic(&mut self, input: KeyEvent) -> (InputResult, bool) {
-        // Special handling for backspace on placeholders
-        if let KeyEvent {
-            code: KeyCode::Backspace,
-            ..
-        } = input
-        {
-            if self.try_remove_placeholder_at_cursor() {
-                return (InputResult::None, true);
-            }
-        }
-
         // Normal input handling
         self.textarea.input(input);
         let text_after = self.textarea.text();
@@ -552,34 +543,6 @@ impl ChatComposer {
             .retain(|(placeholder, _)| text_after.contains(placeholder));
 
         (InputResult::None, true)
-    }
-
-    /// Attempts to remove a placeholder if the cursor is at the end of one.
-    /// Returns true if a placeholder was removed.
-    fn try_remove_placeholder_at_cursor(&mut self) -> bool {
-        let p = self.textarea.cursor();
-        let text = self.textarea.text();
-
-        // Find any placeholder that ends at the cursor position
-        let placeholder_to_remove = self.pending_pastes.iter().find_map(|(ph, _)| {
-            if p < ph.len() {
-                return None;
-            }
-            let potential_ph_start = p - ph.len();
-            if text[potential_ph_start..p] == *ph {
-                Some(ph.clone())
-            } else {
-                None
-            }
-        });
-
-        if let Some(placeholder) = placeholder_to_remove {
-            self.textarea.replace_range(p - placeholder.len()..p, "");
-            self.pending_pastes.retain(|(ph, _)| ph != &placeholder);
-            true
-        } else {
-            false
-        }
     }
 
     /// Synchronize `self.command_popup` with the current text in the
@@ -731,15 +694,15 @@ impl WidgetRef for &ChatComposer {
                     .render_ref(bottom_line_rect, buf);
             }
         }
+        let border_style = if self.has_focus {
+            Style::default().fg(Color::Cyan)
+        } else {
+            Style::default().add_modifier(Modifier::DIM)
+        };
         Block::default()
-            .border_style(Style::default().dim())
             .borders(Borders::LEFT)
             .border_type(BorderType::QuadrantOutside)
-            .border_style(Style::default().fg(if self.has_focus {
-                Color::Cyan
-            } else {
-                Color::Gray
-            }))
+            .border_style(border_style)
             .render_ref(
                 Rect::new(textarea_rect.x, textarea_rect.y, 1, textarea_rect.height),
                 buf,
@@ -751,7 +714,7 @@ impl WidgetRef for &ChatComposer {
         let mut state = self.textarea_state.borrow_mut();
         StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
         if self.textarea.text().is_empty() {
-            Line::from(BASE_PLACEHOLDER_TEXT)
+            Line::from(self.placeholder_text.as_str())
                 .style(Style::default().dim())
                 .render_ref(textarea_rect.inner(Margin::new(1, 0)), buf);
         }
@@ -924,7 +887,8 @@ mod tests {
 
         let (tx, _rx) = std::sync::mpsc::channel();
         let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(true, sender, false);
+        let mut composer =
+            ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
 
         let needs_redraw = composer.handle_paste("hello".to_string());
         assert!(needs_redraw);
@@ -947,7 +911,8 @@ mod tests {
 
         let (tx, _rx) = std::sync::mpsc::channel();
         let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(true, sender, false);
+        let mut composer =
+            ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
 
         let large = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 10);
         let needs_redraw = composer.handle_paste(large.clone());
@@ -976,7 +941,8 @@ mod tests {
         let large = "y".repeat(LARGE_PASTE_CHAR_THRESHOLD + 1);
         let (tx, _rx) = std::sync::mpsc::channel();
         let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(true, sender, false);
+        let mut composer =
+            ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
 
         composer.handle_paste(large);
         assert_eq!(composer.pending_pastes.len(), 1);
@@ -1012,7 +978,12 @@ mod tests {
 
         for (name, input) in test_cases {
             // Create a fresh composer for each test case
-            let mut composer = ChatComposer::new(true, sender.clone(), false);
+            let mut composer = ChatComposer::new(
+                true,
+                sender.clone(),
+                false,
+                "Ask Codex to do anything".to_string(),
+            );
 
             if let Some(text) = input {
                 composer.handle_paste(text);
@@ -1050,7 +1021,8 @@ mod tests {
 
         let (tx, rx) = std::sync::mpsc::channel();
         let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(true, sender, false);
+        let mut composer =
+            ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
 
         // Type the slash command.
         for ch in [
@@ -1093,7 +1065,8 @@ mod tests {
 
         let (tx, rx) = std::sync::mpsc::channel();
         let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(true, sender, false);
+        let mut composer =
+            ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
 
         for ch in ['/', 'm', 'e', 'n', 't', 'i', 'o', 'n'] {
             let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
@@ -1132,7 +1105,8 @@ mod tests {
 
         let (tx, _rx) = std::sync::mpsc::channel();
         let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(true, sender, false);
+        let mut composer =
+            ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
 
         // Define test cases: (paste content, is_large)
         let test_cases = [
@@ -1205,7 +1179,8 @@ mod tests {
 
         let (tx, _rx) = std::sync::mpsc::channel();
         let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(true, sender, false);
+        let mut composer =
+            ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
 
         // Define test cases: (content, is_large)
         let test_cases = [
@@ -1271,7 +1246,8 @@ mod tests {
 
         let (tx, _rx) = std::sync::mpsc::channel();
         let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(true, sender, false);
+        let mut composer =
+            ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
 
         // Define test cases: (cursor_position_from_end, expected_pending_count)
         let test_cases = [
