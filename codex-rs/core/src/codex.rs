@@ -1207,8 +1207,8 @@ async fn submission_loop(
                 let tools = sess.mcp_connection_manager.list_all_tools();
                 let event = Event {
                     id: sub_id,
-                    msg: EventMsg::ListMcpToolsResponse(
-                        crate::protocol::ListMcpToolsResponseEvent { tools },
+                    msg: EventMsg::McpListToolsResponse(
+                        crate::protocol::McpListToolsResponseEvent { tools },
                     ),
                 };
                 if let Err(e) = tx_event.send(event).await {

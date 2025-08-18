@@ -523,7 +523,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             EventMsg::GetHistoryEntryResponse(_) => {
                 // Currently ignored in exec output.
             }
-            EventMsg::ListMcpToolsResponse(_) => {
+            EventMsg::McpListToolsResponse(_) => {
                 // Currently ignored in exec output.
             }
             EventMsg::TurnAborted(abort_reason) => match abort_reason.reason {

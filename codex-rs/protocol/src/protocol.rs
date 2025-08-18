@@ -458,7 +458,7 @@ pub enum EventMsg {
     GetHistoryEntryResponse(GetHistoryEntryResponseEvent),
 
     /// List of MCP tools available to the agent.
-    ListMcpToolsResponse(ListMcpToolsResponseEvent),
+    McpListToolsResponse(McpListToolsResponseEvent),
 
     PlanUpdate(UpdatePlanArgs),
 
@@ -731,7 +731,7 @@ pub struct GetHistoryEntryResponseEvent {
 
 /// Response payload for `Op::ListMcpTools`.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ListMcpToolsResponseEvent {
+pub struct McpListToolsResponseEvent {
     /// Fully qualified tool name -> tool definition.
     pub tools: std::collections::HashMap<String, McpTool>,
 }
