@@ -5,8 +5,6 @@ use std::path::Path;
 
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_mcp_server::CodexToolCallParam;
-use mcp_types::JSONRPCResponse;
-use mcp_types::RequestId;
 use serde_json::json;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -100,21 +98,12 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
         )
         .await?;
 
-    // Expect Codex to return an error or interruption response
-    let codex_response: JSONRPCResponse = timeout(
+    // Expect Codex to emit a TurnAborted event notification
+    let _turn_aborted = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp_process.read_stream_until_response_message(RequestId::Integer(codex_request_id)),
+        mcp_process.read_stream_until_notification_message("turn_aborted"),
     )
     .await??;
-
-    assert!(
-        codex_response
-            .result
-            .as_object()
-            .map(|o| o.contains_key("error"))
-            .unwrap_or(false),
-        "Expected an interruption or error result, got: {codex_response:?}"
-    );
 
     let codex_reply_request_id = mcp_process
         .send_codex_reply_tool_call(&session_id, "Second Run: run `sleep 60`")
@@ -131,21 +120,12 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
         )
         .await?;
 
-    // Expect Codex to return an error or interruption response
-    let codex_response: JSONRPCResponse = timeout(
+    // Expect Codex to emit a TurnAborted event notification
+    let _turn_aborted = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp_process.read_stream_until_response_message(RequestId::Integer(codex_reply_request_id)),
+        mcp_process.read_stream_until_notification_message("turn_aborted"),
     )
     .await??;
-
-    assert!(
-        codex_response
-            .result
-            .as_object()
-            .map(|o| o.contains_key("error"))
-            .unwrap_or(false),
-        "Expected an interruption or error result, got: {codex_response:?}"
-    );
     Ok(())
 }
 
