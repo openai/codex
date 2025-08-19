@@ -177,7 +177,7 @@ You can explicitly choose which authentication Codex should prefer when both are
 preferred_auth_method = "apikey"
 ```
 
-Or override ad‑hoc via CLI:
+Or override ad-hoc via CLI:
 
 ```bash
 codex --config preferred_auth_method="apikey"
@@ -193,7 +193,7 @@ preferred_auth_method = "chatgpt"
 Notes:
 
 - When `preferred_auth_method = "apikey"` and an API key is available, the login screen is skipped.
-- When `preferred_auth_method = "chatgpt"` (default), Codex prefers ChatGPT auth if present; if only an API key is present, it will use the API key. Certain account types may also require API‑key mode.
+- When `preferred_auth_method = "chatgpt"` (default), Codex prefers ChatGPT auth if present; if only an API key is present, it will use the API key. Certain account types may also require API-key mode.
 
 ### Choosing Codex's level of autonomy
 
