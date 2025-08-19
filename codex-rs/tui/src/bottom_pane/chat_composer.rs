@@ -273,6 +273,7 @@ impl ChatComposer {
 
                     if !starts_with_cmd {
                         self.textarea.set_text(&format!("/{} ", cmd.command()));
+                        self.textarea.set_cursor(self.textarea.text().len());
                     }
                 }
                 (InputResult::None, true)
@@ -1069,6 +1070,28 @@ mod tests {
             Err(TryRecvError::Empty) => panic!("expected a DispatchCommand event for '/init'"),
             Err(TryRecvError::Disconnected) => panic!("app event channel disconnected"),
         }
+    }
+
+    #[test]
+    fn slash_tab_completion_moves_cursor_to_end() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let sender = AppEventSender::new(tx);
+        let mut composer =
+            ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
+
+        for ch in ['/', 'c'] {
+            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+
+        let (_result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+        assert_eq!(composer.textarea.text(), "/compact ");
+        assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
     }
 
     #[test]
