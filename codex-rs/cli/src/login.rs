@@ -66,12 +66,12 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
                 Ok(api_key) => {
                     eprintln!("Logged in using an API key - {}", safe_format_key(&api_key));
 
-                    if let Ok(env_api_key) = env::var(OPENAI_API_KEY_ENV_VAR) {
-                        if env_api_key == api_key {
-                            eprintln!(
-                                "   API loaded from OPENAI_API_KEY environment variable or .env file"
-                            );
-                        }
+                    if let Ok(env_api_key) = env::var(OPENAI_API_KEY_ENV_VAR)
+                        && env_api_key == api_key
+                    {
+                        eprintln!(
+                            "   API loaded from OPENAI_API_KEY environment variable or .env file"
+                        );
                     }
                     std::process::exit(0);
                 }

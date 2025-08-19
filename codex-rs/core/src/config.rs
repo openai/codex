@@ -759,10 +759,10 @@ fn default_model() -> String {
 pub fn find_codex_home() -> std::io::Result<PathBuf> {
     // Honor the `CODEX_HOME` environment variable when it is set to allow users
     // (and tests) to override the default location.
-    if let Ok(val) = std::env::var("CODEX_HOME") {
-        if !val.is_empty() {
-            return PathBuf::from(val).canonicalize();
-        }
+    if let Ok(val) = std::env::var("CODEX_HOME")
+        && !val.is_empty()
+    {
+        return PathBuf::from(val).canonicalize();
     }
 
     let mut p = home_dir().ok_or_else(|| {

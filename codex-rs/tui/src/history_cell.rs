@@ -541,33 +541,33 @@ pub(crate) fn new_status_output(
 
     // 👤 Account (only if ChatGPT tokens exist), shown under the first block
     let auth_file = get_auth_file(&config.codex_home);
-    if let Ok(auth) = try_read_auth_json(&auth_file) {
-        if let Some(tokens) = auth.tokens.clone() {
-            lines.push(Line::from(vec!["👤 ".into(), "Account".bold()]));
-            lines.push(Line::from("  • Signed in with ChatGPT"));
+    if let Ok(auth) = try_read_auth_json(&auth_file)
+        && let Some(tokens) = auth.tokens.clone()
+    {
+        lines.push(Line::from(vec!["👤 ".into(), "Account".bold()]));
+        lines.push(Line::from("  • Signed in with ChatGPT"));
 
-            let info = tokens.id_token;
-            if let Some(email) = &info.email {
-                lines.push(Line::from(vec!["  • Login: ".into(), email.clone().into()]));
-            }
-
-            match auth.openai_api_key.as_deref() {
-                Some(key) if !key.is_empty() => {
-                    lines.push(Line::from(
-                        "  • Using API key. Run codex login to use ChatGPT plan",
-                    ));
-                }
-                _ => {
-                    let plan_text = info
-                        .get_chatgpt_plan_type()
-                        .map(|s| title_case(&s))
-                        .unwrap_or_else(|| "Unknown".to_string());
-                    lines.push(Line::from(vec!["  • Plan: ".into(), plan_text.into()]));
-                }
-            }
-
-            lines.push(Line::from(""));
+        let info = tokens.id_token;
+        if let Some(email) = &info.email {
+            lines.push(Line::from(vec!["  • Login: ".into(), email.clone().into()]));
         }
+
+        match auth.openai_api_key.as_deref() {
+            Some(key) if !key.is_empty() => {
+                lines.push(Line::from(
+                    "  • Using API key. Run codex login to use ChatGPT plan",
+                ));
+            }
+            _ => {
+                let plan_text = info
+                    .get_chatgpt_plan_type()
+                    .map(|s| title_case(&s))
+                    .unwrap_or_else(|| "Unknown".to_string());
+                lines.push(Line::from(vec!["  • Plan: ".into(), plan_text.into()]));
+            }
+        }
+
+        lines.push(Line::from(""));
     }
 
     // 🧠 Model
@@ -612,10 +612,10 @@ pub(crate) fn new_status_output(
         "  • Input: ".into(),
         usage.non_cached_input().to_string().into(),
     ];
-    if let Some(cached) = usage.cached_input_tokens {
-        if cached > 0 {
-            input_line_spans.push(format!(" (+ {cached} cached)").into());
-        }
+    if let Some(cached) = usage.cached_input_tokens
+        && cached > 0
+    {
+        input_line_spans.push(format!(" (+ {cached} cached)").into());
     }
     lines.push(Line::from(input_line_spans));
     // Output: <output>
@@ -688,16 +688,15 @@ pub(crate) fn new_mcp_tools_output(
             ]));
         }
 
-        if let Some(env) = cfg.env.as_ref() {
-            if !env.is_empty() {
-                let mut env_pairs: Vec<String> =
-                    env.iter().map(|(k, v)| format!("{k}={v}")).collect();
-                env_pairs.sort();
-                lines.push(Line::from(vec![
-                    "    • Env: ".into(),
-                    env_pairs.join(" ").into(),
-                ]));
-            }
+        if let Some(env) = cfg.env.as_ref()
+            && !env.is_empty()
+        {
+            let mut env_pairs: Vec<String> = env.iter().map(|(k, v)| format!("{k}={v}")).collect();
+            env_pairs.sort();
+            lines.push(Line::from(vec![
+                "    • Env: ".into(),
+                env_pairs.join(" ").into(),
+            ]));
         }
 
         if names.is_empty() {

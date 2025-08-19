@@ -364,10 +364,10 @@ async fn persist_tokens_async(
     let codex_home = codex_home.to_path_buf();
     tokio::task::spawn_blocking(move || {
         let auth_file = get_auth_file(&codex_home);
-        if let Some(parent) = auth_file.parent() {
-            if !parent.exists() {
-                std::fs::create_dir_all(parent).map_err(io::Error::other)?;
-            }
+        if let Some(parent) = auth_file.parent()
+            && !parent.exists()
+        {
+            std::fs::create_dir_all(parent).map_err(io::Error::other)?;
         }
 
         let mut auth = read_or_default(&auth_file);

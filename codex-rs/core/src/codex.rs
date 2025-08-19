@@ -544,10 +544,10 @@ impl Session {
 
     pub fn remove_task(&self, sub_id: &str) {
         let mut state = self.state.lock_unchecked();
-        if let Some(task) = &state.current_task {
-            if task.sub_id == sub_id {
-                state.current_task.take();
-            }
+        if let Some(task) = &state.current_task
+            && task.sub_id == sub_id
+        {
+            state.current_task.take();
         }
     }
 
@@ -1239,18 +1239,18 @@ async fn submission_loop(
                 // Gracefully flush and shutdown rollout recorder on session end so tests
                 // that inspect the rollout file do not race with the background writer.
                 let recorder_opt = sess.rollout.lock_unchecked().take();
-                if let Some(rec) = recorder_opt {
-                    if let Err(e) = rec.shutdown().await {
-                        warn!("failed to shutdown rollout recorder: {e}");
-                        let event = Event {
-                            id: sub.id.clone(),
-                            msg: EventMsg::Error(ErrorEvent {
-                                message: "Failed to shutdown rollout recorder".to_string(),
-                            }),
-                        };
-                        if let Err(e) = sess.tx_event.send(event).await {
-                            warn!("failed to send error message: {e:?}");
-                        }
+                if let Some(rec) = recorder_opt
+                    && let Err(e) = rec.shutdown().await
+                {
+                    warn!("failed to shutdown rollout recorder: {e}");
+                    let event = Event {
+                        id: sub.id.clone(),
+                        msg: EventMsg::Error(ErrorEvent {
+                            message: "Failed to shutdown rollout recorder".to_string(),
+                        }),
+                    };
+                    if let Err(e) = sess.tx_event.send(event).await {
+                        warn!("failed to send error message: {e:?}");
                     }
                 }
 

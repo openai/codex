@@ -339,18 +339,18 @@ async fn binary_size_transcript_matches_ideal_fixture() {
                 }
             }
             "app_event" => {
-                if let Some(variant) = v.get("variant").and_then(|s| s.as_str()) {
-                    if variant == "CommitTick" {
-                        chat.on_commit_tick();
-                        while let Ok(app_ev) = rx.try_recv() {
-                            if let AppEvent::InsertHistory(lines) = app_ev {
-                                transcript.push_str(&lines_to_single_string(&lines));
-                                crate::insert_history::insert_history_lines_to_writer(
-                                    &mut terminal,
-                                    &mut ansi,
-                                    lines,
-                                );
-                            }
+                if let Some(variant) = v.get("variant").and_then(|s| s.as_str())
+                    && variant == "CommitTick"
+                {
+                    chat.on_commit_tick();
+                    while let Ok(app_ev) = rx.try_recv() {
+                        if let AppEvent::InsertHistory(lines) = app_ev {
+                            transcript.push_str(&lines_to_single_string(&lines));
+                            crate::insert_history::insert_history_lines_to_writer(
+                                &mut terminal,
+                                &mut ansi,
+                                lines,
+                            );
                         }
                     }
                 }

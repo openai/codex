@@ -89,10 +89,10 @@ const ILLEGAL_ENV_VAR_PREFIX: &str = "CODEX_";
 /// Security: Do not allow `.env` files to create or modify any variables
 /// with names starting with `CODEX_`.
 fn load_dotenv() {
-    if let Ok(codex_home) = codex_core::config::find_codex_home() {
-        if let Ok(iter) = dotenvy::from_path_iter(codex_home.join(".env")) {
-            set_filtered(iter);
-        }
+    if let Ok(codex_home) = codex_core::config::find_codex_home()
+        && let Ok(iter) = dotenvy::from_path_iter(codex_home.join(".env"))
+    {
+        set_filtered(iter);
     }
 
     if let Ok(iter) = dotenvy::dotenv_iter() {
