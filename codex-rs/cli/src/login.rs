@@ -14,14 +14,14 @@ use std::path::PathBuf;
 
 pub async fn login_with_chatgpt(codex_home: PathBuf) -> std::io::Result<()> {
     let opts = ServerOptions::new(codex_home, CLIENT_ID.to_string());
-    let server = run_login_server(opts, None)?;
+    let server = run_login_server(opts)?;
 
     eprintln!(
         "Starting local login server on http://localhost:{}.\nIf your browser did not open, navigate to this URL to authenticate:\n\n{}",
         server.actual_port, server.auth_url,
     );
 
-    server.block_until_done()
+    server.block_until_done().await
 }
 
 pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) -> ! {
@@ -60,7 +60,7 @@ pub async fn run_login_with_api_key(
 pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides);
 
-    match CodexAuth::from_codex_home(&config.codex_home) {
+    match CodexAuth::from_codex_home(&config.codex_home, config.preferred_auth_method) {
         Ok(Some(auth)) => match auth.mode {
             AuthMode::ApiKey => match auth.get_token().await {
                 Ok(api_key) => {

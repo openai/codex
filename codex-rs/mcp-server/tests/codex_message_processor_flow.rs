@@ -5,26 +5,26 @@ use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort;
 use codex_core::protocol_config_types::ReasoningSummary;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
-use codex_mcp_server::wire_format::AddConversationListenerParams;
-use codex_mcp_server::wire_format::AddConversationSubscriptionResponse;
-use codex_mcp_server::wire_format::EXEC_COMMAND_APPROVAL_METHOD;
-use codex_mcp_server::wire_format::NewConversationParams;
-use codex_mcp_server::wire_format::NewConversationResponse;
-use codex_mcp_server::wire_format::RemoveConversationListenerParams;
-use codex_mcp_server::wire_format::RemoveConversationSubscriptionResponse;
-use codex_mcp_server::wire_format::SendUserMessageParams;
-use codex_mcp_server::wire_format::SendUserMessageResponse;
-use codex_mcp_server::wire_format::SendUserTurnParams;
-use codex_mcp_server::wire_format::SendUserTurnResponse;
+use codex_protocol::mcp_protocol::AddConversationListenerParams;
+use codex_protocol::mcp_protocol::AddConversationSubscriptionResponse;
+use codex_protocol::mcp_protocol::EXEC_COMMAND_APPROVAL_METHOD;
+use codex_protocol::mcp_protocol::NewConversationParams;
+use codex_protocol::mcp_protocol::NewConversationResponse;
+use codex_protocol::mcp_protocol::RemoveConversationListenerParams;
+use codex_protocol::mcp_protocol::RemoveConversationSubscriptionResponse;
+use codex_protocol::mcp_protocol::SendUserMessageParams;
+use codex_protocol::mcp_protocol::SendUserMessageResponse;
+use codex_protocol::mcp_protocol::SendUserTurnParams;
+use codex_protocol::mcp_protocol::SendUserTurnResponse;
 use mcp_test_support::McpProcess;
 use mcp_test_support::create_final_assistant_message_sse_response;
 use mcp_test_support::create_mock_chat_completions_server;
 use mcp_test_support::create_shell_sse_response;
+use mcp_test_support::to_response;
 use mcp_types::JSONRPCNotification;
 use mcp_types::JSONRPCResponse;
 use mcp_types::RequestId;
 use pretty_assertions::assert_eq;
-use serde::de::DeserializeOwned;
 use std::env;
 use tempfile::TempDir;
 use tokio::time::timeout;
@@ -113,7 +113,7 @@ async fn test_codex_jsonrpc_conversation_flow() {
     let send_user_id = mcp
         .send_send_user_message_request(SendUserMessageParams {
             conversation_id,
-            items: vec![codex_mcp_server::wire_format::InputItem::Text {
+            items: vec![codex_protocol::mcp_protocol::InputItem::Text {
                 text: "text".to_string(),
             }],
         })
@@ -166,12 +166,6 @@ async fn test_codex_jsonrpc_conversation_flow() {
     .expect("removeConversationListener resp");
     let RemoveConversationSubscriptionResponse {} =
         to_response(remove_listener_resp).expect("deserialize removeConversationListener response");
-}
-
-fn to_response<T: DeserializeOwned>(response: JSONRPCResponse) -> anyhow::Result<T> {
-    let value = serde_json::to_value(response.result)?;
-    let codex_response = serde_json::from_value(value)?;
-    Ok(codex_response)
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -269,7 +263,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() {
     let send_user_id = mcp
         .send_send_user_message_request(SendUserMessageParams {
             conversation_id,
-            items: vec![codex_mcp_server::wire_format::InputItem::Text {
+            items: vec![codex_protocol::mcp_protocol::InputItem::Text {
                 text: "run python".to_string(),
             }],
         })
@@ -317,7 +311,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() {
     let send_turn_id = mcp
         .send_send_user_turn_request(SendUserTurnParams {
             conversation_id,
-            items: vec![codex_mcp_server::wire_format::InputItem::Text {
+            items: vec![codex_protocol::mcp_protocol::InputItem::Text {
                 text: "run python again".to_string(),
             }],
             cwd: working_directory.clone(),

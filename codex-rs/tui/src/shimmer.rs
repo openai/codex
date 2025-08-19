@@ -46,9 +46,14 @@ pub(crate) fn shimmer_spans(text: &str) -> Vec<Span<'static>> {
         let brightness = 0.4 + 0.6 * t;
         let level = (brightness * 255.0).clamp(0.0, 255.0) as u8;
         let style = if has_true_color {
-            Style::default()
-                .fg(Color::Rgb(level, level, level))
-                .add_modifier(Modifier::BOLD)
+            // Allow custom RGB colors, as the implementation is thoughtfully
+            // adjusting the level of the default foreground color.
+            #[allow(clippy::disallowed_methods)]
+            {
+                Style::default()
+                    .fg(Color::Rgb(level, level, level))
+                    .add_modifier(Modifier::BOLD)
+            }
         } else {
             color_for_level(level)
         };

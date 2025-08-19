@@ -16,6 +16,7 @@ members = [
     "mcp-types",
     "ollama",
     "protocol",
+    "protocol-ts",
     "tui",
 ]
 resolver = "2"

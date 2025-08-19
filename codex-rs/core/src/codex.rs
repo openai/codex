@@ -14,6 +14,8 @@ use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
 use codex_login::CodexAuth;
+use codex_protocol::protocol::TurnAbortReason;
+use codex_protocol::protocol::TurnAbortedEvent;
 use futures::prelude::*;
 use mcp_types::CallToolResult;
 use serde::Serialize;
@@ -37,8 +39,6 @@ use crate::client::ModelClient;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::config::Config;
-use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
-use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::conversation_history::ConversationHistory;
 use crate::environment_context::EnvironmentContext;
@@ -106,6 +106,8 @@ use crate::shell;
 use crate::turn_diff_tracker::TurnDiffTracker;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
+use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 
 // A convenience extension trait for acquiring mutex locks where poisoning is
 // unrecoverable and should abort the program. This avoids scattered `.unwrap()`
@@ -536,7 +538,7 @@ impl Session {
     pub fn set_task(&self, task: AgentTask) {
         let mut state = self.state.lock_unchecked();
         if let Some(current_task) = state.current_task.take() {
-            current_task.abort();
+            current_task.abort(TurnAbortReason::Replaced);
         }
         state.current_task = Some(task);
     }
@@ -853,13 +855,13 @@ impl Session {
             .await
     }
 
-    fn abort(&self) {
-        info!("Aborting existing session");
+    fn interrupt_task(&self) {
+        info!("interrupt received: abort current task, if any");
         let mut state = self.state.lock_unchecked();
         state.pending_approvals.clear();
         state.pending_input.clear();
         if let Some(task) = state.current_task.take() {
-            task.abort();
+            task.abort(TurnAbortReason::Interrupted);
         }
     }
 
@@ -895,7 +897,7 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        self.abort();
+        self.interrupt_task();
     }
 }
 
@@ -965,14 +967,13 @@ impl AgentTask {
         }
     }
 
-    fn abort(self) {
+    fn abort(self, reason: TurnAbortReason) {
+        // TOCTOU?
         if !self.handle.is_finished() {
             self.handle.abort();
             let event = Event {
                 id: self.sub_id,
-                msg: EventMsg::Error(ErrorEvent {
-                    message: " Turn interrupted".to_string(),
-                }),
+                msg: EventMsg::TurnAborted(TurnAbortedEvent { reason }),
             };
             let tx_event = self.sess.tx_event.clone();
             tokio::spawn(async move {
@@ -989,13 +990,90 @@ async fn submission_loop(
     rx_sub: Receiver<Submission>,
 ) {
     // Wrap once to avoid cloning TurnContext for each task.
-    let turn_context = Arc::new(turn_context);
+    let mut turn_context = Arc::new(turn_context);
     // To break out of this loop, send Op::Shutdown.
     while let Ok(sub) = rx_sub.recv().await {
         debug!(?sub, "Submission");
         match sub.op {
             Op::Interrupt => {
-                sess.abort();
+                sess.interrupt_task();
+            }
+            Op::OverrideTurnContext {
+                cwd,
+                approval_policy,
+                sandbox_policy,
+                model,
+                effort,
+                summary,
+            } => {
+                // Recalculate the persistent turn context with provided overrides.
+                let prev = Arc::clone(&turn_context);
+                let provider = prev.client.get_provider();
+
+                // Effective model + family
+                let (effective_model, effective_family) = if let Some(m) = model {
+                    let fam =
+                        find_family_for_model(&m).unwrap_or_else(|| config.model_family.clone());
+                    (m, fam)
+                } else {
+                    (prev.client.get_model(), prev.client.get_model_family())
+                };
+
+                // Effective reasoning settings
+                let effective_effort = effort.unwrap_or(prev.client.get_reasoning_effort());
+                let effective_summary = summary.unwrap_or(prev.client.get_reasoning_summary());
+
+                let auth = prev.client.get_auth();
+                // Build updated config for the client
+                let mut updated_config = (*config).clone();
+                updated_config.model = effective_model.clone();
+                updated_config.model_family = effective_family.clone();
+
+                let client = ModelClient::new(
+                    Arc::new(updated_config),
+                    auth,
+                    provider,
+                    effective_effort,
+                    effective_summary,
+                    sess.session_id,
+                );
+
+                let new_approval_policy = approval_policy.unwrap_or(prev.approval_policy);
+                let new_sandbox_policy = sandbox_policy
+                    .clone()
+                    .unwrap_or(prev.sandbox_policy.clone());
+                let new_cwd = cwd.clone().unwrap_or_else(|| prev.cwd.clone());
+
+                let tools_config = ToolsConfig::new(
+                    &effective_family,
+                    new_approval_policy,
+                    new_sandbox_policy.clone(),
+                    config.include_plan_tool,
+                    config.include_apply_patch_tool,
+                );
+
+                let new_turn_context = TurnContext {
+                    client,
+                    tools_config,
+                    user_instructions: prev.user_instructions.clone(),
+                    base_instructions: prev.base_instructions.clone(),
+                    approval_policy: new_approval_policy,
+                    sandbox_policy: new_sandbox_policy.clone(),
+                    shell_environment_policy: prev.shell_environment_policy.clone(),
+                    cwd: new_cwd.clone(),
+                    disable_response_storage: prev.disable_response_storage,
+                };
+
+                // Install the new persistent context for subsequent tasks/turns.
+                turn_context = Arc::new(new_turn_context);
+                if cwd.is_some() || approval_policy.is_some() || sandbox_policy.is_some() {
+                    sess.record_conversation_items(&[ResponseItem::from(EnvironmentContext::new(
+                        new_cwd,
+                        new_approval_policy,
+                        new_sandbox_policy,
+                    ))])
+                    .await;
+                }
             }
             Op::UserInput { items } => {
                 // attempt to inject input into current task
@@ -1035,8 +1113,8 @@ async fn submission_loop(
                         Arc::new(per_turn_config),
                         None,
                         provider,
-                        effort.into(),
-                        summary.into(),
+                        effort,
+                        summary,
                         sess.session_id,
                     );
 
@@ -1057,7 +1135,7 @@ async fn submission_loop(
                         cwd,
                         disable_response_storage: turn_context.disable_response_storage,
                     };
-
+                    // TODO: record the new environment context in the conversation history
                     // no current task, spawn a new one with the per‑turn context
                     let task =
                         AgentTask::spawn(sess.clone(), Arc::new(fresh_turn_context), sub.id, items);
@@ -1066,13 +1144,13 @@ async fn submission_loop(
             }
             Op::ExecApproval { id, decision } => match decision {
                 ReviewDecision::Abort => {
-                    sess.abort();
+                    sess.interrupt_task();
                 }
                 other => sess.notify_approval(&id, other),
             },
             Op::PatchApproval { id, decision } => match decision {
                 ReviewDecision::Abort => {
-                    sess.abort();
+                    sess.interrupt_task();
                 }
                 other => sess.notify_approval(&id, other),
             },

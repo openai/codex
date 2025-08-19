@@ -7,6 +7,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_login::AuthMode;
 use codex_login::CodexAuth;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
@@ -52,6 +53,59 @@ fn assert_message_ends_with(request_body: &serde_json::Value, text: &str) {
         content.ends_with(text),
         "expected message content '{content}' to end with '{text}'"
     );
+}
+
+/// Writes an `auth.json` into the provided `codex_home` with the specified parameters.
+/// Returns the fake JWT string written to `tokens.id_token`.
+#[expect(clippy::unwrap_used)]
+fn write_auth_json(
+    codex_home: &TempDir,
+    openai_api_key: Option<&str>,
+    chatgpt_plan_type: &str,
+    access_token: &str,
+    account_id: Option<&str>,
+) -> String {
+    use base64::Engine as _;
+    use serde_json::json;
+
+    let header = json!({ "alg": "none", "typ": "JWT" });
+    let payload = json!({
+        "email": "user@example.com",
+        "https://api.openai.com/auth": {
+            "chatgpt_plan_type": chatgpt_plan_type,
+            "chatgpt_account_id": account_id.unwrap_or("acc-123")
+        }
+    });
+
+    let b64 = |b: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b);
+    let header_b64 = b64(&serde_json::to_vec(&header).unwrap());
+    let payload_b64 = b64(&serde_json::to_vec(&payload).unwrap());
+    let signature_b64 = b64(b"sig");
+    let fake_jwt = format!("{header_b64}.{payload_b64}.{signature_b64}");
+
+    let mut tokens = json!({
+        "id_token": fake_jwt,
+        "access_token": access_token,
+        "refresh_token": "refresh-test",
+    });
+    if let Some(acc) = account_id {
+        tokens["account_id"] = json!(acc);
+    }
+
+    let auth_json = json!({
+        "OPENAI_API_KEY": openai_api_key,
+        "tokens": tokens,
+        // RFC3339 datetime; value doesn't matter for these tests
+        "last_refresh": "2025-08-06T20:41:36.232376Z",
+    });
+
+    std::fs::write(
+        codex_home.path().join("auth.json"),
+        serde_json::to_string_pretty(&auth_json).unwrap(),
+    )
+    .unwrap();
+
+    fake_jwt
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -308,6 +362,156 @@ async fn chatgpt_auth_sends_correct_request() {
     assert_eq!(
         request_body["include"][0].as_str().unwrap(),
         "reasoning.encrypted_content"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn prefers_chatgpt_token_when_config_prefers_chatgpt() {
+    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+        );
+        return;
+    }
+
+    // Mock server
+    let server = MockServer::start().await;
+
+    let first = ResponseTemplate::new(200)
+        .insert_header("content-type", "text/event-stream")
+        .set_body_raw(sse_completed("resp1"), "text/event-stream");
+
+    // Expect ChatGPT base path and correct headers
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(header_regex("Authorization", r"Bearer Access-123"))
+        .and(header_regex("chatgpt-account-id", r"acc-123"))
+        .respond_with(first)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    // Init session
+    let codex_home = TempDir::new().unwrap();
+    // Write auth.json that contains both API key and ChatGPT tokens for a plan that should prefer ChatGPT.
+    let _jwt = write_auth_json(
+        &codex_home,
+        Some("sk-test-key"),
+        "pro",
+        "Access-123",
+        Some("acc-123"),
+    );
+
+    let mut config = load_default_config_for_test(&codex_home);
+    config.model_provider = model_provider;
+    config.preferred_auth_method = AuthMode::ChatGPT;
+
+    let conversation_manager = ConversationManager::default();
+    let NewConversation {
+        conversation: codex,
+        ..
+    } = conversation_manager
+        .new_conversation(config)
+        .await
+        .expect("create new conversation");
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: "hello".into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    // verify request body flags
+    let request = &server.received_requests().await.unwrap()[0];
+    let request_body = request.body_json::<serde_json::Value>().unwrap();
+    assert!(
+        !request_body["store"].as_bool().unwrap(),
+        "store should be false for ChatGPT auth"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
+    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+        );
+        return;
+    }
+
+    // Mock server
+    let server = MockServer::start().await;
+
+    let first = ResponseTemplate::new(200)
+        .insert_header("content-type", "text/event-stream")
+        .set_body_raw(sse_completed("resp1"), "text/event-stream");
+
+    // Expect API key header, no ChatGPT account header required.
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(header_regex("Authorization", r"Bearer sk-test-key"))
+        .respond_with(first)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    // Init session
+    let codex_home = TempDir::new().unwrap();
+    // Write auth.json that contains both API key and ChatGPT tokens for a plan that should prefer ChatGPT,
+    // but config will force API key preference.
+    let _jwt = write_auth_json(
+        &codex_home,
+        Some("sk-test-key"),
+        "pro",
+        "Access-123",
+        Some("acc-123"),
+    );
+
+    let mut config = load_default_config_for_test(&codex_home);
+    config.model_provider = model_provider;
+    config.preferred_auth_method = AuthMode::ApiKey;
+
+    let conversation_manager = ConversationManager::default();
+    let NewConversation {
+        conversation: codex,
+        ..
+    } = conversation_manager
+        .new_conversation(config)
+        .await
+        .expect("create new conversation");
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: "hello".into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    // verify request body flags
+    let request = &server.received_requests().await.unwrap()[0];
+    let request_body = request.body_json::<serde_json::Value>().unwrap();
+    assert!(
+        request_body["store"].as_bool().unwrap(),
+        "store should be true for API key auth"
     );
 }
 

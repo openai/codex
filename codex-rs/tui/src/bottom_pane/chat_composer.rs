@@ -45,6 +45,15 @@ struct TokenUsageInfo {
     total_token_usage: TokenUsage,
     last_token_usage: TokenUsage,
     model_context_window: Option<u64>,
+    /// Baseline token count present in the context before the user's first
+    /// message content is considered. This is used to normalize the
+    /// "context left" percentage so it reflects the portion the user can
+    /// influence rather than fixed prompt overhead (system prompt, tool
+    /// instructions, etc.).
+    ///
+    /// Preferred source is `cached_input_tokens` from the first turn (when
+    /// available), otherwise we fall back to 0.
+    initial_prompt_tokens: u64,
 }
 
 pub(crate) struct ChatComposer {
@@ -134,10 +143,17 @@ impl ChatComposer {
         last_token_usage: TokenUsage,
         model_context_window: Option<u64>,
     ) {
+        let initial_prompt_tokens = self
+            .token_usage_info
+            .as_ref()
+            .map(|info| info.initial_prompt_tokens)
+            .unwrap_or_else(|| last_token_usage.cached_input_tokens.unwrap_or(0));
+
         self.token_usage_info = Some(TokenUsageInfo {
             total_token_usage,
             last_token_usage,
             model_context_window,
+            initial_prompt_tokens,
         });
     }
 
@@ -673,11 +689,10 @@ impl WidgetRef for &ChatComposer {
                     let last_token_usage = &token_usage_info.last_token_usage;
                     if let Some(context_window) = token_usage_info.model_context_window {
                         let percent_remaining: u8 = if context_window > 0 {
-                            let percent = 100.0
-                                - (last_token_usage.tokens_in_context_window() as f32
-                                    / context_window as f32
-                                    * 100.0);
-                            percent.clamp(0.0, 100.0) as u8
+                            last_token_usage.percent_of_context_window_remaining(
+                                context_window,
+                                token_usage_info.initial_prompt_tokens,
+                            )
                         } else {
                             100
                         };
