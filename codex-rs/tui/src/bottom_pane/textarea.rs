@@ -208,14 +208,10 @@ impl TextArea {
             // C0 control characters without reporting the CONTROL modifier.
             // Handle common fallbacks for Ctrl-B/Ctrl-F here so they don't get
             // inserted as literal control bytes.
-            KeyEvent { code: KeyCode::Char(c), modifiers: KeyModifiers::NONE, .. }
-                if c == '\u{0002}' /* ^B */ =>
-            {
+            KeyEvent { code: KeyCode::Char('\u{0002}'), modifiers: KeyModifiers::NONE, .. } /* ^B */ => {
                 self.move_cursor_left();
             }
-            KeyEvent { code: KeyCode::Char(c), modifiers: KeyModifiers::NONE, .. }
-                if c == '\u{0006}' /* ^F */ =>
-            {
+            KeyEvent { code: KeyCode::Char('\u{0006}'), modifiers: KeyModifiers::NONE, .. } /* ^F */ => {
                 self.move_cursor_right();
             }
             KeyEvent {
