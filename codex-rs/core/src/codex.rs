@@ -1051,6 +1051,7 @@ async fn submission_loop(
                     new_sandbox_policy.clone(),
                     config.include_plan_tool,
                     config.include_apply_patch_tool,
+                    config.tools_web_search_request,
                 );
 
                 let new_turn_context = TurnContext {
