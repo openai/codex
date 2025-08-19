@@ -19,6 +19,7 @@ use ratatui::widgets::Wrap;
 
 use codex_login::AuthMode;
 
+use crate::LoginStatus;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
@@ -96,6 +97,8 @@ pub(crate) struct AuthModeWidget {
     pub error: Option<String>,
     pub sign_in_state: SignInState,
     pub codex_home: PathBuf,
+    pub login_status: LoginStatus,
+    pub preferred_auth_method: AuthMode,
 }
 
 impl AuthModeWidget {
@@ -117,6 +120,24 @@ impl AuthModeWidget {
             ]),
             Line::from(""),
         ];
+
+        // If the user is already authenticated but the method differs from their
+        // preferred auth method, show a brief explanation.
+        if let LoginStatus::AuthMode(current) = self.login_status {
+            if current != self.preferred_auth_method {
+                let to_label = |mode: AuthMode| match mode {
+                    AuthMode::ApiKey => "API key",
+                    AuthMode::ChatGPT => "ChatGPT",
+                };
+                let msg = format!(
+                    "  You’re currently using {} while your preferred method is {}.",
+                    to_label(current),
+                    to_label(self.preferred_auth_method)
+                );
+                lines.push(Line::from(msg).style(Style::default()));
+                lines.push(Line::from(""));
+            }
+        }
 
         let create_mode_item = |idx: usize,
                                 selected_mode: AuthMode,
@@ -146,17 +167,29 @@ impl AuthModeWidget {
 
             vec![line1, line2]
         };
+        let chatgpt_label = if matches!(self.login_status, LoginStatus::AuthMode(AuthMode::ChatGPT))
+        {
+            "Continue using ChatGPT"
+        } else {
+            "Sign in with ChatGPT"
+        };
 
         lines.extend(create_mode_item(
             0,
             AuthMode::ChatGPT,
-            "Sign in with ChatGPT",
+            chatgpt_label,
             "Usage included with Plus, Pro, and Team plans",
         ));
+        let api_key_label = if matches!(self.login_status, LoginStatus::AuthMode(AuthMode::ApiKey))
+        {
+            "Continue using API key"
+        } else {
+            "Provide your own API key"
+        };
         lines.extend(create_mode_item(
             1,
             AuthMode::ApiKey,
-            "Provide your own API key",
+            api_key_label,
             "Pay for what you use",
         ));
         lines.push(Line::from(""));
@@ -279,6 +312,14 @@ impl AuthModeWidget {
     }
 
     fn start_chatgpt_login(&mut self) {
+        // If we're already authenticated with ChatGPT, don't start a new login –
+        // just proceed to the success message flow.
+        if matches!(self.login_status, LoginStatus::AuthMode(AuthMode::ChatGPT)) {
+            self.sign_in_state = SignInState::ChatGptSuccess;
+            self.event_tx.send(AppEvent::RequestRedraw);
+            return;
+        }
+
         self.error = None;
         let opts = ServerOptions::new(self.codex_home.clone(), CLIENT_ID.to_string());
         let server = run_login_server(opts);
@@ -309,11 +350,14 @@ impl AuthModeWidget {
 
     /// TODO: Read/write from the correct hierarchy config overrides + auth json + OPENAI_API_KEY.
     fn verify_api_key(&mut self) {
-        if std::env::var("OPENAI_API_KEY").is_err() {
-            self.sign_in_state = SignInState::EnvVarMissing;
-        } else {
+        if matches!(self.login_status, LoginStatus::AuthMode(AuthMode::ApiKey)) {
+            // We already have an API key configured (e.g., from auth.json or env),
+            // so mark this step complete immediately.
             self.sign_in_state = SignInState::EnvVarFound;
+        } else {
+            self.sign_in_state = SignInState::EnvVarMissing;
         }
+
         self.event_tx.send(AppEvent::RequestRedraw);
     }
 }
