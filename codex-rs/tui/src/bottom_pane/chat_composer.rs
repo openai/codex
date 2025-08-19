@@ -52,8 +52,7 @@ struct TokenUsageInfo {
     /// instructions, etc.).
     ///
     /// Preferred source is `cached_input_tokens` from the first turn (when
-    /// available), otherwise we fall back to the first observed
-    /// `tokens_in_context_window()`.
+    /// available), otherwise we fall back to 0.
     initial_prompt_tokens: u64,
 }
 
