@@ -2061,13 +2061,12 @@ fn maybe_translate_shell_command(
     let should_translate = matches!(sess.user_shell, crate::shell::Shell::PowerShell(_))
         || turn_context.shell_environment_policy.use_profile;
 
-    if should_translate {
-        if let Some(command) = sess
+    if should_translate
+        && let Some(command) = sess
             .user_shell
             .format_default_shell_invocation(params.command.clone())
-        {
-            return ExecParams { command, ..params };
-        }
+    {
+        return ExecParams { command, ..params };
     }
     params
 }
