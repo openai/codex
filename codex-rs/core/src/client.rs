@@ -153,6 +153,7 @@ impl ModelClient {
             self.effort,
             self.summary,
         );
+        trace!("reasoning: {:?}", reasoning);
 
         // Request encrypted COT if we are not storing responses,
         // otherwise reasoning items will be referenced by ID

@@ -216,8 +216,20 @@ impl BottomPane<'_> {
     }
 
     /// Show a generic list selection view with the provided items.
-    pub(crate) fn show_selection_view(&mut self, items: Vec<SelectionItem>) {
-        let view = list_selection_view::ListSelectionView::new(items, self.app_event_tx.clone());
+    pub(crate) fn show_selection_view(
+        &mut self,
+        title: String,
+        subtitle: Option<String>,
+        footer_hint: Option<String>,
+        items: Vec<SelectionItem>,
+    ) {
+        let view = list_selection_view::ListSelectionView::new(
+            title,
+            subtitle,
+            footer_hint,
+            items,
+            self.app_event_tx.clone(),
+        );
         self.active_view = Some(Box::new(view));
         self.status_view_active = false;
         self.request_redraw();

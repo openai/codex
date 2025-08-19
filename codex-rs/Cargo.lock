@@ -858,6 +858,7 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "codex-arg0",
+ "codex-common",
  "codex-core",
  "codex-login",
  "codex-protocol",

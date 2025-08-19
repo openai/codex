@@ -34,6 +34,7 @@ pub(crate) fn render_rows(
     rows_all: &[GenericDisplayRow],
     state: &ScrollState,
     max_results: usize,
+    _dim_non_selected: bool,
 ) {
     let mut rows: Vec<Row> = Vec::new();
     if rows_all.is_empty() {

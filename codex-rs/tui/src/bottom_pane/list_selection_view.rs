@@ -3,6 +3,12 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Modifier;
+use ratatui::style::Style;
+use ratatui::text::Line;
+use ratatui::text::Span;
+use ratatui::widgets::Paragraph;
+use ratatui::widgets::Widget;
 
 use crate::app_event_sender::AppEventSender;
 
@@ -25,6 +31,9 @@ pub(crate) struct SelectionItem {
 }
 
 pub(crate) struct ListSelectionView {
+    title: String,
+    subtitle: Option<String>,
+    footer_hint: Option<String>,
     items: Vec<SelectionItem>,
     state: ScrollState,
     complete: bool,
@@ -32,8 +41,17 @@ pub(crate) struct ListSelectionView {
 }
 
 impl ListSelectionView {
-    pub fn new(items: Vec<SelectionItem>, app_event_tx: AppEventSender) -> Self {
+    pub fn new(
+        title: String,
+        subtitle: Option<String>,
+        footer_hint: Option<String>,
+        items: Vec<SelectionItem>,
+        app_event_tx: AppEventSender,
+    ) -> Self {
         let mut s = Self {
+            title,
+            subtitle,
+            footer_hint,
             items,
             state: ScrollState::new(),
             complete: false,
@@ -73,6 +91,11 @@ impl ListSelectionView {
             self.complete = true;
         }
     }
+
+    fn cancel(&mut self) {
+        // Close the popup without performing any actions.
+        self.complete = true;
+    }
 }
 
 impl BottomPaneView<'_> for ListSelectionView {
@@ -87,7 +110,7 @@ impl BottomPaneView<'_> for ListSelectionView {
             } => self.move_down(),
             KeyEvent {
                 code: KeyCode::Esc, ..
-            } => self.accept(),
+            } => self.cancel(),
             KeyEvent {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
@@ -108,20 +131,104 @@ impl BottomPaneView<'_> for ListSelectionView {
 
     fn desired_height(&self, _width: u16) -> u16 {
         let rows = (self.items.len()).clamp(1, MAX_POPUP_ROWS);
-        rows as u16
+        // +1 for the title row, +1 for optional subtitle, +1 for optional footer
+        let mut height = rows as u16 + 1;
+        if self.subtitle.is_some() {
+            height = height.saturating_add(1);
+        }
+        if self.footer_hint.is_some() {
+            height = height.saturating_add(1);
+        }
+        height
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
+        if area.height == 0 || area.width == 0 {
+            return;
+        }
+
+        // Render the title line at the top with a left bar and bold title text.
+        let title_area = Rect {
+            x: area.x,
+            y: area.y,
+            width: area.width,
+            height: 1,
+        };
+
+        let title_spans: Vec<Span<'static>> = vec![
+            Span::styled("", Style::default().add_modifier(Modifier::DIM)),
+            Span::styled(
+                self.title.clone(),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+        ];
+        let title_para = Paragraph::new(Line::from(title_spans));
+        title_para.render(title_area, buf);
+
+        // Optional subtitle below the title, dimmed.
+        let mut next_y = area.y.saturating_add(1);
+        if let Some(sub) = &self.subtitle {
+            let subtitle_area = Rect {
+                x: area.x,
+                y: next_y,
+                width: area.width,
+                height: 1,
+            };
+            let subtitle_spans: Vec<Span<'static>> = vec![
+                Span::styled("  ", Style::default().add_modifier(Modifier::DIM)),
+                Span::styled(sub.clone(), Style::default().add_modifier(Modifier::DIM)),
+            ];
+            let subtitle_para = Paragraph::new(Line::from(subtitle_spans));
+            subtitle_para.render(subtitle_area, buf);
+            next_y = next_y.saturating_add(1);
+        }
+
+        // Remaining area for the rows list; reserve one line at the bottom if footer_hint is present.
+        let footer_reserved = if self.footer_hint.is_some() { 1 } else { 0 };
+        let rows_area = Rect {
+            x: area.x,
+            y: next_y,
+            width: area.width,
+            height: area
+                .height
+                .saturating_sub(next_y.saturating_sub(area.y))
+                .saturating_sub(footer_reserved),
+        };
+
+        // Build display rows with numbering and selection arrow prefix.
         let rows: Vec<GenericDisplayRow> = self
             .items
             .iter()
-            .map(|it| GenericDisplayRow {
-                name: it.name.clone(),
-                match_indices: None,
-                is_current: it.is_current,
-                description: it.description.clone(),
+            .enumerate()
+            .map(|(i, it)| {
+                let is_selected = self.state.selected_idx == Some(i);
+                let prefix = if is_selected { '>' } else { ' ' };
+                let display_name = format!("{} {}. {}", prefix, i + 1, it.name);
+                GenericDisplayRow {
+                    name: display_name,
+                    match_indices: None,
+                    is_current: it.is_current,
+                    description: it.description.clone(),
+                }
             })
             .collect();
-        render_rows(area, buf, &rows, &self.state, MAX_POPUP_ROWS);
+        if rows_area.height > 0 {
+            render_rows(rows_area, buf, &rows, &self.state, MAX_POPUP_ROWS, true);
+        }
+
+        // Footer hint (dim), if present.
+        if let Some(hint) = &self.footer_hint {
+            let footer_area = Rect {
+                x: area.x,
+                y: area.y + area.height - 1,
+                width: area.width,
+                height: 1,
+            };
+            let footer_para = Paragraph::new(Line::from(Span::styled(
+                hint.clone(),
+                Style::default().add_modifier(Modifier::DIM),
+            )));
+            footer_para.render(footer_area, buf);
+        }
     }
 }

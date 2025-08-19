@@ -12,14 +12,13 @@ use strum_macros::IntoStaticStr;
 pub enum SlashCommand {
     // DO NOT ALPHA-SORT! Enum order is presentation order in the popup, so
     // more frequently used commands should be listed first.
+    Model,
     New,
     Init,
     Compact,
     Diff,
     Mention,
     Status,
-    /// Choose reasoning effort for the model
-    ReasoningEffort,
     Logout,
     Quit,
     #[cfg(debug_assertions)]
@@ -37,9 +36,7 @@ impl SlashCommand {
             SlashCommand::Diff => "show git diff (including untracked files)",
             SlashCommand::Mention => "mention a file",
             SlashCommand::Status => "show current session configuration and token usage",
-            SlashCommand::ReasoningEffort => {
-                "choose reasoning effort (or disable it) for this session"
-            }
+            SlashCommand::Model => "choose a model preset (model + reasoning effort)",
             SlashCommand::Logout => "log out of Codex",
             #[cfg(debug_assertions)]
             SlashCommand::TestApproval => "test approval request",

@@ -35,7 +35,6 @@ use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
-use strum::IntoEnumIterator;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::debug;
 
@@ -60,6 +59,8 @@ mod agent;
 use self::agent::spawn_agent;
 use crate::streaming::controller::AppEventHistorySink;
 use crate::streaming::controller::StreamController;
+use codex_common::model_presets::ModelPreset;
+use codex_common::model_presets::builtin_model_presets;
 use codex_core::ConversationManager;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_file_search::FileMatch;
@@ -689,43 +690,55 @@ impl ChatWidget<'_> {
         ));
     }
 
-    /// Open a popup to choose the reasoning effort for the current session/turn.
-    pub(crate) fn open_reasoning_effort_popup(&mut self) {
-        let current = self.config.model_reasoning_effort;
-        let options = ReasoningEffortConfig::iter().collect::<Vec<_>>();
+    /// Open a popup to choose the model preset (model + reasoning effort).
+    pub(crate) fn open_model_popup(&mut self) {
+        let current_model = self.config.model.clone();
+        let current_effort = self.config.model_reasoning_effort;
+        let presets: &[ModelPreset] = builtin_model_presets();
 
-        let items: Vec<SelectionItem> = options
-            .iter()
-            .map(|&opt| {
-                let name = opt.to_string();
-                let is_current = opt == current;
-                let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                    tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
-                        cwd: None,
-                        approval_policy: None,
-                        sandbox_policy: None,
-                        model: None,
-                        effort: Some(opt),
-                        summary: None,
-                    }));
-                    tx.send(AppEvent::UpdateReasoningEffort(opt));
-                })];
-                let description = None;
-                SelectionItem {
-                    name,
-                    description,
-                    is_current,
-                    actions,
-                }
-            })
-            .collect();
+        let mut items: Vec<SelectionItem> = Vec::new();
+        for preset in presets.iter() {
+            let name = preset.label.to_string();
+            let description = Some(preset.description.to_string());
+            let is_current = preset.model == current_model && preset.effort == current_effort;
+            let model_slug = preset.model.to_string();
+            let effort = preset.effort;
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                    cwd: None,
+                    approval_policy: None,
+                    sandbox_policy: None,
+                    model: Some(model_slug.clone()),
+                    effort: Some(effort),
+                    summary: None,
+                }));
+                tx.send(AppEvent::UpdateModel(model_slug.clone()));
+                tx.send(AppEvent::UpdateReasoningEffort(effort));
+            })];
+            items.push(SelectionItem {
+                name,
+                description,
+                is_current,
+                actions,
+            });
+        }
 
-        self.bottom_pane.show_selection_view(items);
+        self.bottom_pane.show_selection_view(
+            "Select model and reasoning level".to_string(),
+            Some("Switch between OpenAI models for this and future Codex CLI session".to_string()),
+            Some("Press Enter to confirm or Esc to go back".to_string()),
+            items,
+        );
     }
 
     /// Set the reasoning effort in the widget's config copy.
     pub(crate) fn set_reasoning_effort(&mut self, effort: ReasoningEffortConfig) {
         self.config.model_reasoning_effort = effort;
+    }
+
+    /// Set the model in the widget's config copy.
+    pub(crate) fn set_model(&mut self, model: String) {
+        self.config.model = model;
     }
 
     /// Forward file-search results to the bottom pane.
