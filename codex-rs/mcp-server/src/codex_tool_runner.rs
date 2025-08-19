@@ -226,6 +226,21 @@ async fn run_codex_tool_session_inner(
                             Some(msg) => msg.clone(),
                             None => "".to_string(),
                         };
+                        
+                        // Get the session ID before removing it from the map
+                        let session_id = running_requests_id_to_codex_uuid
+                            .lock()
+                            .await
+                            .get(&request_id)
+                            .cloned();
+                        
+                        // Include session ID in structured_content if available
+                        let structured_content = session_id.map(|id| {
+                            json!({
+                                "sessionId": id.to_string()
+                            })
+                        });
+                        
                         let result = CallToolResult {
                             content: vec![ContentBlock::TextContent(TextContent {
                                 r#type: "text".to_string(),
@@ -233,7 +248,7 @@ async fn run_codex_tool_session_inner(
                                 annotations: None,
                             })],
                             is_error: None,
-                            structured_content: None,
+                            structured_content,
                         };
                         outgoing.send_response(request_id.clone(), result).await;
                         // unregister the id so we don't keep it in the map

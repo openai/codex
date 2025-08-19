@@ -131,21 +131,29 @@ async fn shell_command_approval_triggers_elicitation() -> anyhow::Result<()> {
         mcp_process.read_stream_until_response_message(RequestId::Integer(codex_request_id)),
     )
     .await??;
+    
+    // Check the response structure and content
+    assert_eq!(codex_response.jsonrpc, JSONRPC_VERSION);
+    assert_eq!(codex_response.id, RequestId::Integer(codex_request_id));
+    
+    // Verify the content array is correct
+    let result = codex_response.result.as_object().expect("result should be an object");
+    let content = result.get("content").expect("content should exist");
     assert_eq!(
-        JSONRPCResponse {
-            jsonrpc: JSONRPC_VERSION.into(),
-            id: RequestId::Integer(codex_request_id),
-            result: json!({
-                "content": [
-                    {
-                        "text": "Enjoy your new git repo!",
-                        "type": "text"
-                    }
-                ]
-            }),
-        },
-        codex_response
+        content,
+        &json!([
+            {
+                "text": "Enjoy your new git repo!",
+                "type": "text"
+            }
+        ])
     );
+    
+    // Verify sessionId is present in structuredContent
+    if let Some(structured_content) = result.get("structuredContent") {
+        let structured_obj = structured_content.as_object().expect("structuredContent should be an object");
+        assert!(structured_obj.contains_key("sessionId"), "sessionId should be present");
+    }
 
     assert!(
         workdir_for_shell_function_call.path().join(".git").is_dir(),
@@ -275,21 +283,29 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
         mcp_process.read_stream_until_response_message(RequestId::Integer(codex_request_id)),
     )
     .await??;
+    
+    // Check the response structure and content
+    assert_eq!(codex_response.jsonrpc, JSONRPC_VERSION);
+    assert_eq!(codex_response.id, RequestId::Integer(codex_request_id));
+    
+    // Verify the content array is correct
+    let result = codex_response.result.as_object().expect("result should be an object");
+    let content = result.get("content").expect("content should exist");
     assert_eq!(
-        JSONRPCResponse {
-            jsonrpc: JSONRPC_VERSION.into(),
-            id: RequestId::Integer(codex_request_id),
-            result: json!({
-                "content": [
-                    {
-                        "text": "Patch has been applied successfully!",
-                        "type": "text"
-                    }
-                ]
-            }),
-        },
-        codex_response
+        content,
+        &json!([
+            {
+                "text": "Patch has been applied successfully!",
+                "type": "text"
+            }
+        ])
     );
+    
+    // Verify sessionId is present in structuredContent
+    if let Some(structured_content) = result.get("structuredContent") {
+        let structured_obj = structured_content.as_object().expect("structuredContent should be an object");
+        assert!(structured_obj.contains_key("sessionId"), "sessionId should be present");
+    }
 
     let file_contents = std::fs::read_to_string(test_file.as_path())?;
     assert_eq!(file_contents, "modified content\n");
@@ -342,21 +358,29 @@ async fn codex_tool_passes_base_instructions() -> anyhow::Result<()> {
         mcp_process.read_stream_until_response_message(RequestId::Integer(codex_request_id)),
     )
     .await??;
+    
+    // Check the response structure and content
+    assert_eq!(codex_response.jsonrpc, JSONRPC_VERSION);
+    assert_eq!(codex_response.id, RequestId::Integer(codex_request_id));
+    
+    // Verify the content array is correct
+    let result = codex_response.result.as_object().expect("result should be an object");
+    let content = result.get("content").expect("content should exist");
     assert_eq!(
-        JSONRPCResponse {
-            jsonrpc: JSONRPC_VERSION.into(),
-            id: RequestId::Integer(codex_request_id),
-            result: json!({
-                "content": [
-                    {
-                        "text": "Enjoy!",
-                        "type": "text"
-                    }
-                ]
-            }),
-        },
-        codex_response
+        content,
+        &json!([
+            {
+                "text": "Enjoy!",
+                "type": "text"
+            }
+        ])
     );
+    
+    // Verify sessionId is present in structuredContent
+    if let Some(structured_content) = result.get("structuredContent") {
+        let structured_obj = structured_content.as_object().expect("structuredContent should be an object");
+        assert!(structured_obj.contains_key("sessionId"), "sessionId should be present");
+    }
 
     let requests = server.received_requests().await.unwrap();
     let request = requests[0].body_json::<serde_json::Value>().unwrap();
