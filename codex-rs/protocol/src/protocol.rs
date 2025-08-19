@@ -11,6 +11,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use mcp_types::CallToolResult;
+use mcp_types::Tool as McpTool;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_bytes::ByteBuf;
@@ -135,6 +136,10 @@ pub enum Op {
 
     /// Request a single history entry identified by `log_id` + `offset`.
     GetHistoryEntryRequest { offset: usize, log_id: u64 },
+
+    /// Request the list of MCP tools available across all configured servers.
+    /// Reply is delivered via `EventMsg::McpListToolsResponse`.
+    ListMcpTools,
 
     /// Request the agent to summarize the current conversation context.
     /// The agent will use its existing context (either conversation history or previous response id)
@@ -453,6 +458,9 @@ pub enum EventMsg {
     /// Response to GetHistoryEntryRequest.
     GetHistoryEntryResponse(GetHistoryEntryResponseEvent),
 
+    /// List of MCP tools available to the agent.
+    McpListToolsResponse(McpListToolsResponseEvent),
+
     PlanUpdate(UpdatePlanArgs),
 
     TurnAborted(TurnAbortedEvent),
@@ -747,6 +755,13 @@ pub struct GetHistoryEntryResponseEvent {
     /// The entry at the requested offset, if available and parseable.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entry: Option<HistoryEntry>,
+}
+
+/// Response payload for `Op::ListMcpTools`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct McpListToolsResponseEvent {
+    /// Fully qualified tool name -> tool definition.
+    pub tools: std::collections::HashMap<String, McpTool>,
 }
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
