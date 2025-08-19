@@ -382,6 +382,11 @@ impl App<'_> {
                             self.app_event_tx.send(AppEvent::CodexOp(Op::Compact));
                         }
                     }
+                    SlashCommand::Model => {
+                        if let AppState::Chat { widget } = &mut self.app_state {
+                            widget.open_model_popup();
+                        }
+                    }
                     SlashCommand::Quit => {
                         break;
                     }
@@ -419,6 +424,11 @@ impl App<'_> {
                     SlashCommand::Status => {
                         if let AppState::Chat { widget } = &mut self.app_state {
                             widget.add_status_output();
+                        }
+                    }
+                    SlashCommand::Mcp => {
+                        if let AppState::Chat { widget } = &mut self.app_state {
+                            widget.add_mcp_output();
                         }
                     }
                     #[cfg(debug_assertions)]
@@ -492,6 +502,16 @@ impl App<'_> {
                 AppEvent::FileSearchResult { query, matches } => {
                     if let AppState::Chat { widget } = &mut self.app_state {
                         widget.apply_file_search_result(query, matches);
+                    }
+                }
+                AppEvent::UpdateReasoningEffort(effort) => {
+                    if let AppState::Chat { widget } = &mut self.app_state {
+                        widget.set_reasoning_effort(effort);
+                    }
+                }
+                AppEvent::UpdateModel(model) => {
+                    if let AppState::Chat { widget } = &mut self.app_state {
+                        widget.set_model(model);
                     }
                 }
             }

@@ -204,6 +204,16 @@ impl TextArea {
 
     pub fn input(&mut self, event: KeyEvent) {
         match event {
+            // Some terminals (or configurations) send Control key chords as
+            // C0 control characters without reporting the CONTROL modifier.
+            // Handle common fallbacks for Ctrl-B/Ctrl-F here so they don't get
+            // inserted as literal control bytes.
+            KeyEvent { code: KeyCode::Char('\u{0002}'), modifiers: KeyModifiers::NONE, .. } /* ^B */ => {
+                self.move_cursor_left();
+            }
+            KeyEvent { code: KeyCode::Char('\u{0006}'), modifiers: KeyModifiers::NONE, .. } /* ^F */ => {
+                self.move_cursor_right();
+            }
             KeyEvent {
                 code: KeyCode::Char(c),
                 // Insert plain characters (and Shift-modified). Do NOT insert when ALT is held,
@@ -1143,6 +1153,25 @@ mod tests {
     }
 
     #[test]
+    fn control_b_f_fallback_control_chars_move_cursor() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let mut t = ta_with("abcd");
+        t.set_cursor(2);
+
+        // Simulate terminals that send C0 control chars without CONTROL modifier.
+        // ^B (U+0002) should move left
+        t.input(KeyEvent::new(KeyCode::Char('\u{0002}'), KeyModifiers::NONE));
+        assert_eq!(t.cursor(), 1);
+
+        // ^F (U+0006) should move right
+        t.input(KeyEvent::new(KeyCode::Char('\u{0006}'), KeyModifiers::NONE));
+        assert_eq!(t.cursor(), 2);
+    }
+
+    #[test]
     fn cursor_vertical_movement_across_lines_and_bounds() {
         let mut t = ta_with("short\nloooooooooong\nmid");
         // Place cursor on second line, column 5
@@ -1546,53 +1575,53 @@ mod tests {
                     }
                     14 => {
                         // Try inserting inside an existing element (should clamp to boundary)
-                        if let Some(payload) = elem_texts.choose(&mut rng).cloned() {
-                            if let Some(start) = ta.text().find(&payload) {
-                                let end = start + payload.len();
-                                if end - start > 2 {
-                                    let pos = rng.random_range(start + 1..end - 1);
-                                    let ins = rand_grapheme(&mut rng);
-                                    ta.insert_str_at(pos, &ins);
-                                }
+                        if let Some(payload) = elem_texts.choose(&mut rng).cloned()
+                            && let Some(start) = ta.text().find(&payload)
+                        {
+                            let end = start + payload.len();
+                            if end - start > 2 {
+                                let pos = rng.random_range(start + 1..end - 1);
+                                let ins = rand_grapheme(&mut rng);
+                                ta.insert_str_at(pos, &ins);
                             }
                         }
                     }
                     15 => {
                         // Replace a range that intersects an element -> whole element should be replaced
-                        if let Some(payload) = elem_texts.choose(&mut rng).cloned() {
-                            if let Some(start) = ta.text().find(&payload) {
-                                let end = start + payload.len();
-                                // Create an intersecting range [start-δ, end-δ2)
-                                let mut s = start.saturating_sub(rng.random_range(0..=2));
-                                let mut e = (end + rng.random_range(0..=2)).min(ta.text().len());
-                                // Align to char boundaries to satisfy String::replace_range contract
-                                let txt = ta.text();
-                                while s > 0 && !txt.is_char_boundary(s) {
-                                    s -= 1;
+                        if let Some(payload) = elem_texts.choose(&mut rng).cloned()
+                            && let Some(start) = ta.text().find(&payload)
+                        {
+                            let end = start + payload.len();
+                            // Create an intersecting range [start-δ, end-δ2)
+                            let mut s = start.saturating_sub(rng.random_range(0..=2));
+                            let mut e = (end + rng.random_range(0..=2)).min(ta.text().len());
+                            // Align to char boundaries to satisfy String::replace_range contract
+                            let txt = ta.text();
+                            while s > 0 && !txt.is_char_boundary(s) {
+                                s -= 1;
+                            }
+                            while e < txt.len() && !txt.is_char_boundary(e) {
+                                e += 1;
+                            }
+                            if s < e {
+                                // Small replacement text
+                                let mut srep = String::new();
+                                for _ in 0..rng.random_range(0..=2) {
+                                    srep.push_str(&rand_grapheme(&mut rng));
                                 }
-                                while e < txt.len() && !txt.is_char_boundary(e) {
-                                    e += 1;
-                                }
-                                if s < e {
-                                    // Small replacement text
-                                    let mut srep = String::new();
-                                    for _ in 0..rng.random_range(0..=2) {
-                                        srep.push_str(&rand_grapheme(&mut rng));
-                                    }
-                                    ta.replace_range(s..e, &srep);
-                                }
+                                ta.replace_range(s..e, &srep);
                             }
                         }
                     }
                     16 => {
                         // Try setting the cursor to a position inside an element; it should clamp out
-                        if let Some(payload) = elem_texts.choose(&mut rng).cloned() {
-                            if let Some(start) = ta.text().find(&payload) {
-                                let end = start + payload.len();
-                                if end - start > 2 {
-                                    let pos = rng.random_range(start + 1..end - 1);
-                                    ta.set_cursor(pos);
-                                }
+                        if let Some(payload) = elem_texts.choose(&mut rng).cloned()
+                            && let Some(start) = ta.text().find(&payload)
+                        {
+                            let end = start + payload.len();
+                            if end - start > 2 {
+                                let pos = rng.random_range(start + 1..end - 1);
+                                ta.set_cursor(pos);
                             }
                         }
                     }

@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use crate::app::ChatWidgetArgs;
 use crate::slash_command::SlashCommand;
+use codex_core::protocol_config_types::ReasoningEffort;
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
@@ -63,4 +64,10 @@ pub(crate) enum AppEvent {
     /// Onboarding: result of login_with_chatgpt.
     OnboardingAuthComplete(Result<(), String>),
     OnboardingComplete(ChatWidgetArgs),
+
+    /// Update the current reasoning effort in the running app and widget.
+    UpdateReasoningEffort(ReasoningEffort),
+
+    /// Update the current model slug in the running app and widget.
+    UpdateModel(String),
 }
