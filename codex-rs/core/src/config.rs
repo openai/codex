@@ -140,8 +140,8 @@ pub struct Config {
     /// When this program is invoked, arg0 will be set to `codex-linux-sandbox`.
     pub codex_linux_sandbox_exe: Option<PathBuf>,
 
-    /// If not "none", the value to use for `reasoning.effort` when making a
-    /// request using the Responses API.
+    /// Value to use for `reasoning.effort` when making a request using the
+    /// Responses API.
     pub model_reasoning_effort: ReasoningEffort,
 
     /// If not "none", the value to use for `reasoning.summary` when making a
