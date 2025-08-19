@@ -1,12 +1,13 @@
+use crate::LoginStatus;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::chatwidget::ChatWidget;
 use crate::file_search::FileSearchManager;
 use crate::get_git_diff::get_git_diff;
+use crate::get_login_status;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
 use crate::onboarding::onboarding_screen::OnboardingScreen;
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
-use crate::should_show_login_screen;
 use crate::slash_command::SlashCommand;
 use crate::tui;
 use codex_core::ConversationManager;
@@ -137,8 +138,11 @@ impl App<'_> {
             });
         }
 
-        let show_login_screen = should_show_login_screen(&config);
-        let app_state = if show_login_screen || show_trust_screen {
+        let login_status = get_login_status(&config);
+        let should_show_onboarding =
+            should_show_onboarding(login_status, &config, show_trust_screen);
+        let app_state = if should_show_onboarding {
+            let show_login_screen = should_show_login_screen(login_status, &config);
             let chat_widget_args = ChatWidgetArgs {
                 config: config.clone(),
                 initial_prompt,
@@ -150,9 +154,10 @@ impl App<'_> {
                     event_tx: app_event_tx.clone(),
                     codex_home: config.codex_home.clone(),
                     cwd: config.cwd.clone(),
-                    show_login_screen,
                     show_trust_screen,
+                    show_login_screen,
                     chat_widget_args,
+                    login_status,
                 }),
             }
         } else {
@@ -611,5 +616,79 @@ impl App<'_> {
             AppState::Chat { widget } => widget.handle_codex_event(event),
             AppState::Onboarding { .. } => {}
         }
+    }
+}
+
+fn should_show_onboarding(
+    login_status: LoginStatus,
+    config: &Config,
+    show_trust_screen: bool,
+) -> bool {
+    if show_trust_screen {
+        return true;
+    }
+
+    should_show_login_screen(login_status, config)
+}
+
+fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool {
+    match login_status {
+        LoginStatus::NotAuthenticated => true,
+        LoginStatus::AuthMode(method) => method != config.preferred_auth_method,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_core::config::ConfigOverrides;
+    use codex_core::config::ConfigToml;
+    use codex_login::AuthMode;
+
+    fn make_config(preferred: AuthMode) -> Config {
+        let mut cfg = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            std::env::temp_dir(),
+        )
+        .expect("load default config");
+        cfg.preferred_auth_method = preferred;
+        cfg
+    }
+
+    #[test]
+    fn shows_login_when_not_authenticated() {
+        let cfg = make_config(AuthMode::ChatGPT);
+        assert!(should_show_login_screen(
+            LoginStatus::NotAuthenticated,
+            &cfg
+        ));
+    }
+
+    #[test]
+    fn shows_login_when_api_key_but_prefers_chatgpt() {
+        let cfg = make_config(AuthMode::ChatGPT);
+        assert!(should_show_login_screen(
+            LoginStatus::AuthMode(AuthMode::ApiKey),
+            &cfg
+        ))
+    }
+
+    #[test]
+    fn hides_login_when_api_key_and_prefers_api_key() {
+        let cfg = make_config(AuthMode::ApiKey);
+        assert!(!should_show_login_screen(
+            LoginStatus::AuthMode(AuthMode::ApiKey),
+            &cfg
+        ))
+    }
+
+    #[test]
+    fn hides_login_when_chatgpt_and_prefers_chatgpt() {
+        let cfg = make_config(AuthMode::ChatGPT);
+        assert!(!should_show_login_screen(
+            LoginStatus::AuthMode(AuthMode::ChatGPT),
+            &cfg
+        ))
     }
 }

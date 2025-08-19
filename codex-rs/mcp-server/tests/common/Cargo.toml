@@ -11,6 +11,7 @@ anyhow = "1"
 assert_cmd = "2"
 codex-core = { path = "../../../core" }
 codex-mcp-server = { path = "../.." }
+codex-protocol = { path = "../../../protocol" }
 mcp-types = { path = "../../../mcp-types" }
 pretty_assertions = "1.4.1"
 serde = { version = "1" }

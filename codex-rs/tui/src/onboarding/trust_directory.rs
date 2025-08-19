@@ -75,7 +75,7 @@ impl WidgetRef for &TrustDirectoryWidget {
             |idx: usize, option: TrustDirectorySelection, text: &str| -> Line<'static> {
                 let is_selected = self.highlighted == option;
                 if is_selected {
-                    Line::from(format!("> {}. {text}", idx + 1)).blue()
+                    Line::from(format!("> {}. {text}", idx + 1)).cyan()
                 } else {
                     Line::from(format!("  {}. {}", idx + 1, text))
                 }
@@ -109,6 +109,8 @@ impl WidgetRef for &TrustDirectoryWidget {
             lines.push(Line::from(format!("  {error}")).fg(Color::Red));
             lines.push(Line::from(""));
         }
+        // AE: Following styles.md, this should probably be Cyan because it's a user input tip.
+        //     But leaving this for a future cleanup.
         lines.push(Line::from("  Press Enter to continue").add_modifier(Modifier::DIM));
 
         Paragraph::new(lines)

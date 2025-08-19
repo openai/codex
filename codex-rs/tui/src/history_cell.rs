@@ -711,7 +711,7 @@ pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlainHistoryCell {
                     Span::styled(
                         step,
                         Style::default()
-                            .fg(Color::Blue)
+                            .fg(Color::Cyan)
                             .add_modifier(Modifier::BOLD),
                     ),
                 ),
@@ -913,9 +913,9 @@ fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
         .unwrap_or_default();
 
     let invocation_spans = vec![
-        Span::styled(invocation.server.clone(), Style::default().fg(Color::Blue)),
+        Span::styled(invocation.server.clone(), Style::default().fg(Color::Cyan)),
         Span::raw("."),
-        Span::styled(invocation.tool.clone(), Style::default().fg(Color::Blue)),
+        Span::styled(invocation.tool.clone(), Style::default().fg(Color::Cyan)),
         Span::raw("("),
         Span::styled(args_str, Style::default().add_modifier(Modifier::DIM)),
         Span::raw(")"),

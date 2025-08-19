@@ -1,9 +1,6 @@
 use crate::config_profile::ConfigProfile;
 use crate::config_types::History;
 use crate::config_types::McpServerConfig;
-use crate::config_types::ReasoningEffort;
-use crate::config_types::ReasoningSummary;
-use crate::config_types::SandboxMode;
 use crate::config_types::SandboxWorkspaceWrite;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::config_types::ShellEnvironmentPolicyToml;
@@ -16,6 +13,10 @@ use crate::model_provider_info::built_in_model_providers;
 use crate::openai_model_info::get_model_info;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
+use codex_login::AuthMode;
+use codex_protocol::config_types::ReasoningEffort;
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::SandboxMode;
 use dirs::home_dir;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -165,6 +166,9 @@ pub struct Config {
 
     /// The value for the `originator` header included with Responses API requests.
     pub internal_originator: Option<String>,
+
+    /// If set to `true`, the API key will be signed with the `originator` header.
+    pub preferred_auth_method: AuthMode,
 }
 
 impl Config {
@@ -411,6 +415,9 @@ pub struct ConfigToml {
     pub internal_originator: Option<String>,
 
     pub projects: Option<HashMap<String, ProjectConfig>>,
+
+    /// If set to `true`, the API key will be signed with the `originator` header.
+    pub preferred_auth_method: Option<AuthMode>,
 
     /// Nested tools section for feature toggles
     pub tools: Option<ToolsToml>,
@@ -691,6 +698,7 @@ impl Config {
             include_apply_patch_tool: include_apply_patch_tool_val,
             tools_web_search_request,
             internal_originator: cfg.internal_originator,
+            preferred_auth_method: cfg.preferred_auth_method.unwrap_or(AuthMode::ChatGPT),
         };
         Ok(config)
     }
@@ -1056,6 +1064,7 @@ disable_response_storage = true
                 include_apply_patch_tool: false,
                 tools_web_search_request: false,
                 internal_originator: None,
+                preferred_auth_method: AuthMode::ChatGPT,
             },
             o3_profile_config
         );
@@ -1109,6 +1118,7 @@ disable_response_storage = true
             include_apply_patch_tool: false,
             tools_web_search_request: false,
             internal_originator: None,
+            preferred_auth_method: AuthMode::ChatGPT,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -1177,6 +1187,7 @@ disable_response_storage = true
             include_apply_patch_tool: false,
             tools_web_search_request: false,
             internal_originator: None,
+            preferred_auth_method: AuthMode::ChatGPT,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);

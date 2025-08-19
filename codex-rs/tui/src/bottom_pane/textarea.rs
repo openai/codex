@@ -230,6 +230,11 @@ impl TextArea {
                 code: KeyCode::Backspace,
                 modifiers: KeyModifiers::NONE,
                 ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('h'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
             } => self.delete_backward(1),
             KeyEvent {
                 code: KeyCode::Delete,

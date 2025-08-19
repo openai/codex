@@ -2,11 +2,11 @@ use serde::Deserialize;
 use serde::Serialize;
 use strum_macros::Display as DeriveDisplay;
 
-use crate::config_types::SandboxMode;
 use crate::models::ContentItem;
 use crate::models::ResponseItem;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
+use codex_protocol::config_types::SandboxMode;
 use std::fmt::Display;
 use std::path::PathBuf;
 

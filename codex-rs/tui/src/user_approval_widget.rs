@@ -145,7 +145,7 @@ impl UserApprovalWidget<'_> {
             } => {
                 let cmd = strip_bash_lc_and_escape(command);
                 let mut contents: Vec<Line> = to_command_display(
-                    vec!["? ".fg(Color::Blue), "Codex wants to run ".bold()],
+                    vec!["? ".fg(Color::Cyan), "Codex wants to run ".bold()],
                     cmd,
                     vec![],
                 );
