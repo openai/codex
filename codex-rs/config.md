@@ -300,6 +300,36 @@ This is reasonable to use if Codex is running in an environment that provides it
 
 Though using this option may also be necessary if you try to use Codex in environments where its native sandboxing mechanisms are unsupported, such as older Linux kernels or on Windows.
 
+## Permissions presets
+
+Codex pairs the approval policy and sandbox mode into four easy presets you can select in the TUI (via `/permissions`). These are convenience shortcuts over `approval_policy` and `sandbox_mode`.
+
+- Read Only
+  - Approval: on‑request (default)
+  - Sandbox: read‑only (default)
+  - Behavior: full‑disk reads allowed; writes blocked; outbound network blocked.
+  - Notes: This is the default for untrusted directories and the safest starting point.
+
+- Guarded Write
+  - Approval: on‑request
+  - Sandbox: workspace‑write (writes allowed only in the current workspace; `.git/` is kept read‑only when present)
+  - Network: blocked by default; can be enabled with `[sandbox_workspace_write] network_access = true`.
+
+- Auto Write
+  - Approval: on‑failure
+  - Sandbox: workspace‑write
+  - Behavior: run without asking first; if a sandboxed command fails, Codex will ask to retry without the sandbox. Network is blocked by default.
+
+- YOLO
+  - Approval: never
+  - Sandbox: danger‑full‑access
+  - Behavior: no prompts; full disk and network access. Extremely risky.
+
+Reference defaults
+
+- Default approval policy (when unspecified): `on-request`.
+- Default sandbox mode (when unspecified): `read-only`.
+
 ## mcp_servers
 
 Defines the list of MCP servers that Codex can consult for tool use. Currently, only servers that are launched by executing a program that communicate over stdio are supported. For servers that use the SSE transport, consider an adapter like [mcp-proxy](https://github.com/sparfenyuk/mcp-proxy).
