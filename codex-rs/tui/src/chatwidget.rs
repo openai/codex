@@ -744,7 +744,8 @@ impl ChatWidget<'_> {
         let mut items: Vec<SelectionItem> = Vec::new();
         let presets: Vec<PermissionPreset> = builtin_permission_presets();
         for preset in presets.into_iter() {
-            let is_current = current_approval == preset.approval && current_sandbox == preset.sandbox;
+            let is_current =
+                current_approval == preset.approval && current_sandbox == preset.sandbox;
             let approval = preset.approval;
             let sandbox = preset.sandbox.clone();
             let name = preset.label.to_string();
