@@ -180,15 +180,9 @@ impl CodexMessageProcessor {
                 let outgoing_clone = self.outgoing.clone();
                 let active_login = self.active_login.clone();
                 tokio::spawn(async move {
-                    let result =
-                        tokio::task::spawn_blocking(move || server.block_until_done()).await;
-                    let (success, error_msg) = match result {
-                        Ok(Ok(())) => (true, None),
-                        Ok(Err(err)) => (false, Some(format!("Login server error: {err}"))),
-                        Err(join_err) => (
-                            false,
-                            Some(format!("failed to join login server thread: {join_err}")),
-                        ),
+                    let (success, error_msg) = match server.block_until_done().await {
+                        Ok(()) => (true, None),
+                        Err(err) => (false, Some(format!("Login server error: {err}"))),
                     };
                     let notification = LoginChatGptCompleteNotification {
                         login_id,

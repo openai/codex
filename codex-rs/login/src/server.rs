@@ -52,15 +52,15 @@ impl ServerOptions {
 pub struct LoginServer {
     pub auth_url: String,
     pub actual_port: u16,
-    pub server_handle: thread::JoinHandle<io::Result<()>>,
     pub shutdown_flag: Arc<AtomicBool>,
-    pub server: Arc<Server>,
+    server_handle: tokio::task::JoinHandle<io::Result<()>>,
+    server: Arc<Server>,
 }
 
 impl LoginServer {
-    pub fn block_until_done(self) -> io::Result<()> {
+    pub async fn block_until_done(self) -> io::Result<()> {
         self.server_handle
-            .join()
+            .await
             .map_err(|err| io::Error::other(format!("login server thread panicked: {err:?}")))?
     }
 
@@ -118,7 +118,8 @@ pub fn run_login_server(
     if opts.open_browser {
         let _ = webbrowser::open(&auth_url);
     }
-    let shutdown_flag = shutdown_flag.unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
+    let shutdown_flag: Arc<AtomicBool> =
+        shutdown_flag.unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
     let shutdown_flag_clone = shutdown_flag.clone();
     let timeout_flag = Arc::new(AtomicBool::new(false));
 
@@ -135,31 +136,46 @@ pub fn run_login_server(
         );
     }
 
-    let server_for_thread = server.clone();
-    let server_handle = thread::spawn(move || {
-        while !shutdown_flag.load(Ordering::SeqCst) {
-            let req = match server_for_thread.recv() {
-                Ok(r) => r,
-                Err(e) => {
-                    // If we've been asked to shut down, break gracefully so that
-                    // we can report timeout or cancellation status uniformly.
-                    if shutdown_flag.load(Ordering::SeqCst) {
-                        break;
-                    } else {
-                        return Err(io::Error::other(e));
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Request>(16);
+    let _server_handle = {
+        let server = server.clone();
+        let shutdown_flag = shutdown_flag.clone();
+        thread::spawn(move || {
+            while !shutdown_flag.load(Ordering::SeqCst) {
+                match server.recv() {
+                    Ok(request) => tx.blocking_send(request).map_err(|e| {
+                        eprintln!("Failed to send request to channel: {e}");
+                        io::Error::other("Failed to send request to channel")
+                    })?,
+                    Err(e) => {
+                        // If we've been asked to shut down, break gracefully so that
+                        // we can report timeout or cancellation status uniformly.
+                        if shutdown_flag.load(Ordering::SeqCst) {
+                            break;
+                        } else {
+                            return Err(io::Error::other(e));
+                        }
                     }
-                }
-            };
+                };
+            }
+            Ok(())
+        })
+    };
 
-            let response = process_request(&req, &opts, &redirect_uri, &pkce, actual_port, &state);
+    let server_handle = tokio::spawn(async move {
+        while let Some(req) = rx.recv().await {
+            let url_raw = req.url().to_string();
+            let response =
+                process_request(&url_raw, &opts, &redirect_uri, &pkce, actual_port, &state).await;
+
             let is_login_complete = matches!(response, HandledRequest::ResponseAndExit(_));
             match response {
                 HandledRequest::Response(r) | HandledRequest::ResponseAndExit(r) => {
-                    let _ = req.respond(r);
+                    let _ = tokio::task::spawn_blocking(move || req.respond(r)).await;
                 }
                 HandledRequest::RedirectWithHeader(header) => {
                     let redirect = Response::empty(302).with_header(header);
-                    let _ = req.respond(redirect);
+                    let _ = tokio::task::spawn_blocking(move || req.respond(redirect)).await;
                 }
             }
 
@@ -196,15 +212,14 @@ enum HandledRequest {
     ResponseAndExit(Response<Cursor<Vec<u8>>>),
 }
 
-fn process_request(
-    req: &Request,
+async fn process_request(
+    url_raw: &str,
     opts: &ServerOptions,
     redirect_uri: &str,
     pkce: &PkceCodes,
     actual_port: u16,
     state: &str,
 ) -> HandledRequest {
-    let url_raw = req.url().to_string();
     let parsed_url = match url::Url::parse(&format!("http://localhost{url_raw}")) {
         Ok(u) => u,
         Err(e) => {
@@ -235,18 +250,22 @@ fn process_request(
             };
 
             match exchange_code_for_tokens(&opts.issuer, &opts.client_id, redirect_uri, pkce, &code)
+                .await
             {
                 Ok(tokens) => {
                     // Obtain API key via token-exchange and persist
-                    let api_key =
-                        obtain_api_key(&opts.issuer, &opts.client_id, &tokens.id_token).ok();
-                    if let Err(err) = persist_tokens(
+                    let api_key = obtain_api_key(&opts.issuer, &opts.client_id, &tokens.id_token)
+                        .await
+                        .ok();
+                    if let Err(err) = persist_tokens_async(
                         &opts.codex_home,
                         api_key.clone(),
                         tokens.id_token.clone(),
                         Some(tokens.access_token.clone()),
                         Some(tokens.refresh_token.clone()),
-                    ) {
+                    )
+                    .await
+                    {
                         eprintln!("Persist error: {err}");
                         return HandledRequest::Response(
                             Response::from_string(format!("Unable to persist auth file: {err}"))
@@ -352,7 +371,7 @@ struct ExchangedTokens {
     refresh_token: String,
 }
 
-fn exchange_code_for_tokens(
+async fn exchange_code_for_tokens(
     issuer: &str,
     client_id: &str,
     redirect_uri: &str,
@@ -366,7 +385,7 @@ fn exchange_code_for_tokens(
         refresh_token: String,
     }
 
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::Client::new();
     let resp = client
         .post(format!("{issuer}/oauth/token"))
         .header("Content-Type", "application/x-www-form-urlencoded")
@@ -378,6 +397,7 @@ fn exchange_code_for_tokens(
             urlencoding::encode(&pkce.code_verifier)
         ))
         .send()
+        .await
         .map_err(io::Error::other)?;
 
     if !resp.status().is_success() {
@@ -387,7 +407,7 @@ fn exchange_code_for_tokens(
         )));
     }
 
-    let tokens: TokenResponse = resp.json().map_err(io::Error::other)?;
+    let tokens: TokenResponse = resp.json().await.map_err(io::Error::other)?;
     Ok(ExchangedTokens {
         id_token: tokens.id_token,
         access_token: tokens.access_token,
@@ -395,43 +415,49 @@ fn exchange_code_for_tokens(
     })
 }
 
-fn persist_tokens(
+async fn persist_tokens_async(
     codex_home: &Path,
     api_key: Option<String>,
     id_token: String,
     access_token: Option<String>,
     refresh_token: Option<String>,
 ) -> io::Result<()> {
-    let auth_file = get_auth_file(codex_home);
-    if let Some(parent) = auth_file.parent() {
-        if !parent.exists() {
-            std::fs::create_dir_all(parent).map_err(io::Error::other)?;
+    // Reuse existing synchronous logic but run it off the async runtime.
+    let codex_home = codex_home.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let auth_file = get_auth_file(&codex_home);
+        if let Some(parent) = auth_file.parent() {
+            if !parent.exists() {
+                std::fs::create_dir_all(parent).map_err(io::Error::other)?;
+            }
         }
-    }
 
-    let mut auth = read_or_default(&auth_file);
-    if let Some(key) = api_key {
-        auth.openai_api_key = Some(key);
-    }
-    let tokens = auth
-        .tokens
-        .get_or_insert_with(crate::token_data::TokenData::default);
-    tokens.id_token = crate::token_data::parse_id_token(&id_token).map_err(io::Error::other)?;
-    // Persist chatgpt_account_id if present in claims
-    if let Some(acc) = jwt_auth_claims(&id_token)
-        .get("chatgpt_account_id")
-        .and_then(|v| v.as_str())
-    {
-        tokens.account_id = Some(acc.to_string());
-    }
-    if let Some(at) = access_token {
-        tokens.access_token = at;
-    }
-    if let Some(rt) = refresh_token {
-        tokens.refresh_token = rt;
-    }
-    auth.last_refresh = Some(Utc::now());
-    super::write_auth_json(&auth_file, &auth)
+        let mut auth = read_or_default(&auth_file);
+        if let Some(key) = api_key {
+            auth.openai_api_key = Some(key);
+        }
+        let tokens = auth
+            .tokens
+            .get_or_insert_with(crate::token_data::TokenData::default);
+        tokens.id_token = crate::token_data::parse_id_token(&id_token).map_err(io::Error::other)?;
+        // Persist chatgpt_account_id if present in claims
+        if let Some(acc) = jwt_auth_claims(&id_token)
+            .get("chatgpt_account_id")
+            .and_then(|v| v.as_str())
+        {
+            tokens.account_id = Some(acc.to_string());
+        }
+        if let Some(at) = access_token {
+            tokens.access_token = at;
+        }
+        if let Some(rt) = refresh_token {
+            tokens.refresh_token = rt;
+        }
+        auth.last_refresh = Some(Utc::now());
+        super::write_auth_json(&auth_file, &auth)
+    })
+    .await
+    .map_err(|e| io::Error::other(format!("persist task failed: {e}")))?
 }
 
 fn read_or_default(path: &Path) -> AuthDotJson {
@@ -524,13 +550,13 @@ fn jwt_auth_claims(jwt: &str) -> serde_json::Map<String, serde_json::Value> {
     serde_json::Map::new()
 }
 
-fn obtain_api_key(issuer: &str, client_id: &str, id_token: &str) -> io::Result<String> {
+async fn obtain_api_key(issuer: &str, client_id: &str, id_token: &str) -> io::Result<String> {
     // Token exchange for an API key access token
     #[derive(serde::Deserialize)]
     struct ExchangeResp {
         access_token: String,
     }
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::Client::new();
     let resp = client
         .post(format!("{issuer}/oauth/token"))
         .header("Content-Type", "application/x-www-form-urlencoded")
@@ -543,6 +569,7 @@ fn obtain_api_key(issuer: &str, client_id: &str, id_token: &str) -> io::Result<S
             urlencoding::encode("urn:ietf:params:oauth:token-type:id_token")
         ))
         .send()
+        .await
         .map_err(io::Error::other)?;
     if !resp.status().is_success() {
         return Err(io::Error::other(format!(
@@ -550,6 +577,6 @@ fn obtain_api_key(issuer: &str, client_id: &str, id_token: &str) -> io::Result<S
             resp.status()
         )));
     }
-    let body: ExchangeResp = resp.json().map_err(io::Error::other)?;
+    let body: ExchangeResp = resp.json().await.map_err(io::Error::other)?;
     Ok(body.access_token)
 }
