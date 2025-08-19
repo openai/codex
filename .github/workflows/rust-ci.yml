@@ -130,7 +130,7 @@ jobs:
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Install musl build tools
         run: |
-          sudo apt install -y musl-tools pkg-config
+          sudo apt install -y musl-tools pkg-config && sudo rm -rf /var/lib/apt/lists/*
 
       - name: cargo clippy
         id: clippy
@@ -139,15 +139,15 @@ jobs:
       # Running `cargo build` from the workspace root builds the workspace using
       # the union of all features from third-party crates. This can mask errors
       # where individual crates have underspecified features. To avoid this, we
-      # run `cargo build` for each crate individually, though because this is
+      # run `cargo check` for each crate individually, though because this is
       # slower, we only do this for the x86_64-unknown-linux-gnu target.
-      - name: cargo build individual crates
-        id: build
+      - name: cargo check individual crates
+        id: cargo_check_all_crates
         if: ${{ matrix.target == 'x86_64-unknown-linux-gnu' && matrix.profile != 'release' }}
         continue-on-error: true
         run: |
           find . -name Cargo.toml -mindepth 2 -maxdepth 2 -print0 \
-            | xargs -0 -n1 -I{} bash -c 'cd "$(dirname "{}")" && cargo build --profile ${{ matrix.profile }}'
+            | xargs -0 -n1 -I{} bash -c 'cd "$(dirname "{}")" && cargo check --profile ${{ matrix.profile }}'
 
       - name: cargo test
         id: test
@@ -162,10 +162,10 @@ jobs:
       - name: verify all steps passed
         if: |
           steps.clippy.outcome == 'failure' ||
-          steps.build.outcome == 'failure' ||
+          steps.cargo_check_all_crates.outcome == 'failure' ||
           steps.test.outcome == 'failure'
         run: |
-          echo "One or more checks failed (clippy, build, or test). See logs for details."
+          echo "One or more checks failed (clippy, cargo_check_all_crates, or test). See logs for details."
           exit 1
 
   # --- Gatherer job that you mark as the ONLY required status -----------------
