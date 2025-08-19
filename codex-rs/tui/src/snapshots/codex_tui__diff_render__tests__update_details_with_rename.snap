@@ -4,7 +4,7 @@ assertion_line: 380
 expression: terminal.backend()
 ---
 "proposed patch to 1 file (+1 -1)                                                "
-"  └ src/lib.rs → src/lib_new.rs (+1 -1)                                         "
+"  └ src/lib.rs → src/lib_new.rs                                                 "
 "    1      line one                                                             "
 "    2     -line two                                                             "
 "    2     +line two changed                                                     "
