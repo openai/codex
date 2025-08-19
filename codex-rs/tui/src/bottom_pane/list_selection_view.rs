@@ -41,6 +41,14 @@ pub(crate) struct ListSelectionView {
 }
 
 impl ListSelectionView {
+    fn dim_prefix_span() -> Span<'static> {
+        Span::styled("▌ ", Style::default().add_modifier(Modifier::DIM))
+    }
+
+    fn render_dim_prefix_line(area: Rect, buf: &mut Buffer) {
+        let para = Paragraph::new(Line::from(Self::dim_prefix_span()));
+        para.render(area, buf);
+    }
     pub fn new(
         title: String,
         subtitle: Option<String>,
@@ -58,7 +66,6 @@ impl ListSelectionView {
             app_event_tx,
         };
         let len = s.items.len();
-        // Default selection to the first item that matches the current config choice.
         if let Some(idx) = s.items.iter().position(|it| it.is_current) {
             s.state.selected_idx = Some(idx);
         }
@@ -134,7 +141,8 @@ impl BottomPaneView<'_> for ListSelectionView {
         // +1 for the title row, +1 for optional subtitle, +1 for optional footer
         let mut height = rows as u16 + 1;
         if self.subtitle.is_some() {
-            height = height.saturating_add(1);
+            // +1 for subtitle, +1 for a blank spacer line beneath it
+            height = height.saturating_add(2);
         }
         if self.footer_hint.is_some() {
             height = height.saturating_add(2);
@@ -147,7 +155,6 @@ impl BottomPaneView<'_> for ListSelectionView {
             return;
         }
 
-        // Render the title line at the top with a left bar and bold title text.
         let title_area = Rect {
             x: area.x,
             y: area.y,
@@ -156,7 +163,7 @@ impl BottomPaneView<'_> for ListSelectionView {
         };
 
         let title_spans: Vec<Span<'static>> = vec![
-            Span::styled("▌ ", Style::default().add_modifier(Modifier::DIM)),
+            Self::dim_prefix_span(),
             Span::styled(
                 self.title.clone(),
                 Style::default().add_modifier(Modifier::BOLD),
@@ -165,7 +172,6 @@ impl BottomPaneView<'_> for ListSelectionView {
         let title_para = Paragraph::new(Line::from(title_spans));
         title_para.render(title_area, buf);
 
-        // Optional subtitle below the title, dimmed.
         let mut next_y = area.y.saturating_add(1);
         if let Some(sub) = &self.subtitle {
             let subtitle_area = Rect {
@@ -175,16 +181,22 @@ impl BottomPaneView<'_> for ListSelectionView {
                 height: 1,
             };
             let subtitle_spans: Vec<Span<'static>> = vec![
-                Span::styled("▌ ", Style::default().add_modifier(Modifier::DIM)),
+                Self::dim_prefix_span(),
                 Span::styled(sub.clone(), Style::default().add_modifier(Modifier::DIM)),
             ];
             let subtitle_para = Paragraph::new(Line::from(subtitle_spans));
             subtitle_para.render(subtitle_area, buf);
-            next_y = next_y.saturating_add(1);
+            // Render the extra spacer line with the dimmed prefix to align with title/subtitle
+            let spacer_area = Rect {
+                x: area.x,
+                y: next_y.saturating_add(1),
+                width: area.width,
+                height: 1,
+            };
+            Self::render_dim_prefix_line(spacer_area, buf);
+            next_y = next_y.saturating_add(2);
         }
 
-        // Remaining area for the rows list; reserve two lines at the bottom when footer is present
-        // (one blank spacer line and one for the footer itself).
         let footer_reserved = if self.footer_hint.is_some() { 2 } else { 0 };
         let rows_area = Rect {
             x: area.x,
@@ -196,7 +208,6 @@ impl BottomPaneView<'_> for ListSelectionView {
                 .saturating_sub(footer_reserved),
         };
 
-        // Build display rows with numbering and selection arrow prefix.
         let rows: Vec<GenericDisplayRow> = self
             .items
             .iter()
@@ -222,7 +233,6 @@ impl BottomPaneView<'_> for ListSelectionView {
             render_rows(rows_area, buf, &rows, &self.state, MAX_POPUP_ROWS, true);
         }
 
-        // Footer hint (dim), if present. The blank spacer line above is implicit.
         if let Some(hint) = &self.footer_hint {
             let footer_area = Rect {
                 x: area.x,
