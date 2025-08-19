@@ -537,13 +537,6 @@ pub(crate) fn new_status_output(
         sandbox_name.into(),
     ]));
 
-    if let Some(session_id) = session_id {
-        lines.push(Line::from(vec![
-            "  • Session ID: ".into(),
-            session_id.to_string().into(),
-        ]));
-    }
-
     lines.push(Line::from(""));
 
     // 👤 Account (only if ChatGPT tokens exist), shown under the first block
@@ -608,6 +601,12 @@ pub(crate) fn new_status_output(
 
     // 📊 Token Usage
     lines.push(Line::from(vec!["📊 ".into(), "Token Usage".bold()]));
+    if let Some(session_id) = session_id {
+        lines.push(Line::from(vec![
+            "  • Session ID: ".into(),
+            session_id.to_string().into(),
+        ]));
+    }
     // Input: <input> [+ <cached> cached]
     let mut input_line_spans: Vec<Span<'static>> = vec![
         "  • Input: ".into(),
