@@ -6,9 +6,9 @@ use std::time::Duration;
 
 use crate::app::ChatWidgetArgs;
 use crate::slash_command::SlashCommand;
-use codex_core::protocol_config_types::ReasoningEffort;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
+use codex_core::protocol_config_types::ReasoningEffort;
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
