@@ -2,6 +2,7 @@ use crossterm::terminal;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
+use ratatui::style::Styled;
 use ratatui::text::Line as RtLine;
 use ratatui::text::Span as RtSpan;
 use std::collections::HashMap;
@@ -213,6 +214,33 @@ fn render_patch_details(changes: &HashMap<PathBuf, FileChange>) -> Vec<RtLine<'s
             } => {
                 if let Ok(patch) = diffy::Patch::from_str(unified_diff) {
                     for h in patch.hunks() {
+                        // Emit a unified diff-style hunk header to clearly
+                        // separate non-contiguous changes within the file.
+                        let mut old_count: usize = 0;
+                        let mut new_count: usize = 0;
+                        for l in h.lines() {
+                            match l {
+                                diffy::Line::Insert(_) => new_count += 1,
+                                diffy::Line::Delete(_) => old_count += 1,
+                                diffy::Line::Context(_) => {
+                                    old_count += 1;
+                                    new_count += 1;
+                                }
+                            }
+                        }
+
+                        let header = format!(
+                            "@@ -{},{} +{},{} @@",
+                            h.old_range().start(),
+                            old_count,
+                            h.new_range().start(),
+                            new_count
+                        );
+                        out.push(RtLine::from(vec![
+                            "    ".into(),
+                            header.set_style(style_dim()),
+                        ]));
+
                         let mut old_ln = h.old_range().start();
                         let mut new_ln = h.new_range().start();
                         for l in h.lines() {
