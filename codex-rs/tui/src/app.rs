@@ -421,6 +421,11 @@ impl App<'_> {
                             widget.add_status_output();
                         }
                     }
+                    SlashCommand::Mcp => {
+                        if let AppState::Chat { widget } = &mut self.app_state {
+                            widget.add_mcp_output();
+                        }
+                    }
                     #[cfg(debug_assertions)]
                     SlashCommand::TestApproval => {
                         use codex_core::protocol::EventMsg;
