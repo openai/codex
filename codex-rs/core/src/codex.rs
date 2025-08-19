@@ -1323,6 +1323,8 @@ async fn run_task(
                                 summary,
                                 content,
                                 encrypted_content,
+                                token_usage,
+                                timestamp,
                             },
                             None,
                         ) => {
@@ -1331,6 +1333,8 @@ async fn run_task(
                                 summary: summary.clone(),
                                 content: content.clone(),
                                 encrypted_content: encrypted_content.clone(),
+                                token_usage: token_usage.clone(),
+                                timestamp: timestamp.clone(),
                             });
                         }
                         _ => {
@@ -1735,10 +1739,7 @@ async fn handle_response_item(
             None
         }
         ResponseItem::Reasoning {
-            id: _,
-            summary,
-            content,
-            encrypted_content: _,
+            summary, content, ..
         } => {
             for item in summary {
                 let text = match item {
@@ -2452,19 +2453,289 @@ fn attach_info_to_last_assistant_message(
     usage: TokenUsage,
     timestamp: String,
 ) {
-    for processed_item in items.iter_mut().rev() {
-        if let ResponseItem::Message {
-            role,
-            token_usage,
-            timestamp: message_timestamp,
-            ..
-        } = &mut processed_item.item
-        {
-            if role == "assistant" && token_usage.is_none() {
-                *token_usage = Some(usage);
-                *message_timestamp = Some(timestamp.clone());
-                break;
+    if let Some(item) = items.iter_mut().last() {
+        match &mut item.item {
+            ResponseItem::FunctionCall {
+                token_usage,
+                timestamp: response_timestamp,
+                ..
             }
+            | ResponseItem::Reasoning {
+                token_usage,
+                timestamp: response_timestamp,
+                ..
+            } => {
+                *token_usage = Some(usage.clone());
+                *response_timestamp = Some(timestamp.clone());
+            }
+            ResponseItem::Message {
+                role,
+                token_usage,
+                timestamp: message_timestamp,
+                ..
+            } => {
+                if role == "assistant" && token_usage.is_none() {
+                    *token_usage = Some(usage.clone());
+                    *message_timestamp = Some(timestamp.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::ContentItem;
+    use crate::models::ReasoningItemContent;
+    use crate::models::ResponseItem;
+    use crate::protocol::TokenUsage;
+
+    #[test]
+    fn test_attach_info_to_last_assistant_message_function_call() {
+        let token_usage = TokenUsage {
+            input_tokens: 100,
+            cached_input_tokens: None,
+            output_tokens: 50,
+            reasoning_output_tokens: None,
+            total_tokens: 150,
+        };
+        let timestamp = "2023-01-01T00:00:00Z".to_string();
+
+        let mut items = vec![ProcessedResponseItem {
+            item: ResponseItem::FunctionCall {
+                id: Some("func_1".to_string()),
+                call_id: "call_123".to_string(),
+                name: "test_function".to_string(),
+                arguments: "{}".to_string(),
+                token_usage: None,
+                timestamp: None,
+            },
+            response: None,
+        }];
+
+        attach_info_to_last_assistant_message(&mut items, token_usage.clone(), timestamp.clone());
+
+        match &items[0].item {
+            ResponseItem::FunctionCall {
+                token_usage: attached_usage,
+                timestamp: attached_timestamp,
+                ..
+            } => {
+                assert!(attached_usage.is_some(), "token_usage should be attached");
+                assert!(attached_timestamp.is_some(), "timestamp should be attached");
+                assert_eq!(attached_usage.as_ref().unwrap().total_tokens, 150);
+                assert_eq!(attached_timestamp.as_ref().unwrap(), &timestamp);
+            }
+            _ => panic!("Expected FunctionCall"),
+        }
+    }
+
+    #[test]
+    fn test_attach_info_to_last_assistant_message_reasoning() {
+        let token_usage = TokenUsage {
+            input_tokens: 75,
+            cached_input_tokens: None,
+            output_tokens: 25,
+            reasoning_output_tokens: None,
+            total_tokens: 100,
+        };
+        let timestamp = "2023-02-01T00:00:00Z".to_string();
+
+        let mut items = vec![ProcessedResponseItem {
+            item: ResponseItem::Reasoning {
+                id: "reasoning_1".to_string(),
+                summary: vec![],
+                content: Some(vec![ReasoningItemContent::ReasoningText {
+                    text: "test reasoning".to_string(),
+                }]),
+                encrypted_content: None,
+                token_usage: None,
+                timestamp: None,
+            },
+            response: None,
+        }];
+
+        attach_info_to_last_assistant_message(&mut items, token_usage.clone(), timestamp.clone());
+
+        match &items[0].item {
+            ResponseItem::Reasoning {
+                token_usage: attached_usage,
+                timestamp: attached_timestamp,
+                ..
+            } => {
+                assert!(attached_usage.is_some(), "token_usage should be attached");
+                assert!(attached_timestamp.is_some(), "timestamp should be attached");
+                assert_eq!(attached_usage.as_ref().unwrap().total_tokens, 100);
+                assert_eq!(attached_timestamp.as_ref().unwrap(), &timestamp);
+            }
+            _ => panic!("Expected Reasoning"),
+        }
+    }
+
+    #[test]
+    fn test_attach_info_to_last_assistant_message_multiple_items() {
+        let token_usage = TokenUsage {
+            input_tokens: 200,
+            cached_input_tokens: None,
+            output_tokens: 100,
+            reasoning_output_tokens: None,
+            total_tokens: 300,
+        };
+        let timestamp = "2023-03-01T00:00:00Z".to_string();
+
+        // Test with multiple items where only the last one should get the metadata
+        let mut items = vec![
+            ProcessedResponseItem {
+                item: ResponseItem::Message {
+                    id: Some("msg_1".to_string()),
+                    role: "assistant".to_string(),
+                    content: vec![ContentItem::OutputText {
+                        text: "first message".to_string(),
+                    }],
+                    token_usage: None,
+                    timestamp: None,
+                },
+                response: None,
+            },
+            ProcessedResponseItem {
+                item: ResponseItem::FunctionCall {
+                    id: Some("func_1".to_string()),
+                    call_id: "call_123".to_string(),
+                    name: "test_function".to_string(),
+                    arguments: "{}".to_string(),
+                    token_usage: None,
+                    timestamp: None,
+                },
+                response: None,
+            },
+        ];
+
+        attach_info_to_last_assistant_message(&mut items, token_usage.clone(), timestamp.clone());
+
+        // First item should not have metadata attached
+        match &items[0].item {
+            ResponseItem::Message {
+                token_usage: attached_usage,
+                timestamp: attached_timestamp,
+                ..
+            } => {
+                assert!(
+                    attached_usage.is_none(),
+                    "First item should not have token_usage"
+                );
+                assert!(
+                    attached_timestamp.is_none(),
+                    "First item should not have timestamp"
+                );
+            }
+            _ => panic!("Expected Message"),
+        }
+
+        // Last item should have metadata attached
+        match &items[1].item {
+            ResponseItem::FunctionCall {
+                token_usage: attached_usage,
+                timestamp: attached_timestamp,
+                ..
+            } => {
+                assert!(
+                    attached_usage.is_some(),
+                    "Last item should have token_usage"
+                );
+                assert!(
+                    attached_timestamp.is_some(),
+                    "Last item should have timestamp"
+                );
+                assert_eq!(attached_usage.as_ref().unwrap().total_tokens, 300);
+                assert_eq!(attached_timestamp.as_ref().unwrap(), &timestamp);
+            }
+            _ => panic!("Expected FunctionCall"),
+        }
+    }
+
+    #[test]
+    fn test_attach_info_to_last_assistant_message_preserves_existing_message_logic() {
+        let token_usage = TokenUsage {
+            input_tokens: 50,
+            cached_input_tokens: None,
+            output_tokens: 30,
+            reasoning_output_tokens: None,
+            total_tokens: 80,
+        };
+        let timestamp = "2023-04-01T00:00:00Z".to_string();
+
+        // Test that assistant messages still get metadata (existing behavior)
+        let mut items = vec![ProcessedResponseItem {
+            item: ResponseItem::Message {
+                id: Some("msg_1".to_string()),
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: "assistant message".to_string(),
+                }],
+                token_usage: None,
+                timestamp: None,
+            },
+            response: None,
+        }];
+
+        attach_info_to_last_assistant_message(&mut items, token_usage.clone(), timestamp.clone());
+
+        match &items[0].item {
+            ResponseItem::Message {
+                token_usage: attached_usage,
+                timestamp: attached_timestamp,
+                role,
+                ..
+            } => {
+                assert_eq!(role, "assistant");
+                assert!(
+                    attached_usage.is_some(),
+                    "Assistant message should have token_usage"
+                );
+                assert!(
+                    attached_timestamp.is_some(),
+                    "Assistant message should have timestamp"
+                );
+            }
+            _ => panic!("Expected Message"),
+        }
+
+        // Test that user messages don't get metadata (existing behavior)
+        let mut items = vec![ProcessedResponseItem {
+            item: ResponseItem::Message {
+                id: Some("msg_2".to_string()),
+                role: "user".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: "user message".to_string(),
+                }],
+                token_usage: None,
+                timestamp: None,
+            },
+            response: None,
+        }];
+
+        attach_info_to_last_assistant_message(&mut items, token_usage.clone(), timestamp.clone());
+
+        match &items[0].item {
+            ResponseItem::Message {
+                token_usage: attached_usage,
+                timestamp: attached_timestamp,
+                role,
+                ..
+            } => {
+                assert_eq!(role, "user");
+                assert!(
+                    attached_usage.is_none(),
+                    "User message should not have token_usage"
+                );
+                assert!(
+                    attached_timestamp.is_none(),
+                    "User message should not have timestamp"
+                );
+            }
+            _ => panic!("Expected Message"),
         }
     }
 }

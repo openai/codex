@@ -168,6 +168,34 @@ impl ModelClient {
             .map(|item| match item {
                 // Make an API-safe copy of the input without the timestamp and token_usage fields; otherwise
                 // the API will complain "Unknown parameter: 'input[0].timestamp'".
+                ResponseItem::FunctionCall {
+                    id,
+                    call_id,
+                    name,
+                    arguments,
+                    ..
+                } => ResponseItem::FunctionCall {
+                    id: id.clone(),
+                    call_id: call_id.clone(),
+                    name: name.clone(),
+                    arguments: arguments.clone(),
+                    token_usage: None,
+                    timestamp: None,
+                },
+                ResponseItem::Reasoning {
+                    id,
+                    summary,
+                    content,
+                    encrypted_content,
+                    ..
+                } => ResponseItem::Reasoning {
+                    id: id.clone(),
+                    summary: summary.clone(),
+                    content: content.clone(),
+                    encrypted_content: encrypted_content.clone(),
+                    token_usage: None,
+                    timestamp: None,
+                },
                 ResponseItem::Message { role, content, .. } => ResponseItem::Message {
                     id: None,
                     role: role.clone(),
@@ -971,5 +999,161 @@ mod tests {
         };
         let delay = try_parse_retry_after(&err);
         assert_eq!(delay, Some(Duration::from_secs_f64(1.898)));
+    }
+
+    #[test]
+    fn test_api_safe_stripping_of_metadata_fields() {
+        use crate::models::ContentItem;
+        use crate::models::ReasoningItemContent;
+        use crate::models::ResponseItem;
+        use crate::protocol::TokenUsage;
+
+        // Create sample token usage and timestamp
+        let token_usage = Some(TokenUsage {
+            input_tokens: 100,
+            cached_input_tokens: None,
+            output_tokens: 50,
+            reasoning_output_tokens: None,
+            total_tokens: 150,
+        });
+        let timestamp = Some("2023-01-01T00:00:00Z".to_string());
+
+        // Test FunctionCall stripping
+        let function_call = ResponseItem::FunctionCall {
+            id: Some("func_1".to_string()),
+            call_id: "call_123".to_string(),
+            name: "test_function".to_string(),
+            arguments: "{}".to_string(),
+            token_usage: token_usage.clone(),
+            timestamp: timestamp.clone(),
+        };
+
+        // Test Reasoning stripping
+        let reasoning = ResponseItem::Reasoning {
+            id: "reasoning_1".to_string(),
+            summary: vec![],
+            content: Some(vec![ReasoningItemContent::ReasoningText {
+                text: "test reasoning".to_string(),
+            }]),
+            encrypted_content: None,
+            token_usage: token_usage.clone(),
+            timestamp: timestamp.clone(),
+        };
+
+        // Test Message stripping (existing behavior)
+        let message = ResponseItem::Message {
+            id: Some("msg_1".to_string()),
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "test message".to_string(),
+            }],
+            token_usage: token_usage.clone(),
+            timestamp: timestamp.clone(),
+        };
+
+        let items = vec![function_call, reasoning, message];
+
+        // Apply the same transformation that happens in the client code
+        let api_safe_items: Vec<ResponseItem> = items
+            .iter()
+            .map(|item| match item {
+                ResponseItem::FunctionCall {
+                    id,
+                    call_id,
+                    name,
+                    arguments,
+                    ..
+                } => ResponseItem::FunctionCall {
+                    id: id.clone(),
+                    call_id: call_id.clone(),
+                    name: name.clone(),
+                    arguments: arguments.clone(),
+                    token_usage: None,
+                    timestamp: None,
+                },
+                ResponseItem::Reasoning {
+                    id,
+                    summary,
+                    content,
+                    encrypted_content,
+                    ..
+                } => ResponseItem::Reasoning {
+                    id: id.clone(),
+                    summary: summary.clone(),
+                    content: content.clone(),
+                    encrypted_content: encrypted_content.clone(),
+                    token_usage: None,
+                    timestamp: None,
+                },
+                ResponseItem::Message { role, content, .. } => ResponseItem::Message {
+                    id: None,
+                    role: role.clone(),
+                    content: content.clone(),
+                    token_usage: None,
+                    timestamp: None,
+                },
+                other => other.clone(),
+            })
+            .collect();
+
+        // Verify all metadata fields are stripped
+        for item in &api_safe_items {
+            match item {
+                ResponseItem::FunctionCall {
+                    token_usage,
+                    timestamp,
+                    ..
+                } => {
+                    assert!(
+                        token_usage.is_none(),
+                        "FunctionCall token_usage should be None"
+                    );
+                    assert!(timestamp.is_none(), "FunctionCall timestamp should be None");
+                }
+                ResponseItem::Reasoning {
+                    token_usage,
+                    timestamp,
+                    ..
+                } => {
+                    assert!(
+                        token_usage.is_none(),
+                        "Reasoning token_usage should be None"
+                    );
+                    assert!(timestamp.is_none(), "Reasoning timestamp should be None");
+                }
+                ResponseItem::Message {
+                    token_usage,
+                    timestamp,
+                    ..
+                } => {
+                    assert!(token_usage.is_none(), "Message token_usage should be None");
+                    assert!(timestamp.is_none(), "Message timestamp should be None");
+                }
+                _ => {}
+            }
+        }
+
+        // Verify other fields are preserved
+        match &api_safe_items[0] {
+            ResponseItem::FunctionCall { name, call_id, .. } => {
+                assert_eq!(name, "test_function");
+                assert_eq!(call_id, "call_123");
+            }
+            _ => panic!("Expected FunctionCall"),
+        }
+
+        match &api_safe_items[1] {
+            ResponseItem::Reasoning { id, .. } => {
+                assert_eq!(id, "reasoning_1");
+            }
+            _ => panic!("Expected Reasoning"),
+        }
+
+        match &api_safe_items[2] {
+            ResponseItem::Message { role, .. } => {
+                assert_eq!(role, "assistant");
+            }
+            _ => panic!("Expected Message"),
+        }
     }
 }

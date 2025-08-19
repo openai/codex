@@ -271,6 +271,8 @@ async fn process_chat_sse<S>(
                         text: std::mem::take(&mut reasoning_text),
                     }]),
                     encrypted_content: None,
+                    token_usage: None,
+                    timestamp: None,
                 };
                 let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
             }
@@ -407,6 +409,8 @@ async fn process_chat_sse<S>(
                                     text: std::mem::take(&mut reasoning_text),
                                 }]),
                                 encrypted_content: None,
+                                token_usage: None,
+                                timestamp: None,
                             };
                             let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
                         }
@@ -417,6 +421,8 @@ async fn process_chat_sse<S>(
                             name: fn_call_state.name.clone().unwrap_or_else(|| "".to_string()),
                             arguments: fn_call_state.arguments.clone(),
                             call_id: fn_call_state.call_id.clone().unwrap_or_else(String::new),
+                            token_usage: None,
+                            timestamp: None,
                         };
 
                         let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
@@ -445,6 +451,8 @@ async fn process_chat_sse<S>(
                                     text: std::mem::take(&mut reasoning_text),
                                 }]),
                                 encrypted_content: None,
+                                token_usage: None,
+                                timestamp: None,
                             };
                             let _ = tx_event.send(Ok(ResponseEvent::OutputItemDone(item))).await;
                         }
@@ -452,19 +460,24 @@ async fn process_chat_sse<S>(
                     _ => {}
                 }
 
-                if token_usage.is_some() {
-                    // Emit Completed regardless of reason so the agent can advance.
-                    let _ = tx_event
-                        .send(Ok(ResponseEvent::Completed {
-                            response_id: String::new(),
-                            token_usage: token_usage.clone(),
-                            timestamp: Some(generate_timestamp()),
-                        }))
-                        .await;
-                }
-
                 // Prepare for potential next turn (should not happen in same stream).
                 // fn_call_state = FunctionCallState::default();
+            }
+
+            // Previously we were sending the Completed event only if the finish reason was set,
+            // i.e., the stream has finished.  However, it's common for token usage to be sent
+            // even if the finish reason is *not* set.  Therefore, we now send Completed whenever
+            // token usage is available, regardless of the finish reason, because when we get
+            // token usage we know we've reached the end, since the token usage is only on the
+            // very last chunk.
+            if token_usage.is_some() {
+                let _ = tx_event
+                    .send(Ok(ResponseEvent::Completed {
+                        response_id: String::new(),
+                        token_usage: token_usage.clone(),
+                        timestamp: Some(generate_timestamp()),
+                    }))
+                    .await;
             }
         }
     }
@@ -567,6 +580,8 @@ where
                                 },
                             ]),
                             encrypted_content: None,
+                            token_usage: None,
+                            timestamp: None,
                         };
                         this.pending
                             .push_back(ResponseEvent::OutputItemDone(aggregated_reasoning));
