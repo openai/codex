@@ -1199,6 +1199,22 @@ async fn submission_loop(
                     }
                 });
             }
+            Op::ListMcpTools => {
+                let tx_event = sess.tx_event.clone();
+                let sub_id = sub.id.clone();
+
+                // This is a cheap lookup from the connection manager's cache.
+                let tools = sess.mcp_connection_manager.list_all_tools();
+                let event = Event {
+                    id: sub_id,
+                    msg: EventMsg::McpListToolsResponse(
+                        crate::protocol::McpListToolsResponseEvent { tools },
+                    ),
+                };
+                if let Err(e) = tx_event.send(event).await {
+                    warn!("failed to send McpListToolsResponse event: {e}");
+                }
+            }
             Op::Compact => {
                 // Create a summarization request as user input
                 const SUMMARIZATION_PROMPT: &str = include_str!("prompt_for_compact_command.md");

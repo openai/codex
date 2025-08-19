@@ -1,5 +1,6 @@
 use codex_login::CLIENT_ID;
 use codex_login::ServerOptions;
+use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -18,16 +19,13 @@ use ratatui::widgets::Wrap;
 
 use codex_login::AuthMode;
 
+use crate::LoginStatus;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::onboarding::onboarding_screen::KeyboardHandler;
 use crate::onboarding::onboarding_screen::StepStateProvider;
 use crate::shimmer::shimmer_spans;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
-use std::thread::JoinHandle;
 
 use super::onboarding_screen::StepState;
 // no additional imports
@@ -46,13 +44,14 @@ pub(crate) enum SignInState {
 /// Used to manage the lifecycle of SpawnedLogin and ensure it gets cleaned up.
 pub(crate) struct ContinueInBrowserState {
     auth_url: String,
-    shutdown_flag: Option<Arc<AtomicBool>>,
-    _login_wait_handle: Option<JoinHandle<()>>,
+    shutdown_handle: Option<ShutdownHandle>,
+    _login_wait_handle: Option<tokio::task::JoinHandle<()>>,
 }
+
 impl Drop for ContinueInBrowserState {
     fn drop(&mut self) {
-        if let Some(flag) = &self.shutdown_flag {
-            flag.store(true, Ordering::SeqCst);
+        if let Some(flag) = &self.shutdown_handle {
+            flag.shutdown();
         }
     }
 }
@@ -98,6 +97,8 @@ pub(crate) struct AuthModeWidget {
     pub error: Option<String>,
     pub sign_in_state: SignInState,
     pub codex_home: PathBuf,
+    pub login_status: LoginStatus,
+    pub preferred_auth_method: AuthMode,
 }
 
 impl AuthModeWidget {
@@ -119,6 +120,24 @@ impl AuthModeWidget {
             ]),
             Line::from(""),
         ];
+
+        // If the user is already authenticated but the method differs from their
+        // preferred auth method, show a brief explanation.
+        if let LoginStatus::AuthMode(current) = self.login_status {
+            if current != self.preferred_auth_method {
+                let to_label = |mode: AuthMode| match mode {
+                    AuthMode::ApiKey => "API key",
+                    AuthMode::ChatGPT => "ChatGPT",
+                };
+                let msg = format!(
+                    "  You’re currently using {} while your preferred method is {}.",
+                    to_label(current),
+                    to_label(self.preferred_auth_method)
+                );
+                lines.push(Line::from(msg).style(Style::default()));
+                lines.push(Line::from(""));
+            }
+        }
 
         let create_mode_item = |idx: usize,
                                 selected_mode: AuthMode,
@@ -148,17 +167,29 @@ impl AuthModeWidget {
 
             vec![line1, line2]
         };
+        let chatgpt_label = if matches!(self.login_status, LoginStatus::AuthMode(AuthMode::ChatGPT))
+        {
+            "Continue using ChatGPT"
+        } else {
+            "Sign in with ChatGPT"
+        };
 
         lines.extend(create_mode_item(
             0,
             AuthMode::ChatGPT,
-            "Sign in with ChatGPT",
+            chatgpt_label,
             "Usage included with Plus, Pro, and Team plans",
         ));
+        let api_key_label = if matches!(self.login_status, LoginStatus::AuthMode(AuthMode::ApiKey))
+        {
+            "Continue using API key"
+        } else {
+            "Provide your own API key"
+        };
         lines.extend(create_mode_item(
             1,
             AuthMode::ApiKey,
-            "Provide your own API key",
+            api_key_label,
             "Pay for what you use",
         ));
         lines.push(Line::from(""));
@@ -281,18 +312,31 @@ impl AuthModeWidget {
     }
 
     fn start_chatgpt_login(&mut self) {
+        // If we're already authenticated with ChatGPT, don't start a new login –
+        // just proceed to the success message flow.
+        if matches!(self.login_status, LoginStatus::AuthMode(AuthMode::ChatGPT)) {
+            self.sign_in_state = SignInState::ChatGptSuccess;
+            self.event_tx.send(AppEvent::RequestRedraw);
+            return;
+        }
+
         self.error = None;
         let opts = ServerOptions::new(self.codex_home.clone(), CLIENT_ID.to_string());
-        let server = run_login_server(opts, None);
+        let server = run_login_server(opts);
         match server {
             Ok(child) => {
                 let auth_url = child.auth_url.clone();
-                let shutdown_flag = child.shutdown_flag.clone();
+                let shutdown_handle = child.cancel_handle();
+
+                let event_tx = self.event_tx.clone();
+                let join_handle = tokio::spawn(async move {
+                    spawn_completion_poller(child, event_tx).await;
+                });
                 self.sign_in_state =
                     SignInState::ChatGptContinueInBrowser(ContinueInBrowserState {
                         auth_url,
-                        shutdown_flag: Some(shutdown_flag),
-                        _login_wait_handle: Some(self.spawn_completion_poller(child)),
+                        shutdown_handle: Some(shutdown_handle),
+                        _login_wait_handle: Some(join_handle),
                     });
                 self.event_tx.send(AppEvent::RequestRedraw);
             }
@@ -306,26 +350,31 @@ impl AuthModeWidget {
 
     /// TODO: Read/write from the correct hierarchy config overrides + auth json + OPENAI_API_KEY.
     fn verify_api_key(&mut self) {
-        if std::env::var("OPENAI_API_KEY").is_err() {
-            self.sign_in_state = SignInState::EnvVarMissing;
-        } else {
+        if matches!(self.login_status, LoginStatus::AuthMode(AuthMode::ApiKey)) {
+            // We already have an API key configured (e.g., from auth.json or env),
+            // so mark this step complete immediately.
             self.sign_in_state = SignInState::EnvVarFound;
+        } else {
+            self.sign_in_state = SignInState::EnvVarMissing;
         }
+
         self.event_tx.send(AppEvent::RequestRedraw);
     }
+}
 
-    fn spawn_completion_poller(&self, child: codex_login::LoginServer) -> JoinHandle<()> {
-        let event_tx = self.event_tx.clone();
-        std::thread::spawn(move || {
-            if let Ok(()) = child.block_until_done() {
-                event_tx.send(AppEvent::OnboardingAuthComplete(Ok(())));
-            } else {
-                event_tx.send(AppEvent::OnboardingAuthComplete(Err(
-                    "login failed".to_string()
-                )));
-            }
-        })
-    }
+async fn spawn_completion_poller(
+    child: codex_login::LoginServer,
+    event_tx: AppEventSender,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        if let Ok(()) = child.block_until_done().await {
+            event_tx.send(AppEvent::OnboardingAuthComplete(Ok(())));
+        } else {
+            event_tx.send(AppEvent::OnboardingAuthComplete(Err(
+                "login failed".to_string()
+            )));
+        }
+    })
 }
 
 impl StepStateProvider for AuthModeWidget {
