@@ -146,7 +146,6 @@ impl CodexMessageProcessor {
 
         let opts = LoginServerOptions {
             open_browser: false,
-            login_timeout: Some(LOGIN_CHATGPT_TIMEOUT),
             ..LoginServerOptions::new(config.codex_home.clone(), CLIENT_ID.to_string())
         };
 
@@ -158,6 +157,7 @@ impl CodexMessageProcessor {
         let reply = match run_login_server(opts, None) {
             Ok(server) => {
                 let login_id = Uuid::new_v4();
+                let shutdown_handle = server.cancel_handle();
 
                 // Replace active login if present.
                 {
@@ -166,7 +166,7 @@ impl CodexMessageProcessor {
                         existing.drop();
                     }
                     *guard = Some(ActiveLogin {
-                        shutdown_handle: server.cancel_handle(),
+                        shutdown_handle: shutdown_handle.clone(),
                         login_id,
                     });
                 }
@@ -180,9 +180,19 @@ impl CodexMessageProcessor {
                 let outgoing_clone = self.outgoing.clone();
                 let active_login = self.active_login.clone();
                 tokio::spawn(async move {
-                    let (success, error_msg) = match server.block_until_done().await {
-                        Ok(()) => (true, None),
-                        Err(err) => (false, Some(format!("Login server error: {err}"))),
+                    let (success, error_msg) = match tokio::time::timeout(
+                        LOGIN_CHATGPT_TIMEOUT,
+                        server.block_until_done(),
+                    )
+                    .await
+                    {
+                        Ok(Ok(())) => (true, None),
+                        Ok(Err(err)) => (false, Some(format!("Login server error: {err}"))),
+                        Err(_elapsed) => {
+                            // Timeout: cancel server and report
+                            shutdown_handle.cancel();
+                            (false, Some("Login timed out".to_string()))
+                        }
                     };
                     let notification = LoginChatGptCompleteNotification {
                         login_id,
