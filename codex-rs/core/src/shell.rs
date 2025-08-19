@@ -48,10 +48,10 @@ impl Shell {
                     if let Some(bash) = &ps.bash_exe_fallback {
                         return Some(vec![bash.clone(), "-lc".to_string(), script]);
                     }
+
                     // No bash fallback → run the script under PowerShell.
                     // It will likely fail (except for some simple commands), but the error
-                    // should give a clue to the model that it's running under PowerShell if
-                    // it hasn't realized it already from the environment context.
+                    // should give a clue to the model to fix upon retry that it's running under PowerShell.
                     return Some(vec![
                         ps.exe.clone(),
                         "-NoProfile".to_string(),
@@ -64,15 +64,20 @@ impl Shell {
                 // turn it into a PowerShell command.
                 let first = command.first().map(String::as_str);
                 if first != Some(ps.exe.as_str()) {
-                    if let Ok(joined) = shlex::try_join(command.iter().map(|s| s.as_str())) {
-                        return Some(vec![
-                            ps.exe.clone(),
-                            "-NoProfile".to_string(),
-                            "-Command".to_string(),
-                            joined,
-                        ]);
+                    // TODO: Handle escaping newlines.
+                    if command.iter().any(|a| a.contains('\n') || a.contains('\r')) {
+                        return Some(command);
                     }
-                    return None;
+
+                    let ps_script = "& { if ($args.Length -gt 1) { & $args[0] @($args[1..($args.Length-1)]) } else { & $args[0] }; exit $LASTEXITCODE }";
+                    let mut output = vec![
+                        ps.exe.clone(),
+                        "-NoProfile".to_string(),
+                        "-Command".to_string(),
+                        ps_script.to_string(),
+                    ];
+                    output.extend(command);
+                    return Some(output);
                 }
 
                 // Model generated a PowerShell command. Run it.
@@ -364,8 +369,31 @@ mod tests_windows {
                     exe: "pwsh.exe".to_string(),
                     bash_exe_fallback: Some("bash.exe".to_string()),
                 }),
-                vec!["echo hello"],
-                vec!["pwsh.exe", "-NoProfile", "-Command", "'echo hello'"],
+                vec![
+                    "bash",
+                    "-lc",
+                    "apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: destination_file.txt\n-original content\n+modified content\n*** End Patch\nEOF",
+                ],
+                vec![
+                    "bash.exe",
+                    "-lc",
+                    "apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: destination_file.txt\n-original content\n+modified content\n*** End Patch\nEOF",
+                ],
+            ),
+            (
+                Shell::PowerShell(PowerShellShell {
+                    exe: "pwsh.exe".to_string(),
+                    bash_exe_fallback: Some("bash.exe".to_string()),
+                }),
+                vec!["echo", "hello"],
+                vec![
+                    "pwsh.exe",
+                    "-NoProfile",
+                    "-Command",
+                    "& { if ($args.Length -gt 1) { & $args[0] @($args[1..($args.Length-1)]) } else { & $args[0] }; exit $LASTEXITCODE }",
+                    "echo",
+                    "hello",
+                ],
             ),
             (
                 Shell::PowerShell(PowerShellShell {
@@ -374,6 +402,23 @@ mod tests_windows {
                 }),
                 vec!["pwsh.exe", "-NoProfile", "-Command", "echo hello"],
                 vec!["pwsh.exe", "-NoProfile", "-Command", "echo hello"],
+            ),
+            (
+                // TODO: Handle escaping newlines for powershell invocation.
+                Shell::PowerShell(PowerShellShell {
+                    exe: "powershell.exe".to_string(),
+                    bash_exe_fallback: Some("bash.exe".to_string()),
+                }),
+                vec![
+                    "codex-mcp-server.exe",
+                    "--codex-run-as-apply-patch",
+                    "*** Begin Patch\n*** Update File: C:\\Users\\person\\destination_file.txt\n-original content\n+modified content\n*** End Patch",
+                ],
+                vec![
+                    "codex-mcp-server.exe",
+                    "--codex-run-as-apply-patch",
+                    "*** Begin Patch\n*** Update File: C:\\Users\\person\\destination_file.txt\n-original content\n+modified content\n*** End Patch",
+                ],
             ),
         ];
 
