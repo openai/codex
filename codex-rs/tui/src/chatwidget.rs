@@ -741,6 +741,7 @@ impl ChatWidget<'_> {
     /// Set the model in the widget's config copy.
     pub(crate) fn set_model(&mut self, model: String) {
         self.config.model = model;
+    }
 
     pub(crate) fn add_mcp_output(&mut self) {
         if self.config.mcp_servers.is_empty() {
