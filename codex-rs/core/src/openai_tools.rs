@@ -324,27 +324,6 @@ It is important to remember:
     })
 }
 
-fn create_web_search_request_tool() -> OpenAiTool {
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "query".to_string(),
-        JsonSchema::String {
-            description: Some("The search query".to_string()),
-        },
-    );
-    OpenAiTool::Function(ResponsesApiTool {
-        name: "web_search_request".to_string(),
-        description: "Request user approval to perform a web search with the given query".to_string(),
-        strict: false,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["query".to_string()]),
-            additional_properties: Some(false),
-        },
-    })
-}
-
-
 /// Returns JSON values that are compatible with Function Calling in the
 /// Responses API:
 /// https://platform.openai.com/docs/guides/function-calling?api-mode=responses
@@ -569,9 +548,8 @@ pub(crate) fn get_openai_tools(
         tools.push(create_apply_patch_tool());
     }
 
-    // Include the web search approval-request tool only when enabled via config/CLI.
     if config.web_search_request {
-        tools.push(create_web_search_request_tool());
+        tools.push(OpenAiTool::WebSearch {});
     }
 
     if let Some(mcp_tools) = mcp_tools {
@@ -633,7 +611,7 @@ mod tests {
         );
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
-        assert_eq_tool_names(&tools, &["local_shell", "update_plan", "web_search_request"]);
+        assert_eq_tool_names(&tools, &["local_shell", "update_plan", "web_search"]);
     }
 
     #[test]
@@ -649,7 +627,7 @@ mod tests {
         );
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
-        assert_eq_tool_names(&tools, &["shell", "update_plan", "web_search_request"]);
+        assert_eq_tool_names(&tools, &["shell", "update_plan", "web_search"]);
     }
 
     #[test]
@@ -701,7 +679,10 @@ mod tests {
             )])),
         );
 
-        assert_eq_tool_names(&tools, &["shell", "web_search_request", "test_server/do_something_cool"]);
+        assert_eq_tool_names(
+            &tools,
+            &["shell", "web_search", "test_server/do_something_cool"],
+        );
 
         assert_eq!(
             tools[2],
@@ -782,7 +763,7 @@ mod tests {
             )])),
         );
 
-        assert_eq_tool_names(&tools, &["shell", "web_search_request", "dash/search"]);
+        assert_eq_tool_names(&tools, &["shell", "web_search", "dash/search"]);
 
         assert_eq!(
             tools[2],
@@ -837,7 +818,7 @@ mod tests {
             )])),
         );
 
-        assert_eq_tool_names(&tools, &["shell", "web_search_request", "dash/paginate"]);
+        assert_eq_tool_names(&tools, &["shell", "web_search", "dash/paginate"]);
         assert_eq!(
             tools[2],
             OpenAiTool::Function(ResponsesApiTool {
@@ -889,7 +870,7 @@ mod tests {
             )])),
         );
 
-        assert_eq_tool_names(&tools, &["shell", "web_search_request", "dash/tags"]);
+        assert_eq_tool_names(&tools, &["shell", "web_search", "dash/tags"]);
         assert_eq!(
             tools[2],
             OpenAiTool::Function(ResponsesApiTool {
@@ -944,7 +925,7 @@ mod tests {
             )])),
         );
 
-        assert_eq_tool_names(&tools, &["shell", "web_search_request", "dash/value"]);
+        assert_eq_tool_names(&tools, &["shell", "web_search", "dash/value"]);
         assert_eq!(
             tools[2],
             OpenAiTool::Function(ResponsesApiTool {

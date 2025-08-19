@@ -161,7 +161,6 @@ pub struct Config {
     /// model family's default preference.
     pub include_apply_patch_tool: bool,
 
-    /// Enable the per-call web search request tool. Off by default; can be enabled via --search CLI.
     pub tools_web_search_request: bool,
 
     /// The value for the `originator` header included with Responses API requests.
@@ -484,7 +483,6 @@ impl ConfigToml {
         }
     }
 }
-
 
 /// Optional overrides for user configuration (e.g., from CLI flags).
 #[derive(Default, Debug, Clone)]

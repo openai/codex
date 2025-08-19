@@ -120,7 +120,6 @@ pub async fn run_main(
         disable_response_storage: cli.oss.then_some(true),
         show_raw_agent_reasoning: cli.oss.then_some(true),
     };
-    // Inject --search as a -c override before parsing overrides.
     let mut raw_overrides = cli.config_overrides.raw_overrides.clone();
     if cli.search {
         raw_overrides.push("tools.web_search_request=true".to_string());

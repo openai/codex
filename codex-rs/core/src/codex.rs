@@ -67,9 +67,9 @@ use crate::models::ResponseInputItem;
 use crate::models::ResponseItem;
 use crate::models::ShellToolCallParams;
 use crate::openai_tools::ApplyPatchToolArgs;
+use crate::openai_tools::OpenAiTool;
 use crate::openai_tools::ToolsConfig;
 use crate::openai_tools::get_openai_tools;
-use crate::openai_tools::OpenAiTool;
 use crate::parse_command::parse_command;
 use crate::plan_tool::handle_update_plan;
 use crate::project_doc::get_user_instructions;
@@ -228,7 +228,6 @@ struct State {
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
     pending_input: Vec<ResponseInputItem>,
     history: ConversationHistory,
-    enable_web_search_next_turn: bool,
 }
 
 /// Context for an initialized model agent
@@ -895,21 +894,6 @@ impl Session {
             warn!("failed to spawn notifier '{}': {e}", notify_command[0]);
         }
     }
-
-    pub fn enable_web_search_next_turn(&self) {
-        let mut state = self.state.lock().unwrap();
-        state.enable_web_search_next_turn = true;
-    }
-
-    pub fn consume_enable_web_search_next_turn(&self) -> bool {
-        let mut state = self.state.lock().unwrap();
-        if state.enable_web_search_next_turn {
-            state.enable_web_search_next_turn = false;
-            true
-        } else {
-            false
-        }
-    }
 }
 
 impl Drop for Session {
@@ -1409,13 +1393,10 @@ async fn run_turn(
     sub_id: String,
     input: Vec<ResponseItem>,
 ) -> CodexResult<Vec<ProcessedResponseItem>> {
-    let mut tools = get_openai_tools(
+    let tools = get_openai_tools(
         &turn_context.tools_config,
         Some(sess.mcp_connection_manager.list_all_tools()),
     );
-    if sess.consume_enable_web_search_next_turn() {
-        tools.push(OpenAiTool::WebSearch {});
-    }
 
     let prompt = Prompt {
         input,
@@ -1434,27 +1415,22 @@ async fn run_turn(
                 return Err(e);
             }
             Err(e) => {
-                // One-shot graceful fallback whenever a turn with native web_search fails for any reason.
                 let prompt_has_web_search = prompt
                     .tools
                     .iter()
                     .any(|t| matches!(t, OpenAiTool::WebSearch { .. }));
-                                if prompt_has_web_search {
-
-                    // Inform UI and retry without native web search.
-                    sess
-                        .notify_background_event(
-                            &sub_id,
-                            "web search attempt failed; continuing without web",
-                        )
-                        .await;
+                if prompt_has_web_search {
+                    sess.notify_background_event(
+                        &sub_id,
+                        "web search attempt failed; continuing without web",
+                    )
+                    .await;
                     let tools_no_web: Vec<OpenAiTool> = prompt
                         .tools
                         .iter()
                         .filter(|t| !matches!(t, OpenAiTool::WebSearch { .. }))
                         .cloned()
                         .collect();
-                    // Prepend a system hint so the model informs the user about the fallback.
                     let mut input_with_hint = Vec::with_capacity(prompt.input.len() + 1);
                     input_with_hint.push(ResponseItem::Message {
                         id: None,
@@ -1470,7 +1446,15 @@ async fn run_turn(
                         tools: tools_no_web,
                         base_instructions_override: prompt.base_instructions_override.clone(),
                     };
-                    match try_run_turn(sess, turn_context, turn_diff_tracker, &sub_id, &prompt_no_web).await {
+                    match try_run_turn(
+                        sess,
+                        turn_context,
+                        turn_diff_tracker,
+                        &sub_id,
+                        &prompt_no_web,
+                    )
+                    .await
+                    {
                         Ok(output) => return Ok(output),
                         Err(e2) => return Err(e2),
                     }
@@ -1961,76 +1945,6 @@ async fn handle_function_call(
             .await
         }
         "update_plan" => handle_update_plan(sess, arguments, sub_id, call_id).await,
-        "web_search_request" => {
-            #[derive(serde::Deserialize)]
-            struct WebSearchRequestArgs { query: String }
-            let parsed: Result<WebSearchRequestArgs, _> = serde_json::from_str(&arguments);
-            let Ok(WebSearchRequestArgs { query }) = parsed else {
-                return ResponseInputItem::FunctionCallOutput {
-                    call_id,
-                    output: FunctionCallOutputPayload {
-                        content: "failed to parse function arguments".to_string(),
-                        success: None,
-                    },
-                };
-            };
-
-            // Ask user for approval
-            let (tx_approve, rx_approve) = tokio::sync::oneshot::channel();
-            let event = Event {
-                id: sub_id.clone(),
-                msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
-                    message: format!("web search requires approval: {query}"),
-                }),
-            };
-            sess.tx_event.send(event).await.ok();
-            {
-                let mut state = sess.state.lock().unwrap();
-                state.pending_approvals.insert(sub_id.clone(), tx_approve);
-            }
-            // Reuse ExecApprovalRequestEvent plumbing pattern: emit a generic approval with reason
-            let event = Event {
-                id: sub_id.clone(),
-                msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
-                    call_id: call_id.clone(),
-                    command: vec!["web_search".to_string(), query.clone()],
-                    cwd: turn_context.cwd.clone(),
-                    reason: Some("Request to perform a web search".to_string()),
-                }),
-            };
-            sess.tx_event.send(event).await.ok();
-
-            let decision = rx_approve.await.unwrap_or_default();
-            match decision {
-                ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {
-                    // Enable native web_search for the next turn and enqueue a simple instruction.
-                    sess.enable_web_search_next_turn();
-                    let mut state = sess.state.lock().unwrap();
-                    state.pending_input.push(ResponseInputItem::Message {
-                        role: "user".to_string(),
-                        content: vec![ContentItem::InputText { text: format!(
-                            "Approved web search. Perform a single web search for: {query} and summarize the findings."
-                        ) }],
-                    });
-                    ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: FunctionCallOutputPayload {
-                            content: "web search approved".to_string(),
-                            success: Some(true),
-                        },
-                    }
-                }
-                ReviewDecision::Denied | ReviewDecision::Abort => {
-                    ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: FunctionCallOutputPayload {
-                            content: "web search denied by user".to_string(),
-                            success: Some(false),
-                        },
-                    }
-                }
-            }
-        }
         _ => {
             match sess.mcp_connection_manager.parse_tool_name(&name) {
                 Some((server, tool_name)) => {
