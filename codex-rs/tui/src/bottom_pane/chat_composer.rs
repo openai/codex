@@ -148,11 +148,7 @@ impl ChatComposer {
             .token_usage_info
             .as_ref()
             .map(|info| info.initial_prompt_tokens)
-            .unwrap_or_else(|| {
-                last_token_usage
-                    .cached_input_tokens
-                    .unwrap_or_else(|| last_token_usage.tokens_in_context_window())
-            });
+            .unwrap_or_else(|| last_token_usage.cached_input_tokens.unwrap_or(0));
 
         self.token_usage_info = Some(TokenUsageInfo {
             total_token_usage,
