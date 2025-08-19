@@ -46,9 +46,8 @@ impl ServerOptions {
 pub struct LoginServer {
     pub auth_url: String,
     pub actual_port: u16,
-    shutdown_flag: Arc<tokio::sync::Notify>,
     server_handle: tokio::task::JoinHandle<io::Result<()>>,
-    server: Arc<Server>,
+    shutdown_handle: ShutdownHandle,
 }
 
 impl LoginServer {
@@ -59,14 +58,11 @@ impl LoginServer {
     }
 
     pub fn cancel(&self) {
-        shutdown(&self.shutdown_flag, &self.server);
+        self.shutdown_handle.shutdown();
     }
 
     pub fn cancel_handle(&self) -> ShutdownHandle {
-        ShutdownHandle {
-            shutdown_notify: self.shutdown_flag.clone(),
-            server: self.server.clone(),
-        }
+        self.shutdown_handle.clone()
     }
 }
 
@@ -85,14 +81,10 @@ impl std::fmt::Debug for ShutdownHandle {
 }
 
 impl ShutdownHandle {
-    pub fn cancel(&self) {
-        shutdown(&self.shutdown_notify, &self.server);
+    pub fn shutdown(&self) {
+        self.shutdown_notify.notify_waiters();
+        self.server.unblock();
     }
-}
-
-pub fn shutdown(shutdown_notify: &tokio::sync::Notify, server: &Server) {
-    shutdown_notify.notify_waiters();
-    server.unblock();
 }
 
 pub fn run_login_server(
@@ -181,8 +173,10 @@ pub fn run_login_server(
         auth_url,
         actual_port,
         server_handle,
-        shutdown_flag: shutdown_notify,
-        server,
+        shutdown_handle: ShutdownHandle {
+            shutdown_notify,
+            server,
+        },
     })
 }
 

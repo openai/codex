@@ -50,7 +50,7 @@ pub(crate) struct ContinueInBrowserState {
 impl Drop for ContinueInBrowserState {
     fn drop(&mut self) {
         if let Some(flag) = &self.shutdown_handle {
-            flag.cancel();
+            flag.shutdown();
         }
     }
 }

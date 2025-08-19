@@ -66,7 +66,7 @@ struct ActiveLogin {
 
 impl ActiveLogin {
     fn drop(&self) {
-        self.shutdown_handle.cancel();
+        self.shutdown_handle.shutdown();
     }
 }
 
@@ -190,7 +190,7 @@ impl CodexMessageProcessor {
                         Ok(Err(err)) => (false, Some(format!("Login server error: {err}"))),
                         Err(_elapsed) => {
                             // Timeout: cancel server and report
-                            shutdown_handle.cancel();
+                            shutdown_handle.shutdown();
                             (false, Some("Login timed out".to_string()))
                         }
                     };
