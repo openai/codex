@@ -156,7 +156,7 @@ impl BottomPaneView<'_> for ListSelectionView {
         };
 
         let title_spans: Vec<Span<'static>> = vec![
-            Span::styled("", Style::default().add_modifier(Modifier::DIM)),
+            Span::styled("▌", Style::default().add_modifier(Modifier::DIM)),
             Span::styled(
                 self.title.clone(),
                 Style::default().add_modifier(Modifier::BOLD),
@@ -175,7 +175,7 @@ impl BottomPaneView<'_> for ListSelectionView {
                 height: 1,
             };
             let subtitle_spans: Vec<Span<'static>> = vec![
-                Span::styled("  ", Style::default().add_modifier(Modifier::DIM)),
+                Span::styled("▌ ", Style::default().add_modifier(Modifier::DIM)),
                 Span::styled(sub.clone(), Style::default().add_modifier(Modifier::DIM)),
             ];
             let subtitle_para = Paragraph::new(Line::from(subtitle_spans));
@@ -203,7 +203,12 @@ impl BottomPaneView<'_> for ListSelectionView {
             .map(|(i, it)| {
                 let is_selected = self.state.selected_idx == Some(i);
                 let prefix = if is_selected { '>' } else { ' ' };
-                let display_name = format!("{} {}. {}", prefix, i + 1, it.name);
+                let name_with_marker = if it.is_current {
+                    format!("{} (current)", it.name)
+                } else {
+                    it.name.clone()
+                };
+                let display_name = format!("{} {}. {}", prefix, i + 1, name_with_marker);
                 GenericDisplayRow {
                     name: display_name,
                     match_indices: None,
