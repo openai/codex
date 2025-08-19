@@ -154,7 +154,7 @@ impl CodexMessageProcessor {
             Error(JSONRPCErrorError),
         }
 
-        let reply = match run_login_server(opts, None) {
+        let reply = match run_login_server(opts) {
             Ok(server) => {
                 let login_id = Uuid::new_v4();
                 let shutdown_handle = server.cancel_handle();

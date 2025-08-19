@@ -281,7 +281,7 @@ impl AuthModeWidget {
     fn start_chatgpt_login(&mut self) {
         self.error = None;
         let opts = ServerOptions::new(self.codex_home.clone(), CLIENT_ID.to_string());
-        let server = run_login_server(opts, None);
+        let server = run_login_server(opts);
         match server {
             Ok(child) => {
                 let auth_url = child.auth_url.clone();
