@@ -69,15 +69,16 @@ impl Shell {
                         return Some(command);
                     }
 
-                    let ps_script = "& { if ($args.Length -gt 1) { & $args[0] @($args[1..($args.Length-1)]) } else { & $args[0] }; exit $LASTEXITCODE }";
-                    let mut output = vec![
-                        ps.exe.clone(),
-                        "-NoProfile".to_string(),
-                        "-Command".to_string(),
-                        ps_script.to_string(),
-                    ];
-                    output.extend(command);
-                    return Some(output);
+                    let joined = shlex::try_join(command.iter().map(|s| s.as_str())).ok();
+                    if let Some(joined) = joined {
+                        return Some(vec![
+                            ps.exe.clone(),
+                            "-NoProfile".to_string(),
+                            "-Command".to_string(),
+                            joined,
+                        ]);
+                    }
+                    return None;
                 }
 
                 // Model generated a PowerShell command. Run it.
@@ -386,14 +387,7 @@ mod tests_windows {
                     bash_exe_fallback: Some("bash.exe".to_string()),
                 }),
                 vec!["echo", "hello"],
-                vec![
-                    "pwsh.exe",
-                    "-NoProfile",
-                    "-Command",
-                    "& { if ($args.Length -gt 1) { & $args[0] @($args[1..($args.Length-1)]) } else { & $args[0] }; exit $LASTEXITCODE }",
-                    "echo",
-                    "hello",
-                ],
+                vec!["pwsh.exe", "-NoProfile", "-Command", "echo hello"],
             ),
             (
                 Shell::PowerShell(PowerShellShell {
