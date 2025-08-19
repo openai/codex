@@ -1071,6 +1071,7 @@ async fn submission_loop(
                         new_cwd,
                         new_approval_policy,
                         new_sandbox_policy,
+                        sess.user_shell.clone(),
                     ))])
                     .await;
                 }
