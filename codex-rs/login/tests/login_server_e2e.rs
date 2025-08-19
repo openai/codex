@@ -101,7 +101,7 @@ async fn end_to_end_login_flow_persists_auth_json() {
         open_browser: false,
         force_state: Some(state),
     };
-    let server = run_login_server(opts, None).unwrap();
+    let server = run_login_server(opts).unwrap();
     let login_port = server.actual_port;
 
     // Simulate browser callback, and follow redirect to /success
@@ -159,7 +159,7 @@ async fn creates_missing_codex_home_dir() {
         open_browser: false,
         force_state: Some(state),
     };
-    let server = run_login_server(opts, None).unwrap();
+    let server = run_login_server(opts).unwrap();
     let login_port = server.actual_port;
 
     let client = reqwest::Client::new();

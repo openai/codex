@@ -77,10 +77,7 @@ impl ShutdownHandle {
     }
 }
 
-pub fn run_login_server(
-    opts: ServerOptions,
-    shutdown_flag: Option<Arc<tokio::sync::Notify>>,
-) -> io::Result<LoginServer> {
+pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
     let pkce = generate_pkce();
     let state = opts.force_state.clone().unwrap_or_else(generate_state);
 
@@ -118,7 +115,7 @@ pub fn run_login_server(
         })
     };
 
-    let shutdown_notify = shutdown_flag.unwrap_or_else(|| Arc::new(tokio::sync::Notify::new()));
+    let shutdown_notify = Arc::new(tokio::sync::Notify::new());
     let server_handle = {
         let shutdown_notify = shutdown_notify.clone();
         let server = server.clone();
