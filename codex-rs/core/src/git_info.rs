@@ -22,6 +22,12 @@ pub struct GitInfo {
     pub repository_url: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct GitDiffToRemote {
+    pub sha: String,
+    pub diff: String,
+}
+
 /// Collect git repository information from the given working directory using command-line git.
 /// Returns None if no git repository is found or if git operations fail.
 /// Uses timeouts to prevent freezing on large repositories.
@@ -83,6 +89,27 @@ pub async fn collect_git_info(cwd: &Path) -> Option<GitInfo> {
     Some(git_info)
 }
 
+/// Returns the closest git sha to HEAD that is on a remote as well as the diff to that sha.
+pub async fn git_diff_to_remote(cwd: &Path) -> Option<GitDiffToRemote> {
+    let is_git_repo = run_git_command_with_timeout(&["rev-parse", "--git-dir"], cwd)
+        .await?
+        .status
+        .success();
+    if !is_git_repo {
+        return None;
+    }
+
+    let remotes = get_git_remotes(cwd).await?;
+    let branches = branch_ancestry(cwd).await?;
+    let base_sha = find_closest_sha(cwd, &branches, &remotes).await?;
+    let diff = diff_against_sha(cwd, &base_sha).await?;
+
+    Some(GitDiffToRemote {
+        sha: base_sha,
+        diff,
+    })
+}
+
 /// Run a git command with a timeout to prevent blocking on large repositories
 async fn run_git_command_with_timeout(args: &[&str], cwd: &Path) -> Option<std::process::Output> {
     let result = timeout(
@@ -97,6 +124,249 @@ async fn run_git_command_with_timeout(args: &[&str], cwd: &Path) -> Option<std::
     }
 }
 
+async fn get_git_remotes(cwd: &Path) -> Option<Vec<String>> {
+    let output = run_git_command_with_timeout(&["remote"], cwd).await?;
+    if !output.status.success() {
+        return None;
+    }
+    let mut remotes: Vec<String> = String::from_utf8(output.stdout)
+        .ok()?
+        .lines()
+        .map(|s| s.to_string())
+        .collect();
+    if let Some(pos) = remotes.iter().position(|r| r == "origin") {
+        let origin = remotes.remove(pos);
+        remotes.insert(0, origin);
+    }
+    Some(remotes)
+}
+
+/// Attempt to determine the repository's default branch name.
+///
+/// Preference order:
+/// 1) The symbolic ref at `refs/remotes/<remote>/HEAD` for the first remote (origin prioritized)
+/// 2) `git remote show <remote>` parsed for "HEAD branch: <name>"
+/// 3) Local fallback to existing `main` or `master` if present
+async fn get_default_branch(cwd: &Path) -> Option<String> {
+    // Prefer the first remote (with origin prioritized)
+    let remotes = get_git_remotes(cwd).await.unwrap_or_default();
+    for remote in remotes {
+        // Try symbolic-ref, which returns something like: refs/remotes/origin/main
+        if let Some(symref_output) = run_git_command_with_timeout(
+            &[
+                "symbolic-ref",
+                "--quiet",
+                &format!("refs/remotes/{remote}/HEAD"),
+            ],
+            cwd,
+        )
+        .await
+        {
+            if symref_output.status.success() {
+                if let Ok(sym) = String::from_utf8(symref_output.stdout) {
+                    let trimmed = sym.trim();
+                    if let Some((_, name)) = trimmed.rsplit_once('/') {
+                        return Some(name.to_string());
+                    }
+                }
+            }
+        }
+
+        // Fall back to parsing `git remote show <remote>` output
+        if let Some(show_output) =
+            run_git_command_with_timeout(&["remote", "show", &remote], cwd).await
+        {
+            if show_output.status.success() {
+                if let Ok(text) = String::from_utf8(show_output.stdout) {
+                    for line in text.lines() {
+                        let line = line.trim();
+                        if let Some(rest) = line.strip_prefix("HEAD branch:") {
+                            let name = rest.trim();
+                            if !name.is_empty() {
+                                return Some(name.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // No remote-derived default; try common local defaults if they exist
+    for candidate in ["main", "master"] {
+        if let Some(verify) = run_git_command_with_timeout(
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{candidate}"),
+            ],
+            cwd,
+        )
+        .await
+        {
+            if verify.status.success() {
+                return Some(candidate.to_string());
+            }
+        }
+    }
+
+    None
+}
+
+/// Build an ancestry of branches starting at the current branch and ending at the
+/// repository's default branch (if determinable)..
+async fn branch_ancestry(cwd: &Path) -> Option<Vec<String>> {
+    // Discover current branch (ignore detached HEAD by treating it as None)
+    let current_branch = run_git_command_with_timeout(&["rev-parse", "--abbrev-ref", "HEAD"], cwd)
+        .await
+        .and_then(|o| {
+            if o.status.success() {
+                String::from_utf8(o.stdout).ok()
+            } else {
+                None
+            }
+        })
+        .map(|s| s.trim().to_string())
+        .filter(|s| s != "HEAD");
+
+    // Discover default branch
+    let default_branch = get_default_branch(cwd).await;
+
+    let mut ancestry: Vec<String> = Vec::new();
+    if let Some(cb) = current_branch.clone() {
+        ancestry.push(cb);
+    }
+    if let Some(db) = default_branch {
+        if ancestry.first().map(|b| b != &db).unwrap_or(true) {
+            ancestry.push(db);
+        }
+    }
+
+    // Ensure we return Some vector, even if empty, to allow caller logic to proceed
+    Some(ancestry)
+}
+
+async fn find_closest_sha(cwd: &Path, branches: &[String], remotes: &[String]) -> Option<String> {
+    // A sha and how many commits away from HEAD it is.
+    let mut closest_sha: Option<(String, usize)> = None;
+    'branch_loop: for branch in branches {
+        for remote in remotes {
+            let remote_ref = format!("refs/remotes/{remote}/{branch}");
+            let verify_output = match run_git_command_with_timeout(
+                &["rev-parse", "--verify", "--quiet", &remote_ref],
+                cwd,
+            )
+            .await
+            {
+                Some(output) => output,
+                None => continue 'branch_loop,
+            };
+            if !verify_output.status.success() {
+                continue;
+            }
+            let remote_sha = match String::from_utf8(verify_output.stdout) {
+                Ok(s) => s.trim().to_string(),
+                Err(_) => continue 'branch_loop,
+            };
+            // Compute distance as the number of commits HEAD is ahead of the candidate branch.
+            // Prefer local branch name if it exists; otherwise fall back to the remote ref.
+            let count_output = if let Some(local_count) = run_git_command_with_timeout(
+                &["rev-list", "--count", &format!("{branch}..HEAD")],
+                cwd,
+            )
+            .await
+            {
+                if local_count.status.success() {
+                    local_count
+                } else {
+                    // Try remote ref as a fallback for branches not present locally
+                    match run_git_command_with_timeout(
+                        &["rev-list", "--count", &format!("{remote_ref}..HEAD")],
+                        cwd,
+                    )
+                    .await
+                    {
+                        Some(remote_count) => remote_count,
+                        None => continue 'branch_loop,
+                    }
+                }
+            } else {
+                // No local output; try remote directly
+                match run_git_command_with_timeout(
+                    &["rev-list", "--count", &format!("{remote_ref}..HEAD")],
+                    cwd,
+                )
+                .await
+                {
+                    Some(remote_count) => remote_count,
+                    None => continue 'branch_loop,
+                }
+            };
+            if !count_output.status.success() {
+                continue;
+            }
+            let distance = match String::from_utf8(count_output.stdout) {
+                Ok(s) => match s.trim().parse::<usize>() {
+                    Ok(value) => value,
+                    Err(_) => continue 'branch_loop,
+                },
+                Err(_) => continue 'branch_loop,
+            };
+            match &closest_sha {
+                None => closest_sha = Some((remote_sha.clone(), distance)),
+                Some((_, best_distance)) if distance < *best_distance => {
+                    closest_sha = Some((remote_sha.clone(), distance));
+                }
+                _ => {}
+            }
+            break;
+        }
+    }
+    closest_sha.map(|(sha, _)| sha)
+}
+
+async fn diff_against_sha(cwd: &Path, sha: &str) -> Option<String> {
+    let output = run_git_command_with_timeout(&["diff", sha], cwd).await?;
+    let exit_ok = output.status.code().is_some_and(|c| c == 0 || c == 1);
+    if !exit_ok {
+        return None;
+    }
+    let mut diff = String::from_utf8(output.stdout).ok()?;
+
+    if let Some(untracked_output) =
+        run_git_command_with_timeout(&["ls-files", "--others", "--exclude-standard"], cwd).await
+    {
+        if untracked_output.status.success() {
+            let untracked: Vec<String> = String::from_utf8(untracked_output.stdout)
+                .ok()?
+                .lines()
+                .map(|s| s.to_string())
+                .collect();
+            for file in untracked {
+                if file.is_empty() {
+                    continue;
+                }
+                if let Some(extra) = run_git_command_with_timeout(
+                    &["diff", "--binary", "--no-index", "/dev/null", &file],
+                    cwd,
+                )
+                .await
+                {
+                    let exit_ok = extra.status.code().is_some_and(|c| c == 0 || c == 1);
+                    if exit_ok {
+                        if let Ok(s) = String::from_utf8(extra.stdout) {
+                            diff.push_str(&s);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Some(diff)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,7 +377,8 @@ mod tests {
 
     // Helper function to create a test git repository
     async fn create_test_git_repo(temp_dir: &TempDir) -> PathBuf {
-        let repo_path = temp_dir.path().to_path_buf();
+        let repo_path = temp_dir.path().join("repo");
+        fs::create_dir(&repo_path).expect("Failed to create repo dir");
         let envs = vec![
             ("GIT_CONFIG_GLOBAL", "/dev/null"),
             ("GIT_CONFIG_NOSYSTEM", "1"),
@@ -160,6 +431,41 @@ mod tests {
             .expect("Failed to commit");
 
         repo_path
+    }
+
+    async fn create_test_git_repo_with_remote(temp_dir: &TempDir) -> (PathBuf, String) {
+        let repo_path = create_test_git_repo(temp_dir).await;
+        let remote_path = temp_dir.path().join("remote.git");
+
+        Command::new("git")
+            .args(["init", "--bare", remote_path.to_str().unwrap()])
+            .output()
+            .await
+            .expect("Failed to init bare remote");
+
+        Command::new("git")
+            .args(["remote", "add", "origin", remote_path.to_str().unwrap()])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("Failed to add remote");
+
+        let output = Command::new("git")
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("Failed to get branch");
+        let branch = String::from_utf8(output.stdout).unwrap().trim().to_string();
+
+        Command::new("git")
+            .args(["push", "-u", "origin", &branch])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("Failed to push initial commit");
+
+        (repo_path, branch)
     }
 
     #[tokio::test]
@@ -273,6 +579,136 @@ mod tests {
 
         // Should have the new branch name
         assert_eq!(git_info.branch, Some("feature-branch".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_get_git_working_tree_state_clean_repo() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let (repo_path, branch) = create_test_git_repo_with_remote(&temp_dir).await;
+
+        let remote_sha = Command::new("git")
+            .args(["rev-parse", &format!("origin/{branch}")])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("Failed to rev-parse remote");
+        let remote_sha = String::from_utf8(remote_sha.stdout)
+            .unwrap()
+            .trim()
+            .to_string();
+
+        let state = git_diff_to_remote(&repo_path)
+            .await
+            .expect("Should collect working tree state");
+        assert_eq!(state.sha, remote_sha);
+        assert!(state.diff.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_get_git_working_tree_state_with_changes() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let (repo_path, branch) = create_test_git_repo_with_remote(&temp_dir).await;
+
+        let tracked = repo_path.join("test.txt");
+        fs::write(&tracked, "modified").unwrap();
+        fs::write(repo_path.join("untracked.txt"), "new").unwrap();
+
+        let remote_sha = Command::new("git")
+            .args(["rev-parse", &format!("origin/{branch}")])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("Failed to rev-parse remote");
+        let remote_sha = String::from_utf8(remote_sha.stdout)
+            .unwrap()
+            .trim()
+            .to_string();
+
+        let state = git_diff_to_remote(&repo_path)
+            .await
+            .expect("Should collect working tree state");
+        assert_eq!(state.sha, remote_sha);
+        assert!(state.diff.contains("test.txt"));
+        assert!(state.diff.contains("untracked.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_get_git_working_tree_state_branch_fallback() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let (repo_path, _branch) = create_test_git_repo_with_remote(&temp_dir).await;
+
+        Command::new("git")
+            .args(["checkout", "-b", "feature"])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("Failed to create feature branch");
+        Command::new("git")
+            .args(["push", "-u", "origin", "feature"])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("Failed to push feature branch");
+
+        Command::new("git")
+            .args(["checkout", "-b", "local-branch"])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("Failed to create local branch");
+
+        let remote_sha = Command::new("git")
+            .args(["rev-parse", "origin/feature"])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("Failed to rev-parse remote");
+        let remote_sha = String::from_utf8(remote_sha.stdout)
+            .unwrap()
+            .trim()
+            .to_string();
+
+        let state = git_diff_to_remote(&repo_path)
+            .await
+            .expect("Should collect working tree state");
+        assert_eq!(state.sha, remote_sha);
+    }
+
+    #[tokio::test]
+    async fn test_get_git_working_tree_state_unpushed_commit() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let (repo_path, branch) = create_test_git_repo_with_remote(&temp_dir).await;
+
+        let remote_sha = Command::new("git")
+            .args(["rev-parse", &format!("origin/{branch}")])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("Failed to rev-parse remote");
+        let remote_sha = String::from_utf8(remote_sha.stdout)
+            .unwrap()
+            .trim()
+            .to_string();
+
+        fs::write(repo_path.join("test.txt"), "updated").unwrap();
+        Command::new("git")
+            .args(["add", "test.txt"])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("Failed to add file");
+        Command::new("git")
+            .args(["commit", "-m", "local change"])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("Failed to commit");
+
+        let state = git_diff_to_remote(&repo_path)
+            .await
+            .expect("Should collect working tree state");
+        assert_eq!(state.sha, remote_sha);
+        assert!(state.diff.contains("updated"));
     }
 
     #[test]

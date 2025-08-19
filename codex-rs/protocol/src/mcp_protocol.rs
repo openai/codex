@@ -69,6 +69,11 @@ pub enum ClientRequest {
         request_id: RequestId,
         params: CancelLoginChatGptParams,
     },
+    GitDiffToRemote {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: GitDiffToRemoteParams,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, TS)]
@@ -155,6 +160,12 @@ pub struct LoginChatGptCompleteNotification {
 #[serde(rename_all = "camelCase")]
 pub struct CancelLoginChatGptParams {
     pub login_id: Uuid,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitDiffToRemoteParams {
+    pub cwd: PathBuf,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
