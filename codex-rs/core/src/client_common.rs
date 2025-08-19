@@ -1,5 +1,3 @@
-use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
-use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::error::Result;
 use crate::model_family::ModelFamily;
 use crate::models::ContentItem;
@@ -7,6 +5,8 @@ use crate::models::ResponseItem;
 use crate::openai_tools::OpenAiTool;
 use crate::protocol::TokenUsage;
 use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
+use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
+use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use futures::Stream;
 use serde::Serialize;
 use std::borrow::Cow;
@@ -85,55 +85,8 @@ pub enum ResponseEvent {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct Reasoning {
-    pub(crate) effort: OpenAiReasoningEffort,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) summary: Option<OpenAiReasoningSummary>,
-}
-
-/// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning
-#[derive(Debug, Serialize, Default, Clone, Copy)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum OpenAiReasoningEffort {
-    Minimal,
-    Low,
-    #[default]
-    Medium,
-    High,
-}
-
-impl From<ReasoningEffortConfig> for Option<OpenAiReasoningEffort> {
-    fn from(effort: ReasoningEffortConfig) -> Self {
-        match effort {
-            ReasoningEffortConfig::Minimal => Some(OpenAiReasoningEffort::Minimal),
-            ReasoningEffortConfig::Low => Some(OpenAiReasoningEffort::Low),
-            ReasoningEffortConfig::Medium => Some(OpenAiReasoningEffort::Medium),
-            ReasoningEffortConfig::High => Some(OpenAiReasoningEffort::High),
-            ReasoningEffortConfig::None => None,
-        }
-    }
-}
-
-/// A summary of the reasoning performed by the model. This can be useful for
-/// debugging and understanding the model's reasoning process.
-/// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#reasoning-summaries
-#[derive(Debug, Serialize, Default, Clone, Copy)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum OpenAiReasoningSummary {
-    #[default]
-    Auto,
-    Concise,
-    Detailed,
-}
-
-impl From<ReasoningSummaryConfig> for Option<OpenAiReasoningSummary> {
-    fn from(summary: ReasoningSummaryConfig) -> Self {
-        match summary {
-            ReasoningSummaryConfig::Auto => Some(OpenAiReasoningSummary::Auto),
-            ReasoningSummaryConfig::Concise => Some(OpenAiReasoningSummary::Concise),
-            ReasoningSummaryConfig::Detailed => Some(OpenAiReasoningSummary::Detailed),
-            ReasoningSummaryConfig::None => None,
-        }
-    }
+    pub(crate) effort: ReasoningEffortConfig,
+    pub(crate) summary: ReasoningSummaryConfig,
 }
 
 /// Request object that is serialized as JSON and POST'ed when using the
@@ -164,12 +117,7 @@ pub(crate) fn create_reasoning_param_for_request(
     summary: ReasoningSummaryConfig,
 ) -> Option<Reasoning> {
     if model_family.supports_reasoning_summaries {
-        let effort: Option<OpenAiReasoningEffort> = effort.into();
-        let effort = effort?;
-        Some(Reasoning {
-            effort,
-            summary: summary.into(),
-        })
+        Some(Reasoning { effort, summary })
     } else {
         None
     }
