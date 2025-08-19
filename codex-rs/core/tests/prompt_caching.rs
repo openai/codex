@@ -86,15 +86,16 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
     let requests = server.received_requests().await.unwrap();
     assert_eq!(requests.len(), 2, "expected two POST requests");
 
-    let expected_env_text_base = format!(
-        "<environment_context>\nCurrent working directory: {}\nApproval policy: on-request\nSandbox mode: read-only\nNetwork access: restricted\n",
-        cwd.path().to_string_lossy()
-    );
     let shell = default_user_shell().await;
-    let expected_env_text = match shell.name() {
-        Some(name) => format!("{expected_env_text_base}Shell: {name}\n</environment_context>"),
-        None => format!("{expected_env_text_base}</environment_context>"),
-    };
+
+    let expected_env_text = format!(
+        "<environment_context>\nCurrent working directory: {}\nApproval policy: on-request\nSandbox mode: read-only\nNetwork access: restricted\n{}</environment_context>",
+        cwd.path().to_string_lossy(),
+        match shell.name() {
+            Some(name) => format!("Shell: {name}\n"),
+            None => String::new(),
+        }
+    );
     let expected_ui_text =
         "<user_instructions>\n\nbe consistent and helpful\n\n</user_instructions>";
 
@@ -243,9 +244,14 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() {
     });
     // After overriding the turn context, the environment context should be emitted again
     // reflecting the new cwd, approval policy and sandbox settings.
+    let shell = default_user_shell().await;
     let expected_env_text_2 = format!(
-        "<environment_context>\nCurrent working directory: {}\nApproval policy: never\nSandbox mode: workspace-write\nNetwork access: enabled\n</environment_context>",
-        new_cwd.path().to_string_lossy()
+        "<environment_context>\nCurrent working directory: {}\nApproval policy: never\nSandbox mode: workspace-write\nNetwork access: enabled\n{}</environment_context>",
+        new_cwd.path().to_string_lossy(),
+        match shell.name() {
+            Some(name) => format!("Shell: {name}\n"),
+            None => String::new(),
+        }
     );
     let expected_env_msg_2 = serde_json::json!({
         "type": "message",
