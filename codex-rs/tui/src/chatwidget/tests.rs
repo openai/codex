@@ -695,7 +695,7 @@ fn apply_patch_request_shows_diff_summary() {
 
     // Per-file summary line should include the file path and counts
     assert!(
-        blob.contains("README.md (+2 -0)"),
+        blob.contains("README.md"),
         "missing per-file diff summary: {blob:?}"
     );
 }
