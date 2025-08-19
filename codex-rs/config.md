@@ -149,6 +149,7 @@ approval_policy = "untrusted"
 ```
 
 If you want to be notified whenever a command fails, use "on-failure":
+
 ```toml
 # If the command fails when run in the sandbox, Codex asks for permission to
 # retry the command outside the sandbox.
@@ -156,12 +157,14 @@ approval_policy = "on-failure"
 ```
 
 If you want the model to run until it decides that it needs to ask you for escalated permissions, use "on-request":
+
 ```toml
 # The model decides when to escalate
 approval_policy = "on-request"
 ```
 
 Alternatively, you can have the model run until it is done, and never ask to run a command with escalated permissions:
+
 ```toml
 # User is never prompted: if the command fails, Codex will automatically try
 # something out. Note the `exec` subcommand always uses this mode.
@@ -277,6 +280,9 @@ sandbox_mode = "workspace-write"
 # will override those defaults.
 exclude_tmpdir_env_var = false
 exclude_slash_tmp = false
+
+# Optional list of _additional_ writable roots beyond $TMPDIR and /tmp.
+writable_roots = ["/Users/YOU/.pyenv/shims"]
 
 # Allow the command being run inside the sandbox to make outbound network
 # requests. Disabled by default.
@@ -495,10 +501,12 @@ hide_agent_reasoning = true   # defaults to false
 Surfaces the model’s raw chain-of-thought ("raw reasoning content") when available.
 
 Notes:
+
 - Only takes effect if the selected model/provider actually emits raw reasoning content. Many models do not. When unsupported, this option has no visible effect.
 - Raw reasoning may include intermediate thoughts or sensitive context. Enable only if acceptable for your workflow.
 
 Example:
+
 ```toml
 show_raw_agent_reasoning = true  # defaults to false
 ```
