@@ -240,9 +240,14 @@ impl BottomPane<'_> {
         total_token_usage: TokenUsage,
         last_token_usage: TokenUsage,
         model_context_window: Option<u64>,
+        model: String,
     ) {
-        self.composer
-            .set_token_usage(total_token_usage, last_token_usage, model_context_window);
+        self.composer.set_token_usage(
+            total_token_usage,
+            last_token_usage,
+            model_context_window,
+            model,
+        );
         self.request_redraw();
     }
 
