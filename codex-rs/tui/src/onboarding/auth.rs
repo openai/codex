@@ -1,5 +1,6 @@
 use codex_login::CLIENT_ID;
 use codex_login::ServerOptions;
+use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -24,9 +25,6 @@ use crate::onboarding::onboarding_screen::KeyboardHandler;
 use crate::onboarding::onboarding_screen::StepStateProvider;
 use crate::shimmer::shimmer_spans;
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 
 use super::onboarding_screen::StepState;
 // no additional imports
@@ -45,13 +43,14 @@ pub(crate) enum SignInState {
 /// Used to manage the lifecycle of SpawnedLogin and ensure it gets cleaned up.
 pub(crate) struct ContinueInBrowserState {
     auth_url: String,
-    shutdown_flag: Option<Arc<AtomicBool>>,
+    shutdown_handle: Option<ShutdownHandle>,
     _login_wait_handle: Option<tokio::task::JoinHandle<()>>,
 }
+
 impl Drop for ContinueInBrowserState {
     fn drop(&mut self) {
-        if let Some(flag) = &self.shutdown_flag {
-            flag.store(true, Ordering::SeqCst);
+        if let Some(flag) = &self.shutdown_handle {
+            flag.cancel();
         }
     }
 }
@@ -286,7 +285,7 @@ impl AuthModeWidget {
         match server {
             Ok(child) => {
                 let auth_url = child.auth_url.clone();
-                let shutdown_flag = child.shutdown_flag.clone();
+                let shutdown_handle = child.cancel_handle();
 
                 let event_tx = self.event_tx.clone();
                 let join_handle = tokio::spawn(async move {
@@ -295,7 +294,7 @@ impl AuthModeWidget {
                 self.sign_in_state =
                     SignInState::ChatGptContinueInBrowser(ContinueInBrowserState {
                         auth_url,
-                        shutdown_flag: Some(shutdown_flag),
+                        shutdown_handle: Some(shutdown_handle),
                         _login_wait_handle: Some(join_handle),
                     });
                 self.event_tx.send(AppEvent::RequestRedraw);
