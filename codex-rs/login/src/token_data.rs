@@ -3,6 +3,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use thiserror::Error;
 
+use crate::AuthMode;
+
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Default)]
 pub struct TokenData {
     /// Flat info parsed from the JWT in auth.json.
@@ -23,8 +25,8 @@ pub struct TokenData {
 impl TokenData {
     /// Returns true if this is a plan that should use the traditional
     /// "metered" billing via an API key.
-    pub(crate) fn should_use_api_key(&self, always_use_api_key_signing: bool) -> bool {
-        if always_use_api_key_signing {
+    pub(crate) fn should_use_api_key(&self, preferred_auth_method: AuthMode) -> bool {
+        if preferred_auth_method == AuthMode::ApiKey {
             return true;
         }
 

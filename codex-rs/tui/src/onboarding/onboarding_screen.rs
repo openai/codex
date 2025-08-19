@@ -55,28 +55,23 @@ pub(crate) struct OnboardingScreenArgs {
     pub codex_home: PathBuf,
     pub cwd: PathBuf,
     pub show_trust_screen: bool,
+    pub show_login_screen: bool,
     pub login_status: LoginStatus,
 }
 
 impl OnboardingScreen {
     pub(crate) fn new(args: OnboardingScreenArgs) -> Self {
-        let show_login_screen = matches!(args.login_status, LoginStatus::None)
-            || matches!(
-                args.login_status,
-                LoginStatus::ApiKey {
-                    always_use_api_key_signing: false
-                }
-            );
         let OnboardingScreenArgs {
             event_tx,
             chat_widget_args,
             codex_home,
             cwd,
             show_trust_screen,
+            show_login_screen,
             login_status,
         } = args;
         let mut steps: Vec<Step> = vec![Step::Welcome(WelcomeWidget {
-            is_logged_in: !matches!(login_status, LoginStatus::None),
+            is_logged_in: !matches!(login_status, LoginStatus::NotAuthenticated),
         })];
         if show_login_screen {
             steps.push(Step::Auth(AuthModeWidget {
@@ -86,6 +81,7 @@ impl OnboardingScreen {
                 sign_in_state: SignInState::PickMode,
                 codex_home: codex_home.clone(),
                 login_status,
+                preferred_auth_method: chat_widget_args.config.preferred_auth_method,
             }))
         }
         let is_git_repo = is_inside_git_repo(&cwd);

@@ -13,6 +13,7 @@ use crate::model_provider_info::built_in_model_providers;
 use crate::openai_model_info::get_model_info;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
+use codex_login::AuthMode;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
@@ -165,7 +166,7 @@ pub struct Config {
     pub internal_originator: Option<String>,
 
     /// If set to `true`, the API key will be signed with the `originator` header.
-    pub always_use_api_key_signing: bool,
+    pub preferred_auth_method: AuthMode,
 }
 
 impl Config {
@@ -414,7 +415,7 @@ pub struct ConfigToml {
     pub projects: Option<HashMap<String, ProjectConfig>>,
 
     /// If set to `true`, the API key will be signed with the `originator` header.
-    pub always_use_api_key_signing: Option<bool>,
+    pub preferred_auth_method: Option<AuthMode>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -678,7 +679,7 @@ impl Config {
             include_plan_tool: include_plan_tool.unwrap_or(false),
             include_apply_patch_tool: include_apply_patch_tool_val,
             internal_originator: cfg.internal_originator,
-            always_use_api_key_signing: cfg.always_use_api_key_signing.unwrap_or(false),
+            preferred_auth_method: cfg.preferred_auth_method.unwrap_or(AuthMode::ChatGPT),
         };
         Ok(config)
     }
@@ -1043,7 +1044,7 @@ disable_response_storage = true
                 include_plan_tool: false,
                 include_apply_patch_tool: false,
                 internal_originator: None,
-                always_use_api_key_signing: false,
+                preferred_auth_method: AuthMode::ChatGPT,
             },
             o3_profile_config
         );
@@ -1096,7 +1097,7 @@ disable_response_storage = true
             include_plan_tool: false,
             include_apply_patch_tool: false,
             internal_originator: None,
-            always_use_api_key_signing: false,
+            preferred_auth_method: AuthMode::ChatGPT,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -1164,7 +1165,7 @@ disable_response_storage = true
             include_plan_tool: false,
             include_apply_patch_tool: false,
             internal_originator: None,
-            always_use_api_key_signing: false,
+            preferred_auth_method: AuthMode::ChatGPT,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);

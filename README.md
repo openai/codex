@@ -22,7 +22,7 @@
     - [Authenticate locally and copy your credentials to the "headless" machine](#authenticate-locally-and-copy-your-credentials-to-the-headless-machine)
     - [Connecting through VPS or remote](#connecting-through-vps-or-remote)
   - [Usage-based billing alternative: Use an OpenAI API key](#usage-based-billing-alternative-use-an-openai-api-key)
-    - [Forcing API-key mode (advanced)](#forcing-api-key-mode-advanced)
+    - [Forcing a specific auth method (advanced)](#forcing-a-specific-auth-method-advanced)
   - [Choosing Codex's level of autonomy](#choosing-codexs-level-of-autonomy)
     - [**1. Read/write**](#1-readwrite)
     - [**2. Read-only**](#2-read-only)
@@ -166,25 +166,34 @@ Notes:
 - This command only sets the key for your current terminal session, which we recommend. To set it for all future sessions, you can also add the `export` line to your shell's configuration file (e.g., `~/.zshrc`).
 - If you have signed in with ChatGPT, Codex will default to using your ChatGPT credits. If you wish to use your API key, use the `/logout` command to clear your ChatGPT authentication.
 
-#### Forcing API-key mode (advanced)
+#### Forcing a specific auth method (advanced)
 
-If you want Codex to always use your API key for requests (even when ChatGPT auth exists), set the following config flag:
+You can explicitly choose which authentication Codex should prefer when both are available.
+
+- To always use your API key (even when ChatGPT auth exists), set:
 
 ```toml
 # ~/.codex/config.toml
-always_use_api_key_signing = true
+preferred_auth_method = "apikey"
 ```
 
-Or override ad-hoc via CLI:
+Or override ad‑hoc via CLI:
 
 ```bash
-codex --config always_use_api_key_signing=true
+codex --config preferred_auth_method="apikey"
+```
+
+- To prefer ChatGPT auth (default), set:
+
+```toml
+# ~/.codex/config.toml
+preferred_auth_method = "chatgpt"
 ```
 
 Notes:
 
-- When this is true and an API key is available, the login screen is skipped.
-- When false (default), Codex prefers ChatGPT auth if present; with an API key also present, you'll be offered the login screen with an option to continue using the API key.
+- When `preferred_auth_method = "apikey"` and an API key is available, the login screen is skipped.
+- When `preferred_auth_method = "chatgpt"` (default), Codex prefers ChatGPT auth if present; if only an API key is present, it will use the API key. Certain account types may also require API‑key mode.
 
 ### Choosing Codex's level of autonomy
 

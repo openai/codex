@@ -30,7 +30,8 @@ mod token_data;
 pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 pub const OPENAI_API_KEY_ENV_VAR: &str = "OPENAI_API_KEY";
 
-#[derive(Clone, Debug, PartialEq, Copy)]
+#[derive(Clone, Debug, PartialEq, Copy, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum AuthMode {
     ApiKey,
     ChatGPT,
@@ -65,9 +66,9 @@ impl CodexAuth {
     /// OPENAI_API_KEY environment variable.
     pub fn from_codex_home(
         codex_home: &Path,
-        always_use_api_key_signing: bool,
+        preferred_auth_method: AuthMode,
     ) -> std::io::Result<Option<CodexAuth>> {
-        load_auth(codex_home, true, always_use_api_key_signing)
+        load_auth(codex_home, true, preferred_auth_method)
     }
 
     pub async fn get_token_data(&self) -> Result<TokenData, std::io::Error> {
@@ -171,7 +172,7 @@ impl CodexAuth {
 fn load_auth(
     codex_home: &Path,
     include_env_var: bool,
-    always_use_api_key_signing: bool,
+    preferred_auth_method: AuthMode,
 ) -> std::io::Result<Option<CodexAuth>> {
     // First, check to see if there is a valid auth.json file. If not, we fall
     // back to AuthMode::ApiKey using the OPENAI_API_KEY environment variable
@@ -208,7 +209,7 @@ fn load_auth(
         // "refreshable" even if we are using the API key for auth?
         match &tokens {
             Some(tokens) => {
-                if tokens.should_use_api_key(always_use_api_key_signing) {
+                if tokens.should_use_api_key(preferred_auth_method) {
                     return Ok(Some(CodexAuth::from_api_key(api_key)));
                 } else {
                     // Ignore the API key and fall through to ChatGPT auth.
@@ -390,7 +391,9 @@ mod tests {
     fn writes_api_key_and_loads_auth() {
         let dir = tempdir().unwrap();
         login_with_api_key(dir.path(), "sk-test-key").unwrap();
-        let auth = load_auth(dir.path(), false, false).unwrap().unwrap();
+        let auth = load_auth(dir.path(), false, AuthMode::ChatGPT)
+            .unwrap()
+            .unwrap();
         assert_eq!(auth.mode, AuthMode::ApiKey);
         assert_eq!(auth.api_key.as_deref(), Some("sk-test-key"));
     }
@@ -402,7 +405,9 @@ mod tests {
         let env_var = std::env::var(OPENAI_API_KEY_ENV_VAR);
 
         if let Ok(env_var) = env_var {
-            let auth = load_auth(dir.path(), true, false).unwrap().unwrap();
+            let auth = load_auth(dir.path(), true, AuthMode::ChatGPT)
+                .unwrap()
+                .unwrap();
             assert_eq!(auth.mode, AuthMode::ApiKey);
             assert_eq!(auth.api_key, Some(env_var));
         }
@@ -445,7 +450,9 @@ mod tests {
             mode,
             auth_dot_json,
             auth_file: _,
-        } = load_auth(codex_home.path(), false, false).unwrap().unwrap();
+        } = load_auth(codex_home.path(), false, AuthMode::ChatGPT)
+            .unwrap()
+            .unwrap();
         assert_eq!(None, api_key);
         assert_eq!(AuthMode::ChatGPT, mode);
 
@@ -494,7 +501,9 @@ mod tests {
             mode,
             auth_dot_json,
             auth_file: _,
-        } = load_auth(codex_home.path(), false, false).unwrap().unwrap();
+        } = load_auth(codex_home.path(), false, AuthMode::ChatGPT)
+            .unwrap()
+            .unwrap();
         assert_eq!(None, api_key);
         assert_eq!(AuthMode::ChatGPT, mode);
 
@@ -542,7 +551,9 @@ mod tests {
             mode,
             auth_dot_json,
             auth_file: _,
-        } = load_auth(codex_home.path(), false, false).unwrap().unwrap();
+        } = load_auth(codex_home.path(), false, AuthMode::ChatGPT)
+            .unwrap()
+            .unwrap();
         assert_eq!(Some("sk-test-key".to_string()), api_key);
         assert_eq!(AuthMode::ApiKey, mode);
 
@@ -631,7 +642,9 @@ mod tests {
         )
         .unwrap();
 
-        let auth = load_auth(dir.path(), false, false).unwrap().unwrap();
+        let auth = load_auth(dir.path(), false, AuthMode::ChatGPT)
+            .unwrap()
+            .unwrap();
         assert_eq!(auth.mode, AuthMode::ApiKey);
         assert_eq!(auth.api_key, Some("sk-test-key".to_string()));
 

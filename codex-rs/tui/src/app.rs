@@ -139,43 +139,38 @@ impl App<'_> {
         }
 
         let login_status = get_login_status(&config);
-        let app_state = match login_status {
-            LoginStatus::None
-            | LoginStatus::ApiKey {
-                always_use_api_key_signing: false,
-            } => {
-                let chat_widget_args = ChatWidgetArgs {
-                    config: config.clone(),
-                    initial_prompt,
-                    initial_images,
-                    enhanced_keys_supported,
-                };
-                AppState::Onboarding {
-                    screen: OnboardingScreen::new(OnboardingScreenArgs {
-                        event_tx: app_event_tx.clone(),
-                        codex_home: config.codex_home.clone(),
-                        cwd: config.cwd.clone(),
-                        show_trust_screen,
-                        chat_widget_args,
-                        login_status,
-                    }),
-                }
+        let should_show_onboarding =
+            should_show_onboarding(login_status, &config, show_trust_screen);
+        let app_state = if should_show_onboarding {
+            let show_login_screen = should_show_login_screen(login_status, &config);
+            let chat_widget_args = ChatWidgetArgs {
+                config: config.clone(),
+                initial_prompt,
+                initial_images,
+                enhanced_keys_supported,
+            };
+            AppState::Onboarding {
+                screen: OnboardingScreen::new(OnboardingScreenArgs {
+                    event_tx: app_event_tx.clone(),
+                    codex_home: config.codex_home.clone(),
+                    cwd: config.cwd.clone(),
+                    show_trust_screen,
+                    show_login_screen,
+                    chat_widget_args,
+                    login_status,
+                }),
             }
-            LoginStatus::ChatGPT
-            | LoginStatus::ApiKey {
-                always_use_api_key_signing: true,
-            } => {
-                let chat_widget = ChatWidget::new(
-                    config.clone(),
-                    conversation_manager.clone(),
-                    app_event_tx.clone(),
-                    initial_prompt,
-                    initial_images,
-                    enhanced_keys_supported,
-                );
-                AppState::Chat {
-                    widget: Box::new(chat_widget),
-                }
+        } else {
+            let chat_widget = ChatWidget::new(
+                config.clone(),
+                conversation_manager.clone(),
+                app_event_tx.clone(),
+                initial_prompt,
+                initial_images,
+                enhanced_keys_supported,
+            );
+            AppState::Chat {
+                widget: Box::new(chat_widget),
             }
         };
 
@@ -621,5 +616,24 @@ impl App<'_> {
             AppState::Chat { widget } => widget.handle_codex_event(event),
             AppState::Onboarding { .. } => {}
         }
+    }
+}
+
+fn should_show_onboarding(
+    login_status: LoginStatus,
+    config: &Config,
+    show_trust_screen: bool,
+) -> bool {
+    if show_trust_screen {
+        return true;
+    }
+
+    should_show_login_screen(login_status, config)
+}
+
+fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool {
+    match login_status {
+        LoginStatus::NotAuthenticated => true,
+        LoginStatus::AuthMode(method) => method != config.preferred_auth_method,
     }
 }
