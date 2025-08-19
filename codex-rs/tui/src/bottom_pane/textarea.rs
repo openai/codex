@@ -204,6 +204,16 @@ impl TextArea {
 
     pub fn input(&mut self, event: KeyEvent) {
         match event {
+            // Some terminals (or configurations) send Control key chords as
+            // C0 control characters without reporting the CONTROL modifier.
+            // Handle common fallbacks for Ctrl-B/Ctrl-F here so they don't get
+            // inserted as literal control bytes.
+            KeyEvent { code: KeyCode::Char('\u{0002}'), modifiers: KeyModifiers::NONE, .. } /* ^B */ => {
+                self.move_cursor_left();
+            }
+            KeyEvent { code: KeyCode::Char('\u{0006}'), modifiers: KeyModifiers::NONE, .. } /* ^F */ => {
+                self.move_cursor_right();
+            }
             KeyEvent {
                 code: KeyCode::Char(c),
                 // Insert plain characters (and Shift-modified). Do NOT insert when ALT is held,
@@ -1140,6 +1150,25 @@ mod tests {
 
         t.input(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
         assert_eq!(t.cursor(), 1);
+    }
+
+    #[test]
+    fn control_b_f_fallback_control_chars_move_cursor() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let mut t = ta_with("abcd");
+        t.set_cursor(2);
+
+        // Simulate terminals that send C0 control chars without CONTROL modifier.
+        // ^B (U+0002) should move left
+        t.input(KeyEvent::new(KeyCode::Char('\u{0002}'), KeyModifiers::NONE));
+        assert_eq!(t.cursor(), 1);
+
+        // ^F (U+0006) should move right
+        t.input(KeyEvent::new(KeyCode::Char('\u{0006}'), KeyModifiers::NONE));
+        assert_eq!(t.cursor(), 2);
     }
 
     #[test]
