@@ -137,7 +137,7 @@ impl BottomPaneView<'_> for ListSelectionView {
             height = height.saturating_add(1);
         }
         if self.footer_hint.is_some() {
-            height = height.saturating_add(1);
+            height = height.saturating_add(2);
         }
         height
     }
@@ -156,7 +156,7 @@ impl BottomPaneView<'_> for ListSelectionView {
         };
 
         let title_spans: Vec<Span<'static>> = vec![
-            Span::styled("▌", Style::default().add_modifier(Modifier::DIM)),
+            Span::styled("▌ ", Style::default().add_modifier(Modifier::DIM)),
             Span::styled(
                 self.title.clone(),
                 Style::default().add_modifier(Modifier::BOLD),
@@ -183,8 +183,9 @@ impl BottomPaneView<'_> for ListSelectionView {
             next_y = next_y.saturating_add(1);
         }
 
-        // Remaining area for the rows list; reserve one line at the bottom if footer_hint is present.
-        let footer_reserved = if self.footer_hint.is_some() { 1 } else { 0 };
+        // Remaining area for the rows list; reserve two lines at the bottom when footer is present
+        // (one blank spacer line and one for the footer itself).
+        let footer_reserved = if self.footer_hint.is_some() { 2 } else { 0 };
         let rows_area = Rect {
             x: area.x,
             y: next_y,
@@ -221,7 +222,7 @@ impl BottomPaneView<'_> for ListSelectionView {
             render_rows(rows_area, buf, &rows, &self.state, MAX_POPUP_ROWS, true);
         }
 
-        // Footer hint (dim), if present.
+        // Footer hint (dim), if present. The blank spacer line above is implicit.
         if let Some(hint) = &self.footer_hint {
             let footer_area = Rect {
                 x: area.x,
