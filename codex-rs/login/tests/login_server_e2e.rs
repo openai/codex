@@ -73,8 +73,8 @@ fn start_mock_issuer() -> (SocketAddr, thread::JoinHandle<()>) {
     (addr, handle)
 }
 
-#[test]
-fn end_to_end_login_flow_persists_auth_json() {
+#[tokio::test]
+async fn end_to_end_login_flow_persists_auth_json() {
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
             "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
@@ -106,16 +106,16 @@ fn end_to_end_login_flow_persists_auth_json() {
     let login_port = server.actual_port;
 
     // Simulate browser callback, and follow redirect to /success
-    let client = reqwest::blocking::Client::builder()
+    let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::limited(5))
         .build()
         .unwrap();
     let url = format!("http://127.0.0.1:{login_port}/auth/callback?code=abc&state=test_state_123");
-    let resp = client.get(&url).send().unwrap();
+    let resp = client.get(&url).send().await.unwrap();
     assert!(resp.status().is_success());
 
     // Wait for server shutdown
-    server.block_until_done().unwrap();
+    server.block_until_done().await.unwrap();
 
     // Validate auth.json
     let auth_path = codex_home.join("auth.json");
@@ -133,8 +133,8 @@ fn end_to_end_login_flow_persists_auth_json() {
     drop(issuer_handle);
 }
 
-#[test]
-fn creates_missing_codex_home_dir() {
+#[tokio::test]
+async fn creates_missing_codex_home_dir() {
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
             "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
@@ -164,12 +164,12 @@ fn creates_missing_codex_home_dir() {
     let server = run_login_server(opts, None).unwrap();
     let login_port = server.actual_port;
 
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::Client::new();
     let url = format!("http://127.0.0.1:{login_port}/auth/callback?code=abc&state=state2");
-    let resp = client.get(&url).send().unwrap();
+    let resp = client.get(&url).send().await.unwrap();
     assert!(resp.status().is_success());
 
-    server.block_until_done().unwrap();
+    server.block_until_done().await.unwrap();
 
     let auth_path = codex_home.join("auth.json");
     assert!(

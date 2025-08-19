@@ -27,7 +27,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
-use std::thread::JoinHandle;
 
 use super::onboarding_screen::StepState;
 // no additional imports
@@ -47,7 +46,7 @@ pub(crate) enum SignInState {
 pub(crate) struct ContinueInBrowserState {
     auth_url: String,
     shutdown_flag: Option<Arc<AtomicBool>>,
-    _login_wait_handle: Option<JoinHandle<()>>,
+    _login_wait_handle: Option<tokio::task::JoinHandle<()>>,
 }
 impl Drop for ContinueInBrowserState {
     fn drop(&mut self) {
@@ -288,11 +287,16 @@ impl AuthModeWidget {
             Ok(child) => {
                 let auth_url = child.auth_url.clone();
                 let shutdown_flag = child.shutdown_flag.clone();
+
+                let event_tx = self.event_tx.clone();
+                let join_handle = tokio::spawn(async move {
+                    spawn_completion_poller(child, event_tx).await;
+                });
                 self.sign_in_state =
                     SignInState::ChatGptContinueInBrowser(ContinueInBrowserState {
                         auth_url,
                         shutdown_flag: Some(shutdown_flag),
-                        _login_wait_handle: Some(self.spawn_completion_poller(child)),
+                        _login_wait_handle: Some(join_handle),
                     });
                 self.event_tx.send(AppEvent::RequestRedraw);
             }
@@ -313,19 +317,21 @@ impl AuthModeWidget {
         }
         self.event_tx.send(AppEvent::RequestRedraw);
     }
+}
 
-    fn spawn_completion_poller(&self, child: codex_login::LoginServer) -> JoinHandle<()> {
-        let event_tx = self.event_tx.clone();
-        std::thread::spawn(move || {
-            if let Ok(()) = child.block_until_done() {
-                event_tx.send(AppEvent::OnboardingAuthComplete(Ok(())));
-            } else {
-                event_tx.send(AppEvent::OnboardingAuthComplete(Err(
-                    "login failed".to_string()
-                )));
-            }
-        })
-    }
+async fn spawn_completion_poller(
+    child: codex_login::LoginServer,
+    event_tx: AppEventSender,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        if let Ok(()) = child.block_until_done().await {
+            event_tx.send(AppEvent::OnboardingAuthComplete(Ok(())));
+        } else {
+            event_tx.send(AppEvent::OnboardingAuthComplete(Err(
+                "login failed".to_string()
+            )));
+        }
+    })
 }
 
 impl StepStateProvider for AuthModeWidget {
