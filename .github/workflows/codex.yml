@@ -37,7 +37,7 @@ jobs:
       #    Codex is not going to run.
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@1.88
         with:
