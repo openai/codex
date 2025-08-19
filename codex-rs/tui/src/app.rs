@@ -637,3 +637,58 @@ fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool 
         LoginStatus::AuthMode(method) => method != config.preferred_auth_method,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codex_core::config::ConfigOverrides;
+    use codex_core::config::ConfigToml;
+    use codex_login::AuthMode;
+
+    fn make_config(preferred: AuthMode) -> Config {
+        let mut cfg = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            std::env::temp_dir(),
+        )
+        .expect("load default config");
+        cfg.preferred_auth_method = preferred;
+        cfg
+    }
+
+    #[test]
+    fn shows_login_when_not_authenticated() {
+        let cfg = make_config(AuthMode::ChatGPT);
+        assert!(should_show_login_screen(
+            LoginStatus::NotAuthenticated,
+            &cfg
+        ));
+    }
+
+    #[test]
+    fn shows_login_when_api_key_but_prefers_chatgpt() {
+        let cfg = make_config(AuthMode::ChatGPT);
+        assert!(should_show_login_screen(
+            LoginStatus::AuthMode(AuthMode::ApiKey),
+            &cfg
+        ))
+    }
+
+    #[test]
+    fn hides_login_when_api_key_and_prefers_api_key() {
+        let cfg = make_config(AuthMode::ApiKey);
+        assert!(!should_show_login_screen(
+            LoginStatus::AuthMode(AuthMode::ApiKey),
+            &cfg
+        ))
+    }
+
+    #[test]
+    fn hides_login_when_chatgpt_and_prefers_chatgpt() {
+        let cfg = make_config(AuthMode::ChatGPT);
+        assert!(!should_show_login_screen(
+            LoginStatus::AuthMode(AuthMode::ChatGPT),
+            &cfg
+        ))
+    }
+}
