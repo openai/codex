@@ -17,6 +17,7 @@ mod chat_composer;
 mod chat_composer_history;
 mod command_popup;
 mod file_search_popup;
+mod list_selection_view;
 mod popup_consts;
 mod scroll_state;
 mod selection_popup_common;
@@ -33,6 +34,8 @@ pub(crate) use chat_composer::ChatComposer;
 pub(crate) use chat_composer::InputResult;
 
 use approval_modal_view::ApprovalModalView;
+pub(crate) use list_selection_view::SelectionAction;
+pub(crate) use list_selection_view::SelectionItem;
 use status_indicator_view::StatusIndicatorView;
 
 /// Pane displayed in the lower half of the chat UI.
@@ -210,6 +213,26 @@ impl BottomPane<'_> {
                 self.status_view_active = false;
             }
         }
+    }
+
+    /// Show a generic list selection view with the provided items.
+    pub(crate) fn show_selection_view(
+        &mut self,
+        title: String,
+        subtitle: Option<String>,
+        footer_hint: Option<String>,
+        items: Vec<SelectionItem>,
+    ) {
+        let view = list_selection_view::ListSelectionView::new(
+            title,
+            subtitle,
+            footer_hint,
+            items,
+            self.app_event_tx.clone(),
+        );
+        self.active_view = Some(Box::new(view));
+        self.status_view_active = false;
+        self.request_redraw();
     }
 
     /// Update the live status text shown while a task is running.
