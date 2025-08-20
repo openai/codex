@@ -1,5 +1,6 @@
 use serde::Deserialize;
 use serde::Serialize;
+use std::path::PathBuf;
 use shlex;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
@@ -9,15 +10,15 @@ pub struct ZshShell {
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
-pub struct PowerShellShell {
+pub struct PowerShellConfig {
     exe: String, // Executable name or path, e.g. "pwsh" or "powershell.exe".
-    bash_exe_fallback: Option<String>, // In case the model generates a bash command.
+    bash_exe_fallback: Option<PathBuf>, // In case the model generates a bash command.
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub enum Shell {
     Zsh(ZshShell),
-    PowerShell(PowerShellShell),
+    PowerShell(PowerShellConfig),
     Unknown,
 }
 
@@ -45,19 +46,19 @@ impl Shell {
             Shell::PowerShell(ps) => {
                 // If model generated a bash command, prefer a detected bash fallback
                 if let Some(script) = strip_bash_lc(&command) {
-                    if let Some(bash) = &ps.bash_exe_fallback {
-                        return Some(vec![bash.clone(), "-lc".to_string(), script]);
-                    }
+                    return match &ps.bash_exe_fallback {
+                        Some(bash) => Some(vec![bash.to_string_lossy().to_string(), "-lc".to_string(), script]),
 
-                    // No bash fallback → run the script under PowerShell.
-                    // It will likely fail (except for some simple commands), but the error
-                    // should give a clue to the model to fix upon retry that it's running under PowerShell.
-                    return Some(vec![
-                        ps.exe.clone(),
-                        "-NoProfile".to_string(),
-                        "-Command".to_string(),
-                        script,
-                    ]);
+                        // No bash fallback → run the script under PowerShell.
+                        // It will likely fail (except for some simple commands), but the error
+                        // should give a clue to the model to fix upon retry that it's running under PowerShell.
+                        None => Some(vec![
+                            ps.exe.clone(),
+                            "-NoProfile".to_string(),
+                            "-Command".to_string(),
+                            script,
+                        ]),
+                    };
                 }
 
                 // Not a bash command. If model did not generate a PowerShell command,
@@ -70,15 +71,12 @@ impl Shell {
                     }
 
                     let joined = shlex::try_join(command.iter().map(|s| s.as_str())).ok();
-                    if let Some(joined) = joined {
-                        return Some(vec![
-                            ps.exe.clone(),
-                            "-NoProfile".to_string(),
-                            "-Command".to_string(),
-                            joined,
-                        ]);
-                    }
-                    return None;
+                    return joined.map(|arg| vec![
+                        ps.exe.clone(),
+                        "-NoProfile".to_string(),
+                        "-Command".to_string(),
+                        arg,
+                    ]);
                 }
 
                 // Model generated a PowerShell command. Run it.
@@ -174,18 +172,18 @@ pub async fn default_user_shell() -> Shell {
         .map(|o| o.status.success())
         .unwrap_or(false)
     {
-        Some("bash.exe".to_string())
+        which::which("bash.exe").ok()
     } else {
         None
     };
 
     if has_pwsh {
-        Shell::PowerShell(PowerShellShell {
+        Shell::PowerShell(PowerShellConfig {
             exe: "pwsh.exe".to_string(),
             bash_exe_fallback: bash_exe,
         })
     } else {
-        Shell::PowerShell(PowerShellShell {
+        Shell::PowerShell(PowerShellConfig {
             exe: "powershell.exe".to_string(),
             bash_exe_fallback: bash_exe,
         })
@@ -342,7 +340,7 @@ mod tests_windows {
     fn test_format_default_shell_invocation_powershell() {
         let cases = vec![
             (
-                Shell::PowerShell(PowerShellShell {
+                Shell::PowerShell(PowerShellConfig {
                     exe: "pwsh.exe".to_string(),
                     bash_exe_fallback: None,
                 }),
@@ -350,7 +348,7 @@ mod tests_windows {
                 vec!["pwsh.exe", "-NoProfile", "-Command", "echo hello"],
             ),
             (
-                Shell::PowerShell(PowerShellShell {
+                Shell::PowerShell(PowerShellConfig {
                     exe: "powershell.exe".to_string(),
                     bash_exe_fallback: None,
                 }),
@@ -358,17 +356,17 @@ mod tests_windows {
                 vec!["powershell.exe", "-NoProfile", "-Command", "echo hello"],
             ),
             (
-                Shell::PowerShell(PowerShellShell {
+                Shell::PowerShell(PowerShellConfig {
                     exe: "pwsh.exe".to_string(),
-                    bash_exe_fallback: Some("bash.exe".to_string()),
+                    bash_exe_fallback: Some(PathBuf::from("bash.exe")),
                 }),
                 vec!["bash", "-lc", "echo hello"],
                 vec!["bash.exe", "-lc", "echo hello"],
             ),
             (
-                Shell::PowerShell(PowerShellShell {
+                Shell::PowerShell(PowerShellConfig {
                     exe: "pwsh.exe".to_string(),
-                    bash_exe_fallback: Some("bash.exe".to_string()),
+                    bash_exe_fallback: Some(PathBuf::from("bash.exe")),
                 }),
                 vec![
                     "bash",
@@ -382,26 +380,26 @@ mod tests_windows {
                 ],
             ),
             (
-                Shell::PowerShell(PowerShellShell {
+                Shell::PowerShell(PowerShellConfig {
                     exe: "pwsh.exe".to_string(),
-                    bash_exe_fallback: Some("bash.exe".to_string()),
+                    bash_exe_fallback: Some(PathBuf::from("bash.exe")),
                 }),
                 vec!["echo", "hello"],
                 vec!["pwsh.exe", "-NoProfile", "-Command", "echo hello"],
             ),
             (
-                Shell::PowerShell(PowerShellShell {
+                Shell::PowerShell(PowerShellConfig {
                     exe: "pwsh.exe".to_string(),
-                    bash_exe_fallback: Some("bash.exe".to_string()),
+                    bash_exe_fallback: Some(PathBuf::from("bash.exe")),
                 }),
                 vec!["pwsh.exe", "-NoProfile", "-Command", "echo hello"],
                 vec!["pwsh.exe", "-NoProfile", "-Command", "echo hello"],
             ),
             (
                 // TODO (CODEX_2900): Handle escaping newlines for powershell invocation.
-                Shell::PowerShell(PowerShellShell {
+                Shell::PowerShell(PowerShellConfig {
                     exe: "powershell.exe".to_string(),
-                    bash_exe_fallback: Some("bash.exe".to_string()),
+                    bash_exe_fallback: Some(PathBuf::from("bash.exe")),
                 }),
                 vec![
                     "codex-mcp-server.exe",
