@@ -359,7 +359,7 @@ mod tests {
     use crate::app_event::AppEvent;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
-    use std::sync::mpsc::channel;
+    use tokio::sync::mpsc::unbounded_channel;
 
     fn exec_request() -> ApprovalRequest {
         ApprovalRequest::Exec {
@@ -371,7 +371,7 @@ mod tests {
 
     #[test]
     fn ctrl_c_on_modal_consumes_and_shows_quit_hint() {
-        let (tx_raw, _rx) = channel::<AppEvent>();
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,
@@ -389,7 +389,7 @@ mod tests {
 
     #[test]
     fn overlay_not_shown_above_approval_modal() {
-        let (tx_raw, _rx) = channel::<AppEvent>();
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,
@@ -418,7 +418,7 @@ mod tests {
 
     #[test]
     fn composer_not_shown_after_denied_if_task_running() {
-        let (tx_raw, rx) = channel::<AppEvent>();
+        let (tx_raw, rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx.clone(),
@@ -468,7 +468,7 @@ mod tests {
 
     #[test]
     fn status_indicator_visible_during_command_execution() {
-        let (tx_raw, _rx) = channel::<AppEvent>();
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,
@@ -500,7 +500,7 @@ mod tests {
 
     #[test]
     fn bottom_padding_present_for_status_view() {
-        let (tx_raw, _rx) = channel::<AppEvent>();
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,
@@ -552,7 +552,7 @@ mod tests {
 
     #[test]
     fn bottom_padding_shrinks_when_tiny() {
-        let (tx_raw, _rx) = channel::<AppEvent>();
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,

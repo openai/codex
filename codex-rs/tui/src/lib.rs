@@ -247,10 +247,11 @@ pub async fn run_main(
     }
 
     run_ratatui_app(cli, config, should_show_trust_screen)
+        .await
         .map_err(|err| std::io::Error::other(err.to_string()))
 }
 
-fn run_ratatui_app(
+async fn run_ratatui_app(
     cli: Cli,
     config: Config,
     should_show_trust_screen: bool,
@@ -275,7 +276,7 @@ fn run_ratatui_app(
     let Cli { prompt, images, .. } = cli;
     let mut app = App::new(config.clone(), prompt, images, should_show_trust_screen);
 
-    let app_result = app.run(&mut terminal);
+    let app_result = app.run(&mut terminal).await;
     let usage = app.token_usage();
 
     restore();

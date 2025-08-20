@@ -75,7 +75,7 @@ impl<'a> BottomPaneView<'a> for ApprovalModalView<'a> {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
-    use std::sync::mpsc::channel;
+    use tokio::sync::mpsc::unbounded_channel;
 
     fn make_exec_request() -> ApprovalRequest {
         ApprovalRequest::Exec {
@@ -87,15 +87,15 @@ mod tests {
 
     #[test]
     fn ctrl_c_aborts_and_clears_queue() {
-        let (tx_raw, _rx) = channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
         let first = make_exec_request();
         let mut view = ApprovalModalView::new(first, tx);
         view.enqueue_request(make_exec_request());
 
-        let (tx_raw2, _rx2) = channel::<AppEvent>();
+        let (tx2, _rx2) = unbounded_channel::<AppEvent>();
         let mut pane = BottomPane::new(super::super::BottomPaneParams {
-            app_event_tx: AppEventSender::new(tx_raw2),
+            app_event_tx: AppEventSender::new(tx2),
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
