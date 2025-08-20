@@ -302,27 +302,13 @@ Though using this option may also be necessary if you try to use Codex in enviro
 
 ## Approval presets
 
-Codex pairs the approval policy and sandbox mode into three easy presets you can select in the TUI (via `/permissions`). These are convenience shortcuts over `approval_policy` and `sandbox_mode`.
+Codex provides three main Approval Presets:
 
-- Read Only
-  - Approval: on‑request (default)
-  - Sandbox: read‑only (default)
-  - Behavior: Codex can read files and answer questions. Edits, running commands, and network access require approval.
+- Read Only: Codex can read files and answer questions; edits, running commands, and network access require approval.
+- Auto: Codex can read files, make edits, and run commands in the workspace without approval; asks for approval outside the workspace or for network access.
+- Full Access: Full disk and network access without prompts; extremely risky.
 
-- Auto
-  - Approval: on‑request
-  - Sandbox: workspace‑write (writes allowed only in the current workspace; `.git/` is kept read‑only when present)
-  - Behavior: Codex can read files, make edits, and run commands in the workspace without approval. Codex asks for approval to operate outside the workspace or to access the network. Network is blocked by default (enable via `[sandbox_workspace_write] network_access = true`).
-
-- Full Access
-  - Approval: never
-  - Sandbox: danger‑full‑access
-  - Behavior: No prompts; full disk and network access. Extremely risky.
-
-Reference defaults
-
-- Default approval policy (when unspecified): `on-request`.
-- Default sandbox mode (when unspecified): `read-only`.
+You can further customize how Codex runs at the command line using the `--ask-for-approval` and `--sandbox` options.
 
 ## mcp_servers
 
