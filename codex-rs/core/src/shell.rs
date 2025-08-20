@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use serde::Serialize;
-use std::path::PathBuf;
 use shlex;
+use std::path::PathBuf;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct ZshShell {
@@ -47,7 +47,11 @@ impl Shell {
                 // If model generated a bash command, prefer a detected bash fallback
                 if let Some(script) = strip_bash_lc(&command) {
                     return match &ps.bash_exe_fallback {
-                        Some(bash) => Some(vec![bash.to_string_lossy().to_string(), "-lc".to_string(), script]),
+                        Some(bash) => Some(vec![
+                            bash.to_string_lossy().to_string(),
+                            "-lc".to_string(),
+                            script,
+                        ]),
 
                         // No bash fallback → run the script under PowerShell.
                         // It will likely fail (except for some simple commands), but the error
@@ -71,12 +75,14 @@ impl Shell {
                     }
 
                     let joined = shlex::try_join(command.iter().map(|s| s.as_str())).ok();
-                    return joined.map(|arg| vec![
-                        ps.exe.clone(),
-                        "-NoProfile".to_string(),
-                        "-Command".to_string(),
-                        arg,
-                    ]);
+                    return joined.map(|arg| {
+                        vec![
+                            ps.exe.clone(),
+                            "-NoProfile".to_string(),
+                            "-Command".to_string(),
+                            arg,
+                        ]
+                    });
                 }
 
                 // Model generated a PowerShell command. Run it.
