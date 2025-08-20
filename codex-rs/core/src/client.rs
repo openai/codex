@@ -248,12 +248,10 @@ impl ModelClient {
                         .and_then(|v| v.to_str().ok())
                         .and_then(|s| s.parse::<u64>().ok());
 
-                    if status == StatusCode::UNAUTHORIZED {
-                        if let Some(a) = auth.as_ref() {
-                            let _ = a.refresh_token().await;
-                        }
-                        // Retry immediately with refreshed credentials.
-                        continue;
+                    if status == StatusCode::UNAUTHORIZED
+                        && let Some(a) = auth.as_ref()
+                    {
+                        let _ = a.refresh_token().await;
                     }
 
                     // The OpenAI Responses endpoint returns structured JSON bodies even for 4xx/5xx
@@ -263,7 +261,10 @@ impl ModelClient {
                     // exact error message (e.g. "Unknown parameter: 'input[0].metadata'"). The body is
                     // small and this branch only runs on error paths so the extra allocation is
                     // negligible.
-                    if !(status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error()) {
+                    if !(status == StatusCode::TOO_MANY_REQUESTS
+                        || status == StatusCode::UNAUTHORIZED
+                        || status.is_server_error())
+                    {
                         // Surface the error body to callers. Use `unwrap_or_default` per Clippy.
                         let body = res.text().await.unwrap_or_default();
                         return Err(CodexErr::UnexpectedStatus(status, body));
