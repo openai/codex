@@ -238,7 +238,7 @@ fn render_patch_details(changes: &HashMap<PathBuf, FileChange>) -> Vec<RtLine<'s
                         );
                         out.push(RtLine::from(vec![
                             "    ".into(),
-                            header.set_style(style_dim()),
+                            header.set_style(style_hunk_header()),
                         ]));
 
                         let mut old_ln = h.old_range().start();
@@ -304,8 +304,7 @@ fn push_wrapped_diff_line(
     // ("+"/"-" for inserts/deletes, or a space for context lines) so alignment
     // stays consistent across all diff lines.
     let gap_after_ln = SPACES_AFTER_LINE_NUMBER.saturating_sub(ln_str.len());
-    let first_prefix_cols = indent.len() + ln_str.len() + gap_after_ln;
-    let cont_prefix_cols = indent.len() + ln_str.len() + gap_after_ln;
+    let prefix_cols = indent.len() + ln_str.len() + gap_after_ln;
 
     let mut first = true;
     let (sign_opt, line_style) = match kind {
@@ -315,15 +314,12 @@ fn push_wrapped_diff_line(
     };
     let mut lines: Vec<RtLine<'static>> = Vec::new();
     while !remaining_text.is_empty() {
-        let prefix_cols = if first {
-            first_prefix_cols
-        } else {
-            cont_prefix_cols
-        };
         // Fit the content for the current terminal row:
         // compute how many columns are available after the prefix, then split
         // at a UTF-8 character boundary so this row's chunk fits exactly.
-        let available_content_cols = term_cols.saturating_sub(prefix_cols).max(1);
+        let available_content_cols = term_cols
+            .saturating_sub(if first { prefix_cols + 1 } else { prefix_cols })
+            .max(1);
         let split_at_byte_index = remaining_text
             .char_indices()
             .nth(available_content_cols)
@@ -383,6 +379,10 @@ fn style_add() -> Style {
 
 fn style_del() -> Style {
     Style::default().fg(Color::Red)
+}
+
+fn style_hunk_header() -> Style {
+    Style::default().fg(Color::Cyan)
 }
 
 #[cfg(test)]
