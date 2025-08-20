@@ -642,6 +642,15 @@ pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
         Line::from(vec!["🔌  ".into(), "MCP Tools".bold()]),
         Line::from(""),
         Line::from("  • No MCP servers configured.".italic()),
+        Line::from(vec![
+            "    See the ".into(),
+            Span::styled(
+                "\u{1b}]8;;https://github.com/openai/codex/blob/main/codex-rs/config.md#mcp_servers\u{7}MCP docs\u{1b}]8;;\u{7}",
+                Style::default().add_modifier(Modifier::UNDERLINED),
+            ),
+            " to configure them.".into(),
+        ])
+        .style(Style::default().add_modifier(Modifier::DIM)),
         Line::from(""),
     ];
 
