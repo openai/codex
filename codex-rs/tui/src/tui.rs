@@ -74,9 +74,10 @@ pub fn init() -> Result<Terminal> {
     // Instead of clearing the screen (which can drop scrollback in some terminals),
     // scroll existing lines up until the cursor reaches the top, then start at (0, 0).
     if let Ok((_x, y)) = cursor::position()
-        && y > 0 {
-            execute!(stdout(), ScrollUp(y))?;
-        }
+        && y > 0
+    {
+        execute!(stdout(), ScrollUp(y))?;
+    }
     execute!(stdout(), MoveTo(0, 0))?;
 
     let backend = CrosstermBackend::new(stdout());
