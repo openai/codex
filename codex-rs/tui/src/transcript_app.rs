@@ -8,6 +8,10 @@ use crossterm::terminal::EnterAlternateScreen;
 use crossterm::terminal::LeaveAlternateScreen;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use ratatui::style::Color;
+use ratatui::style::Style;
+use ratatui::style::Styled;
+use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
@@ -137,23 +141,90 @@ impl TranscriptApp {
 
     fn scroll_area(&self, area: Rect) -> Rect {
         let mut area = area;
-        area.y += 1;
-        area.height -= 1;
+        // Reserve 1 line for the header and 4 lines for the bottom status section. This matches the chat composer.
+        area.y = area.y.saturating_add(1);
+        area.height = area.height.saturating_sub(5);
         area
     }
 
     pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer) {
-        Line::from("/ ".repeat(area.width as usize / 2)).render_ref(area, buf);
-        Span::from("T R A N S C R I P T").render_ref(area, buf);
+        Span::from("/ ".repeat(area.width as usize / 2))
+            .dim()
+            .render_ref(area, buf);
+        Span::from("/ T R A N S C R I P T")
+            .dim()
+            .render_ref(area, buf);
 
-        let area = self.scroll_area(area);
-        let wrapped = insert_history::word_wrap_lines(&self.transcript_lines, area.width);
+        // Main content area (excludes header and bottom status section)
+        let content_area = self.scroll_area(area);
+        let wrapped = insert_history::word_wrap_lines(&self.transcript_lines, content_area.width);
+
+        // Clamp scroll offset to valid range
         self.scroll_offset = self
             .scroll_offset
-            .min(wrapped.len().saturating_sub(area.height as usize));
+            .min(wrapped.len().saturating_sub(content_area.height as usize));
         let start = self.scroll_offset;
-        let end = (start + area.height as usize).min(wrapped.len());
+        let end = (start + content_area.height as usize).min(wrapped.len());
         let page = &wrapped[start..end];
-        Paragraph::new(page.to_vec()).render_ref(area, buf);
+        Paragraph::new(page.to_vec()).render_ref(content_area, buf);
+
+        // Fill remaining visible lines (if any) with a leading '~' in the first column.
+        let visible = (end - start) as u16;
+        if content_area.height > visible {
+            let extra = content_area.height - visible;
+            for i in 0..extra {
+                let y = content_area.y.saturating_add(visible + i);
+                Span::from("~")
+                    .dim()
+                    .render_ref(Rect::new(content_area.x, y, 1, 1), buf);
+            }
+        }
+
+        // Bottom status section (4 lines): separator with % scrolled, then key hints (styled like chat composer)
+        let sep_y = content_area.bottom();
+        let sep_rect = Rect::new(area.x, sep_y, area.width, 1);
+        let hints_rect = Rect::new(area.x, sep_y + 1, area.width, 2);
+
+        // Separator line (dim)
+        Span::from("─".repeat(sep_rect.width as usize))
+            .dim()
+            .render_ref(sep_rect, buf);
+
+        // Scroll percentage (0-100%) aligned near the right edge
+        let max_scroll = wrapped.len().saturating_sub(content_area.height as usize);
+        let percent: u8 = if max_scroll == 0 {
+            100
+        } else {
+            (((self.scroll_offset.min(max_scroll)) as f32 / max_scroll as f32) * 100.0).round()
+                as u8
+        };
+        let pct_text = format!(" {percent}% ");
+        let pct_w = pct_text.chars().count() as u16;
+        let pct_x = sep_rect.x + sep_rect.width - pct_w - 1;
+        Span::from(pct_text)
+            .dim()
+            .render_ref(Rect::new(pct_x, sep_rect.y, pct_w, 1), buf);
+
+        let key_hint_style = Style::default().fg(Color::Cyan);
+
+        let hints1 = vec![
+            " ".into(),
+            "↑".set_style(key_hint_style),
+            "/".into(),
+            "↓".set_style(key_hint_style),
+            " scroll   ".into(),
+            "PgUp".set_style(key_hint_style),
+            "/".into(),
+            "PgDn".set_style(key_hint_style),
+            " page   ".into(),
+            "Home".set_style(key_hint_style),
+            "/".into(),
+            "End".set_style(key_hint_style),
+            " jump".into(),
+        ];
+
+        let hints2 = vec![" ".into(), "q".set_style(key_hint_style), " quit".into()];
+        Paragraph::new(vec![Line::from(hints1).dim(), Line::from(hints2).dim()])
+            .render_ref(hints_rect, buf);
     }
 }
