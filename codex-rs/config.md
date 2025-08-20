@@ -300,6 +300,16 @@ This is reasonable to use if Codex is running in an environment that provides it
 
 Though using this option may also be necessary if you try to use Codex in environments where its native sandboxing mechanisms are unsupported, such as older Linux kernels or on Windows.
 
+## Approval presets
+
+Codex provides three main Approval Presets:
+
+- Read Only: Codex can read files and answer questions; edits, running commands, and network access require approval.
+- Auto: Codex can read files, make edits, and run commands in the workspace without approval; asks for approval outside the workspace or for network access.
+- Full Access: Full disk and network access without prompts; extremely risky.
+
+You can further customize how Codex runs at the command line using the `--ask-for-approval` and `--sandbox` options.
+
 ## mcp_servers
 
 Defines the list of MCP servers that Codex can consult for tool use. Currently, only servers that are launched by executing a program that communicate over stdio are supported. For servers that use the SSE transport, consider an adapter like [mcp-proxy](https://github.com/sparfenyuk/mcp-proxy).

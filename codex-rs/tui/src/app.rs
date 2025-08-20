@@ -387,6 +387,11 @@ impl App<'_> {
                             widget.open_model_popup();
                         }
                     }
+                    SlashCommand::Approvals => {
+                        if let AppState::Chat { widget } = &mut self.app_state {
+                            widget.open_approvals_popup();
+                        }
+                    }
                     SlashCommand::Quit => {
                         break;
                     }
@@ -512,6 +517,16 @@ impl App<'_> {
                 AppEvent::UpdateModel(model) => {
                     if let AppState::Chat { widget } = &mut self.app_state {
                         widget.set_model(model);
+                    }
+                }
+                AppEvent::UpdateAskForApprovalPolicy(policy) => {
+                    if let AppState::Chat { widget } = &mut self.app_state {
+                        widget.set_approval_policy(policy);
+                    }
+                }
+                AppEvent::UpdateSandboxPolicy(policy) => {
+                    if let AppState::Chat { widget } = &mut self.app_state {
+                        widget.set_sandbox_policy(policy);
                     }
                 }
             }
