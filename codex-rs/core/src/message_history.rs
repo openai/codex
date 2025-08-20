@@ -125,16 +125,18 @@ pub(crate) async fn append_entry(text: &str, session_id: &Uuid, config: &Config)
 /// times if the lock is currently held by another process. This prevents a
 /// potential indefinite wait while still giving other writers some time to
 /// finish their operation.
-async fn acquire_exclusive_lock_with_retry(file: &std::fs::File) -> Result<()> {
+async fn acquire_exclusive_lock_with_retry(file: &File) -> Result<()> {
     use tokio::time::sleep;
 
     for _ in 0..MAX_RETRIES {
-        match fs2::FileExt::try_lock_exclusive(file) {
+        match file.try_lock() {
             Ok(()) => return Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                sleep(RETRY_SLEEP).await;
-            }
-            Err(e) => return Err(e),
+            Err(e) => match e {
+                std::fs::TryLockError::WouldBlock => {
+                    sleep(RETRY_SLEEP).await;
+                }
+                other => return Err(other.into()),
+            },
         }
     }
 
@@ -259,12 +261,14 @@ pub(crate) fn lookup(log_id: u64, offset: usize, config: &Config) -> Option<Hist
 #[cfg(unix)]
 fn acquire_shared_lock_with_retry(file: &File) -> Result<()> {
     for _ in 0..MAX_RETRIES {
-        match fs2::FileExt::try_lock_shared(file) {
+        match file.try_lock_shared() {
             Ok(()) => return Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                std::thread::sleep(RETRY_SLEEP);
-            }
-            Err(e) => return Err(e),
+            Err(e) => match e {
+                std::fs::TryLockError::WouldBlock => {
+                    std::thread::sleep(RETRY_SLEEP);
+                }
+                other => return Err(other.into()),
+            },
         }
     }
 

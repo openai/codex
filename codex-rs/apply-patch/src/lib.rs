@@ -415,12 +415,12 @@ fn apply_hunks_to_files(hunks: &[Hunk]) -> anyhow::Result<AffectedPaths> {
     for hunk in hunks {
         match hunk {
             Hunk::AddFile { path, contents } => {
-                if let Some(parent) = path.parent() {
-                    if !parent.as_os_str().is_empty() {
-                        std::fs::create_dir_all(parent).with_context(|| {
-                            format!("Failed to create parent directories for {}", path.display())
-                        })?;
-                    }
+                if let Some(parent) = path.parent()
+                    && !parent.as_os_str().is_empty()
+                {
+                    std::fs::create_dir_all(parent).with_context(|| {
+                        format!("Failed to create parent directories for {}", path.display())
+                    })?;
                 }
                 std::fs::write(path, contents)
                     .with_context(|| format!("Failed to write file {}", path.display()))?;
@@ -439,15 +439,12 @@ fn apply_hunks_to_files(hunks: &[Hunk]) -> anyhow::Result<AffectedPaths> {
                 let AppliedPatch { new_contents, .. } =
                     derive_new_contents_from_chunks(path, chunks)?;
                 if let Some(dest) = move_path {
-                    if let Some(parent) = dest.parent() {
-                        if !parent.as_os_str().is_empty() {
-                            std::fs::create_dir_all(parent).with_context(|| {
-                                format!(
-                                    "Failed to create parent directories for {}",
-                                    dest.display()
-                                )
-                            })?;
-                        }
+                    if let Some(parent) = dest.parent()
+                        && !parent.as_os_str().is_empty()
+                    {
+                        std::fs::create_dir_all(parent).with_context(|| {
+                            format!("Failed to create parent directories for {}", dest.display())
+                        })?;
                     }
                     std::fs::write(dest, new_contents)
                         .with_context(|| format!("Failed to write file {}", dest.display()))?;
@@ -529,9 +526,12 @@ fn compute_replacements(
         // If a chunk has a `change_context`, we use seek_sequence to find it, then
         // adjust our `line_index` to continue from there.
         if let Some(ctx_line) = &chunk.change_context {
-            if let Some(idx) =
-                seek_sequence::seek_sequence(original_lines, &[ctx_line.clone()], line_index, false)
-            {
+            if let Some(idx) = seek_sequence::seek_sequence(
+                original_lines,
+                std::slice::from_ref(ctx_line),
+                line_index,
+                false,
+            ) {
                 line_index = idx + 1;
             } else {
                 return Err(ApplyPatchError::ComputeReplacements(format!(

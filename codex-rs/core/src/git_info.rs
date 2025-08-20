@@ -60,31 +60,28 @@ pub async fn collect_git_info(cwd: &Path) -> Option<GitInfo> {
     // Process commit hash
     if let Some(output) = commit_result
         && output.status.success()
+        && let Ok(hash) = String::from_utf8(output.stdout)
     {
-        if let Ok(hash) = String::from_utf8(output.stdout) {
-            git_info.commit_hash = Some(hash.trim().to_string());
-        }
+        git_info.commit_hash = Some(hash.trim().to_string());
     }
 
     // Process branch name
     if let Some(output) = branch_result
         && output.status.success()
+        && let Ok(branch) = String::from_utf8(output.stdout)
     {
-        if let Ok(branch) = String::from_utf8(output.stdout) {
-            let branch = branch.trim();
-            if branch != "HEAD" {
-                git_info.branch = Some(branch.to_string());
-            }
+        let branch = branch.trim();
+        if branch != "HEAD" {
+            git_info.branch = Some(branch.to_string());
         }
     }
 
     // Process repository URL
     if let Some(output) = url_result
         && output.status.success()
+        && let Ok(url) = String::from_utf8(output.stdout)
     {
-        if let Ok(url) = String::from_utf8(output.stdout) {
-            git_info.repository_url = Some(url.trim().to_string());
-        }
+        git_info.repository_url = Some(url.trim().to_string());
     }
 
     Some(git_info)

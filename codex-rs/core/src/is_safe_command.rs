@@ -12,20 +12,17 @@ pub fn is_known_safe_command(command: &[String]) -> bool {
     // introduce side effects ( "&&", "||", ";", and "|" ). If every
     // individual command in the script is itself a known‑safe command, then
     // the composite expression is considered safe.
-    if let [bash, flag, script] = command {
-        if bash == "bash" && flag == "-lc" {
-            if let Some(tree) = try_parse_bash(script) {
-                if let Some(all_commands) = try_parse_word_only_commands_sequence(&tree, script) {
-                    if !all_commands.is_empty()
-                        && all_commands
-                            .iter()
-                            .all(|cmd| is_safe_to_call_with_exec(cmd))
-                    {
-                        return true;
-                    }
-                }
-            }
-        }
+    if let [bash, flag, script] = command
+        && bash == "bash"
+        && flag == "-lc"
+        && let Some(tree) = try_parse_bash(script)
+        && let Some(all_commands) = try_parse_word_only_commands_sequence(&tree, script)
+        && !all_commands.is_empty()
+        && all_commands
+            .iter()
+            .all(|cmd| is_safe_to_call_with_exec(cmd))
+    {
+        return true;
     }
 
     false

@@ -8,6 +8,7 @@ use ratatui::widgets::WidgetRef;
 
 use codex_login::AuthMode;
 
+use crate::LoginStatus;
 use crate::app::ChatWidgetArgs;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -53,8 +54,9 @@ pub(crate) struct OnboardingScreenArgs {
     pub chat_widget_args: ChatWidgetArgs,
     pub codex_home: PathBuf,
     pub cwd: PathBuf,
-    pub show_login_screen: bool,
     pub show_trust_screen: bool,
+    pub show_login_screen: bool,
+    pub login_status: LoginStatus,
 }
 
 impl OnboardingScreen {
@@ -64,11 +66,12 @@ impl OnboardingScreen {
             chat_widget_args,
             codex_home,
             cwd,
-            show_login_screen,
             show_trust_screen,
+            show_login_screen,
+            login_status,
         } = args;
         let mut steps: Vec<Step> = vec![Step::Welcome(WelcomeWidget {
-            is_logged_in: !show_login_screen,
+            is_logged_in: !matches!(login_status, LoginStatus::NotAuthenticated),
         })];
         if show_login_screen {
             steps.push(Step::Auth(AuthModeWidget {
@@ -77,6 +80,8 @@ impl OnboardingScreen {
                 error: None,
                 sign_in_state: SignInState::PickMode,
                 codex_home: codex_home.clone(),
+                login_status,
+                preferred_auth_method: chat_widget_args.config.preferred_auth_method,
             }))
         }
         let is_git_repo = is_inside_git_repo(&cwd);

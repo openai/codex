@@ -11,6 +11,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 use mcp_types::CallToolResult;
+use mcp_types::Tool as McpTool;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_bytes::ByteBuf;
@@ -135,6 +136,10 @@ pub enum Op {
 
     /// Request a single history entry identified by `log_id` + `offset`.
     GetHistoryEntryRequest { offset: usize, log_id: u64 },
+
+    /// Request the list of MCP tools available across all configured servers.
+    /// Reply is delivered via `EventMsg::McpListToolsResponse`.
+    ListMcpTools,
 
     /// Request the agent to summarize the current conversation context.
     /// The agent will use its existing context (either conversation history or previous response id)
@@ -453,6 +458,9 @@ pub enum EventMsg {
     /// Response to GetHistoryEntryRequest.
     GetHistoryEntryResponse(GetHistoryEntryResponseEvent),
 
+    /// List of MCP tools available to the agent.
+    McpListToolsResponse(McpListToolsResponseEvent),
+
     PlanUpdate(UpdatePlanArgs),
 
     TurnAborted(TurnAbortedEvent),
@@ -507,6 +515,33 @@ impl TokenUsage {
     pub fn tokens_in_context_window(&self) -> u64 {
         self.total_tokens
             .saturating_sub(self.reasoning_output_tokens.unwrap_or(0))
+    }
+
+    /// Estimate the remaining user-controllable percentage of the model's context window.
+    ///
+    /// `context_window` is the total size of the model's context window.
+    /// `baseline_used_tokens` should capture tokens that are always present in
+    /// the context (e.g., system prompt and fixed tool instructions) so that
+    /// the percentage reflects the portion the user can influence.
+    ///
+    /// This normalizes both the numerator and denominator by subtracting the
+    /// baseline, so immediately after the first prompt the UI shows 100% left
+    /// and trends toward 0% as the user fills the effective window.
+    pub fn percent_of_context_window_remaining(
+        &self,
+        context_window: u64,
+        baseline_used_tokens: u64,
+    ) -> u8 {
+        if context_window <= baseline_used_tokens {
+            return 0;
+        }
+
+        let effective_window = context_window - baseline_used_tokens;
+        let used = self
+            .tokens_in_context_window()
+            .saturating_sub(baseline_used_tokens);
+        let remaining = effective_window.saturating_sub(used);
+        ((remaining as f32 / effective_window as f32) * 100.0).clamp(0.0, 100.0) as u8
     }
 }
 
@@ -720,6 +755,13 @@ pub struct GetHistoryEntryResponseEvent {
     /// The entry at the requested offset, if available and parseable.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entry: Option<HistoryEntry>,
+}
+
+/// Response payload for `Op::ListMcpTools`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct McpListToolsResponseEvent {
+    /// Fully qualified tool name -> tool definition.
+    pub tools: std::collections::HashMap<String, McpTool>,
 }
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]

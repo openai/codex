@@ -285,7 +285,7 @@ impl UserApprovalWidget<'_> {
                                 "✔ ".fg(Color::Green),
                                 "You ".into(),
                                 "approved".bold(),
-                                "codex to run ".into(),
+                                " codex to run ".into(),
                             ],
                             cmd,
                             vec![" every time this session".bold()],
