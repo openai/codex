@@ -209,7 +209,8 @@ impl IntoOutgoingNotification for OutgoingNotification {
 
 impl IntoOutgoingNotification for CodexServerNotification {
     fn into_outgoing_notification(self) -> OutgoingNotification {
-        let method = self.to_string();
+        // Prefix all Codex server notifications with the MCP event namespace.
+        let method = format!("codex/event/{}", self);
         let params = match &self {
             CodexServerNotification::AuthStatusChange(p) => serde_json::to_value(p).ok(),
             CodexServerNotification::LoginChatGptComplete(p) => serde_json::to_value(p).ok(),
