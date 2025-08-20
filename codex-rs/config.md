@@ -302,28 +302,22 @@ Though using this option may also be necessary if you try to use Codex in enviro
 
 ## Permissions presets
 
-Codex pairs the approval policy and sandbox mode into four easy presets you can select in the TUI (via `/permissions`). These are convenience shortcuts over `approval_policy` and `sandbox_mode`.
+Codex pairs the approval policy and sandbox mode into three easy presets you can select in the TUI (via `/permissions`). These are convenience shortcuts over `approval_policy` and `sandbox_mode`.
 
 - Read Only
   - Approval: on‑request (default)
   - Sandbox: read‑only (default)
-  - Behavior: full‑disk reads allowed; writes blocked; outbound network blocked.
-  - Notes: This is the default for untrusted directories and the safest starting point.
+  - Behavior: Codex can read files and answer questions. Edits, running commands, and network access require approval.
 
-- Guarded Write
+- Auto
   - Approval: on‑request
   - Sandbox: workspace‑write (writes allowed only in the current workspace; `.git/` is kept read‑only when present)
-  - Network: blocked by default; can be enabled with `[sandbox_workspace_write] network_access = true`.
+  - Behavior: Codex can read files, make edits, and run commands in the workspace without approval. Codex asks for approval to operate outside the workspace or to access the network. Network is blocked by default (enable via `[sandbox_workspace_write] network_access = true`).
 
-- Auto Write
-  - Approval: on‑failure
-  - Sandbox: workspace‑write
-  - Behavior: run without asking first; if a sandboxed command fails, Codex will ask to retry without the sandbox. Network is blocked by default.
-
-- YOLO
+- Full Access
   - Approval: never
   - Sandbox: danger‑full‑access
-  - Behavior: no prompts; full disk and network access. Extremely risky.
+  - Behavior: No prompts; full disk and network access. Extremely risky.
 
 Reference defaults
 
