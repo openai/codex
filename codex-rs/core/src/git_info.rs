@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::Path;
 
 use serde::Deserialize;
@@ -231,12 +232,48 @@ async fn branch_ancestry(cwd: &Path) -> Option<Vec<String>> {
     let default_branch = get_default_branch(cwd).await;
 
     let mut ancestry: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
     if let Some(cb) = current_branch.clone() {
+        seen.insert(cb.clone());
         ancestry.push(cb);
     }
     if let Some(db) = default_branch {
-        if ancestry.first().map(|b| b != &db).unwrap_or(true) {
+        if !seen.contains(&db) {
+            seen.insert(db.clone());
             ancestry.push(db);
+        }
+    }
+
+    // Expand candidates: include any remote branches that already contain HEAD.
+    // This addresses cases where we're on a new local-only branch forked from a
+    // remote branch that isn't the repository default. We prioritize remotes in
+    // the order returned by get_git_remotes (origin first).
+    let remotes = get_git_remotes(cwd).await.unwrap_or_default();
+    for remote in remotes {
+        if let Some(output) = run_git_command_with_timeout(
+            &[
+                "for-each-ref",
+                "--format=%(refname:short)",
+                "--contains=HEAD",
+                &format!("refs/remotes/{remote}"),
+            ],
+            cwd,
+        )
+        .await
+            && output.status.success()
+        {
+            if let Ok(text) = String::from_utf8(output.stdout) {
+                for line in text.lines() {
+                    let short = line.trim();
+                    // Expect format like: "origin/feature"; extract the branch path after "remote/"
+                    if let Some(stripped) = short.strip_prefix(&format!("{remote}/")) {
+                        if !stripped.is_empty() && !seen.contains(stripped) {
+                            seen.insert(stripped.to_string());
+                            ancestry.push(stripped.to_string());
+                        }
+                    }
+                }
+            }
         }
     }
 
