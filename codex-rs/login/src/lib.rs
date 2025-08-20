@@ -16,7 +16,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
-// removed tracing-based logs
 
 pub use crate::server::LoginServer;
 pub use crate::server::ServerOptions;
