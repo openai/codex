@@ -1,6 +1,8 @@
 use std::collections::HashSet;
 use std::path::Path;
 
+use codex_protocol::mcp_protocol::GitSha;
+use futures::future::join_all;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio::process::Command;
@@ -23,15 +25,6 @@ pub struct GitInfo {
     /// Repository URL (if available from remote)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repository_url: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct GitSha(String);
-
-impl GitSha {
-    fn new(sha: &str) -> Self {
-        Self(sha.to_string())
-    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -408,19 +401,21 @@ async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
             .ok()?
             .lines()
             .map(|s| s.to_string())
+            .filter(|s| !s.is_empty())
             .collect();
-        for file in untracked {
-            if file.is_empty() {
-                continue;
-            }
-            if let Some(extra) = run_git_command_with_timeout(
-                &["diff", "--binary", "--no-index", "/dev/null", &file],
-                cwd,
-            )
-            .await
-            {
-                let exit_ok = extra.status.code().is_some_and(|c| c == 0 || c == 1);
-                if exit_ok && let Ok(s) = String::from_utf8(extra.stdout) {
+
+        if !untracked.is_empty() {
+            let futures_iter = untracked.into_iter().map(|file| async move {
+                let file_owned = file;
+                let args_vec: Vec<&str> =
+                    vec!["diff", "--binary", "--no-index", "/dev/null", &file_owned];
+                run_git_command_with_timeout(&args_vec, cwd).await
+            });
+            let results = join_all(futures_iter).await;
+            for extra in results.into_iter().flatten() {
+                if extra.status.code().is_some_and(|c| c == 0 || c == 1)
+                    && let Ok(s) = String::from_utf8(extra.stdout)
+                {
                     diff.push_str(&s);
                 }
             }

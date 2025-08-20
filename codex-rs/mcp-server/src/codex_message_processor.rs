@@ -14,6 +14,7 @@ use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ReviewDecision;
+use codex_protocol::mcp_protocol::GitDiffToRemoteResponse;
 use mcp_types::JSONRPCErrorError;
 use mcp_types::RequestId;
 use tokio::sync::Mutex;
@@ -523,7 +524,11 @@ impl CodexMessageProcessor {
         let diff = git_diff_to_remote(&cwd).await;
         match diff {
             Some(value) => {
-                self.outgoing.send_response(request_id, value).await;
+                let response = GitDiffToRemoteResponse {
+                    sha: value.sha,
+                    diff: value.diff,
+                };
+                self.outgoing.send_response(request_id, response).await;
             }
             None => {
                 let error = JSONRPCErrorError {
