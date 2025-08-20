@@ -60,10 +60,10 @@ mod agent;
 use self::agent::spawn_agent;
 use crate::streaming::controller::AppEventHistorySink;
 use crate::streaming::controller::StreamController;
+use codex_common::approvals_presets::ApprovalsPreset;
+use codex_common::approvals_presets::builtin_approvals_presets;
 use codex_common::model_presets::ModelPreset;
 use codex_common::model_presets::builtin_model_presets;
-use codex_common::permission_presets::PermissionPreset;
-use codex_common::permission_presets::builtin_permission_presets;
 use codex_core::ConversationManager;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
@@ -742,7 +742,7 @@ impl ChatWidget<'_> {
         let current_approval = self.config.approval_policy;
         let current_sandbox = self.config.sandbox_policy.clone();
         let mut items: Vec<SelectionItem> = Vec::new();
-        let presets: Vec<PermissionPreset> = builtin_permission_presets();
+        let presets: Vec<ApprovalsPreset> = builtin_approvals_presets();
         for preset in presets.into_iter() {
             let is_current =
                 current_approval == preset.approval && current_sandbox == preset.sandbox;

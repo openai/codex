@@ -3,7 +3,7 @@ use codex_core::protocol::SandboxPolicy;
 
 /// A simple preset pairing an approval policy with a sandbox policy.
 #[derive(Debug, Clone)]
-pub struct PermissionPreset {
+pub struct ApprovalsPreset {
     /// Stable identifier for the preset.
     pub id: &'static str,
     /// Display label shown in UIs.
@@ -19,23 +19,23 @@ pub struct PermissionPreset {
 /// Built-in list of permission presets that pair approval and sandbox policy.
 ///
 /// Keep this UI-agnostic so it can be reused by both TUI and MCP server.
-pub fn builtin_permission_presets() -> Vec<PermissionPreset> {
+pub fn builtin_approvals_presets() -> Vec<ApprovalsPreset> {
     vec![
-        PermissionPreset {
+        ApprovalsPreset {
             id: "read-only",
             label: "Read Only",
             description: "Codex can read files and answer questions. Codex requires approval to make edits, run commands, or access network.",
             approval: AskForApproval::OnRequest,
             sandbox: SandboxPolicy::ReadOnly,
         },
-        PermissionPreset {
+        ApprovalsPreset {
             id: "auto",
             label: "Auto",
             description: "Codex can read files, make edits, and run commands in the workspace. Codex requires approval to work outside the workspace or access network.",
             approval: AskForApproval::OnRequest,
             sandbox: SandboxPolicy::new_workspace_write_policy(),
         },
-        PermissionPreset {
+        ApprovalsPreset {
             id: "full-access",
             label: "Full Access",
             description: "Codex can read files, make edits, and run commands with network access, without approval. Exercise caution.",
