@@ -374,10 +374,10 @@ impl Session {
 
         // Join all independent futures.
         // If we have ChatGPT auth, start background token auto-refresh.
-        if let Some(ref a) = auth {
-            if matches!(a.mode, AuthMode::ChatGPT) {
-                a.spawn_auto_refresh();
-            }
+        if let Some(ref a) = auth
+            && matches!(a.mode, AuthMode::ChatGPT)
+        {
+            a.spawn_auto_refresh();
         }
 
         let (rollout_res, mcp_res, default_shell, (history_log_id, history_entry_count)) =
