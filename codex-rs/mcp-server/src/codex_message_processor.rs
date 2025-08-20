@@ -14,6 +14,7 @@ use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ReviewDecision;
+use codex_protocol::mcp_protocol::AuthMode;
 use codex_protocol::mcp_protocol::GitDiffToRemoteResponse;
 use mcp_types::JSONRPCErrorError;
 use mcp_types::RequestId;
@@ -60,7 +61,6 @@ use codex_protocol::mcp_protocol::SendUserMessageResponse;
 use codex_protocol::mcp_protocol::SendUserTurnParams;
 use codex_protocol::mcp_protocol::SendUserTurnResponse;
 use codex_protocol::mcp_protocol::ServerNotification;
-use codex_protocol::protocol::AuthMethod;
 use serde::Serialize;
 use toml::Value as TomlValue; // for clarity where overrides stored
 
@@ -231,7 +231,7 @@ impl CodexMessageProcessor {
                     // Send an auth status change notification.
                     if success {
                         let payload = AuthStatusChangeNotification {
-                            auth_method: Some(AuthMethod::ChatGPT),
+                            auth_method: Some(AuthMode::ChatGPT),
                         };
                         send_server_notification(
                             &outgoing_clone,
@@ -359,14 +359,14 @@ impl CodexMessageProcessor {
             }
         };
 
-        let preferred_auth_method: AuthMethod = config.preferred_auth_method.into();
+        let preferred_auth_method: AuthMode = config.preferred_auth_method;
         let response =
             match CodexAuth::from_codex_home(&config.codex_home, config.preferred_auth_method) {
                 Ok(Some(auth)) => {
                     // Verify that the current auth mode has a valid, non-empty token.
                     // If token acquisition fails or is empty, treat as unauthenticated.
                     let reported_auth_method = match auth.get_token().await {
-                        Ok(token) if !token.is_empty() => Some(auth.mode.into()),
+                        Ok(token) if !token.is_empty() => Some(auth.mode),
                         Ok(_) => None, // Empty token
                         Err(err) => {
                             tracing::warn!("failed to get token for auth status: {err}");

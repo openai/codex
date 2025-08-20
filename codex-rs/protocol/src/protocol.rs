@@ -859,28 +859,3 @@ mod tests {
         );
     }
 }
-
-#[derive(Clone, Debug, PartialEq, Copy, Eq, Serialize, Deserialize, TS)]
-#[serde(rename_all = "lowercase")]
-pub enum AuthMethod {
-    ApiKey,
-    ChatGPT,
-}
-
-impl From<codex_login::AuthMode> for AuthMethod {
-    fn from(value: codex_login::AuthMode) -> Self {
-        match value {
-            codex_login::AuthMode::ApiKey => AuthMethod::ApiKey,
-            codex_login::AuthMode::ChatGPT => AuthMethod::ChatGPT,
-        }
-    }
-}
-
-impl From<AuthMethod> for codex_login::AuthMode {
-    fn from(value: AuthMethod) -> Self {
-        match value {
-            AuthMethod::ApiKey => codex_login::AuthMode::ApiKey,
-            AuthMethod::ChatGPT => codex_login::AuthMode::ChatGPT,
-        }
-    }
-}

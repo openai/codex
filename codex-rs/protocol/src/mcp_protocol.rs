@@ -6,7 +6,6 @@ use crate::config_types::ReasoningEffort;
 use crate::config_types::ReasoningSummary;
 use crate::config_types::SandboxMode;
 use crate::protocol::AskForApproval;
-use crate::protocol::AuthMethod;
 use crate::protocol::FileChange;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
@@ -36,6 +35,14 @@ impl GitSha {
     pub fn new(sha: &str) -> Self {
         Self(sha.to_string())
     }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, TS)]
+#[serde(rename_all = "lowercase")]
+#[ts(export)]
+pub enum AuthMode {
+    ApiKey,
+    ChatGPT,
 }
 
 /// Request from the client to the server.
@@ -207,8 +214,8 @@ pub struct GetAuthStatusParams {
 #[serde(rename_all = "camelCase")]
 pub struct GetAuthStatusResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub auth_method: Option<AuthMethod>,
-    pub preferred_auth_method: AuthMethod,
+    pub auth_method: Option<AuthMode>,
+    pub preferred_auth_method: AuthMode,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
@@ -357,7 +364,7 @@ pub struct LoginChatGptCompleteNotification {
 pub struct AuthStatusChangeNotification {
     /// Current authentication method; omitted if signed out.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub auth_method: Option<AuthMethod>,
+    pub auth_method: Option<AuthMode>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS, Display)]

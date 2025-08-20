@@ -29,13 +29,7 @@ mod token_data;
 
 pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 pub const OPENAI_API_KEY_ENV_VAR: &str = "OPENAI_API_KEY";
-
-#[derive(Clone, Debug, PartialEq, Copy, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum AuthMode {
-    ApiKey,
-    ChatGPT,
-}
+pub use codex_protocol::mcp_protocol::AuthMode;
 
 #[derive(Debug, Clone)]
 pub struct CodexAuth {

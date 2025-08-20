@@ -822,6 +822,7 @@ version = "0.0.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
+ "codex-protocol",
  "pretty_assertions",
  "rand 0.8.5",
  "reqwest",
@@ -900,7 +901,6 @@ dependencies = [
 name = "codex-protocol"
 version = "0.0.0"
 dependencies = [
- "codex-login",
  "mcp-types",
  "pretty_assertions",
  "serde",
