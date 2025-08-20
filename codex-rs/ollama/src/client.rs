@@ -166,9 +166,8 @@ impl OllamaClient {
                                         yield PullEvent::Error(err_msg.to_string());
                                         return;
                                     }
-                                    if let Some(status) = value.get("status").and_then(|s| s.as_str()) {
-                                        if status == "success" { yield PullEvent::Success; return; }
-                                    }
+                                    if let Some(status) = value.get("status").and_then(|s| s.as_str())
+                                        && status == "success" { yield PullEvent::Success; return; }
                                 }
                             }
                         }

@@ -208,11 +208,7 @@ impl ModelClient {
                 req_builder = req_builder.header("chatgpt-account-id", account_id);
             }
 
-            let originator = self
-                .config
-                .internal_originator
-                .as_deref()
-                .unwrap_or("codex_cli_rs");
+            let originator = &self.config.responses_originator_header;
             req_builder = req_builder.header("originator", originator);
             req_builder = req_builder.header("User-Agent", get_codex_user_agent(Some(originator)));
 
@@ -251,6 +247,14 @@ impl ModelClient {
                         .get(reqwest::header::RETRY_AFTER)
                         .and_then(|v| v.to_str().ok())
                         .and_then(|s| s.parse::<u64>().ok());
+
+                    if status == StatusCode::UNAUTHORIZED {
+                        if let Some(a) = auth.as_ref() {
+                            let _ = a.refresh_token().await;
+                        }
+                        // Retry immediately with refreshed credentials.
+                        continue;
+                    }
 
                     // The OpenAI Responses endpoint returns structured JSON bodies even for 4xx/5xx
                     // errors. When we bubble early with only the HTTP status the caller sees an opaque

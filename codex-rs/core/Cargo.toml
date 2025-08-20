@@ -23,7 +23,6 @@ codex-protocol = { path = "../protocol" }
 dirs = "6"
 env-flags = "0.1.1"
 eventsource-stream = "0.2.3"
-fs2 = "0.4.3"
 futures = "0.3"
 libc = "0.2.175"
 mcp-types = { path = "../mcp-types" }

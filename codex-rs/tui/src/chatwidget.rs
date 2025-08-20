@@ -60,9 +60,13 @@ mod agent;
 use self::agent::spawn_agent;
 use crate::streaming::controller::AppEventHistorySink;
 use crate::streaming::controller::StreamController;
+use codex_common::approval_presets::ApprovalPreset;
+use codex_common::approval_presets::builtin_approval_presets;
 use codex_common::model_presets::ModelPreset;
 use codex_common::model_presets::builtin_model_presets;
 use codex_core::ConversationManager;
+use codex_core::protocol::AskForApproval;
+use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_file_search::FileMatch;
 use uuid::Uuid;
@@ -731,6 +735,57 @@ impl ChatWidget<'_> {
             Some("Press Enter to confirm or Esc to go back".to_string()),
             items,
         );
+    }
+
+    /// Open a popup to choose the approvals mode (ask for approval policy + sandbox policy).
+    pub(crate) fn open_approvals_popup(&mut self) {
+        let current_approval = self.config.approval_policy;
+        let current_sandbox = self.config.sandbox_policy.clone();
+        let mut items: Vec<SelectionItem> = Vec::new();
+        let presets: Vec<ApprovalPreset> = builtin_approval_presets();
+        for preset in presets.into_iter() {
+            let is_current =
+                current_approval == preset.approval && current_sandbox == preset.sandbox;
+            let approval = preset.approval;
+            let sandbox = preset.sandbox.clone();
+            let name = preset.label.to_string();
+            let description = Some(preset.description.to_string());
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                    cwd: None,
+                    approval_policy: Some(approval),
+                    sandbox_policy: Some(sandbox.clone()),
+                    model: None,
+                    effort: None,
+                    summary: None,
+                }));
+                tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
+                tx.send(AppEvent::UpdateSandboxPolicy(sandbox.clone()));
+            })];
+            items.push(SelectionItem {
+                name,
+                description,
+                is_current,
+                actions,
+            });
+        }
+
+        self.bottom_pane.show_selection_view(
+            "Select Approval Mode".to_string(),
+            None,
+            Some("Press Enter to confirm or Esc to go back".to_string()),
+            items,
+        );
+    }
+
+    /// Set the approval policy in the widget's config copy.
+    pub(crate) fn set_approval_policy(&mut self, policy: AskForApproval) {
+        self.config.approval_policy = policy;
+    }
+
+    /// Set the sandbox policy in the widget's config copy.
+    pub(crate) fn set_sandbox_policy(&mut self, policy: SandboxPolicy) {
+        self.config.sandbox_policy = policy;
     }
 
     /// Set the reasoning effort in the widget's config copy.
