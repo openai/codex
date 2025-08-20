@@ -29,3 +29,5 @@ mod config_summary;
 pub use config_summary::create_config_summary_entries;
 // Shared fuzzy matcher (used by TUI selection popups and other UI filtering)
 pub mod fuzzy_match;
+// Shared model presets used by TUI and MCP server
+pub mod model_presets;

@@ -264,10 +264,10 @@ where
     #[allow(clippy::print_stderr)]
     fn drop(&mut self) {
         // Attempt to restore the cursor state
-        if self.hidden_cursor {
-            if let Err(err) = self.show_cursor() {
-                eprintln!("Failed to show the cursor: {err}");
-            }
+        if self.hidden_cursor
+            && let Err(err) = self.show_cursor()
+        {
+            eprintln!("Failed to show the cursor: {err}");
         }
     }
 }
@@ -309,7 +309,7 @@ where
     }
 
     /// Get a Frame object which provides a consistent view into the terminal state for rendering.
-    pub fn get_frame(&mut self) -> Frame {
+    pub fn get_frame(&mut self) -> Frame<'_> {
         let count = self.frame_count;
         Frame {
             cursor_position: None,
