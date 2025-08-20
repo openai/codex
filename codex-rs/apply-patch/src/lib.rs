@@ -22,6 +22,8 @@ use tree_sitter_bash::LANGUAGE as BASH;
 /// Detailed instructions for gpt-4.1 on how to use the `apply_patch` tool.
 pub const APPLY_PATCH_TOOL_INSTRUCTIONS: &str = include_str!("../apply_patch_tool_instructions.md");
 
+const APPLY_PATCH_COMMANDS: [&str; 2] = ["apply_patch", "applypatch"];
+
 #[derive(Debug, Error, PartialEq)]
 pub enum ApplyPatchError {
     #[error(transparent)]
@@ -82,7 +84,6 @@ pub struct ApplyPatchArgs {
 }
 
 pub fn maybe_parse_apply_patch(argv: &[String]) -> MaybeApplyPatch {
-    const APPLY_PATCH_COMMANDS: [&str; 2] = ["apply_patch", "applypatch"];
     match argv {
         [cmd, body] if APPLY_PATCH_COMMANDS.contains(&cmd.as_str()) => match parse_patch(body) {
             Ok(source) => MaybeApplyPatch::Body(source),
@@ -91,7 +92,9 @@ pub fn maybe_parse_apply_patch(argv: &[String]) -> MaybeApplyPatch {
         [bash, flag, script]
             if bash == "bash"
                 && flag == "-lc"
-                && script.trim_start().starts_with("apply_patch") =>
+                && APPLY_PATCH_COMMANDS
+                    .iter()
+                    .any(|cmd| script.trim_start().starts_with(cmd)) =>
         {
             match extract_heredoc_body_from_apply_patch_command(script) {
                 Ok(body) => match parse_patch(&body) {
@@ -262,7 +265,10 @@ pub fn maybe_parse_apply_patch_verified(argv: &[String], cwd: &Path) -> MaybeApp
 fn extract_heredoc_body_from_apply_patch_command(
     src: &str,
 ) -> std::result::Result<String, ExtractHeredocError> {
-    if !src.trim_start().starts_with("apply_patch") {
+    if !APPLY_PATCH_COMMANDS
+        .iter()
+        .any(|cmd| src.trim_start().starts_with(cmd))
+    {
         return Err(ExtractHeredocError::CommandDidNotStartWithApplyPatch);
     }
 
@@ -752,6 +758,33 @@ mod tests {
             "bash",
             "-lc",
             r#"apply_patch <<'PATCH'
+*** Begin Patch
+*** Add File: foo
++hi
+*** End Patch
+PATCH"#,
+        ]);
+
+        match maybe_parse_apply_patch(&args) {
+            MaybeApplyPatch::Body(ApplyPatchArgs { hunks, patch: _ }) => {
+                assert_eq!(
+                    hunks,
+                    vec![Hunk::AddFile {
+                        path: PathBuf::from("foo"),
+                        contents: "hi\n".to_string()
+                    }]
+                );
+            }
+            result => panic!("expected MaybeApplyPatch::Body got {result:?}"),
+        }
+    }
+
+    #[test]
+    fn test_heredoc_applypatch() {
+        let args = strs_to_strings(&[
+            "bash",
+            "-lc",
+            r#"applypatch <<'PATCH'
 *** Begin Patch
 *** Add File: foo
 +hi
