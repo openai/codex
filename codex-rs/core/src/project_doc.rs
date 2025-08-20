@@ -13,7 +13,7 @@
 //! 3.  We do **not** walk past the Git root.
 
 use crate::config::Config;
-use std::path::Path;
+use std::path::PathBuf;
 use tokio::io::AsyncReadExt;
 use tracing::error;
 
@@ -27,7 +27,7 @@ const PROJECT_DOC_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
 /// Combines `Config::instructions` and `AGENTS.md` (if present) into a single
 /// string of instructions.
 pub(crate) async fn get_user_instructions(config: &Config) -> Option<String> {
-    match find_project_doc(config).await {
+    match read_project_docs(config).await {
         Ok(Some(project_doc)) => match &config.user_instructions {
             Some(original_instructions) => Some(format!(
                 "{original_instructions}{PROJECT_DOC_SEPARATOR}{project_doc}"
@@ -48,31 +48,77 @@ pub(crate) async fn get_user_instructions(config: &Config) -> Option<String> {
 /// concatenation of all discovered docs. If no documentation file is found the
 /// function returns `Ok(None)`. Unexpected I/O failures bubble up as `Err` so
 /// callers can decide how to handle them.
-async fn find_project_doc(config: &Config) -> std::io::Result<Option<String>> {
-    let max_bytes = config.project_doc_max_bytes;
+pub async fn read_project_docs(config: &Config) -> std::io::Result<Option<String>> {
+    let max_total = config.project_doc_max_bytes;
 
-    // If limit is zero, docs are disabled.
-    if max_bytes == 0 {
+    if max_total == 0 {
         return Ok(None);
     }
 
-    // Build a list of directories from repo root to the current working
-    // directory (inclusive). If no repo root is found, only consider the cwd.
-    let mut dir = config.cwd.clone();
+    let paths = discover_project_doc_paths(config)?;
+    if paths.is_empty() {
+        return Ok(None);
+    }
 
-    // Canonicalize to avoid infinite loops when `cwd` contains `..` components.
+    let mut remaining: u64 = max_total as u64;
+    let mut parts: Vec<String> = Vec::new();
+
+    for p in paths {
+        if remaining == 0 {
+            break;
+        }
+
+        let file = match tokio::fs::File::open(&p).await {
+            Ok(f) => f,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(e),
+        };
+
+        let size = file.metadata().await?.len();
+        let mut reader = tokio::io::BufReader::new(file).take(remaining);
+        let mut data: Vec<u8> = Vec::new();
+        reader.read_to_end(&mut data).await?;
+
+        if size > remaining {
+            tracing::warn!(
+                "Project doc `{}` exceeds remaining budget ({} bytes) - truncating.",
+                p.display(),
+                remaining,
+            );
+        }
+
+        let text = String::from_utf8_lossy(&data).to_string();
+        if !text.trim().is_empty() {
+            parts.push(text);
+            remaining = remaining.saturating_sub(data.len() as u64);
+        }
+    }
+
+    if parts.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(parts.join("\n\n")))
+    }
+}
+
+/// Discover the list of AGENTS.md files using the same search rules as
+/// `read_project_docs`, but return the file paths instead of concatenated
+/// contents. The list is ordered from repository root to the current working
+/// directory (inclusive). Symlinks are allowed. When `project_doc_max_bytes`
+/// is zero, returns an empty list.
+pub fn discover_project_doc_paths(config: &Config) -> std::io::Result<Vec<PathBuf>> {
+    let mut dir = config.cwd.clone();
     if let Ok(canon) = dir.canonicalize() {
         dir = canon;
     }
 
-    // First, discover the repo root (if any) while collecting the path chain.
-    let mut chain: Vec<std::path::PathBuf> = vec![dir.clone()];
-    let mut git_root: Option<std::path::PathBuf> = None;
+    // Build chain from cwd upwards and detect git root.
+    let mut chain: Vec<PathBuf> = vec![dir.clone()];
+    let mut git_root: Option<PathBuf> = None;
     let mut cursor = dir.clone();
     while let Some(parent) = cursor.parent() {
-        // `.git` can be a *file* (for worktrees or submodules) or a *dir*.
         let git_marker = cursor.join(".git");
-        let git_exists = match tokio::fs::metadata(&git_marker).await {
+        let git_exists = match std::fs::metadata(&git_marker) {
             Ok(_) => true,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
             Err(e) => return Err(e),
@@ -87,14 +133,8 @@ async fn find_project_doc(config: &Config) -> std::io::Result<Option<String>> {
         cursor = parent.to_path_buf();
     }
 
-    // If we found a git root, trim the chain so that it starts at the git
-    // root and ends at the original cwd; otherwise, the chain should only
-    // include the cwd.
-    let search_dirs: Vec<std::path::PathBuf> = if let Some(root) = git_root {
-        // `chain` currently contains: [cwd, parent, ..., maybe root?, ...]
-        // Keep entries from `root` down to the original `cwd` and reverse to
-        // get [root, ..., cwd].
-        let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+    let search_dirs: Vec<PathBuf> = if let Some(root) = git_root {
+        let mut dirs: Vec<PathBuf> = Vec::new();
         let mut saw_root = false;
         for p in chain.iter().rev() {
             if !saw_root {
@@ -106,68 +146,31 @@ async fn find_project_doc(config: &Config) -> std::io::Result<Option<String>> {
             }
             dirs.push(p.clone());
         }
-        // Now `dirs` is [root, ..., cwd]
         dirs
     } else {
         vec![config.cwd.clone()]
     };
 
-    // Load and concatenate docs from all search directories.
-    let mut parts: Vec<String> = Vec::new();
+    let mut found: Vec<PathBuf> = Vec::new();
     for d in search_dirs {
-        if let Some(doc) = load_first_candidate(&d, CANDIDATE_FILENAMES, max_bytes).await?
-            && !doc.trim().is_empty() {
-                parts.push(doc);
+        for name in CANDIDATE_FILENAMES {
+            let candidate = d.join(name);
+            match std::fs::symlink_metadata(&candidate) {
+                Ok(md) => {
+                    let ft = md.file_type();
+                    // Allow regular files and symlinks; opening will later fail for dangling links.
+                    if ft.is_file() || ft.is_symlink() {
+                        found.push(candidate);
+                        break;
+                    }
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e),
             }
-    }
-
-    if parts.is_empty() {
-        Ok(None)
-    } else {
-        Ok(Some(parts.join("\n\n")))
-    }
-}
-
-/// Attempt to load the first candidate file found in `dir`. Returns the file
-/// contents (truncated if it exceeds `max_bytes`) when successful.
-async fn load_first_candidate(
-    dir: &Path,
-    names: &[&str],
-    max_bytes: usize,
-) -> std::io::Result<Option<String>> {
-    for name in names {
-        let candidate = dir.join(name);
-
-        let file = match tokio::fs::File::open(&candidate).await {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(e) => return Err(e),
-            Ok(f) => f,
-        };
-
-        let size = file.metadata().await?.len();
-
-        let reader = tokio::io::BufReader::new(file);
-        let mut data = Vec::with_capacity(std::cmp::min(size as usize, max_bytes));
-        let mut limited = reader.take(max_bytes as u64);
-        limited.read_to_end(&mut data).await?;
-
-        if size as usize > max_bytes {
-            tracing::warn!(
-                "Project doc `{}` exceeds {max_bytes} bytes - truncating.",
-                candidate.display(),
-            );
         }
-
-        let contents = String::from_utf8_lossy(&data).to_string();
-        if contents.trim().is_empty() {
-            // Empty file – treat as not found.
-            continue;
-        }
-
-        return Ok(Some(contents));
     }
 
-    Ok(None)
+    Ok(found)
 }
 
 #[cfg(test)]
