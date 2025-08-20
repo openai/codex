@@ -22,9 +22,6 @@ pub const CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR: &str = "CODEX_SANDBOX_NETWORK_
 /// accommodate sandboxing configuration and other sandboxing mechanisms.
 pub const CODEX_SANDBOX_ENV_VAR: &str = "CODEX_SANDBOX";
 
-/// Set this to change the originator sent with all network requests.
-pub const CODEX_ORIGINATOR_ENV_VAR: &str = "CODEX_ORIGINATOR";
-
 #[derive(Debug, Clone, Copy)]
 pub enum StdioPolicy {
     RedirectForShellTool,
