@@ -242,7 +242,7 @@ fn load_auth(
         // "refreshable" even if we are using the API key for auth?
         match &tokens {
             Some(tokens) => {
-                if tokens.should_use_api_key(preferred_auth_method) {
+                if tokens.should_use_api_key(preferred_auth_method, tokens.is_openai_email()) {
                     return Ok(Some(CodexAuth::from_api_key(api_key)));
                 } else {
                     // Ignore the API key and fall through to ChatGPT auth.

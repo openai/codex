@@ -52,6 +52,7 @@ use crate::history_cell::CommandOutput;
 use crate::history_cell::ExecCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PatchEventType;
+use crate::tui::FrameRequester;
 // streaming internals are provided by crate::streaming and crate::markdown_stream
 use crate::user_approval_widget::ApprovalRequest;
 mod interrupts;
@@ -77,10 +78,10 @@ struct RunningCommand {
     parsed_cmd: Vec<ParsedCommand>,
 }
 
-pub(crate) struct ChatWidget<'a> {
+pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
-    bottom_pane: BottomPane<'a>,
+    bottom_pane: BottomPane,
     active_exec_cell: Option<ExecCell>,
     config: Config,
     initial_user_message: Option<UserMessage>,
@@ -98,6 +99,7 @@ pub(crate) struct ChatWidget<'a> {
     // Whether a redraw is needed after handling the current event
     needs_redraw: bool,
     session_id: Option<Uuid>,
+    frame_requester: FrameRequester,
 }
 
 struct UserMessage {
@@ -124,7 +126,7 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
     }
 }
 
-impl ChatWidget<'_> {
+impl ChatWidget {
     #[inline]
     fn mark_needs_redraw(&mut self) {
         self.needs_redraw = true;
@@ -500,6 +502,7 @@ impl ChatWidget<'_> {
     pub(crate) fn new(
         config: Config,
         conversation_manager: Arc<ConversationManager>,
+        frame_requester: FrameRequester,
         app_event_tx: AppEventSender,
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
@@ -511,8 +514,10 @@ impl ChatWidget<'_> {
 
         Self {
             app_event_tx: app_event_tx.clone(),
+            frame_requester: frame_requester.clone(),
             codex_op_tx,
             bottom_pane: BottomPane::new(BottomPaneParams {
+                frame_requester,
                 app_event_tx,
                 has_input_focus: true,
                 enhanced_keys_supported,
@@ -672,7 +677,7 @@ impl ChatWidget<'_> {
     }
 
     fn request_redraw(&mut self) {
-        self.app_event_tx.send(AppEvent::RequestRedraw);
+        self.frame_requester.schedule_frame();
     }
 
     pub(crate) fn add_diff_in_progress(&mut self) {
@@ -880,7 +885,7 @@ impl ChatWidget<'_> {
     }
 }
 
-impl WidgetRef for &ChatWidget<'_> {
+impl WidgetRef for &ChatWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let [active_cell_area, bottom_pane_area] = self.layout_areas(area);
         (&self.bottom_pane).render(bottom_pane_area, buf);
