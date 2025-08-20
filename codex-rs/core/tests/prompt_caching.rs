@@ -8,6 +8,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort;
 use codex_core::protocol_config_types::ReasoningSummary;
+use codex_core::shell::default_user_shell;
 use codex_login::CodexAuth;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
@@ -85,9 +86,15 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
     let requests = server.received_requests().await.unwrap();
     assert_eq!(requests.len(), 2, "expected two POST requests");
 
+    let shell = default_user_shell().await;
+
     let expected_env_text = format!(
-        "<environment_context>\nCurrent working directory: {}\nApproval policy: on-request\nSandbox mode: read-only\nNetwork access: restricted\n</environment_context>",
-        cwd.path().to_string_lossy()
+        "<environment_context>\nCurrent working directory: {}\nApproval policy: on-request\nSandbox mode: read-only\nNetwork access: restricted\n{}</environment_context>",
+        cwd.path().to_string_lossy(),
+        match shell.name() {
+            Some(name) => format!("Shell: {name}\n"),
+            None => String::new(),
+        }
     );
     let expected_ui_text =
         "<user_instructions>\n\nbe consistent and helpful\n\n</user_instructions>";
@@ -237,9 +244,14 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() {
     });
     // After overriding the turn context, the environment context should be emitted again
     // reflecting the new cwd, approval policy and sandbox settings.
+    let shell = default_user_shell().await;
     let expected_env_text_2 = format!(
-        "<environment_context>\nCurrent working directory: {}\nApproval policy: never\nSandbox mode: workspace-write\nNetwork access: enabled\n</environment_context>",
-        new_cwd.path().to_string_lossy()
+        "<environment_context>\nCurrent working directory: {}\nApproval policy: never\nSandbox mode: workspace-write\nNetwork access: enabled\n{}</environment_context>",
+        new_cwd.path().to_string_lossy(),
+        match shell.name() {
+            Some(name) => format!("Shell: {name}\n"),
+            None => String::new(),
+        }
     );
     let expected_env_msg_2 = serde_json::json!({
         "type": "message",

@@ -245,7 +245,7 @@ where
     /// Index of the current buffer in the previous array
     current: usize,
     /// Whether the cursor is currently hidden
-    hidden_cursor: bool,
+    pub hidden_cursor: bool,
     /// Area of the viewport
     pub viewport_area: Rect,
     /// Last known size of the terminal. Used to detect if the internal buffers have to be resized.

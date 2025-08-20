@@ -168,7 +168,8 @@ pub(crate) fn new_session_info(
             Line::from("".dim()),
             Line::from(format!(" /init - {}", SlashCommand::Init.description()).dim()),
             Line::from(format!(" /status - {}", SlashCommand::Status.description()).dim()),
-            Line::from(format!(" /diff - {}", SlashCommand::Diff.description()).dim()),
+            Line::from(format!(" /approvals - {}", SlashCommand::Approvals.description()).dim()),
+            Line::from(format!(" /model - {}", SlashCommand::Model.description()).dim()),
             Line::from("".dim()),
         ];
         PlainHistoryCell { lines }
@@ -641,6 +642,15 @@ pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
         Line::from(vec!["🔌  ".into(), "MCP Tools".bold()]),
         Line::from(""),
         Line::from("  • No MCP servers configured.".italic()),
+        Line::from(vec![
+            "    See the ".into(),
+            Span::styled(
+                "\u{1b}]8;;https://github.com/openai/codex/blob/main/codex-rs/config.md#mcp_servers\u{7}MCP docs\u{1b}]8;;\u{7}",
+                Style::default().add_modifier(Modifier::UNDERLINED),
+            ),
+            " to configure them.".into(),
+        ])
+        .style(Style::default().add_modifier(Modifier::DIM)),
         Line::from(""),
     ];
 

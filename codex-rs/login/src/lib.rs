@@ -62,6 +62,39 @@ impl CodexAuth {
         }
     }
 
+    pub async fn refresh_token(&self) -> Result<String, std::io::Error> {
+        let token_data = self
+            .get_current_token_data()
+            .ok_or(std::io::Error::other("Token data is not available."))?;
+        let token = token_data.refresh_token;
+
+        let refresh_response = try_refresh_token(token)
+            .await
+            .map_err(std::io::Error::other)?;
+
+        let updated = update_tokens(
+            &self.auth_file,
+            refresh_response.id_token,
+            refresh_response.access_token,
+            refresh_response.refresh_token,
+        )
+        .await?;
+
+        if let Ok(mut auth_lock) = self.auth_dot_json.lock() {
+            *auth_lock = Some(updated.clone());
+        }
+
+        let access = match updated.tokens {
+            Some(t) => t.access_token,
+            None => {
+                return Err(std::io::Error::other(
+                    "Token data is not available after refresh.",
+                ));
+            }
+        };
+        Ok(access)
+    }
+
     /// Loads the available auth information from the auth.json or
     /// OPENAI_API_KEY environment variable.
     pub fn from_codex_home(
@@ -209,7 +242,7 @@ fn load_auth(
         // "refreshable" even if we are using the API key for auth?
         match &tokens {
             Some(tokens) => {
-                if tokens.should_use_api_key(preferred_auth_method) {
+                if tokens.should_use_api_key(preferred_auth_method, tokens.is_openai_email()) {
                     return Ok(Some(CodexAuth::from_api_key(api_key)));
                 } else {
                     // Ignore the API key and fall through to ChatGPT auth.

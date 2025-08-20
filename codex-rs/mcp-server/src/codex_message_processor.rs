@@ -8,11 +8,13 @@ use codex_core::ConversationManager;
 use codex_core::NewConversation;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::git_info::git_diff_to_remote;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ReviewDecision;
+use codex_protocol::mcp_protocol::GitDiffToRemoteResponse;
 use mcp_types::JSONRPCErrorError;
 use mcp_types::RequestId;
 use tokio::sync::Mutex;
@@ -125,6 +127,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::CancelLoginChatGpt { request_id, params } => {
                 self.cancel_login_chatgpt(request_id, params.login_id).await;
+            }
+            ClientRequest::GitDiffToRemote { request_id, params } => {
+                self.git_diff_to_origin(request_id, params.cwd).await;
             }
         }
     }
@@ -508,6 +513,27 @@ impl CodexMessageProcessor {
                 let error = JSONRPCErrorError {
                     code: INVALID_REQUEST_ERROR_CODE,
                     message: format!("subscription not found: {subscription_id}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
+    async fn git_diff_to_origin(&self, request_id: RequestId, cwd: PathBuf) {
+        let diff = git_diff_to_remote(&cwd).await;
+        match diff {
+            Some(value) => {
+                let response = GitDiffToRemoteResponse {
+                    sha: value.sha,
+                    diff: value.diff,
+                };
+                self.outgoing.send_response(request_id, response).await;
+            }
+            None => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("failed to compute git diff to remote for cwd: {cwd:?}"),
                     data: None,
                 };
                 self.outgoing.send_error(request_id, error).await;

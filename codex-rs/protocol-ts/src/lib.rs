@@ -36,6 +36,7 @@ pub fn generate_ts(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
     codex_protocol::mcp_protocol::LoginChatGptCompleteNotification::export_all_to(out_dir)?;
     codex_protocol::mcp_protocol::CancelLoginChatGptParams::export_all_to(out_dir)?;
     codex_protocol::mcp_protocol::CancelLoginChatGptResponse::export_all_to(out_dir)?;
+    codex_protocol::mcp_protocol::GitDiffToRemoteParams::export_all_to(out_dir)?;
     codex_protocol::mcp_protocol::ApplyPatchApprovalParams::export_all_to(out_dir)?;
     codex_protocol::mcp_protocol::ApplyPatchApprovalResponse::export_all_to(out_dir)?;
     codex_protocol::mcp_protocol::ExecCommandApprovalParams::export_all_to(out_dir)?;
