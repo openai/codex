@@ -6,6 +6,7 @@ use ratatui::widgets::WidgetRef;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::BottomPane;
 use crate::status_indicator_widget::StatusIndicatorWidget;
+use crate::tui::FrameRequester;
 
 use super::BottomPaneView;
 
@@ -14,9 +15,9 @@ pub(crate) struct StatusIndicatorView {
 }
 
 impl StatusIndicatorView {
-    pub fn new(app_event_tx: AppEventSender) -> Self {
+    pub fn new(app_event_tx: AppEventSender, frame_requester: FrameRequester) -> Self {
         Self {
-            view: StatusIndicatorWidget::new(app_event_tx),
+            view: StatusIndicatorWidget::new(app_event_tx, frame_requester),
         }
     }
 
@@ -25,7 +26,7 @@ impl StatusIndicatorView {
     }
 }
 
-impl BottomPaneView<'_> for StatusIndicatorView {
+impl BottomPaneView for StatusIndicatorView {
     fn should_hide_when_task_is_done(&mut self) -> bool {
         true
     }
@@ -38,7 +39,7 @@ impl BottomPaneView<'_> for StatusIndicatorView {
         self.view.render_ref(area, buf);
     }
 
-    fn handle_key_event(&mut self, _pane: &mut BottomPane<'_>, key_event: KeyEvent) {
+    fn handle_key_event(&mut self, _pane: &mut BottomPane, key_event: KeyEvent) {
         if key_event.code == KeyCode::Esc {
             self.view.interrupt();
         }

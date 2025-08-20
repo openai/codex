@@ -1,7 +1,7 @@
 //! Bottom pane: shows the ChatComposer or a BottomPaneView, if one is active.
 
-use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::tui::FrameRequester;
 use crate::user_approval_widget::ApprovalRequest;
 use bottom_pane_view::BottomPaneView;
 use codex_core::protocol::TokenUsage;
@@ -39,15 +39,17 @@ pub(crate) use list_selection_view::SelectionItem;
 use status_indicator_view::StatusIndicatorView;
 
 /// Pane displayed in the lower half of the chat UI.
-pub(crate) struct BottomPane<'a> {
+pub(crate) struct BottomPane {
     /// Composer is retained even when a BottomPaneView is displayed so the
     /// input state is retained when the view is closed.
     composer: ChatComposer,
 
     /// If present, this is displayed instead of the `composer`.
-    active_view: Option<Box<dyn BottomPaneView<'a> + 'a>>,
+    active_view: Option<Box<dyn BottomPaneView>>,
 
     app_event_tx: AppEventSender,
+    frame_requester: FrameRequester,
+
     has_input_focus: bool,
     is_task_running: bool,
     ctrl_c_quit_hint: bool,
@@ -59,12 +61,13 @@ pub(crate) struct BottomPane<'a> {
 
 pub(crate) struct BottomPaneParams {
     pub(crate) app_event_tx: AppEventSender,
+    pub(crate) frame_requester: FrameRequester,
     pub(crate) has_input_focus: bool,
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) placeholder_text: String,
 }
 
-impl BottomPane<'_> {
+impl BottomPane {
     const BOTTOM_PAD_LINES: u16 = 2;
     pub fn new(params: BottomPaneParams) -> Self {
         let enhanced_keys_supported = params.enhanced_keys_supported;
@@ -77,6 +80,7 @@ impl BottomPane<'_> {
             ),
             active_view: None,
             app_event_tx: params.app_event_tx,
+            frame_requester: params.frame_requester,
             has_input_focus: params.has_input_focus,
             is_task_running: false,
             ctrl_c_quit_hint: false,
@@ -113,7 +117,10 @@ impl BottomPane<'_> {
             if !view.is_complete() {
                 self.active_view = Some(view);
             } else if self.is_task_running {
-                let mut v = StatusIndicatorView::new(self.app_event_tx.clone());
+                let mut v = StatusIndicatorView::new(
+                    self.app_event_tx.clone(),
+                    self.frame_requester.clone(),
+                );
                 v.update_text("waiting for model".to_string());
                 self.active_view = Some(Box::new(v));
                 self.status_view_active = true;
@@ -144,7 +151,10 @@ impl BottomPane<'_> {
                     self.active_view = Some(view);
                 } else if self.is_task_running {
                     // Modal aborted but task still running – restore status indicator.
-                    let mut v = StatusIndicatorView::new(self.app_event_tx.clone());
+                    let mut v = StatusIndicatorView::new(
+                        self.app_event_tx.clone(),
+                        self.frame_requester.clone(),
+                    );
                     v.update_text("waiting for model".to_string());
                     self.active_view = Some(Box::new(v));
                     self.status_view_active = true;
@@ -199,6 +209,7 @@ impl BottomPane<'_> {
             if self.active_view.is_none() {
                 self.active_view = Some(Box::new(StatusIndicatorView::new(
                     self.app_event_tx.clone(),
+                    self.frame_requester.clone(),
                 )));
                 self.status_view_active = true;
             }
@@ -292,7 +303,7 @@ impl BottomPane<'_> {
 
     /// Height (terminal rows) required by the current bottom pane.
     pub(crate) fn request_redraw(&self) {
-        self.app_event_tx.send(AppEvent::RequestRedraw)
+        self.frame_requester.schedule_frame();
     }
 
     // --- History helpers ---
@@ -322,7 +333,7 @@ impl BottomPane<'_> {
     }
 }
 
-impl WidgetRef for &BottomPane<'_> {
+impl WidgetRef for &BottomPane {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         if let Some(view) = &self.active_view {
             // Reserve bottom padding lines; keep at least 1 line for the view.
@@ -375,6 +386,7 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,
+            frame_requester: crate::tui::FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
@@ -393,6 +405,7 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,
+            frame_requester: crate::tui::FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
@@ -422,6 +435,7 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx.clone(),
+            frame_requester: crate::tui::FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
@@ -472,6 +486,7 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,
+            frame_requester: crate::tui::FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
@@ -504,6 +519,7 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,
+            frame_requester: crate::tui::FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
@@ -556,6 +572,7 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,
+            frame_requester: crate::tui::FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),

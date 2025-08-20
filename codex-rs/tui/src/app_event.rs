@@ -1,10 +1,7 @@
 use codex_core::protocol::Event;
 use codex_file_search::FileMatch;
-use crossterm::event::KeyEvent;
 use ratatui::text::Line;
-use std::time::Duration;
 
-use crate::app::ChatWidgetArgs;
 use crate::slash_command::SlashCommand;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
@@ -14,21 +11,6 @@ use codex_core::protocol_config_types::ReasoningEffort;
 #[derive(Debug)]
 pub(crate) enum AppEvent {
     CodexEvent(Event),
-
-    /// Request a redraw which will be debounced by the [`App`].
-    RequestRedraw,
-
-    /// Actually draw the next frame.
-    Redraw,
-
-    /// Schedule a one-shot animation frame roughly after the given duration.
-    /// Multiple requests are coalesced by the central frame scheduler.
-    ScheduleFrameIn(Duration),
-
-    KeyEvent(KeyEvent),
-
-    /// Text pasted from the terminal clipboard.
-    Paste(String),
 
     /// Request to exit the application gracefully.
     ExitRequest,
@@ -62,10 +44,6 @@ pub(crate) enum AppEvent {
     StartCommitAnimation,
     StopCommitAnimation,
     CommitTick,
-
-    /// Onboarding: result of login_with_chatgpt.
-    OnboardingAuthComplete(Result<(), String>),
-    OnboardingComplete(ChatWidgetArgs),
 
     /// Update the current reasoning effort in the running app and widget.
     UpdateReasoningEffort(ReasoningEffort),

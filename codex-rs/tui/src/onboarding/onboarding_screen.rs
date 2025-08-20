@@ -1,5 +1,7 @@
 use codex_core::util::is_inside_git_repo;
+use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::KeyEventKind;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::Widget;
@@ -9,25 +11,24 @@ use ratatui::widgets::WidgetRef;
 use codex_login::AuthMode;
 
 use crate::LoginStatus;
-use crate::app::ChatWidgetArgs;
-use crate::app_event::AppEvent;
-use crate::app_event_sender::AppEventSender;
 use crate::onboarding::auth::AuthModeWidget;
 use crate::onboarding::auth::SignInState;
-use crate::onboarding::continue_to_chat::ContinueToChatWidget;
 use crate::onboarding::trust_directory::TrustDirectorySelection;
 use crate::onboarding::trust_directory::TrustDirectoryWidget;
 use crate::onboarding::welcome::WelcomeWidget;
+use crate::tui::FrameRequester;
+use crate::tui::Tui;
+use crate::tui::TuiEvent;
+use color_eyre::eyre::Result;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::Mutex;
+use std::sync::RwLock;
 
 #[allow(clippy::large_enum_variant)]
 enum Step {
     Welcome(WelcomeWidget),
     Auth(AuthModeWidget),
     TrustDirectory(TrustDirectoryWidget),
-    ContinueToChat(ContinueToChatWidget),
 }
 
 pub(crate) trait KeyboardHandler {
@@ -45,43 +46,42 @@ pub(crate) trait StepStateProvider {
 }
 
 pub(crate) struct OnboardingScreen {
-    event_tx: AppEventSender,
+    request_frame: FrameRequester,
     steps: Vec<Step>,
+    is_done: bool,
 }
 
 pub(crate) struct OnboardingScreenArgs {
-    pub event_tx: AppEventSender,
-    pub chat_widget_args: ChatWidgetArgs,
     pub codex_home: PathBuf,
     pub cwd: PathBuf,
     pub show_trust_screen: bool,
     pub show_login_screen: bool,
     pub login_status: LoginStatus,
+    pub preferred_auth_method: AuthMode,
 }
 
 impl OnboardingScreen {
-    pub(crate) fn new(args: OnboardingScreenArgs) -> Self {
+    pub(crate) fn new(tui: &mut Tui, args: OnboardingScreenArgs) -> Self {
         let OnboardingScreenArgs {
-            event_tx,
-            chat_widget_args,
             codex_home,
             cwd,
             show_trust_screen,
             show_login_screen,
             login_status,
+            preferred_auth_method,
         } = args;
         let mut steps: Vec<Step> = vec![Step::Welcome(WelcomeWidget {
             is_logged_in: !matches!(login_status, LoginStatus::NotAuthenticated),
         })];
         if show_login_screen {
             steps.push(Step::Auth(AuthModeWidget {
-                event_tx: event_tx.clone(),
+                request_frame: tui.frame_requester(),
                 highlighted_mode: AuthMode::ChatGPT,
                 error: None,
-                sign_in_state: SignInState::PickMode,
+                sign_in_state: Arc::new(RwLock::new(SignInState::PickMode)),
                 codex_home: codex_home.clone(),
                 login_status,
-                preferred_auth_method: chat_widget_args.config.preferred_auth_method,
+                preferred_auth_method,
             }))
         }
         let is_git_repo = is_inside_git_repo(&cwd);
@@ -91,9 +91,6 @@ impl OnboardingScreen {
             // Default to not trusting the directory if it's not a git repo.
             TrustDirectorySelection::DontTrust
         };
-        // Share ChatWidgetArgs between steps so changes in the TrustDirectory step
-        // are reflected when continuing to chat.
-        let shared_chat_args = Arc::new(Mutex::new(chat_widget_args));
         if show_trust_screen {
             steps.push(Step::TrustDirectory(TrustDirectoryWidget {
                 cwd,
@@ -102,39 +99,13 @@ impl OnboardingScreen {
                 selection: None,
                 highlighted,
                 error: None,
-                chat_widget_args: shared_chat_args.clone(),
             }))
         }
-        steps.push(Step::ContinueToChat(ContinueToChatWidget {
-            event_tx: event_tx.clone(),
-            chat_widget_args: shared_chat_args,
-        }));
         // TODO: add git warning.
-        Self { event_tx, steps }
-    }
-
-    pub(crate) fn on_auth_complete(&mut self, result: Result<(), String>) {
-        let current_step = self.current_step_mut();
-        if let Some(Step::Auth(state)) = current_step {
-            match result {
-                Ok(()) => {
-                    state.sign_in_state = SignInState::ChatGptSuccessMessage;
-                    self.event_tx.send(AppEvent::RequestRedraw);
-                    let tx1 = self.event_tx.clone();
-                    let tx2 = self.event_tx.clone();
-                    std::thread::spawn(move || {
-                        std::thread::sleep(std::time::Duration::from_millis(150));
-                        tx1.send(AppEvent::RequestRedraw);
-                        std::thread::sleep(std::time::Duration::from_millis(200));
-                        tx2.send(AppEvent::RequestRedraw);
-                    });
-                }
-                Err(e) => {
-                    state.sign_in_state = SignInState::PickMode;
-                    state.error = Some(e);
-                    self.event_tx.send(AppEvent::RequestRedraw);
-                }
-            }
+        Self {
+            request_frame: tui.frame_requester(),
+            steps,
+            is_done: false,
         }
     }
 
@@ -168,19 +139,57 @@ impl OnboardingScreen {
         out
     }
 
-    fn current_step_mut(&mut self) -> Option<&mut Step> {
+    pub(crate) fn is_done(&self) -> bool {
+        self.is_done
+            || !self
+                .steps
+                .iter()
+                .any(|step| matches!(step.get_step_state(), StepState::InProgress))
+    }
+
+    pub fn directory_trust_decision(&self) -> Option<TrustDirectorySelection> {
         self.steps
-            .iter_mut()
-            .find(|step| matches!(step.get_step_state(), StepState::InProgress))
+            .iter()
+            .find_map(|step| {
+                if let Step::TrustDirectory(TrustDirectoryWidget { selection, .. }) = step {
+                    Some(*selection)
+                } else {
+                    None
+                }
+            })
+            .flatten()
     }
 }
 
 impl KeyboardHandler for OnboardingScreen {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
-        if let Some(active_step) = self.current_steps_mut().into_iter().last() {
-            active_step.handle_key_event(key_event);
-        }
-        self.event_tx.send(AppEvent::RequestRedraw);
+        match key_event {
+            KeyEvent {
+                code: KeyCode::Char('d'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('c'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('q'),
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                self.is_done = true;
+            }
+            _ => {
+                if let Some(active_step) = self.current_steps_mut().into_iter().last() {
+                    active_step.handle_key_event(key_event);
+                }
+            }
+        };
+        self.request_frame.schedule_frame();
     }
 }
 
@@ -246,7 +255,7 @@ impl WidgetRef for &OnboardingScreen {
 impl KeyboardHandler for Step {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match self {
-            Step::Welcome(_) | Step::ContinueToChat(_) => (),
+            Step::Welcome(_) => (),
             Step::Auth(widget) => widget.handle_key_event(key_event),
             Step::TrustDirectory(widget) => widget.handle_key_event(key_event),
         }
@@ -259,7 +268,6 @@ impl StepStateProvider for Step {
             Step::Welcome(w) => w.get_step_state(),
             Step::Auth(w) => w.get_step_state(),
             Step::TrustDirectory(w) => w.get_step_state(),
-            Step::ContinueToChat(w) => w.get_step_state(),
         }
     }
 }
@@ -276,9 +284,39 @@ impl WidgetRef for Step {
             Step::TrustDirectory(widget) => {
                 widget.render_ref(area, buf);
             }
-            Step::ContinueToChat(widget) => {
-                widget.render_ref(area, buf);
+        }
+    }
+}
+
+pub(crate) async fn run_onboarding_app(
+    args: OnboardingScreenArgs,
+    tui: &mut Tui,
+) -> Result<Option<crate::onboarding::TrustDirectorySelection>> {
+    use tokio_stream::StreamExt;
+
+    let mut onboarding_screen = OnboardingScreen::new(tui, args);
+
+    tui.draw(u16::MAX, |frame| {
+        frame.render_widget_ref(&onboarding_screen, frame.area());
+    })?;
+
+    let tui_events = tui.event_stream();
+    tokio::pin!(tui_events);
+
+    while !onboarding_screen.is_done() {
+        if let Some(event) = tui_events.next().await {
+            match event {
+                TuiEvent::Key(key_event) => {
+                    onboarding_screen.handle_key_event(key_event);
+                }
+                TuiEvent::Draw => {
+                    let _ = tui.draw(u16::MAX, |frame| {
+                        frame.render_widget_ref(&onboarding_screen, frame.area());
+                    });
+                }
+                _ => {}
             }
         }
     }
+    Ok(onboarding_screen.directory_trust_decision())
 }

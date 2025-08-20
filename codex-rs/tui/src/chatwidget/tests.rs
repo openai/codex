@@ -104,14 +104,22 @@ async fn helpers_are_available_and_do_not_panic() {
     let tx = AppEventSender::new(tx_raw);
     let cfg = test_config();
     let conversation_manager = Arc::new(ConversationManager::default());
-    let mut w = ChatWidget::new(cfg, conversation_manager, tx, None, Vec::new(), false);
+    let mut w = ChatWidget::new(
+        cfg,
+        conversation_manager,
+        crate::tui::FrameRequester::test_dummy(),
+        tx,
+        None,
+        Vec::new(),
+        false,
+    );
     // Basic construction sanity.
     let _ = &mut w;
 }
 
 // --- Helpers for tests that need direct construction and event draining ---
 fn make_chatwidget_manual() -> (
-    ChatWidget<'static>,
+    ChatWidget,
     tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
     tokio::sync::mpsc::UnboundedReceiver<Op>,
 ) {
@@ -121,6 +129,7 @@ fn make_chatwidget_manual() -> (
     let cfg = test_config();
     let bottom = BottomPane::new(BottomPaneParams {
         app_event_tx: app_event_tx.clone(),
+        frame_requester: crate::tui::FrameRequester::test_dummy(),
         has_input_focus: true,
         enhanced_keys_supported: false,
         placeholder_text: "Ask Codex to do anything".to_string(),
@@ -142,6 +151,7 @@ fn make_chatwidget_manual() -> (
         interrupts: InterruptManager::new(),
         needs_redraw: false,
         session_id: None,
+        frame_requester: crate::tui::FrameRequester::test_dummy(),
     };
     (widget, rx, op_rx)
 }
