@@ -1,4 +1,3 @@
-use base64::Engine;
 use chrono::DateTime;
 use chrono::Utc;
 use serde::Deserialize;
@@ -36,12 +35,6 @@ pub const OPENAI_API_KEY_ENV_VAR: &str = "OPENAI_API_KEY";
 pub enum AuthMode {
     ApiKey,
     ChatGPT,
-}
-
-#[derive(Deserialize)]
-struct StdClaims {
-    #[serde(default)]
-    exp: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
