@@ -313,7 +313,8 @@ fn push_wrapped_diff_line(
         DiffLineType::Context => (None, None),
     };
     let mut lines: Vec<RtLine<'static>> = Vec::new();
-    while !remaining_text.is_empty() {
+
+    loop {
         // Fit the content for the current terminal row:
         // compute how many columns are available after the prefix, then split
         // at a UTF-8 character boundary so this row's chunk fits exactly.
@@ -364,6 +365,9 @@ fn push_wrapped_diff_line(
                 line.style = line.style.patch(style);
             }
             lines.push(line);
+        }
+        if remaining_text.is_empty() {
+            break;
         }
     }
     lines
@@ -457,5 +461,49 @@ mod tests {
 
         // Render into a small terminal to capture the visual layout
         snapshot_lines("wrap_behavior_insert", lines, DEFAULT_WRAP_COLS + 10, 8);
+    }
+
+    #[test]
+    fn ui_snapshot_single_line_replacement_counts() {
+        // Reproduce: one deleted line replaced by one inserted line, no extra context
+        let original = "# Codex CLI (Rust Implementation)\n";
+        let modified = "# Codex CLI (Rust Implementation) banana\n";
+        let patch = diffy::create_patch(original, modified).to_string();
+
+        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+        changes.insert(
+            PathBuf::from("README.md"),
+            FileChange::Update {
+                unified_diff: patch,
+                move_path: None,
+            },
+        );
+
+        let lines =
+            create_diff_summary("proposed patch", &changes, PatchEventType::ApprovalRequest);
+
+        snapshot_lines("single_line_replacement_counts", lines, 80, 8);
+    }
+
+    #[test]
+    fn ui_snapshot_blank_context_line() {
+        // Ensure a hunk that includes a blank context line at the beginning is rendered visibly
+        let original = "\nY\n";
+        let modified = "\nY changed\n";
+        let patch = diffy::create_patch(original, modified).to_string();
+
+        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+        changes.insert(
+            PathBuf::from("example.txt"),
+            FileChange::Update {
+                unified_diff: patch,
+                move_path: None,
+            },
+        );
+
+        let lines =
+            create_diff_summary("proposed patch", &changes, PatchEventType::ApprovalRequest);
+
+        snapshot_lines("blank_context_line", lines, 80, 10);
     }
 }
