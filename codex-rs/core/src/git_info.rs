@@ -57,32 +57,32 @@ pub async fn collect_git_info(cwd: &Path) -> Option<GitInfo> {
     };
 
     // Process commit hash
-    if let Some(output) = commit_result {
-        if output.status.success() {
-            if let Ok(hash) = String::from_utf8(output.stdout) {
-                git_info.commit_hash = Some(hash.trim().to_string());
-            }
+    if let Some(output) = commit_result
+        && output.status.success()
+    {
+        if let Ok(hash) = String::from_utf8(output.stdout) {
+            git_info.commit_hash = Some(hash.trim().to_string());
         }
     }
 
     // Process branch name
-    if let Some(output) = branch_result {
-        if output.status.success() {
-            if let Ok(branch) = String::from_utf8(output.stdout) {
-                let branch = branch.trim();
-                if branch != "HEAD" {
-                    git_info.branch = Some(branch.to_string());
-                }
+    if let Some(output) = branch_result
+        && output.status.success()
+    {
+        if let Ok(branch) = String::from_utf8(output.stdout) {
+            let branch = branch.trim();
+            if branch != "HEAD" {
+                git_info.branch = Some(branch.to_string());
             }
         }
     }
 
     // Process repository URL
-    if let Some(output) = url_result {
-        if output.status.success() {
-            if let Ok(url) = String::from_utf8(output.stdout) {
-                git_info.repository_url = Some(url.trim().to_string());
-            }
+    if let Some(output) = url_result
+        && output.status.success()
+    {
+        if let Ok(url) = String::from_utf8(output.stdout) {
+            git_info.repository_url = Some(url.trim().to_string());
         }
     }
 
@@ -161,13 +161,12 @@ async fn get_default_branch(cwd: &Path) -> Option<String> {
             cwd,
         )
         .await
+            && symref_output.status.success()
         {
-            if symref_output.status.success() {
-                if let Ok(sym) = String::from_utf8(symref_output.stdout) {
-                    let trimmed = sym.trim();
-                    if let Some((_, name)) = trimmed.rsplit_once('/') {
-                        return Some(name.to_string());
-                    }
+            if let Ok(sym) = String::from_utf8(symref_output.stdout) {
+                let trimmed = sym.trim();
+                if let Some((_, name)) = trimmed.rsplit_once('/') {
+                    return Some(name.to_string());
                 }
             }
         }
@@ -175,16 +174,15 @@ async fn get_default_branch(cwd: &Path) -> Option<String> {
         // Fall back to parsing `git remote show <remote>` output
         if let Some(show_output) =
             run_git_command_with_timeout(&["remote", "show", &remote], cwd).await
+            && show_output.status.success()
         {
-            if show_output.status.success() {
-                if let Ok(text) = String::from_utf8(show_output.stdout) {
-                    for line in text.lines() {
-                        let line = line.trim();
-                        if let Some(rest) = line.strip_prefix("HEAD branch:") {
-                            let name = rest.trim();
-                            if !name.is_empty() {
-                                return Some(name.to_string());
-                            }
+            if let Ok(text) = String::from_utf8(show_output.stdout) {
+                for line in text.lines() {
+                    let line = line.trim();
+                    if let Some(rest) = line.strip_prefix("HEAD branch:") {
+                        let name = rest.trim();
+                        if !name.is_empty() {
+                            return Some(name.to_string());
                         }
                     }
                 }
@@ -204,10 +202,9 @@ async fn get_default_branch(cwd: &Path) -> Option<String> {
             cwd,
         )
         .await
+            && verify.status.success()
         {
-            if verify.status.success() {
-                return Some(candidate.to_string());
-            }
+            return Some(candidate.to_string());
         }
     }
 
@@ -336,28 +333,27 @@ async fn diff_against_sha(cwd: &Path, sha: &str) -> Option<String> {
 
     if let Some(untracked_output) =
         run_git_command_with_timeout(&["ls-files", "--others", "--exclude-standard"], cwd).await
+        && untracked_output.status.success()
     {
-        if untracked_output.status.success() {
-            let untracked: Vec<String> = String::from_utf8(untracked_output.stdout)
-                .ok()?
-                .lines()
-                .map(|s| s.to_string())
-                .collect();
-            for file in untracked {
-                if file.is_empty() {
-                    continue;
-                }
-                if let Some(extra) = run_git_command_with_timeout(
-                    &["diff", "--binary", "--no-index", "/dev/null", &file],
-                    cwd,
-                )
-                .await
-                {
-                    let exit_ok = extra.status.code().is_some_and(|c| c == 0 || c == 1);
-                    if exit_ok {
-                        if let Ok(s) = String::from_utf8(extra.stdout) {
-                            diff.push_str(&s);
-                        }
+        let untracked: Vec<String> = String::from_utf8(untracked_output.stdout)
+            .ok()?
+            .lines()
+            .map(|s| s.to_string())
+            .collect();
+        for file in untracked {
+            if file.is_empty() {
+                continue;
+            }
+            if let Some(extra) = run_git_command_with_timeout(
+                &["diff", "--binary", "--no-index", "/dev/null", &file],
+                cwd,
+            )
+            .await
+            {
+                let exit_ok = extra.status.code().is_some_and(|c| c == 0 || c == 1);
+                if exit_ok {
+                    if let Ok(s) = String::from_utf8(extra.stdout) {
+                        diff.push_str(&s);
                     }
                 }
             }
