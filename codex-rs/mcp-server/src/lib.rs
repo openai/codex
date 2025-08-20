@@ -6,6 +6,8 @@ use std::io::Result as IoResult;
 use std::path::PathBuf;
 
 use codex_common::CliConfigOverrides;
+use codex_core::config::Config;
+use codex_core::config::ConfigOverrides;
 
 use mcp_types::JSONRPCMessage;
 use tokio::io::AsyncBufReadExt;
@@ -83,17 +85,18 @@ pub async fn run_main(
         }
     });
 
-    // Parse CLI overrides once so we can reuse them for operations
-    // like `get_auth_status` that need access to the effective config.
-    let cli_kv_overrides = match cli_config_overrides.parse_overrides() {
-        Ok(v) => v,
-        Err(e) => {
-            return Err(std::io::Error::new(
-                ErrorKind::InvalidInput,
-                format!("error parsing -c overrides: {e}"),
-            ));
-        }
-    };
+    // Parse CLI overrides once and derive the base Config eagerly so later
+    // components do not need to work with raw TOML values.
+    let cli_kv_overrides = cli_config_overrides.parse_overrides().map_err(|e| {
+        std::io::Error::new(
+            ErrorKind::InvalidInput,
+            format!("error parsing -c overrides: {e}"),
+        )
+    })?;
+    let config = Config::load_with_cli_overrides(cli_kv_overrides, ConfigOverrides::default())
+        .map_err(|e| {
+            std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))
+        })?;
 
     // Task: process incoming messages.
     let processor_handle = tokio::spawn({
@@ -101,7 +104,7 @@ pub async fn run_main(
         let mut processor = MessageProcessor::new(
             outgoing_message_sender,
             codex_linux_sandbox_exe,
-            cli_kv_overrides,
+            std::sync::Arc::new(config),
         );
         async move {
             while let Some(msg) = incoming_rx.recv().await {

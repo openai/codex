@@ -61,7 +61,6 @@ use codex_protocol::mcp_protocol::SendUserMessageResponse;
 use codex_protocol::mcp_protocol::SendUserTurnParams;
 use codex_protocol::mcp_protocol::SendUserTurnResponse;
 use codex_protocol::mcp_protocol::ServerNotification;
-use toml::Value as TomlValue; // for clarity where overrides stored
 
 // Duration before a ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -82,7 +81,7 @@ pub(crate) struct CodexMessageProcessor {
     conversation_manager: Arc<ConversationManager>,
     outgoing: Arc<OutgoingMessageSender>,
     codex_linux_sandbox_exe: Option<PathBuf>,
-    cli_kv_overrides: Vec<(String, TomlValue)>,
+    config: Arc<Config>,
     conversation_listeners: HashMap<Uuid, oneshot::Sender<()>>,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     // Queue of pending interrupt requests per conversation. We reply when TurnAborted arrives.
@@ -94,13 +93,13 @@ impl CodexMessageProcessor {
         conversation_manager: Arc<ConversationManager>,
         outgoing: Arc<OutgoingMessageSender>,
         codex_linux_sandbox_exe: Option<PathBuf>,
-        cli_kv_overrides: Vec<(String, TomlValue)>,
+        config: Arc<Config>,
     ) -> Self {
         Self {
             conversation_manager,
             outgoing,
             codex_linux_sandbox_exe,
-            cli_kv_overrides,
+            config,
             conversation_listeners: HashMap::new(),
             active_login: Arc::new(Mutex::new(None)),
             pending_interrupts: Arc::new(Mutex::new(HashMap::new())),
@@ -149,21 +148,7 @@ impl CodexMessageProcessor {
     }
 
     async fn login_chatgpt(&mut self, request_id: RequestId) {
-        let config = match Config::load_with_cli_overrides(
-            self.cli_kv_overrides.clone(),
-            ConfigOverrides::default(),
-        ) {
-            Ok(cfg) => cfg,
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("error loading config for login: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
+        let config = self.config.as_ref();
 
         let opts = LoginServerOptions {
             open_browser: false,
@@ -291,21 +276,7 @@ impl CodexMessageProcessor {
         drop(guard);
 
         // Load config to locate codex_home for persistent logout.
-        let config = match Config::load_with_cli_overrides(
-            self.cli_kv_overrides.clone(),
-            ConfigOverrides::default(),
-        ) {
-            Ok(cfg) => cfg,
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("error loading config for logout: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
+        let config = self.config.as_ref();
 
         if let Err(err) = logout(&config.codex_home) {
             let error = JSONRPCErrorError {
@@ -333,21 +304,7 @@ impl CodexMessageProcessor {
 
     async fn get_auth_status(&self, request_id: RequestId) {
         // Load config to determine codex_home and preferred auth method.
-        let config = match Config::load_with_cli_overrides(
-            self.cli_kv_overrides.clone(),
-            ConfigOverrides::default(),
-        ) {
-            Ok(cfg) => cfg,
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("error loading config for auth status: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
+        let config = self.config.as_ref();
 
         let preferred_auth_method: AuthMode = config.preferred_auth_method;
         let response =

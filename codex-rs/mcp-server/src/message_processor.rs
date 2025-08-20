@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use crate::codex_message_processor::CodexMessageProcessor;
 use crate::codex_tool_config::CodexToolCallParam;
@@ -12,7 +11,7 @@ use crate::outgoing_message::OutgoingMessageSender;
 use codex_protocol::mcp_protocol::ClientRequest;
 
 use codex_core::ConversationManager;
-use codex_core::config::Config as CodexConfig;
+use codex_core::config::Config;
 use codex_core::protocol::Submission;
 use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
@@ -30,9 +29,9 @@ use mcp_types::ServerCapabilitiesTools;
 use mcp_types::ServerNotification;
 use mcp_types::TextContent;
 use serde_json::json;
+use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task;
-use toml::Value as TomlValue;
 use uuid::Uuid;
 
 pub(crate) struct MessageProcessor {
@@ -50,7 +49,7 @@ impl MessageProcessor {
     pub(crate) fn new(
         outgoing: OutgoingMessageSender,
         codex_linux_sandbox_exe: Option<PathBuf>,
-        cli_kv_overrides: Vec<(String, TomlValue)>,
+        config: Arc<Config>,
     ) -> Self {
         let outgoing = Arc::new(outgoing);
         let conversation_manager = Arc::new(ConversationManager::default());
@@ -58,7 +57,7 @@ impl MessageProcessor {
             conversation_manager.clone(),
             outgoing.clone(),
             codex_linux_sandbox_exe.clone(),
-            cli_kv_overrides,
+            config,
         );
         Self {
             codex_message_processor,
@@ -347,7 +346,7 @@ impl MessageProcessor {
         }
     }
     async fn handle_tool_call_codex(&self, id: RequestId, arguments: Option<serde_json::Value>) {
-        let (initial_prompt, config): (String, CodexConfig) = match arguments {
+        let (initial_prompt, config): (String, Config) = match arguments {
             Some(json_val) => match serde_json::from_value::<CodexToolCallParam>(json_val) {
                 Ok(tool_cfg) => match tool_cfg.into_config(self.codex_linux_sandbox_exe.clone()) {
                     Ok(cfg) => cfg,
