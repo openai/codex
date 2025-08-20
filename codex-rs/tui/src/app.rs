@@ -379,6 +379,11 @@ impl App<'_> {
                         self.app_event_tx.send(AppEvent::CodexOp(Op::Compact));
                     }
                 }
+                SlashCommand::Model => {
+                    if let AppState::Chat { widget } = &mut self.app_state {
+                        widget.open_model_popup();
+                    }
+                }
                 SlashCommand::Approvals => {
                     if let AppState::Chat { widget } = &mut self.app_state {
                         widget.open_approvals_popup();
@@ -397,6 +402,7 @@ impl App<'_> {
                     if let AppState::Chat { widget } = &mut self.app_state {
                         widget.add_diff_in_progress();
                     }
+
                     let tx = self.app_event_tx.clone();
                     tokio::spawn(async move {
                         let text = match get_git_diff().await {
@@ -420,6 +426,11 @@ impl App<'_> {
                 SlashCommand::Status => {
                     if let AppState::Chat { widget } = &mut self.app_state {
                         widget.add_status_output();
+                    }
+                }
+                SlashCommand::Mcp => {
+                    if let AppState::Chat { widget } = &mut self.app_state {
+                        widget.add_mcp_output();
                     }
                 }
                 #[cfg(debug_assertions)]
@@ -459,16 +470,6 @@ impl App<'_> {
                             grant_root: Some(PathBuf::from("/tmp")),
                         }),
                     }));
-                }
-                SlashCommand::Model => {
-                    if let AppState::Chat { widget } = &mut self.app_state {
-                        widget.open_model_popup();
-                    }
-                }
-                SlashCommand::Mcp => {
-                    if let AppState::Chat { widget } = &mut self.app_state {
-                        widget.add_mcp_output();
-                    }
                 }
             },
             AppEvent::OnboardingAuthComplete(result) => {
