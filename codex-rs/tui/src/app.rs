@@ -1,254 +1,142 @@
-use crate::LoginStatus;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::chatwidget::ChatWidget;
 use crate::file_search::FileSearchManager;
 use crate::get_git_diff::get_git_diff;
-use crate::get_login_status;
-use crate::onboarding::onboarding_screen::KeyboardHandler;
-use crate::onboarding::onboarding_screen::OnboardingScreen;
-use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::slash_command::SlashCommand;
 use crate::tui;
+use crate::tui::TuiEvent;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::protocol::Event;
 use codex_core::protocol::Op;
+use codex_core::protocol::TokenUsage;
 use color_eyre::eyre::Result;
-use crossterm::SynchronizedUpdate;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::terminal::supports_keyboard_enhancement;
-use ratatui::layout::Offset;
-use ratatui::prelude::Backend;
-use ratatui::text::Line;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Duration;
-use std::time::Instant;
 use tokio::select;
-use tokio::sync::mpsc::UnboundedReceiver;
 use tokio::sync::mpsc::unbounded_channel;
 
-/// Time window for debouncing redraw requests.
-const REDRAW_DEBOUNCE: Duration = Duration::from_millis(1);
-
-/// Top-level application state: which full-screen view is currently active.
-#[allow(clippy::large_enum_variant)]
-enum AppState<'a> {
-    Onboarding {
-        screen: OnboardingScreen,
-    },
-    /// The main chat UI is visible.
-    Chat {
-        /// Boxed to avoid a large enum variant and reduce the overall size of
-        /// `AppState`.
-        widget: Box<ChatWidget<'a>>,
-    },
-}
-
-pub(crate) struct App<'a> {
+pub(crate) struct App {
     server: Arc<ConversationManager>,
     app_event_tx: AppEventSender,
-    app_event_rx: UnboundedReceiver<AppEvent>,
-    app_state: AppState<'a>,
+    chat_widget: ChatWidget,
 
     /// Config is stored here so we can recreate ChatWidgets as needed.
     config: Config,
 
     file_search: FileSearchManager,
 
-    pending_history_lines: Vec<Line<'static>>,
-
     enhanced_keys_supported: bool,
 
     /// Controls the animation thread that sends CommitTick events.
     commit_anim_running: Arc<AtomicBool>,
-
-    /// Channel to schedule one-shot animation frames; coalesced by a single
-    /// scheduler thread.
-    frame_schedule_tx: std::sync::mpsc::Sender<Instant>,
 }
 
-/// Aggregate parameters needed to create a `ChatWidget`, as creation may be
-/// deferred until after the Git warning screen is dismissed.
-#[derive(Clone, Debug)]
-pub(crate) struct ChatWidgetArgs {
-    pub(crate) config: Config,
-    initial_prompt: Option<String>,
-    initial_images: Vec<PathBuf>,
-    enhanced_keys_supported: bool,
-}
-
-impl App<'_> {
-    pub(crate) fn new(
+impl App {
+    pub async fn run(
+        tui: &mut tui::Tui,
         config: Config,
         initial_prompt: Option<String>,
-        initial_images: Vec<std::path::PathBuf>,
-        show_trust_screen: bool,
-    ) -> Self {
-        let conversation_manager = Arc::new(ConversationManager::default());
-
-        let (app_event_tx, app_event_rx) = unbounded_channel();
+        initial_images: Vec<PathBuf>,
+    ) -> Result<TokenUsage> {
+        use tokio_stream::StreamExt;
+        let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
+
+        let conversation_manager = Arc::new(ConversationManager::default());
 
         let enhanced_keys_supported = supports_keyboard_enhancement().unwrap_or(false);
 
-        let login_status = get_login_status(&config);
-        let should_show_onboarding =
-            should_show_onboarding(login_status, &config, show_trust_screen);
-        let app_state = if should_show_onboarding {
-            let show_login_screen = should_show_login_screen(login_status, &config);
-            let chat_widget_args = ChatWidgetArgs {
-                config: config.clone(),
-                initial_prompt,
-                initial_images,
-                enhanced_keys_supported,
-            };
-            AppState::Onboarding {
-                screen: OnboardingScreen::new(OnboardingScreenArgs {
-                    event_tx: app_event_tx.clone(),
-                    codex_home: config.codex_home.clone(),
-                    cwd: config.cwd.clone(),
-                    show_trust_screen,
-                    show_login_screen,
-                    chat_widget_args,
-                    login_status,
-                }),
-            }
-        } else {
-            let chat_widget = ChatWidget::new(
-                config.clone(),
-                conversation_manager.clone(),
-                app_event_tx.clone(),
-                initial_prompt,
-                initial_images,
-                enhanced_keys_supported,
-            );
-            AppState::Chat {
-                widget: Box::new(chat_widget),
-            }
-        };
+        let chat_widget = ChatWidget::new(
+            config.clone(),
+            conversation_manager.clone(),
+            tui.frame_requester(),
+            app_event_tx.clone(),
+            initial_prompt,
+            initial_images,
+            enhanced_keys_supported,
+        );
 
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
 
-        // Spawn a single scheduler thread that coalesces both debounced redraw
-        // requests and animation frame requests, and emits a single Redraw event
-        // at the earliest requested time.
-        let (frame_tx, frame_rx) = std::sync::mpsc::channel::<Instant>();
-        {
-            let app_event_tx = app_event_tx.clone();
-            std::thread::spawn(move || {
-                use std::sync::mpsc::RecvTimeoutError;
-                let mut next_deadline: Option<Instant> = None;
-                loop {
-                    if next_deadline.is_none() {
-                        match frame_rx.recv() {
-                            Ok(deadline) => next_deadline = Some(deadline),
-                            Err(_) => break,
-                        }
-                    }
-
-                    #[expect(clippy::expect_used)]
-                    let deadline = next_deadline.expect("deadline set");
-                    let now = Instant::now();
-                    let timeout = if deadline > now {
-                        deadline - now
-                    } else {
-                        Duration::from_millis(0)
-                    };
-
-                    match frame_rx.recv_timeout(timeout) {
-                        Ok(new_deadline) => {
-                            next_deadline =
-                                Some(next_deadline.map_or(new_deadline, |d| d.min(new_deadline)));
-                        }
-                        Err(RecvTimeoutError::Timeout) => {
-                            app_event_tx.send(AppEvent::Redraw);
-                            next_deadline = None;
-                        }
-                        Err(RecvTimeoutError::Disconnected) => break,
-                    }
-                }
-            });
-        }
-        Self {
+        let mut app = Self {
             server: conversation_manager,
             app_event_tx,
-            pending_history_lines: Vec::new(),
-            app_event_rx,
-            app_state,
+            chat_widget,
             config,
             file_search,
             enhanced_keys_supported,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
-            frame_schedule_tx: frame_tx,
-        }
-    }
+        };
 
-    fn schedule_frame_in(&self, dur: Duration) {
-        let _ = self.frame_schedule_tx.send(Instant::now() + dur);
-    }
+        let tui_events = tui.event_stream();
+        tokio::pin!(tui_events);
 
-    pub(crate) async fn run(&mut self, terminal: &mut tui::Tui) -> Result<()> {
-        use tokio_stream::StreamExt;
+        tui.frame_requester().schedule_frame();
 
-        self.handle_event(terminal, AppEvent::Redraw)?;
-
-        let mut crossterm_events = crossterm::event::EventStream::new();
-
-        while let Some(event) = {
-            select! {
-                maybe_app_event = self.app_event_rx.recv() => {
-                    maybe_app_event
-                },
-                Some(Ok(event)) = crossterm_events.next() => {
-                    match event {
-                        crossterm::event::Event::Key(key_event) => {
-                            Some(AppEvent::KeyEvent(key_event))
-                        }
-                        crossterm::event::Event::Resize(_, _) => {
-                            Some(AppEvent::Redraw)
-                        }
-                        crossterm::event::Event::Paste(pasted) => {
-                            // Many terminals convert newlines to \r when pasting (e.g., iTerm2),
-                            // but tui-textarea expects \n. Normalize CR to LF.
-                            // [tui-textarea]: https://github.com/rhysd/tui-textarea/blob/4d18622eeac13b309e0ff6a55a46ac6706da68cf/src/textarea.rs#L782-L783
-                            // [iTerm2]: https://github.com/gnachman/iTerm2/blob/5d0c0d9f68523cbd0494dad5422998964a2ecd8d/sources/iTermPasteHelper.m#L206-L216
-                            let pasted = pasted.replace("\r", "\n");
-                            Some(AppEvent::Paste(pasted))
-                        }
-                        _ => {
-                            // Ignore any other events.
-                            None
-                        }
-                    }
-                },
+        while select! {
+            Some(event) = app_event_rx.recv() => {
+                app.handle_event(tui, event)?
             }
-        } && self.handle_event(terminal, event)?
-        {}
-        terminal.clear()?;
-        Ok(())
+            Some(event) = tui_events.next() => {
+                app.handle_tui_event(tui, event).await?
+            }
+        } {}
+        tui.terminal.clear()?;
+        Ok(app.token_usage())
     }
 
-    fn handle_event(&mut self, terminal: &mut tui::Tui, event: AppEvent) -> Result<bool> {
+    pub(crate) async fn handle_tui_event(
+        &mut self,
+        tui: &mut tui::Tui,
+        event: TuiEvent,
+    ) -> Result<bool> {
+        match event {
+            TuiEvent::Key(key_event) => {
+                self.handle_key_event(key_event).await;
+            }
+            TuiEvent::Paste(pasted) => {
+                // Many terminals convert newlines to \r when pasting (e.g., iTerm2),
+                // but tui-textarea expects \n. Normalize CR to LF.
+                // [tui-textarea]: https://github.com/rhysd/tui-textarea/blob/4d18622eeac13b309e0ff6a55a46ac6706da68cf/src/textarea.rs#L782-L783
+                // [iTerm2]: https://github.com/gnachman/iTerm2/blob/5d0c0d9f68523cbd0494dad5422998964a2ecd8d/sources/iTermPasteHelper.m#L206-L216
+                let pasted = pasted.replace("\r", "\n");
+                self.chat_widget.handle_paste(pasted);
+            }
+            TuiEvent::Draw => {
+                tui.draw(
+                    self.chat_widget.desired_height(tui.terminal.size()?.width),
+                    |frame| {
+                        frame.render_widget_ref(&self.chat_widget, frame.area());
+                        if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
+                            frame.set_cursor_position((x, y));
+                        }
+                    },
+                )?;
+            }
+            #[cfg(unix)]
+            TuiEvent::ResumeFromSuspend => {
+                let cursor_pos = tui.terminal.get_cursor_position()?;
+                tui.terminal
+                    .set_viewport_area(ratatui::layout::Rect::new(0, cursor_pos.y, 0, 0));
+            }
+        }
+        Ok(true)
+    }
+
+    fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
         match event {
             AppEvent::InsertHistory(lines) => {
-                self.pending_history_lines.extend(lines);
-                self.app_event_tx.send(AppEvent::RequestRedraw);
-            }
-            AppEvent::RequestRedraw => {
-                self.schedule_frame_in(REDRAW_DEBOUNCE);
-            }
-            AppEvent::ScheduleFrameIn(dur) => {
-                self.schedule_frame_in(dur);
-            }
-            AppEvent::Redraw => {
-                std::io::stdout().sync_update(|_| self.draw_next_frame(terminal))??;
+                tui.insert_history_lines(lines);
             }
             AppEvent::StartCommitAnimation => {
                 if self
@@ -270,124 +158,48 @@ impl App<'_> {
                 self.commit_anim_running.store(false, Ordering::Release);
             }
             AppEvent::CommitTick => {
-                if let AppState::Chat { widget } = &mut self.app_state {
-                    widget.on_commit_tick();
-                }
-            }
-            AppEvent::KeyEvent(key_event) => {
-                match key_event {
-                    KeyEvent {
-                        code: KeyCode::Char('c'),
-                        modifiers: crossterm::event::KeyModifiers::CONTROL,
-                        kind: KeyEventKind::Press,
-                        ..
-                    } => match &mut self.app_state {
-                        AppState::Chat { widget } => {
-                            widget.on_ctrl_c();
-                        }
-                        AppState::Onboarding { .. } => {
-                            self.app_event_tx.send(AppEvent::ExitRequest);
-                        }
-                    },
-                    KeyEvent {
-                        code: KeyCode::Char('z'),
-                        modifiers: crossterm::event::KeyModifiers::CONTROL,
-                        kind: KeyEventKind::Press,
-                        ..
-                    } => {
-                        #[cfg(unix)]
-                        {
-                            self.suspend(terminal)?;
-                        }
-                        // No-op on non-Unix platforms.
-                    }
-                    KeyEvent {
-                        code: KeyCode::Char('d'),
-                        modifiers: crossterm::event::KeyModifiers::CONTROL,
-                        kind: KeyEventKind::Press,
-                        ..
-                    } => {
-                        match &mut self.app_state {
-                            AppState::Chat { widget } => {
-                                if widget.composer_is_empty() {
-                                    self.app_event_tx.send(AppEvent::ExitRequest);
-                                } else {
-                                    // Treat Ctrl+D as a normal key event when the composer
-                                    // is not empty so that it doesn't quit the application
-                                    // prematurely.
-                                    self.dispatch_key_event(key_event);
-                                }
-                            }
-                            AppState::Onboarding { .. } => {
-                                self.app_event_tx.send(AppEvent::ExitRequest);
-                            }
-                        }
-                    }
-                    KeyEvent {
-                        kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                        ..
-                    } => {
-                        self.dispatch_key_event(key_event);
-                    }
-                    _ => {
-                        // Ignore Release key events.
-                    }
-                };
-            }
-            AppEvent::Paste(text) => {
-                self.dispatch_paste_event(text);
+                self.chat_widget.on_commit_tick();
             }
             AppEvent::CodexEvent(event) => {
-                self.dispatch_codex_event(event);
+                self.chat_widget.handle_codex_event(event);
             }
             AppEvent::ExitRequest => {
                 return Ok(false);
             }
-            AppEvent::CodexOp(op) => match &mut self.app_state {
-                AppState::Chat { widget } => widget.submit_op(op),
-                AppState::Onboarding { .. } => {}
-            },
+            AppEvent::CodexOp(op) => self.chat_widget.submit_op(op),
             AppEvent::DiffResult(text) => {
-                if let AppState::Chat { widget } = &mut self.app_state {
-                    widget.add_diff_output(text);
-                }
+                self.chat_widget.add_diff_output(text);
             }
             AppEvent::DispatchCommand(command) => match command {
                 SlashCommand::New => {
                     // User accepted – switch to chat view.
-                    let new_widget = Box::new(ChatWidget::new(
+                    let new_widget = ChatWidget::new(
                         self.config.clone(),
                         self.server.clone(),
+                        tui.frame_requester(),
                         self.app_event_tx.clone(),
                         None,
                         Vec::new(),
                         self.enhanced_keys_supported,
-                    ));
-                    self.app_state = AppState::Chat { widget: new_widget };
-                    self.app_event_tx.send(AppEvent::RequestRedraw);
+                    );
+                    self.chat_widget = new_widget;
+                    tui.frame_requester().schedule_frame();
                 }
                 SlashCommand::Init => {
                     // Guard: do not run if a task is active.
-                    if let AppState::Chat { widget } = &mut self.app_state {
-                        const INIT_PROMPT: &str = include_str!("../prompt_for_init_command.md");
-                        widget.submit_text_message(INIT_PROMPT.to_string());
-                    }
+                    const INIT_PROMPT: &str = include_str!("../prompt_for_init_command.md");
+                    self.chat_widget
+                        .submit_text_message(INIT_PROMPT.to_string());
                 }
                 SlashCommand::Compact => {
-                    if let AppState::Chat { widget } = &mut self.app_state {
-                        widget.clear_token_usage();
-                        self.app_event_tx.send(AppEvent::CodexOp(Op::Compact));
-                    }
+                    self.chat_widget.clear_token_usage();
+                    self.app_event_tx.send(AppEvent::CodexOp(Op::Compact));
                 }
                 SlashCommand::Model => {
-                    if let AppState::Chat { widget } = &mut self.app_state {
-                        widget.open_model_popup();
-                    }
+                    self.chat_widget.open_model_popup();
                 }
                 SlashCommand::Approvals => {
-                    if let AppState::Chat { widget } = &mut self.app_state {
-                        widget.open_approvals_popup();
-                    }
+                    self.chat_widget.open_approvals_popup();
                 }
                 SlashCommand::Quit => {
                     return Ok(false);
@@ -399,10 +211,7 @@ impl App<'_> {
                     return Ok(false);
                 }
                 SlashCommand::Diff => {
-                    if let AppState::Chat { widget } = &mut self.app_state {
-                        widget.add_diff_in_progress();
-                    }
-
+                    self.chat_widget.add_diff_in_progress();
                     let tx = self.app_event_tx.clone();
                     tokio::spawn(async move {
                         let text = match get_git_diff().await {
@@ -419,19 +228,13 @@ impl App<'_> {
                     });
                 }
                 SlashCommand::Mention => {
-                    if let AppState::Chat { widget } = &mut self.app_state {
-                        widget.insert_str("@");
-                    }
+                    self.chat_widget.insert_str("@");
                 }
                 SlashCommand::Status => {
-                    if let AppState::Chat { widget } = &mut self.app_state {
-                        widget.add_status_output();
-                    }
+                    self.chat_widget.add_status_output();
                 }
                 SlashCommand::Mcp => {
-                    if let AppState::Chat { widget } = &mut self.app_state {
-                        widget.add_mcp_output();
-                    }
+                    self.chat_widget.add_mcp_output();
                 }
                 #[cfg(debug_assertions)]
                 SlashCommand::TestApproval => {
@@ -472,256 +275,61 @@ impl App<'_> {
                     }));
                 }
             },
-            AppEvent::OnboardingAuthComplete(result) => {
-                if let AppState::Onboarding { screen } = &mut self.app_state {
-                    screen.on_auth_complete(result);
-                }
-            }
-            AppEvent::OnboardingComplete(ChatWidgetArgs {
-                config,
-                enhanced_keys_supported,
-                initial_images,
-                initial_prompt,
-            }) => {
-                self.app_state = AppState::Chat {
-                    widget: Box::new(ChatWidget::new(
-                        config,
-                        self.server.clone(),
-                        self.app_event_tx.clone(),
-                        initial_prompt,
-                        initial_images,
-                        enhanced_keys_supported,
-                    )),
-                }
-            }
             AppEvent::StartFileSearch(query) => {
                 if !query.is_empty() {
                     self.file_search.on_user_query(query);
                 }
             }
             AppEvent::FileSearchResult { query, matches } => {
-                if let AppState::Chat { widget } = &mut self.app_state {
-                    widget.apply_file_search_result(query, matches);
-                }
+                self.chat_widget.apply_file_search_result(query, matches);
             }
             AppEvent::UpdateReasoningEffort(effort) => {
-                if let AppState::Chat { widget } = &mut self.app_state {
-                    widget.set_reasoning_effort(effort);
-                }
+                self.chat_widget.set_reasoning_effort(effort);
             }
             AppEvent::UpdateModel(model) => {
-                if let AppState::Chat { widget } = &mut self.app_state {
-                    widget.set_model(model);
-                }
+                self.chat_widget.set_model(model);
             }
             AppEvent::UpdateAskForApprovalPolicy(policy) => {
-                if let AppState::Chat { widget } = &mut self.app_state {
-                    widget.set_approval_policy(policy);
-                }
+                self.chat_widget.set_approval_policy(policy);
             }
             AppEvent::UpdateSandboxPolicy(policy) => {
-                if let AppState::Chat { widget } = &mut self.app_state {
-                    widget.set_sandbox_policy(policy);
-                }
+                self.chat_widget.set_sandbox_policy(policy);
             }
         }
         Ok(true)
     }
 
-    #[cfg(unix)]
-    fn suspend(&mut self, terminal: &mut tui::Tui) -> Result<()> {
-        tui::restore()?;
-        // SAFETY: Unix-only code path. We intentionally send SIGTSTP to the
-        // current process group (pid 0) to trigger standard job-control
-        // suspension semantics. This FFI does not involve any raw pointers,
-        // is not called from a signal handler, and uses a constant signal.
-        // Errors from kill are acceptable (e.g., if already stopped) — the
-        // subsequent re-init path will still leave the terminal in a good state.
-        // We considered `nix`, but didn't think it was worth pulling in for this one call.
-        unsafe { libc::kill(0, libc::SIGTSTP) };
-        *terminal = tui::init(&self.config)?;
-        terminal.clear()?;
-        self.app_event_tx.send(AppEvent::RequestRedraw);
-        Ok(())
-    }
-
     pub(crate) fn token_usage(&self) -> codex_core::protocol::TokenUsage {
-        match &self.app_state {
-            AppState::Chat { widget } => widget.token_usage().clone(),
-            AppState::Onboarding { .. } => codex_core::protocol::TokenUsage::default(),
-        }
+        self.chat_widget.token_usage().clone()
     }
 
-    fn draw_next_frame(&mut self, terminal: &mut tui::Tui) -> Result<()> {
-        if matches!(self.app_state, AppState::Onboarding { .. }) {
-            terminal.clear()?;
-        }
-
-        let screen_size = terminal.size()?;
-        let last_known_screen_size = terminal.last_known_screen_size;
-        if screen_size != last_known_screen_size {
-            let cursor_pos = terminal.get_cursor_position()?;
-            let last_known_cursor_pos = terminal.last_known_cursor_pos;
-            if cursor_pos.y != last_known_cursor_pos.y {
-                // The terminal was resized. The only point of reference we have for where our viewport
-                // was moved is the cursor position.
-                // NB this assumes that the cursor was not wrapped as part of the resize.
-                let cursor_delta = cursor_pos.y as i32 - last_known_cursor_pos.y as i32;
-
-                let new_viewport_area = terminal.viewport_area.offset(Offset {
-                    x: 0,
-                    y: cursor_delta,
-                });
-                terminal.set_viewport_area(new_viewport_area);
-                terminal.clear()?;
+    async fn handle_key_event(&mut self, key_event: KeyEvent) {
+        match key_event {
+            KeyEvent {
+                code: KeyCode::Char('c'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                self.chat_widget.on_ctrl_c();
             }
-        }
-
-        let size = terminal.size()?;
-        let desired_height = match &self.app_state {
-            AppState::Chat { widget } => widget.desired_height(size.width),
-            AppState::Onboarding { .. } => size.height,
+            KeyEvent {
+                code: KeyCode::Char('d'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } if self.chat_widget.composer_is_empty() => {
+                self.app_event_tx.send(AppEvent::ExitRequest);
+            }
+            KeyEvent {
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            } => {
+                self.chat_widget.handle_key_event(key_event);
+            }
+            _ => {
+                // Ignore Release key events.
+            }
         };
-
-        let mut area = terminal.viewport_area;
-        area.height = desired_height.min(size.height);
-        area.width = size.width;
-        if area.bottom() > size.height {
-            terminal
-                .backend_mut()
-                .scroll_region_up(0..area.top(), area.bottom() - size.height)?;
-            area.y = size.height - area.height;
-        }
-        if area != terminal.viewport_area {
-            terminal.clear()?;
-            terminal.set_viewport_area(area);
-        }
-        if !self.pending_history_lines.is_empty() {
-            crate::insert_history::insert_history_lines(
-                terminal,
-                self.pending_history_lines.clone(),
-            );
-            self.pending_history_lines.clear();
-        }
-        terminal.draw(|frame| match &mut self.app_state {
-            AppState::Chat { widget } => {
-                if let Some((x, y)) = widget.cursor_pos(frame.area()) {
-                    frame.set_cursor_position((x, y));
-                }
-                frame.render_widget_ref(&**widget, frame.area())
-            }
-            AppState::Onboarding { screen } => frame.render_widget_ref(&*screen, frame.area()),
-        })?;
-        Ok(())
-    }
-
-    /// Dispatch a KeyEvent to the current view and let it decide what to do
-    /// with it.
-    fn dispatch_key_event(&mut self, key_event: KeyEvent) {
-        match &mut self.app_state {
-            AppState::Chat { widget } => {
-                widget.handle_key_event(key_event);
-            }
-            AppState::Onboarding { screen } => match key_event.code {
-                KeyCode::Char('q') => {
-                    self.app_event_tx.send(AppEvent::ExitRequest);
-                }
-                _ => screen.handle_key_event(key_event),
-            },
-        }
-    }
-
-    fn dispatch_paste_event(&mut self, pasted: String) {
-        match &mut self.app_state {
-            AppState::Chat { widget } => widget.handle_paste(pasted),
-            AppState::Onboarding { .. } => {}
-        }
-    }
-
-    fn dispatch_codex_event(&mut self, event: Event) {
-        match &mut self.app_state {
-            AppState::Chat { widget } => widget.handle_codex_event(event),
-            AppState::Onboarding { .. } => {}
-        }
-    }
-}
-
-fn should_show_onboarding(
-    login_status: LoginStatus,
-    config: &Config,
-    show_trust_screen: bool,
-) -> bool {
-    if show_trust_screen {
-        return true;
-    }
-
-    should_show_login_screen(login_status, config)
-}
-
-fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool {
-    // Only show the login screen for providers that actually require OpenAI auth
-    // (OpenAI or equivalents). For OSS/other providers, skip login entirely.
-    if !config.model_provider.requires_openai_auth {
-        return false;
-    }
-
-    match login_status {
-        LoginStatus::NotAuthenticated => true,
-        LoginStatus::AuthMode(method) => method != config.preferred_auth_method,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use codex_core::config::ConfigOverrides;
-    use codex_core::config::ConfigToml;
-    use codex_login::AuthMode;
-
-    fn make_config(preferred: AuthMode) -> Config {
-        let mut cfg = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides::default(),
-            std::env::temp_dir(),
-        )
-        .expect("load default config");
-        cfg.preferred_auth_method = preferred;
-        cfg
-    }
-
-    #[test]
-    fn shows_login_when_not_authenticated() {
-        let cfg = make_config(AuthMode::ChatGPT);
-        assert!(should_show_login_screen(
-            LoginStatus::NotAuthenticated,
-            &cfg
-        ));
-    }
-
-    #[test]
-    fn shows_login_when_api_key_but_prefers_chatgpt() {
-        let cfg = make_config(AuthMode::ChatGPT);
-        assert!(should_show_login_screen(
-            LoginStatus::AuthMode(AuthMode::ApiKey),
-            &cfg
-        ))
-    }
-
-    #[test]
-    fn hides_login_when_api_key_and_prefers_api_key() {
-        let cfg = make_config(AuthMode::ApiKey);
-        assert!(!should_show_login_screen(
-            LoginStatus::AuthMode(AuthMode::ApiKey),
-            &cfg
-        ))
-    }
-
-    #[test]
-    fn hides_login_when_chatgpt_and_prefers_chatgpt() {
-        let cfg = make_config(AuthMode::ChatGPT);
-        assert!(!should_show_login_screen(
-            LoginStatus::AuthMode(AuthMode::ChatGPT),
-            &cfg
-        ))
     }
 }

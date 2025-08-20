@@ -12,13 +12,13 @@ use super::BottomPaneView;
 use super::CancellationEvent;
 
 /// Modal overlay asking the user to approve/deny a sequence of requests.
-pub(crate) struct ApprovalModalView<'a> {
-    current: UserApprovalWidget<'a>,
+pub(crate) struct ApprovalModalView {
+    current: UserApprovalWidget,
     queue: Vec<ApprovalRequest>,
     app_event_tx: AppEventSender,
 }
 
-impl ApprovalModalView<'_> {
+impl ApprovalModalView {
     pub fn new(request: ApprovalRequest, app_event_tx: AppEventSender) -> Self {
         Self {
             current: UserApprovalWidget::new(request, app_event_tx.clone()),
@@ -41,13 +41,13 @@ impl ApprovalModalView<'_> {
     }
 }
 
-impl<'a> BottomPaneView<'a> for ApprovalModalView<'a> {
-    fn handle_key_event(&mut self, _pane: &mut BottomPane<'a>, key_event: KeyEvent) {
+impl BottomPaneView for ApprovalModalView {
+    fn handle_key_event(&mut self, _pane: &mut BottomPane, key_event: KeyEvent) {
         self.current.handle_key_event(key_event);
         self.maybe_advance();
     }
 
-    fn on_ctrl_c(&mut self, _pane: &mut BottomPane<'a>) -> CancellationEvent {
+    fn on_ctrl_c(&mut self, _pane: &mut BottomPane) -> CancellationEvent {
         self.current.on_ctrl_c();
         self.queue.clear();
         CancellationEvent::Handled
@@ -96,6 +96,7 @@ mod tests {
         let (tx2, _rx2) = unbounded_channel::<AppEvent>();
         let mut pane = BottomPane::new(super::super::BottomPaneParams {
             app_event_tx: AppEventSender::new(tx2),
+            frame_requester: crate::tui::FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
