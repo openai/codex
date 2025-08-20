@@ -389,7 +389,7 @@ impl App<'_> {
                     }
                     SlashCommand::Approvals => {
                         if let AppState::Chat { widget } = &mut self.app_state {
-                            widget.open_permissions_popup();
+                            widget.open_approvals_popup();
                         }
                     }
                     SlashCommand::Quit => {

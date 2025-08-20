@@ -737,8 +737,8 @@ impl ChatWidget<'_> {
         );
     }
 
-    /// Open a popup to choose the permissions (approval + sandbox policy).
-    pub(crate) fn open_permissions_popup(&mut self) {
+    /// Open a popup to choose the approvals mode (ask for approval policy + sandbox policy).
+    pub(crate) fn open_approvals_popup(&mut self) {
         let current_approval = self.config.approval_policy;
         let current_sandbox = self.config.sandbox_policy.clone();
         let mut items: Vec<SelectionItem> = Vec::new();
@@ -771,8 +771,8 @@ impl ChatWidget<'_> {
         }
 
         self.bottom_pane.show_selection_view(
-            "Select permissions".to_string(),
-            Some("Choose approval and sandbox mode for this session".to_string()),
+            "Select Approvals Mode".to_string(),
+            None,
             Some("Press Enter to confirm or Esc to go back".to_string()),
             items,
         );
