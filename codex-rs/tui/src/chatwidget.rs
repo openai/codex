@@ -52,6 +52,7 @@ use crate::history_cell::CommandOutput;
 use crate::history_cell::ExecCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PatchEventType;
+use crate::tui::FrameRequester;
 // streaming internals are provided by crate::streaming and crate::markdown_stream
 use crate::user_approval_widget::ApprovalRequest;
 mod interrupts;
@@ -60,9 +61,13 @@ mod agent;
 use self::agent::spawn_agent;
 use crate::streaming::controller::AppEventHistorySink;
 use crate::streaming::controller::StreamController;
+use codex_common::approval_presets::ApprovalPreset;
+use codex_common::approval_presets::builtin_approval_presets;
 use codex_common::model_presets::ModelPreset;
 use codex_common::model_presets::builtin_model_presets;
 use codex_core::ConversationManager;
+use codex_core::protocol::AskForApproval;
+use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_file_search::FileMatch;
 use uuid::Uuid;
@@ -73,10 +78,10 @@ struct RunningCommand {
     parsed_cmd: Vec<ParsedCommand>,
 }
 
-pub(crate) struct ChatWidget<'a> {
+pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
-    bottom_pane: BottomPane<'a>,
+    bottom_pane: BottomPane,
     active_exec_cell: Option<ExecCell>,
     config: Config,
     initial_user_message: Option<UserMessage>,
@@ -94,6 +99,7 @@ pub(crate) struct ChatWidget<'a> {
     // Whether a redraw is needed after handling the current event
     needs_redraw: bool,
     session_id: Option<Uuid>,
+    frame_requester: FrameRequester,
 }
 
 struct UserMessage {
@@ -120,7 +126,7 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
     }
 }
 
-impl ChatWidget<'_> {
+impl ChatWidget {
     #[inline]
     fn mark_needs_redraw(&mut self) {
         self.needs_redraw = true;
@@ -496,6 +502,7 @@ impl ChatWidget<'_> {
     pub(crate) fn new(
         config: Config,
         conversation_manager: Arc<ConversationManager>,
+        frame_requester: FrameRequester,
         app_event_tx: AppEventSender,
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
@@ -507,8 +514,10 @@ impl ChatWidget<'_> {
 
         Self {
             app_event_tx: app_event_tx.clone(),
+            frame_requester: frame_requester.clone(),
             codex_op_tx,
             bottom_pane: BottomPane::new(BottomPaneParams {
+                frame_requester,
                 app_event_tx,
                 has_input_focus: true,
                 enhanced_keys_supported,
@@ -668,7 +677,7 @@ impl ChatWidget<'_> {
     }
 
     fn request_redraw(&mut self) {
-        self.app_event_tx.send(AppEvent::RequestRedraw);
+        self.frame_requester.schedule_frame();
     }
 
     pub(crate) fn add_diff_in_progress(&mut self) {
@@ -731,6 +740,57 @@ impl ChatWidget<'_> {
             Some("Press Enter to confirm or Esc to go back".to_string()),
             items,
         );
+    }
+
+    /// Open a popup to choose the approvals mode (ask for approval policy + sandbox policy).
+    pub(crate) fn open_approvals_popup(&mut self) {
+        let current_approval = self.config.approval_policy;
+        let current_sandbox = self.config.sandbox_policy.clone();
+        let mut items: Vec<SelectionItem> = Vec::new();
+        let presets: Vec<ApprovalPreset> = builtin_approval_presets();
+        for preset in presets.into_iter() {
+            let is_current =
+                current_approval == preset.approval && current_sandbox == preset.sandbox;
+            let approval = preset.approval;
+            let sandbox = preset.sandbox.clone();
+            let name = preset.label.to_string();
+            let description = Some(preset.description.to_string());
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                    cwd: None,
+                    approval_policy: Some(approval),
+                    sandbox_policy: Some(sandbox.clone()),
+                    model: None,
+                    effort: None,
+                    summary: None,
+                }));
+                tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
+                tx.send(AppEvent::UpdateSandboxPolicy(sandbox.clone()));
+            })];
+            items.push(SelectionItem {
+                name,
+                description,
+                is_current,
+                actions,
+            });
+        }
+
+        self.bottom_pane.show_selection_view(
+            "Select Approval Mode".to_string(),
+            None,
+            Some("Press Enter to confirm or Esc to go back".to_string()),
+            items,
+        );
+    }
+
+    /// Set the approval policy in the widget's config copy.
+    pub(crate) fn set_approval_policy(&mut self, policy: AskForApproval) {
+        self.config.approval_policy = policy;
+    }
+
+    /// Set the sandbox policy in the widget's config copy.
+    pub(crate) fn set_sandbox_policy(&mut self, policy: SandboxPolicy) {
+        self.config.sandbox_policy = policy;
     }
 
     /// Set the reasoning effort in the widget's config copy.
@@ -825,7 +885,7 @@ impl ChatWidget<'_> {
     }
 }
 
-impl WidgetRef for &ChatWidget<'_> {
+impl WidgetRef for &ChatWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let [active_cell_area, bottom_pane_area] = self.layout_areas(area);
         (&self.bottom_pane).render(bottom_pane_area, buf);

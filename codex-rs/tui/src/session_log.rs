@@ -132,24 +132,7 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
         AppEvent::CodexEvent(ev) => {
             write_record("to_tui", "codex_event", ev);
         }
-        AppEvent::KeyEvent(k) => {
-            let value = json!({
-                "ts": now_ts(),
-                "dir": "to_tui",
-                "kind": "key_event",
-                "event": format!("{:?}", k),
-            });
-            LOGGER.write_json_line(value);
-        }
-        AppEvent::Paste(s) => {
-            let value = json!({
-                "ts": now_ts(),
-                "dir": "to_tui",
-                "kind": "paste",
-                "text": s,
-            });
-            LOGGER.write_json_line(value);
-        }
+
         AppEvent::DispatchCommand(cmd) => {
             let value = json!({
                 "ts": now_ts(),

@@ -22,6 +22,7 @@ workspace = true
 
 [dependencies]
 anyhow = "1"
+async-stream = "0.3.6"
 base64 = "0.22.1"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
@@ -33,18 +34,19 @@ codex-common = { path = "../common", features = [
     "sandbox_summary",
 ] }
 codex-core = { path = "../core" }
-codex-protocol = { path = "../protocol" }
 codex-file-search = { path = "../file-search" }
 codex-login = { path = "../login" }
 codex-ollama = { path = "../ollama" }
+codex-protocol = { path = "../protocol" }
 color-eyre = "0.6.3"
-crossterm = { version = "0.28.1", features = ["bracketed-paste"] }
+crossterm = { version = "0.28.1", features = ["bracketed-paste", "event-stream"] }
 diffy = "0.4.2"
 image = { version = "^0.25.6", default-features = false, features = ["jpeg"] }
 lazy_static = "1"
-once_cell = "1"
 mcp-types = { path = "../mcp-types" }
+once_cell = "1"
 path-clean = "1.0.1"
+rand = "0.9"
 ratatui = { version = "0.29.0", features = [
     "scrolling-regions",
     "unstable-rendered-line-info",
@@ -67,6 +69,7 @@ tokio = { version = "1", features = [
     "rt-multi-thread",
     "signal",
 ] }
+tokio-stream = "0.1.17"
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-appender = "0.2.3"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
@@ -75,7 +78,6 @@ tui-markdown = "0.3.3"
 unicode-segmentation = "1.12.0"
 unicode-width = "0.1"
 uuid = "1"
-rand = "0.9"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
