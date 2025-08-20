@@ -13,6 +13,7 @@ use crate::model_provider_info::built_in_model_providers;
 use crate::openai_model_info::get_model_info;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
+use crate::spawn::CODEX_ORIGINATOR_ENV_VAR;
 use codex_login::AuthMode;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
@@ -625,6 +626,10 @@ impl Config {
         let include_apply_patch_tool_val =
             include_apply_patch_tool.unwrap_or(model_family.uses_apply_patch_tool);
 
+        let originator = std::env::var(CODEX_ORIGINATOR_ENV_VAR)
+            .ok()
+            .or(cfg.internal_originator);
+
         let config = Self {
             model,
             model_family,
@@ -678,7 +683,7 @@ impl Config {
             experimental_resume,
             include_plan_tool: include_plan_tool.unwrap_or(false),
             include_apply_patch_tool: include_apply_patch_tool_val,
-            internal_originator: cfg.internal_originator,
+            internal_originator: originator,
             preferred_auth_method: cfg.preferred_auth_method.unwrap_or(AuthMode::ChatGPT),
         };
         Ok(config)
