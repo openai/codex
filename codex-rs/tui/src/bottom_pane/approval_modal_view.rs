@@ -41,7 +41,7 @@ impl ApprovalModalView {
     }
 }
 
-impl<'a> BottomPaneView for ApprovalModalView {
+impl BottomPaneView for ApprovalModalView {
     fn handle_key_event(&mut self, _pane: &mut BottomPane, key_event: KeyEvent) {
         self.current.handle_key_event(key_event);
         self.maybe_advance();

@@ -103,7 +103,7 @@ impl App {
     ) -> Result<bool> {
         match event {
             TuiEvent::Key(key_event) => {
-                self.handle_key_event(tui, key_event).await;
+                self.handle_key_event(key_event).await;
             }
             TuiEvent::Paste(pasted) => {
                 // Many terminals convert newlines to \r when pasting (e.g., iTerm2),
@@ -303,7 +303,7 @@ impl App {
         self.chat_widget.token_usage().clone()
     }
 
-    async fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
+    async fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event {
             KeyEvent {
                 code: KeyCode::Char('c'),
