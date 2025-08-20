@@ -24,7 +24,7 @@ pub fn builtin_permission_presets() -> Vec<PermissionPreset> {
         PermissionPreset {
             id: "read-only",
             label: "Read Only",
-            description: "Codex can read files in the workspace and answer questions. Codex requires approval to make edits, run commands, or access network.",
+            description: "Codex can read files and answer questions. Codex requires approval to make edits, run commands, or access network.",
             approval: AskForApproval::OnRequest,
             sandbox: SandboxPolicy::ReadOnly,
         },
