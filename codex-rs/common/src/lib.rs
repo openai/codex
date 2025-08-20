@@ -32,4 +32,4 @@ pub mod fuzzy_match;
 // Shared model presets used by TUI and MCP server
 pub mod model_presets;
 // Shared approval presets (approval + sandbox) used by TUI and MCP server
-pub mod approvals_presets;
+pub mod approval_presets;
