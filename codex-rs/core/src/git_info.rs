@@ -7,6 +7,8 @@ use tokio::process::Command;
 use tokio::time::Duration as TokioDuration;
 use tokio::time::timeout;
 
+use crate::util::is_inside_git_repo;
+
 /// Timeout for git commands to prevent freezing on large repositories
 const GIT_COMMAND_TIMEOUT: TokioDuration = TokioDuration::from_secs(5);
 
@@ -89,11 +91,7 @@ pub async fn collect_git_info(cwd: &Path) -> Option<GitInfo> {
 
 /// Returns the closest git sha to HEAD that is on a remote as well as the diff to that sha.
 pub async fn git_diff_to_remote(cwd: &Path) -> Option<GitDiffToRemote> {
-    let is_git_repo = run_git_command_with_timeout(&["rev-parse", "--git-dir"], cwd)
-        .await?
-        .status
-        .success();
-    if !is_git_repo {
+    if !is_inside_git_repo(cwd) {
         return None;
     }
 
@@ -160,12 +158,11 @@ async fn get_default_branch(cwd: &Path) -> Option<String> {
         )
         .await
             && symref_output.status.success()
+            && let Ok(sym) = String::from_utf8(symref_output.stdout)
         {
-            if let Ok(sym) = String::from_utf8(symref_output.stdout) {
-                let trimmed = sym.trim();
-                if let Some((_, name)) = trimmed.rsplit_once('/') {
-                    return Some(name.to_string());
-                }
+            let trimmed = sym.trim();
+            if let Some((_, name)) = trimmed.rsplit_once('/') {
+                return Some(name.to_string());
             }
         }
 
@@ -173,15 +170,14 @@ async fn get_default_branch(cwd: &Path) -> Option<String> {
         if let Some(show_output) =
             run_git_command_with_timeout(&["remote", "show", &remote], cwd).await
             && show_output.status.success()
+            && let Ok(text) = String::from_utf8(show_output.stdout)
         {
-            if let Ok(text) = String::from_utf8(show_output.stdout) {
-                for line in text.lines() {
-                    let line = line.trim();
-                    if let Some(rest) = line.strip_prefix("HEAD branch:") {
-                        let name = rest.trim();
-                        if !name.is_empty() {
-                            return Some(name.to_string());
-                        }
+            for line in text.lines() {
+                let line = line.trim();
+                if let Some(rest) = line.strip_prefix("HEAD branch:") {
+                    let name = rest.trim();
+                    if !name.is_empty() {
+                        return Some(name.to_string());
                     }
                 }
             }
@@ -234,11 +230,11 @@ async fn branch_ancestry(cwd: &Path) -> Option<Vec<String>> {
         seen.insert(cb.clone());
         ancestry.push(cb);
     }
-    if let Some(db) = default_branch {
-        if !seen.contains(&db) {
-            seen.insert(db.clone());
-            ancestry.push(db);
-        }
+    if let Some(db) = default_branch
+        && !seen.contains(&db)
+    {
+        seen.insert(db.clone());
+        ancestry.push(db);
     }
 
     // Expand candidates: include any remote branches that already contain HEAD.
@@ -258,17 +254,17 @@ async fn branch_ancestry(cwd: &Path) -> Option<Vec<String>> {
         )
         .await
             && output.status.success()
+            && let Ok(text) = String::from_utf8(output.stdout)
         {
-            if let Ok(text) = String::from_utf8(output.stdout) {
-                for line in text.lines() {
-                    let short = line.trim();
-                    // Expect format like: "origin/feature"; extract the branch path after "remote/"
-                    if let Some(stripped) = short.strip_prefix(&format!("{remote}/")) {
-                        if !stripped.is_empty() && !seen.contains(stripped) {
-                            seen.insert(stripped.to_string());
-                            ancestry.push(stripped.to_string());
-                        }
-                    }
+            for line in text.lines() {
+                let short = line.trim();
+                // Expect format like: "origin/feature"; extract the branch path after "remote/"
+                if let Some(stripped) = short.strip_prefix(&format!("{remote}/"))
+                    && !stripped.is_empty()
+                    && !seen.contains(stripped)
+                {
+                    seen.insert(stripped.to_string());
+                    ancestry.push(stripped.to_string());
                 }
             }
         }
@@ -278,80 +274,108 @@ async fn branch_ancestry(cwd: &Path) -> Option<Vec<String>> {
     Some(ancestry)
 }
 
+// Helper for a single branch: return the remote SHA if present on any remote
+// and the distance (commits ahead of HEAD) for that branch. The first item is
+// None if the branch is not present on any remote. Returns None if distance
+// could not be computed due to git errors/timeouts.
+async fn branch_remote_and_distance(
+    cwd: &Path,
+    branch: &str,
+    remotes: &[String],
+) -> Option<(Option<String>, usize)> {
+    // Try to find the first remote ref that exists for this branch (origin prioritized by caller).
+    let mut found_remote_sha: Option<String> = None;
+    let mut found_remote_ref: Option<String> = None;
+    for remote in remotes {
+        let remote_ref = format!("refs/remotes/{remote}/{branch}");
+        let Some(verify_output) =
+            run_git_command_with_timeout(&["rev-parse", "--verify", "--quiet", &remote_ref], cwd)
+                .await
+        else {
+            // Mirror previous behavior: if the verify call times out/fails at the process level,
+            // treat the entire branch as unusable.
+            return None;
+        };
+        if !verify_output.status.success() {
+            continue;
+        }
+        let Ok(sha) = String::from_utf8(verify_output.stdout) else {
+            // Mirror previous behavior and skip the entire branch on parse failure.
+            return None;
+        };
+        found_remote_sha = Some(sha.trim().to_string());
+        found_remote_ref = Some(remote_ref);
+        break;
+    }
+
+    // Compute distance as the number of commits HEAD is ahead of the branch.
+    // Prefer local branch name if it exists; otherwise fall back to the remote ref (if any).
+    let count_output = if let Some(local_count) =
+        run_git_command_with_timeout(&["rev-list", "--count", &format!("{branch}..HEAD")], cwd)
+            .await
+    {
+        if local_count.status.success() {
+            local_count
+        } else if let Some(remote_ref) = &found_remote_ref {
+            match run_git_command_with_timeout(
+                &["rev-list", "--count", &format!("{remote_ref}..HEAD")],
+                cwd,
+            )
+            .await
+            {
+                Some(remote_count) => remote_count,
+                None => return None,
+            }
+        } else {
+            return None;
+        }
+    } else if let Some(remote_ref) = &found_remote_ref {
+        match run_git_command_with_timeout(
+            &["rev-list", "--count", &format!("{remote_ref}..HEAD")],
+            cwd,
+        )
+        .await
+        {
+            Some(remote_count) => remote_count,
+            None => return None,
+        }
+    } else {
+        return None;
+    };
+
+    if !count_output.status.success() {
+        return None;
+    }
+    let Ok(distance_str) = String::from_utf8(count_output.stdout) else {
+        return None;
+    };
+    let Ok(distance) = distance_str.trim().parse::<usize>() else {
+        return None;
+    };
+
+    Some((found_remote_sha, distance))
+}
+
+// Finds the closest sha that exist on any of branches and also exists on any of the remotes.
 async fn find_closest_sha(cwd: &Path, branches: &[String], remotes: &[String]) -> Option<String> {
     // A sha and how many commits away from HEAD it is.
     let mut closest_sha: Option<(String, usize)> = None;
-    'branch_loop: for branch in branches {
-        for remote in remotes {
-            let remote_ref = format!("refs/remotes/{remote}/{branch}");
-            let verify_output = match run_git_command_with_timeout(
-                &["rev-parse", "--verify", "--quiet", &remote_ref],
-                cwd,
-            )
-            .await
-            {
-                Some(output) => output,
-                None => continue 'branch_loop,
-            };
-            if !verify_output.status.success() {
-                continue;
+    for branch in branches {
+        let Some((maybe_remote_sha, distance)) =
+            branch_remote_and_distance(cwd, branch, remotes).await
+        else {
+            continue;
+        };
+        let Some(remote_sha) = maybe_remote_sha else {
+            // Preserve existing behavior: skip branches that are not present on a remote.
+            continue;
+        };
+        match &closest_sha {
+            None => closest_sha = Some((remote_sha, distance)),
+            Some((_, best_distance)) if distance < *best_distance => {
+                closest_sha = Some((remote_sha, distance));
             }
-            let remote_sha = match String::from_utf8(verify_output.stdout) {
-                Ok(s) => s.trim().to_string(),
-                Err(_) => continue 'branch_loop,
-            };
-            // Compute distance as the number of commits HEAD is ahead of the candidate branch.
-            // Prefer local branch name if it exists; otherwise fall back to the remote ref.
-            let count_output = if let Some(local_count) = run_git_command_with_timeout(
-                &["rev-list", "--count", &format!("{branch}..HEAD")],
-                cwd,
-            )
-            .await
-            {
-                if local_count.status.success() {
-                    local_count
-                } else {
-                    // Try remote ref as a fallback for branches not present locally
-                    match run_git_command_with_timeout(
-                        &["rev-list", "--count", &format!("{remote_ref}..HEAD")],
-                        cwd,
-                    )
-                    .await
-                    {
-                        Some(remote_count) => remote_count,
-                        None => continue 'branch_loop,
-                    }
-                }
-            } else {
-                // No local output; try remote directly
-                match run_git_command_with_timeout(
-                    &["rev-list", "--count", &format!("{remote_ref}..HEAD")],
-                    cwd,
-                )
-                .await
-                {
-                    Some(remote_count) => remote_count,
-                    None => continue 'branch_loop,
-                }
-            };
-            if !count_output.status.success() {
-                continue;
-            }
-            let distance = match String::from_utf8(count_output.stdout) {
-                Ok(s) => match s.trim().parse::<usize>() {
-                    Ok(value) => value,
-                    Err(_) => continue 'branch_loop,
-                },
-                Err(_) => continue 'branch_loop,
-            };
-            match &closest_sha {
-                None => closest_sha = Some((remote_sha.clone(), distance)),
-                Some((_, best_distance)) if distance < *best_distance => {
-                    closest_sha = Some((remote_sha.clone(), distance));
-                }
-                _ => {}
-            }
-            break;
+            _ => {}
         }
     }
     closest_sha.map(|(sha, _)| sha)
@@ -359,6 +383,8 @@ async fn find_closest_sha(cwd: &Path, branches: &[String], remotes: &[String]) -
 
 async fn diff_against_sha(cwd: &Path, sha: &str) -> Option<String> {
     let output = run_git_command_with_timeout(&["diff", sha], cwd).await?;
+    // 0 is success and no diff.
+    // 1 is success but there is a diff.
     let exit_ok = output.status.code().is_some_and(|c| c == 0 || c == 1);
     if !exit_ok {
         return None;
@@ -385,10 +411,8 @@ async fn diff_against_sha(cwd: &Path, sha: &str) -> Option<String> {
             .await
             {
                 let exit_ok = extra.status.code().is_some_and(|c| c == 0 || c == 1);
-                if exit_ok {
-                    if let Ok(s) = String::from_utf8(extra.stdout) {
-                        diff.push_str(&s);
-                    }
+                if exit_ok && let Ok(s) = String::from_utf8(extra.stdout) {
+                    diff.push_str(&s);
                 }
             }
         }
