@@ -387,7 +387,7 @@ impl App<'_> {
                             widget.open_model_popup();
                         }
                     }
-                    SlashCommand::Permissions => {
+                    SlashCommand::Approvals => {
                         if let AppState::Chat { widget } = &mut self.app_state {
                             widget.open_permissions_popup();
                         }

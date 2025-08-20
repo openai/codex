@@ -13,7 +13,7 @@ pub enum SlashCommand {
     // DO NOT ALPHA-SORT! Enum order is presentation order in the popup, so
     // more frequently used commands should be listed first.
     Model,
-    Permissions,
+    Approvals,
     New,
     Init,
     Compact,
@@ -39,7 +39,7 @@ impl SlashCommand {
             SlashCommand::Mention => "mention a file",
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::Model => "choose a model preset (model + reasoning effort)",
-            SlashCommand::Permissions => {
+            SlashCommand::Approvals => {
                 "choose approval/sandbox permissions (read only, guarded write, auto write, yolo)"
             }
             SlashCommand::Mcp => "list configured MCP tools",
