@@ -26,6 +26,16 @@ impl Display for ConversationId {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[ts(type = "string")]
+pub struct GitSha(pub String);
+
+impl GitSha {
+    pub fn new(sha: &str) -> Self {
+        Self(sha.to_string())
+    }
+}
+
 /// Request from the client to the server.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(tag = "method", rename_all = "camelCase")]
@@ -68,6 +78,11 @@ pub enum ClientRequest {
         #[serde(rename = "id")]
         request_id: RequestId,
         params: CancelLoginChatGptParams,
+    },
+    GitDiffToRemote {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: GitDiffToRemoteParams,
     },
 }
 
@@ -139,6 +154,13 @@ pub struct LoginChatGptResponse {
     pub auth_url: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitDiffToRemoteResponse {
+    pub sha: GitSha,
+    pub diff: String,
+}
+
 // Event name for notifying client of login completion or failure.
 pub const LOGIN_CHATGPT_COMPLETE_EVENT: &str = "codex/event/login_chatgpt_complete";
 
@@ -155,6 +177,12 @@ pub struct LoginChatGptCompleteNotification {
 #[serde(rename_all = "camelCase")]
 pub struct CancelLoginChatGptParams {
     pub login_id: Uuid,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GitDiffToRemoteParams {
+    pub cwd: PathBuf,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
