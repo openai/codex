@@ -112,12 +112,11 @@ fn long_token_wraps() {
     let mut count_a = 0usize;
     for row in 0..6 {
         for col in 0..20 {
-            if let Some(cell) = screen.cell(row, col) {
-                if let Some(ch) = cell.contents().chars().next() {
-                    if ch == 'A' {
-                        count_a += 1;
-                    }
-                }
+            if let Some(cell) = screen.cell(row, col)
+                && let Some(ch) = cell.contents().chars().next()
+                && ch == 'A'
+            {
+                count_a += 1;
             }
         }
     }

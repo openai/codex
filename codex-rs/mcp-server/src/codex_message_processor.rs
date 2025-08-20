@@ -8,11 +8,13 @@ use codex_core::ConversationManager;
 use codex_core::NewConversation;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::git_info::git_diff_to_remote;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ReviewDecision;
+use codex_protocol::mcp_protocol::GitDiffToRemoteResponse;
 use mcp_types::JSONRPCErrorError;
 use mcp_types::RequestId;
 use tokio::sync::Mutex;
@@ -25,36 +27,36 @@ use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::json_to_toml::json_to_toml;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
-use crate::wire_format::APPLY_PATCH_APPROVAL_METHOD;
-use crate::wire_format::AddConversationListenerParams;
-use crate::wire_format::AddConversationSubscriptionResponse;
-use crate::wire_format::ApplyPatchApprovalParams;
-use crate::wire_format::ApplyPatchApprovalResponse;
-use crate::wire_format::ClientRequest;
-use crate::wire_format::ConversationId;
-use crate::wire_format::EXEC_COMMAND_APPROVAL_METHOD;
-use crate::wire_format::ExecCommandApprovalParams;
-use crate::wire_format::ExecCommandApprovalResponse;
-use crate::wire_format::InputItem as WireInputItem;
-use crate::wire_format::InterruptConversationParams;
-use crate::wire_format::InterruptConversationResponse;
-use crate::wire_format::LOGIN_CHATGPT_COMPLETE_EVENT;
-use crate::wire_format::LoginChatGptCompleteNotification;
-use crate::wire_format::LoginChatGptResponse;
-use crate::wire_format::NewConversationParams;
-use crate::wire_format::NewConversationResponse;
-use crate::wire_format::RemoveConversationListenerParams;
-use crate::wire_format::RemoveConversationSubscriptionResponse;
-use crate::wire_format::SendUserMessageParams;
-use crate::wire_format::SendUserMessageResponse;
-use crate::wire_format::SendUserTurnParams;
-use crate::wire_format::SendUserTurnResponse;
 use codex_core::protocol::InputItem as CoreInputItem;
 use codex_core::protocol::Op;
 use codex_login::CLIENT_ID;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
+use codex_protocol::mcp_protocol::APPLY_PATCH_APPROVAL_METHOD;
+use codex_protocol::mcp_protocol::AddConversationListenerParams;
+use codex_protocol::mcp_protocol::AddConversationSubscriptionResponse;
+use codex_protocol::mcp_protocol::ApplyPatchApprovalParams;
+use codex_protocol::mcp_protocol::ApplyPatchApprovalResponse;
+use codex_protocol::mcp_protocol::ClientRequest;
+use codex_protocol::mcp_protocol::ConversationId;
+use codex_protocol::mcp_protocol::EXEC_COMMAND_APPROVAL_METHOD;
+use codex_protocol::mcp_protocol::ExecCommandApprovalParams;
+use codex_protocol::mcp_protocol::ExecCommandApprovalResponse;
+use codex_protocol::mcp_protocol::InputItem as WireInputItem;
+use codex_protocol::mcp_protocol::InterruptConversationParams;
+use codex_protocol::mcp_protocol::InterruptConversationResponse;
+use codex_protocol::mcp_protocol::LOGIN_CHATGPT_COMPLETE_EVENT;
+use codex_protocol::mcp_protocol::LoginChatGptCompleteNotification;
+use codex_protocol::mcp_protocol::LoginChatGptResponse;
+use codex_protocol::mcp_protocol::NewConversationParams;
+use codex_protocol::mcp_protocol::NewConversationResponse;
+use codex_protocol::mcp_protocol::RemoveConversationListenerParams;
+use codex_protocol::mcp_protocol::RemoveConversationSubscriptionResponse;
+use codex_protocol::mcp_protocol::SendUserMessageParams;
+use codex_protocol::mcp_protocol::SendUserMessageResponse;
+use codex_protocol::mcp_protocol::SendUserTurnParams;
+use codex_protocol::mcp_protocol::SendUserTurnResponse;
 
 // Duration before a ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -66,7 +68,7 @@ struct ActiveLogin {
 
 impl ActiveLogin {
     fn drop(&self) {
-        self.shutdown_handle.cancel();
+        self.shutdown_handle.shutdown();
     }
 }
 
@@ -126,6 +128,9 @@ impl CodexMessageProcessor {
             ClientRequest::CancelLoginChatGpt { request_id, params } => {
                 self.cancel_login_chatgpt(request_id, params.login_id).await;
             }
+            ClientRequest::GitDiffToRemote { request_id, params } => {
+                self.git_diff_to_origin(request_id, params.cwd).await;
+            }
         }
     }
 
@@ -146,7 +151,6 @@ impl CodexMessageProcessor {
 
         let opts = LoginServerOptions {
             open_browser: false,
-            login_timeout: Some(LOGIN_CHATGPT_TIMEOUT),
             ..LoginServerOptions::new(config.codex_home.clone(), CLIENT_ID.to_string())
         };
 
@@ -155,9 +159,10 @@ impl CodexMessageProcessor {
             Error(JSONRPCErrorError),
         }
 
-        let reply = match run_login_server(opts, None) {
+        let reply = match run_login_server(opts) {
             Ok(server) => {
                 let login_id = Uuid::new_v4();
+                let shutdown_handle = server.cancel_handle();
 
                 // Replace active login if present.
                 {
@@ -166,7 +171,7 @@ impl CodexMessageProcessor {
                         existing.drop();
                     }
                     *guard = Some(ActiveLogin {
-                        shutdown_handle: server.cancel_handle(),
+                        shutdown_handle: shutdown_handle.clone(),
                         login_id,
                     });
                 }
@@ -180,15 +185,19 @@ impl CodexMessageProcessor {
                 let outgoing_clone = self.outgoing.clone();
                 let active_login = self.active_login.clone();
                 tokio::spawn(async move {
-                    let result =
-                        tokio::task::spawn_blocking(move || server.block_until_done()).await;
-                    let (success, error_msg) = match result {
+                    let (success, error_msg) = match tokio::time::timeout(
+                        LOGIN_CHATGPT_TIMEOUT,
+                        server.block_until_done(),
+                    )
+                    .await
+                    {
                         Ok(Ok(())) => (true, None),
                         Ok(Err(err)) => (false, Some(format!("Login server error: {err}"))),
-                        Err(join_err) => (
-                            false,
-                            Some(format!("failed to join login server thread: {join_err}")),
-                        ),
+                        Err(_elapsed) => {
+                            // Timeout: cancel server and report
+                            shutdown_handle.shutdown();
+                            (false, Some("Login timed out".to_string()))
+                        }
                     };
                     let notification = LoginChatGptCompleteNotification {
                         login_id,
@@ -237,7 +246,7 @@ impl CodexMessageProcessor {
             self.outgoing
                 .send_response(
                     request_id,
-                    crate::wire_format::CancelLoginChatGptResponse {},
+                    codex_protocol::mcp_protocol::CancelLoginChatGptResponse {},
                 )
                 .await;
         } else {
@@ -510,6 +519,27 @@ impl CodexMessageProcessor {
             }
         }
     }
+
+    async fn git_diff_to_origin(&self, request_id: RequestId, cwd: PathBuf) {
+        let diff = git_diff_to_remote(&cwd).await;
+        match diff {
+            Some(value) => {
+                let response = GitDiffToRemoteResponse {
+                    sha: value.sha,
+                    diff: value.diff,
+                };
+                self.outgoing.send_response(request_id, response).await;
+            }
+            None => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("failed to compute git diff to remote for cwd: {cwd:?}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
 }
 
 async fn apply_bespoke_event_handling(
@@ -595,7 +625,7 @@ fn derive_config_from_params(
         profile,
         cwd,
         approval_policy,
-        sandbox,
+        sandbox: sandbox_mode,
         config: cli_overrides,
         base_instructions,
         include_plan_tool,
@@ -605,8 +635,8 @@ fn derive_config_from_params(
         model,
         config_profile: profile,
         cwd: cwd.map(PathBuf::from),
-        approval_policy: approval_policy.map(Into::into),
-        sandbox_mode: sandbox.map(Into::into),
+        approval_policy,
+        sandbox_mode,
         model_provider: None,
         codex_linux_sandbox_exe,
         base_instructions,

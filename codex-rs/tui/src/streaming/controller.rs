@@ -96,26 +96,26 @@ impl StreamController {
     /// Begin a stream, flushing previously completed lines from any other
     /// active stream to maintain ordering.
     pub(crate) fn begin(&mut self, kind: StreamKind, sink: &impl HistorySink) {
-        if let Some(current) = self.current_stream {
-            if current != kind {
-                // Synchronously flush completed lines from previous stream.
-                let cfg = self.config.clone();
-                let prev_state = self.state_mut(current);
-                let newly_completed = prev_state.collector.commit_complete_lines(&cfg);
-                if !newly_completed.is_empty() {
-                    prev_state.enqueue(newly_completed);
-                }
-                let step = prev_state.drain_all();
-                if !step.history.is_empty() {
-                    let mut lines: Lines = Vec::new();
-                    self.emit_header_if_needed(current, &mut lines);
-                    lines.extend(step.history);
-                    // Ensure at most one trailing blank after the flushed block.
-                    Self::ensure_single_trailing_blank(&mut lines);
-                    sink.insert_history(lines);
-                }
-                self.current_stream = None;
+        if let Some(current) = self.current_stream
+            && current != kind
+        {
+            // Synchronously flush completed lines from previous stream.
+            let cfg = self.config.clone();
+            let prev_state = self.state_mut(current);
+            let newly_completed = prev_state.collector.commit_complete_lines(&cfg);
+            if !newly_completed.is_empty() {
+                prev_state.enqueue(newly_completed);
             }
+            let step = prev_state.drain_all();
+            if !step.history.is_empty() {
+                let mut lines: Lines = Vec::new();
+                self.emit_header_if_needed(current, &mut lines);
+                lines.extend(step.history);
+                // Ensure at most one trailing blank after the flushed block.
+                Self::ensure_single_trailing_blank(&mut lines);
+                sink.insert_history(lines);
+            }
+            self.current_stream = None;
         }
 
         if self.current_stream != Some(kind) {

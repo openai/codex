@@ -1,7 +1,7 @@
 //! Configuration object accepted by the `codex` MCP tool-call.
 
-use codex_core::config_types::SandboxMode;
 use codex_core::protocol::AskForApproval;
+use codex_protocol::config_types::SandboxMode;
 use mcp_types::Tool;
 use mcp_types::ToolInputSchema;
 use schemars::JsonSchema;

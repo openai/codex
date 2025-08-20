@@ -134,9 +134,9 @@ impl WidgetRef for &FileSearchPopup {
 
         if self.waiting && rows_all.is_empty() {
             // Render a minimal waiting stub using the shared renderer (no rows -> "no matches").
-            render_rows(area, buf, &[], &self.state, MAX_POPUP_ROWS);
+            render_rows(area, buf, &[], &self.state, MAX_POPUP_ROWS, false);
         } else {
-            render_rows(area, buf, &rows_all, &self.state, MAX_POPUP_ROWS);
+            render_rows(area, buf, &rows_all, &self.state, MAX_POPUP_ROWS, false);
         }
     }
 }

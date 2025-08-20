@@ -22,6 +22,7 @@
     - [Authenticate locally and copy your credentials to the "headless" machine](#authenticate-locally-and-copy-your-credentials-to-the-headless-machine)
     - [Connecting through VPS or remote](#connecting-through-vps-or-remote)
   - [Usage-based billing alternative: Use an OpenAI API key](#usage-based-billing-alternative-use-an-openai-api-key)
+    - [Forcing a specific auth method (advanced)](#forcing-a-specific-auth-method-advanced)
   - [Choosing Codex's level of autonomy](#choosing-codexs-level-of-autonomy)
     - [**1. Read/write**](#1-readwrite)
     - [**2. Read-only**](#2-read-only)
@@ -164,6 +165,35 @@ Notes:
 
 - This command only sets the key for your current terminal session, which we recommend. To set it for all future sessions, you can also add the `export` line to your shell's configuration file (e.g., `~/.zshrc`).
 - If you have signed in with ChatGPT, Codex will default to using your ChatGPT credits. If you wish to use your API key, use the `/logout` command to clear your ChatGPT authentication.
+
+#### Forcing a specific auth method (advanced)
+
+You can explicitly choose which authentication Codex should prefer when both are available.
+
+- To always use your API key (even when ChatGPT auth exists), set:
+
+```toml
+# ~/.codex/config.toml
+preferred_auth_method = "apikey"
+```
+
+Or override ad-hoc via CLI:
+
+```bash
+codex --config preferred_auth_method="apikey"
+```
+
+- To prefer ChatGPT auth (default), set:
+
+```toml
+# ~/.codex/config.toml
+preferred_auth_method = "chatgpt"
+```
+
+Notes:
+
+- When `preferred_auth_method = "apikey"` and an API key is available, the login screen is skipped.
+- When `preferred_auth_method = "chatgpt"` (default), Codex prefers ChatGPT auth if present; if only an API key is present, it will use the API key. Certain account types may also require API-key mode.
 
 ### Choosing Codex's level of autonomy
 
