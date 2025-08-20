@@ -1,0 +1,1697 @@
+
+def ensure_gender_column(cur):
+    cur.execute("PRAGMA table_info(records)")
+    cols = [c[1].lower() for c in cur.fetchall()]
+    if "gender" not in cols:
+        cur.execute("ALTER TABLE records ADD COLUMN gender TEXT")
+
+
+
+# ===== User Roles & Security =====
+# Roles: Owner, Admin, Operator
+# Owner (Irfan, cannot be deleted/renamed) full authority
+# Admin: manage Operators, approve deletions, export
+# Operator: add/edit only, request deletion, no export
+
+def ensure_users_table(cur):
+    cur.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (USERS_TABLE,))
+    row = cur.fetchone()
+    if row and "Owner" not in row[0]:
+        print("Rebuilding users table to support Owner role...")
+        cur.execute(f"ALTER TABLE {USERS_TABLE} RENAME TO {USERS_TABLE}_old")
+        cur.execute(f"""
+            CREATE TABLE {USERS_TABLE} (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE COLLATE NOCASE,
+                password TEXT NOT NULL,
+                role TEXT NOT NULL CHECK(role IN ('Owner','Admin','Operator')),
+                active INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        cur.execute(f"INSERT INTO {USERS_TABLE} (username, password, role, active, created_at) "
+                    f"SELECT username, password, role, active, created_at FROM {USERS_TABLE}_old")
+        cur.execute(f"DROP TABLE {USERS_TABLE}_old")
+
+
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+I Matrix — Employee Master System (Professional Edition) — Secured + Admin Tools
+
+WHAT'S NEW (per user request):
+- True Login system with users in SQLite (default admin/admin on first run)
+- Roles: Admin & Operator. Operators have full access EXCEPT deletion
+  -> Operators' deletions become "Deletion Requests"
+- Admin "Deletion Requests" panel to Approve/Reject (approved actually delete)
+- Password management:
+  -> Any logged-in user can Change Password
+  -> Admin can Manage Users (add operator, reset operator password, delete operator)
+- Export dialog:
+  -> Drag-and-drop column reordering
+  -> Select columns
+  -> Optional manual heading (appears at top of PDF & as merged first row in Excel)
+  -> Removed logo support from exports
+- App Icon: if 'eye.png' exists in the same folder, use it for the window icon
+
+Dependencies: pandas, openpyxl, reportlab, tkcalendar
+"""
+
+import os
+import sqlite3
+from datetime import date, datetime
+import pandas as pd
+import tkinter as tk
+from tkinter import ttk, messagebox, filedialog
+from tkcalendar import DateEntry
+
+# ---- Splash Screen Helper ----
+def show_splash(root, duration_ms=1800):
+    """Simple splash screen with flags + title, auto-closes after duration."""
+    splash = tk.Toplevel(root)
+    splash.overrideredirect(True)
+    # Center on screen
+    splash.update_idletasks()
+    w, h = 480, 260
+    x = (splash.winfo_screenwidth() // 2) - (w // 2)
+    y = (splash.winfo_screenheight() // 2) - (h // 2)
+    splash.geometry(f"{w}x{h}+{x}+{y}")
+    frm = ttk.Frame(splash, padding=24)
+    frm.pack(fill=tk.BOTH, expand=True)
+    # Title + flags
+    lbl = ttk.Label(frm, text="🇨🇳  I Matrix — Employee Master System  🇵🇰", font=("Segoe UI Semibold", 16))
+    lbl.pack(pady=(10,6))
+    sub = ttk.Label(frm, text="Professional Edition", font=("Segoe UI", 11))
+    sub.pack(pady=(0,10))
+    app = ttk.Label(frm, text="Launching...", font=("Consolas", 10))
+    app.pack(pady=(0,16))
+    # Progress mimic (pulsing text)
+    pulse = ttk.Label(frm, text="●  ●  ●", font=("Segoe UI", 14), anchor="center")
+    pulse.pack()
+    # Auto close
+    splash.after(duration_ms, splash.destroy)
+    return splash
+
+
+# ReportLab for PDF
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib import colors
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER, TA_LEFT
+
+# openpyxl for Excel styling
+from openpyxl import load_workbook, Workbook
+from openpyxl.styles import Alignment
+from openpyxl.utils import get_column_letter
+
+APP_TITLE = "I Matrix — Employee Master System (Pro, Secured)"
+DB_FILE = "chinese_master.db"
+TABLE = "records"
+USERS_TABLE = "users"
+DELREQ_TABLE = "deletion_requests"
+BACKUP_DIR = "backups"
+
+CHECKED = "☑"
+UNCHECKED = "☐"
+
+# -----------------------------
+# Database functions
+# -----------------------------
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+
+    # main records table
+    cur.execute(f"""
+    CREATE TABLE IF NOT EXISTS {TABLE} (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        s_no INTEGER,
+        country TEXT,
+        company TEXT,
+        name TEXT,
+        passport_no TEXT,
+        joining_date TEXT,
+        date_of_arrival TEXT,
+        date_of_departure TEXT,
+        type_of_visa TEXT,
+        visa_no TEXT,
+        date_of_issue_visa TEXT,
+        date_of_expiry_visa TEXT,
+        visa_remaining_days INTEGER,
+        visa_status TEXT,
+        in_out TEXT,
+        contact_number TEXT,
+        company_contact_person TEXT,
+        designation TEXT,
+        work_location TEXT,
+        remarks TEXT,
+        last_updated TEXT
+    )
+    """)
+
+    # users table
+    cur.execute(f"""
+    CREATE TABLE IF NOT EXISTS {USERS_TABLE} (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
+        password TEXT NOT NULL,
+        role TEXT NOT NULL CHECK(role IN ('Admin','Operator'))
+    )
+    """)
+
+    # deletion requests table
+    cur.execute(f"""
+    CREATE TABLE IF NOT EXISTS {DELREQ_TABLE} (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        record_id INTEGER NOT NULL,
+        requested_by TEXT NOT NULL,
+        requested_at TEXT NOT NULL,
+        FOREIGN KEY(record_id) REFERENCES {TABLE}(id)
+    )
+    """)
+
+    conn.commit()
+
+    # seed default admin if no users
+    cur.execute(f"SELECT COUNT(*) FROM {USERS_TABLE}")
+    if (cur.fetchone()[0] or 0) == 0:
+        cur.execute(f"INSERT INTO {USERS_TABLE} (username, password, role) VALUES (?,?,?)",
+                    ("admin", "admin", "Admin"))
+        # also add one demo operator
+        cur.execute(f"INSERT INTO {USERS_TABLE} (username, password, role) VALUES (?,?,?)",
+                    ("operator", "operator", "Operator"))
+        conn.commit()
+
+    conn.close()
+
+
+def db_execute(query, params=(), fetch=False, commit=False):
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute(query, params)
+    result = None
+    if fetch:
+        result = cur.fetchall()
+    if commit:
+        conn.commit()
+    conn.close()
+    return result
+
+
+def renumber_sno():
+    """Make S.No contiguous (1..N) ordered by current s_no, then id."""
+    conn = sqlite3.connect(DB_FILE)
+    cur = conn.cursor()
+    cur.execute(f"SELECT id FROM {TABLE} ORDER BY s_no ASC, id ASC")
+    ids = [row[0] for row in cur.fetchall()]
+    for n, rid in enumerate(ids, start=1):
+        cur.execute(f"UPDATE {TABLE} SET s_no=? WHERE id=?", (n, rid))
+    conn.commit()
+    conn.close()
+
+
+def next_sno():
+    r = db_execute(f"SELECT COUNT(*) FROM {TABLE}", fetch=True)
+    cnt = int(r[0][0]) if r and r[0][0] is not None else 0
+    return cnt + 1
+
+
+# -----------------------------
+# Utilities
+# -----------------------------
+def calc_remaining_and_status(expiry_str):
+    if not expiry_str:
+        return None, "Unknown"
+    try:
+        exp = datetime.strptime(expiry_str, "%Y-%m-%d").date()
+    except Exception:
+        return None, "Invalid Date"
+    today = date.today()
+    remaining = (exp - today).days
+    status = "Expired" if remaining < 0 else "Active"
+    return remaining, status
+
+
+def _parse_date_cell(cell):
+    if pd.isna(cell):
+        return ""
+    if isinstance(cell, (pd.Timestamp, datetime)):
+        try:
+            return pd.to_datetime(cell).strftime("%Y-%m-%d")
+        except Exception:
+            return ""
+    s = str(cell).strip()
+    if not s or s.lower() in ("nan", "none"):
+        return ""
+    d = pd.to_datetime(s, errors="coerce", dayfirst=False, yearfirst=True)
+    if pd.isna(d):
+        return ""
+    return d.strftime("%Y-%m-%d")
+
+
+# -----------------------------
+# CRUD operations
+# -----------------------------
+def add_record(values):
+    s_no = next_sno()
+    last_updated = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    remaining, status = calc_remaining_and_status(values.get('date_of_expiry_visa') or "")
+    db_execute(f"""INSERT INTO {TABLE} (
+                s_no, country, company, name, passport_no,
+                joining_date, date_of_arrival, date_of_departure, type_of_visa, visa_no,
+                date_of_issue_visa, date_of_expiry_visa, visa_remaining_days, visa_status,
+                in_out, contact_number, company_contact_person, designation, work_location,
+                remarks, last_updated
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               (s_no, values.get('country'), values.get('company'), values.get('name'), values.get('passport_no'),
+                values.get('joining_date'), values.get('date_of_arrival'), values.get('date_of_departure'),
+                values.get('type_of_visa'), values.get('visa_no'), values.get('date_of_issue_visa'),
+                values.get('date_of_expiry_visa'), remaining, status, values.get('in_out'),
+                values.get('contact_number'), values.get('company_contact_person'), values.get('designation'),
+                values.get('work_location'), values.get('remarks'), last_updated),
+               commit=True)
+
+
+def update_record(rec_id, values):
+    last_updated = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    remaining, status = calc_remaining_and_status(values.get('date_of_expiry_visa') or "")
+    db_execute(f"""UPDATE {TABLE} SET
+                  country=?, company=?, name=?, passport_no=?, joining_date=?, date_of_arrival=?,
+                  date_of_departure=?, type_of_visa=?, visa_no=?, date_of_issue_visa=?,
+                  date_of_expiry_visa=?, visa_remaining_days=?, visa_status=?, in_out=?,
+                  contact_number=?, company_contact_person=?, designation=?, work_location=?,
+                  remarks=?, last_updated=?
+                  WHERE id=?""",
+               (values.get('country'), values.get('company'), values.get('name'), values.get('passport_no'),
+                values.get('joining_date'), values.get('date_of_arrival'), values.get('date_of_departure'),
+                values.get('type_of_visa'), values.get('visa_no'), values.get('date_of_issue_visa'),
+                values.get('date_of_expiry_visa'), remaining, status, values.get('in_out'),
+                values.get('contact_number'), values.get('company_contact_person'), values.get('designation'),
+                values.get('work_location'), values.get('remarks'), last_updated, rec_id),
+               commit=True)
+
+
+def delete_record(rec_id):
+    db_execute(f"DELETE FROM {TABLE} WHERE id=?", (rec_id,), commit=True)
+
+
+# -----------------------------
+# Fetch
+# -----------------------------
+def fetch_records(filters=None):
+    base = f"""SELECT id, s_no, country, company, name, passport_no, joining_date, date_of_arrival,
+                      date_of_departure, type_of_visa, visa_no, date_of_issue_visa, date_of_expiry_visa,
+                      visa_remaining_days, visa_status, in_out, contact_number, company_contact_person,
+                      designation, work_location, remarks, last_updated
+               FROM {TABLE}"""
+    params = []
+    if filters:
+        clauses = []
+        for k, v in filters.items():
+            if v in (None, ""):
+                continue
+            if k in ("joining_date", "date_of_arrival", "date_of_departure", "date_of_issue_visa",
+                     "date_of_expiry_visa", "in_out"):
+                clauses.append(f"{k} = ?")
+                params.append(v)
+            else:
+                clauses.append(f"{k} LIKE ?")
+                params.append(f"%{v}%")
+        if filters.get("arrival_from"):
+            clauses.append("date_of_arrival >= ?")
+            params.append(filters["arrival_from"])
+        if filters.get("arrival_to"):
+            clauses.append("date_of_arrival <= ?")
+            params.append(filters["arrival_to"])
+        if clauses:
+            base += " WHERE " + " AND ".join(clauses)
+    base += " ORDER BY s_no ASC"
+    return db_execute(base, tuple(params), fetch=True)
+
+
+# -----------------------------
+# Export helpers (dynamic columns)
+# -----------------------------
+ALL_COLS = [
+    ("S#", 1),
+    ("Country", 2),
+    ("Company", 3),
+    ("Name", 4),
+    ("Passport No.", 5),
+    ("Joining Date", 6),
+    ("Date of Arrival", 7),
+    ("Date of Departure", 8),
+    ("Type of Visa", 9),
+    ("Visa No.", 10),
+    ("Date Of Issue Visa", 11),
+    ("Date Of Expiry Visa", 12),
+    ("Visa Remaining days", 13),
+    ("Visa Status", 14),
+    ("IN/OUT", 15),
+    ("Contact Number", 16),
+    ("Company Contact Person", 17),
+    ("Designation", 18),
+    ("Work Location", 19),
+    ("Remarks", 20),
+    ("Last Updated", 21),
+]
+
+
+def export_dataframe(records_full_rows, selected_cols):
+    headers = [c[0] for c in selected_cols]
+    idxs = [c[1] for c in selected_cols]
+    data = []
+    for r in records_full_rows:
+        row = []
+        for i in idxs:
+            row.append("" if r[i] is None else r[i])
+        data.append(row)
+    return pd.DataFrame(data, columns=headers)
+
+
+def _excel_autofit_and_style(filepath, left_align_headers={"Name"}, heading_text=None):
+    wb = load_workbook(filepath)
+    ws = wb.active
+
+    head_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    body_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    body_left = Alignment(horizontal="left", vertical="center", wrap_text=True)
+
+    max_col = ws.max_column
+    max_row = ws.max_row
+
+    # Optional heading row merged across all columns
+    start_data_row = 1
+    if heading_text:
+        ws.insert_rows(1, 1)
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=max_col)
+        c = ws.cell(row=1, column=1)
+        c.value = heading_text
+        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        start_data_row = 2
+        max_row += 1
+
+    for c in range(start_data_row, start_data_row+1):
+        for col in range(1, max_col+1):
+            ws.cell(row=c, column=col).alignment = head_center
+
+    headers = [ws.cell(row=start_data_row, column=c).value for c in range(1, max_col+1)]
+    left_cols = {i+1 for i, h in enumerate(headers) if h in left_align_headers}
+
+    col_widths = [0]*(max_col+1)
+    for r in range(start_data_row+1, max_row+1):
+        for c in range(1, max_col+1):
+            cell = ws.cell(row=r, column=c)
+            cell.alignment = (body_left if c in left_cols else body_center)
+            txt = "" if cell.value is None else str(cell.value)
+            col_widths[c] = max(col_widths[c], len(txt))
+    for c in range(1, max_col+1):
+        head_txt = "" if headers[c-1] is None else str(headers[c-1])
+        col_widths[c] = max(col_widths[c], len(head_txt))
+    for c in range(1, max_col+1):
+        ws.column_dimensions[get_column_letter(c)].width = min(60, max(10, col_widths[c] + 2))
+
+    # A4 landscape, fit to width
+    ws.page_setup.paperSize = ws.PAPERSIZE_A4
+    ws.page_setup.orientation = ws.ORIENTATION_LANDSCAPE
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.print_options.horizontalCentered = True
+
+    wb.save(filepath)
+
+
+def export_to_excel_dynamic(records_full_rows, filepath, selected_cols, heading_text=None):
+    df = export_dataframe(records_full_rows, selected_cols)
+    df.to_excel(filepath, index=False, engine="openpyxl")
+    _excel_autofit_and_style(filepath, left_align_headers={"Name"}, heading_text=heading_text)
+    return filepath
+
+
+def export_to_pdf_dynamic(records_full_rows, filepath, selected_cols, title="Employee Master Export", heading_text=None):
+    styles = getSampleStyleSheet()
+
+    ncols = max(1, len(selected_cols))
+    if ncols <= 7:
+        head_size, body_size, pad_top, pad_bottom = 11, 9, 6, 5
+    elif ncols <= 11:
+        head_size, body_size, pad_top, pad_bottom = 10, 8, 5, 4
+    else:
+        head_size, body_size, pad_top, pad_bottom = 9, 7, 4, 3
+
+    head_style = ParagraphStyle(
+        "HeadCenter", parent=styles['Heading5'], alignment=TA_CENTER,
+        fontName="Helvetica-Bold", fontSize=head_size, textColor=colors.white
+    )
+    body_center_style = ParagraphStyle(
+        "BodyCenter", parent=styles['BodyText'], alignment=TA_CENTER,
+        fontName="Helvetica", fontSize=body_size, leading=body_size+1
+    )
+    body_left_style = ParagraphStyle(
+        "BodyLeft", parent=styles['BodyText'], alignment=TA_LEFT,
+        fontName="Helvetica", fontSize=body_size, leading=body_size+1
+    )
+
+    page_w, page_h = landscape(A4)
+    left_margin = right_margin = 18
+    top_margin = 28
+    bottom_margin = 18
+    usable_width = page_w - left_margin - right_margin
+
+    doc = SimpleDocTemplate(
+        filepath, pagesize=landscape(A4),
+        leftMargin=left_margin, rightMargin=right_margin,
+        topMargin=top_margin, bottomMargin=bottom_margin
+    )
+
+    elements = []
+    # Manual heading if provided
+    if heading_text:
+        elements.append(Paragraph(heading_text, styles['Title']))
+        elements.append(Spacer(1, 6))
+    else:
+        elements.append(Paragraph(title, styles['Title']))
+        elements.append(Spacer(1, 6))
+
+    headers = [c[0] for c in selected_cols]
+    idxs = [c[1] for c in selected_cols]
+
+    table_data = [[Paragraph(h, head_style) for h in headers]]
+    lens = [max(6, len(h)) for h in headers]
+
+    for r in records_full_rows:
+        row_cells = []
+        for col_pos, i in enumerate(idxs):
+            sval = "" if r[i] is None else str(r[i])
+            if headers[col_pos] == "Name":
+                row_cells.append(Paragraph(sval, body_left_style))
+            else:
+                row_cells.append(Paragraph(sval, body_center_style))
+            lens[col_pos] = max(lens[col_pos], len(sval))
+        table_data.append(row_cells)
+
+    raw_weights = []
+    for h, L in zip(headers, lens):
+        base = 1.0
+        if h in ("Company", "Work Location", "Company Contact Person", "Designation", "Remarks", "Name"):
+            base = 1.8
+        weight = base + min(3.5, L/20.0)
+        raw_weights.append(weight)
+
+    total_w = sum(raw_weights)
+    col_widths = [usable_width * (w/total_w) for w in raw_weights]
+
+    t = Table(table_data, colWidths=col_widths, repeatRows=1, hAlign='CENTER')
+    t.setStyle(TableStyle([
+        ('BACKGROUND', (0,0), (-1,0), colors.HexColor("#2F3C4F")),
+        ('TEXTCOLOR',(0,0),(-1,0),colors.white),
+        ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0,0), (-1,0), head_size),
+        ('ALIGN', (0,0), (-1,0), 'CENTER'),
+        ('FONTNAME', (0,1), (-1,-1), 'Helvetica'),
+        ('FONTSIZE', (0,1), (-1,-1), body_size),
+        ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+        ('GRID', (0,0), (-1,-1), 0.25, colors.gray),
+        ('ROWBACKGROUNDS', (0,1), (-1,-1), [colors.white, colors.Color(0.98,0.98,0.98)]),
+        ('TOPPADDING', (0,0), (-1,-1), pad_top),
+        ('BOTTOMPADDING', (0,0), (-1,-1), pad_bottom),
+        ('LEFTPADDING', (0,0), (-1,-1), 3),
+        ('RIGHTPADDING', (0,0), (-1,-1), 3),
+    ]))
+    t.setStyle(TableStyle([('ALIGN', (0,1), (-1,-1), 'CENTER')]))
+    if "Name" in headers:
+        idx_name = headers.index("Name")
+        t.setStyle(TableStyle([('ALIGN', (idx_name,1), (idx_name,-1), 'LEFT')]))
+
+    elements.append(t)
+    doc.build(elements)
+    return filepath
+
+
+# -----------------------------
+# Login & user management dialogs
+# -----------------------------
+class LoginDialog(tk.Toplevel):
+    def __init__(self, master):
+        super().__init__(master)
+        self.title("Login")
+        self.resizable(False, False)
+        self.role = None
+        self.username = None
+
+        frm = ttk.Frame(self, padding=12)
+        frm.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(frm, text="Username").grid(row=0, column=0, sticky="w", padx=6, pady=4)
+        self.e_user = ttk.Entry(frm, width=22)
+        self.e_user.grid(row=0, column=1, padx=6, pady=4)
+        self.e_user.insert(0, "admin")
+
+        ttk.Label(frm, text="Password").grid(row=1, column=0, sticky="w", padx=6, pady=4)
+        self.e_pass = ttk.Entry(frm, show="*", width=22)
+        self.e_pass.grid(row=1, column=1, padx=6, pady=4)
+        self.e_pass.insert(0, "admin")
+
+        btns = ttk.Frame(frm)
+        btns.grid(row=2, column=0, columnspan=2, sticky="e")
+        ttk.Button(btns, text="Login", command=self.try_login).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btns, text="Exit", command=self.cancel).pack(side=tk.LEFT, padx=4)
+
+        self.bind("<Return>", lambda e: self.try_login())
+        self.grab_set()
+        self.e_user.focus_set()
+
+    def try_login(self):
+        u = self.e_user.get().strip()
+        p = self.e_pass.get().strip()
+        row = db_execute(f"SELECT username, password, role FROM {USERS_TABLE} WHERE username=?", (u,), fetch=True)
+        if not row or row[0][1] != p:
+            messagebox.showerror("Login failed", "Invalid username or password.")
+            return
+        self.username = row[0][0]
+        self.role = row[0][2]
+        self.destroy()
+
+    def cancel(self):
+        self.role = None
+        self.destroy()
+
+
+class ChangePasswordDialog(tk.Toplevel):
+    def __init__(self, master, username):
+        super().__init__(master)
+        self.title("Change Password")
+        self.resizable(False, False)
+        self.username = username
+
+        frm = ttk.Frame(self, padding=12)
+        frm.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(frm, text=f"User: {username}").grid(row=0, column=0, columnspan=2, sticky="w", pady=(0,6))
+        ttk.Label(frm, text="Current Password").grid(row=1, column=0, sticky="w", padx=6, pady=4)
+        self.e_old = ttk.Entry(frm, show="*", width=24); self.e_old.grid(row=1, column=1, padx=6, pady=4)
+
+        ttk.Label(frm, text="New Password").grid(row=2, column=0, sticky="w", padx=6, pady=4)
+        self.e_new = ttk.Entry(frm, show="*", width=24); self.e_new.grid(row=2, column=1, padx=6, pady=4)
+
+        ttk.Label(frm, text="Confirm New").grid(row=3, column=0, sticky="w", padx=6, pady=4)
+        self.e_conf = ttk.Entry(frm, show="*", width=24); self.e_conf.grid(row=3, column=1, padx=6, pady=4)
+
+        ttk.Button(frm, text="Update", command=self.change).grid(row=4, column=1, sticky="e", pady=8)
+
+        self.grab_set()
+
+    def change(self):
+        old = self.e_old.get().strip()
+        new = self.e_new.get().strip()
+        conf = self.e_conf.get().strip()
+        if not new or new != conf:
+            messagebox.showerror("Error", "New passwords do not match.")
+            return
+        row = db_execute(f"SELECT password FROM {USERS_TABLE} WHERE username=?", (self.username,), fetch=True)
+        if not row or row[0][0] != old:
+            messagebox.showerror("Error", "Current password is incorrect.")
+            return
+        db_execute(f"UPDATE {USERS_TABLE} SET password=? WHERE username=?", (new, self.username), commit=True)
+        messagebox.showinfo("Updated", "Password changed.")
+        self.destroy()
+
+
+class ManageUsersDialog(tk.Toplevel):
+    def __init__(self, master):
+        super().__init__(master)
+        self.title("Manage Users (Admin)")
+        self.resizable(False, False)
+
+        frm = ttk.Frame(self, padding=10)
+        frm.pack(fill=tk.BOTH, expand=True)
+
+        self.tree = ttk.Treeview(frm, columns=("username","role"), show="headings", height=8)
+        self.tree.heading("username", text="Username")
+        self.tree.heading("role", text="Role")
+        self.tree.column("username", width=160)
+        self.tree.column("role", width=100, anchor="center")
+        self.tree.grid(row=0, column=0, columnspan=4, pady=(0,6))
+
+        ttk.Button(frm, text="Add Operator", command=self.add_operator).grid(row=1, column=0, sticky="w", padx=4, pady=4)
+        ttk.Button(frm, text="Reset Password", command=self.reset_password).grid(row=1, column=1, sticky="w", padx=4, pady=4)
+        ttk.Button(frm, text="Delete Operator", command=self.delete_operator).grid(row=1, column=2, sticky="w", padx=4, pady=4)
+        ttk.Button(frm, text="Close", command=self.destroy).grid(row=1, column=3, sticky="e", padx=4, pady=4)
+
+        self.load_users()
+        self.grab_set()
+
+    def load_users(self):
+        for i in self.tree.get_children():
+            self.tree.delete(i)
+        rows = db_execute(f"SELECT username, role FROM {USERS_TABLE} ORDER BY role DESC, username ASC", fetch=True)
+        for u, r in rows:
+            self.tree.insert("", tk.END, values=(u, r))
+
+    def _selected_user(self):
+        sel = self.tree.selection()
+        if not sel:
+            return None
+        vals = self.tree.item(sel[0])["values"]
+        return vals[0], vals[1]
+
+    def add_operator(self):
+        def do_add():
+            u = e_user.get().strip()
+            p = e_pass.get().strip()
+            if not u or not p:
+                messagebox.showerror("Error", "Username and password required.")
+                return
+            try:
+                db_execute(f"INSERT INTO {USERS_TABLE} (username, password, role) VALUES (?,?,?)",
+                           (u, p, "Operator"), commit=True)
+                messagebox.showinfo("Added", f"Operator '{u}' created.")
+                d.destroy()
+                self.load_users()
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed: {e}")
+
+        d = tk.Toplevel(self); d.title("Add Operator"); d.resizable(False, False)
+        frm = ttk.Frame(d, padding=10); frm.pack()
+        ttk.Label(frm, text="Username").grid(row=0, column=0, padx=6, pady=4, sticky="w")
+        e_user = ttk.Entry(frm, width=20); e_user.grid(row=0, column=1, padx=6, pady=4)
+        ttk.Label(frm, text="Password").grid(row=1, column=0, padx=6, pady=4, sticky="w")
+        e_pass = ttk.Entry(frm, show="*", width=20); e_pass.grid(row=1, column=1, padx=6, pady=4)
+        ttk.Button(frm, text="Create", command=do_add).grid(row=2, column=1, sticky="e", pady=6)
+        d.grab_set()
+
+    def reset_password(self):
+        sel = self._selected_user()
+        if not sel:
+            messagebox.showerror("Select", "Select a user first.")
+            return
+        u, role = sel
+        if u == "admin":
+            messagebox.showwarning("Not allowed", "Reset admin via Change Password.")
+            return
+        new = simple_prompt(self, f"Enter new password for '{u}':")
+        if not new:
+            return
+        db_execute(f"UPDATE {USERS_TABLE} SET password=? WHERE username=?", (new, u), commit=True)
+        messagebox.showinfo("Updated", "Password reset.")
+
+    def delete_operator(self):
+        sel = self._selected_user()
+        if not sel:
+            messagebox.showerror("Select", "Select a user first.")
+            return
+        u, role = sel
+        if role != "Operator":
+            messagebox.showwarning("Not allowed", "You can delete only Operators.")
+            return
+        if messagebox.askyesno("Confirm", f"Delete operator '{u}'?"):
+            db_execute(f"DELETE FROM {USERS_TABLE} WHERE username=?", (u,), commit=True)
+            self.load_users()
+
+
+def simple_prompt(master, prompt_text):
+    """Returns the text or None."""
+    d = tk.Toplevel(master); d.title("Input"); d.resizable(False, False)
+    frm = ttk.Frame(d, padding=10); frm.pack()
+    ttk.Label(frm, text=prompt_text).grid(row=0, column=0, padx=6, pady=4)
+    e = ttk.Entry(frm, width=40); e.grid(row=1, column=0, padx=6, pady=4)
+    out = {"val": None}
+    def ok():
+        out["val"] = e.get().strip()
+        d.destroy()
+    ttk.Button(frm, text="OK", command=ok).grid(row=2, column=0, sticky="e", pady=6)
+    e.focus_set()
+    d.grab_set()
+    master.wait_window(d)
+    return out["val"]
+
+
+# -----------------------------
+# Export Column Picker with Drag-and-Drop
+# -----------------------------
+class ColumnSelectDialog(tk.Toplevel):
+    def __init__(self, master, callback):
+        super().__init__(master)
+        self.title("Export: Choose & Reorder Columns")
+        self.resizable(False, False)
+        self.callback = callback
+        self.grab_set()
+
+        frm = ttk.Frame(self, padding=10)
+        frm.pack(fill=tk.BOTH, expand=True)
+
+        ttk.Label(frm, text="Select columns (drag to reorder):").grid(row=0, column=0, sticky="w")
+
+        self.lb = tk.Listbox(frm, selectmode=tk.MULTIPLE, height=14, width=36, activestyle="dotbox")
+        self.lb.grid(row=1, column=0, padx=(0,8), pady=6, sticky="ns")
+
+        # defaults selected
+        defaults = {"S#", "Country", "Company", "Name", "Passport No.", "Date of Arrival",
+                    "Date of Departure", "Date Of Expiry Visa", "IN/OUT", "Visa Status",
+                    "Visa Remaining days", "Contact Number", "Remarks"}
+        for title, idx in ALL_COLS:
+            self.lb.insert(tk.END, title)
+            if title in defaults:
+                self.lb.selection_set(tk.END)
+
+        # drag & drop logic
+        self.lb.bind("<Button-1>", self._set_current)
+        self.lb.bind("<B1-Motion>", self._shift_selection)
+
+        # optional manual heading
+        ttk.Label(frm, text="Optional heading (will appear on top):").grid(row=2, column=0, sticky="w")
+        self.heading_entry = ttk.Entry(frm, width=40)
+        self.heading_entry.grid(row=3, column=0, sticky="we", pady=(0,8))
+
+        btns = ttk.Frame(frm)
+        btns.grid(row=4, column=0, sticky="e")
+        ttk.Button(btns, text="Export to Excel", command=lambda: self.finish("excel")).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btns, text="Export to PDF (A4)", command=lambda: self.finish("pdf")).pack(side=tk.LEFT, padx=4)
+
+        self.cur_index = None
+
+    def _set_current(self, event):
+        self.cur_index = self.lb.nearest(event.y)
+
+    def _shift_selection(self, event):
+        i = self.lb.nearest(event.y)
+        if i < 0: return
+        if i != self.cur_index:
+            txt = self.lb.get(self.cur_index)
+            self.lb.delete(self.cur_index)
+            self.lb.insert(i, txt)
+            # preserve selection state when dragging
+            if self.lb.selection_includes(self.cur_index):
+                self.lb.selection_clear(self.cur_index)
+                self.lb.selection_set(i)
+            self.cur_index = i
+
+    def finish(self, kind):
+        selected_titles = [self.lb.get(i) for i in self.lb.curselection()]
+        if not selected_titles:
+            messagebox.showerror("No columns", "Please select at least one column.")
+            return
+        # build selected list preserving listbox order for chosen ones
+        order = [self.lb.get(i) for i in range(self.lb.size())]
+        selected_cols = []
+        for title in order:
+            if title in selected_titles:
+                idx = dict(ALL_COLS)[title]
+                selected_cols.append((title, idx))
+        heading = self.heading_entry.get().strip() or None
+        self.callback(kind, selected_cols, heading)
+        self.destroy()
+
+
+# -----------------------------
+# GUI App
+# -----------------------------
+class App:
+    def __init__(self, root, username, role):
+        self.root = root
+        self.username = username
+        self.role = role
+        root.title(APP_TITLE)
+        root.geometry("1420x830")
+        # --- Toolbar ---
+        toolbar = ttk.Frame(root, padding=(8,4))
+        toolbar.pack(side=tk.TOP, fill=tk.X)
+        ttk.Button(toolbar, text="➕ New (Ctrl+N)", command=self.add_new).pack(side=tk.LEFT, padx=4)
+        ttk.Button(toolbar, text="✏️ Edit (Ctrl+U)", command=self.update_selected).pack(side=tk.LEFT, padx=4)
+        ttk.Button(toolbar, text="🗑 Delete", command=self.delete_selected).pack(side=tk.LEFT, padx=4)
+        ttk.Separator(toolbar, orient="vertical").pack(side=tk.LEFT, fill=tk.Y, padx=6)
+        ttk.Button(toolbar, text="📤 Export (Ctrl+E)", command=self.open_export_dialog).pack(side=tk.LEFT, padx=4)
+        ttk.Button(toolbar, text="💾 Backup", command=self.manual_backup).pack(side=tk.LEFT, padx=4)
+        ttk.Separator(toolbar, orient="vertical").pack(side=tk.LEFT, fill=tk.Y, padx=6)
+        self._font_big = False
+        ttk.Button(toolbar, text="A⇧ / A⇩", command=self.toggle_font_size).pack(side=tk.LEFT, padx=4)
+
+
+        # Set app icon if eye.png exists in current directory
+        try:
+            icon_path = os.path.join(os.path.dirname(__file__), "eye.png")
+            if os.path.exists(icon_path):
+                img = tk.PhotoImage(file=icon_path)
+                root.iconphoto(True, img)
+        except Exception:
+            pass
+
+        # ---- Styling ----
+        style = ttk.Style()
+        try:
+            style.theme_use("clam")
+        except Exception:
+            pass
+        base_font = ("Segoe UI", 10)
+        head_font = ("Segoe UI Semibold", 10)
+        style.configure(".", font=base_font)
+        style.configure("Treeview", rowheight=24, font=base_font)
+        style.configure("Treeview.Heading", font=head_font, background="#e7edf6")
+        style.map("Treeview", background=[("selected", "#cfe0ff")])
+        style.configure("TButton", padding=6)
+        style.configure("TLabel", padding=2)
+
+        style.configure("Highlight.TCombobox", fieldbackground="#fff2cc")
+        style.map("Highlight.TCombobox", fieldbackground=[("readonly", "#fff2cc"), ("!disabled", "#fff2cc")])
+        style.configure("Highlight.TEntry", fieldbackground="#fff2cc")
+        style.map("Highlight.TEntry", fieldbackground=[("!disabled", "#fff2cc")])
+
+        # ---- Menu ----
+        self._build_menu()
+
+        # ---- Top frames ----
+        topf = ttk.LabelFrame(root, text="Employee Details", padding=8)
+        topf.pack(side=tk.TOP, fill=tk.X, padx=8, pady=6)
+        botf = ttk.Frame(root, padding=6)
+        botf.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+        # --- Form fields ---
+        self.widgets = {}
+
+        row1 = [
+            ("Country", "country", "entry"),
+            ("Company", "company", "entry"),
+            ("Name", "name", "entry"),
+            ("Passport No.", "passport_no", "entry"),
+        ]
+        row2 = [
+            ("Joining Date", "joining_date", "date"),
+            ("Date of Arrival", "date_of_arrival", "date"),
+            ("Date of Departure", "date_of_departure", "date"),
+            ("IN/OUT", "in_out", "combo_inout"),
+        ]
+        row3 = [
+            ("Type of Visa", "type_of_visa", "combo_visa"),
+            ("Visa No.", "visa_no", "entry"),
+            ("Date Of Issue Visa", "date_of_issue_visa", "date"),
+            ("Date Of Expiry Visa", "date_of_expiry_visa", "date"),
+        ]
+
+        def add_field(row_idx, col_idx, label, key, kind):
+            ttk.Label(topf, text=label).grid(row=row_idx, column=col_idx*2, sticky="w", padx=6, pady=4)
+            if kind == "date":
+                w = DateEntry(topf, width=16, date_pattern="yyyy-mm-dd", state="readonly",
+                              showweeknumbers=False, style="Highlight.TEntry")
+            elif kind == "combo_inout":
+                w = ttk.Combobox(topf, values=["", "IN", "OUT"], width=18, state="readonly", style="Highlight.TCombobox")
+                w.set("")
+            elif kind == "combo_visa":
+                w = ttk.Combobox(topf, values=["", "Employment", "Visit", "Business", "Other"],
+                                 width=20, state="normal", style="Highlight.TCombobox")
+                w.set("")
+            else:
+                w = ttk.Entry(topf, width=24)
+            w.grid(row=row_idx, column=col_idx*2+1, padx=6, pady=4, sticky="w")
+            self.widgets[key] = w
+
+        for i, (lbl, key, kind) in enumerate(row1):
+            add_field(0, i, lbl, key, kind)
+        for i, (lbl, key, kind) in enumerate(row2):
+            add_field(1, i, lbl, key, kind)
+        for i, (lbl, key, kind) in enumerate(row3):
+            add_field(2, i, lbl, key, kind)
+        ttk.Label(topf, text="Remarks").grid(row=4, column=0, sticky="w", padx=6, pady=4)
+        self.widgets["remarks"] = ttk.Entry(topf, width=140)
+        self.widgets["remarks"].grid(row=4, column=1, columnspan=7, sticky="we", padx=6, pady=4)
+
+        # Buttons
+        btn_frame = ttk.Frame(topf)
+        btn_frame.grid(row=5, column=0, columnspan=8, pady=8, sticky="w")
+        ttk.Button(btn_frame, text="Add New", command=self.add_new).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text="Update Selected", command=self.update_selected).pack(side=tk.LEFT, padx=4)
+        self.btn_delete_selected = ttk.Button(btn_frame, text="Delete Selected", command=self.delete_selected)
+        self.btn_delete_selected.pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text="Clear Form", command=self.clear_form).pack(side=tk.LEFT, padx=4)
+
+        # Search / Filter
+        search_frame = ttk.LabelFrame(botf, text="Search / Filter")
+        search_frame.pack(side=tk.TOP, fill=tk.X, pady=6)
+
+        ttk.Label(search_frame, text="Name").grid(row=0, column=0, padx=6, pady=4)
+        self.search_name = ttk.Entry(search_frame, width=20)
+        self.search_name.grid(row=0, column=1, padx=6, pady=4)
+
+        ttk.Label(search_frame, text="Passport No.").grid(row=0, column=2, padx=6, pady=4)
+        self.search_passport = ttk.Entry(search_frame, width=20)
+        self.search_passport.grid(row=0, column=3, padx=6, pady=4)
+
+        ttk.Label(search_frame, text="IN/OUT").grid(row=0, column=4, padx=6, pady=4)
+        self.search_inout = ttk.Combobox(search_frame, values=["", "IN", "OUT"], width=14, state="readonly", style="Highlight.TCombobox")
+        self.search_inout.grid(row=0, column=5, padx=6, pady=4)
+        self.search_inout.set("")
+
+        ttk.Label(search_frame, text="Arrival From").grid(row=0, column=6, padx=6, pady=4)
+        self.search_arr_from = DateEntry(search_frame, width=12, date_pattern="yyyy-mm-dd", state="readonly", style="Highlight.TEntry")
+        self.search_arr_from.grid(row=0, column=7, padx=6, pady=4)
+        self.search_arr_from.set_date(date.today())
+        self.use_arr_from = tk.BooleanVar(value=False)
+        ttk.Checkbutton(search_frame, text="Use", variable=self.use_arr_from).grid(row=0, column=8, padx=2)
+
+        ttk.Label(search_frame, text="Arrival To").grid(row=0, column=9, padx=6, pady=4)
+        self.search_arr_to = DateEntry(search_frame, width=12, date_pattern="yyyy-mm-dd", state="readonly", style="Highlight.TEntry")
+        self.search_arr_to.grid(row=0, column=10, padx=6, pady=4)
+        self.search_arr_to.set_date(date.today())
+        self.use_arr_to = tk.BooleanVar(value=False)
+        ttk.Checkbutton(search_frame, text="Use", variable=self.use_arr_to).grid(row=0, column=11, padx=2)
+
+        ttk.Button(search_frame, text="Search (Ctrl+F)", command=self.search).grid(row=0, column=12, padx=8)
+        ttk.Button(search_frame, text="Show All", command=self.load_all).grid(row=0, column=13, padx=8)
+
+        # Export & bulk
+        export_frame = ttk.Frame(botf)
+        export_frame.pack(side=tk.TOP, fill=tk.X)
+        self.btn_export = ttk.Button(export_frame, text="Export (Pick/Reorder Columns)…", command=self.open_export_dialog)
+        self.btn_export.pack(side=tk.LEFT, padx=6, pady=4)
+        ttk.Button(export_frame, text="Download Bulk Template", command=self.download_bulk_template).pack(side=tk.LEFT, padx=6, pady=4)
+        ttk.Button(export_frame, text="Bulk Import from Excel", command=self.bulk_import_from_excel).pack(side=tk.LEFT, padx=6, pady=4)
+
+        # Multi-delete helpers
+        multi_frame = ttk.Frame(botf)
+        multi_frame.pack(side=tk.TOP, fill=tk.X, pady=(2, 6))
+        ttk.Button(multi_frame, text="Select All (visible)", command=self.select_all_visible).pack(side=tk.LEFT, padx=4)
+        ttk.Button(multi_frame, text="Clear Checks", command=self.clear_checks).pack(side=tk.LEFT, padx=4)
+        self.btn_delete_checked = ttk.Button(multi_frame, text="Delete Checked", command=self.delete_checked)
+        self.btn_delete_checked.pack(side=tk.LEFT, padx=4)
+
+        # Treeview
+        cols = (
+            "select","id","s_no","country","company","name","passport_no",
+            "joining_date","date_of_arrival","date_of_departure",
+            "type_of_visa","visa_no","date_of_issue_visa","date_of_expiry_visa",
+            "remaining","status","in_out",
+            "contact_number","remarks"
+        )
+        self.tree = ttk.Treeview(botf, columns=cols, show="headings", selectmode="browse")
+        headings = {
+            "select":"Select",
+            "id":"DB ID", "s_no":"S#",
+            "country":"Country","company":"Company","name":"Name","passport_no":"Passport No.",
+            "joining_date":"Joining Date","date_of_arrival":"Arrival","date_of_departure":"Departure",
+            "type_of_visa":"Type of Visa","visa_no":"Visa No.","date_of_issue_visa":"Issue Date","date_of_expiry_visa":"Expiry Date",
+            "remaining":"Remaining Days","status":"Visa Status","in_out":"IN/OUT",
+            "contact_number":"Contact Number","remarks":"Remarks"
+        }
+        for c in cols:
+            self.tree.heading(c, text=headings[c])
+            if c == "select":
+                self.tree.column(c, width=70, anchor="center")
+            elif c in ("id","s_no","in_out"):
+                self.tree.column(c, width=60, anchor="center")
+            elif c in ("remaining","status"):
+                self.tree.column(c, width=110, anchor="center")
+            elif c in ("country","company","name","passport_no","visa_no","contact_number"):
+                self.tree.column(c, width=150, anchor="w")
+            elif c in ("remarks",):
+                self.tree.column(c, width=250, anchor="w")
+            else:
+                self.tree.column(c, width=120, anchor="w")
+
+        vs = ttk.Scrollbar(botf, orient="vertical", command=self.tree.yview)
+        hs = ttk.Scrollbar(botf, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscroll=vs.set, xscroll=hs.set)
+        vs.pack(side=tk.RIGHT, fill=tk.Y)
+        hs.pack(side=tk.BOTTOM, fill=tk.X)
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Status bar
+        self.status = ttk.Label(root, text="Ready", anchor="w", relief="groove")
+        self.status.pack(side=tk.BOTTOM, fill=tk.X)
+
+        # Selections for checkboxes (DB IDs)
+        self.checked_ids = set()
+
+        # Bindings
+        self.tree.bind("<<TreeviewSelect>>", self.on_tree_select)
+        self.tree.bind("<Button-1>", self.on_tree_click)  # toggle checkbox
+        root.bind("<Control-f>", lambda e: self.search())
+        root.bind("<Control-e>", lambda e: self.open_export_dialog())
+        root.bind("<Control-n>", lambda e: self.add_new())
+
+        # Init
+        renumber_sno()
+        self._apply_role_permissions()
+        self.load_all()
+
+        # Auto-backup on close
+        self.root.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    # ---- Menu ----
+    def _build_menu(self):
+        menubar = tk.Menu(self.root)
+        m_file = tk.Menu(menubar, tearoff=0)
+        m_file.add_command(label="Backup Now", command=self.manual_backup)
+        m_file.add_separator()
+        m_file.add_command(label="Exit", command=self.root.quit)
+        menubar.add_cascade(label="File", menu=m_file)
+
+        m_admin = tk.Menu(menubar, tearoff=0)
+        m_admin.add_command(label="Deletion Requests…", command=self.open_deletion_requests)
+        m_admin.add_command(label="Manage Users…", command=self.open_manage_users)
+        menubar.add_cascade(label="Admin", menu=m_admin)
+
+        m_account = tk.Menu(menubar, tearoff=0)
+        m_account.add_command(label="Change Password…", command=self.open_change_password)
+        menubar.add_cascade(label="Account", menu=m_account)
+
+        m_help = tk.Menu(menubar, tearoff=0)
+        m_help.add_command(label="About", command=lambda: messagebox.showinfo("About",
+            f"{APP_TITLE}\n\n© {datetime.now().year}"))
+        menubar.add_cascade(label="Help", menu=m_help)
+
+        self.root.config(menu=menubar)
+        self.menu_admin = m_admin  # keep handle for role toggling
+
+    # ---- Role permissions ----
+    def _apply_role_permissions(self):
+        if self.role != "Admin":
+            self.btn_export.state(["disabled"])
+            self.btn_delete_selected.config(text="Request Delete")
+            self.btn_delete_checked.config(text="Request Delete (checked)")
+            self.menu_admin.entryconfig(0, state="disabled")
+            self.menu_admin.entryconfig(1, state="disabled")
+            self.status.config(text=f"Logged in as Operator: deletions become requests; export disabled.")
+        else:
+            self.btn_export.state(["!disabled"])
+            self.btn_delete_selected.config(text="Delete Selected")
+            self.btn_delete_checked.config(text="Delete Checked")
+            self.menu_admin.entryconfig(0, state="normal")
+            self.menu_admin.entryconfig(1, state="normal")
+            self.status.config(text=f"Logged in as Admin.")
+
+    # ---- Account actions ----
+    def open_change_password(self):
+        ChangePasswordDialog(self.root, self.username)
+
+    def open_manage_users(self):
+        if self.role != "Admin":
+            messagebox.showwarning("Permission", "Only Admin can manage users.")
+            return
+        ManageUsersDialog(self.root)
+
+    # ---- Deletion Requests panel ----
+    def open_deletion_requests(self):
+        if self.role != "Admin":
+            messagebox.showwarning("Permission", "Only Admin can view requests.")
+            return
+
+        d = tk.Toplevel(self.root); d.title("Deletion Requests"); d.geometry("520x380")
+        frm = ttk.Frame(d, padding=10); frm.pack(fill=tk.BOTH, expand=True)
+        tree = ttk.Treeview(frm, columns=("id","record_id","requested_by","requested_at"), show="headings", height=12)
+        for i,(k,h) in enumerate([("id","Req ID"),("record_id","Record ID"),("requested_by","By"),("requested_at","When")]):
+            tree.heading(k, text=h)
+            anchor = "center" if k in ("id","record_id") else "w"
+            tree.column(k, width=80 if anchor=="center" else 200, anchor=anchor)
+        tree.pack(fill=tk.BOTH, expand=True)
+
+        def refresh():
+            for x in tree.get_children():
+                tree.delete(x)
+            rows = db_execute(f"SELECT id, record_id, requested_by, requested_at FROM {DELREQ_TABLE} ORDER BY id DESC", fetch=True)
+            for r in rows:
+                tree.insert("", tk.END, values=r)
+
+        def approve():
+            sel = tree.selection()
+            if not sel:
+                return
+            req_id, rec_id, by, when = tree.item(sel[0])["values"]
+            try:
+                delete_record(rec_id)
+            except Exception as e:
+                messagebox.showerror("Error", f"Delete failed: {e}")
+                return
+            db_execute(f"DELETE FROM {DELREQ_TABLE} WHERE id=?", (req_id,), commit=True)
+            renumber_sno()
+            refresh()
+            self.load_all()
+            messagebox.showinfo("Done", f"Record {rec_id} deleted (requested by {by}).")
+
+        def reject():
+            sel = tree.selection()
+            if not sel:
+                return
+            req_id = tree.item(sel[0])["values"][0]
+            db_execute(f"DELETE FROM {DELREQ_TABLE} WHERE id=?", (req_id,), commit=True)
+            refresh()
+
+        btns = ttk.Frame(frm); btns.pack(fill=tk.X, pady=6)
+        ttk.Button(btns, text="Approve (Delete)", command=approve).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btns, text="Reject", command=reject).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btns, text="Refresh", command=refresh).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btns, text="Close", command=d.destroy).pack(side=tk.RIGHT, padx=4)
+
+        refresh()
+        d.grab_set()
+
+    # -----------------------------
+    # Widget helpers
+    # -----------------------------
+    def _get_widget_value(self, key):
+        w = self.widgets.get(key)
+        if not w:
+            return ""
+        if isinstance(w, DateEntry):
+            try:
+                return w.get_date().strftime("%Y-%m-%d")
+            except Exception:
+                return ""
+        try:
+            return w.get().strip()
+        except Exception:
+            return ""
+
+    def collect_form_values(self):
+        return {
+            'country': self._get_widget_value('country'),
+            'company': self._get_widget_value('company'),
+            'name': self._get_widget_value('name'),
+            'passport_no': self._get_widget_value('passport_no'),
+            'joining_date': self._get_widget_value('joining_date'),
+            'date_of_arrival': self._get_widget_value('date_of_arrival'),
+            'date_of_departure': self._get_widget_value('date_of_departure'),
+            'type_of_visa': self._get_widget_value('type_of_visa'),
+            'visa_no': self._get_widget_value('visa_no'),
+            'date_of_issue_visa': self._get_widget_value('date_of_issue_visa'),
+            'date_of_expiry_visa': self._get_widget_value('date_of_expiry_visa'),
+            'in_out': self._get_widget_value('in_out'),
+            'contact_number': self._get_widget_value('contact_number'),
+            'company_contact_person': self._get_widget_value('company_contact_person'),
+            'designation': self._get_widget_value('designation'),
+            'work_location': self._get_widget_value('work_location'),
+            'remarks': self._get_widget_value('remarks')
+        }
+
+    # -----------------------------
+    # CRUD + UI actions
+    # -----------------------------
+    def add_new(self):
+        vals = self.collect_form_values()
+        if not vals['name'] or not vals['passport_no']:
+            messagebox.showerror("Required", "Please enter at least Name and Passport No.")
+            return
+        if vals['date_of_expiry_visa'] == "":
+            messagebox.showerror("Required", "Please set Date Of Expiry Visa.")
+            return
+
+        if vals['in_out'] == 'IN':
+            vals['date_of_arrival'] = date.today().strftime("%Y-%m-%d")
+            vals['date_of_departure'] = ""
+
+        try:
+            add_record(vals)
+            renumber_sno()
+            messagebox.showinfo("Saved", "Record added.")
+            self.clear_form()
+            self.load_all()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to add record:\n{e}")
+
+    def load_all(self):
+        rows = fetch_records()
+        self.populate_tree(rows, renumber_display=False)
+        self._update_status_counts()
+
+    def populate_tree(self, rows, renumber_display=False):
+        for i in self.tree.get_children():
+            self.tree.delete(i)
+
+        for idx, r in enumerate(rows):
+            rec_id = r[0]
+            display_sno = (idx + 1) if renumber_display else (r[1] or "")
+            vals = (
+                CHECKED if rec_id in self.checked_ids else UNCHECKED,
+                rec_id,
+                display_sno,
+                r[2] or "",  # country
+                r[3] or "",  # company
+                r[4] or "",  # name
+                r[5] or "",  # passport
+                r[6] or "",  # joining
+                r[7] or "",  # arrival
+                r[8] or "",  # departure
+                r[9] or "",  # type visa
+                r[10] or "", # visa no
+                r[11] or "", # issue
+                r[12] or "", # expiry
+                r[13] if r[13] is not None else "",
+                r[14] or "", # status
+                r[15] or "", # in/out
+                r[16] or "", # contact
+                r[20] or ""  # remarks
+            )
+            self.tree.insert("", tk.END, values=vals)
+
+    def _filters_from_ui(self):
+        filters = {
+            'name': self.search_name.get().strip(),
+            'passport_no': self.search_passport.get().strip(),
+            'in_out': self.search_inout.get().strip()
+        }
+        if self.use_arr_from.get():
+            filters['arrival_from'] = self.search_arr_from.get_date().strftime("%Y-%m-%d")
+        if self.use_arr_to.get():
+            filters['arrival_to'] = self.search_arr_to.get_date().strftime("%Y-%m-%d")
+        return filters
+
+    def search(self):
+        filters = self._filters_from_ui()
+        rows = fetch_records(filters)
+        self.populate_tree(rows, renumber_display=True)
+        self._update_status_counts()
+
+    def on_tree_click(self, event):
+        region = self.tree.identify("region", event.x, event.y)
+        if region == "heading":
+            return
+        col = self.tree.identify_column(event.x)
+        rowid = self.tree.identify_row(event.y)
+        if col == "#1" and rowid:
+            vals = list(self.tree.item(rowid, "values"))
+            try:
+                dbid = int(vals[1])
+            except Exception:
+                dbid = vals[1]
+            if dbid in self.checked_ids:
+                self.checked_ids.remove(dbid)
+                vals[0] = UNCHECKED
+            else:
+                self.checked_ids.add(dbid)
+                vals[0] = CHECKED
+            self.tree.item(rowid, values=vals)
+            return "break"
+
+    def on_tree_select(self, event):
+        sel = self.tree.selection()
+        if not sel:
+            return
+        vals = self.tree.item(sel[0])['values']
+        if not vals:
+            return
+        rec_id = vals[1]
+        r = db_execute(f"SELECT * FROM {TABLE} WHERE id=?", (rec_id,), fetch=True)
+        if not r:
+            return
+        r = r[0]
+
+        def set_widget_value(key, value):
+            w = self.widgets.get(key)
+            if not w:
+                return
+            if isinstance(w, DateEntry):
+                try:
+                    w.set_date(datetime.strptime(value, "%Y-%m-%d").date() if value else date.today())
+                except Exception:
+                    pass
+            elif isinstance(w, ttk.Combobox):
+                try:
+                    w.set(value if value is not None else "")
+                except Exception:
+                    pass
+            else:
+                try:
+                    w.delete(0, tk.END)
+                except Exception:
+                    pass
+                if value is not None:
+                    try:
+                        w.insert(0, str(value))
+                    except Exception:
+                        pass
+
+        set_widget_value('country', r[2])
+        set_widget_value('company', r[3])
+        set_widget_value('name', r[4])
+        set_widget_value('passport_no', r[5])
+        set_widget_value('joining_date', r[6])
+        set_widget_value('date_of_arrival', r[7])
+        set_widget_value('date_of_departure', r[8])
+        set_widget_value('type_of_visa', r[9])
+        set_widget_value('visa_no', r[10])
+        set_widget_value('date_of_issue_visa', r[11])
+        set_widget_value('date_of_expiry_visa', r[12])
+        set_widget_value('in_out', r[15])
+        set_widget_value('contact_number', r[16])
+        set_widget_value('company_contact_person', r[17])
+        set_widget_value('designation', r[18])
+        set_widget_value('work_location', r[19])
+        set_widget_value('remarks', r[20])
+
+    def clear_form(self):
+        for k, w in self.widgets.items():
+            if isinstance(w, DateEntry):
+                try:
+                    w.set_date(date.today())
+                except Exception:
+                    pass
+            else:
+                try:
+                    w.set("") if isinstance(w, ttk.Combobox) else w.delete(0, tk.END)
+                except Exception:
+                    pass
+
+    def get_selected_dbid(self):
+        sel = self.tree.selection()
+        if not sel:
+            return None
+        vals = self.tree.item(sel[0])['values']
+        return vals[1] if vals else None
+
+    # --- Deletion behavior with roles ---
+    def _request_delete(self, rec_ids):
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        for rid in rec_ids:
+            try:
+                db_execute(f"INSERT INTO {DELREQ_TABLE} (record_id, requested_by, requested_at) VALUES (?,?,?)",
+                           (rid, self.username, ts), commit=True)
+            except Exception:
+                pass
+        messagebox.showinfo("Requested", f"Sent {len(rec_ids)} deletion request(s) to Admin.")
+
+    def update_selected(self):
+        rec_id = self.get_selected_dbid()
+        if not rec_id:
+            messagebox.showerror("Select", "Please select a record in the list first.")
+            return
+        vals = self.collect_form_values()
+        if not vals['name'] or not vals['passport_no']:
+            messagebox.showerror("Required", "Please enter at least Name and Passport No.")
+            return
+        if vals['in_out'] == 'OUT':
+            vals['date_of_departure'] = date.today().strftime("%Y-%m-%d")
+        try:
+            update_record(rec_id, vals)
+            renumber_sno()
+            messagebox.showinfo("Updated", "Record updated.")
+            self.load_all()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to update:\n{e}")
+
+    def delete_selected(self):
+        rec_id = self.get_selected_dbid()
+        if not rec_id:
+            messagebox.showerror("Select", "Please select a record to delete.")
+            return
+        if self.role != "Admin":
+            self._request_delete([rec_id])
+            return
+        if messagebox.askyesno("Confirm", "Delete selected record?"):
+            delete_record(rec_id)
+            renumber_sno()
+            try:
+                self.checked_ids.discard(int(rec_id))
+            except Exception:
+                self.checked_ids.discard(rec_id)
+            messagebox.showinfo("Deleted", "Record deleted.")
+            self.load_all()
+
+    # Multi-delete actions
+    def select_all_visible(self):
+        for iid in self.tree.get_children():
+            vals = list(self.tree.item(iid, "values"))
+            if not vals:
+                continue
+            dbid = vals[1]
+            self.checked_ids.add(dbid)
+            vals[0] = CHECKED
+            self.tree.item(iid, values=vals)
+
+    def clear_checks(self):
+        self.checked_ids.clear()
+        for iid in self.tree.get_children():
+            vals = list(self.tree.item(iid, "values"))
+            if not vals:
+                continue
+            vals[0] = UNCHECKED
+            self.tree.item(iid, values=vals)
+
+    def delete_checked(self):
+        ids = list(self.checked_ids)
+        if not ids:
+            messagebox.showinfo("Nothing selected", "Please check one or more rows first.")
+            return
+        if self.role != "Admin":
+            self._request_delete(ids)
+            return
+        if not messagebox.askyesno("Confirm", f"Delete {len(ids)} checked record(s)?"):
+            return
+        errors = 0
+        for rid in ids:
+            try:
+                delete_record(rid)
+            except Exception:
+                errors += 1
+        renumber_sno()
+        self.checked_ids.clear()
+        self.load_all()
+        if errors:
+            messagebox.showwarning("Completed with errors", f"Deleted {len(ids)-errors}, {errors} failed.")
+        else:
+            messagebox.showinfo("Deleted", f"Deleted {len(ids)} record(s).")
+
+    # -----------------------------
+    # Export (with column picker & heading)
+    # -----------------------------
+    def open_export_dialog(self):
+        if self.role != "Admin":
+            messagebox.showwarning("Permission", "Only Admin can export.")
+            return
+        ColumnSelectDialog(self.root, self._on_columns_chosen)
+
+    def _collect_visible_full_rows(self, renumber_visible=False):
+        rows = []
+        for iid in self.tree.get_children():
+            vals = self.tree.item(iid)['values']
+            if not vals:
+                continue
+            dbid = vals[1]
+            row = db_execute(f"SELECT * FROM {TABLE} WHERE id=?", (dbid,), fetch=True)
+            if row:
+                rows.append(list(row[0]))
+        if renumber_visible:
+            for i, r in enumerate(rows):
+                r[1] = i + 1
+        return rows
+
+    def _on_columns_chosen(self, kind, selected_cols, heading_text):
+        rows = self._collect_visible_full_rows(renumber_visible=True)
+        if not rows:
+            messagebox.showinfo("Nothing", "No records to export.")
+            return
+        if kind == "excel":
+            fpath = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel files","*.xlsx")], initialfile="export.xlsx")
+            if not fpath:
+                return
+            try:
+                export_to_excel_dynamic(rows, fpath, selected_cols, heading_text=heading_text)
+                messagebox.showinfo("Exported", f"Exported to {fpath}")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to export Excel:\n{e}")
+        else:
+            fpath = filedialog.asksaveasfilename(defaultextension=".pdf", filetypes=[("PDF files","*.pdf")], initialfile="export.pdf")
+            if not fpath:
+                return
+            try:
+                export_to_pdf_dynamic(rows, fpath, selected_cols, title="Employee Master Export", heading_text=heading_text)
+                messagebox.showinfo("Exported", f"PDF exported to {fpath}")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to export PDF:\n{e}")
+
+    # -----------------------------
+    # Bulk / Template functions
+    # -----------------------------
+    def download_bulk_template(self):
+        cols = [
+            "Country", "Company", "Name", "Passport No.", "Joining Date",
+            "Date of Arrival", "Date of Departure", "Type of Visa", "Visa No.",
+            "Date Of Issue Visa", "Date Of Expiry Visa", "IN/OUT", "Contact Number",
+            "Company Contact Person", "Designation", "Work Location", "Remarks"
+        ]
+        fpath = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            filetypes=[("Excel files", "*.xlsx")],
+            initialfile="bulk_template.xlsx",
+            title="Save Bulk Entry Template"
+        )
+        if not fpath:
+            return
+        pd.DataFrame(columns=cols).to_excel(fpath, index=False, engine="openpyxl")
+        messagebox.showinfo("Template Created", f"Template saved to {fpath}")
+
+    def bulk_import_from_excel(self):
+        fpath = filedialog.askopenfilename(
+            filetypes=[("Excel files", "*.xlsx")],
+            title="Select Excel File for Bulk Import"
+        )
+        if not fpath:
+            return
+
+        try:
+            df = pd.read_excel(fpath, engine="openpyxl")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to read Excel file:\n{e}")
+            return
+
+        required_cols = [
+            "Country", "Company", "Name", "Passport No.", "Joining Date",
+            "Date of Arrival", "Date of Departure", "Type of Visa", "Visa No.",
+            "Date Of Issue Visa", "Date Of Expiry Visa", "IN/OUT", "Contact Number",
+            "Company Contact Person", "Designation", "Work Location", "Remarks"
+        ]
+        missing = [c for c in required_cols if c not in df.columns]
+        if missing:
+            messagebox.showerror("Invalid Template", f"Missing column(s): {', '.join(missing)}")
+            return
+
+        added_count = 0
+        skipped_count = 0
+        error_count = 0
+        for idx, row in df.iterrows():
+            if pd.isna(row.get("Name")) or pd.isna(row.get("Passport No.")):
+                skipped_count += 1
+                continue
+
+            jdate = _parse_date_cell(row.get("Joining Date"))
+            arrival = _parse_date_cell(row.get("Date of Arrival"))
+            departure = _parse_date_cell(row.get("Date of Departure"))
+            issue = _parse_date_cell(row.get("Date Of Issue Visa"))
+            expiry = _parse_date_cell(row.get("Date Of Expiry Visa"))
+
+            if expiry == "":
+                skipped_count += 1
+                continue
+
+            values = {
+                'country': "" if pd.isna(row.get("Country")) else str(row.get("Country")),
+                'company': "" if pd.isna(row.get("Company")) else str(row.get("Company")),
+                'name': "" if pd.isna(row.get("Name")) else str(row.get("Name")),
+                'passport_no': "" if pd.isna(row.get("Passport No.")) else str(row.get("Passport No.")),
+                'joining_date': jdate,
+                'date_of_arrival': arrival,
+                'date_of_departure': departure,
+                'type_of_visa': "" if pd.isna(row.get("Type of Visa")) else str(row.get("Type of Visa")),
+                'visa_no': "" if pd.isna(row.get("Visa No.")) else str(row.get("Visa No.")),
+                'date_of_issue_visa': issue,
+                'date_of_expiry_visa': expiry,
+                'in_out': "" if pd.isna(row.get("IN/OUT")) else str(row.get("IN/OUT")),
+                'contact_number': "" if pd.isna(row.get("Contact Number")) else str(row.get("Contact Number")),
+                'company_contact_person': "" if pd.isna(row.get("Company Contact Person")) else str(row.get("Company Contact Person")),
+                'designation': "" if pd.isna(row.get("Designation")) else str(row.get("Designation")),
+                'work_location': "" if pd.isna(row.get("Work Location")) else str(row.get("Work Location")),
+                'remarks': "" if pd.isna(row.get("Remarks")) else str(row.get("Remarks"))
+            }
+
+            try:
+                add_record(values)
+                added_count += 1
+            except Exception as e:
+                print(f"Row {idx} skipped due to error: {e}")
+                error_count += 1
+                continue
+
+        renumber_sno()
+        self.load_all()
+        messagebox.showinfo("Import Complete", f"Added: {added_count}\nSkipped: {skipped_count}\nErrors: {error_count}")
+
+    # -----------------------------
+    # Status helpers & backup
+    # -----------------------------
+    def _update_status_counts(self):
+        r_total = db_execute(f"SELECT COUNT(*) FROM {TABLE}", fetch=True)[0][0]
+        r_in = db_execute(f"SELECT COUNT(*) FROM {TABLE} WHERE in_out='IN'", fetch=True)[0][0]
+        r_out = db_execute(f"SELECT COUNT(*) FROM {TABLE} WHERE in_out='OUT'", fetch=True)[0][0]
+        visible = len(self.tree.get_children())
+        self.status.config(text=f"Total: {r_total} | IN: {r_in} | OUT: {r_out} | Visible: {visible}")
+
+    def _backup_now(self):
+        try:
+            os.makedirs(BACKUP_DIR, exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            out = os.path.join(BACKUP_DIR, f"backup_{ts}.csv")
+            rows = db_execute(f"SELECT * FROM {TABLE}", fetch=True)
+            if not rows:
+                cols = [d[1] for d in [
+                    ("id","id"),("s_no","s_no"),("country","country"),("company","company"),("name","name"),
+                    ("passport_no","passport_no"),("joining_date","joining_date"),("date_of_arrival","date_of_arrival"),
+                    ("date_of_departure","date_of_departure"),("type_of_visa","type_of_visa"),("visa_no","visa_no"),
+                    ("date_of_issue_visa","date_of_issue_visa"),("date_of_expiry_visa","date_of_expiry_visa"),
+                    ("visa_remaining_days","visa_remaining_days"),("visa_status","visa_status"),("in_out","in_out"),
+                    ("contact_number","contact_number"),("company_contact_person","company_contact_person"),
+                    ("designation","designation"),("work_location","work_location"),("remarks","remarks"),("last_updated","last_updated")
+                ]]
+                pd.DataFrame(columns=cols).to_csv(out, index=False, encoding="utf-8")
+            else:
+                cols = [d[1] for d in db_execute(f"PRAGMA table_info({TABLE})", fetch=True)]
+                pd.DataFrame(rows, columns=cols).to_csv(out, index=False, encoding="utf-8")
+            return out
+        except Exception as e:
+            messagebox.showerror("Backup Error", f"Backup failed:\n{e}")
+            return None
+
+    def manual_backup(self):
+        out = self._backup_now()
+        if out:
+            messagebox.showinfo("Backup", f"Backup saved to {out}")
+
+
+
+    def toggle_font_size(self):
+        try:
+            style = ttk.Style()
+            current = style.lookup(".", "font") or ("Segoe UI", 10)
+            # Toggle between 10 and 12 pt base font
+            if not self._font_big:
+                style.configure(".", font=("Segoe UI", 12))
+                style.configure("Treeview.Heading", font=("Segoe UI Semibold", 12))
+                self._font_big = True
+                self.status.config(text="Font size: Large")
+            else:
+                style.configure(".", font=("Segoe UI", 10))
+                style.configure("Treeview.Heading", font=("Segoe UI Semibold", 10))
+                self._font_big = False
+                self.status.config(text="Font size: Normal")
+        except Exception:
+            pass
+    def on_close(self):
+        self._backup_now()
+        self.root.destroy()
+
+
+# -----------------------------
+# Run the app (hide until login)
+# -----------------------------
+def main():
+    init_db()
+    root = tk.Tk()
+    # Hide the main window until successful login
+    root.withdraw()
+
+    # Splash
+    splash = show_splash(root)
+    root.update()
+    splash.wait_window()  # wait for splash to close
+    # App icon also for login window, if available
+    try:
+        icon_path = os.path.join(os.path.dirname(__file__), "eye.png")
+        if os.path.exists(icon_path):
+            img = tk.PhotoImage(file=icon_path)
+            root.iconphoto(True, img)
+    except Exception:
+        pass
+
+    # Do login
+    dlg = LoginDialog(root)
+    root.wait_window(dlg)
+    if not dlg.role:
+        root.destroy()
+        return
+
+    # Show main after login
+    root.deiconify()
+    app = App(root, dlg.username, dlg.role)
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()
