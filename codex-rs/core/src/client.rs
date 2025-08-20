@@ -208,11 +208,7 @@ impl ModelClient {
                 req_builder = req_builder.header("chatgpt-account-id", account_id);
             }
 
-            let originator = self
-                .config
-                .internal_originator
-                .as_deref()
-                .unwrap_or("codex_cli_rs");
+            let originator = &self.config.responses_originator_header;
             req_builder = req_builder.header("originator", originator);
             req_builder = req_builder.header("User-Agent", get_codex_user_agent(Some(originator)));
 
