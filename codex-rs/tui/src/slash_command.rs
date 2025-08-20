@@ -40,7 +40,7 @@ impl SlashCommand {
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::Model => "choose a model preset (model + reasoning effort)",
             SlashCommand::Approvals => {
-                "choose approval/sandbox permissions (read only, guarded write, auto write, yolo)"
+                "choose what Codex can do without approval"
             }
             SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Logout => "log out of Codex",
