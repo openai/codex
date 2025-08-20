@@ -1,15 +1,23 @@
-{ pkgs, monorep-deps ? [], ... }:
-let
+{
+  pkgs,
+  monorep-deps ? [],
+  ...
+}: let
   env = {
     PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig:$PKG_CONFIG_PATH";
   };
-in
-rec {
+in rec {
   package = pkgs.rustPlatform.buildRustPackage {
     inherit env;
     pname = "codex-rs";
     version = "0.1.0";
-    cargoLock.lockFile = ./Cargo.lock;
+    cargoLock = {
+      lockFile = ./Cargo.lock;
+      # Since ratatui is in crates.patch we need to use the hash here
+      outputHashes = {
+        "ratatui-0.29.0" = "sha256-HBvT5c8GsiCxMffNjJGLmHnvG77A6cqEL+1ARurBXho=";
+      };
+    };
     doCheck = false;
     src = ./.;
     nativeBuildInputs = with pkgs; [
@@ -25,10 +33,12 @@ rec {
   devShell = pkgs.mkShell {
     inherit env;
     name = "codex-rs-dev";
-    packages = monorep-deps ++ [
-      pkgs.cargo
-      package
-    ];
+    packages =
+      monorep-deps
+      ++ [
+        pkgs.cargo
+        package
+      ];
     shellHook = ''
       echo "Entering development shell for codex-rs"
       alias codex="cd ${package.src}/tui; cargo run; cd -"
