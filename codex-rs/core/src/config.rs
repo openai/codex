@@ -275,21 +275,27 @@ pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Re
     {
         let root = doc.as_table_mut();
         if !root.contains_key("projects") {
-            root.insert("projects", toml_edit::table().into());
+            root.insert("projects", toml_edit::table());
         }
     }
-    let projects_tbl = doc["projects"].as_table_mut().expect("projects table exists");
+    let Some(projects_tbl) = doc["projects"].as_table_mut() else {
+        return Err(anyhow::anyhow!(
+            "projects table missing after initialization"
+        ));
+    };
     // Ensure we emit an explicit [projects] header
     projects_tbl.set_implicit(false);
 
     // Ensure the per-project entry is its own explicit table
     if !projects_tbl.contains_key(project_key.as_str()) {
-        projects_tbl.insert(project_key.as_str(), toml_edit::table().into());
+        projects_tbl.insert(project_key.as_str(), toml_edit::table());
     }
-    let proj_tbl = projects_tbl
+    let Some(proj_tbl) = projects_tbl
         .get_mut(project_key.as_str())
         .and_then(|i| i.as_table_mut())
-        .expect("project table exists");
+    else {
+        return Err(anyhow::anyhow!("project table missing for {}", project_key));
+    };
     proj_tbl.set_implicit(false);
     proj_tbl["trust_level"] = toml_edit::value("trusted");
 
