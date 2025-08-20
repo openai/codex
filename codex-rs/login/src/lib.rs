@@ -69,6 +69,39 @@ impl CodexAuth {
         }
     }
 
+    pub async fn refresh_token(&self) -> Result<String, std::io::Error> {
+        let token_data = self
+            .get_current_token_data()
+            .ok_or(std::io::Error::other("Token data is not available."))?;
+        let token = token_data.refresh_token;
+
+        let refresh_response = try_refresh_token(token)
+            .await
+            .map_err(std::io::Error::other)?;
+
+        let updated = update_tokens(
+            &self.auth_file,
+            refresh_response.id_token,
+            refresh_response.access_token,
+            refresh_response.refresh_token,
+        )
+        .await?;
+
+        if let Ok(mut auth_lock) = self.auth_dot_json.lock() {
+            *auth_lock = Some(updated.clone());
+        }
+
+        let access = match updated.tokens {
+            Some(t) => t.access_token,
+            None => {
+                return Err(std::io::Error::other(
+                    "Token data is not available after refresh.",
+                ));
+            }
+        };
+        Ok(access)
+    }
+
     /// Loads the available auth information from the auth.json or
     /// OPENAI_API_KEY environment variable.
     pub fn from_codex_home(
@@ -132,17 +165,6 @@ impl CodexAuth {
                 Ok(id_token)
             }
         }
-    }
-
-    /// Spawn a background task that proactively refreshes the access token
-    /// before it expires. It schedules a renewal for 5 minutes before the
-    /// token's `exp` and retries up to 5 times with exponential backoff on
-    /// failures. This runs until process exit.
-    pub fn spawn_auto_refresh(&self) {
-        let auth = self.clone();
-        tokio::spawn(async move {
-            run_auto_refresh_loop(auth).await;
-        });
     }
 
     pub fn get_account_id(&self) -> Option<String> {
@@ -285,97 +307,6 @@ pub fn login_with_api_key(codex_home: &Path, api_key: &str) -> std::io::Result<(
         last_refresh: None,
     };
     write_auth_json(&get_auth_file(codex_home), &auth_dot_json)
-}
-
-async fn run_auto_refresh_loop(auth: CodexAuth) {
-    // Minimum sleep used when we cannot infer expiry; refresh roughly hourly.
-    let default_sleep = Duration::from_secs(55 * 60);
-    loop {
-        // Determine next refresh time from access_token exp - 5 minutes.
-        let maybe_exp;
-        {
-            let auth_json = auth.get_current_auth_json();
-            if let Some(AuthDotJson {
-                tokens: Some(tokens),
-                ..
-            }) = auth_json
-            {
-                let exp = decode_jwt_exp(&tokens.access_token);
-                maybe_exp = exp.map(|dt| dt - chrono::Duration::minutes(5));
-            } else {
-                maybe_exp = None;
-            }
-        }
-
-        let now = chrono::Utc::now();
-        let sleep_for = match maybe_exp {
-            Some(when) if when > now => (when - now).to_std().unwrap_or(Duration::from_secs(0)),
-            Some(_) => Duration::from_secs(0),
-            None => default_sleep,
-        };
-
-        tokio::time::sleep(sleep_for).await;
-
-        // Attempt to refresh with retries
-        let mut attempt: u32 = 0;
-        let max_attempts: u32 = 5;
-        while let Some(AuthDotJson {
-            tokens: Some(tokens),
-            ..
-        }) = auth.get_current_auth_json()
-        {
-            let refresh_token = tokens.refresh_token.clone();
-
-            match tokio::time::timeout(Duration::from_secs(60), try_refresh_token(refresh_token))
-                .await
-            {
-                Ok(Ok(resp)) => {
-                    match update_tokens(
-                        &auth.auth_file,
-                        resp.id_token,
-                        resp.access_token,
-                        resp.refresh_token,
-                    )
-                    .await
-                    {
-                        Ok(updated) => {
-                            #[allow(clippy::unwrap_used)]
-                            if let Ok(mut guard) = auth.auth_dot_json.lock() {
-                                *guard = Some(updated);
-                            }
-                            break;
-                        }
-                        Err(_e) => {}
-                    }
-                }
-                Ok(Err(_e)) => {}
-                Err(_) => {}
-            }
-
-            attempt += 1;
-            if attempt >= max_attempts {
-                break;
-            }
-            let backoff_secs = 5u64.saturating_mul(1u64 << (attempt - 1));
-            let delay = Duration::from_secs(backoff_secs);
-            tokio::time::sleep(delay).await;
-        }
-    }
-}
-
-fn decode_jwt_exp(jwt: &str) -> Option<chrono::DateTime<chrono::Utc>> {
-    let mut parts = jwt.split('.');
-    let (_h, payload_b64, _s) = match (parts.next(), parts.next(), parts.next()) {
-        (Some(h), Some(p), Some(s)) if !h.is_empty() && !p.is_empty() && !s.is_empty() => (h, p, s),
-        _ => return None,
-    };
-    let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(payload_b64)
-        .ok()?;
-    let claims: StdClaims = serde_json::from_slice(&payload_bytes).ok()?;
-    claims
-        .exp
-        .and_then(|ts| chrono::DateTime::<chrono::Utc>::from_timestamp(ts as i64, 0))
 }
 
 /// Attempt to read and refresh the `auth.json` file in the given `CODEX_HOME` directory.

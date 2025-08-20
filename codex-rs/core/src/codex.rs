@@ -373,12 +373,6 @@ impl Session {
         let history_meta_fut = crate::message_history::history_metadata(&config);
 
         // Join all independent futures.
-        // If we have ChatGPT auth, start background token auto-refresh.
-        if let Some(ref a) = auth
-            && matches!(a.mode, AuthMode::ChatGPT)
-        {
-            a.spawn_auto_refresh();
-        }
 
         let (rollout_res, mcp_res, default_shell, (history_log_id, history_entry_count)) =
             tokio::join!(rollout_fut, mcp_fut, default_shell_fut, history_meta_fut);
