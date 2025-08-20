@@ -263,6 +263,7 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::AgentReasoningSectionBreak(_)
                     | EventMsg::McpToolCallBegin(_)
                     | EventMsg::McpToolCallEnd(_)
+                    | EventMsg::McpListToolsResponse(_)
                     | EventMsg::ExecCommandBegin(_)
                     | EventMsg::ExecCommandOutputDelta(_)
                     | EventMsg::ExecCommandEnd(_)
@@ -272,6 +273,7 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::TurnDiff(_)
                     | EventMsg::GetHistoryEntryResponse(_)
                     | EventMsg::PlanUpdate(_)
+                    | EventMsg::TurnAborted(_)
                     | EventMsg::ShutdownComplete => {
                         // For now, we do not do anything extra for these
                         // events. Note that

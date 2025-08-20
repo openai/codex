@@ -31,7 +31,6 @@ use crate::bottom_pane::textarea::TextAreaState;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
 
-const BASE_PLACEHOLDER_TEXT: &str = "Ask Codex to do anything";
 /// If the pasted content exceeds this number of characters, replace it with a
 /// placeholder in the UI.
 const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
@@ -46,6 +45,15 @@ struct TokenUsageInfo {
     total_token_usage: TokenUsage,
     last_token_usage: TokenUsage,
     model_context_window: Option<u64>,
+    /// Baseline token count present in the context before the user's first
+    /// message content is considered. This is used to normalize the
+    /// "context left" percentage so it reflects the portion the user can
+    /// influence rather than fixed prompt overhead (system prompt, tool
+    /// instructions, etc.).
+    ///
+    /// Preferred source is `cached_input_tokens` from the first turn (when
+    /// available), otherwise we fall back to 0.
+    initial_prompt_tokens: u64,
 }
 
 pub(crate) struct ChatComposer {
@@ -61,6 +69,7 @@ pub(crate) struct ChatComposer {
     pending_pastes: Vec<(String, String)>,
     token_usage_info: Option<TokenUsageInfo>,
     has_focus: bool,
+    placeholder_text: String,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -75,6 +84,7 @@ impl ChatComposer {
         has_input_focus: bool,
         app_event_tx: AppEventSender,
         enhanced_keys_supported: bool,
+        placeholder_text: String,
     ) -> Self {
         let use_shift_enter_hint = enhanced_keys_supported;
 
@@ -91,6 +101,7 @@ impl ChatComposer {
             pending_pastes: Vec::new(),
             token_usage_info: None,
             has_focus: has_input_focus,
+            placeholder_text,
         }
     }
 
@@ -132,10 +143,17 @@ impl ChatComposer {
         last_token_usage: TokenUsage,
         model_context_window: Option<u64>,
     ) {
+        let initial_prompt_tokens = self
+            .token_usage_info
+            .as_ref()
+            .map(|info| info.initial_prompt_tokens)
+            .unwrap_or_else(|| last_token_usage.cached_input_tokens.unwrap_or(0));
+
         self.token_usage_info = Some(TokenUsageInfo {
             total_token_usage,
             last_token_usage,
             model_context_window,
+            initial_prompt_tokens,
         });
     }
 
@@ -255,6 +273,12 @@ impl ChatComposer {
 
                     if !starts_with_cmd {
                         self.textarea.set_text(&format!("/{} ", cmd.command()));
+                        self.textarea.set_cursor(self.textarea.text().len());
+                    }
+                    // After completing the command, move cursor to the end.
+                    if !self.textarea.text().is_empty() {
+                        let end = self.textarea.text().len();
+                        self.textarea.set_cursor(end);
                     }
                 }
                 (InputResult::None, true)
@@ -671,11 +695,10 @@ impl WidgetRef for &ChatComposer {
                     let last_token_usage = &token_usage_info.last_token_usage;
                     if let Some(context_window) = token_usage_info.model_context_window {
                         let percent_remaining: u8 = if context_window > 0 {
-                            let percent = 100.0
-                                - (last_token_usage.tokens_in_context_window() as f32
-                                    / context_window as f32
-                                    * 100.0);
-                            percent.clamp(0.0, 100.0) as u8
+                            last_token_usage.percent_of_context_window_remaining(
+                                context_window,
+                                token_usage_info.initial_prompt_tokens,
+                            )
                         } else {
                             100
                         };
@@ -712,7 +735,7 @@ impl WidgetRef for &ChatComposer {
         let mut state = self.textarea_state.borrow_mut();
         StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
         if self.textarea.text().is_empty() {
-            Line::from(BASE_PLACEHOLDER_TEXT)
+            Line::from(self.placeholder_text.as_str())
                 .style(Style::default().dim())
                 .render_ref(textarea_rect.inner(Margin::new(1, 0)), buf);
         }
@@ -727,6 +750,7 @@ mod tests {
     use crate::bottom_pane::InputResult;
     use crate::bottom_pane::chat_composer::LARGE_PASTE_CHAR_THRESHOLD;
     use crate::bottom_pane::textarea::TextArea;
+    use tokio::sync::mpsc::unbounded_channel;
 
     #[test]
     fn test_current_at_token_basic_cases() {
@@ -883,9 +907,10 @@ mod tests {
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
 
-        let (tx, _rx) = std::sync::mpsc::channel();
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(true, sender, false);
+        let mut composer =
+            ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
 
         let needs_redraw = composer.handle_paste("hello".to_string());
         assert!(needs_redraw);
@@ -906,9 +931,10 @@ mod tests {
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
 
-        let (tx, _rx) = std::sync::mpsc::channel();
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(true, sender, false);
+        let mut composer =
+            ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
 
         let large = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 10);
         let needs_redraw = composer.handle_paste(large.clone());
@@ -935,9 +961,10 @@ mod tests {
         use crossterm::event::KeyModifiers;
 
         let large = "y".repeat(LARGE_PASTE_CHAR_THRESHOLD + 1);
-        let (tx, _rx) = std::sync::mpsc::channel();
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(true, sender, false);
+        let mut composer =
+            ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
 
         composer.handle_paste(large);
         assert_eq!(composer.pending_pastes.len(), 1);
@@ -956,7 +983,7 @@ mod tests {
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
-        let (tx, _rx) = std::sync::mpsc::channel();
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
         let mut terminal = match Terminal::new(TestBackend::new(100, 10)) {
             Ok(t) => t,
@@ -973,7 +1000,12 @@ mod tests {
 
         for (name, input) in test_cases {
             // Create a fresh composer for each test case
-            let mut composer = ChatComposer::new(true, sender.clone(), false);
+            let mut composer = ChatComposer::new(
+                true,
+                sender.clone(),
+                false,
+                "Ask Codex to do anything".to_string(),
+            );
 
             if let Some(text) = input {
                 composer.handle_paste(text);
@@ -1007,11 +1039,12 @@ mod tests {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
-        use std::sync::mpsc::TryRecvError;
+        use tokio::sync::mpsc::error::TryRecvError;
 
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(true, sender, false);
+        let mut composer =
+            ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
 
         // Type the slash command.
         for ch in [
@@ -1046,15 +1079,38 @@ mod tests {
     }
 
     #[test]
+    fn slash_tab_completion_moves_cursor_to_end() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer =
+            ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
+
+        for ch in ['/', 'c'] {
+            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+
+        let (_result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+
+        assert_eq!(composer.textarea.text(), "/compact ");
+        assert_eq!(composer.textarea.cursor(), composer.textarea.text().len());
+    }
+
+    #[test]
     fn slash_mention_dispatches_command_and_inserts_at() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
-        use std::sync::mpsc::TryRecvError;
+        use tokio::sync::mpsc::error::TryRecvError;
 
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, mut rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(true, sender, false);
+        let mut composer =
+            ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
 
         for ch in ['/', 'm', 'e', 'n', 't', 'i', 'o', 'n'] {
             let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
@@ -1091,9 +1147,10 @@ mod tests {
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
 
-        let (tx, _rx) = std::sync::mpsc::channel();
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(true, sender, false);
+        let mut composer =
+            ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
 
         // Define test cases: (paste content, is_large)
         let test_cases = [
@@ -1164,9 +1221,10 @@ mod tests {
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
 
-        let (tx, _rx) = std::sync::mpsc::channel();
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(true, sender, false);
+        let mut composer =
+            ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
 
         // Define test cases: (content, is_large)
         let test_cases = [
@@ -1230,9 +1288,10 @@ mod tests {
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
 
-        let (tx, _rx) = std::sync::mpsc::channel();
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
-        let mut composer = ChatComposer::new(true, sender, false);
+        let mut composer =
+            ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
 
         // Define test cases: (cursor_position_from_end, expected_pending_count)
         let test_cases = [

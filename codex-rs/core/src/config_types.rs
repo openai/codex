@@ -5,11 +5,9 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use strum_macros::Display;
 use wildmatch::WildMatchPattern;
 
 use serde::Deserialize;
-use serde::Serialize;
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
@@ -77,21 +75,6 @@ pub enum HistoryPersistence {
 /// Collection of settings that are specific to the TUI.
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct Tui {}
-
-#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Default, Serialize, Display)]
-#[serde(rename_all = "kebab-case")]
-#[strum(serialize_all = "kebab-case")]
-pub enum SandboxMode {
-    #[serde(rename = "read-only")]
-    #[default]
-    ReadOnly,
-
-    #[serde(rename = "workspace-write")]
-    WorkspaceWrite,
-
-    #[serde(rename = "danger-full-access")]
-    DangerFullAccess,
-}
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct SandboxWorkspaceWrite {
@@ -199,32 +182,4 @@ impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
             use_profile,
         }
     }
-}
-
-/// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning
-#[derive(Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq, Display)]
-#[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase")]
-pub enum ReasoningEffort {
-    Low,
-    #[default]
-    Medium,
-    High,
-    /// Option to disable reasoning.
-    None,
-}
-
-/// A summary of the reasoning performed by the model. This can be useful for
-/// debugging and understanding the model's reasoning process.
-/// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#reasoning-summaries
-#[derive(Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq, Display)]
-#[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase")]
-pub enum ReasoningSummary {
-    #[default]
-    Auto,
-    Concise,
-    Detailed,
-    /// Option to disable reasoning summaries.
-    None,
 }

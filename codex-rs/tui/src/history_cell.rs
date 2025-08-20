@@ -1,4 +1,3 @@
-use crate::colors::LIGHT_BLUE;
 use crate::diff_render::create_diff_summary;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
@@ -9,7 +8,6 @@ use codex_ansi_escape::ansi_escape_line;
 use codex_common::create_config_summary_entries;
 use codex_common::elapsed::format_duration;
 use codex_core::config::Config;
-use codex_core::parse_command::ParsedCommand;
 use codex_core::plan_tool::PlanItemArg;
 use codex_core::plan_tool::StepStatus;
 use codex_core::plan_tool::UpdatePlanArgs;
@@ -20,6 +18,7 @@ use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TokenUsage;
 use codex_login::get_auth_file;
 use codex_login::try_read_auth_json;
+use codex_protocol::parse_command::ParsedCommand;
 use image::DynamicImage;
 use image::ImageReader;
 use mcp_types::EmbeddedResourceResource;
@@ -31,6 +30,7 @@ use ratatui::style::Style;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
+use shlex::try_join as shlex_try_join;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::PathBuf;
@@ -168,8 +168,8 @@ pub(crate) fn new_session_info(
             Line::from("".dim()),
             Line::from(format!(" /init - {}", SlashCommand::Init.description()).dim()),
             Line::from(format!(" /status - {}", SlashCommand::Status.description()).dim()),
-            Line::from(format!(" /diff - {}", SlashCommand::Diff.description()).dim()),
-            Line::from(format!(" /prompts - {}", SlashCommand::Prompts.description()).dim()),
+            Line::from(format!(" /approvals - {}", SlashCommand::Approvals.description()).dim()),
+            Line::from(format!(" /model - {}", SlashCommand::Model.description()).dim()),
             Line::from("".dim()),
         ];
         PlainHistoryCell { lines }
@@ -232,10 +232,11 @@ fn exec_command_lines(
 ) -> Vec<Line<'static>> {
     match parsed.is_empty() {
         true => new_exec_command_generic(command, output, start_time),
-        false => new_parsed_command(parsed, output, start_time),
+        false => new_parsed_command(command, parsed, output, start_time),
     }
 }
 fn new_parsed_command(
+    command: &[String],
     parsed_commands: &[ParsedCommand],
     output: Option<&CommandOutput>,
     start_time: Option<Instant>,
@@ -251,14 +252,33 @@ fn new_parsed_command(
             lines.push(Line::from(spans));
         }
         Some(o) if o.exit_code == 0 => {
-            lines.push(Line::from("✓ Completed".green().bold()));
+            lines.push(Line::from(vec!["✓".green(), " Completed".into()]));
         }
         Some(o) => {
-            lines.push(Line::from(
-                format!("✗ Failed (exit {})", o.exit_code).red().bold(),
-            ));
+            lines.push(Line::from(vec![
+                "✗".red(),
+                format!(" Failed (exit {})", o.exit_code).into(),
+            ]));
         }
     };
+
+    // Optionally include the complete, unaltered command from the model.
+    if std::env::var("SHOW_FULL_COMMANDS")
+        .map(|v| !v.is_empty())
+        .unwrap_or(false)
+    {
+        let full_cmd = shlex_try_join(command.iter().map(|s| s.as_str()))
+            .unwrap_or_else(|_| command.join(" "));
+        lines.push(Line::from(vec![
+            Span::styled("  └ ", Style::default().add_modifier(Modifier::DIM)),
+            Span::styled(
+                full_cmd,
+                Style::default()
+                    .add_modifier(Modifier::DIM)
+                    .add_modifier(Modifier::ITALIC),
+            ),
+        ]));
+    }
 
     for (i, parsed) in parsed_commands.iter().enumerate() {
         let text = match parsed {
@@ -285,7 +305,7 @@ fn new_parsed_command(
             let prefix = if j == 0 { first_prefix } else { "    " };
             lines.push(Line::from(vec![
                 Span::styled(prefix, Style::default().add_modifier(Modifier::DIM)),
-                Span::styled(line_text.to_string(), Style::default().fg(LIGHT_BLUE)),
+                line_text.to_string().dim(),
             ]));
         }
     }
@@ -518,44 +538,37 @@ pub(crate) fn new_status_output(
         sandbox_name.into(),
     ]));
 
-    if let Some(session_id) = session_id {
-        lines.push(Line::from(vec![
-            "  • Session ID: ".into(),
-            session_id.to_string().into(),
-        ]));
-    }
-
     lines.push(Line::from(""));
 
     // 👤 Account (only if ChatGPT tokens exist), shown under the first block
     let auth_file = get_auth_file(&config.codex_home);
-    if let Ok(auth) = try_read_auth_json(&auth_file) {
-        if let Some(tokens) = auth.tokens.clone() {
-            lines.push(Line::from(vec!["👤 ".into(), "Account".bold()]));
-            lines.push(Line::from("  • Signed in with ChatGPT"));
+    if let Ok(auth) = try_read_auth_json(&auth_file)
+        && let Some(tokens) = auth.tokens.clone()
+    {
+        lines.push(Line::from(vec!["👤 ".into(), "Account".bold()]));
+        lines.push(Line::from("  • Signed in with ChatGPT"));
 
-            let info = tokens.id_token;
-            if let Some(email) = &info.email {
-                lines.push(Line::from(vec!["  • Login: ".into(), email.clone().into()]));
-            }
-
-            match auth.openai_api_key.as_deref() {
-                Some(key) if !key.is_empty() => {
-                    lines.push(Line::from(
-                        "  • Using API key. Run codex login to use ChatGPT plan",
-                    ));
-                }
-                _ => {
-                    let plan_text = info
-                        .get_chatgpt_plan_type()
-                        .map(|s| title_case(&s))
-                        .unwrap_or_else(|| "Unknown".to_string());
-                    lines.push(Line::from(vec!["  • Plan: ".into(), plan_text.into()]));
-                }
-            }
-
-            lines.push(Line::from(""));
+        let info = tokens.id_token;
+        if let Some(email) = &info.email {
+            lines.push(Line::from(vec!["  • Login: ".into(), email.clone().into()]));
         }
+
+        match auth.openai_api_key.as_deref() {
+            Some(key) if !key.is_empty() => {
+                lines.push(Line::from(
+                    "  • Using API key. Run codex login to use ChatGPT plan",
+                ));
+            }
+            _ => {
+                let plan_text = info
+                    .get_chatgpt_plan_type()
+                    .map(|s| title_case(&s))
+                    .unwrap_or_else(|| "Unknown".to_string());
+                lines.push(Line::from(vec!["  • Plan: ".into(), plan_text.into()]));
+            }
+        }
+
+        lines.push(Line::from(""));
     }
 
     // 🧠 Model
@@ -589,15 +602,21 @@ pub(crate) fn new_status_output(
 
     // 📊 Token Usage
     lines.push(Line::from(vec!["📊 ".into(), "Token Usage".bold()]));
+    if let Some(session_id) = session_id {
+        lines.push(Line::from(vec![
+            "  • Session ID: ".into(),
+            session_id.to_string().into(),
+        ]));
+    }
     // Input: <input> [+ <cached> cached]
     let mut input_line_spans: Vec<Span<'static>> = vec![
         "  • Input: ".into(),
         usage.non_cached_input().to_string().into(),
     ];
-    if let Some(cached) = usage.cached_input_tokens {
-        if cached > 0 {
-            input_line_spans.push(format!(" (+ {cached} cached)").into());
-        }
+    if let Some(cached) = usage.cached_input_tokens
+        && cached > 0
+    {
+        input_line_spans.push(format!(" (+ {cached} cached)").into());
     }
     lines.push(Line::from(input_line_spans));
     // Output: <output>
@@ -615,18 +634,83 @@ pub(crate) fn new_status_output(
     PlainHistoryCell { lines }
 }
 
-pub(crate) fn new_prompts_output() -> PlainHistoryCell {
+/// Render a summary of configured MCP servers from the current `Config`.
+pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
     let lines: Vec<Line<'static>> = vec![
-        Line::from("/prompts".magenta()),
+        Line::from("/mcp".magenta()),
         Line::from(""),
-        Line::from(" 1. Explain this codebase"),
-        Line::from(" 2. Summarize recent commits"),
-        Line::from(" 3. Implement {feature}"),
-        Line::from(" 4. Find and fix a bug in @filename"),
-        Line::from(" 5. Write tests for @filename"),
-        Line::from(" 6. Improve documentation in @filename"),
+        Line::from(vec!["🔌  ".into(), "MCP Tools".bold()]),
+        Line::from(""),
+        Line::from("  • No MCP servers configured.".italic()),
         Line::from(""),
     ];
+
+    PlainHistoryCell { lines }
+}
+
+/// Render MCP tools grouped by connection using the fully-qualified tool names.
+pub(crate) fn new_mcp_tools_output(
+    config: &Config,
+    tools: std::collections::HashMap<String, mcp_types::Tool>,
+) -> PlainHistoryCell {
+    let mut lines: Vec<Line<'static>> = vec![
+        Line::from("/mcp".magenta()),
+        Line::from(""),
+        Line::from(vec!["🔌  ".into(), "MCP Tools".bold()]),
+        Line::from(""),
+    ];
+
+    if tools.is_empty() {
+        lines.push(Line::from("  • No MCP tools available.".italic()));
+        lines.push(Line::from(""));
+        return PlainHistoryCell { lines };
+    }
+
+    for (server, cfg) in config.mcp_servers.iter() {
+        let prefix = format!("{server}__");
+        let mut names: Vec<String> = tools
+            .keys()
+            .filter(|k| k.starts_with(&prefix))
+            .map(|k| k[prefix.len()..].to_string())
+            .collect();
+        names.sort();
+
+        lines.push(Line::from(vec![
+            "  • Server: ".into(),
+            server.clone().into(),
+        ]));
+
+        if !cfg.command.is_empty() {
+            let cmd_display = format!("{} {}", cfg.command, cfg.args.join(" "));
+
+            lines.push(Line::from(vec![
+                "    • Command: ".into(),
+                cmd_display.into(),
+            ]));
+        }
+
+        if let Some(env) = cfg.env.as_ref()
+            && !env.is_empty()
+        {
+            let mut env_pairs: Vec<String> = env.iter().map(|(k, v)| format!("{k}={v}")).collect();
+            env_pairs.sort();
+            lines.push(Line::from(vec![
+                "    • Env: ".into(),
+                env_pairs.join(" ").into(),
+            ]));
+        }
+
+        if names.is_empty() {
+            lines.push(Line::from("    • Tools: (none)"));
+        } else {
+            lines.push(Line::from(vec![
+                "    • Tools: ".into(),
+                names.join(", ").into(),
+            ]));
+        }
+        lines.push(Line::from(""));
+    }
+
     PlainHistoryCell { lines }
 }
 
@@ -707,7 +791,7 @@ pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlainHistoryCell {
                     Span::styled(
                         step,
                         Style::default()
-                            .fg(Color::Blue)
+                            .fg(Color::Cyan)
                             .add_modifier(Modifier::BOLD),
                     ),
                 ),
@@ -798,8 +882,32 @@ pub(crate) fn new_patch_apply_success(stdout: String) -> PlainHistoryCell {
         let mut iter = stdout.lines();
         for (i, raw) in iter.by_ref().take(TOOL_CALL_MAX_LINES).enumerate() {
             let prefix = if i == 0 { "  └ " } else { "    " };
-            let s = format!("{prefix}{raw}");
-            lines.push(ansi_escape_line(&s).dim());
+
+            // First line is the header; dim it entirely.
+            if i == 0 {
+                let s = format!("{prefix}{raw}");
+                lines.push(ansi_escape_line(&s).dim());
+                continue;
+            }
+
+            // Subsequent lines should look like: "M path/to/file".
+            // Colorize the status letter like `git status` (e.g., M red).
+            let status = raw.chars().next();
+            let rest = raw.get(1..).unwrap_or("");
+
+            let status_span = match status {
+                Some('M') => "M".red(),
+                Some('A') => "A".green(),
+                Some('D') => "D".red(),
+                Some(other) => other.to_string().into(),
+                None => "".into(),
+            };
+
+            lines.push(Line::from(vec![
+                prefix.into(),
+                status_span,
+                ansi_escape_line(rest).to_string().into(),
+            ]));
         }
         let remaining = iter.count();
         if remaining > 0 {
@@ -885,9 +993,9 @@ fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
         .unwrap_or_default();
 
     let invocation_spans = vec![
-        Span::styled(invocation.server.clone(), Style::default().fg(Color::Blue)),
+        Span::styled(invocation.server.clone(), Style::default().fg(Color::Cyan)),
         Span::raw("."),
-        Span::styled(invocation.tool.clone(), Style::default().fg(Color::Blue)),
+        Span::styled(invocation.tool.clone(), Style::default().fg(Color::Cyan)),
         Span::raw("("),
         Span::styled(args_str, Style::default().add_modifier(Modifier::DIM)),
         Span::raw(")"),

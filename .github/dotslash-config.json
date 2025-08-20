@@ -17,6 +17,10 @@
         "linux-aarch64": {
           "regex": "^codex-aarch64-unknown-linux-musl\\.zst$",
           "path": "codex"
+        },
+        "windows-x86_64": {
+          "regex": "^codex-x86_64-pc-windows-msvc\\.exe\\.zst$",
+          "path": "codex.exe"
         }
       }
     }

@@ -13,7 +13,6 @@ use codex_core::ConversationManager;
 use codex_core::NewConversation;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
-use codex_core::config_types::SandboxMode;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
@@ -22,6 +21,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::util::is_inside_git_repo;
 use codex_ollama::DEFAULT_OSS_MODEL;
+use codex_protocol::config_types::SandboxMode;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
 use event_processor_with_json_output::EventProcessorWithJsonOutput;
 use tracing::debug;
@@ -146,6 +146,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         codex_linux_sandbox_exe,
         base_instructions: None,
         include_plan_tool: None,
+        include_apply_patch_tool: None,
         disable_response_storage: oss.then_some(true),
         show_raw_agent_reasoning: oss.then_some(true),
     };

@@ -71,6 +71,8 @@ impl CommandPopup {
             for (_, cmd) in self.all_commands.iter() {
                 out.push((cmd, None, 0));
             }
+            // Keep the original presentation order when no filter is applied.
+            return out;
         } else {
             for (_, cmd) in self.all_commands.iter() {
                 if let Some((indices, score)) = fuzzy_match(cmd.command(), filter) {
@@ -78,6 +80,7 @@ impl CommandPopup {
                 }
             }
         }
+        // When filtering, sort by ascending score and then by command for stability.
         out.sort_by(|a, b| a.2.cmp(&b.2).then_with(|| a.0.command().cmp(b.0.command())));
         out
     }
@@ -128,7 +131,7 @@ impl WidgetRef for CommandPopup {
                 })
                 .collect()
         };
-        render_rows(area, buf, &rows_all, &self.state, MAX_POPUP_ROWS);
+        render_rows(area, buf, &rows_all, &self.state, MAX_POPUP_ROWS, false);
     }
 }
 

@@ -3,17 +3,24 @@
 
 use std::path::Path;
 
+use codex_core::protocol::TurnAbortReason;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
-use codex_mcp_server::CodexToolCallParam;
+use codex_protocol::mcp_protocol::AddConversationListenerParams;
+use codex_protocol::mcp_protocol::InterruptConversationParams;
+use codex_protocol::mcp_protocol::InterruptConversationResponse;
+use codex_protocol::mcp_protocol::NewConversationParams;
+use codex_protocol::mcp_protocol::NewConversationResponse;
+use codex_protocol::mcp_protocol::SendUserMessageParams;
+use codex_protocol::mcp_protocol::SendUserMessageResponse;
 use mcp_types::JSONRPCResponse;
 use mcp_types::RequestId;
-use serde_json::json;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
 use mcp_test_support::McpProcess;
 use mcp_test_support::create_mock_chat_completions_server;
 use mcp_test_support::create_shell_sse_response;
+use mcp_test_support::to_response;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -41,111 +48,91 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
     let shell_command = vec![
         "powershell".to_string(),
         "-Command".to_string(),
-        "Start-Sleep -Seconds 60".to_string(),
+        "Start-Sleep -Seconds 10".to_string(),
     ];
     #[cfg(not(target_os = "windows"))]
-    let shell_command = vec!["sleep".to_string(), "60".to_string()];
-    let workdir_for_shell_function_call = TempDir::new()?;
+    let shell_command = vec!["sleep".to_string(), "10".to_string()];
+
+    let tmp = TempDir::new()?;
+    // Temporary Codex home with config pointing at the mock server.
+    let codex_home = tmp.path().join("codex_home");
+    std::fs::create_dir(&codex_home)?;
+    let working_directory = tmp.path().join("workdir");
+    std::fs::create_dir(&working_directory)?;
 
     // Create mock server with a single SSE response: the long sleep command
-    let server = create_mock_chat_completions_server(vec![
-        create_shell_sse_response(
-            shell_command.clone(),
-            Some(workdir_for_shell_function_call.path()),
-            Some(60_000), // 60 seconds timeout in ms
-            "call_sleep",
-        )?,
-        create_shell_sse_response(
-            shell_command.clone(),
-            Some(workdir_for_shell_function_call.path()),
-            Some(60_000), // 60 seconds timeout in ms
-            "call_sleep",
-        )?,
-    ])
+    let server = create_mock_chat_completions_server(vec![create_shell_sse_response(
+        shell_command.clone(),
+        Some(&working_directory),
+        Some(10_000), // 10 seconds timeout in ms
+        "call_sleep",
+    )?])
     .await;
+    create_config_toml(&codex_home, server.uri())?;
 
-    // Create Codex configuration
-    let codex_home = TempDir::new()?;
-    create_config_toml(codex_home.path(), server.uri())?;
-    let mut mcp_process = McpProcess::new(codex_home.path()).await?;
-    timeout(DEFAULT_READ_TIMEOUT, mcp_process.initialize()).await??;
+    // Start MCP server and initialize.
+    let mut mcp = McpProcess::new(&codex_home).await?;
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await??;
 
-    // Send codex tool call that triggers "sleep 60"
-    let codex_request_id = mcp_process
-        .send_codex_tool_call(CodexToolCallParam {
-            cwd: None,
-            prompt: "First Run: run `sleep 60`".to_string(),
-            model: None,
-            profile: None,
-            approval_policy: None,
-            sandbox: None,
-            config: None,
-            base_instructions: None,
-            include_plan_tool: None,
+    // 1) newConversation
+    let new_conv_id = mcp
+        .send_new_conversation_request(NewConversationParams {
+            cwd: Some(working_directory.to_string_lossy().into_owned()),
+            ..Default::default()
         })
         .await?;
+    let new_conv_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(new_conv_id)),
+    )
+    .await??;
+    let new_conv_resp = to_response::<NewConversationResponse>(new_conv_resp)?;
+    let NewConversationResponse {
+        conversation_id, ..
+    } = new_conv_resp;
 
-    let session_id = mcp_process
-        .read_stream_until_configured_response_message()
+    // 2) addConversationListener
+    let add_listener_id = mcp
+        .send_add_conversation_listener_request(AddConversationListenerParams { conversation_id })
         .await?;
+    let _add_listener_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(add_listener_id)),
+    )
+    .await??;
+
+    // 3) sendUserMessage (should trigger notifications; we only validate an OK response)
+    let send_user_id = mcp
+        .send_send_user_message_request(SendUserMessageParams {
+            conversation_id,
+            items: vec![codex_protocol::mcp_protocol::InputItem::Text {
+                text: "run first sleep command".to_string(),
+            }],
+        })
+        .await?;
+    let send_user_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(send_user_id)),
+    )
+    .await??;
+    let SendUserMessageResponse {} = to_response::<SendUserMessageResponse>(send_user_resp)?;
 
     // Give the command a moment to start
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
-    // Send interrupt notification
-    mcp_process
-        .send_notification(
-            "notifications/cancelled",
-            Some(json!({ "requestId": codex_request_id })),
-        )
+    // 4) send interrupt request
+    let interrupt_id = mcp
+        .send_interrupt_conversation_request(InterruptConversationParams { conversation_id })
         .await?;
-
-    // Expect Codex to return an error or interruption response
-    let codex_response: JSONRPCResponse = timeout(
+    let interrupt_resp: JSONRPCResponse = timeout(
         DEFAULT_READ_TIMEOUT,
-        mcp_process.read_stream_until_response_message(RequestId::Integer(codex_request_id)),
+        mcp.read_stream_until_response_message(RequestId::Integer(interrupt_id)),
     )
     .await??;
+    let InterruptConversationResponse { abort_reason } =
+        to_response::<InterruptConversationResponse>(interrupt_resp)?;
+    assert_eq!(TurnAbortReason::Interrupted, abort_reason);
 
-    assert!(
-        codex_response
-            .result
-            .as_object()
-            .map(|o| o.contains_key("error"))
-            .unwrap_or(false),
-        "Expected an interruption or error result, got: {codex_response:?}"
-    );
-
-    let codex_reply_request_id = mcp_process
-        .send_codex_reply_tool_call(&session_id, "Second Run: run `sleep 60`")
-        .await?;
-
-    // Give the command a moment to start
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-
-    // Send interrupt notification
-    mcp_process
-        .send_notification(
-            "notifications/cancelled",
-            Some(json!({ "requestId": codex_reply_request_id })),
-        )
-        .await?;
-
-    // Expect Codex to return an error or interruption response
-    let codex_response: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp_process.read_stream_until_response_message(RequestId::Integer(codex_reply_request_id)),
-    )
-    .await??;
-
-    assert!(
-        codex_response
-            .result
-            .as_object()
-            .map(|o| o.contains_key("error"))
-            .unwrap_or(false),
-        "Expected an interruption or error result, got: {codex_response:?}"
-    );
     Ok(())
 }
 

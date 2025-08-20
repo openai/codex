@@ -70,13 +70,13 @@ pub async fn default_user_shell() -> Shell {
             }
             let stdout = String::from_utf8_lossy(&o.stdout);
             for line in stdout.lines() {
-                if let Some(shell_path) = line.strip_prefix("UserShell: ") {
-                    if shell_path.ends_with("/zsh") {
-                        return Shell::Zsh(ZshShell {
-                            shell_path: shell_path.to_string(),
-                            zshrc_path: format!("{home}/.zshrc"),
-                        });
-                    }
+                if let Some(shell_path) = line.strip_prefix("UserShell: ")
+                    && shell_path.ends_with("/zsh")
+                {
+                    return Shell::Zsh(ZshShell {
+                        shell_path: shell_path.to_string(),
+                        zshrc_path: format!("{home}/.zshrc"),
+                    });
                 }
             }
 

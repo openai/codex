@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_core::config::Config;
-use codex_core::parse_command::ParsedCommand;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -19,6 +18,7 @@ use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::InputItem;
+use codex_core::protocol::McpListToolsResponseEvent;
 use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
@@ -26,8 +26,10 @@ use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol::TurnDiffEvent;
+use codex_protocol::parse_command::ParsedCommand;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use rand::Rng;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
@@ -43,6 +45,8 @@ use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::InputResult;
+use crate::bottom_pane::SelectionAction;
+use crate::bottom_pane::SelectionItem;
 use crate::history_cell;
 use crate::history_cell::CommandOutput;
 use crate::history_cell::ExecCell;
@@ -56,7 +60,14 @@ mod agent;
 use self::agent::spawn_agent;
 use crate::streaming::controller::AppEventHistorySink;
 use crate::streaming::controller::StreamController;
+use codex_common::approval_presets::ApprovalPreset;
+use codex_common::approval_presets::builtin_approval_presets;
+use codex_common::model_presets::ModelPreset;
+use codex_common::model_presets::builtin_model_presets;
 use codex_core::ConversationManager;
+use codex_core::protocol::AskForApproval;
+use codex_core::protocol::SandboxPolicy;
+use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_file_search::FileMatch;
 use uuid::Uuid;
 
@@ -497,6 +508,8 @@ impl ChatWidget<'_> {
         initial_images: Vec<PathBuf>,
         enhanced_keys_supported: bool,
     ) -> Self {
+        let mut rng = rand::rng();
+        let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
 
         Self {
@@ -506,6 +519,7 @@ impl ChatWidget<'_> {
                 app_event_tx,
                 has_input_focus: true,
                 enhanced_keys_supported,
+                placeholder_text: placeholder,
             }),
             active_exec_cell: None,
             config: config.clone(),
@@ -634,6 +648,7 @@ impl ChatWidget<'_> {
             EventMsg::TaskComplete(TaskCompleteEvent { .. }) => self.on_task_complete(),
             EventMsg::TokenCount(token_usage) => self.on_token_count(token_usage),
             EventMsg::Error(ErrorEvent { message }) => self.on_error(message),
+            EventMsg::TurnAborted(_) => self.on_error("Turn interrupted".to_owned()),
             EventMsg::PlanUpdate(update) => self.on_plan_update(update),
             EventMsg::ExecApprovalRequest(ev) => self.on_exec_approval_request(id, ev),
             EventMsg::ApplyPatchApprovalRequest(ev) => self.on_apply_patch_approval_request(id, ev),
@@ -645,6 +660,7 @@ impl ChatWidget<'_> {
             EventMsg::McpToolCallBegin(ev) => self.on_mcp_tool_call_begin(ev),
             EventMsg::McpToolCallEnd(ev) => self.on_mcp_tool_call_end(ev),
             EventMsg::GetHistoryEntryResponse(ev) => self.on_get_history_entry_response(ev),
+            EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
             EventMsg::ShutdownComplete => self.on_shutdown_complete(),
             EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) => self.on_turn_diff(unified_diff),
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
@@ -662,8 +678,17 @@ impl ChatWidget<'_> {
         self.app_event_tx.send(AppEvent::RequestRedraw);
     }
 
+    pub(crate) fn add_diff_in_progress(&mut self) {
+        self.bottom_pane.set_task_running(true);
+        self.bottom_pane
+            .update_status_text("computing diff".to_string());
+        self.request_redraw();
+    }
+
     pub(crate) fn add_diff_output(&mut self, diff_output: String) {
-        self.add_to_history(&history_cell::new_diff_output(diff_output.clone()));
+        self.bottom_pane.set_task_running(false);
+        self.add_to_history(&history_cell::new_diff_output(diff_output));
+        self.mark_needs_redraw();
     }
 
     pub(crate) fn add_status_output(&mut self) {
@@ -674,8 +699,114 @@ impl ChatWidget<'_> {
         ));
     }
 
-    pub(crate) fn add_prompts_output(&mut self) {
-        self.add_to_history(&history_cell::new_prompts_output());
+    /// Open a popup to choose the model preset (model + reasoning effort).
+    pub(crate) fn open_model_popup(&mut self) {
+        let current_model = self.config.model.clone();
+        let current_effort = self.config.model_reasoning_effort;
+        let presets: &[ModelPreset] = builtin_model_presets();
+
+        let mut items: Vec<SelectionItem> = Vec::new();
+        for preset in presets.iter() {
+            let name = preset.label.to_string();
+            let description = Some(preset.description.to_string());
+            let is_current = preset.model == current_model && preset.effort == current_effort;
+            let model_slug = preset.model.to_string();
+            let effort = preset.effort;
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                    cwd: None,
+                    approval_policy: None,
+                    sandbox_policy: None,
+                    model: Some(model_slug.clone()),
+                    effort: Some(effort),
+                    summary: None,
+                }));
+                tx.send(AppEvent::UpdateModel(model_slug.clone()));
+                tx.send(AppEvent::UpdateReasoningEffort(effort));
+            })];
+            items.push(SelectionItem {
+                name,
+                description,
+                is_current,
+                actions,
+            });
+        }
+
+        self.bottom_pane.show_selection_view(
+            "Select model and reasoning level".to_string(),
+            Some("Switch between OpenAI models for this and future Codex CLI session".to_string()),
+            Some("Press Enter to confirm or Esc to go back".to_string()),
+            items,
+        );
+    }
+
+    /// Open a popup to choose the approvals mode (ask for approval policy + sandbox policy).
+    pub(crate) fn open_approvals_popup(&mut self) {
+        let current_approval = self.config.approval_policy;
+        let current_sandbox = self.config.sandbox_policy.clone();
+        let mut items: Vec<SelectionItem> = Vec::new();
+        let presets: Vec<ApprovalPreset> = builtin_approval_presets();
+        for preset in presets.into_iter() {
+            let is_current =
+                current_approval == preset.approval && current_sandbox == preset.sandbox;
+            let approval = preset.approval;
+            let sandbox = preset.sandbox.clone();
+            let name = preset.label.to_string();
+            let description = Some(preset.description.to_string());
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                    cwd: None,
+                    approval_policy: Some(approval),
+                    sandbox_policy: Some(sandbox.clone()),
+                    model: None,
+                    effort: None,
+                    summary: None,
+                }));
+                tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
+                tx.send(AppEvent::UpdateSandboxPolicy(sandbox.clone()));
+            })];
+            items.push(SelectionItem {
+                name,
+                description,
+                is_current,
+                actions,
+            });
+        }
+
+        self.bottom_pane.show_selection_view(
+            "Select Approval Mode".to_string(),
+            None,
+            Some("Press Enter to confirm or Esc to go back".to_string()),
+            items,
+        );
+    }
+
+    /// Set the approval policy in the widget's config copy.
+    pub(crate) fn set_approval_policy(&mut self, policy: AskForApproval) {
+        self.config.approval_policy = policy;
+    }
+
+    /// Set the sandbox policy in the widget's config copy.
+    pub(crate) fn set_sandbox_policy(&mut self, policy: SandboxPolicy) {
+        self.config.sandbox_policy = policy;
+    }
+
+    /// Set the reasoning effort in the widget's config copy.
+    pub(crate) fn set_reasoning_effort(&mut self, effort: ReasoningEffortConfig) {
+        self.config.model_reasoning_effort = effort;
+    }
+
+    /// Set the model in the widget's config copy.
+    pub(crate) fn set_model(&mut self, model: String) {
+        self.config.model = model;
+    }
+
+    pub(crate) fn add_mcp_output(&mut self) {
+        if self.config.mcp_servers.is_empty() {
+            self.add_to_history(&history_cell::empty_mcp_output());
+        } else {
+            self.submit_op(Op::ListMcpTools);
+        }
     }
 
     /// Forward file-search results to the bottom pane.
@@ -719,6 +850,10 @@ impl ChatWidget<'_> {
         }
     }
 
+    fn on_list_mcp_tools(&mut self, ev: McpListToolsResponseEvent) {
+        self.add_to_history(&history_cell::new_mcp_tools_output(&self.config, ev.tools));
+    }
+
     /// Programmatically submit a user text message as if typed in the
     /// composer. The text will be added to conversation history and sent to
     /// the agent.
@@ -757,6 +892,15 @@ impl WidgetRef for &ChatWidget<'_> {
         }
     }
 }
+
+const EXAMPLE_PROMPTS: [&str; 6] = [
+    "Explain this codebase",
+    "Summarize recent commits",
+    "Implement {feature}",
+    "Find and fix a bug in @filename",
+    "Write tests for @filename",
+    "Improve documentation in @filename",
+];
 
 fn add_token_usage(current_usage: &TokenUsage, new_usage: &TokenUsage) -> TokenUsage {
     let cached_input_tokens = match (

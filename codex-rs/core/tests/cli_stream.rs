@@ -297,13 +297,12 @@ async fn integration_creates_and_checks_session_file() {
                     Ok(v) => v,
                     Err(_) => continue,
                 };
-                if item.get("type").and_then(|t| t.as_str()) == Some("message") {
-                    if let Some(c) = item.get("content") {
-                        if c.to_string().contains(&marker) {
-                            matching_path = Some(path.to_path_buf());
-                            break;
-                        }
-                    }
+                if item.get("type").and_then(|t| t.as_str()) == Some("message")
+                    && let Some(c) = item.get("content")
+                    && c.to_string().contains(&marker)
+                {
+                    matching_path = Some(path.to_path_buf());
+                    break;
                 }
             }
         }
@@ -376,13 +375,12 @@ async fn integration_creates_and_checks_session_file() {
         let Ok(item) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
-        if item.get("type").and_then(|t| t.as_str()) == Some("message") {
-            if let Some(c) = item.get("content") {
-                if c.to_string().contains(&marker) {
-                    found_message = true;
-                    break;
-                }
-            }
+        if item.get("type").and_then(|t| t.as_str()) == Some("message")
+            && let Some(c) = item.get("content")
+            && c.to_string().contains(&marker)
+        {
+            found_message = true;
+            break;
         }
     }
     assert!(
