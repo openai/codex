@@ -1,3 +1,4 @@
+use base64::Engine;
 use chrono::DateTime;
 use chrono::Utc;
 use serde::Deserialize;
@@ -15,6 +16,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
+use tracing::info;
+use tracing::trace;
+use tracing::warn;
 
 pub use crate::server::LoginServer;
 pub use crate::server::ServerOptions;
@@ -127,6 +131,17 @@ impl CodexAuth {
         }
     }
 
+    /// Spawn a background task that proactively refreshes the access token
+    /// before it expires. It schedules a renewal for 5 minutes before the
+    /// token's `exp` and retries up to 5 times with exponential backoff on
+    /// failures. This runs until process exit.
+    pub fn spawn_auto_refresh(&self) {
+        let auth = self.clone();
+        tokio::spawn(async move {
+            run_auto_refresh_loop(auth).await;
+        });
+    }
+
     pub fn get_account_id(&self) -> Option<String> {
         self.get_current_token_data()
             .and_then(|t| t.account_id.clone())
@@ -165,6 +180,140 @@ impl CodexAuth {
             mode: AuthMode::ChatGPT,
             auth_file: PathBuf::new(),
             auth_dot_json,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct StdClaims {
+    #[serde(default)]
+    exp: Option<u64>,
+}
+
+fn decode_jwt_exp(jwt: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    let mut parts = jwt.split('.');
+    let (_h, payload_b64, _s) = match (parts.next(), parts.next(), parts.next()) {
+        (Some(h), Some(p), Some(s)) if !h.is_empty() && !p.is_empty() && !s.is_empty() => (h, p, s),
+        _ => return None,
+    };
+    let payload_bytes = match base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload_b64) {
+        Ok(b) => b,
+        Err(_) => return None,
+    };
+    let claims: StdClaims = match serde_json::from_slice(&payload_bytes) {
+        Ok(c) => c,
+        Err(_) => return None,
+    };
+    claims
+        .exp
+        .and_then(|ts| chrono::DateTime::<chrono::Utc>::from_timestamp(ts as i64, 0))
+}
+
+async fn run_auto_refresh_loop(auth: CodexAuth) {
+    // Minimum sleep used when we cannot infer expiry; refresh roughly hourly.
+    let default_sleep = Duration::from_secs(55 * 60);
+    loop {
+        // Determine next refresh time from access_token exp - 5 minutes.
+        let (maybe_exp, has_tokens);
+        {
+            let auth_json = auth.get_current_auth_json();
+            if let Some(AuthDotJson {
+                tokens: Some(tokens),
+                ..
+            }) = auth_json
+            {
+                has_tokens = true;
+                let exp = decode_jwt_exp(&tokens.access_token);
+                maybe_exp = exp.map(|dt| dt - chrono::Duration::minutes(5));
+            } else {
+                has_tokens = false;
+                maybe_exp = None;
+            }
+        }
+
+        let now = chrono::Utc::now();
+        let sleep_for = match maybe_exp {
+            Some(when) if when > now => (when - now).to_std().unwrap_or(Duration::from_secs(0)),
+            Some(_) => Duration::from_secs(0),
+            None => default_sleep,
+        };
+
+        if !has_tokens {
+            trace!(
+                "token auto-refresh: no tokens yet; sleeping for {:?}",
+                sleep_for
+            );
+        } else if let Some(exp_at) = maybe_exp.map(|d| d + chrono::Duration::minutes(5)) {
+            trace!(
+                "token auto-refresh: scheduling refresh in {:?} (exp at {})",
+                sleep_for,
+                exp_at.to_rfc3339()
+            );
+        }
+
+        tokio::time::sleep(sleep_for).await;
+
+        // Attempt to refresh with retries
+        let mut attempt: u32 = 0;
+        let max_attempts: u32 = 5;
+        loop {
+            // Snapshot refresh_token under lock each attempt in case it changes.
+            let refresh_token = match auth.get_current_auth_json() {
+                Some(AuthDotJson {
+                    tokens: Some(tokens),
+                    ..
+                }) => tokens.refresh_token.clone(),
+                _ => {
+                    trace!("token auto-refresh: skipping refresh (no refresh_token)");
+                    break;
+                }
+            };
+
+            match tokio::time::timeout(Duration::from_secs(60), try_refresh_token(refresh_token))
+                .await
+            {
+                Ok(Ok(resp)) => {
+                    match update_tokens(
+                        &auth.auth_file,
+                        resp.id_token,
+                        resp.access_token,
+                        resp.refresh_token,
+                    )
+                    .await
+                    {
+                        Ok(updated) => {
+                            #[allow(clippy::unwrap_used)]
+                            if let Ok(mut guard) = auth.auth_dot_json.lock() {
+                                *guard = Some(updated);
+                            }
+                            info!("token auto-refresh: refresh succeeded");
+                            break;
+                        }
+                        Err(e) => {
+                            warn!("token auto-refresh: failed to persist tokens: {e}");
+                        }
+                    }
+                }
+                Ok(Err(e)) => {
+                    warn!("token auto-refresh: refresh error: {e}");
+                }
+                Err(_) => {
+                    warn!("token auto-refresh: refresh timed out");
+                }
+            }
+
+            attempt += 1;
+            if attempt >= max_attempts {
+                warn!("token auto-refresh: giving up after {attempt} attempts");
+                break;
+            }
+            let backoff_secs = 5u64.saturating_mul(1u64 << (attempt - 1));
+            let delay = Duration::from_secs(backoff_secs);
+            trace!(
+                "token auto-refresh: retrying in {:?} (attempt {attempt}/{max_attempts})",
+                delay
+            );
+            tokio::time::sleep(delay).await;
         }
     }
 }

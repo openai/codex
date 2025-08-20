@@ -24,6 +24,7 @@ tokio = { version = "1", features = [
     "rt-multi-thread",
     "signal",
 ] }
+tracing = "0.1"
 url = "2"
 urlencoding = "2.1"
 webbrowser = "1.0"
