@@ -1,15 +1,16 @@
 //! Project-level documentation discovery.
 //!
-//! Project-level documentation can be stored in a file named `AGENTS.md`.
-//! Currently, we include only the contents of the first file found as follows:
+//! Project-level documentation can be stored in files named `AGENTS.md`.
+//! We include the concatenation of all files found along the path from the
+//! repository root to the current working directory as follows:
 //!
-//! 1.  Look for the doc file in the current working directory (as determined
-//!     by the `Config`).
-//! 2.  If not found, walk *upwards* until the Git repository root is reached
-//!     (detected by the presence of a `.git` directory/file), or failing that,
-//!     the filesystem root.
-//! 3.  If the Git root is encountered, look for the doc file there. If it
-//!     exists, the search stops – we do **not** walk past the Git root.
+//! 1.  Determine the Git repository root by walking upwards from the current
+//!     working directory until a `.git` directory or file is found. If no Git
+//!     root is found, only the current working directory is considered.
+//! 2.  Collect every `AGENTS.md` found from the repository root down to the
+//!     current working directory (inclusive) and concatenate their contents in
+//!     that order.
+//! 3.  We do **not** walk past the Git root.
 
 use crate::config::Config;
 use std::path::Path;
@@ -41,35 +42,36 @@ pub(crate) async fn get_user_instructions(config: &Config) -> Option<String> {
     }
 }
 
-/// Attempt to locate and load the project documentation. Currently, the search
-/// starts from `Config::cwd`, but if we may want to consider other directories
-/// in the future, e.g., additional writable directories in the `SandboxPolicy`.
+/// Attempt to locate and load the project documentation.
 ///
-/// On success returns `Ok(Some(contents))`. If no documentation file is found
-/// the function returns `Ok(None)`. Unexpected I/O failures bubble up as
-/// `Err` so callers can decide how to handle them.
+/// On success returns `Ok(Some(contents))` where `contents` is the
+/// concatenation of all discovered docs. If no documentation file is found the
+/// function returns `Ok(None)`. Unexpected I/O failures bubble up as `Err` so
+/// callers can decide how to handle them.
 async fn find_project_doc(config: &Config) -> std::io::Result<Option<String>> {
     let max_bytes = config.project_doc_max_bytes;
 
-    // Attempt to load from the working directory first.
-    if let Some(doc) = load_first_candidate(&config.cwd, CANDIDATE_FILENAMES, max_bytes).await? {
-        return Ok(Some(doc));
+    // If limit is zero, docs are disabled.
+    if max_bytes == 0 {
+        return Ok(None);
     }
 
-    // Walk up towards the filesystem root, stopping once we encounter the Git
-    // repository root. The presence of **either** a `.git` *file* or
-    // *directory* counts.
+    // Build a list of directories from repo root to the current working
+    // directory (inclusive). If no repo root is found, only consider the cwd.
     let mut dir = config.cwd.clone();
 
-    // Canonicalize the path so that we do not end up in an infinite loop when
-    // `cwd` contains `..` components.
+    // Canonicalize to avoid infinite loops when `cwd` contains `..` components.
     if let Ok(canon) = dir.canonicalize() {
         dir = canon;
     }
 
-    while let Some(parent) = dir.parent() {
+    // First, discover the repo root (if any) while collecting the path chain.
+    let mut chain: Vec<std::path::PathBuf> = vec![dir.clone()];
+    let mut git_root: Option<std::path::PathBuf> = None;
+    let mut cursor = dir.clone();
+    while let Some(parent) = cursor.parent() {
         // `.git` can be a *file* (for worktrees or submodules) or a *dir*.
-        let git_marker = dir.join(".git");
+        let git_marker = cursor.join(".git");
         let git_exists = match tokio::fs::metadata(&git_marker).await {
             Ok(_) => true,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
@@ -77,17 +79,53 @@ async fn find_project_doc(config: &Config) -> std::io::Result<Option<String>> {
         };
 
         if git_exists {
-            // We are at the repo root – attempt one final load.
-            if let Some(doc) = load_first_candidate(&dir, CANDIDATE_FILENAMES, max_bytes).await? {
-                return Ok(Some(doc));
-            }
+            git_root = Some(cursor.clone());
             break;
         }
 
-        dir = parent.to_path_buf();
+        chain.push(parent.to_path_buf());
+        cursor = parent.to_path_buf();
     }
 
-    Ok(None)
+    // If we found a git root, trim the chain so that it starts at the git
+    // root and ends at the original cwd; otherwise, the chain should only
+    // include the cwd.
+    let search_dirs: Vec<std::path::PathBuf> = if let Some(root) = git_root {
+        // `chain` currently contains: [cwd, parent, ..., maybe root?, ...]
+        // Keep entries from `root` down to the original `cwd` and reverse to
+        // get [root, ..., cwd].
+        let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+        let mut saw_root = false;
+        for p in chain.iter().rev() {
+            if !saw_root {
+                if p == &root {
+                    saw_root = true;
+                } else {
+                    continue;
+                }
+            }
+            dirs.push(p.clone());
+        }
+        // Now `dirs` is [root, ..., cwd]
+        dirs
+    } else {
+        vec![config.cwd.clone()]
+    };
+
+    // Load and concatenate docs from all search directories.
+    let mut parts: Vec<String> = Vec::new();
+    for d in search_dirs {
+        if let Some(doc) = load_first_candidate(&d, CANDIDATE_FILENAMES, max_bytes).await?
+            && !doc.trim().is_empty() {
+                parts.push(doc);
+            }
+    }
+
+    if parts.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(parts.join("\n\n")))
+    }
 }
 
 /// Attempt to load the first candidate file found in `dir`. Returns the file
@@ -277,5 +315,33 @@ mod tests {
         let res = get_user_instructions(&make_config(&tmp, 4096, Some(INSTRUCTIONS))).await;
 
         assert_eq!(res, Some(INSTRUCTIONS.to_string()));
+    }
+
+    /// When both the repository root and the working directory contain
+    /// AGENTS.md files, their contents are concatenated from root to cwd.
+    #[tokio::test]
+    async fn concatenates_root_and_cwd_docs() {
+        let repo = tempfile::tempdir().expect("tempdir");
+
+        // Simulate a git repository.
+        std::fs::write(
+            repo.path().join(".git"),
+            "gitdir: /path/to/actual/git/dir\n",
+        )
+        .unwrap();
+
+        // Repo root doc.
+        fs::write(repo.path().join("AGENTS.md"), "root doc").unwrap();
+
+        // Nested working directory with its own doc.
+        let nested = repo.path().join("workspace/crate_a");
+        std::fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("AGENTS.md"), "crate doc").unwrap();
+
+        let mut cfg = make_config(&repo, 4096, None);
+        cfg.cwd = nested;
+
+        let res = get_user_instructions(&cfg).await.expect("doc expected");
+        assert_eq!(res, "root doc\n\ncrate doc");
     }
 }
