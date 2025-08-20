@@ -1233,12 +1233,17 @@ disable_response_storage = true
             contents
         );
 
-        // Verify the explicit table for the project exists
-        let project_key = format!("[projects.\"{}\"]", project_dir.path().to_string_lossy());
+        // Verify the explicit table for the project exists. toml_edit may choose
+        // either basic (double-quoted) or literal (single-quoted) strings for keys
+        // containing backslashes (e.g., on Windows). Accept both forms.
+        let path_str = project_dir.path().to_string_lossy();
+        let project_key_double = format!("[projects.\"{}\"]", path_str);
+        let project_key_single = format!("[projects.'{}']", path_str);
         assert!(
-            contents.contains(&project_key),
-            "missing explicit project table header: expected to find `{}` in:\n{}",
-            project_key,
+            contents.contains(&project_key_double) || contents.contains(&project_key_single),
+            "missing explicit project table header: expected to find `{}` or `{}` in:\n{}",
+            project_key_double,
+            project_key_single,
             contents
         );
 
