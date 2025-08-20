@@ -92,6 +92,7 @@ pub enum TuiEvent {
     Key(KeyEvent),
     Paste(String),
     Draw,
+    #[cfg(unix)]
     ResumeFromSuspend,
 }
 

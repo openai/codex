@@ -17,7 +17,6 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::terminal::supports_keyboard_enhancement;
-use ratatui::layout::Rect;
 use ratatui::text::Line;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -129,10 +128,11 @@ impl App {
                     },
                 )?;
             }
+            #[cfg(unix)]
             TuiEvent::ResumeFromSuspend => {
                 let cursor_pos = tui.terminal.get_cursor_position()?;
                 tui.terminal
-                    .set_viewport_area(Rect::new(0, cursor_pos.y, 0, 0));
+                    .set_viewport_area(ratatui::layout::Rect::new(0, cursor_pos.y, 0, 0));
             }
         }
         Ok(true)
