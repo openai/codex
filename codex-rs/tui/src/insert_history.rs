@@ -38,7 +38,6 @@ pub fn insert_history_lines_to_writer<B, W>(
     W: Write,
 {
     let screen_size = terminal.backend().size().unwrap_or(Size::new(0, 0));
-    let cursor_pos = terminal.get_cursor_position().ok();
 
     let mut area = terminal.get_frame().area();
 
@@ -104,9 +103,14 @@ pub fn insert_history_lines_to_writer<B, W>(
     queue!(writer, ResetScrollRegion).ok();
 
     // Restore the cursor position to where it was before we started.
-    if let Some(cursor_pos) = cursor_pos {
-        queue!(writer, MoveTo(cursor_pos.x, cursor_pos.y)).ok();
-    }
+    queue!(
+        writer,
+        MoveTo(
+            terminal.last_known_cursor_pos.x,
+            terminal.last_known_cursor_pos.y
+        )
+    )
+    .ok();
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
