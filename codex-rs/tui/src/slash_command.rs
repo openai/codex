@@ -39,9 +39,7 @@ impl SlashCommand {
             SlashCommand::Mention => "mention a file",
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::Model => "choose a model preset (model + reasoning effort)",
-            SlashCommand::Approvals => {
-                "choose what Codex can do without approval"
-            }
+            SlashCommand::Approvals => "choose what Codex can do without approval",
             SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Logout => "log out of Codex",
             #[cfg(debug_assertions)]
