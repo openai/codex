@@ -130,17 +130,20 @@ pub(crate) fn create_diff_summary(
     for (idx, f) in files.iter().enumerate() {
         let mut spans: Vec<RtSpan<'static>> = Vec::new();
         spans.push(RtSpan::raw(f.display_path.clone()));
-        spans.push(RtSpan::raw(" ("));
-        spans.push(RtSpan::styled(
-            format!("+{}", f.added),
-            Style::default().fg(Color::Green),
-        ));
-        spans.push(RtSpan::raw(" "));
-        spans.push(RtSpan::styled(
-            format!("-{}", f.removed),
-            Style::default().fg(Color::Red),
-        ));
-        spans.push(RtSpan::raw(")"));
+        // Show per-file +/- counts only when there are multiple files
+        if file_count > 1 {
+            spans.push(RtSpan::raw(" ("));
+            spans.push(RtSpan::styled(
+                format!("+{}", f.added),
+                Style::default().fg(Color::Green),
+            ));
+            spans.push(RtSpan::raw(" "));
+            spans.push(RtSpan::styled(
+                format!("-{}", f.removed),
+                Style::default().fg(Color::Red),
+            ));
+            spans.push(RtSpan::raw(")"));
+        }
 
         let mut line = RtLine::from(spans);
         let prefix = if idx == 0 { "  └ " } else { "    " };

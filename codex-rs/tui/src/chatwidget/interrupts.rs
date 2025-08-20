@@ -71,7 +71,7 @@ impl InterruptManager {
         self.queue.push_back(QueuedInterrupt::PatchEnd(ev));
     }
 
-    pub(crate) fn flush_all(&mut self, chat: &mut ChatWidget<'_>) {
+    pub(crate) fn flush_all(&mut self, chat: &mut ChatWidget) {
         while let Some(q) = self.queue.pop_front() {
             match q {
                 QueuedInterrupt::ExecApproval(id, ev) => chat.handle_exec_approval_now(id, ev),

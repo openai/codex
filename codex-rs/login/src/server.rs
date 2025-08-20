@@ -1,9 +1,8 @@
+use std::io::Cursor;
 use std::io::{self};
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use std::thread;
 
 use crate::AuthDotJson;
@@ -13,6 +12,8 @@ use crate::pkce::generate_pkce;
 use base64::Engine;
 use chrono::Utc;
 use rand::RngCore;
+use tiny_http::Header;
+use tiny_http::Request;
 use tiny_http::Response;
 use tiny_http::Server;
 
@@ -42,31 +43,41 @@ impl ServerOptions {
     }
 }
 
-#[derive(Debug)]
 pub struct LoginServer {
     pub auth_url: String,
     pub actual_port: u16,
-    pub server_handle: thread::JoinHandle<io::Result<()>>,
-    pub shutdown_flag: Arc<AtomicBool>,
+    server_handle: tokio::task::JoinHandle<io::Result<()>>,
+    shutdown_handle: ShutdownHandle,
 }
 
 impl LoginServer {
-    pub fn block_until_done(self) -> io::Result<()> {
-        #[expect(clippy::expect_used)]
+    pub async fn block_until_done(self) -> io::Result<()> {
         self.server_handle
-            .join()
-            .expect("can't join on the server thread")
+            .await
+            .map_err(|err| io::Error::other(format!("login server thread panicked: {err:?}")))?
     }
 
     pub fn cancel(&self) {
-        self.shutdown_flag.store(true, Ordering::SeqCst);
+        self.shutdown_handle.shutdown();
+    }
+
+    pub fn cancel_handle(&self) -> ShutdownHandle {
+        self.shutdown_handle.clone()
     }
 }
 
-pub fn run_login_server(
-    opts: ServerOptions,
-    shutdown_flag: Option<Arc<AtomicBool>>,
-) -> io::Result<LoginServer> {
+#[derive(Clone, Debug)]
+pub struct ShutdownHandle {
+    shutdown_notify: Arc<tokio::sync::Notify>,
+}
+
+impl ShutdownHandle {
+    pub fn shutdown(&self) {
+        self.shutdown_notify.notify_waiters();
+    }
+}
+
+pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
     let pkce = generate_pkce();
     let state = opts.force_state.clone().unwrap_or_else(generate_state);
 
@@ -80,6 +91,7 @@ pub fn run_login_server(
             ));
         }
     };
+    let server = Arc::new(server);
 
     let redirect_uri = format!("http://localhost:{actual_port}/auth/callback");
     let auth_url = build_authorize_url(&opts.issuer, &opts.client_id, &redirect_uri, &pkce, &state);
@@ -87,133 +99,176 @@ pub fn run_login_server(
     if opts.open_browser {
         let _ = webbrowser::open(&auth_url);
     }
-    let shutdown_flag = shutdown_flag.unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
-    let shutdown_flag_clone = shutdown_flag.clone();
-    let server_handle = thread::spawn(move || {
-        while !shutdown_flag.load(Ordering::SeqCst) {
-            let req = match server.recv() {
-                Ok(r) => r,
-                Err(e) => return Err(io::Error::other(e)),
-            };
 
-            let url_raw = req.url().to_string();
-            let parsed_url = match url::Url::parse(&format!("http://localhost{url_raw}")) {
-                Ok(u) => u,
-                Err(e) => {
-                    eprintln!("URL parse error: {e}");
-                    let _ = req.respond(Response::from_string("Bad Request").with_status_code(400));
-                    continue;
-                }
-            };
-            let path = parsed_url.path().to_string();
+    // Map blocking reads from server.recv() to an async channel.
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Request>(16);
+    let _server_handle = {
+        let server = server.clone();
+        thread::spawn(move || -> io::Result<()> {
+            while let Ok(request) = server.recv() {
+                tx.blocking_send(request).map_err(|e| {
+                    eprintln!("Failed to send request to channel: {e}");
+                    io::Error::other("Failed to send request to channel")
+                })?;
+            }
+            Ok(())
+        })
+    };
 
-            match path.as_str() {
-                "/auth/callback" => {
-                    let params: std::collections::HashMap<String, String> =
-                        parsed_url.query_pairs().into_owned().collect();
-                    if params.get("state").map(String::as_str) != Some(state.as_str()) {
-                        let _ = req
-                            .respond(Response::from_string("State mismatch").with_status_code(400));
-                        continue;
+    let shutdown_notify = Arc::new(tokio::sync::Notify::new());
+    let server_handle = {
+        let shutdown_notify = shutdown_notify.clone();
+        let server = server.clone();
+        tokio::spawn(async move {
+            let result = loop {
+                tokio::select! {
+                    _ = shutdown_notify.notified() => {
+                        break Err(io::Error::other("Login was not completed"));
                     }
-                    let code = match params.get("code") {
-                        Some(c) if !c.is_empty() => c.clone(),
-                        _ => {
-                            let _ = req.respond(
-                                Response::from_string("Missing authorization code")
-                                    .with_status_code(400),
-                            );
-                            continue;
-                        }
-                    };
+                    maybe_req = rx.recv() => {
+                        let Some(req) = maybe_req else {
+                            break Err(io::Error::other("Login was not completed"));
+                        };
 
-                    match exchange_code_for_tokens(
-                        &opts.issuer,
-                        &opts.client_id,
-                        &redirect_uri,
-                        &pkce,
-                        &code,
-                    ) {
-                        Ok(tokens) => {
-                            // Obtain API key via token-exchange and persist
-                            let api_key =
-                                obtain_api_key(&opts.issuer, &opts.client_id, &tokens.id_token)
-                                    .ok();
-                            if let Err(err) = persist_tokens(
-                                &opts.codex_home,
-                                api_key.clone(),
-                                tokens.id_token.clone(),
-                                Some(tokens.access_token.clone()),
-                                Some(tokens.refresh_token.clone()),
-                            ) {
-                                eprintln!("Persist error: {err}");
-                                let _ = req.respond(
-                                    Response::from_string(format!(
-                                        "Unable to persist auth file: {err}"
-                                    ))
-                                    .with_status_code(500),
-                                );
-                                continue;
+                        let url_raw = req.url().to_string();
+                        let response =
+                            process_request(&url_raw, &opts, &redirect_uri, &pkce, actual_port, &state).await;
+
+                        let is_login_complete = matches!(response, HandledRequest::ResponseAndExit(_));
+                        match response {
+                            HandledRequest::Response(r) | HandledRequest::ResponseAndExit(r) => {
+                                let _ = tokio::task::spawn_blocking(move || req.respond(r)).await;
                             }
-
-                            let success_url = compose_success_url(
-                                actual_port,
-                                &opts.issuer,
-                                &tokens.id_token,
-                                &tokens.access_token,
-                            );
-                            match tiny_http::Header::from_bytes(
-                                &b"Location"[..],
-                                success_url.as_bytes(),
-                            ) {
-                                Ok(h) => {
-                                    let response = tiny_http::Response::empty(302).with_header(h);
-                                    let _ = req.respond(response);
-                                }
-                                Err(_) => {
-                                    let _ = req.respond(
-                                        Response::from_string("Internal Server Error")
-                                            .with_status_code(500),
-                                    );
-                                }
+                            HandledRequest::RedirectWithHeader(header) => {
+                                let redirect = Response::empty(302).with_header(header);
+                                let _ = tokio::task::spawn_blocking(move || req.respond(redirect)).await;
                             }
                         }
-                        Err(err) => {
-                            eprintln!("Token exchange error: {err}");
-                            let _ = req.respond(
-                                Response::from_string(format!("Token exchange failed: {err}"))
-                                    .with_status_code(500),
-                            );
+
+                        if is_login_complete {
+                            break Ok(());
                         }
                     }
                 }
-                "/success" => {
-                    let body = include_str!("assets/success.html");
-                    let mut resp = Response::from_data(body.as_bytes());
-                    if let Ok(h) = tiny_http::Header::from_bytes(
-                        &b"Content-Type"[..],
-                        &b"text/html; charset=utf-8"[..],
-                    ) {
-                        resp.add_header(h);
-                    }
-                    let _ = req.respond(resp);
-                    shutdown_flag.store(true, Ordering::SeqCst);
-                    return Ok(());
-                }
+            };
+
+            // Ensure that the server is unblocked so the thread dedicated to
+            // running `server.recv()` in a loop exits cleanly.
+            server.unblock();
+            result
+        })
+    };
+
+    Ok(LoginServer {
+        auth_url,
+        actual_port,
+        server_handle,
+        shutdown_handle: ShutdownHandle { shutdown_notify },
+    })
+}
+
+enum HandledRequest {
+    Response(Response<Cursor<Vec<u8>>>),
+    RedirectWithHeader(Header),
+    ResponseAndExit(Response<Cursor<Vec<u8>>>),
+}
+
+async fn process_request(
+    url_raw: &str,
+    opts: &ServerOptions,
+    redirect_uri: &str,
+    pkce: &PkceCodes,
+    actual_port: u16,
+    state: &str,
+) -> HandledRequest {
+    let parsed_url = match url::Url::parse(&format!("http://localhost{url_raw}")) {
+        Ok(u) => u,
+        Err(e) => {
+            eprintln!("URL parse error: {e}");
+            return HandledRequest::Response(
+                Response::from_string("Bad Request").with_status_code(400),
+            );
+        }
+    };
+    let path = parsed_url.path().to_string();
+
+    match path.as_str() {
+        "/auth/callback" => {
+            let params: std::collections::HashMap<String, String> =
+                parsed_url.query_pairs().into_owned().collect();
+            if params.get("state").map(String::as_str) != Some(state) {
+                return HandledRequest::Response(
+                    Response::from_string("State mismatch").with_status_code(400),
+                );
+            }
+            let code = match params.get("code") {
+                Some(c) if !c.is_empty() => c.clone(),
                 _ => {
-                    let _ = req.respond(Response::from_string("Not Found").with_status_code(404));
+                    return HandledRequest::Response(
+                        Response::from_string("Missing authorization code").with_status_code(400),
+                    );
+                }
+            };
+
+            match exchange_code_for_tokens(&opts.issuer, &opts.client_id, redirect_uri, pkce, &code)
+                .await
+            {
+                Ok(tokens) => {
+                    // Obtain API key via token-exchange and persist
+                    let api_key = obtain_api_key(&opts.issuer, &opts.client_id, &tokens.id_token)
+                        .await
+                        .ok();
+                    if let Err(err) = persist_tokens_async(
+                        &opts.codex_home,
+                        api_key.clone(),
+                        tokens.id_token.clone(),
+                        Some(tokens.access_token.clone()),
+                        Some(tokens.refresh_token.clone()),
+                    )
+                    .await
+                    {
+                        eprintln!("Persist error: {err}");
+                        return HandledRequest::Response(
+                            Response::from_string(format!("Unable to persist auth file: {err}"))
+                                .with_status_code(500),
+                        );
+                    }
+
+                    let success_url = compose_success_url(
+                        actual_port,
+                        &opts.issuer,
+                        &tokens.id_token,
+                        &tokens.access_token,
+                    );
+                    match tiny_http::Header::from_bytes(&b"Location"[..], success_url.as_bytes()) {
+                        Ok(header) => HandledRequest::RedirectWithHeader(header),
+                        Err(_) => HandledRequest::Response(
+                            Response::from_string("Internal Server Error").with_status_code(500),
+                        ),
+                    }
+                }
+                Err(err) => {
+                    eprintln!("Token exchange error: {err}");
+                    HandledRequest::Response(
+                        Response::from_string(format!("Token exchange failed: {err}"))
+                            .with_status_code(500),
+                    )
                 }
             }
         }
-        Err(io::Error::other("Login flow was not completed"))
-    });
-
-    Ok(LoginServer {
-        auth_url: auth_url.clone(),
-        actual_port,
-        server_handle,
-        shutdown_flag: shutdown_flag_clone,
-    })
+        "/success" => {
+            let body = include_str!("assets/success.html");
+            let mut resp = Response::from_data(body.as_bytes());
+            if let Ok(h) = tiny_http::Header::from_bytes(
+                &b"Content-Type"[..],
+                &b"text/html; charset=utf-8"[..],
+            ) {
+                resp.add_header(h);
+            }
+            HandledRequest::ResponseAndExit(resp)
+        }
+        _ => HandledRequest::Response(Response::from_string("Not Found").with_status_code(404)),
+    }
 }
 
 fn build_authorize_url(
@@ -254,7 +309,7 @@ struct ExchangedTokens {
     refresh_token: String,
 }
 
-fn exchange_code_for_tokens(
+async fn exchange_code_for_tokens(
     issuer: &str,
     client_id: &str,
     redirect_uri: &str,
@@ -268,7 +323,7 @@ fn exchange_code_for_tokens(
         refresh_token: String,
     }
 
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::Client::new();
     let resp = client
         .post(format!("{issuer}/oauth/token"))
         .header("Content-Type", "application/x-www-form-urlencoded")
@@ -280,6 +335,7 @@ fn exchange_code_for_tokens(
             urlencoding::encode(&pkce.code_verifier)
         ))
         .send()
+        .await
         .map_err(io::Error::other)?;
 
     if !resp.status().is_success() {
@@ -289,7 +345,7 @@ fn exchange_code_for_tokens(
         )));
     }
 
-    let tokens: TokenResponse = resp.json().map_err(io::Error::other)?;
+    let tokens: TokenResponse = resp.json().await.map_err(io::Error::other)?;
     Ok(ExchangedTokens {
         id_token: tokens.id_token,
         access_token: tokens.access_token,
@@ -297,43 +353,49 @@ fn exchange_code_for_tokens(
     })
 }
 
-fn persist_tokens(
+async fn persist_tokens_async(
     codex_home: &Path,
     api_key: Option<String>,
     id_token: String,
     access_token: Option<String>,
     refresh_token: Option<String>,
 ) -> io::Result<()> {
-    let auth_file = get_auth_file(codex_home);
-    if let Some(parent) = auth_file.parent() {
-        if !parent.exists() {
+    // Reuse existing synchronous logic but run it off the async runtime.
+    let codex_home = codex_home.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let auth_file = get_auth_file(&codex_home);
+        if let Some(parent) = auth_file.parent()
+            && !parent.exists()
+        {
             std::fs::create_dir_all(parent).map_err(io::Error::other)?;
         }
-    }
 
-    let mut auth = read_or_default(&auth_file);
-    if let Some(key) = api_key {
-        auth.openai_api_key = Some(key);
-    }
-    let tokens = auth
-        .tokens
-        .get_or_insert_with(crate::token_data::TokenData::default);
-    tokens.id_token = crate::token_data::parse_id_token(&id_token).map_err(io::Error::other)?;
-    // Persist chatgpt_account_id if present in claims
-    if let Some(acc) = jwt_auth_claims(&id_token)
-        .get("chatgpt_account_id")
-        .and_then(|v| v.as_str())
-    {
-        tokens.account_id = Some(acc.to_string());
-    }
-    if let Some(at) = access_token {
-        tokens.access_token = at;
-    }
-    if let Some(rt) = refresh_token {
-        tokens.refresh_token = rt;
-    }
-    auth.last_refresh = Some(Utc::now());
-    super::write_auth_json(&auth_file, &auth)
+        let mut auth = read_or_default(&auth_file);
+        if let Some(key) = api_key {
+            auth.openai_api_key = Some(key);
+        }
+        let tokens = auth
+            .tokens
+            .get_or_insert_with(crate::token_data::TokenData::default);
+        tokens.id_token = crate::token_data::parse_id_token(&id_token).map_err(io::Error::other)?;
+        // Persist chatgpt_account_id if present in claims
+        if let Some(acc) = jwt_auth_claims(&id_token)
+            .get("chatgpt_account_id")
+            .and_then(|v| v.as_str())
+        {
+            tokens.account_id = Some(acc.to_string());
+        }
+        if let Some(at) = access_token {
+            tokens.access_token = at;
+        }
+        if let Some(rt) = refresh_token {
+            tokens.refresh_token = rt;
+        }
+        auth.last_refresh = Some(Utc::now());
+        super::write_auth_json(&auth_file, &auth)
+    })
+    .await
+    .map_err(|e| io::Error::other(format!("persist task failed: {e}")))?
 }
 
 fn read_or_default(path: &Path) -> AuthDotJson {
@@ -426,13 +488,13 @@ fn jwt_auth_claims(jwt: &str) -> serde_json::Map<String, serde_json::Value> {
     serde_json::Map::new()
 }
 
-fn obtain_api_key(issuer: &str, client_id: &str, id_token: &str) -> io::Result<String> {
+async fn obtain_api_key(issuer: &str, client_id: &str, id_token: &str) -> io::Result<String> {
     // Token exchange for an API key access token
     #[derive(serde::Deserialize)]
     struct ExchangeResp {
         access_token: String,
     }
-    let client = reqwest::blocking::Client::new();
+    let client = reqwest::Client::new();
     let resp = client
         .post(format!("{issuer}/oauth/token"))
         .header("Content-Type", "application/x-www-form-urlencoded")
@@ -445,6 +507,7 @@ fn obtain_api_key(issuer: &str, client_id: &str, id_token: &str) -> io::Result<S
             urlencoding::encode("urn:ietf:params:oauth:token-type:id_token")
         ))
         .send()
+        .await
         .map_err(io::Error::other)?;
     if !resp.status().is_success() {
         return Err(io::Error::other(format!(
@@ -452,6 +515,6 @@ fn obtain_api_key(issuer: &str, client_id: &str, id_token: &str) -> io::Result<S
             resp.status()
         )));
     }
-    let body: ExchangeResp = resp.json().map_err(io::Error::other)?;
+    let body: ExchangeResp = resp.json().await.map_err(io::Error::other)?;
     Ok(body.access_token)
 }

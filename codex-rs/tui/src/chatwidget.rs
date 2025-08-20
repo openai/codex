@@ -18,6 +18,7 @@ use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::InputItem;
+use codex_core::protocol::McpListToolsResponseEvent;
 use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
@@ -44,11 +45,14 @@ use crate::bottom_pane::BottomPane;
 use crate::bottom_pane::BottomPaneParams;
 use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::InputResult;
+use crate::bottom_pane::SelectionAction;
+use crate::bottom_pane::SelectionItem;
 use crate::history_cell;
 use crate::history_cell::CommandOutput;
 use crate::history_cell::ExecCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PatchEventType;
+use crate::tui::FrameRequester;
 // streaming internals are provided by crate::streaming and crate::markdown_stream
 use crate::user_approval_widget::ApprovalRequest;
 mod interrupts;
@@ -57,7 +61,14 @@ mod agent;
 use self::agent::spawn_agent;
 use crate::streaming::controller::AppEventHistorySink;
 use crate::streaming::controller::StreamController;
+use codex_common::approval_presets::ApprovalPreset;
+use codex_common::approval_presets::builtin_approval_presets;
+use codex_common::model_presets::ModelPreset;
+use codex_common::model_presets::builtin_model_presets;
 use codex_core::ConversationManager;
+use codex_core::protocol::AskForApproval;
+use codex_core::protocol::SandboxPolicy;
+use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_file_search::FileMatch;
 use uuid::Uuid;
 
@@ -67,10 +78,10 @@ struct RunningCommand {
     parsed_cmd: Vec<ParsedCommand>,
 }
 
-pub(crate) struct ChatWidget<'a> {
+pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
-    bottom_pane: BottomPane<'a>,
+    bottom_pane: BottomPane,
     active_exec_cell: Option<ExecCell>,
     config: Config,
     initial_user_message: Option<UserMessage>,
@@ -88,6 +99,7 @@ pub(crate) struct ChatWidget<'a> {
     // Whether a redraw is needed after handling the current event
     needs_redraw: bool,
     session_id: Option<Uuid>,
+    frame_requester: FrameRequester,
 }
 
 struct UserMessage {
@@ -114,7 +126,7 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
     }
 }
 
-impl ChatWidget<'_> {
+impl ChatWidget {
     #[inline]
     fn mark_needs_redraw(&mut self) {
         self.needs_redraw = true;
@@ -490,6 +502,7 @@ impl ChatWidget<'_> {
     pub(crate) fn new(
         config: Config,
         conversation_manager: Arc<ConversationManager>,
+        frame_requester: FrameRequester,
         app_event_tx: AppEventSender,
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
@@ -501,8 +514,10 @@ impl ChatWidget<'_> {
 
         Self {
             app_event_tx: app_event_tx.clone(),
+            frame_requester: frame_requester.clone(),
             codex_op_tx,
             bottom_pane: BottomPane::new(BottomPaneParams {
+                frame_requester,
                 app_event_tx,
                 has_input_focus: true,
                 enhanced_keys_supported,
@@ -635,6 +650,7 @@ impl ChatWidget<'_> {
             EventMsg::TaskComplete(TaskCompleteEvent { .. }) => self.on_task_complete(),
             EventMsg::TokenCount(token_usage) => self.on_token_count(token_usage),
             EventMsg::Error(ErrorEvent { message }) => self.on_error(message),
+            EventMsg::TurnAborted(_) => self.on_error("Turn interrupted".to_owned()),
             EventMsg::PlanUpdate(update) => self.on_plan_update(update),
             EventMsg::ExecApprovalRequest(ev) => self.on_exec_approval_request(id, ev),
             EventMsg::ApplyPatchApprovalRequest(ev) => self.on_apply_patch_approval_request(id, ev),
@@ -646,6 +662,7 @@ impl ChatWidget<'_> {
             EventMsg::McpToolCallBegin(ev) => self.on_mcp_tool_call_begin(ev),
             EventMsg::McpToolCallEnd(ev) => self.on_mcp_tool_call_end(ev),
             EventMsg::GetHistoryEntryResponse(ev) => self.on_get_history_entry_response(ev),
+            EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
             EventMsg::ShutdownComplete => self.on_shutdown_complete(),
             EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) => self.on_turn_diff(unified_diff),
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
@@ -660,7 +677,7 @@ impl ChatWidget<'_> {
     }
 
     fn request_redraw(&mut self) {
-        self.app_event_tx.send(AppEvent::RequestRedraw);
+        self.frame_requester.schedule_frame();
     }
 
     pub(crate) fn add_diff_in_progress(&mut self) {
@@ -682,6 +699,116 @@ impl ChatWidget<'_> {
             &self.total_token_usage,
             &self.session_id,
         ));
+    }
+
+    /// Open a popup to choose the model preset (model + reasoning effort).
+    pub(crate) fn open_model_popup(&mut self) {
+        let current_model = self.config.model.clone();
+        let current_effort = self.config.model_reasoning_effort;
+        let presets: &[ModelPreset] = builtin_model_presets();
+
+        let mut items: Vec<SelectionItem> = Vec::new();
+        for preset in presets.iter() {
+            let name = preset.label.to_string();
+            let description = Some(preset.description.to_string());
+            let is_current = preset.model == current_model && preset.effort == current_effort;
+            let model_slug = preset.model.to_string();
+            let effort = preset.effort;
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                    cwd: None,
+                    approval_policy: None,
+                    sandbox_policy: None,
+                    model: Some(model_slug.clone()),
+                    effort: Some(effort),
+                    summary: None,
+                }));
+                tx.send(AppEvent::UpdateModel(model_slug.clone()));
+                tx.send(AppEvent::UpdateReasoningEffort(effort));
+            })];
+            items.push(SelectionItem {
+                name,
+                description,
+                is_current,
+                actions,
+            });
+        }
+
+        self.bottom_pane.show_selection_view(
+            "Select model and reasoning level".to_string(),
+            Some("Switch between OpenAI models for this and future Codex CLI session".to_string()),
+            Some("Press Enter to confirm or Esc to go back".to_string()),
+            items,
+        );
+    }
+
+    /// Open a popup to choose the approvals mode (ask for approval policy + sandbox policy).
+    pub(crate) fn open_approvals_popup(&mut self) {
+        let current_approval = self.config.approval_policy;
+        let current_sandbox = self.config.sandbox_policy.clone();
+        let mut items: Vec<SelectionItem> = Vec::new();
+        let presets: Vec<ApprovalPreset> = builtin_approval_presets();
+        for preset in presets.into_iter() {
+            let is_current =
+                current_approval == preset.approval && current_sandbox == preset.sandbox;
+            let approval = preset.approval;
+            let sandbox = preset.sandbox.clone();
+            let name = preset.label.to_string();
+            let description = Some(preset.description.to_string());
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                    cwd: None,
+                    approval_policy: Some(approval),
+                    sandbox_policy: Some(sandbox.clone()),
+                    model: None,
+                    effort: None,
+                    summary: None,
+                }));
+                tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
+                tx.send(AppEvent::UpdateSandboxPolicy(sandbox.clone()));
+            })];
+            items.push(SelectionItem {
+                name,
+                description,
+                is_current,
+                actions,
+            });
+        }
+
+        self.bottom_pane.show_selection_view(
+            "Select Approval Mode".to_string(),
+            None,
+            Some("Press Enter to confirm or Esc to go back".to_string()),
+            items,
+        );
+    }
+
+    /// Set the approval policy in the widget's config copy.
+    pub(crate) fn set_approval_policy(&mut self, policy: AskForApproval) {
+        self.config.approval_policy = policy;
+    }
+
+    /// Set the sandbox policy in the widget's config copy.
+    pub(crate) fn set_sandbox_policy(&mut self, policy: SandboxPolicy) {
+        self.config.sandbox_policy = policy;
+    }
+
+    /// Set the reasoning effort in the widget's config copy.
+    pub(crate) fn set_reasoning_effort(&mut self, effort: ReasoningEffortConfig) {
+        self.config.model_reasoning_effort = effort;
+    }
+
+    /// Set the model in the widget's config copy.
+    pub(crate) fn set_model(&mut self, model: String) {
+        self.config.model = model;
+    }
+
+    pub(crate) fn add_mcp_output(&mut self) {
+        if self.config.mcp_servers.is_empty() {
+            self.add_to_history(&history_cell::empty_mcp_output());
+        } else {
+            self.submit_op(Op::ListMcpTools);
+        }
     }
 
     /// Forward file-search results to the bottom pane.
@@ -725,6 +852,10 @@ impl ChatWidget<'_> {
         }
     }
 
+    fn on_list_mcp_tools(&mut self, ev: McpListToolsResponseEvent) {
+        self.add_to_history(&history_cell::new_mcp_tools_output(&self.config, ev.tools));
+    }
+
     /// Programmatically submit a user text message as if typed in the
     /// composer. The text will be added to conversation history and sent to
     /// the agent.
@@ -754,7 +885,7 @@ impl ChatWidget<'_> {
     }
 }
 
-impl WidgetRef for &ChatWidget<'_> {
+impl WidgetRef for &ChatWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let [active_cell_area, bottom_pane_area] = self.layout_areas(area);
         (&self.bottom_pane).render(bottom_pane_area, buf);

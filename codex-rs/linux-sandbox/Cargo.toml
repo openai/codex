@@ -20,7 +20,7 @@ clap = { version = "4", features = ["derive"] }
 codex-common = { path = "../common", features = ["cli"] }
 codex-core = { path = "../core" }
 landlock = "0.4.1"
-libc = "0.2.172"
+libc = "0.2.175"
 seccompiler = "0.5.0"
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]

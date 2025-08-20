@@ -19,6 +19,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::shimmer::shimmer_spans;
+use crate::tui::FrameRequester;
 
 // We render the live text using markdown so it visually matches the history
 // cells. Before rendering we strip any ANSI escape sequences to avoid writing
@@ -39,10 +40,11 @@ pub(crate) struct StatusIndicatorWidget {
     reveal_len_at_base: usize,
     start_time: Instant,
     app_event_tx: AppEventSender,
+    frame_requester: FrameRequester,
 }
 
 impl StatusIndicatorWidget {
-    pub(crate) fn new(app_event_tx: AppEventSender) -> Self {
+    pub(crate) fn new(app_event_tx: AppEventSender, frame_requester: FrameRequester) -> Self {
         Self {
             text: String::from("waiting for model"),
             last_target_len: 0,
@@ -51,6 +53,7 @@ impl StatusIndicatorWidget {
             start_time: Instant::now(),
 
             app_event_tx,
+            frame_requester,
         }
     }
 
@@ -143,8 +146,8 @@ impl WidgetRef for StatusIndicatorWidget {
         }
 
         // Schedule next animation frame.
-        self.app_event_tx
-            .send(AppEvent::ScheduleFrameIn(Duration::from_millis(100)));
+        self.frame_requester
+            .schedule_frame_in(Duration::from_millis(100));
         let idx = self.current_frame();
         let elapsed = self.start_time.elapsed().as_secs();
         let shown_now = self.current_shown_len(idx);
@@ -213,13 +216,13 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use crate::app_event_sender::AppEventSender;
-    use std::sync::mpsc::channel;
+    use tokio::sync::mpsc::unbounded_channel;
 
     #[test]
     fn renders_without_left_border_or_padding() {
-        let (tx_raw, _rx) = channel::<AppEvent>();
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let mut w = StatusIndicatorWidget::new(tx);
+        let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy());
         w.restart_with_text("Hello".to_string());
 
         let area = ratatui::layout::Rect::new(0, 0, 30, 1);
@@ -235,9 +238,9 @@ mod tests {
 
     #[test]
     fn working_header_is_present_on_last_line() {
-        let (tx_raw, _rx) = channel::<AppEvent>();
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let mut w = StatusIndicatorWidget::new(tx);
+        let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy());
         w.restart_with_text("Hi".to_string());
         // Ensure some frames elapse so we get a stable state.
         std::thread::sleep(std::time::Duration::from_millis(120));
@@ -256,9 +259,9 @@ mod tests {
 
     #[test]
     fn header_starts_at_expected_position() {
-        let (tx_raw, _rx) = channel::<AppEvent>();
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let mut w = StatusIndicatorWidget::new(tx);
+        let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy());
         w.restart_with_text("Hello".to_string());
         std::thread::sleep(std::time::Duration::from_millis(120));
 

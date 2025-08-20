@@ -72,6 +72,10 @@ enum Subcommand {
     /// Apply the latest diff produced by Codex agent as a `git apply` to your local working tree.
     #[clap(visible_alias = "a")]
     Apply(ApplyCommand),
+
+    /// Internal: generate TypeScript protocol bindings.
+    #[clap(hide = true)]
+    GenerateTs(GenerateTsCommand),
 }
 
 #[derive(Debug, Parser)]
@@ -118,6 +122,17 @@ enum LoginSubcommand {
 struct LogoutCommand {
     #[clap(skip)]
     config_overrides: CliConfigOverrides,
+}
+
+#[derive(Debug, Parser)]
+struct GenerateTsCommand {
+    /// Output directory where .ts files will be written
+    #[arg(short = 'o', long = "out", value_name = "DIR")]
+    out_dir: PathBuf,
+
+    /// Optional path to the Prettier executable to format generated files
+    #[arg(short = 'p', long = "prettier", value_name = "PRETTIER_BIN")]
+    prettier: Option<PathBuf>,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -193,6 +208,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         Some(Subcommand::Apply(mut apply_cli)) => {
             prepend_config_flags(&mut apply_cli.config_overrides, cli.config_overrides);
             run_apply_command(apply_cli, None).await?;
+        }
+        Some(Subcommand::GenerateTs(gen_cli)) => {
+            codex_protocol_ts::generate_ts(&gen_cli.out_dir, gen_cli.prettier.as_deref())?;
         }
     }
 
