@@ -201,41 +201,36 @@ impl App<'_> {
 
         let mut crossterm_events = crossterm::event::EventStream::new();
 
-        loop {
-            if let Some(event) = {
-                select! {
-                    maybe_app_event = self.app_event_rx.recv() => {
-                        maybe_app_event
-                    },
-                    Some(Ok(event)) = crossterm_events.next() => {
-                        match event {
-                            crossterm::event::Event::Key(key_event) => {
-                                Some(AppEvent::KeyEvent(key_event))
-                            }
-                            crossterm::event::Event::Resize(_, _) => {
-                                Some(AppEvent::Redraw)
-                            }
-                            crossterm::event::Event::Paste(pasted) => {
-                                // Many terminals convert newlines to \r when pasting (e.g., iTerm2),
-                                // but tui-textarea expects \n. Normalize CR to LF.
-                                // [tui-textarea]: https://github.com/rhysd/tui-textarea/blob/4d18622eeac13b309e0ff6a55a46ac6706da68cf/src/textarea.rs#L782-L783
-                                // [iTerm2]: https://github.com/gnachman/iTerm2/blob/5d0c0d9f68523cbd0494dad5422998964a2ecd8d/sources/iTermPasteHelper.m#L206-L216
-                                let pasted = pasted.replace("\r", "\n");
-                                Some(AppEvent::Paste(pasted))
-                            }
-                            _ => {
-                                // Ignore any other events.
-                                None
-                            }
+        while let Some(event) = {
+            select! {
+                maybe_app_event = self.app_event_rx.recv() => {
+                    maybe_app_event
+                },
+                Some(Ok(event)) = crossterm_events.next() => {
+                    match event {
+                        crossterm::event::Event::Key(key_event) => {
+                            Some(AppEvent::KeyEvent(key_event))
                         }
-                    },
-                }
-            } {
-                if !self.handle_event(terminal, event)? {
-                    break;
-                }
+                        crossterm::event::Event::Resize(_, _) => {
+                            Some(AppEvent::Redraw)
+                        }
+                        crossterm::event::Event::Paste(pasted) => {
+                            // Many terminals convert newlines to \r when pasting (e.g., iTerm2),
+                            // but tui-textarea expects \n. Normalize CR to LF.
+                            // [tui-textarea]: https://github.com/rhysd/tui-textarea/blob/4d18622eeac13b309e0ff6a55a46ac6706da68cf/src/textarea.rs#L782-L783
+                            // [iTerm2]: https://github.com/gnachman/iTerm2/blob/5d0c0d9f68523cbd0494dad5422998964a2ecd8d/sources/iTermPasteHelper.m#L206-L216
+                            let pasted = pasted.replace("\r", "\n");
+                            Some(AppEvent::Paste(pasted))
+                        }
+                        _ => {
+                            // Ignore any other events.
+                            None
+                        }
+                    }
+                },
             }
-        }
+        } && self.handle_event(terminal, event)?
+        {}
         terminal.clear()?;
         Ok(())
     }
