@@ -71,6 +71,9 @@ openssl-sys = { version = "*", features = ["vendored"] }
 [target.aarch64-unknown-linux-musl.dependencies]
 openssl-sys = { version = "*", features = ["vendored"] }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+which = "6"
+
 [dev-dependencies]
 assert_cmd = "2"
 core_test_support = { path = "tests/common" }
