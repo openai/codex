@@ -259,10 +259,39 @@ pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Re
         Err(e) => return Err(e.into()),
     };
 
-    // Mark the project as trusted. toml_edit is very good at handling
-    // missing properties
+    // Ensure we render a human-friendly structure:
+    //
+    // [projects]
+    // [projects."/path/to/project"]
+    // trust_level = "trusted"
+    //
+    // rather than inline tables like:
+    //
+    // [projects]
+    // "/path/to/project" = { trust_level = "trusted" }
     let project_key = project_path.to_string_lossy().to_string();
-    doc["projects"][project_key.as_str()]["trust_level"] = toml_edit::value("trusted");
+
+    // Ensure top-level `projects` exists as a non-inline, explicit table
+    {
+        let root = doc.as_table_mut();
+        if !root.contains_key("projects") {
+            root.insert("projects", toml_edit::table().into());
+        }
+    }
+    let projects_tbl = doc["projects"].as_table_mut().expect("projects table exists");
+    // Ensure we emit an explicit [projects] header
+    projects_tbl.set_implicit(false);
+
+    // Ensure the per-project entry is its own explicit table
+    if !projects_tbl.contains_key(project_key.as_str()) {
+        projects_tbl.insert(project_key.as_str(), toml_edit::table().into());
+    }
+    let proj_tbl = projects_tbl
+        .get_mut(project_key.as_str())
+        .and_then(|i| i.as_table_mut())
+        .expect("project table exists");
+    proj_tbl.set_implicit(false);
+    proj_tbl["trust_level"] = toml_edit::value("trusted");
 
     // ensure codex_home exists
     std::fs::create_dir_all(codex_home)?;
@@ -1175,6 +1204,44 @@ disable_response_storage = true
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_set_project_trusted_writes_explicit_tables() -> anyhow::Result<()> {
+        let codex_home = TempDir::new().unwrap();
+        let project_dir = TempDir::new().unwrap();
+
+        // Call the function under test
+        set_project_trusted(codex_home.path(), project_dir.path())?;
+
+        // Read back the generated config.toml
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let contents = std::fs::read_to_string(&config_path)?;
+
+        // Verify it does not use inline tables for the project entry
+        assert!(
+            !contents.contains("{ trust_level"),
+            "config.toml should not use inline tables:\n{}",
+            contents
+        );
+
+        // Verify the explicit table for the project exists
+        let project_key = format!("[projects.\"{}\"]", project_dir.path().to_string_lossy());
+        assert!(
+            contents.contains(&project_key),
+            "missing explicit project table header: expected to find `{}` in:\n{}",
+            project_key,
+            contents
+        );
+
+        // Verify the trust_level entry
+        assert!(
+            contents.contains("trust_level = \"trusted\""),
+            "missing trust_level entry in:\n{}",
+            contents
+        );
 
         Ok(())
     }
