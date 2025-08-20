@@ -926,6 +926,7 @@ name = "codex-tui"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-stream",
  "base64 0.22.1",
  "chrono",
  "clap",

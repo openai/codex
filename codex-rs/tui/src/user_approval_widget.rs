@@ -95,11 +95,11 @@ static PATCH_SELECT_OPTIONS: LazyLock<Vec<SelectOption>> = LazyLock::new(|| {
 });
 
 /// A modal prompting the user to approve or deny the pending request.
-pub(crate) struct UserApprovalWidget<'a> {
+pub(crate) struct UserApprovalWidget {
     approval_request: ApprovalRequest,
     app_event_tx: AppEventSender,
-    confirmation_prompt: Paragraph<'a>,
-    select_options: &'a Vec<SelectOption>,
+    confirmation_prompt: Paragraph<'static>,
+    select_options: &'static Vec<SelectOption>,
 
     /// Currently selected index in *select* mode.
     selected_option: usize,
@@ -137,7 +137,7 @@ fn to_command_display<'a>(
     lines
 }
 
-impl UserApprovalWidget<'_> {
+impl UserApprovalWidget {
     pub(crate) fn new(approval_request: ApprovalRequest, app_event_tx: AppEventSender) -> Self {
         let confirmation_prompt = match &approval_request {
             ApprovalRequest::Exec {
@@ -356,7 +356,7 @@ impl UserApprovalWidget<'_> {
     }
 }
 
-impl WidgetRef for &UserApprovalWidget<'_> {
+impl WidgetRef for &UserApprovalWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let prompt_height = self.get_confirmation_prompt_height(area.width);
         let [prompt_chunk, response_chunk] = Layout::default()
