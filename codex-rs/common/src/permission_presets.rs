@@ -22,30 +22,23 @@ pub struct PermissionPreset {
 pub fn builtin_permission_presets() -> Vec<PermissionPreset> {
     vec![
         PermissionPreset {
-            id: "default-untrusted-read-only",
+            id: "read-only",
             label: "Read Only",
-            description: "Default for untrusted directories: auto-run trusted read-only commands; ask for others. No writes or network",
+            description: "Codex can read files in the workspace and answer questions. Codex requires approval to make edits, run commands, or access network.",
             approval: AskForApproval::OnRequest,
             sandbox: SandboxPolicy::ReadOnly,
         },
         PermissionPreset {
-            id: "trusted-directory",
-            label: "Guarded Write",
-            description: "Run everything in sandbox; model decides when to ask for permission. Network is blocked by default",
+            id: "auto",
+            label: "Auto",
+            description: "Codex can read files, make edits, and run commands in the workspace. Codex requires approval to work outside the workspace or access network.",
             approval: AskForApproval::OnRequest,
             sandbox: SandboxPolicy::new_workspace_write_policy(),
         },
         PermissionPreset {
-            id: "full-auto",
-            label: "Auto Write",
-            description: "Doesn't ask for permission except for network access. Network is blocked by default",
-            approval: AskForApproval::OnFailure,
-            sandbox: SandboxPolicy::new_workspace_write_policy(),
-        },
-        PermissionPreset {
-            id: "yolo-dangerous",
-            label: "YOLO",
-            description: "No approvals; full disk and network access. Extremely risky",
+            id: "full-access",
+            label: "Full Access",
+            description: "Codex can read files, make edits, and run commands with network access, without approval. Exercise caution.",
             approval: AskForApproval::Never,
             sandbox: SandboxPolicy::DangerFullAccess,
         },
