@@ -182,6 +182,17 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    /// Update the animated header shown to the left of the brackets in the
+    /// status indicator (defaults to "Working"). This will update the active
+    /// StatusIndicatorView if present; otherwise, if a live overlay is active,
+    /// it will update that. If neither is present, this call is a no-op.
+    pub(crate) fn update_status_header(&mut self, header: String) {
+        if let Some(view) = self.active_view.as_mut() {
+            view.update_status_header(header.clone());
+            self.request_redraw();
+        }
+    }
+
     pub(crate) fn show_ctrl_c_quit_hint(&mut self) {
         self.ctrl_c_quit_hint = true;
         self.composer

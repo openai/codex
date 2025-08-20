@@ -45,22 +45,6 @@ impl MarkdownStreamCollector {
         self.buffer.push_str(delta);
     }
 
-    /// Insert a paragraph/section separator if one is not already present at the
-    /// end of the buffer. Ensures the next content starts after a blank line.
-    pub fn insert_section_break(&mut self) {
-        if self.buffer.is_empty() {
-            return;
-        }
-        if self.buffer.ends_with("\n\n") {
-            return;
-        }
-        if self.buffer.ends_with('\n') {
-            self.buffer.push('\n');
-        } else {
-            self.buffer.push_str("\n\n");
-        }
-    }
-
     /// Render the full buffer and return only the newly completed logical lines
     /// since the last commit. When the buffer does not end with a newline, the
     /// final rendered line is considered incomplete and is not emitted.
