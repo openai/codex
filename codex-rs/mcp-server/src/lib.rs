@@ -1,6 +1,7 @@
 //! Prototype MCP server.
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
+use std::io::ErrorKind;
 use std::io::Result as IoResult;
 use std::path::PathBuf;
 
@@ -88,7 +89,7 @@ pub async fn run_main(
         Ok(v) => v,
         Err(e) => {
             return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
+                ErrorKind::InvalidInput,
                 format!("error parsing -c overrides: {e}"),
             ));
         }

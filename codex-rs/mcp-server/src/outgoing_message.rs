@@ -3,6 +3,7 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
 use codex_core::protocol::Event;
+use codex_protocol::mcp_protocol::ServerNotification as CodexServerNotification;
 use mcp_types::JSONRPC_VERSION;
 use mcp_types::JSONRPCError;
 use mcp_types::JSONRPCErrorError;
@@ -121,8 +122,12 @@ impl OutgoingMessageSender {
         .await;
     }
 
-    pub(crate) async fn send_notification(&self, notification: OutgoingNotification) {
-        let outgoing_message = OutgoingMessage::Notification(notification);
+    pub(crate) async fn send_notification<N>(&self, notification: N)
+    where
+        N: IntoOutgoingNotification,
+    {
+        let outgoing_notification = notification.into_outgoing_notification();
+        let outgoing_message = OutgoingMessage::Notification(outgoing_notification);
         let _ = self.sender.send(outgoing_message).await;
     }
 
@@ -188,6 +193,29 @@ pub(crate) struct OutgoingNotification {
     pub method: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub params: Option<serde_json::Value>,
+}
+
+/// Trait to allow `send_notification` to accept either a fully-formed
+/// `OutgoingNotification` or a higher-level `ServerNotification` enum.
+pub(crate) trait IntoOutgoingNotification {
+    fn into_outgoing_notification(self) -> OutgoingNotification;
+}
+
+impl IntoOutgoingNotification for OutgoingNotification {
+    fn into_outgoing_notification(self) -> OutgoingNotification {
+        self
+    }
+}
+
+impl IntoOutgoingNotification for CodexServerNotification {
+    fn into_outgoing_notification(self) -> OutgoingNotification {
+        let method = self.to_string();
+        let params = match &self {
+            CodexServerNotification::AuthStatusChange(p) => serde_json::to_value(p).ok(),
+            CodexServerNotification::LoginChatGptComplete(p) => serde_json::to_value(p).ok(),
+        };
+        OutgoingNotification { method, params }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
