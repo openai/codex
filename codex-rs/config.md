@@ -300,7 +300,7 @@ This is reasonable to use if Codex is running in an environment that provides it
 
 Though using this option may also be necessary if you try to use Codex in environments where its native sandboxing mechanisms are unsupported, such as older Linux kernels or on Windows.
 
-## Permissions presets
+## Approval presets
 
 Codex pairs the approval policy and sandbox mode into three easy presets you can select in the TUI (via `/permissions`). These are convenience shortcuts over `approval_policy` and `sandbox_mode`.
 

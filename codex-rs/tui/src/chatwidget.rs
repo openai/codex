@@ -759,7 +759,7 @@ impl ChatWidget<'_> {
                     effort: None,
                     summary: None,
                 }));
-                tx.send(AppEvent::UpdateApprovalPolicy(approval));
+                tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
                 tx.send(AppEvent::UpdateSandboxPolicy(sandbox.clone()));
             })];
             items.push(SelectionItem {

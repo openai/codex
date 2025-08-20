@@ -74,7 +74,7 @@ pub(crate) enum AppEvent {
     UpdateModel(String),
 
     /// Update the current approval policy in the running app and widget.
-    UpdateApprovalPolicy(AskForApproval),
+    UpdateAskForApprovalPolicy(AskForApproval),
 
     /// Update the current sandbox policy in the running app and widget.
     UpdateSandboxPolicy(SandboxPolicy),

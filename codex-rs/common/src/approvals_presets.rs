@@ -16,7 +16,7 @@ pub struct ApprovalsPreset {
     pub sandbox: SandboxPolicy,
 }
 
-/// Built-in list of permission presets that pair approval and sandbox policy.
+/// Built-in list of approval presets that pair approval and sandbox policy.
 ///
 /// Keep this UI-agnostic so it can be reused by both TUI and MCP server.
 pub fn builtin_approvals_presets() -> Vec<ApprovalsPreset> {

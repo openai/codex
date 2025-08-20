@@ -519,7 +519,7 @@ impl App<'_> {
                         widget.set_model(model);
                     }
                 }
-                AppEvent::UpdateApprovalPolicy(policy) => {
+                AppEvent::UpdateAskForApprovalPolicy(policy) => {
                     if let AppState::Chat { widget } = &mut self.app_state {
                         widget.set_approval_policy(policy);
                     }
