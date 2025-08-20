@@ -18,6 +18,7 @@ use codex_tui::Cli as TuiCli;
 use std::path::PathBuf;
 
 use crate::proto::ProtoCli;
+mod concurrent;
 
 /// Codex CLI
 ///
@@ -36,6 +37,22 @@ use crate::proto::ProtoCli;
 struct MultitoolCli {
     #[clap(flatten)]
     pub config_overrides: CliConfigOverrides,
+
+    /// Experimental:Launch a concurrent task in a separate Git worktree using the given prompt.
+    /// Creates worktree under $CODEX_HOME/worktrees/<repo>/codex/<slug> and runs `codex exec` in full-auto mode.
+    #[arg(long = "concurrent", value_name = "PROMPT")]
+    pub concurrent: Option<String>,
+
+    /// When using --concurrent, also attempt to auto-merge the resulting changes
+    /// back into the current working tree as unstaged modifications via
+    /// a 3-way git apply. Disable with --automerge=false.
+    #[arg(long = "automerge", default_value_t = true, action = clap::ArgAction::Set)]
+    pub automerge: bool,
+
+    /// Run the same --concurrent prompt N times in separate worktrees and keep them all.
+    /// Intended to generate multiple candidate solutions without auto-merging.
+    #[arg(long = "best-of-n", value_name = "N", default_value_t = 1)]
+    pub best_of_n: usize,
 
     #[clap(flatten)]
     interactive: TuiCli,
@@ -144,6 +161,87 @@ fn main() -> anyhow::Result<()> {
 
 async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     let cli = MultitoolCli::parse();
+
+    // Handle --concurrent at the root level.
+    if let Some(prompt) = cli.concurrent.clone() {
+        if cli.subcommand.is_some() {
+            eprintln!("--concurrent cannot be used together with a subcommand");
+            std::process::exit(2);
+        }
+        let runs = if cli.best_of_n == 0 { 1 } else { cli.best_of_n };
+        if runs > 1 {
+            println!(
+                "Running best-of-n with {runs} runs; auto-merge will be disabled and worktrees kept."
+            );
+
+            // Launch all runs concurrently and collect results as they finish.
+            let mut join_set = tokio::task::JoinSet::new();
+            for _ in 0..runs {
+                let prompt = prompt.clone();
+                let overrides = cli.config_overrides.clone();
+                let sandbox = codex_linux_sandbox_exe.clone();
+                join_set.spawn(async move {
+                    concurrent::run_concurrent_flow_quiet_no_automerge(prompt, overrides, sandbox)
+                        .await
+                });
+            }
+
+            let mut results: Vec<concurrent::ConcurrentRunResult> = Vec::with_capacity(runs);
+            while let Some(join_result) = join_set.join_next().await {
+                match join_result {
+                    Ok(Ok(res)) => {
+                        println!(
+                            "task finished for branch: {}\n, directory: {}",
+                            res.branch,
+                            res.worktree_dir.display()
+                        );
+                        results.push(res);
+                    }
+                    Ok(Err(err)) => {
+                        eprintln!("concurrent task failed: {err}");
+                    }
+                    Err(join_err) => {
+                        eprintln!("failed to join concurrent task: {join_err}");
+                    }
+                }
+            }
+
+            println!("\nBest-of-n summary:");
+            for r in &results {
+                let status = match r.exec_exit_code {
+                    Some(0) => "OK",
+                    Some(_code) => "FAIL",
+                    None => "OK",
+                };
+                let log = r
+                    .log_file
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "<no log>".to_string());
+                println!(
+                    "[{status}] branch={} worktree={} log={}",
+                    r.branch,
+                    r.worktree_dir.display(),
+                    log
+                );
+            }
+        } else {
+            concurrent::run_concurrent_flow(
+                prompt,
+                cli.config_overrides,
+                codex_linux_sandbox_exe,
+                cli.automerge,
+                false,
+            )
+            .await?;
+        }
+        return Ok(());
+    }
+
+    if cli.best_of_n > 1 {
+        eprintln!("--best-of-n requires --concurrent <PROMPT>");
+        std::process::exit(2);
+    }
 
     match cli.subcommand {
         None => {
