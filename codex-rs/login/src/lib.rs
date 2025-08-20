@@ -188,25 +188,6 @@ struct StdClaims {
     exp: Option<u64>,
 }
 
-fn decode_jwt_exp(jwt: &str) -> Option<chrono::DateTime<chrono::Utc>> {
-    let mut parts = jwt.split('.');
-    let (_h, payload_b64, _s) = match (parts.next(), parts.next(), parts.next()) {
-        (Some(h), Some(p), Some(s)) if !h.is_empty() && !p.is_empty() && !s.is_empty() => (h, p, s),
-        _ => return None,
-    };
-    let payload_bytes = match base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload_b64) {
-        Ok(b) => b,
-        Err(_) => return None,
-    };
-    let claims: StdClaims = match serde_json::from_slice(&payload_bytes) {
-        Ok(c) => c,
-        Err(_) => return None,
-    };
-    claims
-        .exp
-        .and_then(|ts| chrono::DateTime::<chrono::Utc>::from_timestamp(ts as i64, 0))
-}
-
 async fn run_auto_refresh_loop(auth: CodexAuth) {
     // Minimum sleep used when we cannot infer expiry; refresh roughly hourly.
     let default_sleep = Duration::from_secs(55 * 60);
@@ -239,17 +220,12 @@ async fn run_auto_refresh_loop(auth: CodexAuth) {
         // Attempt to refresh with retries
         let mut attempt: u32 = 0;
         let max_attempts: u32 = 5;
-        loop {
-            // Snapshot refresh_token under lock each attempt in case it changes.
-            let refresh_token = match auth.get_current_auth_json() {
-                Some(AuthDotJson {
-                    tokens: Some(tokens),
-                    ..
-                }) => tokens.refresh_token.clone(),
-                _ => {
-                    break;
-                }
-            };
+        while let Some(AuthDotJson {
+            tokens: Some(tokens),
+            ..
+        }) = auth.get_current_auth_json()
+        {
+            let refresh_token = tokens.refresh_token.clone();
 
             match tokio::time::timeout(Duration::from_secs(60), try_refresh_token(refresh_token))
                 .await
@@ -286,6 +262,21 @@ async fn run_auto_refresh_loop(auth: CodexAuth) {
             tokio::time::sleep(delay).await;
         }
     }
+}
+
+fn decode_jwt_exp(jwt: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    let mut parts = jwt.split('.');
+    let (_h, payload_b64, _s) = match (parts.next(), parts.next(), parts.next()) {
+        (Some(h), Some(p), Some(s)) if !h.is_empty() && !p.is_empty() && !s.is_empty() => (h, p, s),
+        _ => return None,
+    };
+    let payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload_b64)
+        .ok()?;
+    let claims: StdClaims = serde_json::from_slice(&payload_bytes).ok()?;
+    claims
+        .exp
+        .and_then(|ts| chrono::DateTime::<chrono::Utc>::from_timestamp(ts as i64, 0))
 }
 
 fn load_auth(
