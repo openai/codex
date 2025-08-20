@@ -63,9 +63,11 @@ pub(crate) fn shimmer_spans(text: &str) -> Vec<Span<'static>> {
 }
 
 fn color_for_level(level: u8) -> Style {
-    if level < 144 {
+    // Tune thresholds so the edges of the shimmer band appear dim
+    // in fallback mode (no true color support).
+    if level < 160 {
         Style::default().add_modifier(Modifier::DIM)
-    } else if level < 208 {
+    } else if level < 224 {
         Style::default()
     } else {
         Style::default().add_modifier(Modifier::BOLD)
