@@ -19,7 +19,7 @@ pub struct ApprovalPreset {
 /// Built-in list of approval presets that pair approval and sandbox policy.
 ///
 /// Keep this UI-agnostic so it can be reused by both TUI and MCP server.
-pub fn builtin_approvals_presets() -> Vec<ApprovalPreset> {
+pub fn builtin_approval_presets() -> Vec<ApprovalPreset> {
     vec![
         ApprovalPreset {
             id: "read-only",
