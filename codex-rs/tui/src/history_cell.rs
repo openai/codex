@@ -168,7 +168,8 @@ pub(crate) fn new_session_info(
             Line::from("".dim()),
             Line::from(format!(" /init - {}", SlashCommand::Init.description()).dim()),
             Line::from(format!(" /status - {}", SlashCommand::Status.description()).dim()),
-            Line::from(format!(" /diff - {}", SlashCommand::Diff.description()).dim()),
+            Line::from(format!(" /approvals - {}", SlashCommand::Approvals.description()).dim()),
+            Line::from(format!(" /model - {}", SlashCommand::Model.description()).dim()),
             Line::from("".dim()),
         ];
         PlainHistoryCell { lines }
