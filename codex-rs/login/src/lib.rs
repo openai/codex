@@ -16,9 +16,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
-use tracing::info;
-use tracing::trace;
-use tracing::warn;
+// removed tracing-based logs
 
 pub use crate::server::LoginServer;
 pub use crate::server::ServerOptions;
@@ -214,7 +212,7 @@ async fn run_auto_refresh_loop(auth: CodexAuth) {
     let default_sleep = Duration::from_secs(55 * 60);
     loop {
         // Determine next refresh time from access_token exp - 5 minutes.
-        let (maybe_exp, has_tokens);
+        let maybe_exp;
         {
             let auth_json = auth.get_current_auth_json();
             if let Some(AuthDotJson {
@@ -222,11 +220,9 @@ async fn run_auto_refresh_loop(auth: CodexAuth) {
                 ..
             }) = auth_json
             {
-                has_tokens = true;
                 let exp = decode_jwt_exp(&tokens.access_token);
                 maybe_exp = exp.map(|dt| dt - chrono::Duration::minutes(5));
             } else {
-                has_tokens = false;
                 maybe_exp = None;
             }
         }
@@ -237,19 +233,6 @@ async fn run_auto_refresh_loop(auth: CodexAuth) {
             Some(_) => Duration::from_secs(0),
             None => default_sleep,
         };
-
-        if !has_tokens {
-            trace!(
-                "token auto-refresh: no tokens yet; sleeping for {:?}",
-                sleep_for
-            );
-        } else if let Some(exp_at) = maybe_exp.map(|d| d + chrono::Duration::minutes(5)) {
-            trace!(
-                "token auto-refresh: scheduling refresh in {:?} (exp at {})",
-                sleep_for,
-                exp_at.to_rfc3339()
-            );
-        }
 
         tokio::time::sleep(sleep_for).await;
 
@@ -264,7 +247,6 @@ async fn run_auto_refresh_loop(auth: CodexAuth) {
                     ..
                 }) => tokens.refresh_token.clone(),
                 _ => {
-                    trace!("token auto-refresh: skipping refresh (no refresh_token)");
                     break;
                 }
             };
@@ -286,33 +268,21 @@ async fn run_auto_refresh_loop(auth: CodexAuth) {
                             if let Ok(mut guard) = auth.auth_dot_json.lock() {
                                 *guard = Some(updated);
                             }
-                            info!("token auto-refresh: refresh succeeded");
                             break;
                         }
-                        Err(e) => {
-                            warn!("token auto-refresh: failed to persist tokens: {e}");
-                        }
+                        Err(_e) => {}
                     }
                 }
-                Ok(Err(e)) => {
-                    warn!("token auto-refresh: refresh error: {e}");
-                }
-                Err(_) => {
-                    warn!("token auto-refresh: refresh timed out");
-                }
+                Ok(Err(_e)) => {}
+                Err(_) => {}
             }
 
             attempt += 1;
             if attempt >= max_attempts {
-                warn!("token auto-refresh: giving up after {attempt} attempts");
                 break;
             }
             let backoff_secs = 5u64.saturating_mul(1u64 << (attempt - 1));
             let delay = Duration::from_secs(backoff_secs);
-            trace!(
-                "token auto-refresh: retrying in {:?} (attempt {attempt}/{max_attempts})",
-                delay
-            );
             tokio::time::sleep(delay).await;
         }
     }
