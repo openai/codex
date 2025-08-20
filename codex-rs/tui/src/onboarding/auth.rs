@@ -29,6 +29,8 @@ use std::path::PathBuf;
 
 use super::onboarding_screen::StepState;
 // no additional imports
+use codex_login::logout;
+const PRICING_URL: &str = "https://openai.com/chatgpt/pricing";
 
 #[derive(Debug)]
 pub(crate) enum SignInState {
@@ -36,8 +38,16 @@ pub(crate) enum SignInState {
     ChatGptContinueInBrowser(ContinueInBrowserState),
     ChatGptSuccessMessage,
     ChatGptSuccess,
+    FreePlan,
     EnvVarMissing,
     EnvVarFound,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FreePlanSelection {
+    Upgrade,
+    Logout,
+    Exit,
 }
 
 #[derive(Debug)]
@@ -59,12 +69,30 @@ impl Drop for ContinueInBrowserState {
 impl KeyboardHandler for AuthModeWidget {
     fn handle_key_event(&mut self, key_event: KeyEvent) {
         match key_event.code {
-            KeyCode::Up | KeyCode::Char('k') => {
-                self.highlighted_mode = AuthMode::ChatGPT;
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.highlighted_mode = AuthMode::ApiKey;
-            }
+            KeyCode::Up | KeyCode::Char('k') => match self.sign_in_state {
+                SignInState::FreePlan => {
+                    self.free_plan_selected = match self.free_plan_selected {
+                        FreePlanSelection::Upgrade => FreePlanSelection::Exit,
+                        FreePlanSelection::Logout => FreePlanSelection::Upgrade,
+                        FreePlanSelection::Exit => FreePlanSelection::Logout,
+                    };
+                }
+                _ => {
+                    self.highlighted_mode = AuthMode::ChatGPT;
+                }
+            },
+            KeyCode::Down | KeyCode::Char('j') => match self.sign_in_state {
+                SignInState::FreePlan => {
+                    self.free_plan_selected = match self.free_plan_selected {
+                        FreePlanSelection::Upgrade => FreePlanSelection::Logout,
+                        FreePlanSelection::Logout => FreePlanSelection::Exit,
+                        FreePlanSelection::Exit => FreePlanSelection::Upgrade,
+                    };
+                }
+                _ => {
+                    self.highlighted_mode = AuthMode::ApiKey;
+                }
+            },
             KeyCode::Char('1') => {
                 self.start_chatgpt_login();
             }
@@ -78,6 +106,22 @@ impl KeyboardHandler for AuthModeWidget {
                 SignInState::ChatGptSuccessMessage => {
                     self.sign_in_state = SignInState::ChatGptSuccess
                 }
+                SignInState::FreePlan => match self.free_plan_selected {
+                    FreePlanSelection::Upgrade => {
+                        let _ = webbrowser::open(PRICING_URL);
+                        let _ = logout(&self.codex_home);
+                        self.login_status = LoginStatus::NotAuthenticated;
+                        self.event_tx.send(AppEvent::ExitRequest);
+                    }
+                    FreePlanSelection::Logout => {
+                        let _ = logout(&self.codex_home);
+                        self.login_status = LoginStatus::NotAuthenticated;
+                        self.sign_in_state = SignInState::PickMode;
+                    }
+                    FreePlanSelection::Exit => {
+                        self.event_tx.send(AppEvent::ExitRequest);
+                    }
+                },
                 _ => {}
             },
             KeyCode::Esc => {
@@ -99,6 +143,7 @@ pub(crate) struct AuthModeWidget {
     pub codex_home: PathBuf,
     pub login_status: LoginStatus,
     pub preferred_auth_method: AuthMode,
+    pub free_plan_selected: FreePlanSelection,
 }
 
 impl AuthModeWidget {
@@ -123,8 +168,8 @@ impl AuthModeWidget {
 
         // If the user is already authenticated but the method differs from their
         // preferred auth method, show a brief explanation.
-        if let LoginStatus::AuthMode(current) = self.login_status
-            && current != self.preferred_auth_method
+        if let LoginStatus::Auth(ref current) = self.login_status
+            && current.mode != self.preferred_auth_method
         {
             let to_label = |mode: AuthMode| match mode {
                 AuthMode::ApiKey => "API key",
@@ -132,7 +177,7 @@ impl AuthModeWidget {
             };
             let msg = format!(
                 "  You’re currently using {} while your preferred method is {}.",
-                to_label(current),
+                to_label(current.mode),
                 to_label(self.preferred_auth_method)
             );
             lines.push(Line::from(msg).style(Style::default()));
@@ -167,11 +212,9 @@ impl AuthModeWidget {
 
             vec![line1, line2]
         };
-        let chatgpt_label = if matches!(self.login_status, LoginStatus::AuthMode(AuthMode::ChatGPT))
-        {
-            "Continue using ChatGPT"
-        } else {
-            "Sign in with ChatGPT"
+        let chatgpt_label = match &self.login_status {
+            LoginStatus::Auth(auth) if auth.mode == AuthMode::ChatGPT => "Continue using ChatGPT",
+            _ => "Sign in with ChatGPT",
         };
 
         lines.extend(create_mode_item(
@@ -180,11 +223,9 @@ impl AuthModeWidget {
             chatgpt_label,
             "Usage included with Plus, Pro, and Team plans",
         ));
-        let api_key_label = if matches!(self.login_status, LoginStatus::AuthMode(AuthMode::ApiKey))
-        {
-            "Continue using API key"
-        } else {
-            "Provide your own API key"
+        let api_key_label = match &self.login_status {
+            LoginStatus::Auth(auth) if auth.mode == AuthMode::ApiKey => "Continue using API key",
+            _ => "Provide your own API key",
         };
         lines.extend(create_mode_item(
             1,
@@ -287,6 +328,53 @@ impl AuthModeWidget {
             .render(area, buf);
     }
 
+    fn render_free_plan(&self, area: Rect, buf: &mut Buffer) {
+        let mut lines: Vec<Line> = vec![
+            Line::from("> You're currently signed in using a free ChatGPT account"),
+            Line::from(""),
+            Line::from(
+                "  To use Codex with your ChatGPT plan, upgrade to a Pro, Plus, and Team account.",
+            ),
+            Line::from(""),
+            Line::from(vec![
+                Span::raw("  "),
+                "\u{1b}]8;;https://openai.com/chatgpt/pricing\u{7}https://openai.com/chatgpt/pricing\u{1b}]8;;\u{7}"
+                    .underlined(),
+            ]),
+            Line::from(""),
+        ];
+
+        let option_line = |idx: usize, label: &str, selected: bool| {
+            if selected {
+                Line::from(format!("> {idx}. {label}")).fg(Color::Cyan)
+            } else {
+                Line::from(format!("  {idx}. {label}"))
+            }
+        };
+
+        lines.push(option_line(
+            1,
+            "Upgrade plan",
+            matches!(self.free_plan_selected, FreePlanSelection::Upgrade),
+        ));
+        lines.push(option_line(
+            2,
+            "Log out to use a different account",
+            matches!(self.free_plan_selected, FreePlanSelection::Logout),
+        ));
+        lines.push(option_line(
+            3,
+            "Exit",
+            matches!(self.free_plan_selected, FreePlanSelection::Exit),
+        ));
+        lines.push(Line::from(""));
+        lines.push(Line::from("  Press Enter to confirm").add_modifier(Modifier::DIM));
+
+        Paragraph::new(lines)
+            .wrap(Wrap { trim: false })
+            .render(area, buf);
+    }
+
     fn render_env_var_found(&self, area: Rect, buf: &mut Buffer) {
         let lines = vec![Line::from("✓ Using OPENAI_API_KEY").fg(Color::Green)];
 
@@ -314,8 +402,14 @@ impl AuthModeWidget {
     fn start_chatgpt_login(&mut self) {
         // If we're already authenticated with ChatGPT, don't start a new login –
         // just proceed to the success message flow.
-        if matches!(self.login_status, LoginStatus::AuthMode(AuthMode::ChatGPT)) {
-            self.sign_in_state = SignInState::ChatGptSuccess;
+        if let LoginStatus::Auth(auth) = &self.login_status
+            && auth.mode == AuthMode::ChatGPT
+        {
+            if auth.get_plan_type().as_deref() == Some("free") {
+                self.sign_in_state = SignInState::FreePlan;
+            } else {
+                self.sign_in_state = SignInState::ChatGptSuccess;
+            }
             self.event_tx.send(AppEvent::RequestRedraw);
             return;
         }
@@ -348,14 +442,16 @@ impl AuthModeWidget {
         }
     }
 
-    /// TODO: Read/write from the correct hierarchy config overrides + auth json + OPENAI_API_KEY.
     fn verify_api_key(&mut self) {
-        if matches!(self.login_status, LoginStatus::AuthMode(AuthMode::ApiKey)) {
-            // We already have an API key configured (e.g., from auth.json or env),
-            // so mark this step complete immediately.
-            self.sign_in_state = SignInState::EnvVarFound;
-        } else {
-            self.sign_in_state = SignInState::EnvVarMissing;
+        match &self.login_status {
+            LoginStatus::Auth(auth) if auth.mode == AuthMode::ApiKey => {
+                // We already have an API key configured (e.g., from auth.json or env),
+                // so mark this step complete immediately.
+                self.sign_in_state = SignInState::EnvVarFound;
+            }
+            _ => {
+                self.sign_in_state = SignInState::EnvVarMissing;
+            }
         }
 
         self.event_tx.send(AppEvent::RequestRedraw);
@@ -383,7 +479,8 @@ impl StepStateProvider for AuthModeWidget {
             SignInState::PickMode
             | SignInState::EnvVarMissing
             | SignInState::ChatGptContinueInBrowser(_)
-            | SignInState::ChatGptSuccessMessage => StepState::InProgress,
+            | SignInState::ChatGptSuccessMessage
+            | SignInState::FreePlan => StepState::InProgress,
             SignInState::ChatGptSuccess | SignInState::EnvVarFound => StepState::Complete,
         }
     }
@@ -403,6 +500,9 @@ impl WidgetRef for AuthModeWidget {
             }
             SignInState::ChatGptSuccess => {
                 self.render_chatgpt_success(area, buf);
+            }
+            SignInState::FreePlan => {
+                self.render_free_plan(area, buf);
             }
             SignInState::EnvVarMissing => {
                 self.render_env_var_missing(area, buf);

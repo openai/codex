@@ -12,7 +12,6 @@ use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
-use codex_login::AuthMode;
 use codex_login::CodexAuth;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
@@ -297,9 +296,9 @@ fn restore() {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum LoginStatus {
-    AuthMode(AuthMode),
+    Auth(CodexAuth),
     NotAuthenticated,
 }
 
@@ -309,7 +308,7 @@ fn get_login_status(config: &Config) -> LoginStatus {
         // to refresh the token. Block on it.
         let codex_home = config.codex_home.clone();
         match CodexAuth::from_codex_home(&codex_home, config.preferred_auth_method) {
-            Ok(Some(auth)) => LoginStatus::AuthMode(auth.mode),
+            Ok(Some(auth)) => LoginStatus::Auth(auth),
             Ok(None) => LoginStatus::NotAuthenticated,
             Err(err) => {
                 error!("Failed to read auth.json: {err}");

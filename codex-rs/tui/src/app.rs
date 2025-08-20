@@ -139,10 +139,11 @@ impl App<'_> {
         }
 
         let login_status = get_login_status(&config);
+        tracing::info!("login_status1: {:?}", login_status);
         let should_show_onboarding =
-            should_show_onboarding(login_status, &config, show_trust_screen);
+            should_show_onboarding(&login_status, &config, show_trust_screen);
         let app_state = if should_show_onboarding {
-            let show_login_screen = should_show_login_screen(login_status, &config);
+            let show_login_screen = should_show_login_screen(&login_status, &config);
             let chat_widget_args = ChatWidgetArgs {
                 config: config.clone(),
                 initial_prompt,
@@ -640,7 +641,7 @@ impl App<'_> {
 }
 
 fn should_show_onboarding(
-    login_status: LoginStatus,
+    login_status: &LoginStatus,
     config: &Config,
     show_trust_screen: bool,
 ) -> bool {
@@ -648,10 +649,21 @@ fn should_show_onboarding(
         return true;
     }
 
+    if is_free_plan(login_status) {
+        return true;
+    }
+
     should_show_login_screen(login_status, config)
 }
 
-fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool {
+fn is_free_plan(login_status: &LoginStatus) -> bool {
+    match login_status {
+        LoginStatus::Auth(auth) => auth.get_plan_type().as_deref() == Some("free"),
+        LoginStatus::NotAuthenticated => false,
+    }
+}
+
+fn should_show_login_screen(login_status: &LoginStatus, config: &Config) -> bool {
     // Only show the login screen for providers that actually require OpenAI auth
     // (OpenAI or equivalents). For OSS/other providers, skip login entirely.
     if !config.model_provider.requires_openai_auth {
@@ -660,7 +672,9 @@ fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool 
 
     match login_status {
         LoginStatus::NotAuthenticated => true,
-        LoginStatus::AuthMode(method) => method != config.preferred_auth_method,
+        LoginStatus::Auth(auth) => {
+            auth.mode != config.preferred_auth_method || is_free_plan(login_status)
+        }
     }
 }
 
@@ -670,6 +684,7 @@ mod tests {
     use codex_core::config::ConfigOverrides;
     use codex_core::config::ConfigToml;
     use codex_login::AuthMode;
+    use codex_login::CodexAuth;
 
     fn make_config(preferred: AuthMode) -> Config {
         let mut cfg = Config::load_from_base_config_with_overrides(
@@ -686,7 +701,7 @@ mod tests {
     fn shows_login_when_not_authenticated() {
         let cfg = make_config(AuthMode::ChatGPT);
         assert!(should_show_login_screen(
-            LoginStatus::NotAuthenticated,
+            &LoginStatus::NotAuthenticated,
             &cfg
         ));
     }
@@ -695,7 +710,7 @@ mod tests {
     fn shows_login_when_api_key_but_prefers_chatgpt() {
         let cfg = make_config(AuthMode::ChatGPT);
         assert!(should_show_login_screen(
-            LoginStatus::AuthMode(AuthMode::ApiKey),
+            &LoginStatus::Auth(CodexAuth::from_api_key("sk-test")),
             &cfg
         ))
     }
@@ -704,7 +719,7 @@ mod tests {
     fn hides_login_when_api_key_and_prefers_api_key() {
         let cfg = make_config(AuthMode::ApiKey);
         assert!(!should_show_login_screen(
-            LoginStatus::AuthMode(AuthMode::ApiKey),
+            &LoginStatus::Auth(CodexAuth::from_api_key("sk-test")),
             &cfg
         ))
     }
@@ -713,7 +728,7 @@ mod tests {
     fn hides_login_when_chatgpt_and_prefers_chatgpt() {
         let cfg = make_config(AuthMode::ChatGPT);
         assert!(!should_show_login_screen(
-            LoginStatus::AuthMode(AuthMode::ChatGPT),
+            &LoginStatus::Auth(CodexAuth::create_dummy_chatgpt_auth_for_testing()),
             &cfg
         ))
     }

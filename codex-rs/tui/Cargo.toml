@@ -33,18 +33,19 @@ codex-common = { path = "../common", features = [
     "sandbox_summary",
 ] }
 codex-core = { path = "../core" }
-codex-protocol = { path = "../protocol" }
 codex-file-search = { path = "../file-search" }
 codex-login = { path = "../login" }
 codex-ollama = { path = "../ollama" }
+codex-protocol = { path = "../protocol" }
 color-eyre = "0.6.3"
 crossterm = { version = "0.28.1", features = ["bracketed-paste"] }
 diffy = "0.4.2"
 image = { version = "^0.25.6", default-features = false, features = ["jpeg"] }
 lazy_static = "1"
-once_cell = "1"
 mcp-types = { path = "../mcp-types" }
+once_cell = "1"
 path-clean = "1.0.1"
+rand = "0.9"
 ratatui = { version = "0.29.0", features = [
     "scrolling-regions",
     "unstable-rendered-line-info",
@@ -75,7 +76,7 @@ tui-markdown = "0.3.3"
 unicode-segmentation = "1.12.0"
 unicode-width = "0.1"
 uuid = "1"
-rand = "0.9"
+webbrowser = "1"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

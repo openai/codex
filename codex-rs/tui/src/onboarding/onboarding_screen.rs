@@ -18,6 +18,7 @@ use crate::onboarding::continue_to_chat::ContinueToChatWidget;
 use crate::onboarding::trust_directory::TrustDirectorySelection;
 use crate::onboarding::trust_directory::TrustDirectoryWidget;
 use crate::onboarding::welcome::WelcomeWidget;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -73,6 +74,8 @@ impl OnboardingScreen {
         let mut steps: Vec<Step> = vec![Step::Welcome(WelcomeWidget {
             is_logged_in: !matches!(login_status, LoginStatus::NotAuthenticated),
         })];
+        //
+
         if show_login_screen {
             steps.push(Step::Auth(AuthModeWidget {
                 event_tx: event_tx.clone(),
@@ -82,6 +85,7 @@ impl OnboardingScreen {
                 codex_home: codex_home.clone(),
                 login_status,
                 preferred_auth_method: chat_widget_args.config.preferred_auth_method,
+                free_plan_selected: crate::onboarding::auth::FreePlanSelection::Upgrade,
             }))
         }
         let is_git_repo = is_inside_git_repo(&cwd);
@@ -118,16 +122,30 @@ impl OnboardingScreen {
         if let Some(Step::Auth(state)) = current_step {
             match result {
                 Ok(()) => {
-                    state.sign_in_state = SignInState::ChatGptSuccessMessage;
-                    self.event_tx.send(AppEvent::RequestRedraw);
-                    let tx1 = self.event_tx.clone();
-                    let tx2 = self.event_tx.clone();
-                    std::thread::spawn(move || {
-                        std::thread::sleep(std::time::Duration::from_millis(150));
-                        tx1.send(AppEvent::RequestRedraw);
-                        std::thread::sleep(std::time::Duration::from_millis(200));
-                        tx2.send(AppEvent::RequestRedraw);
-                    });
+                    // After login, if the plan is free, show the Free Plan state inside Auth.
+                    let is_free = match codex_login::CodexAuth::from_codex_home(
+                        &state.codex_home,
+                        state.preferred_auth_method,
+                    ) {
+                        Ok(Some(auth)) => auth.get_plan_type().as_deref() == Some("free"),
+                        _ => false,
+                    };
+
+                    if is_free {
+                        state.sign_in_state = SignInState::FreePlan;
+                        self.event_tx.send(AppEvent::RequestRedraw);
+                    } else {
+                        state.sign_in_state = SignInState::ChatGptSuccessMessage;
+                        self.event_tx.send(AppEvent::RequestRedraw);
+                        let tx1 = self.event_tx.clone();
+                        let tx2 = self.event_tx.clone();
+                        std::thread::spawn(move || {
+                            std::thread::sleep(std::time::Duration::from_millis(150));
+                            tx1.send(AppEvent::RequestRedraw);
+                            std::thread::sleep(std::time::Duration::from_millis(200));
+                            tx2.send(AppEvent::RequestRedraw);
+                        });
+                    }
                 }
                 Err(e) => {
                     state.sign_in_state = SignInState::PickMode;
