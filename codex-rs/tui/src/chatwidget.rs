@@ -771,7 +771,7 @@ impl ChatWidget<'_> {
         }
 
         self.bottom_pane.show_selection_view(
-            "Select Approvals Mode".to_string(),
+            "Select Approval Mode".to_string(),
             None,
             Some("Press Enter to confirm or Esc to go back".to_string()),
             items,
