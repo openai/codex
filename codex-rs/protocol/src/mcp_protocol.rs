@@ -14,6 +14,7 @@ use crate::protocol::TurnAbortReason;
 use mcp_types::RequestId;
 use serde::Deserialize;
 use serde::Serialize;
+use strum_macros::Display;
 use ts_rs::TS;
 use uuid::Uuid;
 
@@ -168,29 +169,6 @@ pub struct LoginChatGptResponse {
 pub struct GitDiffToRemoteResponse {
     pub sha: GitSha,
     pub diff: String,
-}
-
-// Event name for notifying client of login completion or failure.
-pub const LOGIN_CHATGPT_COMPLETE_EVENT: &str = "codex/event/login_chatgpt_complete";
-
-// Event name for notifying client of an auth status change.
-pub const AUTH_STATUS_CHANGE_EVENT: &str = "codex/event/auth_status_change";
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct LoginChatGptCompleteNotification {
-    pub login_id: Uuid,
-    pub success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct AuthStatusChangeNotification {
-    /// Current authentication method; omitted if signed out.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub auth_method: Option<AuthMethod>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
@@ -363,6 +341,34 @@ pub struct ExecCommandApprovalResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 pub struct ApplyPatchApprovalResponse {
     pub decision: ReviewDecision,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginChatGptCompleteNotification {
+    pub login_id: Uuid,
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthStatusChangeNotification {
+    /// Current authentication method; omitted if signed out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_method: Option<AuthMethod>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS, Display)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum ServerNotification {
+    /// Authentication status changed
+    AuthStatusChange(AuthStatusChangeNotification),
+
+    /// ChatGPT login flow completed
+    LoginChatGptComplete(LoginChatGptCompleteNotification),
 }
 
 #[cfg(test)]

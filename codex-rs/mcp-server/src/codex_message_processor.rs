@@ -36,7 +36,6 @@ use codex_login::ShutdownHandle;
 use codex_login::logout;
 use codex_login::run_login_server;
 use codex_protocol::mcp_protocol::APPLY_PATCH_APPROVAL_METHOD;
-use codex_protocol::mcp_protocol::AUTH_STATUS_CHANGE_EVENT;
 use codex_protocol::mcp_protocol::AddConversationListenerParams;
 use codex_protocol::mcp_protocol::AddConversationSubscriptionResponse;
 use codex_protocol::mcp_protocol::ApplyPatchApprovalParams;
@@ -50,7 +49,6 @@ use codex_protocol::mcp_protocol::ExecCommandApprovalResponse;
 use codex_protocol::mcp_protocol::InputItem as WireInputItem;
 use codex_protocol::mcp_protocol::InterruptConversationParams;
 use codex_protocol::mcp_protocol::InterruptConversationResponse;
-use codex_protocol::mcp_protocol::LOGIN_CHATGPT_COMPLETE_EVENT;
 use codex_protocol::mcp_protocol::LoginChatGptCompleteNotification;
 use codex_protocol::mcp_protocol::LoginChatGptResponse;
 use codex_protocol::mcp_protocol::NewConversationParams;
@@ -61,7 +59,9 @@ use codex_protocol::mcp_protocol::SendUserMessageParams;
 use codex_protocol::mcp_protocol::SendUserMessageResponse;
 use codex_protocol::mcp_protocol::SendUserTurnParams;
 use codex_protocol::mcp_protocol::SendUserTurnResponse;
+use codex_protocol::mcp_protocol::ServerNotification;
 use codex_protocol::protocol::AuthMethod;
+use serde::Serialize;
 use toml::Value as TomlValue; // for clarity where overrides stored
 
 // Duration before a ChatGPT login attempt is abandoned.
@@ -216,31 +216,29 @@ impl CodexMessageProcessor {
                             (false, Some("Login timed out".to_string()))
                         }
                     };
-                    let notification = LoginChatGptCompleteNotification {
+                    let payload = LoginChatGptCompleteNotification {
                         login_id,
                         success,
                         error: error_msg,
                     };
-                    let params = serde_json::to_value(&notification).ok();
-                    outgoing_clone
-                        .send_notification(OutgoingNotification {
-                            method: LOGIN_CHATGPT_COMPLETE_EVENT.to_string(),
-                            params,
-                        })
-                        .await;
+                    send_server_notification(
+                        &outgoing_clone,
+                        payload,
+                        ServerNotification::LoginChatGptComplete,
+                    )
+                    .await;
 
                     // Send an auth status change notification.
                     if success {
-                        let notification = AuthStatusChangeNotification {
+                        let payload = AuthStatusChangeNotification {
                             auth_method: Some(AuthMethod::ChatGPT),
                         };
-                        let params = serde_json::to_value(&notification).ok();
-                        outgoing_clone
-                            .send_notification(OutgoingNotification {
-                                method: AUTH_STATUS_CHANGE_EVENT.to_string(),
-                                params,
-                            })
-                            .await;
+                        send_server_notification(
+                            &outgoing_clone,
+                            payload,
+                            ServerNotification::AuthStatusChange,
+                        )
+                        .await;
                     }
 
                     // Clear the active login if it matches this attempt. It may have been replaced or cancelled.
@@ -334,15 +332,13 @@ impl CodexMessageProcessor {
             .await;
 
         // Send auth status change notification.
-        self.outgoing
-            .send_notification(OutgoingNotification {
-                method: AUTH_STATUS_CHANGE_EVENT.to_string(),
-                params: Some(
-                    serde_json::to_value(&AuthStatusChangeNotification { auth_method: None })
-                        .unwrap_or_default(),
-                ),
-            })
-            .await;
+        let payload = AuthStatusChangeNotification { auth_method: None };
+        send_server_notification(
+            &self.outgoing,
+            payload,
+            ServerNotification::AuthStatusChange,
+        )
+        .await;
     }
 
     async fn get_auth_status(&self, request_id: RequestId) {
@@ -866,4 +862,21 @@ async fn on_exec_approval_response(
     {
         error!("failed to submit ExecApproval: {err}");
     }
+}
+
+/// Helper to serialize a notification payload, wrap it in a `ServerNotification`,
+/// and send it over the provided `OutgoingMessageSender`.
+async fn send_server_notification<P, F>(outgoing: &OutgoingMessageSender, payload: P, wrap: F)
+where
+    P: Serialize,
+    F: FnOnce(P) -> ServerNotification,
+{
+    let params = serde_json::to_value(&payload).ok();
+    let notification = wrap(payload);
+    outgoing
+        .send_notification(OutgoingNotification {
+            method: notification.to_string(),
+            params,
+        })
+        .await;
 }
