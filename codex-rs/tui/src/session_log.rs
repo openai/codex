@@ -132,13 +132,11 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
         AppEvent::CodexEvent(ev) => {
             write_record("to_tui", "codex_event", ev);
         }
-
-        AppEvent::DispatchCommand(cmd) => {
+        AppEvent::NewSession => {
             let value = json!({
                 "ts": now_ts(),
                 "dir": "to_tui",
-                "kind": "slash_command",
-                "command": format!("{:?}", cmd),
+                "kind": "new_session",
             });
             LOGGER.write_json_line(value);
         }
