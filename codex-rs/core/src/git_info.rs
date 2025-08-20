@@ -26,8 +26,17 @@ pub struct GitInfo {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct GitSha(String);
+
+impl GitSha {
+    fn new(sha: &str) -> Self {
+        Self(sha.to_string())
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct GitDiffToRemote {
-    pub sha: String,
+    pub sha: GitSha,
     pub diff: String,
 }
 
@@ -282,9 +291,9 @@ async fn branch_remote_and_distance(
     cwd: &Path,
     branch: &str,
     remotes: &[String],
-) -> Option<(Option<String>, usize)> {
+) -> Option<(Option<GitSha>, usize)> {
     // Try to find the first remote ref that exists for this branch (origin prioritized by caller).
-    let mut found_remote_sha: Option<String> = None;
+    let mut found_remote_sha: Option<GitSha> = None;
     let mut found_remote_ref: Option<String> = None;
     for remote in remotes {
         let remote_ref = format!("refs/remotes/{remote}/{branch}");
@@ -303,7 +312,7 @@ async fn branch_remote_and_distance(
             // Mirror previous behavior and skip the entire branch on parse failure.
             return None;
         };
-        found_remote_sha = Some(sha.trim().to_string());
+        found_remote_sha = Some(GitSha::new(sha.trim()));
         found_remote_ref = Some(remote_ref);
         break;
     }
@@ -357,9 +366,9 @@ async fn branch_remote_and_distance(
 }
 
 // Finds the closest sha that exist on any of branches and also exists on any of the remotes.
-async fn find_closest_sha(cwd: &Path, branches: &[String], remotes: &[String]) -> Option<String> {
+async fn find_closest_sha(cwd: &Path, branches: &[String], remotes: &[String]) -> Option<GitSha> {
     // A sha and how many commits away from HEAD it is.
-    let mut closest_sha: Option<(String, usize)> = None;
+    let mut closest_sha: Option<(GitSha, usize)> = None;
     for branch in branches {
         let Some((maybe_remote_sha, distance)) =
             branch_remote_and_distance(cwd, branch, remotes).await
@@ -381,8 +390,8 @@ async fn find_closest_sha(cwd: &Path, branches: &[String], remotes: &[String]) -
     closest_sha.map(|(sha, _)| sha)
 }
 
-async fn diff_against_sha(cwd: &Path, sha: &str) -> Option<String> {
-    let output = run_git_command_with_timeout(&["diff", sha], cwd).await?;
+async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
+    let output = run_git_command_with_timeout(&["diff", &sha.0], cwd).await?;
     // 0 is success and no diff.
     // 1 is success but there is a diff.
     let exit_ok = output.status.code().is_some_and(|c| c == 0 || c == 1);
