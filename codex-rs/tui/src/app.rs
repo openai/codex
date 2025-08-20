@@ -124,6 +124,7 @@ impl App {
                     },
                 )?;
             }
+            #[cfg(unix)]
             TuiEvent::ResumeFromSuspend => {
                 let cursor_pos = tui.terminal.get_cursor_position()?;
                 tui.terminal
