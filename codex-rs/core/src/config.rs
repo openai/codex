@@ -1273,8 +1273,9 @@ disable_response_storage = true
         // Seed config.toml with an inline project entry under [projects]
         let config_path = codex_home.path().join(CONFIG_TOML_FILE);
         let path_str = project_dir.path().to_string_lossy();
+        // Use a literal-quoted key so Windows backslashes don't require escaping
         let initial = format!(
-            "[projects]\n\"{}\" = {{ trust_level = \"untrusted\" }}\n",
+            "[projects]\n'{}' = {{ trust_level = \"untrusted\" }}\n",
             path_str
         );
         std::fs::create_dir_all(codex_home.path())?;
