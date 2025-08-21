@@ -328,7 +328,7 @@ impl UserApprovalWidget {
             }
         }
         lines.push(Line::from(""));
-        self.app_event_tx.send(AppEvent::InsertHistory(lines));
+        self.app_event_tx.send(AppEvent::InsertHistoryLines(lines));
 
         let op = match &self.approval_request {
             ApprovalRequest::Exec { id, .. } => Op::ExecApproval {

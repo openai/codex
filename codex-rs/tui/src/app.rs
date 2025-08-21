@@ -140,9 +140,16 @@ impl App {
 
     fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
         match event {
-            AppEvent::InsertHistory(lines) => {
+            AppEvent::InsertHistoryLines(lines) => {
                 self.transcript_lines.extend(lines.clone());
                 tui.insert_history_lines(lines);
+            }
+            AppEvent::InsertHistoryCell(cell) => {
+                self.transcript_lines.extend(cell.transcript_lines());
+                let display = cell.display_lines();
+                if !display.is_empty() {
+                    tui.insert_history_lines(display);
+                }
             }
             AppEvent::StartCommitAnimation => {
                 if self

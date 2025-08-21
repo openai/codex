@@ -17,7 +17,7 @@ pub(crate) struct AppEventHistorySink(pub(crate) crate::app_event_sender::AppEve
 impl HistorySink for AppEventHistorySink {
     fn insert_history(&self, lines: Vec<Line<'static>>) {
         self.0
-            .send(crate::app_event::AppEvent::InsertHistory(lines))
+            .send(crate::app_event::AppEvent::InsertHistoryLines(lines))
     }
     fn start_commit_animation(&self) {
         self.0
