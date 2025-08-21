@@ -19,6 +19,7 @@ use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
+use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -821,6 +822,25 @@ fn plan_update_renders_history_cell() {
     assert!(blob.contains("Explore codebase"));
     assert!(blob.contains("Implement feature"));
     assert!(blob.contains("Write tests"));
+}
+
+#[test]
+fn stream_error_is_rendered_to_history() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+    let msg = "stream error: stream disconnected before completion: idle timeout waiting for SSE; retrying 1/5 in 211ms…";
+    chat.handle_codex_event(Event {
+        id: "sub-1".into(),
+        msg: EventMsg::StreamError(StreamErrorEvent {
+            message: msg.to_string(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(!cells.is_empty(), "expected a history cell for StreamError");
+    let blob = lines_to_single_string(cells.last().unwrap());
+    assert!(blob.contains("⚠ "));
+    assert!(blob.contains("stream error:"));
+    assert!(blob.contains("idle timeout waiting for SSE"));
 }
 
 #[test]

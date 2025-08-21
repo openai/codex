@@ -94,6 +94,7 @@ use crate::protocol::PatchApplyEndEvent;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
+use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
 use crate::protocol::TaskCompleteEvent;
 use crate::protocol::TurnDiffEvent;
@@ -815,6 +816,16 @@ impl Session {
         let _ = self.tx_event.send(event).await;
     }
 
+    async fn notify_stream_error(&self, sub_id: &str, message: impl Into<String>) {
+        let event = Event {
+            id: sub_id.to_string(),
+            msg: EventMsg::StreamError(StreamErrorEvent {
+                message: message.into(),
+            }),
+        };
+        let _ = self.tx_event.send(event).await;
+    }
+
     /// Build the full turn input by concatenating the current conversation
     /// history with additional items for this turn.
     pub fn turn_input_with_history(&self, extra: Vec<ResponseItem>) -> Vec<ResponseItem> {
@@ -1523,7 +1534,7 @@ async fn run_turn(
                     // Surface retry information to any UI/front‑end so the
                     // user understands what is happening instead of staring
                     // at a seemingly frozen screen.
-                    sess.notify_background_event(
+                    sess.notify_stream_error(
                         &sub_id,
                         format!(
                             "stream error: {e}; retrying {retries}/{max_retries} in {delay:?}…"
@@ -1758,7 +1769,7 @@ async fn run_compact_task(
                 if retries < max_retries {
                     retries += 1;
                     let delay = backoff(retries);
-                    sess.notify_background_event(
+                    sess.notify_stream_error(
                         &sub_id,
                         format!(
                             "stream error: {e}; retrying {retries}/{max_retries} in {delay:?}…"
