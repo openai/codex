@@ -3,7 +3,7 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
 use codex_core::protocol::Event;
-use codex_protocol::mcp_protocol::ServerNotification as CodexServerNotification;
+use codex_protocol::mcp_protocol::ServerNotification;
 use mcp_types::JSONRPC_VERSION;
 use mcp_types::JSONRPCError;
 use mcp_types::JSONRPCErrorError;
@@ -122,12 +122,19 @@ impl OutgoingMessageSender {
         .await;
     }
 
-    pub(crate) async fn send_notification<N>(&self, notification: N)
-    where
-        N: Into<OutgoingNotification>,
-    {
-        let outgoing_notification: OutgoingNotification = notification.into();
-        let outgoing_message = OutgoingMessage::Notification(outgoing_notification);
+    pub(crate) async fn send_server_notification(&self, notification: ServerNotification) {
+        let method = format!("codex/event/{}", notification);
+        let params = match serde_json::to_value(&notification) {
+            Ok(serde_json::Value::Object(mut map)) => map.remove("data"),
+            _ => None,
+        };
+        let outgoing_message =
+            OutgoingMessage::Notification(OutgoingNotification { method, params });
+        let _ = self.sender.send(outgoing_message).await;
+    }
+
+    pub(crate) async fn send_notification(&self, notification: OutgoingNotification) {
+        let outgoing_message = OutgoingMessage::Notification(notification);
         let _ = self.sender.send(outgoing_message).await;
     }
 
@@ -193,18 +200,6 @@ pub(crate) struct OutgoingNotification {
     pub method: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub params: Option<serde_json::Value>,
-}
-
-impl From<CodexServerNotification> for OutgoingNotification {
-    fn from(value: CodexServerNotification) -> Self {
-        // Prefix all Codex server notifications with the MCP event namespace.
-        let method = format!("codex/event/{}", value);
-        let params = match &value {
-            CodexServerNotification::AuthStatusChange(p) => serde_json::to_value(p).ok(),
-            CodexServerNotification::LoginChatGptComplete(p) => serde_json::to_value(p).ok(),
-        };
-        OutgoingNotification { method, params }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]

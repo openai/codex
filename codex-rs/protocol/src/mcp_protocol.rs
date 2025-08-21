@@ -39,7 +39,6 @@ impl GitSha {
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, TS)]
 #[serde(rename_all = "lowercase")]
-#[ts(export)]
 pub enum AuthMode {
     ApiKey,
     ChatGPT,
@@ -368,7 +367,7 @@ pub struct AuthStatusChangeNotification {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS, Display)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum ServerNotification {
     /// Authentication status changed

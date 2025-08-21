@@ -206,7 +206,7 @@ impl CodexMessageProcessor {
                         error: error_msg,
                     };
                     outgoing_clone
-                        .send_notification(ServerNotification::LoginChatGptComplete(payload))
+                        .send_server_notification(ServerNotification::LoginChatGptComplete(payload))
                         .await;
 
                     // Send an auth status change notification.
@@ -215,7 +215,7 @@ impl CodexMessageProcessor {
                             auth_method: Some(AuthMode::ChatGPT),
                         };
                         outgoing_clone
-                            .send_notification(ServerNotification::AuthStatusChange(payload))
+                            .send_server_notification(ServerNotification::AuthStatusChange(payload))
                             .await;
                     }
 
@@ -299,7 +299,7 @@ impl CodexMessageProcessor {
         // Send auth status change notification.
         let payload = AuthStatusChangeNotification { auth_method: None };
         self.outgoing
-            .send_notification(ServerNotification::AuthStatusChange(payload))
+            .send_server_notification(ServerNotification::AuthStatusChange(payload))
             .await;
     }
 
