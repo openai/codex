@@ -6,12 +6,12 @@ use crate::models::ContentItem;
 use crate::models::ResponseItem;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
+use crate::shell::Shell;
 use codex_protocol::config_types::SandboxMode;
-use std::fmt::Display;
 use std::path::PathBuf;
 
 /// wraps environment context message in a tag for the model to parse more easily.
-pub(crate) const ENVIRONMENT_CONTEXT_START: &str = "<environment_context>\n";
+pub(crate) const ENVIRONMENT_CONTEXT_START: &str = "<environment_context>";
 pub(crate) const ENVIRONMENT_CONTEXT_END: &str = "</environment_context>";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, DeriveDisplay)]
@@ -24,52 +24,87 @@ pub enum NetworkAccess {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename = "environment_context", rename_all = "snake_case")]
 pub(crate) struct EnvironmentContext {
-    pub cwd: PathBuf,
-    pub approval_policy: AskForApproval,
-    pub sandbox_mode: SandboxMode,
-    pub network_access: NetworkAccess,
+    pub cwd: Option<PathBuf>,
+    pub approval_policy: Option<AskForApproval>,
+    pub sandbox_mode: Option<SandboxMode>,
+    pub network_access: Option<NetworkAccess>,
+    pub shell: Option<Shell>,
 }
 
 impl EnvironmentContext {
     pub fn new(
-        cwd: PathBuf,
-        approval_policy: AskForApproval,
-        sandbox_policy: SandboxPolicy,
+        cwd: Option<PathBuf>,
+        approval_policy: Option<AskForApproval>,
+        sandbox_policy: Option<SandboxPolicy>,
+        shell: Option<Shell>,
     ) -> Self {
         Self {
             cwd,
             approval_policy,
             sandbox_mode: match sandbox_policy {
-                SandboxPolicy::DangerFullAccess => SandboxMode::DangerFullAccess,
-                SandboxPolicy::ReadOnly => SandboxMode::ReadOnly,
-                SandboxPolicy::WorkspaceWrite { .. } => SandboxMode::WorkspaceWrite,
+                Some(SandboxPolicy::DangerFullAccess) => Some(SandboxMode::DangerFullAccess),
+                Some(SandboxPolicy::ReadOnly) => Some(SandboxMode::ReadOnly),
+                Some(SandboxPolicy::WorkspaceWrite { .. }) => Some(SandboxMode::WorkspaceWrite),
+                None => None,
             },
             network_access: match sandbox_policy {
-                SandboxPolicy::DangerFullAccess => NetworkAccess::Enabled,
-                SandboxPolicy::ReadOnly => NetworkAccess::Restricted,
-                SandboxPolicy::WorkspaceWrite { network_access, .. } => {
+                Some(SandboxPolicy::DangerFullAccess) => Some(NetworkAccess::Enabled),
+                Some(SandboxPolicy::ReadOnly) => Some(NetworkAccess::Restricted),
+                Some(SandboxPolicy::WorkspaceWrite { network_access, .. }) => {
                     if network_access {
-                        NetworkAccess::Enabled
+                        Some(NetworkAccess::Enabled)
                     } else {
-                        NetworkAccess::Restricted
+                        Some(NetworkAccess::Restricted)
                     }
                 }
+                None => None,
             },
+            shell,
         }
     }
 }
 
-impl Display for EnvironmentContext {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(
-            f,
-            "Current working directory: {}",
-            self.cwd.to_string_lossy()
-        )?;
-        writeln!(f, "Approval policy: {}", self.approval_policy)?;
-        writeln!(f, "Sandbox mode: {}", self.sandbox_mode)?;
-        writeln!(f, "Network access: {}", self.network_access)?;
-        Ok(())
+impl EnvironmentContext {
+    /// Serializes the environment context to XML. Libraries like `quick-xml`
+    /// require custom macros to handle Enums with newtypes, so we just do it
+    /// manually, to keep things simple. Output looks like:
+    ///
+    /// ```xml
+    /// <environment_context>
+    ///   <cwd>...</cwd>
+    ///   <approval_policy>...</approval_policy>
+    ///   <sandbox_mode>...</sandbox_mode>
+    ///   <network_access>...</network_access>
+    ///   <shell>...</shell>
+    /// </environment_context>
+    /// ```
+    pub fn serialize_to_xml(self) -> String {
+        let mut lines = vec![ENVIRONMENT_CONTEXT_START.to_string()];
+        if let Some(cwd) = self.cwd {
+            lines.push(format!("  <cwd>{}</cwd>", cwd.to_string_lossy()));
+        }
+        if let Some(approval_policy) = self.approval_policy {
+            lines.push(format!(
+                "  <approval_policy>{}</approval_policy>",
+                approval_policy
+            ));
+        }
+        if let Some(sandbox_mode) = self.sandbox_mode {
+            lines.push(format!("  <sandbox_mode>{}</sandbox_mode>", sandbox_mode));
+        }
+        if let Some(network_access) = self.network_access {
+            lines.push(format!(
+                "  <network_access>{}</network_access>",
+                network_access
+            ));
+        }
+        if let Some(shell) = self.shell
+            && let Some(shell_name) = shell.name()
+        {
+            lines.push(format!("  <shell>{}</shell>", shell_name));
+        }
+        lines.push(ENVIRONMENT_CONTEXT_END.to_string());
+        lines.join("\n")
     }
 }
 
@@ -79,7 +114,7 @@ impl From<EnvironmentContext> for ResponseItem {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::InputText {
-                text: format!("{ENVIRONMENT_CONTEXT_START}{ec}{ENVIRONMENT_CONTEXT_END}"),
+                text: ec.serialize_to_xml(),
             }],
         }
     }

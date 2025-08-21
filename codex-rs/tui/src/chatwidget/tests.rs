@@ -19,6 +19,7 @@ use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
+use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -144,12 +145,13 @@ fn make_chatwidget_manual() -> (
         total_token_usage: TokenUsage::default(),
         last_token_usage: TokenUsage::default(),
         stream: StreamController::new(cfg),
-        last_stream_kind: None,
         running_commands: HashMap::new(),
         pending_exec_completions: Vec::new(),
         task_complete_pending: false,
         interrupts: InterruptManager::new(),
         needs_redraw: false,
+        reasoning_buffer: String::new(),
+        full_reasoning_buffer: String::new(),
         session_id: None,
         frame_requester: crate::tui::FrameRequester::test_dummy(),
     };
@@ -161,8 +163,10 @@ fn drain_insert_history(
 ) -> Vec<Vec<ratatui::text::Line<'static>>> {
     let mut out = Vec::new();
     while let Ok(ev) = rx.try_recv() {
-        if let AppEvent::InsertHistory(lines) = ev {
-            out.push(lines);
+        match ev {
+            AppEvent::InsertHistoryLines(lines) => out.push(lines),
+            AppEvent::InsertHistoryCell(cell) => out.push(cell.display_lines()),
+            _ => {}
         }
     }
     out
@@ -336,13 +340,25 @@ async fn binary_size_transcript_matches_ideal_fixture() {
                     let ev: Event = serde_json::from_value(payload.clone()).expect("parse");
                     chat.handle_codex_event(ev);
                     while let Ok(app_ev) = rx.try_recv() {
-                        if let AppEvent::InsertHistory(lines) = app_ev {
-                            transcript.push_str(&lines_to_single_string(&lines));
-                            crate::insert_history::insert_history_lines_to_writer(
-                                &mut terminal,
-                                &mut ansi,
-                                lines,
-                            );
+                        match app_ev {
+                            AppEvent::InsertHistoryLines(lines) => {
+                                transcript.push_str(&lines_to_single_string(&lines));
+                                crate::insert_history::insert_history_lines_to_writer(
+                                    &mut terminal,
+                                    &mut ansi,
+                                    lines,
+                                );
+                            }
+                            AppEvent::InsertHistoryCell(cell) => {
+                                let lines = cell.display_lines();
+                                transcript.push_str(&lines_to_single_string(&lines));
+                                crate::insert_history::insert_history_lines_to_writer(
+                                    &mut terminal,
+                                    &mut ansi,
+                                    lines,
+                                );
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -353,13 +369,25 @@ async fn binary_size_transcript_matches_ideal_fixture() {
                 {
                     chat.on_commit_tick();
                     while let Ok(app_ev) = rx.try_recv() {
-                        if let AppEvent::InsertHistory(lines) = app_ev {
-                            transcript.push_str(&lines_to_single_string(&lines));
-                            crate::insert_history::insert_history_lines_to_writer(
-                                &mut terminal,
-                                &mut ansi,
-                                lines,
-                            );
+                        match app_ev {
+                            AppEvent::InsertHistoryLines(lines) => {
+                                transcript.push_str(&lines_to_single_string(&lines));
+                                crate::insert_history::insert_history_lines_to_writer(
+                                    &mut terminal,
+                                    &mut ansi,
+                                    lines,
+                                );
+                            }
+                            AppEvent::InsertHistoryCell(cell) => {
+                                let lines = cell.display_lines();
+                                transcript.push_str(&lines_to_single_string(&lines));
+                                crate::insert_history::insert_history_lines_to_writer(
+                                    &mut terminal,
+                                    &mut ansi,
+                                    lines,
+                                );
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -375,6 +403,11 @@ async fn binary_size_transcript_matches_ideal_fixture() {
         .expect("read ideal-binary-response.txt");
     // Normalize line endings for Windows vs. Unix checkouts
     let ideal = ideal.replace("\r\n", "\n");
+    let ideal_first_line = ideal
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .to_string();
 
     // Build the final VT100 visual by parsing the ANSI stream. Trim trailing spaces per line
     // and drop trailing empty lines so the shape matches the ideal fixture exactly.
@@ -400,21 +433,67 @@ async fn binary_size_transcript_matches_ideal_fixture() {
     while lines.last().is_some_and(|l| l.is_empty()) {
         lines.pop();
     }
-    // Compare only after the last session banner marker, and start at the next 'thinking' line.
+    // Compare only after the last session banner marker. Skip the transient
+    // 'thinking' header if present, and start from the first non-empty line
+    // of content that follows.
     const MARKER_PREFIX: &str = ">_ You are using OpenAI Codex in ";
     let last_marker_line_idx = lines
         .iter()
         .rposition(|l| l.starts_with(MARKER_PREFIX))
         .expect("marker not found in visible output");
-    let thinking_line_idx = (last_marker_line_idx + 1..lines.len())
-        .find(|&idx| lines[idx].trim_start() == "thinking")
-        .expect("no 'thinking' line found after marker");
+    // Anchor to the first ideal line if present; otherwise use heuristics.
+    let start_idx = (last_marker_line_idx + 1..lines.len())
+        .find(|&idx| lines[idx].trim_start() == ideal_first_line)
+        .or_else(|| {
+            // Prefer the first assistant content line (blockquote '>' prefix) after the marker.
+            (last_marker_line_idx + 1..lines.len())
+                .find(|&idx| lines[idx].trim_start().starts_with('>'))
+        })
+        .unwrap_or_else(|| {
+            // Fallback: first non-empty, non-'thinking' line
+            (last_marker_line_idx + 1..lines.len())
+                .find(|&idx| {
+                    let t = lines[idx].trim_start();
+                    !t.is_empty() && t != "thinking"
+                })
+                .expect("no content line found after marker")
+        });
 
     let mut compare_lines: Vec<String> = Vec::new();
-    // Ensure the first line is exactly 'thinking' without leading spaces to match the fixture
-    compare_lines.push(lines[thinking_line_idx].trim_start().to_string());
-    compare_lines.extend(lines[(thinking_line_idx + 1)..].iter().cloned());
+    // Ensure the first line is trimmed-left to match the fixture shape.
+    compare_lines.push(lines[start_idx].trim_start().to_string());
+    compare_lines.extend(lines[(start_idx + 1)..].iter().cloned());
     let visible_after = compare_lines.join("\n");
+
+    // Normalize: drop a leading 'thinking' line if present in either side to
+    // avoid coupling to whether the reasoning header is rendered in history.
+    fn drop_leading_thinking(s: &str) -> String {
+        let mut it = s.lines();
+        let first = it.next();
+        let rest = it.collect::<Vec<_>>().join("\n");
+        if first.is_some_and(|l| l.trim() == "thinking") {
+            rest
+        } else {
+            s.to_string()
+        }
+    }
+    let visible_after = drop_leading_thinking(&visible_after);
+    let ideal = drop_leading_thinking(&ideal);
+
+    // Normalize: strip leading Markdown blockquote markers ('>' or '> ') which
+    // may be present in rendered transcript lines but not in the ideal text.
+    fn strip_blockquotes(s: &str) -> String {
+        s.lines()
+            .map(|l| {
+                l.strip_prefix("> ")
+                    .or_else(|| l.strip_prefix('>'))
+                    .unwrap_or(l)
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+    let visible_after = strip_blockquotes(&visible_after);
+    let ideal = strip_blockquotes(&ideal);
 
     // Optionally update the fixture when env var is set
     if std::env::var("UPDATE_IDEAL").as_deref() == Ok("1") {
@@ -746,7 +825,26 @@ fn plan_update_renders_history_cell() {
 }
 
 #[test]
-fn headers_emitted_on_stream_begin_for_answer_and_reasoning() {
+fn stream_error_is_rendered_to_history() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+    let msg = "stream error: stream disconnected before completion: idle timeout waiting for SSE; retrying 1/5 in 211ms…";
+    chat.handle_codex_event(Event {
+        id: "sub-1".into(),
+        msg: EventMsg::StreamError(StreamErrorEvent {
+            message: msg.to_string(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(!cells.is_empty(), "expected a history cell for StreamError");
+    let blob = lines_to_single_string(cells.last().unwrap());
+    assert!(blob.contains("⚠ "));
+    assert!(blob.contains("stream error:"));
+    assert!(blob.contains("idle timeout waiting for SSE"));
+}
+
+#[test]
+fn headers_emitted_on_stream_begin_for_answer_and_not_for_reasoning() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
     // Answer: no header until a newline commit
@@ -758,7 +856,7 @@ fn headers_emitted_on_stream_begin_for_answer_and_reasoning() {
     });
     let mut saw_codex_pre = false;
     while let Ok(ev) = rx.try_recv() {
-        if let AppEvent::InsertHistory(lines) = ev {
+        if let AppEvent::InsertHistoryLines(lines) = ev {
             let s = lines
                 .iter()
                 .flat_map(|l| l.spans.iter())
@@ -786,7 +884,7 @@ fn headers_emitted_on_stream_begin_for_answer_and_reasoning() {
     chat.on_commit_tick();
     let mut saw_codex_post = false;
     while let Ok(ev) = rx.try_recv() {
-        if let AppEvent::InsertHistory(lines) = ev {
+        if let AppEvent::InsertHistoryLines(lines) = ev {
             let s = lines
                 .iter()
                 .flat_map(|l| l.spans.iter())
@@ -804,7 +902,7 @@ fn headers_emitted_on_stream_begin_for_answer_and_reasoning() {
         "expected 'codex' header to be emitted after first newline commit"
     );
 
-    // Reasoning: header immediately
+    // Reasoning: do NOT emit a history header; status text is updated instead
     let (mut chat2, mut rx2, _op_rx2) = make_chatwidget_manual();
     chat2.handle_codex_event(Event {
         id: "sub-b".into(),
@@ -814,7 +912,7 @@ fn headers_emitted_on_stream_begin_for_answer_and_reasoning() {
     });
     let mut saw_thinking = false;
     while let Ok(ev) = rx2.try_recv() {
-        if let AppEvent::InsertHistory(lines) = ev {
+        if let AppEvent::InsertHistoryLines(lines) = ev {
             let s = lines
                 .iter()
                 .flat_map(|l| l.spans.iter())
@@ -828,8 +926,8 @@ fn headers_emitted_on_stream_begin_for_answer_and_reasoning() {
         }
     }
     assert!(
-        saw_thinking,
-        "expected 'thinking' header to be emitted at stream start"
+        !saw_thinking,
+        "reasoning deltas should not emit history headers"
     );
 }
 
