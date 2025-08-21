@@ -2,7 +2,7 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::chatwidget::ChatWidget;
 use crate::file_search::FileSearchManager;
-use crate::transcript_app::run_transcript_app;
+use crate::transcript_app::TranscriptApp;
 use crate::tui;
 use crate::tui::TuiEvent;
 use codex_core::ConversationManager;
@@ -12,7 +12,11 @@ use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use crossterm::execute;
+use crossterm::terminal::EnterAlternateScreen;
+use crossterm::terminal::LeaveAlternateScreen;
 use crossterm::terminal::supports_keyboard_enhancement;
+use ratatui::layout::Rect;
 use ratatui::text::Line;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -34,6 +38,11 @@ pub(crate) struct App {
     file_search: FileSearchManager,
 
     transcript_lines: Vec<Line<'static>>,
+
+    // Transcript overlay state
+    transcript_overlay: Option<TranscriptApp>,
+    deferred_history_lines: Vec<Line<'static>>,
+    transcript_saved_viewport: Option<Rect>,
 
     enhanced_keys_supported: bool,
 
@@ -76,6 +85,9 @@ impl App {
             file_search,
             enhanced_keys_supported,
             transcript_lines: Vec::new(),
+            transcript_overlay: None,
+            deferred_history_lines: Vec::new(),
+            transcript_saved_viewport: None,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
         };
 
@@ -101,34 +113,55 @@ impl App {
         tui: &mut tui::Tui,
         event: TuiEvent,
     ) -> Result<bool> {
-        match event {
-            TuiEvent::Key(key_event) => {
-                self.handle_key_event(tui, key_event).await;
+        if let Some(overlay) = &mut self.transcript_overlay {
+            overlay.handle_event(tui, event)?;
+            if overlay.is_done {
+                // Exit alternate screen and restore viewport.
+                let _ = execute!(tui.terminal.backend_mut(), LeaveAlternateScreen);
+                if let Some(saved) = self.transcript_saved_viewport.take() {
+                    tui.terminal.set_viewport_area(saved);
+                }
+                if !self.deferred_history_lines.is_empty() {
+                    let lines = std::mem::take(&mut self.deferred_history_lines);
+                    tui.insert_history_lines(lines);
+                }
+                self.transcript_overlay = None;
             }
-            TuiEvent::Paste(pasted) => {
-                // Many terminals convert newlines to \r when pasting (e.g., iTerm2),
-                // but tui-textarea expects \n. Normalize CR to LF.
-                // [tui-textarea]: https://github.com/rhysd/tui-textarea/blob/4d18622eeac13b309e0ff6a55a46ac6706da68cf/src/textarea.rs#L782-L783
-                // [iTerm2]: https://github.com/gnachman/iTerm2/blob/5d0c0d9f68523cbd0494dad5422998964a2ecd8d/sources/iTermPasteHelper.m#L206-L216
-                let pasted = pasted.replace("\r", "\n");
-                self.chat_widget.handle_paste(pasted);
-            }
-            TuiEvent::Draw => {
-                tui.draw(
-                    self.chat_widget.desired_height(tui.terminal.size()?.width),
-                    |frame| {
-                        frame.render_widget_ref(&self.chat_widget, frame.area());
-                        if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
-                            frame.set_cursor_position((x, y));
-                        }
-                    },
-                )?;
-            }
-            #[cfg(unix)]
-            TuiEvent::ResumeFromSuspend => {
-                let cursor_pos = tui.terminal.get_cursor_position()?;
-                tui.terminal
-                    .set_viewport_area(ratatui::layout::Rect::new(0, cursor_pos.y, 0, 0));
+            tui.frame_requester().schedule_frame();
+        } else {
+            match event {
+                TuiEvent::Key(key_event) => {
+                    self.handle_key_event(tui, key_event).await;
+                }
+                TuiEvent::Paste(pasted) => {
+                    // Many terminals convert newlines to \r when pasting (e.g., iTerm2),
+                    // but tui-textarea expects \n. Normalize CR to LF.
+                    // [tui-textarea]: https://github.com/rhysd/tui-textarea/blob/4d18622eeac13b309e0ff6a55a46ac6706da68cf/src/textarea.rs#L782-L783
+                    // [iTerm2]: https://github.com/gnachman/iTerm2/blob/5d0c0d9f68523cbd0494dad5422998964a2ecd8d/sources/iTermPasteHelper.m#L206-L216
+                    let pasted = pasted.replace("\r", "\n");
+                    self.chat_widget.handle_paste(pasted);
+                }
+                TuiEvent::Draw => {
+                    tui.draw(
+                        self.chat_widget.desired_height(tui.terminal.size()?.width),
+                        |frame| {
+                            frame.render_widget_ref(&self.chat_widget, frame.area());
+                            if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
+                                frame.set_cursor_position((x, y));
+                            }
+                        },
+                    )?;
+                }
+                #[cfg(unix)]
+                TuiEvent::ResumeFromSuspend => {
+                    let cursor_pos = tui.terminal.get_cursor_position()?;
+                    tui.terminal.set_viewport_area(ratatui::layout::Rect::new(
+                        0,
+                        cursor_pos.y,
+                        0,
+                        0,
+                    ));
+                }
             }
         }
         Ok(true)
@@ -149,14 +182,30 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::InsertHistoryLines(lines) => {
+                if let Some(overlay) = &mut self.transcript_overlay {
+                    overlay.insert_lines(lines.clone());
+                    tui.frame_requester().schedule_frame();
+                }
                 self.transcript_lines.extend(lines.clone());
-                tui.insert_history_lines(lines);
+                if self.transcript_overlay.is_some() {
+                    self.deferred_history_lines.extend(lines);
+                } else {
+                    tui.insert_history_lines(lines);
+                }
             }
             AppEvent::InsertHistoryCell(cell) => {
+                if let Some(overlay) = &mut self.transcript_overlay {
+                    overlay.insert_lines(cell.transcript_lines());
+                    tui.frame_requester().schedule_frame();
+                }
                 self.transcript_lines.extend(cell.transcript_lines());
                 let display = cell.display_lines();
                 if !display.is_empty() {
-                    tui.insert_history_lines(display);
+                    if self.transcript_overlay.is_some() {
+                        self.deferred_history_lines.extend(display);
+                    } else {
+                        tui.insert_history_lines(display);
+                    }
                 }
             }
             AppEvent::StartCommitAnimation => {
@@ -243,7 +292,17 @@ impl App {
                 kind: KeyEventKind::Press,
                 ..
             } => {
-                run_transcript_app(tui, self.transcript_lines.clone()).await;
+                // Enter alternate screen and set viewport to full size.
+                let _ = execute!(tui.terminal.backend_mut(), EnterAlternateScreen);
+                if let Ok(size) = tui.terminal.size() {
+                    self.transcript_saved_viewport = Some(tui.terminal.viewport_area);
+                    tui.terminal
+                        .set_viewport_area(Rect::new(0, 0, size.width, size.height));
+                    let _ = tui.terminal.clear();
+                }
+
+                self.transcript_overlay = Some(TranscriptApp::new(self.transcript_lines.clone()));
+                tui.frame_requester().schedule_frame();
             }
             KeyEvent {
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,

@@ -1,11 +1,11 @@
+use std::io::Result;
+
 use crate::insert_history;
 use crate::tui;
+use crate::tui::TuiEvent;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
-use crossterm::execute;
-use crossterm::terminal::EnterAlternateScreen;
-use crossterm::terminal::LeaveAlternateScreen;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
@@ -16,52 +16,6 @@ use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
-use tokio::select;
-
-pub async fn run_transcript_app(tui: &mut tui::Tui, transcript_lines: Vec<Line<'static>>) {
-    use tokio_stream::StreamExt;
-    let _ = execute!(tui.terminal.backend_mut(), EnterAlternateScreen);
-    #[allow(clippy::unwrap_used)]
-    let size = tui.terminal.size().unwrap();
-    let old_viewport_area = tui.terminal.viewport_area;
-    tui.terminal
-        .set_viewport_area(Rect::new(0, 0, size.width, size.height));
-    let _ = tui.terminal.clear();
-
-    let tui_events = tui.event_stream();
-    tokio::pin!(tui_events);
-
-    tui.frame_requester().schedule_frame();
-
-    let mut app = TranscriptApp {
-        transcript_lines,
-        scroll_offset: usize::MAX,
-        is_done: false,
-    };
-
-    while !app.is_done {
-        select! {
-            Some(event) = tui_events.next() => {
-                match event {
-                    crate::tui::TuiEvent::Key(key_event) => {
-                        app.handle_key_event(tui, key_event);
-                        tui.frame_requester().schedule_frame();
-                    }
-                    crate::tui::TuiEvent::Draw => {
-                        let _ = tui.draw(u16::MAX, |frame| {
-                            app.render(frame.area(), frame.buffer);
-                        });
-                    }
-                    _ => {}
-                }
-            }
-        }
-    }
-
-    let _ = execute!(tui.terminal.backend_mut(), LeaveAlternateScreen);
-
-    tui.terminal.set_viewport_area(old_viewport_area);
-}
 
 pub(crate) struct TranscriptApp {
     pub(crate) transcript_lines: Vec<Line<'static>>,
@@ -70,7 +24,32 @@ pub(crate) struct TranscriptApp {
 }
 
 impl TranscriptApp {
-    pub(crate) fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
+    pub(crate) fn new(transcript_lines: Vec<Line<'static>>) -> Self {
+        Self {
+            transcript_lines,
+            scroll_offset: 0,
+            is_done: false,
+        }
+    }
+
+    pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
+        match event {
+            TuiEvent::Key(key_event) => self.handle_key_event(tui, key_event),
+            TuiEvent::Draw => {
+                tui.draw(u16::MAX, |frame| {
+                    self.render(frame.area(), frame.buffer);
+                })?;
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+
+    pub(crate) fn insert_lines(&mut self, lines: Vec<Line<'static>>) {
+        self.transcript_lines.extend(lines);
+    }
+
+    fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
         match key_event {
             KeyEvent {
                 code: KeyCode::Char('q'),
@@ -147,7 +126,7 @@ impl TranscriptApp {
         area
     }
 
-    pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer) {
+    fn render(&mut self, area: Rect, buf: &mut Buffer) {
         Span::from("/ ".repeat(area.width as usize / 2))
             .dim()
             .render_ref(area, buf);
