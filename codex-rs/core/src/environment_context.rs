@@ -6,6 +6,7 @@ use crate::models::ContentItem;
 use crate::models::ResponseItem;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
+use crate::shell::Shell;
 use codex_protocol::config_types::SandboxMode;
 use std::fmt::Display;
 use std::path::PathBuf;
@@ -28,6 +29,7 @@ pub(crate) struct EnvironmentContext {
     pub approval_policy: AskForApproval,
     pub sandbox_mode: SandboxMode,
     pub network_access: NetworkAccess,
+    pub shell: Shell,
 }
 
 impl EnvironmentContext {
@@ -35,6 +37,7 @@ impl EnvironmentContext {
         cwd: PathBuf,
         approval_policy: AskForApproval,
         sandbox_policy: SandboxPolicy,
+        shell: Shell,
     ) -> Self {
         Self {
             cwd,
@@ -55,6 +58,7 @@ impl EnvironmentContext {
                     }
                 }
             },
+            shell,
         }
     }
 }
@@ -69,6 +73,9 @@ impl Display for EnvironmentContext {
         writeln!(f, "Approval policy: {}", self.approval_policy)?;
         writeln!(f, "Sandbox mode: {}", self.sandbox_mode)?;
         writeln!(f, "Network access: {}", self.network_access)?;
+        if let Some(shell_name) = self.shell.name() {
+            writeln!(f, "Shell: {shell_name}")?;
+        }
         Ok(())
     }
 }
