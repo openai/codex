@@ -432,8 +432,9 @@ pub struct ProjectConfig {
 
 #[derive(Deserialize, Debug, Clone, Default)]
 pub struct ToolsToml {
-    #[serde(default)]
-    pub web_search_request: Option<bool>,
+    // Renamed from `web_search_request`; keep alias for backwards compatibility.
+    #[serde(default, alias = "web_search_request")]
+    pub web_search: Option<bool>,
 }
 
 impl ConfigToml {
@@ -599,7 +600,7 @@ impl Config {
         let tools_web_search_request = cfg
             .tools
             .as_ref()
-            .and_then(|t| t.web_search_request)
+            .and_then(|t| t.web_search)
             .unwrap_or(false);
 
         let model = model

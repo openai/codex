@@ -129,7 +129,7 @@ pub async fn run_main(
     };
     let mut raw_overrides = cli.config_overrides.raw_overrides.clone();
     if cli.search {
-        raw_overrides.push("tools.web_search_request=true".to_string());
+        raw_overrides.push("tools.web_search=true".to_string());
     }
     let overrides_cli = codex_common::CliConfigOverrides { raw_overrides };
     let cli_kv_overrides = match overrides_cli.parse_overrides() {
