@@ -89,8 +89,6 @@ pub(crate) struct ChatWidget {
     last_token_usage: TokenUsage,
     // Stream lifecycle controller
     stream: StreamController,
-    // Track the most recently active stream kind in the current turn
-    last_stream_kind: Option<StreamKind>,
     running_commands: HashMap<String, RunningCommand>,
     pending_exec_completions: Vec<(Vec<String>, Vec<ParsedCommand>, CommandOutput)>,
     task_complete_pending: bool,
@@ -98,6 +96,8 @@ pub(crate) struct ChatWidget {
     interrupts: InterruptManager,
     // Whether a redraw is needed after handling the current event
     needs_redraw: bool,
+    // Accumulates the current reasoning block text to extract a header
+    reasoning_buffer: String,
     session_id: Option<Uuid>,
     frame_requester: FrameRequester,
 }
@@ -106,8 +106,6 @@ struct UserMessage {
     text: String,
     image_paths: Vec<PathBuf>,
 }
-
-use crate::streaming::StreamKind;
 
 impl From<String> for UserMessage {
     fn from(text: String) -> Self {
@@ -133,7 +131,7 @@ impl ChatWidget {
     }
     fn flush_answer_stream_with_separator(&mut self) {
         let sink = AppEventHistorySink(self.app_event_tx.clone());
-        let _ = self.stream.finalize(StreamKind::Answer, true, &sink);
+        let _ = self.stream.finalize(true, &sink);
     }
     // --- Small event handlers ---
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
@@ -150,30 +148,38 @@ impl ChatWidget {
     fn on_agent_message(&mut self, message: String) {
         let sink = AppEventHistorySink(self.app_event_tx.clone());
         let finished = self.stream.apply_final_answer(&message, &sink);
-        self.last_stream_kind = Some(StreamKind::Answer);
         self.handle_if_stream_finished(finished);
         self.mark_needs_redraw();
     }
 
     fn on_agent_message_delta(&mut self, delta: String) {
-        self.handle_streaming_delta(StreamKind::Answer, delta);
+        self.handle_streaming_delta(delta);
     }
 
     fn on_agent_reasoning_delta(&mut self, delta: String) {
-        self.handle_streaming_delta(StreamKind::Reasoning, delta);
+        // For reasoning deltas, do not stream to history. Accumulate the
+        // current reasoning block and extract the first bold element
+        // (between **/**) as the chunk header. Show this header as status.
+        self.reasoning_buffer.push_str(&delta);
+
+        if let Some(header) = extract_first_bold(&self.reasoning_buffer) {
+            // Update the shimmer header to the extracted reasoning chunk header.
+            self.bottom_pane.update_status_header(header);
+        } else {
+            // Fallback while we don't yet have a bold header: leave existing header as-is.
+        }
+        self.mark_needs_redraw();
     }
 
-    fn on_agent_reasoning_final(&mut self, text: String) {
-        let sink = AppEventHistorySink(self.app_event_tx.clone());
-        let finished = self.stream.apply_final_reasoning(&text, &sink);
-        self.last_stream_kind = Some(StreamKind::Reasoning);
-        self.handle_if_stream_finished(finished);
+    fn on_agent_reasoning_final(&mut self) {
+        // Clear the reasoning buffer at the end of a reasoning block.
+        self.reasoning_buffer.clear();
         self.mark_needs_redraw();
     }
 
     fn on_reasoning_section_break(&mut self) {
-        let sink = AppEventHistorySink(self.app_event_tx.clone());
-        self.stream.insert_reasoning_section_break(&sink);
+        // Start a new reasoning block for header extraction.
+        self.reasoning_buffer.clear();
     }
 
     // Raw reasoning uses the same flow as summarized reasoning
@@ -182,7 +188,7 @@ impl ChatWidget {
         self.bottom_pane.clear_ctrl_c_quit_hint();
         self.bottom_pane.set_task_running(true);
         self.stream.reset_headers_for_new_turn();
-        self.last_stream_kind = None;
+        self.reasoning_buffer.clear();
         self.mark_needs_redraw();
     }
 
@@ -191,9 +197,7 @@ impl ChatWidget {
         // without emitting stray headers for other streams.
         if self.stream.is_write_cycle_active() {
             let sink = AppEventHistorySink(self.app_event_tx.clone());
-            if let Some(kind) = self.last_stream_kind {
-                let _ = self.stream.finalize(kind, true, &sink);
-            }
+            let _ = self.stream.finalize(true, &sink);
         }
         // Mark task stopped and request redraw now that all content is in history.
         self.bottom_pane.set_task_running(false);
@@ -355,10 +359,9 @@ impl ChatWidget {
     }
 
     #[inline]
-    fn handle_streaming_delta(&mut self, kind: StreamKind, delta: String) {
+    fn handle_streaming_delta(&mut self, delta: String) {
         let sink = AppEventHistorySink(self.app_event_tx.clone());
-        self.stream.begin(kind, &sink);
-        self.last_stream_kind = Some(kind);
+        self.stream.begin(&sink);
         self.stream.push_and_maybe_commit(&delta, &sink);
         self.mark_needs_redraw();
     }
@@ -532,12 +535,12 @@ impl ChatWidget {
             total_token_usage: TokenUsage::default(),
             last_token_usage: TokenUsage::default(),
             stream: StreamController::new(config),
-            last_stream_kind: None,
             running_commands: HashMap::new(),
             pending_exec_completions: Vec::new(),
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
             needs_redraw: false,
+            reasoning_buffer: String::new(),
             session_id: None,
         }
     }
@@ -641,9 +644,9 @@ impl ChatWidget {
             | EventMsg::AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent {
                 delta,
             }) => self.on_agent_reasoning_delta(delta),
-            EventMsg::AgentReasoning(AgentReasoningEvent { text })
-            | EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text }) => {
-                self.on_agent_reasoning_final(text)
+            EventMsg::AgentReasoning(AgentReasoningEvent { .. })
+            | EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { .. }) => {
+                self.on_agent_reasoning_final()
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
             EventMsg::TaskStarted => self.on_task_started(),
@@ -930,6 +933,36 @@ fn add_token_usage(current_usage: &TokenUsage, new_usage: &TokenUsage) -> TokenU
         reasoning_output_tokens,
         total_tokens: current_usage.total_tokens + new_usage.total_tokens,
     }
+}
+
+// Extract the first bold (Markdown) element in the form **...** from `s`.
+// Returns the inner text if found; otherwise `None`.
+fn extract_first_bold(s: &str) -> Option<String> {
+    let bytes = s.as_bytes();
+    let mut i = 0usize;
+    while i + 1 < bytes.len() {
+        if bytes[i] == b'*' && bytes[i + 1] == b'*' {
+            let start = i + 2;
+            let mut j = start;
+            while j + 1 < bytes.len() {
+                if bytes[j] == b'*' && bytes[j + 1] == b'*' {
+                    // Found closing **
+                    let inner = &s[start..j];
+                    let trimmed = inner.trim();
+                    if !trimmed.is_empty() {
+                        return Some(trimmed.to_string());
+                    } else {
+                        return None;
+                    }
+                }
+                j += 1;
+            }
+            // No closing; stop searching (wait for more deltas)
+            return None;
+        }
+        i += 1;
+    }
+    None
 }
 
 #[cfg(test)]

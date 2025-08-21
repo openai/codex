@@ -4,6 +4,7 @@ use crate::chatwidget::ChatWidget;
 use crate::file_search::FileSearchManager;
 use crate::get_git_diff::get_git_diff;
 use crate::slash_command::SlashCommand;
+use crate::transcript_app::run_transcript_app;
 use crate::tui;
 use crate::tui::TuiEvent;
 use codex_core::ConversationManager;
@@ -16,6 +17,7 @@ use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::terminal::supports_keyboard_enhancement;
+use ratatui::text::Line;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -34,6 +36,8 @@ pub(crate) struct App {
     config: Config,
 
     file_search: FileSearchManager,
+
+    transcript_lines: Vec<Line<'static>>,
 
     enhanced_keys_supported: bool,
 
@@ -75,6 +79,7 @@ impl App {
             config,
             file_search,
             enhanced_keys_supported,
+            transcript_lines: Vec::new(),
             commit_anim_running: Arc::new(AtomicBool::new(false)),
         };
 
@@ -102,7 +107,7 @@ impl App {
     ) -> Result<bool> {
         match event {
             TuiEvent::Key(key_event) => {
-                self.handle_key_event(key_event).await;
+                self.handle_key_event(tui, key_event).await;
             }
             TuiEvent::Paste(pasted) => {
                 // Many terminals convert newlines to \r when pasting (e.g., iTerm2),
@@ -136,6 +141,7 @@ impl App {
     fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
         match event {
             AppEvent::InsertHistory(lines) => {
+                self.transcript_lines.extend(lines.clone());
                 tui.insert_history_lines(lines);
             }
             AppEvent::StartCommitAnimation => {
@@ -303,7 +309,7 @@ impl App {
         self.chat_widget.token_usage().clone()
     }
 
-    async fn handle_key_event(&mut self, key_event: KeyEvent) {
+    async fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
         match key_event {
             KeyEvent {
                 code: KeyCode::Char('c'),
@@ -320,6 +326,14 @@ impl App {
                 ..
             } if self.chat_widget.composer_is_empty() => {
                 self.app_event_tx.send(AppEvent::ExitRequest);
+            }
+            KeyEvent {
+                code: KeyCode::Char('t'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                run_transcript_app(tui, self.transcript_lines.clone()).await;
             }
             KeyEvent {
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
