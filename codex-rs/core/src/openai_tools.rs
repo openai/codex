@@ -244,7 +244,7 @@ pub(crate) struct ApplyPatchToolArgs {
 }
 
 /// Returns a JSON tool that can be used to edit files. Public for testing, please use `get_openai_tools`.
-pub fn create_apply_patch_json_tool() -> OpenAiTool {
+fn create_apply_patch_json_tool() -> OpenAiTool {
     let mut properties = BTreeMap::new();
     properties.insert(
         "input".to_string(),
@@ -294,13 +294,13 @@ For instructions on [context_before] and [context_after]:
 
 The full grammar definition is below:
 Patch := Begin { FileOp } End
-Begin := "**_ Begin Patch" NEWLINE
-End := "_** End Patch" NEWLINE
+Begin := "*** Begin Patch" NEWLINE
+End := "*** End Patch" NEWLINE
 FileOp := AddFile | DeleteFile | UpdateFile
-AddFile := "**_ Add File: " path NEWLINE { "+" line NEWLINE }
-DeleteFile := "_** Delete File: " path NEWLINE
-UpdateFile := "**_ Update File: " path NEWLINE [ MoveTo ] { Hunk }
-MoveTo := "_** Move to: " newPath NEWLINE
+AddFile := "*** Add File: " path NEWLINE { "+" line NEWLINE }
+DeleteFile := "*** Delete File: " path NEWLINE
+UpdateFile := "*** Update File: " path NEWLINE [ MoveTo ] { Hunk }
+MoveTo := "*** Move to: " newPath NEWLINE
 Hunk := "@@" [ header ] NEWLINE { HunkLine } [ "*** End of File" NEWLINE ]
 HunkLine := (" " | "-" | "+") text NEWLINE
 

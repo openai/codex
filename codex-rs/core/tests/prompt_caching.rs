@@ -192,7 +192,7 @@ async fn prompt_tools_are_consistent_across_requests() {
 
     let body1 = requests[1].body_json::<serde_json::Value>().unwrap();
     assert_eq!(
-        body0["instructions"],
+        body1["instructions"],
         serde_json::json!(expected_instructions),
     );
     assert_tool_names(&body1, expected_tools_names);
