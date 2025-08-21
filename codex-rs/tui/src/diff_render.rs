@@ -2,7 +2,6 @@ use crossterm::terminal;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
-use ratatui::style::Styled;
 use ratatui::text::Line as RtLine;
 use ratatui::text::Span as RtSpan;
 use std::collections::HashMap;
@@ -213,33 +212,17 @@ fn render_patch_details(changes: &HashMap<PathBuf, FileChange>) -> Vec<RtLine<'s
                 move_path: _,
             } => {
                 if let Ok(patch) = diffy::Patch::from_str(unified_diff) {
+                    let mut is_first_hunk = true;
                     for h in patch.hunks() {
-                        // Emit a unified diff-style hunk header to clearly
-                        // separate non-contiguous changes within the file.
-                        let mut old_count: usize = 0;
-                        let mut new_count: usize = 0;
-                        for l in h.lines() {
-                            match l {
-                                diffy::Line::Insert(_) => new_count += 1,
-                                diffy::Line::Delete(_) => old_count += 1,
-                                diffy::Line::Context(_) => {
-                                    old_count += 1;
-                                    new_count += 1;
-                                }
-                            }
+                        // Render a simple separator between non-contiguous hunks
+                        // instead of diff-style @@ headers.
+                        if !is_first_hunk {
+                            out.push(RtLine::from(vec![
+                                RtSpan::raw("    "),
+                                RtSpan::styled("⋮", style_dim()),
+                            ]));
                         }
-
-                        let header = format!(
-                            "@@ -{},{} +{},{} @@",
-                            h.old_range().start(),
-                            old_count,
-                            h.new_range().start(),
-                            new_count
-                        );
-                        out.push(RtLine::from(vec![
-                            "    ".into(),
-                            header.set_style(style_hunk_header()),
-                        ]));
+                        is_first_hunk = false;
 
                         let mut old_ln = h.old_range().start();
                         let mut new_ln = h.new_range().start();
@@ -385,10 +368,6 @@ fn style_del() -> Style {
     Style::default().fg(Color::Red)
 }
 
-fn style_hunk_header() -> Style {
-    Style::default().fg(Color::Cyan)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -505,5 +484,29 @@ mod tests {
             create_diff_summary("proposed patch", &changes, PatchEventType::ApprovalRequest);
 
         snapshot_lines("blank_context_line", lines, 80, 10);
+    }
+
+    #[test]
+    fn ui_snapshot_vertical_ellipsis_between_hunks() {
+        // Create a patch with two separate hunks to ensure we render the vertical ellipsis (⋮)
+        let original =
+            "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10\n";
+        let modified = "line 1\nline two changed\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline nine changed\nline 10\n";
+        let patch = diffy::create_patch(original, modified).to_string();
+
+        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+        changes.insert(
+            PathBuf::from("example.txt"),
+            FileChange::Update {
+                unified_diff: patch,
+                move_path: None,
+            },
+        );
+
+        let lines =
+            create_diff_summary("proposed patch", &changes, PatchEventType::ApprovalRequest);
+
+        // Height is large enough to show both hunks and the separator
+        snapshot_lines("vertical_ellipsis_between_hunks", lines, 80, 16);
     }
 }
