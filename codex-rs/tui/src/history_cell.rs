@@ -1,6 +1,7 @@
 use crate::diff_render::create_diff_summary;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
+use crate::markdown::append_markdown;
 use crate::slash_command::SlashCommand;
 use crate::text_formatting::format_and_truncate_tool_result;
 use base64::Engine;
@@ -39,7 +40,7 @@ use std::time::Instant;
 use tracing::error;
 use uuid::Uuid;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct CommandOutput {
     pub(crate) exit_code: i32,
     pub(crate) stdout: String,
@@ -54,8 +55,12 @@ pub(crate) enum PatchEventType {
 /// Represents an event to display in the conversation history. Returns its
 /// `Vec<Line<'static>>` representation to make it easier to display in a
 /// scrollable list.
-pub(crate) trait HistoryCell {
+pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync {
     fn display_lines(&self) -> Vec<Line<'static>>;
+
+    fn transcript_lines(&self) -> Vec<Line<'static>> {
+        self.display_lines()
+    }
 
     fn desired_height(&self, width: u16) -> u16 {
         Paragraph::new(Text::from(self.display_lines()))
@@ -66,6 +71,7 @@ pub(crate) trait HistoryCell {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct PlainHistoryCell {
     lines: Vec<Line<'static>>,
 }
@@ -76,6 +82,22 @@ impl HistoryCell for PlainHistoryCell {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct TranscriptOnlyHistoryCell {
+    lines: Vec<Line<'static>>,
+}
+
+impl HistoryCell for TranscriptOnlyHistoryCell {
+    fn display_lines(&self) -> Vec<Line<'static>> {
+        Vec::new()
+    }
+
+    fn transcript_lines(&self) -> Vec<Line<'static>> {
+        self.lines.clone()
+    }
+}
+
+#[derive(Debug)]
 pub(crate) struct ExecCell {
     pub(crate) command: Vec<String>,
     pub(crate) parsed: Vec<ParsedCommand>,
@@ -101,6 +123,7 @@ impl WidgetRef for &ExecCell {
     }
 }
 
+#[derive(Debug)]
 struct CompletedMcpToolCallWithImageOutput {
     _image: DynamicImage,
 }
@@ -728,6 +751,12 @@ pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
     PlainHistoryCell { lines }
 }
 
+pub(crate) fn new_stream_error_event(message: String) -> PlainHistoryCell {
+    let lines: Vec<Line<'static>> =
+        vec![vec!["⚠ ".magenta().bold(), message.dim()].into(), "".into()];
+    PlainHistoryCell { lines }
+}
+
 /// Render a user‑friendly plan update styled like a checkbox todo list.
 pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlainHistoryCell {
     let UpdatePlanArgs { explanation, plan } = update;
@@ -928,6 +957,17 @@ pub(crate) fn new_patch_apply_success(stdout: String) -> PlainHistoryCell {
     lines.push(Line::from(""));
 
     PlainHistoryCell { lines }
+}
+
+pub(crate) fn new_reasoning_block(
+    full_reasoning_buffer: String,
+    config: &Config,
+) -> TranscriptOnlyHistoryCell {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::from("thinking".magenta().italic()));
+    append_markdown(&full_reasoning_buffer, &mut lines, config);
+    lines.push(Line::from(""));
+    TranscriptOnlyHistoryCell { lines }
 }
 
 fn output_lines(

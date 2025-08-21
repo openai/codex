@@ -14,6 +14,7 @@ use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ReviewDecision;
+use codex_protocol::mcp_protocol::AuthMode;
 use codex_protocol::mcp_protocol::GitDiffToRemoteResponse;
 use mcp_types::JSONRPCErrorError;
 use mcp_types::RequestId;
@@ -30,14 +31,17 @@ use crate::outgoing_message::OutgoingNotification;
 use codex_core::protocol::InputItem as CoreInputItem;
 use codex_core::protocol::Op;
 use codex_login::CLIENT_ID;
+use codex_login::CodexAuth;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
+use codex_login::logout;
 use codex_login::run_login_server;
 use codex_protocol::mcp_protocol::APPLY_PATCH_APPROVAL_METHOD;
 use codex_protocol::mcp_protocol::AddConversationListenerParams;
 use codex_protocol::mcp_protocol::AddConversationSubscriptionResponse;
 use codex_protocol::mcp_protocol::ApplyPatchApprovalParams;
 use codex_protocol::mcp_protocol::ApplyPatchApprovalResponse;
+use codex_protocol::mcp_protocol::AuthStatusChangeNotification;
 use codex_protocol::mcp_protocol::ClientRequest;
 use codex_protocol::mcp_protocol::ConversationId;
 use codex_protocol::mcp_protocol::EXEC_COMMAND_APPROVAL_METHOD;
@@ -46,7 +50,6 @@ use codex_protocol::mcp_protocol::ExecCommandApprovalResponse;
 use codex_protocol::mcp_protocol::InputItem as WireInputItem;
 use codex_protocol::mcp_protocol::InterruptConversationParams;
 use codex_protocol::mcp_protocol::InterruptConversationResponse;
-use codex_protocol::mcp_protocol::LOGIN_CHATGPT_COMPLETE_EVENT;
 use codex_protocol::mcp_protocol::LoginChatGptCompleteNotification;
 use codex_protocol::mcp_protocol::LoginChatGptResponse;
 use codex_protocol::mcp_protocol::NewConversationParams;
@@ -57,6 +60,7 @@ use codex_protocol::mcp_protocol::SendUserMessageParams;
 use codex_protocol::mcp_protocol::SendUserMessageResponse;
 use codex_protocol::mcp_protocol::SendUserTurnParams;
 use codex_protocol::mcp_protocol::SendUserTurnResponse;
+use codex_protocol::mcp_protocol::ServerNotification;
 
 // Duration before a ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -77,6 +81,7 @@ pub(crate) struct CodexMessageProcessor {
     conversation_manager: Arc<ConversationManager>,
     outgoing: Arc<OutgoingMessageSender>,
     codex_linux_sandbox_exe: Option<PathBuf>,
+    config: Arc<Config>,
     conversation_listeners: HashMap<Uuid, oneshot::Sender<()>>,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     // Queue of pending interrupt requests per conversation. We reply when TurnAborted arrives.
@@ -88,11 +93,13 @@ impl CodexMessageProcessor {
         conversation_manager: Arc<ConversationManager>,
         outgoing: Arc<OutgoingMessageSender>,
         codex_linux_sandbox_exe: Option<PathBuf>,
+        config: Arc<Config>,
     ) -> Self {
         Self {
             conversation_manager,
             outgoing,
             codex_linux_sandbox_exe,
+            config,
             conversation_listeners: HashMap::new(),
             active_login: Arc::new(Mutex::new(None)),
             pending_interrupts: Arc::new(Mutex::new(HashMap::new())),
@@ -128,6 +135,12 @@ impl CodexMessageProcessor {
             ClientRequest::CancelLoginChatGpt { request_id, params } => {
                 self.cancel_login_chatgpt(request_id, params.login_id).await;
             }
+            ClientRequest::LogoutChatGpt { request_id } => {
+                self.logout_chatgpt(request_id).await;
+            }
+            ClientRequest::GetAuthStatus { request_id } => {
+                self.get_auth_status(request_id).await;
+            }
             ClientRequest::GitDiffToRemote { request_id, params } => {
                 self.git_diff_to_origin(request_id, params.cwd).await;
             }
@@ -135,19 +148,7 @@ impl CodexMessageProcessor {
     }
 
     async fn login_chatgpt(&mut self, request_id: RequestId) {
-        let config =
-            match Config::load_with_cli_overrides(Default::default(), ConfigOverrides::default()) {
-                Ok(cfg) => cfg,
-                Err(err) => {
-                    let error = JSONRPCErrorError {
-                        code: INTERNAL_ERROR_CODE,
-                        message: format!("error loading config for login: {err}"),
-                        data: None,
-                    };
-                    self.outgoing.send_error(request_id, error).await;
-                    return;
-                }
-            };
+        let config = self.config.as_ref();
 
         let opts = LoginServerOptions {
             open_browser: false,
@@ -199,18 +200,24 @@ impl CodexMessageProcessor {
                             (false, Some("Login timed out".to_string()))
                         }
                     };
-                    let notification = LoginChatGptCompleteNotification {
+                    let payload = LoginChatGptCompleteNotification {
                         login_id,
                         success,
                         error: error_msg,
                     };
-                    let params = serde_json::to_value(&notification).ok();
                     outgoing_clone
-                        .send_notification(OutgoingNotification {
-                            method: LOGIN_CHATGPT_COMPLETE_EVENT.to_string(),
-                            params,
-                        })
+                        .send_server_notification(ServerNotification::LoginChatGptComplete(payload))
                         .await;
+
+                    // Send an auth status change notification.
+                    if success {
+                        let payload = AuthStatusChangeNotification {
+                            auth_method: Some(AuthMode::ChatGPT),
+                        };
+                        outgoing_clone
+                            .send_server_notification(ServerNotification::AuthStatusChange(payload))
+                            .await;
+                    }
 
                     // Clear the active login if it matches this attempt. It may have been replaced or cancelled.
                     let mut guard = active_login.lock().await;
@@ -258,6 +265,78 @@ impl CodexMessageProcessor {
             };
             self.outgoing.send_error(request_id, error).await;
         }
+    }
+
+    async fn logout_chatgpt(&mut self, request_id: RequestId) {
+        {
+            // Cancel any active login attempt.
+            let mut guard = self.active_login.lock().await;
+            if let Some(active) = guard.take() {
+                active.drop();
+            }
+        }
+
+        // Load config to locate codex_home for persistent logout.
+        let config = self.config.as_ref();
+
+        if let Err(err) = logout(&config.codex_home) {
+            let error = JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("logout failed: {err}"),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
+        self.outgoing
+            .send_response(
+                request_id,
+                codex_protocol::mcp_protocol::LogoutChatGptResponse {},
+            )
+            .await;
+
+        // Send auth status change notification.
+        let payload = AuthStatusChangeNotification { auth_method: None };
+        self.outgoing
+            .send_server_notification(ServerNotification::AuthStatusChange(payload))
+            .await;
+    }
+
+    async fn get_auth_status(&self, request_id: RequestId) {
+        // Load config to determine codex_home and preferred auth method.
+        let config = self.config.as_ref();
+
+        let preferred_auth_method: AuthMode = config.preferred_auth_method;
+        let response =
+            match CodexAuth::from_codex_home(&config.codex_home, config.preferred_auth_method) {
+                Ok(Some(auth)) => {
+                    // Verify that the current auth mode has a valid, non-empty token.
+                    // If token acquisition fails or is empty, treat as unauthenticated.
+                    let reported_auth_method = match auth.get_token().await {
+                        Ok(token) if !token.is_empty() => Some(auth.mode),
+                        Ok(_) => None, // Empty token
+                        Err(err) => {
+                            tracing::warn!("failed to get token for auth status: {err}");
+                            None
+                        }
+                    };
+                    codex_protocol::mcp_protocol::GetAuthStatusResponse {
+                        auth_method: reported_auth_method,
+                        preferred_auth_method,
+                    }
+                }
+                Ok(None) => codex_protocol::mcp_protocol::GetAuthStatusResponse {
+                    auth_method: None,
+                    preferred_auth_method,
+                },
+                Err(_) => codex_protocol::mcp_protocol::GetAuthStatusResponse {
+                    auth_method: None,
+                    preferred_auth_method,
+                },
+            };
+
+        self.outgoing.send_response(request_id, response).await;
     }
 
     async fn process_new_conversation(&self, request_id: RequestId, params: NewConversationParams) {

@@ -3,6 +3,7 @@ use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
 
 use codex_core::protocol::Event;
+use codex_protocol::mcp_protocol::ServerNotification;
 use mcp_types::JSONRPC_VERSION;
 use mcp_types::JSONRPCError;
 use mcp_types::JSONRPCErrorError;
@@ -119,6 +120,17 @@ impl OutgoingMessageSender {
             params: Some(params.clone()),
         })
         .await;
+    }
+
+    pub(crate) async fn send_server_notification(&self, notification: ServerNotification) {
+        let method = format!("codex/event/{}", notification);
+        let params = match serde_json::to_value(&notification) {
+            Ok(serde_json::Value::Object(mut map)) => map.remove("data"),
+            _ => None,
+        };
+        let outgoing_message =
+            OutgoingMessage::Notification(OutgoingNotification { method, params });
+        let _ = self.sender.send(outgoing_message).await;
     }
 
     pub(crate) async fn send_notification(&self, notification: OutgoingNotification) {
