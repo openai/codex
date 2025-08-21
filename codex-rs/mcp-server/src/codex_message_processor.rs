@@ -268,12 +268,13 @@ impl CodexMessageProcessor {
     }
 
     async fn logout_chatgpt(&mut self, request_id: RequestId) {
-        // Cancel any active login attempt.
-        let mut guard = self.active_login.lock().await;
-        if let Some(active) = guard.take() {
-            active.drop();
+        {
+            // Cancel any active login attempt.
+            let mut guard = self.active_login.lock().await;
+            if let Some(active) = guard.take() {
+                active.drop();
+            }
         }
-        drop(guard);
 
         // Load config to locate codex_home for persistent logout.
         let config = self.config.as_ref();

@@ -124,9 +124,9 @@ impl OutgoingMessageSender {
 
     pub(crate) async fn send_notification<N>(&self, notification: N)
     where
-        N: IntoOutgoingNotification,
+        N: Into<OutgoingNotification>,
     {
-        let outgoing_notification = notification.into_outgoing_notification();
+        let outgoing_notification: OutgoingNotification = notification.into();
         let outgoing_message = OutgoingMessage::Notification(outgoing_notification);
         let _ = self.sender.send(outgoing_message).await;
     }
@@ -195,23 +195,11 @@ pub(crate) struct OutgoingNotification {
     pub params: Option<serde_json::Value>,
 }
 
-/// Trait to allow `send_notification` to accept either a fully-formed
-/// `OutgoingNotification` or a higher-level `ServerNotification` enum.
-pub(crate) trait IntoOutgoingNotification {
-    fn into_outgoing_notification(self) -> OutgoingNotification;
-}
-
-impl IntoOutgoingNotification for OutgoingNotification {
-    fn into_outgoing_notification(self) -> OutgoingNotification {
-        self
-    }
-}
-
-impl IntoOutgoingNotification for CodexServerNotification {
-    fn into_outgoing_notification(self) -> OutgoingNotification {
+impl From<CodexServerNotification> for OutgoingNotification {
+    fn from(value: CodexServerNotification) -> Self {
         // Prefix all Codex server notifications with the MCP event namespace.
-        let method = format!("codex/event/{}", self);
-        let params = match &self {
+        let method = format!("codex/event/{}", value);
+        let params = match &value {
             CodexServerNotification::AuthStatusChange(p) => serde_json::to_value(p).ok(),
             CodexServerNotification::LoginChatGptComplete(p) => serde_json::to_value(p).ok(),
         };
