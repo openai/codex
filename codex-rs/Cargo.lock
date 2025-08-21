@@ -713,7 +713,6 @@ dependencies = [
  "os_info",
  "predicates",
  "pretty_assertions",
- "quick-xml",
  "rand 0.9.2",
  "regex-lite",
  "reqwest",
@@ -3493,7 +3492,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9845d9dccf565065824e69f9f235fafba1587031eda353c1f1561cd6a6be78f4"
 dependencies = [
  "memchr",
- "serde",
 ]
 
 [[package]]

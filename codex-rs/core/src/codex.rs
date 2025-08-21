@@ -508,10 +508,10 @@ impl Session {
             conversation_items.push(Prompt::format_user_instructions_message(user_instructions));
         }
         conversation_items.push(ResponseItem::from(EnvironmentContext::new(
-            turn_context.cwd.to_path_buf(),
-            turn_context.approval_policy,
-            turn_context.sandbox_policy.clone(),
-            sess.user_shell.clone(),
+            Some(turn_context.cwd.clone()),
+            Some(turn_context.approval_policy),
+            Some(turn_context.sandbox_policy.clone()),
+            Some(sess.user_shell.clone()),
         )));
         sess.record_conversation_items(&conversation_items).await;
 
@@ -1068,10 +1068,11 @@ async fn submission_loop(
                 turn_context = Arc::new(new_turn_context);
                 if cwd.is_some() || approval_policy.is_some() || sandbox_policy.is_some() {
                     sess.record_conversation_items(&[ResponseItem::from(EnvironmentContext::new(
-                        new_cwd,
-                        new_approval_policy,
-                        new_sandbox_policy,
-                        sess.user_shell.clone(),
+                        cwd,
+                        approval_policy,
+                        sandbox_policy,
+                        // Shell is not configurable from turn to turn
+                        None,
                     ))])
                     .await;
                 }

@@ -8,13 +8,11 @@ use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use futures::Stream;
-use serde::Deserialize;
 use serde::Serialize;
 use std::borrow::Cow;
 use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
-use strum_macros::Display as DeriveDisplay;
 use tokio::sync::mpsc;
 
 /// The `instructions` field in the payload sent to a model should always start
