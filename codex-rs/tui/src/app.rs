@@ -2,15 +2,11 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::chatwidget::ChatWidget;
 use crate::file_search::FileSearchManager;
-use crate::get_git_diff::get_git_diff;
-use crate::slash_command::SlashCommand;
 use crate::transcript_app::run_transcript_app;
 use crate::tui;
 use crate::tui::TuiEvent;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
-use codex_core::protocol::Event;
-use codex_core::protocol::Op;
 use codex_core::protocol::TokenUsage;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
@@ -140,6 +136,18 @@ impl App {
 
     fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
         match event {
+            AppEvent::NewSession => {
+                self.chat_widget = ChatWidget::new(
+                    self.config.clone(),
+                    self.server.clone(),
+                    tui.frame_requester(),
+                    self.app_event_tx.clone(),
+                    None,
+                    Vec::new(),
+                    self.enhanced_keys_supported,
+                );
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::InsertHistoryLines(lines) => {
                 self.transcript_lines.extend(lines.clone());
                 tui.insert_history_lines(lines);
@@ -183,111 +191,6 @@ impl App {
             AppEvent::DiffResult(text) => {
                 self.chat_widget.add_diff_output(text);
             }
-            AppEvent::DispatchCommand(command) => match command {
-                SlashCommand::New => {
-                    // User accepted – switch to chat view.
-                    let new_widget = ChatWidget::new(
-                        self.config.clone(),
-                        self.server.clone(),
-                        tui.frame_requester(),
-                        self.app_event_tx.clone(),
-                        None,
-                        Vec::new(),
-                        self.enhanced_keys_supported,
-                    );
-                    self.chat_widget = new_widget;
-                    tui.frame_requester().schedule_frame();
-                }
-                SlashCommand::Init => {
-                    // Guard: do not run if a task is active.
-                    const INIT_PROMPT: &str = include_str!("../prompt_for_init_command.md");
-                    self.chat_widget
-                        .submit_text_message(INIT_PROMPT.to_string());
-                }
-                SlashCommand::Compact => {
-                    self.chat_widget.clear_token_usage();
-                    self.app_event_tx.send(AppEvent::CodexOp(Op::Compact));
-                }
-                SlashCommand::Model => {
-                    self.chat_widget.open_model_popup();
-                }
-                SlashCommand::Approvals => {
-                    self.chat_widget.open_approvals_popup();
-                }
-                SlashCommand::Quit => {
-                    return Ok(false);
-                }
-                SlashCommand::Logout => {
-                    if let Err(e) = codex_login::logout(&self.config.codex_home) {
-                        tracing::error!("failed to logout: {e}");
-                    }
-                    return Ok(false);
-                }
-                SlashCommand::Diff => {
-                    self.chat_widget.add_diff_in_progress();
-                    let tx = self.app_event_tx.clone();
-                    tokio::spawn(async move {
-                        let text = match get_git_diff().await {
-                            Ok((is_git_repo, diff_text)) => {
-                                if is_git_repo {
-                                    diff_text
-                                } else {
-                                    "`/diff` — _not inside a git repository_".to_string()
-                                }
-                            }
-                            Err(e) => format!("Failed to compute diff: {e}"),
-                        };
-                        tx.send(AppEvent::DiffResult(text));
-                    });
-                }
-                SlashCommand::Mention => {
-                    self.chat_widget.insert_str("@");
-                }
-                SlashCommand::Status => {
-                    self.chat_widget.add_status_output();
-                }
-                SlashCommand::Mcp => {
-                    self.chat_widget.add_mcp_output();
-                }
-                #[cfg(debug_assertions)]
-                SlashCommand::TestApproval => {
-                    use codex_core::protocol::EventMsg;
-                    use std::collections::HashMap;
-
-                    use codex_core::protocol::ApplyPatchApprovalRequestEvent;
-                    use codex_core::protocol::FileChange;
-
-                    self.app_event_tx.send(AppEvent::CodexEvent(Event {
-                        id: "1".to_string(),
-                        // msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
-                        //     call_id: "1".to_string(),
-                        //     command: vec!["git".into(), "apply".into()],
-                        //     cwd: self.config.cwd.clone(),
-                        //     reason: Some("test".to_string()),
-                        // }),
-                        msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
-                            call_id: "1".to_string(),
-                            changes: HashMap::from([
-                                (
-                                    PathBuf::from("/tmp/test.txt"),
-                                    FileChange::Add {
-                                        content: "test".to_string(),
-                                    },
-                                ),
-                                (
-                                    PathBuf::from("/tmp/test2.txt"),
-                                    FileChange::Update {
-                                        unified_diff: "+test\n-test2".to_string(),
-                                        move_path: None,
-                                    },
-                                ),
-                            ]),
-                            reason: None,
-                            grant_root: Some(PathBuf::from("/tmp")),
-                        }),
-                    }));
-                }
-            },
             AppEvent::StartFileSearch(query) => {
                 if !query.is_empty() {
                     self.file_search.on_user_query(query);
