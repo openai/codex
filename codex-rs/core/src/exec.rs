@@ -3,7 +3,6 @@ use std::os::unix::process::ExitStatusExt;
 
 use std::collections::HashMap;
 use std::io;
-use std::path::Path;
 use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::time::Duration;
@@ -18,6 +17,7 @@ use tokio::process::Child;
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::error::SandboxErr;
+use crate::landlock::spawn_command_under_linux_sandbox;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::ExecCommandOutputDeltaEvent;
@@ -161,65 +161,6 @@ pub async fn process_exec_tool_call(
             Err(err)
         }
     }
-}
-
-/// Spawn a shell tool command under the Linux Landlock+seccomp sandbox helper
-/// (codex-linux-sandbox).
-///
-/// Unlike macOS Seatbelt where we directly embed the policy text, the Linux
-/// helper accepts a list of `--sandbox-permission`/`-s` flags mirroring the
-/// public CLI. We convert the internal [`SandboxPolicy`] representation into
-/// the equivalent CLI options.
-pub async fn spawn_command_under_linux_sandbox<P>(
-    codex_linux_sandbox_exe: P,
-    command: Vec<String>,
-    sandbox_policy: &SandboxPolicy,
-    cwd: PathBuf,
-    stdio_policy: StdioPolicy,
-    env: HashMap<String, String>,
-) -> std::io::Result<Child>
-where
-    P: AsRef<Path>,
-{
-    let args = create_linux_sandbox_command_args(command, sandbox_policy, &cwd);
-    let arg0 = Some("codex-linux-sandbox");
-    spawn_child_async(
-        codex_linux_sandbox_exe.as_ref().to_path_buf(),
-        args,
-        arg0,
-        cwd,
-        sandbox_policy,
-        stdio_policy,
-        env,
-    )
-    .await
-}
-
-/// Converts the sandbox policy into the CLI invocation for `codex-linux-sandbox`.
-fn create_linux_sandbox_command_args(
-    command: Vec<String>,
-    sandbox_policy: &SandboxPolicy,
-    cwd: &Path,
-) -> Vec<String> {
-    #[expect(clippy::expect_used)]
-    let sandbox_policy_cwd = cwd.to_str().expect("cwd must be valid UTF-8").to_string();
-
-    #[expect(clippy::expect_used)]
-    let sandbox_policy_json =
-        serde_json::to_string(sandbox_policy).expect("Failed to serialize SandboxPolicy to JSON");
-
-    let mut linux_cmd: Vec<String> = vec![
-        sandbox_policy_cwd,
-        sandbox_policy_json,
-        // Separator so that command arguments starting with `-` are not parsed as
-        // options of the helper itself.
-        "--".to_string(),
-    ];
-
-    // Append the original tool command.
-    linux_cmd.extend(command);
-
-    linux_cmd
 }
 
 /// We don't have a fully deterministic way to tell if our command failed

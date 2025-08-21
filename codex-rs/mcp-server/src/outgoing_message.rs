@@ -101,7 +101,7 @@ impl OutgoingMessageSender {
         event: &Event,
         meta: Option<OutgoingNotificationMeta>,
     ) {
-        #[allow(clippy::expect_used)]
+        #[expect(clippy::expect_used)]
         let event_json = serde_json::to_value(event).expect("Event must serialize");
 
         let params = if let Ok(params) = serde_json::to_value(OutgoingNotificationParams {
@@ -119,9 +119,6 @@ impl OutgoingMessageSender {
             params: Some(params.clone()),
         })
         .await;
-
-        self.send_event_as_notification_new_schema(event, Some(params.clone()))
-            .await;
     }
 
     pub(crate) async fn send_notification(&self, notification: OutgoingNotification) {
@@ -129,19 +126,6 @@ impl OutgoingMessageSender {
         let _ = self.sender.send(outgoing_message).await;
     }
 
-    // should be backwards compatible.
-    // it will replace send_event_as_notification eventually.
-    async fn send_event_as_notification_new_schema(
-        &self,
-        event: &Event,
-        params: Option<serde_json::Value>,
-    ) {
-        let outgoing_message = OutgoingMessage::Notification(OutgoingNotification {
-            method: event.msg.to_string(),
-            params,
-        });
-        let _ = self.sender.send(outgoing_message).await;
-    }
     pub(crate) async fn send_error(&self, id: RequestId, error: JSONRPCErrorError) {
         let outgoing_message = OutgoingMessage::Error(OutgoingError { id, error });
         let _ = self.sender.send(outgoing_message).await;
@@ -244,8 +228,6 @@ pub(crate) struct OutgoingError {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
-
     use codex_core::protocol::EventMsg;
     use codex_core::protocol::SessionConfiguredEvent;
     use pretty_assertions::assert_eq;
@@ -283,17 +265,6 @@ mod tests {
             panic!("Event must serialize");
         };
         assert_eq!(params, Some(expected_params.clone()));
-
-        let result2 = outgoing_rx.recv().await.unwrap();
-        let OutgoingMessage::Notification(OutgoingNotification {
-            method: method2,
-            params: params2,
-        }) = result2
-        else {
-            panic!("expected Notification for second message");
-        };
-        assert_eq!(method2, event.msg.to_string());
-        assert_eq!(params2, Some(expected_params));
     }
 
     #[tokio::test]
@@ -338,16 +309,5 @@ mod tests {
             }
         });
         assert_eq!(params.unwrap(), expected_params);
-
-        let result2 = outgoing_rx.recv().await.unwrap();
-        let OutgoingMessage::Notification(OutgoingNotification {
-            method: method2,
-            params: params2,
-        }) = result2
-        else {
-            panic!("expected Notification for second message");
-        };
-        assert_eq!(method2, event.msg.to_string());
-        assert_eq!(params2.unwrap(), expected_params);
     }
 }

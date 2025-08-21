@@ -21,6 +21,7 @@ use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TaskCompleteEvent;
+use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnDiffEvent;
 use owo_colors::OwoColorize;
 use owo_colors::Style;
@@ -191,7 +192,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     self.answer_started = true;
                 }
                 print!("{delta}");
-                #[allow(clippy::expect_used)]
+                #[expect(clippy::expect_used)]
                 std::io::stdout().flush().expect("could not flush stdout");
             }
             EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta }) => {
@@ -207,7 +208,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     self.reasoning_started = true;
                 }
                 print!("{delta}");
-                #[allow(clippy::expect_used)]
+                #[expect(clippy::expect_used)]
                 std::io::stdout().flush().expect("could not flush stdout");
             }
             EventMsg::AgentReasoningSectionBreak(_) => {
@@ -215,7 +216,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     return CodexStatus::Running;
                 }
                 println!();
-                #[allow(clippy::expect_used)]
+                #[expect(clippy::expect_used)]
                 std::io::stdout().flush().expect("could not flush stdout");
             }
             EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text }) => {
@@ -224,7 +225,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 }
                 if !self.raw_reasoning_started {
                     print!("{text}");
-                    #[allow(clippy::expect_used)]
+                    #[expect(clippy::expect_used)]
                     std::io::stdout().flush().expect("could not flush stdout");
                 } else {
                     println!();
@@ -241,7 +242,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     self.raw_reasoning_started = true;
                 }
                 print!("{delta}");
-                #[allow(clippy::expect_used)]
+                #[expect(clippy::expect_used)]
                 std::io::stdout().flush().expect("could not flush stdout");
             }
             EventMsg::AgentMessage(AgentMessageEvent { message }) => {
@@ -522,6 +523,17 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             EventMsg::GetHistoryEntryResponse(_) => {
                 // Currently ignored in exec output.
             }
+            EventMsg::McpListToolsResponse(_) => {
+                // Currently ignored in exec output.
+            }
+            EventMsg::TurnAborted(abort_reason) => match abort_reason.reason {
+                TurnAbortReason::Interrupted => {
+                    ts_println!(self, "task interrupted");
+                }
+                TurnAbortReason::Replaced => {
+                    ts_println!(self, "task aborted: replaced by a new task");
+                }
+            },
             EventMsg::ShutdownComplete => return CodexStatus::Shutdown,
         }
         CodexStatus::Running

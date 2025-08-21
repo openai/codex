@@ -1,9 +1,6 @@
 use crate::config_profile::ConfigProfile;
 use crate::config_types::History;
 use crate::config_types::McpServerConfig;
-use crate::config_types::ReasoningEffort;
-use crate::config_types::ReasoningSummary;
-use crate::config_types::SandboxMode;
 use crate::config_types::SandboxWorkspaceWrite;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::config_types::ShellEnvironmentPolicyToml;
@@ -16,6 +13,10 @@ use crate::model_provider_info::built_in_model_providers;
 use crate::openai_model_info::get_model_info;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
+use codex_login::AuthMode;
+use codex_protocol::config_types::ReasoningEffort;
+use codex_protocol::config_types::ReasoningSummary;
+use codex_protocol::config_types::SandboxMode;
 use dirs::home_dir;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -33,6 +34,8 @@ const OPENAI_DEFAULT_MODEL: &str = "gpt-5";
 pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 
 const CONFIG_TOML_FILE: &str = "config.toml";
+
+const DEFAULT_RESPONSES_ORIGINATOR_HEADER: &str = "codex_cli_rs";
 
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
@@ -139,8 +142,8 @@ pub struct Config {
     /// When this program is invoked, arg0 will be set to `codex-linux-sandbox`.
     pub codex_linux_sandbox_exe: Option<PathBuf>,
 
-    /// If not "none", the value to use for `reasoning.effort` when making a
-    /// request using the Responses API.
+    /// Value to use for `reasoning.effort` when making a request using the
+    /// Responses API.
     pub model_reasoning_effort: ReasoningEffort,
 
     /// If not "none", the value to use for `reasoning.summary` when making a
@@ -156,8 +159,16 @@ pub struct Config {
     /// Include an experimental plan tool that the model can use to update its current plan and status of each step.
     pub include_plan_tool: bool,
 
+    /// Include the `apply_patch` tool for models that benefit from invoking
+    /// file edits as a structured tool call. When unset, this falls back to the
+    /// model family's default preference.
+    pub include_apply_patch_tool: bool,
+
     /// The value for the `originator` header included with Responses API requests.
-    pub internal_originator: Option<String>,
+    pub responses_originator_header: String,
+
+    /// If set to `true`, the API key will be signed with the `originator` header.
+    pub preferred_auth_method: AuthMode,
 }
 
 impl Config {
@@ -401,9 +412,12 @@ pub struct ConfigToml {
     pub experimental_instructions_file: Option<PathBuf>,
 
     /// The value for the `originator` header included with Responses API requests.
-    pub internal_originator: Option<String>,
+    pub responses_originator_header_internal_override: Option<String>,
 
     pub projects: Option<HashMap<String, ProjectConfig>>,
+
+    /// If set to `true`, the API key will be signed with the `originator` header.
+    pub preferred_auth_method: Option<AuthMode>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -480,6 +494,7 @@ pub struct ConfigOverrides {
     pub codex_linux_sandbox_exe: Option<PathBuf>,
     pub base_instructions: Option<String>,
     pub include_plan_tool: Option<bool>,
+    pub include_apply_patch_tool: Option<bool>,
     pub disable_response_storage: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
 }
@@ -505,6 +520,7 @@ impl Config {
             codex_linux_sandbox_exe,
             base_instructions,
             include_plan_tool,
+            include_apply_patch_tool,
             disable_response_storage,
             show_raw_agent_reasoning,
         } = overrides;
@@ -581,6 +597,7 @@ impl Config {
                 needs_special_apply_patch_instructions: false,
                 supports_reasoning_summaries,
                 uses_local_shell_tool: false,
+                uses_apply_patch_tool: false,
             }
         });
 
@@ -606,6 +623,13 @@ impl Config {
         let file_base_instructions =
             Self::get_base_instructions(experimental_instructions_path, &resolved_cwd)?;
         let base_instructions = base_instructions.or(file_base_instructions);
+
+        let include_apply_patch_tool_val =
+            include_apply_patch_tool.unwrap_or(model_family.uses_apply_patch_tool);
+
+        let responses_originator_header: String = cfg
+            .responses_originator_header_internal_override
+            .unwrap_or(DEFAULT_RESPONSES_ORIGINATOR_HEADER.to_owned());
 
         let config = Self {
             model,
@@ -659,7 +683,9 @@ impl Config {
 
             experimental_resume,
             include_plan_tool: include_plan_tool.unwrap_or(false),
-            internal_originator: cfg.internal_originator,
+            include_apply_patch_tool: include_apply_patch_tool_val,
+            responses_originator_header,
+            preferred_auth_method: cfg.preferred_auth_method.unwrap_or(AuthMode::ChatGPT),
         };
         Ok(config)
     }
@@ -739,10 +765,10 @@ fn default_model() -> String {
 pub fn find_codex_home() -> std::io::Result<PathBuf> {
     // Honor the `CODEX_HOME` environment variable when it is set to allow users
     // (and tests) to override the default location.
-    if let Ok(val) = std::env::var("CODEX_HOME") {
-        if !val.is_empty() {
-            return PathBuf::from(val).canonicalize();
-        }
+    if let Ok(val) = std::env::var("CODEX_HOME")
+        && !val.is_empty()
+    {
+        return PathBuf::from(val).canonicalize();
     }
 
     let mut p = home_dir().ok_or_else(|| {
@@ -765,7 +791,6 @@ pub fn log_dir(cfg: &Config) -> std::io::Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used)]
     use crate::config_types::HistoryPersistence;
 
     use super::*;
@@ -1023,7 +1048,9 @@ disable_response_storage = true
                 experimental_resume: None,
                 base_instructions: None,
                 include_plan_tool: false,
-                internal_originator: None,
+                include_apply_patch_tool: false,
+                responses_originator_header: "codex_cli_rs".to_string(),
+                preferred_auth_method: AuthMode::ChatGPT,
             },
             o3_profile_config
         );
@@ -1074,7 +1101,9 @@ disable_response_storage = true
             experimental_resume: None,
             base_instructions: None,
             include_plan_tool: false,
-            internal_originator: None,
+            include_apply_patch_tool: false,
+            responses_originator_header: "codex_cli_rs".to_string(),
+            preferred_auth_method: AuthMode::ChatGPT,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -1140,7 +1169,9 @@ disable_response_storage = true
             experimental_resume: None,
             base_instructions: None,
             include_plan_tool: false,
-            internal_originator: None,
+            include_apply_patch_tool: false,
+            responses_originator_header: "codex_cli_rs".to_string(),
+            preferred_auth_method: AuthMode::ChatGPT,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);

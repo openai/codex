@@ -1,4 +1,3 @@
-#![expect(clippy::expect_used)]
 use mcp_types::ClientCapabilities;
 use mcp_types::ClientRequest;
 use mcp_types::Implementation;

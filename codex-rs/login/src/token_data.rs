@@ -3,10 +3,15 @@ use serde::Deserialize;
 use serde::Serialize;
 use thiserror::Error;
 
+use crate::AuthMode;
+
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Default)]
 pub struct TokenData {
     /// Flat info parsed from the JWT in auth.json.
-    #[serde(deserialize_with = "deserialize_id_token")]
+    #[serde(
+        deserialize_with = "deserialize_id_token",
+        serialize_with = "serialize_id_token"
+    )]
     pub id_token: IdTokenInfo,
 
     /// This is a JWT.
@@ -20,22 +25,42 @@ pub struct TokenData {
 impl TokenData {
     /// Returns true if this is a plan that should use the traditional
     /// "metered" billing via an API key.
-    pub(crate) fn is_plan_that_should_use_api_key(&self) -> bool {
+    pub(crate) fn should_use_api_key(
+        &self,
+        preferred_auth_method: AuthMode,
+        is_openai_email: bool,
+    ) -> bool {
+        if preferred_auth_method == AuthMode::ApiKey {
+            return true;
+        }
+        // If the email is an OpenAI email, use AuthMode::ChatGPT unless preferred_auth_method is AuthMode::ApiKey.
+        if is_openai_email {
+            return false;
+        }
+
         self.id_token
             .chatgpt_plan_type
             .as_ref()
             .is_none_or(|plan| plan.is_plan_that_should_use_api_key())
     }
+
+    pub fn is_openai_email(&self) -> bool {
+        self.id_token
+            .email
+            .as_deref()
+            .is_some_and(|email| email.trim().to_ascii_lowercase().ends_with("@openai.com"))
+    }
 }
 
 /// Flat subset of useful claims in id_token from auth.json.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct IdTokenInfo {
     pub email: Option<String>,
     /// The ChatGPT subscription plan type
     /// (e.g., "free", "plus", "pro", "business", "enterprise", "edu").
     /// (Note: ae has not verified that those are the exact values.)
     pub(crate) chatgpt_plan_type: Option<PlanType>,
+    pub raw_jwt: String,
 }
 
 impl IdTokenInfo {
@@ -126,6 +151,7 @@ pub(crate) fn parse_id_token(id_token: &str) -> Result<IdTokenInfo, IdTokenInfoE
     Ok(IdTokenInfo {
         email: claims.email,
         chatgpt_plan_type: claims.auth.and_then(|a| a.chatgpt_plan_type),
+        raw_jwt: id_token.to_string(),
     })
 }
 
@@ -137,15 +163,20 @@ where
     parse_id_token(&s).map_err(serde::de::Error::custom)
 }
 
+fn serialize_id_token<S>(id_token: &IdTokenInfo, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(&id_token.raw_jwt)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde::Serialize;
 
     #[test]
-    #[expect(clippy::expect_used, clippy::unwrap_used)]
     fn id_token_info_parses_email_and_plan() {
-        // Build a fake JWT with a URL-safe base64 payload containing email and plan.
         #[derive(Serialize)]
         struct Header {
             alg: &'static str,

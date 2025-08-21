@@ -183,6 +183,7 @@ impl From<Vec<InputItem>> for ResponseInputItem {
                             None
                         }
                     },
+                    _ => None,
                 })
                 .collect::<Vec<ContentItem>>(),
         }
@@ -266,7 +267,6 @@ impl std::ops::Deref for FunctionCallOutputPayload {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
     use super::*;
 
     #[test]

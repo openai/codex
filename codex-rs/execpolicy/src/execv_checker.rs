@@ -140,7 +140,6 @@ fn is_executable_file(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
     use tempfile::TempDir;
 
     use super::*;
@@ -215,7 +214,12 @@ system_path=[{fake_cp:?}]
 
         // Only readable folders specified.
         assert_eq!(
-            checker.check(valid_exec.clone(), &cwd, &[root_path.clone()], &[]),
+            checker.check(
+                valid_exec.clone(),
+                &cwd,
+                std::slice::from_ref(&root_path),
+                &[]
+            ),
             Err(WriteablePathNotInWriteableFolders {
                 file: dest_path.clone(),
                 folders: vec![]
@@ -227,8 +231,8 @@ system_path=[{fake_cp:?}]
             checker.check(
                 valid_exec.clone(),
                 &cwd,
-                &[root_path.clone()],
-                &[root_path.clone()]
+                std::slice::from_ref(&root_path),
+                std::slice::from_ref(&root_path)
             ),
             Ok(cp.clone()),
         );
@@ -247,8 +251,8 @@ system_path=[{fake_cp:?}]
             checker.check(
                 valid_exec_call_folders_as_args,
                 &cwd,
-                &[root_path.clone()],
-                &[root_path.clone()]
+                std::slice::from_ref(&root_path),
+                std::slice::from_ref(&root_path)
             ),
             Ok(cp.clone()),
         );
@@ -270,8 +274,8 @@ system_path=[{fake_cp:?}]
             checker.check(
                 exec_with_parent_of_readable_folder,
                 &cwd,
-                &[root_path.clone()],
-                &[dest_path.clone()]
+                std::slice::from_ref(&root_path),
+                std::slice::from_ref(&dest_path)
             ),
             Err(ReadablePathNotInReadableFolders {
                 file: root_path.parent().unwrap().to_path_buf(),

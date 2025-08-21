@@ -1,8 +1,6 @@
 use std::path::PathBuf;
 
 use codex_core::config::set_project_trusted;
-use codex_core::protocol::AskForApproval;
-use codex_core::protocol::SandboxPolicy;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
@@ -18,15 +16,10 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 
-use crate::colors::LIGHT_BLUE;
-
 use crate::onboarding::onboarding_screen::KeyboardHandler;
 use crate::onboarding::onboarding_screen::StepStateProvider;
 
 use super::onboarding_screen::StepState;
-use crate::app::ChatWidgetArgs;
-use std::sync::Arc;
-use std::sync::Mutex;
 
 pub(crate) struct TrustDirectoryWidget {
     pub codex_home: PathBuf,
@@ -35,11 +28,10 @@ pub(crate) struct TrustDirectoryWidget {
     pub selection: Option<TrustDirectorySelection>,
     pub highlighted: TrustDirectorySelection,
     pub error: Option<String>,
-    pub chat_widget_args: Arc<Mutex<ChatWidgetArgs>>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum TrustDirectorySelection {
+pub enum TrustDirectorySelection {
     Trust,
     DontTrust,
 }
@@ -77,13 +69,7 @@ impl WidgetRef for &TrustDirectoryWidget {
             |idx: usize, option: TrustDirectorySelection, text: &str| -> Line<'static> {
                 let is_selected = self.highlighted == option;
                 if is_selected {
-                    Line::from(vec![
-                        Span::styled(
-                            format!("> {}. ", idx + 1),
-                            Style::default().fg(LIGHT_BLUE).add_modifier(Modifier::DIM),
-                        ),
-                        Span::styled(text.to_owned(), Style::default().fg(LIGHT_BLUE)),
-                    ])
+                    Line::from(format!("> {}. {text}", idx + 1)).cyan()
                 } else {
                     Line::from(format!("  {}. {}", idx + 1, text))
                 }
@@ -117,6 +103,8 @@ impl WidgetRef for &TrustDirectoryWidget {
             lines.push(Line::from(format!("  {error}")).fg(Color::Red));
             lines.push(Line::from(""));
         }
+        // AE: Following styles.md, this should probably be Cyan because it's a user input tip.
+        //     But leaving this for a future cleanup.
         lines.push(Line::from("  Press Enter to continue").add_modifier(Modifier::DIM));
 
         Paragraph::new(lines)
@@ -160,13 +148,6 @@ impl TrustDirectoryWidget {
             tracing::error!("Failed to set project trusted: {e:?}");
             self.error = Some(e.to_string());
             // self.error = Some("Failed to set project trusted".to_string());
-        }
-
-        // Update the in-memory chat config for this session to a more permissive
-        // policy suitable for a trusted workspace.
-        if let Ok(mut args) = self.chat_widget_args.lock() {
-            args.config.approval_policy = AskForApproval::OnRequest;
-            args.config.sandbox_policy = SandboxPolicy::new_workspace_write_policy();
         }
 
         self.selection = Some(TrustDirectorySelection::Trust);

@@ -167,10 +167,10 @@ impl ModelProviderInfo {
 
         if let Some(env_headers) = &self.env_http_headers {
             for (header, env_var) in env_headers {
-                if let Ok(val) = std::env::var(env_var) {
-                    if !val.trim().is_empty() {
-                        builder = builder.header(header, val);
-                    }
+                if let Ok(val) = std::env::var(env_var)
+                    && !val.trim().is_empty()
+                {
+                    builder = builder.header(header, val);
                 }
             }
         }
@@ -322,7 +322,6 @@ pub fn create_oss_provider_with_base_url(base_url: &str) -> ModelProviderInfo {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
     use super::*;
     use pretty_assertions::assert_eq;
 

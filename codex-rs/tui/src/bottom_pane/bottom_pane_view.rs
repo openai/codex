@@ -6,17 +6,11 @@ use ratatui::layout::Rect;
 use super::BottomPane;
 use super::CancellationEvent;
 
-/// Type to use for a method that may require a redraw of the UI.
-pub(crate) enum ConditionalUpdate {
-    NeedsRedraw,
-    NoRedraw,
-}
-
 /// Trait implemented by every view that can be shown in the bottom pane.
-pub(crate) trait BottomPaneView<'a> {
+pub(crate) trait BottomPaneView {
     /// Handle a key event while the view is active. A redraw is always
     /// scheduled after this call.
-    fn handle_key_event(&mut self, _pane: &mut BottomPane<'a>, _key_event: KeyEvent) {}
+    fn handle_key_event(&mut self, _pane: &mut BottomPane, _key_event: KeyEvent) {}
 
     /// Return `true` if the view has finished and should be removed.
     fn is_complete(&self) -> bool {
@@ -24,7 +18,7 @@ pub(crate) trait BottomPaneView<'a> {
     }
 
     /// Handle Ctrl-C while this view is active.
-    fn on_ctrl_c(&mut self, _pane: &mut BottomPane<'a>) -> CancellationEvent {
+    fn on_ctrl_c(&mut self, _pane: &mut BottomPane) -> CancellationEvent {
         CancellationEvent::Ignored
     }
 
@@ -34,9 +28,9 @@ pub(crate) trait BottomPaneView<'a> {
     /// Render the view: this will be displayed in place of the composer.
     fn render(&self, area: Rect, buf: &mut Buffer);
 
-    /// Update the status indicator text.
-    fn update_status_text(&mut self, _text: String) -> ConditionalUpdate {
-        ConditionalUpdate::NoRedraw
+    /// Update the status indicator animated header. Default no-op.
+    fn update_status_header(&mut self, _header: String) {
+        // no-op
     }
 
     /// Called when task completes to check if the view should be hidden.
@@ -52,4 +46,8 @@ pub(crate) trait BottomPaneView<'a> {
     ) -> Option<ApprovalRequest> {
         Some(request)
     }
+
+    /// Optional hook for views that expose a live status line. Views that do not
+    /// support this can ignore the call.
+    fn update_status_text(&mut self, _text: String) {}
 }

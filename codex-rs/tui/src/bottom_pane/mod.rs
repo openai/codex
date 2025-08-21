@@ -1,7 +1,7 @@
 //! Bottom pane: shows the ChatComposer or a BottomPaneView, if one is active.
 
-use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::tui::FrameRequester;
 use crate::user_approval_widget::ApprovalRequest;
 use bottom_pane_view::BottomPaneView;
 use codex_core::protocol::TokenUsage;
@@ -17,6 +17,7 @@ mod chat_composer;
 mod chat_composer_history;
 mod command_popup;
 mod file_search_popup;
+mod list_selection_view;
 mod popup_consts;
 mod scroll_state;
 mod selection_popup_common;
@@ -32,28 +33,26 @@ pub(crate) enum CancellationEvent {
 pub(crate) use chat_composer::ChatComposer;
 pub(crate) use chat_composer::InputResult;
 
-use crate::status_indicator_widget::StatusIndicatorWidget;
 use approval_modal_view::ApprovalModalView;
+pub(crate) use list_selection_view::SelectionAction;
+pub(crate) use list_selection_view::SelectionItem;
 use status_indicator_view::StatusIndicatorView;
 
 /// Pane displayed in the lower half of the chat UI.
-pub(crate) struct BottomPane<'a> {
+pub(crate) struct BottomPane {
     /// Composer is retained even when a BottomPaneView is displayed so the
     /// input state is retained when the view is closed.
     composer: ChatComposer,
 
     /// If present, this is displayed instead of the `composer`.
-    active_view: Option<Box<dyn BottomPaneView<'a> + 'a>>,
+    active_view: Option<Box<dyn BottomPaneView>>,
 
     app_event_tx: AppEventSender,
+    frame_requester: FrameRequester,
+
     has_input_focus: bool,
     is_task_running: bool,
     ctrl_c_quit_hint: bool,
-
-    /// Optional live, multi‑line status/"live cell" rendered directly above
-    /// the composer while a task is running. Unlike `active_view`, this does
-    /// not replace the composer; it augments it.
-    live_status: Option<StatusIndicatorWidget>,
 
     /// True if the active view is the StatusIndicatorView that replaces the
     /// composer during a running task.
@@ -62,11 +61,13 @@ pub(crate) struct BottomPane<'a> {
 
 pub(crate) struct BottomPaneParams {
     pub(crate) app_event_tx: AppEventSender,
+    pub(crate) frame_requester: FrameRequester,
     pub(crate) has_input_focus: bool,
     pub(crate) enhanced_keys_supported: bool,
+    pub(crate) placeholder_text: String,
 }
 
-impl BottomPane<'_> {
+impl BottomPane {
     const BOTTOM_PAD_LINES: u16 = 2;
     pub fn new(params: BottomPaneParams) -> Self {
         let enhanced_keys_supported = params.enhanced_keys_supported;
@@ -75,33 +76,26 @@ impl BottomPane<'_> {
                 params.has_input_focus,
                 params.app_event_tx.clone(),
                 enhanced_keys_supported,
+                params.placeholder_text,
             ),
             active_view: None,
             app_event_tx: params.app_event_tx,
+            frame_requester: params.frame_requester,
             has_input_focus: params.has_input_focus,
             is_task_running: false,
             ctrl_c_quit_hint: false,
-            live_status: None,
             status_view_active: false,
         }
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
-        let overlay_status_h = self
-            .live_status
-            .as_ref()
-            .map(|s| s.desired_height(width))
-            .unwrap_or(0);
-
         let view_height = if let Some(view) = self.active_view.as_ref() {
             view.desired_height(width)
         } else {
             self.composer.desired_height(width)
         };
 
-        overlay_status_h
-            .saturating_add(view_height)
-            .saturating_add(Self::BOTTOM_PAD_LINES)
+        view_height.saturating_add(Self::BOTTOM_PAD_LINES)
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
@@ -123,7 +117,10 @@ impl BottomPane<'_> {
             if !view.is_complete() {
                 self.active_view = Some(view);
             } else if self.is_task_running {
-                let mut v = StatusIndicatorView::new(self.app_event_tx.clone());
+                let mut v = StatusIndicatorView::new(
+                    self.app_event_tx.clone(),
+                    self.frame_requester.clone(),
+                );
                 v.update_text("waiting for model".to_string());
                 self.active_view = Some(Box::new(v));
                 self.status_view_active = true;
@@ -154,7 +151,10 @@ impl BottomPane<'_> {
                     self.active_view = Some(view);
                 } else if self.is_task_running {
                     // Modal aborted but task still running – restore status indicator.
-                    let mut v = StatusIndicatorView::new(self.app_event_tx.clone());
+                    let mut v = StatusIndicatorView::new(
+                        self.app_event_tx.clone(),
+                        self.frame_requester.clone(),
+                    );
                     v.update_text("waiting for model".to_string());
                     self.active_view = Some(Box::new(v));
                     self.status_view_active = true;
@@ -182,42 +182,15 @@ impl BottomPane<'_> {
         self.request_redraw();
     }
 
-    /// Update the status indicator text. Prefer replacing the composer with
-    /// the StatusIndicatorView so the input pane shows a single-line status
-    /// like: `▌ Working waiting for model`.
-    pub(crate) fn update_status_text(&mut self, text: String) {
-        let mut handled_by_view = false;
+    /// Update the animated header shown to the left of the brackets in the
+    /// status indicator (defaults to "Working"). This will update the active
+    /// StatusIndicatorView if present; otherwise, if a live overlay is active,
+    /// it will update that. If neither is present, this call is a no-op.
+    pub(crate) fn update_status_header(&mut self, header: String) {
         if let Some(view) = self.active_view.as_mut() {
-            if matches!(
-                view.update_status_text(text.clone()),
-                bottom_pane_view::ConditionalUpdate::NeedsRedraw
-            ) {
-                handled_by_view = true;
-            }
-        } else {
-            let mut v = StatusIndicatorView::new(self.app_event_tx.clone());
-            v.update_text(text.clone());
-            self.active_view = Some(Box::new(v));
-            self.status_view_active = true;
-            handled_by_view = true;
+            view.update_status_header(header.clone());
+            self.request_redraw();
         }
-
-        // Fallback: if the current active view did not consume status updates
-        // and no modal view is active, present an overlay above the composer.
-        // If a modal is active, do NOT render the overlay to avoid drawing
-        // over the dialog.
-        if !handled_by_view && self.active_view.is_none() {
-            if self.live_status.is_none() {
-                self.live_status = Some(StatusIndicatorWidget::new(self.app_event_tx.clone()));
-            }
-            if let Some(status) = &mut self.live_status {
-                status.update_text(text);
-            }
-        } else if !handled_by_view {
-            // Ensure any previous overlay is cleared when a modal becomes active.
-            self.live_status = None;
-        }
-        self.request_redraw();
     }
 
     pub(crate) fn show_ctrl_c_quit_hint(&mut self) {
@@ -247,12 +220,12 @@ impl BottomPane<'_> {
             if self.active_view.is_none() {
                 self.active_view = Some(Box::new(StatusIndicatorView::new(
                     self.app_event_tx.clone(),
+                    self.frame_requester.clone(),
                 )));
                 self.status_view_active = true;
             }
             self.request_redraw();
         } else {
-            self.live_status = None;
             // Drop the status view when a task completes, but keep other
             // modal views (e.g. approval dialogs).
             if let Some(mut view) = self.active_view.take() {
@@ -261,6 +234,39 @@ impl BottomPane<'_> {
                 }
                 self.status_view_active = false;
             }
+        }
+    }
+
+    /// Show a generic list selection view with the provided items.
+    pub(crate) fn show_selection_view(
+        &mut self,
+        title: String,
+        subtitle: Option<String>,
+        footer_hint: Option<String>,
+        items: Vec<SelectionItem>,
+    ) {
+        let view = list_selection_view::ListSelectionView::new(
+            title,
+            subtitle,
+            footer_hint,
+            items,
+            self.app_event_tx.clone(),
+        );
+        self.active_view = Some(Box::new(view));
+        self.status_view_active = false;
+        self.request_redraw();
+    }
+
+    /// Update the live status text shown while a task is running.
+    /// If a modal view is active (i.e., not the status indicator), this is a no‑op.
+    pub(crate) fn update_status_text(&mut self, text: String) {
+        if !self.is_task_running || !self.status_view_active {
+            return;
+        }
+        if let Some(mut view) = self.active_view.take() {
+            view.update_status_text(text);
+            self.active_view = Some(view);
+            self.request_redraw();
         }
     }
 
@@ -302,15 +308,13 @@ impl BottomPane<'_> {
         // Otherwise create a new approval modal overlay.
         let modal = ApprovalModalView::new(request, self.app_event_tx.clone());
         self.active_view = Some(Box::new(modal));
-        // Hide any overlay status while a modal is visible.
-        self.live_status = None;
         self.status_view_active = false;
         self.request_redraw()
     }
 
     /// Height (terminal rows) required by the current bottom pane.
     pub(crate) fn request_redraw(&self) {
-        self.app_event_tx.send(AppEvent::RequestRedraw)
+        self.frame_requester.schedule_frame();
     }
 
     // --- History helpers ---
@@ -340,48 +344,33 @@ impl BottomPane<'_> {
     }
 }
 
-impl WidgetRef for &BottomPane<'_> {
+impl WidgetRef for &BottomPane {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let mut y_offset = 0u16;
-        if let Some(status) = &self.live_status {
-            let live_h = status
-                .desired_height(area.width)
-                .min(area.height.saturating_sub(y_offset));
-            if live_h > 0 {
-                let live_rect = Rect {
-                    x: area.x,
-                    y: area.y + y_offset,
-                    width: area.width,
-                    height: live_h,
-                };
-                status.render_ref(live_rect, buf);
-                y_offset = y_offset.saturating_add(live_h);
-            }
-        }
-
         if let Some(view) = &self.active_view {
-            if y_offset < area.height {
-                // Reserve bottom padding lines; keep at least 1 line for the view.
-                let avail = area.height - y_offset;
+            // Reserve bottom padding lines; keep at least 1 line for the view.
+            let avail = area.height;
+            if avail > 0 {
                 let pad = BottomPane::BOTTOM_PAD_LINES.min(avail.saturating_sub(1));
                 let view_rect = Rect {
                     x: area.x,
-                    y: area.y + y_offset,
+                    y: area.y,
                     width: area.width,
                     height: avail - pad,
                 };
                 view.render(view_rect, buf);
             }
-        } else if y_offset < area.height {
-            let composer_rect = Rect {
-                x: area.x,
-                y: area.y + y_offset,
-                width: area.width,
-                // Reserve bottom padding
-                height: (area.height - y_offset)
-                    - BottomPane::BOTTOM_PAD_LINES.min((area.height - y_offset).saturating_sub(1)),
-            };
-            (&self.composer).render_ref(composer_rect, buf);
+        } else {
+            let avail = area.height;
+            if avail > 0 {
+                let composer_rect = Rect {
+                    x: area.x,
+                    y: area.y,
+                    width: area.width,
+                    // Reserve bottom padding
+                    height: avail - BottomPane::BOTTOM_PAD_LINES.min(avail.saturating_sub(1)),
+                };
+                (&self.composer).render_ref(composer_rect, buf);
+            }
         }
     }
 }
@@ -392,7 +381,7 @@ mod tests {
     use crate::app_event::AppEvent;
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
-    use std::sync::mpsc::channel;
+    use tokio::sync::mpsc::unbounded_channel;
 
     fn exec_request() -> ApprovalRequest {
         ApprovalRequest::Exec {
@@ -404,12 +393,14 @@ mod tests {
 
     #[test]
     fn ctrl_c_on_modal_consumes_and_shows_quit_hint() {
-        let (tx_raw, _rx) = channel::<AppEvent>();
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,
+            frame_requester: crate::tui::FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
         });
         pane.push_approval_request(exec_request());
         assert_eq!(CancellationEvent::Handled, pane.on_ctrl_c());
@@ -421,20 +412,20 @@ mod tests {
 
     #[test]
     fn overlay_not_shown_above_approval_modal() {
-        let (tx_raw, _rx) = channel::<AppEvent>();
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,
+            frame_requester: crate::tui::FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
         });
 
         // Create an approval modal (active view).
         pane.push_approval_request(exec_request());
-        // Attempt to update status; this should NOT create an overlay while modal is visible.
-        pane.update_status_text("running command".to_string());
 
-        // Render and verify the top row does not include the Working header overlay.
+        // Render and verify the top row does not include an overlay.
         let area = Rect::new(0, 0, 60, 6);
         let mut buf = Buffer::empty(area);
         (&pane).render_ref(area, &mut buf);
@@ -445,23 +436,24 @@ mod tests {
         }
         assert!(
             !r0.contains("Working"),
-            "overlay Working header should not render above modal"
+            "overlay should not render above modal"
         );
     }
 
     #[test]
     fn composer_not_shown_after_denied_if_task_running() {
-        let (tx_raw, rx) = channel::<AppEvent>();
+        let (tx_raw, rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx.clone(),
+            frame_requester: crate::tui::FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
         });
 
         // Start a running task so the status indicator replaces the composer.
         pane.set_task_running(true);
-        pane.update_status_text("waiting for model".to_string());
 
         // Push an approval modal (e.g., command approval) which should hide the status view.
         pane.push_approval_request(exec_request());
@@ -501,21 +493,18 @@ mod tests {
 
     #[test]
     fn status_indicator_visible_during_command_execution() {
-        let (tx_raw, _rx) = channel::<AppEvent>();
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,
+            frame_requester: crate::tui::FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
         });
 
         // Begin a task: show initial status.
         pane.set_task_running(true);
-        pane.update_status_text("waiting for model".to_string());
-
-        // As a long-running command begins (post-approval), ensure the status
-        // indicator is visible while we wait for the command to run.
-        pane.update_status_text("running command".to_string());
 
         // Allow some frames so the animation thread ticks.
         std::thread::sleep(std::time::Duration::from_millis(120));
@@ -537,17 +526,18 @@ mod tests {
 
     #[test]
     fn bottom_padding_present_for_status_view() {
-        let (tx_raw, _rx) = channel::<AppEvent>();
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,
+            frame_requester: crate::tui::FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
         });
 
         // Activate spinner (status view replaces composer) with no live ring.
         pane.set_task_running(true);
-        pane.update_status_text("waiting for model".to_string());
 
         // Use height == desired_height; expect 1 status row at top and 2 bottom padding rows.
         let height = pane.desired_height(30);
@@ -589,16 +579,17 @@ mod tests {
 
     #[test]
     fn bottom_padding_shrinks_when_tiny() {
-        let (tx_raw, _rx) = channel::<AppEvent>();
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,
+            frame_requester: crate::tui::FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
+            placeholder_text: "Ask Codex to do anything".to_string(),
         });
 
         pane.set_task_running(true);
-        pane.update_status_text("waiting for model".to_string());
 
         // Height=2 → pad shrinks to 1; bottom row is blank, top row has spinner.
         let area2 = Rect::new(0, 0, 20, 2);
