@@ -1013,9 +1013,9 @@ pub(crate) fn new_reasoning_block(
     config: &Config,
 ) -> TranscriptOnlyHistoryCell {
     let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::from(""));
     lines.push(Line::from("thinking".magenta().italic()));
     append_markdown(&full_reasoning_buffer, &mut lines, config);
-    lines.push(Line::from(""));
     TranscriptOnlyHistoryCell { lines }
 }
 

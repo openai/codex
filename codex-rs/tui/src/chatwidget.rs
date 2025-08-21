@@ -714,8 +714,12 @@ impl ChatWidget {
     }
 
     fn add_to_history(&mut self, cell: impl HistoryCell + 'static) {
+        // Only break exec grouping if the cell renders visible lines.
+        let has_display_lines = !cell.display_lines().is_empty();
         self.flush_active_exec_cell();
-        self.last_history_was_exec = false;
+        if has_display_lines {
+            self.last_history_was_exec = false;
+        }
         self.app_event_tx
             .send(AppEvent::InsertHistoryCell(Box::new(cell)));
     }
