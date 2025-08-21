@@ -8,14 +8,15 @@ use std::time::Instant;
 use crossterm::SynchronizedUpdate;
 use crossterm::cursor;
 use crossterm::cursor::MoveTo;
+use crossterm::cursor::Show;
 use crossterm::event::DisableBracketedPaste;
 use crossterm::event::EnableBracketedPaste;
-use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
-use crossterm::event::KeyEventKind;
 use crossterm::event::KeyboardEnhancementFlags;
 use crossterm::event::PopKeyboardEnhancementFlags;
 use crossterm::event::PushKeyboardEnhancementFlags;
+use crossterm::terminal::EnterAlternateScreen;
+use crossterm::terminal::LeaveAlternateScreen;
 use crossterm::terminal::ScrollUp;
 use ratatui::backend::Backend;
 use ratatui::backend::CrosstermBackend;
@@ -98,8 +99,6 @@ pub enum TuiEvent {
     Key(KeyEvent),
     Paste(String),
     Draw,
-    #[cfg(unix)]
-    ResumeFromSuspend,
 }
 
 pub struct Tui {
@@ -107,6 +106,7 @@ pub struct Tui {
     draw_tx: tokio::sync::broadcast::Sender<()>,
     pub(crate) terminal: Terminal,
     pending_history_lines: Vec<Line<'static>>,
+    alt_saved_viewport: Option<ratatui::layout::Rect>,
 }
 
 #[derive(Clone, Debug)]
@@ -184,6 +184,7 @@ impl Tui {
             draw_tx,
             terminal,
             pending_history_lines: vec![],
+            alt_saved_viewport: None,
         }
     }
 
@@ -202,19 +203,6 @@ impl Tui {
                 select! {
                     Some(Ok(event)) = crossterm_events.next() => {
                         match event {
-                            crossterm::event::Event::Key(KeyEvent {
-                                code: KeyCode::Char('z'),
-                                modifiers: crossterm::event::KeyModifiers::CONTROL,
-                                kind: KeyEventKind::Press,
-                                ..
-                            }) => {
-                                #[cfg(unix)]
-                                {
-                                    let _ = Tui::suspend();
-                                    yield TuiEvent::ResumeFromSuspend;
-                                    yield TuiEvent::Draw;
-                                }
-                            }
                             crossterm::event::Event::Key(key_event) => {
                                 yield TuiEvent::Key(key_event);
                             }
@@ -248,10 +236,81 @@ impl Tui {
     }
 
     #[cfg(unix)]
-    fn suspend() -> Result<()> {
+    fn suspend_process() -> Result<()> {
         restore()?;
         unsafe { libc::kill(0, libc::SIGTSTP) };
         set_modes()?;
+        Ok(())
+    }
+
+    /// Suspend and automatically handle alt-screen vs inline viewport.
+    /// - If in alternate screen, temporarily leave it, suspend, update saved viewport based on
+    ///   resumed cursor position, then re-enter alt screen and restore fullscreen viewport.
+    /// - Otherwise, suspend from inline viewport and realign viewport to the resumed cursor.
+    #[cfg(unix)]
+    pub fn suspend(&mut self) -> Result<()> {
+        if self.alt_saved_viewport.is_some() {
+            let _ = ratatui::crossterm::execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
+
+            if let Some(saved) = self.alt_saved_viewport.as_ref() {
+                let bottom = saved.y.saturating_add(saved.height.saturating_sub(1));
+                let _ = crossterm::execute!(std::io::stdout(), MoveTo(0, bottom), Show);
+            }
+
+            let _ = Tui::suspend_process();
+
+            if let Ok((_x, y)) = crossterm::cursor::position()
+                && let Some(saved) = self.alt_saved_viewport.as_mut()
+            {
+                saved.y = y;
+            }
+
+            let _ = ratatui::crossterm::execute!(self.terminal.backend_mut(), EnterAlternateScreen);
+            if let Ok(size) = self.terminal.size() {
+                use ratatui::layout::Rect;
+
+                self.terminal
+                    .set_viewport_area(Rect::new(0, 0, size.width, size.height));
+                let _ = self.terminal.clear();
+            }
+        } else {
+            let area = self.terminal.viewport_area;
+            let bottom = area.y.saturating_add(area.height.saturating_sub(1));
+            let _ = crossterm::execute!(std::io::stdout(), MoveTo(0, bottom), Show);
+
+            let _ = Tui::suspend_process();
+
+            let cursor_pos = self.terminal.get_cursor_position()?;
+            self.terminal
+                .set_viewport_area(ratatui::layout::Rect::new(0, cursor_pos.y, 0, 0));
+        }
+        self.frame_requester().schedule_frame();
+        Ok(())
+    }
+
+    /// Enter alternate screen and expand the viewport to full terminal size, saving the current
+    /// inline viewport for restoration when leaving.
+    pub fn enter_alt_screen(&mut self) -> Result<()> {
+        let _ = ratatui::crossterm::execute!(self.terminal.backend_mut(), EnterAlternateScreen);
+        if let Ok(size) = self.terminal.size() {
+            self.alt_saved_viewport = Some(self.terminal.viewport_area);
+            self.terminal.set_viewport_area(ratatui::layout::Rect::new(
+                0,
+                0,
+                size.width,
+                size.height,
+            ));
+            let _ = self.terminal.clear();
+        }
+        Ok(())
+    }
+
+    /// Leave alternate screen and restore the previously saved inline viewport, if any.
+    pub fn leave_alt_screen(&mut self) -> Result<()> {
+        let _ = ratatui::crossterm::execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
+        if let Some(saved) = self.alt_saved_viewport.take() {
+            self.terminal.set_viewport_area(saved);
+        }
         Ok(())
     }
 

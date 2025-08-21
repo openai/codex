@@ -12,11 +12,7 @@ use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
-use crossterm::execute;
-use crossterm::terminal::EnterAlternateScreen;
-use crossterm::terminal::LeaveAlternateScreen;
 use crossterm::terminal::supports_keyboard_enhancement;
-use ratatui::layout::Rect;
 use ratatui::text::Line;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -42,7 +38,6 @@ pub(crate) struct App {
     // Transcript overlay state
     transcript_overlay: Option<TranscriptApp>,
     deferred_history_lines: Vec<Line<'static>>,
-    transcript_saved_viewport: Option<Rect>,
 
     enhanced_keys_supported: bool,
 
@@ -87,7 +82,6 @@ impl App {
             transcript_lines: Vec::new(),
             transcript_overlay: None,
             deferred_history_lines: Vec::new(),
-            transcript_saved_viewport: None,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
         };
 
@@ -114,13 +108,21 @@ impl App {
         event: TuiEvent,
     ) -> Result<bool> {
         if let Some(overlay) = &mut self.transcript_overlay {
+            // Intercept Ctrl+Z while in transcript mode to leave alt screen before suspend.
+            #[cfg(unix)]
+            if let TuiEvent::Key(key_event) = &event
+                && key_event.code == KeyCode::Char('z')
+                && key_event.modifiers == crossterm::event::KeyModifiers::CONTROL
+                && key_event.kind == KeyEventKind::Press
+            {
+                let _ = tui.suspend();
+                return Ok(true);
+            }
+
             overlay.handle_event(tui, event)?;
             if overlay.is_done {
                 // Exit alternate screen and restore viewport.
-                let _ = execute!(tui.terminal.backend_mut(), LeaveAlternateScreen);
-                if let Some(saved) = self.transcript_saved_viewport.take() {
-                    tui.terminal.set_viewport_area(saved);
-                }
+                let _ = tui.leave_alt_screen();
                 if !self.deferred_history_lines.is_empty() {
                     let lines = std::mem::take(&mut self.deferred_history_lines);
                     tui.insert_history_lines(lines);
@@ -131,6 +133,15 @@ impl App {
         } else {
             match event {
                 TuiEvent::Key(key_event) => {
+                    #[cfg(unix)]
+                    if key_event.code == KeyCode::Char('z')
+                        && key_event.modifiers == crossterm::event::KeyModifiers::CONTROL
+                        && key_event.kind == KeyEventKind::Press
+                    {
+                        let _ = tui.suspend();
+                        return Ok(true);
+                    }
+
                     self.handle_key_event(tui, key_event).await;
                 }
                 TuiEvent::Paste(pasted) => {
@@ -151,16 +162,6 @@ impl App {
                             }
                         },
                     )?;
-                }
-                #[cfg(unix)]
-                TuiEvent::ResumeFromSuspend => {
-                    let cursor_pos = tui.terminal.get_cursor_position()?;
-                    tui.terminal.set_viewport_area(ratatui::layout::Rect::new(
-                        0,
-                        cursor_pos.y,
-                        0,
-                        0,
-                    ));
                 }
             }
         }
@@ -293,14 +294,7 @@ impl App {
                 ..
             } => {
                 // Enter alternate screen and set viewport to full size.
-                let _ = execute!(tui.terminal.backend_mut(), EnterAlternateScreen);
-                if let Ok(size) = tui.terminal.size() {
-                    self.transcript_saved_viewport = Some(tui.terminal.viewport_area);
-                    tui.terminal
-                        .set_viewport_area(Rect::new(0, 0, size.width, size.height));
-                    let _ = tui.terminal.clear();
-                }
-
+                let _ = tui.enter_alt_screen();
                 self.transcript_overlay = Some(TranscriptApp::new(self.transcript_lines.clone()));
                 tui.frame_requester().schedule_frame();
             }
