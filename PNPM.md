@@ -1,4 +1,8 @@
-# Migration to pnpm
+# Migration to pnpm (Upstream note)
+
+Note: This document describes pnpm usage for the upstream OpenAI Codex monorepo, which includes a TypeScript package (`codex-cli`). This custom fork focuses on the Rust CLI and ships a binary named `codex-custom`. You generally do not need pnpm for `codex-custom`.
+
+If you are maintaining upstream Node packages, the guidance below remains relevant. Otherwise, you can ignore this file when working with this fork.
 
 This project has been migrated from npm to pnpm to improve dependency management and developer experience.
 
@@ -39,15 +43,15 @@ corepack prepare pnpm@10.8.1 --activate
 | Install a dependency in a specific package | `pnpm --filter @openai/codex add lodash` |
 | Run a command in all packages              | `pnpm -r run test`                       |
 
-## Monorepo structure
+## Monorepo structure (upstream)
 
 ```
 codex/
 ├── pnpm-workspace.yaml    # Workspace configuration
 ├── .npmrc                 # pnpm configuration
 ├── package.json           # Root dependencies and scripts
-├── codex-cli/             # Main package
-│   └── package.json       # codex-cli specific dependencies
+├── codex-cli/             # Upstream main TS package (not used in this fork)
+│   └── package.json
 └── docs/                  # Documentation (future package)
 ```
 

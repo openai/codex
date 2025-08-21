@@ -28,7 +28,7 @@
         codex-cli = import ./codex-cli {
           inherit pkgs monorepo-deps;
         };
-        codex-rs = import ./codex-rs {
+        codex-custom = import ./codex-custom {
           pkgs = pkgsWithRust;
           inherit monorepo-deps;
         };
@@ -36,17 +36,17 @@
       rec {
         packages = {
           codex-cli = codex-cli.package;
-          codex-rs = codex-rs.package;
+          codex-custom = codex-custom.package;
         };
 
         devShells = {
           codex-cli = codex-cli.devShell;
-          codex-rs = codex-rs.devShell;
+          codex-custom = codex-custom.devShell;
         };
 
         apps = {
           codex-cli = codex-cli.app;
-          codex-rs = codex-rs.app;
+          codex-custom = codex-custom.app;
         };
 
         defaultPackage = packages.codex-cli;

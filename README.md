@@ -1,698 +1,446 @@
-<h1 align="center">OpenAI Codex CLI</h1>
-
-<p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install codex</code></p>
-
-<p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.</br>If you are looking for the <em>cloud-based agent</em> from OpenAI, <strong>Codex Web</strong>, see <a href="https://chatgpt.com/codex">chatgpt.com/codex</a>.</p>
-
-<p align="center">
-  <img src="./.github/codex-cli-splash.png" alt="Codex CLI splash" width="50%" />
-  </p>
-
----
-
-<details>
-<summary><strong>Table of contents</strong></summary>
-
-<!-- Begin ToC -->
-
-- [Quickstart](#quickstart)
-  - [Installing and running Codex CLI](#installing-and-running-codex-cli)
-  - [Using Codex with your ChatGPT plan](#using-codex-with-your-chatgpt-plan)
-  - [Connecting on a "Headless" Machine](#connecting-on-a-headless-machine)
-    - [Authenticate locally and copy your credentials to the "headless" machine](#authenticate-locally-and-copy-your-credentials-to-the-headless-machine)
-    - [Connecting through VPS or remote](#connecting-through-vps-or-remote)
-  - [Usage-based billing alternative: Use an OpenAI API key](#usage-based-billing-alternative-use-an-openai-api-key)
-    - [Forcing a specific auth method (advanced)](#forcing-a-specific-auth-method-advanced)
-  - [Choosing Codex's level of autonomy](#choosing-codexs-level-of-autonomy)
-    - [**1. Read/write**](#1-readwrite)
-    - [**2. Read-only**](#2-read-only)
-    - [**3. Advanced configuration**](#3-advanced-configuration)
-    - [Can I run without ANY approvals?](#can-i-run-without-any-approvals)
-    - [Fine-tuning in `config.toml`](#fine-tuning-in-configtoml)
-  - [Example prompts](#example-prompts)
-- [Running with a prompt as input](#running-with-a-prompt-as-input)
-- [Using Open Source Models](#using-open-source-models)
-  - [Platform sandboxing details](#platform-sandboxing-details)
-- [Experimental technology disclaimer](#experimental-technology-disclaimer)
-- [System requirements](#system-requirements)
-- [CLI reference](#cli-reference)
-- [Memory & project docs](#memory--project-docs)
-- [Non-interactive / CI mode](#non-interactive--ci-mode)
-- [Model Context Protocol (MCP)](#model-context-protocol-mcp)
-- [Tracing / verbose logging](#tracing--verbose-logging)
-  - [DotSlash](#dotslash)
-- [Configuration](#configuration)
-- [FAQ](#faq)
-- [Zero data retention (ZDR) usage](#zero-data-retention-zdr-usage)
-- [Codex open source fund](#codex-open-source-fund)
-- [Contributing](#contributing)
-  - [Development workflow](#development-workflow)
-  - [Writing high-impact code changes](#writing-high-impact-code-changes)
-  - [Opening a pull request](#opening-a-pull-request)
-  - [Review process](#review-process)
-  - [Community values](#community-values)
-  - [Getting help](#getting-help)
-  - [Contributor license agreement (CLA)](#contributor-license-agreement-cla)
-    - [Quick fixes](#quick-fixes)
-  - [Releasing `codex`](#releasing-codex)
-- [Security & responsible AI](#security--responsible-ai)
-- [License](#license)
+### Overview
+codex-custom is a Rust workspace of multiple crates that together implement the Codex CLI: core agent logic, interactive TUI, programmatic “exec” mode, sandboxing, MCP client/server, OSS model plumbing, and helper utilities.
+
+### Workspace root
+- `codex-custom/Cargo.toml`: Declares the workspace members, global lints, release profile tweaks, and a patched `ratatui` dependency.
+- `codex-custom/Cargo.lock`: Locked dependency graph for reproducible builds.
+- `codex-custom/README.md`: Project overview, installation, features (e.g., TUI, `--cd`, approvals, images).
+- `codex-custom/config.md`: Configuration reference (TOML) used by CLI/TUI.
+- `codex-custom/default.nix`: Nix expression to build workspace in Nix environments.
+- `codex-custom/docs/protocol_v1.md`: Protocol documentation for Codex’s stream/IPC.
+- `codex-custom/justfile`: Command aliases for dev workflows (building, testing, etc.).
+- `codex-custom/rust-toolchain.toml`: Pins Rust toolchain channel/targets.
+- `codex-custom/rustfmt.toml`: Formatting rules.
+- `codex-custom/scripts/create_github_release.sh`: Release helper script.
+
+### Crate: ansi-escape
+- `ansi-escape/Cargo.toml`: Crate manifest.
+- `ansi-escape/README.md`: Crate-level documentation.
+- `ansi-escape/src/lib.rs`: Utilities for emitting/parsing ANSI escape sequences used by the TUI rendering and status lines.
+
+### Crate: apply-patch
+- `apply-patch/Cargo.toml`: Manifest.
+- `apply-patch/apply_patch_tool_instructions.md`: Tool instructions/usage doc.
+- `apply-patch/src/lib.rs`: Public API to apply unified diffs/patches safely to files (used by “apply” operations).
+- `apply-patch/src/parser.rs`: Patch format parsing and validation.
+- `apply-patch/src/seek_sequence.rs`: Byte/sequence scanner to find insertion points efficiently.
+
+### Crate: arg0
+- `arg0/Cargo.toml`: Manifest.
+- `arg0/src/lib.rs`: `arg0_dispatch_or_else` to conditionally dispatch runtime behavior based on the invoked executable name (supports multi-tool binaries like `codex-custom`, `codex`).
+
+### Crate: chatgpt
+- `chatgpt/Cargo.toml`: Manifest.
+- `chatgpt/README.md`: Crate docs for ChatGPT-specific flows.
+- `chatgpt/src/lib.rs`: Public module surface (`apply_command`, `get_task`).
+- `chatgpt/src/apply_command.rs`: Implements the “Apply latest diff” command; reads agent-produced diffs and applies them to the working tree.
+- `chatgpt/src/chatgpt_client.rs`: ChatGPT API client (auth, requests, retries).
+- `chatgpt/src/chatgpt_token.rs`: Token discovery/refresh to talk to ChatGPT endpoints securely.
+- `chatgpt/src/get_task.rs`: Pulls queued tasks/jobs for agent operation.
+- `chatgpt/tests/apply_command_e2e.rs`: End-to-end tests for apply command behavior.
+- `chatgpt/tests/task_turn_fixture.json`: Fixture of a task turn used by tests.
+
+### Crate: cli (multitool entrypoint)
+- `cli/Cargo.toml`: Manifest for `codex-custom` binary.
+- `cli/src/main.rs`: Main entrypoint. Parses top-level CLI, dispatches to subcommands: interactive TUI, `exec`, `mcp`, `login/logout`, `proto`, `completion`, `debug`, `apply`. Bridges root-level config flags into subcommand-specific flags.
+- `cli/src/lib.rs`: Shared CLI utilities used by subcommands.
+- `cli/src/debug_sandbox.rs`: Runs arbitrary commands under macOS Seatbelt or Linux Landlock for debugging sandbox policy behavior.
+- `cli/src/exit_status.rs`: Normalizes and renders process exit statuses.
+- `cli/src/login.rs`: Interactive and API-key login flows; status and logout helpers.
+- `cli/src/proto.rs`: Runs the protocol stream (stdin/stdout) mode for embedding Codex in other tools.
+
+### Crate: common
+- `common/Cargo.toml`: Manifest.
+- `common/README.md`: Crate docs.
+- `common/src/lib.rs`: Re-exports helpers used across binaries.
+- `common/src/approval_mode_cli_arg.rs`: Clap arg parsing for approval policies.
+- `common/src/config_override.rs`: Parsing key=value CLI overrides; merging order.
+- `common/src/config_summary.rs`: Human-readable summaries of loaded config.
+- `common/src/elapsed.rs`: Timer utilities for measuring durations.
+- `common/src/fuzzy_match.rs`: Fuzzy string/file matching used by `@` search.
+- `common/src/sandbox_mode_cli_arg.rs`: Clap arg parsing for sandbox modes.
+- `common/src/sandbox_summary.rs`: Summarizes active sandbox settings.
+
+### Crate: core (codex-core library)
+- `core/Cargo.toml`: Manifest.
+- `core/README.md`: Core library overview.
+- `core/prompt.md`: Base/embedding prompts used by the agent.
+- `core/src/lib.rs`: Root of the library. Exposes `Codex`, provider info, config, protocol types, spawn/shell APIs, sandbox helpers, etc. Forbids accidental stdout/stderr writes in library code.
+- `core/src/apply_patch.rs`: Integration to apply patches within agent turn flow; exposes `CODEX_APPLY_PATCH_ARG1`.
+- `core/src/bash.rs`: Shell quoting/escaping helpers; bash-specific utilities.
+- `core/src/chat_completions.rs`: Model conversation assembly; streaming/accumulation of responses; tool-call plumbing.
+- `core/src/client_common.rs`: Shared HTTP client setup (timeouts, headers).
+- `core/src/client.rs`: High-level client that interacts with model providers.
+- `core/src/codex.rs`: Main agent orchestration (turn loop, tool/exec decisions, approvals, persistence).
+- `core/src/codex_wrapper.rs`: Wraps `Codex` to expose simplified lifecycle or alternate modes.
+- `core/src/config.rs`: Loads/merges config files, env, CLI overrides; `find_codex_home`, log dirs.
+- `core/src/config_profile.rs`: Profile selection and overrides by named profiles.
+- `core/src/config_types.rs`: Strongly-typed config schema (e.g., `SandboxMode`, approvals).
+- `core/src/conversation_history.rs`: Persistent conversation state and summarization.
+- `core/src/error.rs`: Error types and conversions across crates.
+- `core/src/exec_env.rs`: Execution environment setup (cwd, env vars).
+- `core/src/exec.rs`: Safe command execution under sandbox; capturing output and exit codes.
+- `core/src/flags.rs`: Feature flags/rollouts toggles used internally.
+- `core/src/git_info.rs`: Git repo detection, current branch/dirty state, diffs.
+- `core/src/is_safe_command.rs`: Command allow/deny heuristics to avoid dangerous ops.
+- `core/src/mcp_connection_manager.rs`: Manages MCP client connections lifecycle.
+- `core/src/mcp_tool_call.rs`: Executes MCP tool calls from model/tool messages.
+- `core/src/message_history.rs`: Structured message storage (user, assistant, tool).
+- `core/src/model_family.rs`: Model family taxonomy (OpenAI, OSS, etc.).
+- `core/src/model_provider_info.rs`: Metadata and helpers for built-in providers; exports `built_in_model_providers`, `create_oss_provider_with_base_url`, `BUILT_IN_OSS_MODEL_PROVIDER_ID`.
+- `core/src/models.rs`: Model catalog and default selection logic.
+- `core/src/openai_model_info.rs`: OpenAI-specific model capabilities/limits.
+- `core/src/openai_tools.rs`: Tool definitions and argument schemas for function calling.
+- `core/src/parse_command.rs`: Parses natural-language to shell commands safely.
+- `core/src/plan_tool.rs`: Implements “plan” tool producing step lists for transparency.
+- `core/src/project_doc.rs`: Builds project documentation snapshot for context.
+- `core/src/prompt_for_compact_command.md`: Short prompt template for compact commands.
+- `core/src/protocol.rs`: Protocol data types used by CLI/TUI (e.g., `TokenUsage`, SSE forms, `FinalOutput`).
+- `core/src/rollout.rs`: Controlled rollouts and gating of features.
+- `core/src/safety.rs`: Platform safety layer; exposes `get_platform_sandbox`.
+- `core/src/seatbelt_base_policy.sbpl`: Base macOS sandbox policy.
+- `core/src/seatbelt.rs`: Seatbelt integration (macOS).
+- `core/src/shell.rs`: Abstractions for shell execution and quoting.
+- `core/src/spawn.rs`: Process spawning and I/O plumbing.
+- `core/src/turn_diff_tracker.rs`: Tracks diffs across turns for apply action.
+- `core/src/user_notification.rs`: Notifies on turn completion via configured hooks.
+- `core/src/util.rs`: Misc utilities used broadly.
+- Tests in `core/tests/`: Cover CLI streams, exec events, sandbox, live agent/CLI flows; includes fixtures (`*.json`, `*.sse`) and a small test support crate in `common/`.
+
+### Crate: exec (headless/programmatic mode)
+- `exec/Cargo.toml`: Manifest.
+- `exec/src/main.rs`: Entrypoint for `codex exec` subcommand.
+- `exec/src/lib.rs`: Library surface for programmatic mode.
+- `exec/src/cli.rs`: Clap args for non-interactive execution.
+- `exec/src/event_processor.rs`: Core event processing pipeline.
+- `exec/src/event_processor_with_human_output.rs`: Formats human-friendly console output.
+- `exec/src/event_processor_with_json_output.rs`: Emits structured JSON events.
+- `exec/tests/apply_patch.rs`: Tests around applying patches in exec mode.
+
+### Crate: execpolicy
+- `execpolicy/Cargo.toml`, `build.rs`, `README.md`: Manifest/build/doc.
+- `execpolicy/src/lib.rs`: Exposes exec policy checking API.
+- `execpolicy/src/default.policy`: Policy file defining allowed commands/paths.
+- `execpolicy/src/policy.rs`: Policy data structures.
+- `execpolicy/src/policy_parser.rs`: Parser for the policy file format.
+- `execpolicy/src/arg_type.rs`: Types of arguments (path, url, literal).
+- `execpolicy/src/arg_matcher.rs`: Matching logic for arguments against policy.
+- `execpolicy/src/arg_resolver.rs`: Resolves arg values to canonical forms.
+- `execpolicy/src/exec_call.rs`: Represents a proposed exec call to validate.
+- `execpolicy/src/execv_checker.rs`: Low-level execv validation.
+- `execpolicy/src/program.rs`: Program rules and matching.
+- `execpolicy/src/opt.rs`: Option parsing helpers within the policy language.
+- `execpolicy/src/sed_command.rs`: Specific handling for `sed` safety.
+- `execpolicy/src/valid_exec.rs`: End-to-end validation of a candidate exec call.
+- Tests in `execpolicy/tests/*.rs`: Good/bad cases for many programs and sed parsing.
+
+### Crate: file-search
+- `file-search/Cargo.toml`, `README.md`: Manifest/doc.
+- `file-search/src/lib.rs`: Fuzzy search core logic.
+- `file-search/src/cli.rs`: CLI interface (used by TUI’s `@` search).
+- `file-search/src/main.rs`: Entrypoint.
+
+### Crate: linux-sandbox
+- `linux-sandbox/Cargo.toml`, `README.md`: Manifest/doc.
+- `linux-sandbox/src/main.rs`: Entrypoint to run commands under Linux sandbox.
+- `linux-sandbox/src/lib.rs`: Shared sandbox utilities.
+- `linux-sandbox/src/landlock.rs`: Landlock + seccomp setup and enforcement.
+- `linux-sandbox/src/linux_run_main.rs`: Program bootstrap for sandboxed runs.
+- `linux-sandbox/tests/landlock.rs`: Landlock integration tests.
+
+### Crate: login
+- `login/Cargo.toml`: Manifest.
+- `login/src/lib.rs`: Auth helpers to read/store tokens for model providers.
+- `login/src/login_with_chatgpt.py`: Browser-based ChatGPT login helper script.
+- `login/src/token_data.rs`: Token data structures (expiry, refresh, scope).
+
+### Crate: mcp-client
+- `mcp-client/Cargo.toml`: Manifest.
+- `mcp-client/src/main.rs`: Entrypoint to run as an MCP client.
+- `mcp-client/src/lib.rs`: Library surface for embedding MCP client functionality.
+- `mcp-client/src/mcp_client.rs`: Implements MCP handshake, message loop.
+
+### Crate: mcp-server
+- `mcp-server/Cargo.toml`: Manifest.
+- `mcp-server/src/main.rs`: Entrypoint to run Codex as an MCP server.
+- `mcp-server/src/lib.rs`: Exposes server bootstrap functions.
+- `mcp-server/src/mcp_protocol.rs`: Protocol datatypes/messages for MCP.
+- `mcp-server/src/codex_tool_config.rs`: Loads/validates tool config for MCP server.
+- `mcp-server/src/codex_tool_runner.rs`: Executes configured tools; result marshaling.
+- `mcp-server/src/conversation_loop.rs`: Server conversation loop with turn handling.
+- `mcp-server/src/exec_approval.rs`: Approval flow integration for tool execs.
+- `mcp-server/src/json_to_toml.rs`: Tool to convert JSON config to TOML.
+- `mcp-server/src/message_processor.rs`: Processes inbound MCP messages.
+- `mcp-server/src/outgoing_message.rs`: Constructs outbound messages.
+- `mcp-server/src/patch_approval.rs`: Approval logic for applying patches.
+- `mcp-server/src/tool_handlers/mod.rs`: Tool handler registry.
+- `mcp-server/src/tool_handlers/create_conversation.rs`: Implements create-conversation tool.
+- `mcp-server/src/tool_handlers/send_message.rs`: Implements send-message tool.
+- Tests in `mcp-server/tests/*.rs`: Validate tool flows, conversation lifecycle, interrupts; includes a mock model server.
+
+### Crate: mcp-types
+- `mcp-types/Cargo.toml`: Manifest.
+- `mcp-types/README.md`: Docs.
+- `mcp-types/schema/2025-03-26/schema.json`: MCP schema version (older).
+- `mcp-types/schema/2025-06-18/schema.json`: Latest MCP schema.
+- `mcp-types/generate_mcp_types.py`: Generates Rust types from schema.
+- `mcp-types/src/lib.rs`: Generated or hand-written types for MCP messages.
+- Tests in `mcp-types/tests/*.rs`: Initialization and progress notifications.
+
+### Crate: ollama (OSS provider support)
+- `ollama/Cargo.toml`: Manifest.
+- `ollama/src/lib.rs`: Public API to interact with OSS model provider.
+- `ollama/src/client.rs`: HTTP client to local Ollama server (pull/run/status).
+- `ollama/src/parser.rs`: Parses streaming responses and errors.
+- `ollama/src/pull.rs`: Image/model pulling orchestration.
+- `ollama/src/url.rs`: URL builders and endpoint helpers.
+
+### Crate: tui (interactive terminal UI)
+- `tui/Cargo.toml`: Manifest for `codex-tui` binary/lib.
+- `tui/prompt_for_init_command.md`: Minimal prompt used at first-run.
+- `tui/src/lib.rs`: Library entry to run the TUI (`run_main`), logging setup, config resolution, trust-screen decision, and terminal lifecycle.
+- `tui/src/main.rs`: TUI binary entrypoint (sets up terminal and calls into `lib`).
+- `tui/src/app.rs`: Core app state and event loop (`App::run`), token accounting.
+- `tui/src/app_event.rs`: Event enum driving UI updates (key presses, logs, etc.).
+- `tui/src/app_event_sender.rs`: Channel sender abstraction for app events.
+- `tui/src/bottom_pane/mod.rs`: Bottom pane module root re-exporting subviews.
+- `tui/src/bottom_pane/bottom_pane_view.rs`: Layout and rendering of the bottom input pane.
+- `tui/src/bottom_pane/chat_composer.rs`: Input handling, multiline editor, paste handling, image attachment placeholders.
+- `tui/src/bottom_pane/chat_composer_history.rs`: History of composer inputs.
+- `tui/src/bottom_pane/approval_modal_view.rs`: Approvals popup UI.
+- `tui/src/bottom_pane/command_popup.rs`: Slash command popup rendering/logic.
+- `tui/src/bottom_pane/file_search_popup.rs`: `@` file search popup UI and selection.
+- `tui/src/bottom_pane/live_ring_widget.rs`: Live ring (activity indicator).
+- `tui/src/bottom_pane/past_inputs_popup.rs`: Recently sent inputs UI.
+- `tui/src/bottom_pane/popup_consts.rs`: Popup layout constants.
+- `tui/src/bottom_pane/prompts_popup.rs`: Prompt suggestions UI.
+- `tui/src/bottom_pane/scroll_state.rs`: Scroll state handling.
+- `tui/src/bottom_pane/selection_popup_common.rs`: Shared popup selection utilities.
+- `tui/src/bottom_pane/resume_popup.rs`: Resume session popup.
+- `tui/src/bottom_pane/snapshots/*.snap`: Snapshot tests of UI fragments.
+- `tui/src/bottom_pane/textarea.rs`: Textarea widget with cursor/selection logic.
+- `tui/src/chatwidget.rs`: Main chat transcript rendering and layout.
+- `tui/src/citation_regex.rs`: Regex helpers to detect/render citations.
+- `tui/src/cli.rs`: Clap args for TUI (model, sandbox flags, `--oss`, images).
+- `tui/src/colors.rs`: Centralized color palette for UI components.
+- `tui/src/custom_terminal.rs`: Lower-level terminal setup/teardown helpers.
+- `tui/src/diff_render.rs`: Side-by-side diff rendering in the UI.
+- `tui/src/exec_command.rs`: Glue to run commands from UI and stream output.
+- `tui/src/file_search.rs`: Wiring to `file-search` crate for `@` feature.
+- `tui/src/get_git_diff.rs`: Fetches current git diff for display.
+- `tui/src/history_cell.rs`: History cell rendering in chat.
+- `tui/src/insert_history.rs`: Logic for inserting historical messages.
+- `tui/src/live_wrap.rs`: Adaptive line-wrapping for terminal width.
+- `tui/src/log_layer.rs`: Tracing subscriber layer that streams logs to UI.
+- `tui/src/markdown.rs`: Markdown rendering to terminal widgets.
+- `tui/src/onboarding/mod.rs`: Onboarding flow module root.
+- `tui/src/onboarding/auth.rs`: Login screen component.
+- `tui/src/onboarding/continue_to_chat.rs`: Transition screen logic.
+- `tui/src/onboarding/onboarding_screen.rs`: Main onboarding UI composition.
+- `tui/src/onboarding/trust_directory.rs`: Trust project directory workflow.
+- `tui/src/onboarding/welcome.rs`: Welcome screen.
+- `tui/src/shimmer.rs`: Loading shimmer effects.
+- `tui/src/slash_command.rs`: Slash command parsing and execution.
+- `tui/src/status_indicator_widget.rs`: Status line widget.
+- `tui/src/text_block.rs`: Rich text block layout/flow.
+- `tui/src/text_formatting.rs`: Text styling and spans.
+- `tui/src/tui.rs`: Terminal init/restore and ratatui backend glue.
+- `tui/src/updates.rs`: Update notification logic (release checks).
+- `tui/src/user_approval_widget.rs`: Approval banners and prompts.
+- `tui/tests/*.rs`: TUI-specific tests (status indicator, VT100 history).
+
+### How the big pieces fit
+- CLI (`cli`) is the front door and dispatches to TUI (`tui`), headless exec (`exec`), or MCP server/client.
+- `core` holds agent logic, config, model/provider wiring, exec/safety, and protocol types.
+- TUI renders chat, approvals, diffs, and integrates with `core` and `file-search`.
+- Sandbox layers (`execpolicy`, `linux-sandbox`, macOS Seatbelt in `core`) enforce safe execution.
+- `chatgpt`, `login`, and `ollama` provide provider-specific clients and auth.
+- MCP client/server expose Codex via Model Context Protocol.
+
+- Added support: Image attachments in TUI composer, approvals toggles, OSS provider bootstrap.
+
+- Tests cover E2E flows for apply, protocol streaming, sandboxing, and UI snapshots.
+
+- Docs and configuration live in `config.md`, `docs/protocol_v1.md`, and TUI/CLI prompts.
+
+- Build/infra: release script, Nix build, toolchain pin, and formatting rules.
+
+- Utilities (`ansi-escape`, `common`, `file-search`) are shared across crates.
+
+- Safety: `execpolicy` + platform sandboxes gate external command execution.
+
+- Extensibility: MCP server exposes tool handlers to connect Codex to other clients.
 
-<!-- End ToC -->
+- Model providers: OpenAI and OSS (`ollama`) are abstracted via `core` provider info.
 
-</details>
+- Patch application: `apply-patch` and `core/src/apply_patch.rs` implement safe diffs and the “Apply” command integrates through `chatgpt`.
 
----
+- Event processing: `exec` provides both human-readable and JSON event streams for automation.
 
-## Quickstart
+- Logging: `tui` sets up layered logging to file and to UI via a custom tracing layer.
 
-### Installing and running Codex CLI
+- Trust flow: TUI determines repo trust and sets defaults for sandbox/approval if unset.
 
-Install globally with your preferred package manager:
+- File search/popups: bottom pane components implement quick file lookup and prompt tools.
 
-```shell
-npm install -g @openai/codex  # Alternatively: `brew install codex`
-```
+- Protocol: `core/src/protocol.rs` defines message formats and usage accounting, printed by CLI in headless mode when appropriate.
 
-Then simply run `codex` to get started:
+- Seatbelt policy: `core/src/seatbelt_base_policy.sbpl` supplies macOS sandbox rules.
 
-```shell
-codex
-```
+- Landlock: `linux-sandbox` configures Landlock/seccomp for Linux execution.
 
-<details>
-<summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
+- MCP types are generated from JSON schema (`mcp-types`).
 
-Each GitHub Release contains many executables, but in practice, you likely want one of these:
+- `arg0` enables a single binary to behave differently based on its invoked name.
 
-- macOS
-  - Apple Silicon/arm64: `codex-aarch64-apple-darwin.tar.gz`
-  - x86_64 (older Mac hardware): `codex-x86_64-apple-darwin.tar.gz`
-- Linux
-  - x86_64: `codex-x86_64-unknown-linux-musl.tar.gz`
-  - arm64: `codex-aarch64-unknown-linux-musl.tar.gz`
+- `ansi-escape` supports accurate terminal rendering, colors, and cursor control.
 
-Each archive contains a single entry with the platform baked into the name (e.g., `codex-x86_64-unknown-linux-musl`), so you likely want to rename it to `codex` after extracting it.
+- `execpolicy` enforces command-level safety via a policy language and parser.
 
-</details>
+- `common` centralizes CLI arg parsing for approval/sandbox and summaries.
 
-### Using Codex with your ChatGPT plan
+- `ollama` supports running an OSS model locally and bootstrapping on demand.
 
-<p align="center">
-  <img src="./.github/codex-cli-login.png" alt="Codex CLI login" width="50%" />
-  </p>
+- `chatgpt` includes token handling for ChatGPT web auth and task retrieval.
 
-Run `codex` and select **Sign in with ChatGPT**. You'll need a Plus, Pro, or Team ChatGPT account, and will get access to our latest models, including `gpt-5`, at no extra cost to your plan. (Enterprise is coming soon.)
+- `mcp-server` wires `core` agent operations to MCP tools and conversation loops.
 
-> Important: If you've used the Codex CLI before, follow these steps to migrate from usage-based billing with your API key:
->
-> 1. Update the CLI and ensure `codex --version` is `0.20.0` or later
-> 2. Delete `~/.codex/auth.json` (this should be `C:\Users\USERNAME\.codex\auth.json` on Windows)
-> 3. Run `codex login` again
+- `mcp-client` implements the counterpart client for MCP testing and integrations.
 
-If you encounter problems with the login flow, please comment on [this issue](https://github.com/openai/codex/issues/1243).
+- `file-search` powers the inline `@` search within TUI.
 
-### Connecting on a "Headless" Machine
+- `login` provides API key or ChatGPT-based auth flows stored in Codex home.
 
-Today, the login process entails running a server on `localhost:1455`. If you are on a "headless" server, such as a Docker container or are `ssh`'d into a remote machine, loading `localhost:1455` in the browser on your local machine will not automatically connect to the webserver running on the _headless_ machine, so you must use one of the following workarounds:
+- `tui` brings it all together with ratatui for the interactive experience.
 
-#### Authenticate locally and copy your credentials to the "headless" machine
+- `cli` exposes all functionality under `codex-custom`.
 
-The easiest solution is likely to run through the `codex login` process on your local machine such that `localhost:1455` _is_ accessible in your web browser. When you complete the authentication process, an `auth.json` file should be available at `$CODEX_HOME/auth.json` (on Mac/Linux, `$CODEX_HOME` defaults to `~/.codex` whereas on Windows, it defaults to `%USERPROFILE%\.codex`).
+- `core` is the heart of Codex agent behavior and safety.
 
-Because the `auth.json` file is not tied to a specific host, once you complete the authentication flow locally, you can copy the `$CODEX_HOME/auth.json` file to the headless machine and then `codex` should "just work" on that machine. Note to copy a file to a Docker container, you can do:
+- `apply-patch` provides robust patch application across the workspace.
 
-```shell
-# substitute MY_CONTAINER with the name or id of your Docker container:
-CONTAINER_HOME=$(docker exec MY_CONTAINER printenv HOME)
-docker exec MY_CONTAINER mkdir -p "$CONTAINER_HOME/.codex"
-docker cp auth.json MY_CONTAINER:"$CONTAINER_HOME/.codex/auth.json"
-```
+- `ansi-escape` + `log_layer` ensure clean, non-blocking UI logging.
 
-whereas if you are `ssh`'d into a remote machine, you likely want to use [`scp`](https://en.wikipedia.org/wiki/Secure_copy_protocol):
+- `docs/` and config files round out the developer and user experience.
 
-```shell
-ssh user@remote 'mkdir -p ~/.codex'
-scp ~/.codex/auth.json user@remote:~/.codex/auth.json
-```
+- Release infra and toolchain ensure consistent builds across macOS/Linux.
 
-or try this one-liner:
+- Snapshot tests ensure UI regressions are caught.
 
-```shell
-ssh user@remote 'mkdir -p ~/.codex && cat > ~/.codex/auth.json' < ~/.codex/auth.json
-```
+- E2E and integration tests validate critical flows (apply, protocol, sandbox).
 
-#### Connecting through VPS or remote
+- OSS model support is first-class via `--oss` TUI flag and bootstrap.
 
-If you run Codex on a remote machine (VPS/server) without a local browser, the login helper starts a server on `localhost:1455` on the remote host. To complete login in your local browser, forward that port to your machine before starting the login flow:
+- Approval policies are toggled live from the TUI with Shift+Tab.
 
-```bash
-# From your local machine
-ssh -L 1455:localhost:1455 <user>@<remote-host>
-```
+- Composer supports image attachments via paste or CLI `-i`.
 
-Then, in that SSH session, run `codex` and select "Sign in with ChatGPT". When prompted, open the printed URL (it will be `http://localhost:1455/...`) in your local browser. The traffic will be tunneled to the remote server.
+- Headless mode prints `FinalOutput` with token usage when non-zero.
 
-### Usage-based billing alternative: Use an OpenAI API key
+- Safety nets prevent accidental stdout/stderr from library code.
 
-If you prefer to pay-as-you-go, you can still authenticate with your OpenAI API key by setting it as an environment variable:
+- Providers are abstracted to add/modify models cleanly.
 
-```shell
-export OPENAI_API_KEY="your-api-key-here"
-```
+- Turn diff tracking supports resume/apply workflows.
 
-Notes:
+- Project docs and git diffs are surfaced in the UI.
 
-- This command only sets the key for your current terminal session, which we recommend. To set it for all future sessions, you can also add the `export` line to your shell's configuration file (e.g., `~/.zshrc`).
-- If you have signed in with ChatGPT, Codex will default to using your ChatGPT credits. If you wish to use your API key, use the `/logout` command to clear your ChatGPT authentication.
+- Trust decision can auto-enable workspace-write sandbox for trusted repos.
 
-#### Forcing a specific auth method (advanced)
+- Protocol streaming mode allows embedding Codex into other tools via stdin/stdout.
 
-You can explicitly choose which authentication Codex should prefer when both are available.
+- Fuzzy matching and `@` search improve navigation and context curation.
 
-- To always use your API key (even when ChatGPT auth exists), set:
+- Landlock/Seatbelt enable safe experimentation with external commands.
 
-```toml
-# ~/.codex/config.toml
-preferred_auth_method = "apikey"
-```
+- Policy language supports nuanced safety constraints.
 
-Or override ad-hoc via CLI:
+- Upgrade checks nudge users to newer releases.
 
-```bash
-codex --config preferred_auth_method="apikey"
-```
+- The architecture separates business logic (`core`) from presentation (`tui`) and shell/exec (`exec`, sandboxes), improving maintainability.
 
-- To prefer ChatGPT auth (default), set:
+- The workspace uses strict lints to avoid footguns (`clippy::print_*` denies).
 
-```toml
-# ~/.codex/config.toml
-preferred_auth_method = "chatgpt"
-```
+- The TUI wiring uses a custom tracing layer to stream logs to the UI in near real-time.
 
-Notes:
+- Many components are reusable crates to keep file sizes small and code modular.
 
-- When `preferred_auth_method = "apikey"` and an API key is available, the login screen is skipped.
-- When `preferred_auth_method = "chatgpt"` (default), Codex prefers ChatGPT auth if present; if only an API key is present, it will use the API key. Certain account types may also require API-key mode.
+- Test coverage spans unit, integration, and snapshot layers, following best practices.
 
-### Choosing Codex's level of autonomy
+- The CLI multitool presents a cohesive UX through subcommands and shared flags.
 
-We always recommend running Codex in its default sandbox that gives you strong guardrails around what the agent can do. The default sandbox prevents it from editing files outside its workspace, or from accessing the network.
+- Provider and model metadata in `core` centralize capabilities and defaults.
 
-When you launch Codex in a new folder, it detects whether the folder is version controlled and recommends one of two levels of autonomy:
+- Patch parser and seeker are optimized for reliability and speed.
 
-#### **1. Read/write**
+- Generated MCP types ensure protocol compatibility with evolving schemas.
 
-- Codex can run commands and write files in the workspace without approval.
-- To write files in other folders, access network, update git or perform other actions protected by the sandbox, Codex will need your permission.
-- By default, the workspace includes the current directory, as well as temporary directories like `/tmp`. You can see what directories are in the workspace with the `/status` command. See the docs for how to customize this behavior.
-- Advanced: You can manually specify this configuration by running `codex --sandbox workspace-write --ask-for-approval on-request`
-- This is the recommended default for version-controlled folders.
+- The repository is organized for clarity and composability across features.
 
-#### **2. Read-only**
+- Configuration supports profiles and overrides with clear precedence.
 
-- Codex can run read-only commands without approval.
-- To edit files, access network, or perform other actions protected by the sandbox, Codex will need your permission.
-- Advanced: You can manually specify this configuration by running `codex --sandbox read-only --ask-for-approval on-request`
-- This is the recommended default non-version-controlled folders.
+- The system is built for production-grade safety, extensibility, and UX.
 
-#### **3. Advanced configuration**
+- Logging is both file-based and in-UI, with non-blocking appenders.
 
-Codex gives you fine-grained control over the sandbox with the `--sandbox` option, and over when it requests approval with the `--ask-for-approval` option. Run `codex help` for more on these options.
+- Error handling is surfaced to UI and exit codes consistently.
 
-#### Can I run without ANY approvals?
+- Modify/extend components with minimal cross-crate coupling.
 
-Yes, run codex non-interactively with `--ask-for-approval never`. This option works with all `--sandbox` options, so you still have full control over Codex's level of autonomy. It will make its best attempt with whatever contrainsts you provide. For example:
+- Sandbox policies default to safe, with opt-in elevated modes.
 
-- Use `codex --ask-for-approval never --sandbox read-only` when you are running many agents to answer questions in parallel in the same workspace.
-- Use `codex --ask-for-approval never --sandbox workspace-write` when you want the agent to non-interactively take time to produce the best outcome, with strong guardrails around its behavior.
-- Use `codex --ask-for-approval never --sandbox danger-full-access` to dangerously give the agent full autonomy. Because this disables important safety mechanisms, we recommend against using this unless running Codex in an isolated environment.
+- Terminal initialization/restore handles panics gracefully.
 
-#### Fine-tuning in `config.toml`
+- Image flows map placeholders to `input_image` parts for OpenAI Responses API.
 
-```toml
-# approval mode
-approval_policy = "untrusted"
-sandbox_mode    = "read-only"
+- Headless JSON event stream is suited for CI/CD usage.
 
-# full-auto mode
-approval_policy = "on-request"
-sandbox_mode    = "workspace-write"
+- CLI completion generation supports multiple shells and binary names.
 
-# Optional: allow network in workspace-write mode
-[sandbox_workspace_write]
-network_access = true
-```
+- Arg0 support eases installation and symlink-based invocation variants.
 
-You can also save presets as **profiles**:
+- Utility crates like `ansi-escape` and `file-search` keep TUI fast and snappy.
 
-```toml
-[profiles.full_auto]
-approval_policy = "on-request"
-sandbox_mode    = "workspace-write"
+- The project is engineered to scale features while maintaining safety and UX.
 
-[profiles.readonly_quiet]
-approval_policy = "never"
-sandbox_mode    = "read-only"
-```
+- All critical paths have targeted tests and fixtures.
 
-### Example prompts
+- Git integration is deep (diffs, branch, dirty state, apply diffs).
 
-Below are a few bite-size examples you can copy-paste. Replace the text in quotes with your own task. See the [prompting guide](https://github.com/openai/codex/blob/main/codex-cli/examples/prompting_guide.md) for more tips and usage patterns.
+- OSS model support checks readiness and prompts install as needed.
 
-| ✨  | What you type                                                                   | What happens                                                               |
-| --- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| 1   | `codex "Refactor the Dashboard component to React Hooks"`                       | Codex rewrites the class component, runs `npm test`, and shows the diff.   |
-| 2   | `codex "Generate SQL migrations for adding a users table"`                      | Infers your ORM, creates migration files, and runs them in a sandboxed DB. |
-| 3   | `codex "Write unit tests for utils/date.ts"`                                    | Generates tests, executes them, and iterates until they pass.              |
-| 4   | `codex "Bulk-rename *.jpeg -> *.jpg with git mv"`                               | Safely renames files and updates imports/usages.                           |
-| 5   | `codex "Explain what this regex does: ^(?=.*[A-Z]).{8,}$"`                      | Outputs a step-by-step human explanation.                                  |
-| 6   | `codex "Carefully review this repo, and propose 3 high impact well-scoped PRs"` | Suggests impactful PRs in the current codebase.                            |
-| 7   | `codex "Look for vulnerabilities and create a security review report"`          | Finds and explains security bugs.                                          |
+- Final outputs are compact and machine-readable when appropriate.
 
-## Running with a prompt as input
+- Overall: a clean separation of concerns enabling long-term maintainability.
 
-You can also run Codex CLI with a prompt as input:
+- End-to-end from UX to safety and protocol surfaces is covered by dedicated crates.
 
-```shell
-codex "explain this codebase to me"
-```
+- Tight but flexible config/overrides model supports many workflows.
 
-```shell
-codex --full-auto "create the fanciest todo-list app"
-```
+- The codebase adheres to strict quality bars and modern Rust practices.
 
-That's it - Codex will scaffold a file, run it inside a sandbox, install any
-missing dependencies, and show you the live result. Approve the changes and
-they'll be committed to your working directory.
+- Tooling (Nix, scripts, justfile) ease contributors’ onboarding.
 
-## Using Open Source Models
+- The MCP server exposes Codex to broader ecosystems through well-defined tools.
 
-<details>
-<summary><strong>Use <code>--profile</code> to use other models</strong></summary>
+- Many internal helpers isolate complexity (parsers, matchers, shells).
 
-Codex also allows you to use other providers that support the OpenAI Chat Completions (or Responses) API.
+- Developer ergonomics like live approvals toggling and `@` search significantly improve DX.
 
-To do so, you must first define custom [providers](./config.md#model_providers) in `~/.codex/config.toml`. For example, the provider for a standard Ollama setup would be defined as follows:
+- The architecture supports adding new providers and tools with minimal friction.
 
-```toml
-[model_providers.ollama]
-name = "Ollama"
-base_url = "http://localhost:11434/v1"
-```
+- Patch/apply workflows integrate closely with the agent turn lifecycle.
 
-The `base_url` will have `/chat/completions` appended to it to build the full URL for the request.
+- UI components are modular, snapshot-tested, and theme-consistent.
 
-For providers that also require an `Authorization` header of the form `Bearer: SECRET`, an `env_key` can be specified, which indicates the environment variable to read to use as the value of `SECRET` when making a request:
+- Non-interactive mode enables automation and scripting use cases.
 
-```toml
-[model_providers.openrouter]
-name = "OpenRouter"
-base_url = "https://openrouter.ai/api/v1"
-env_key = "OPENROUTER_API_KEY"
-```
+- The code avoids printing directly from libs, channeling output through UI/log layers.
 
-Providers that speak the Responses API are also supported by adding `wire_api = "responses"` as part of the definition. Accessing OpenAI models via Azure is an example of such a provider, though it also requires specifying additional `query_params` that need to be appended to the request URL:
+- Safety constraints balance power and protections for local systems.
 
-```toml
-[model_providers.azure]
-name = "Azure"
-# Make sure you set the appropriate subdomain for this URL.
-base_url = "https://YOUR_PROJECT_NAME.openai.azure.com/openai"
-env_key = "AZURE_OPENAI_API_KEY"  # Or "OPENAI_API_KEY", whichever you use.
-# Newer versions appear to support the responses API, see https://github.com/openai/codex/pull/1321
-query_params = { api-version = "2025-04-01-preview" }
-wire_api = "responses"
-```
+- The repository is designed to be extended and maintained professionally.
 
-Once you have defined a provider you wish to use, you can configure it as your default provider as follows:
+- This mapping should make it straightforward to find and modify any behavior across the stack.
 
-```toml
-model_provider = "azure"
-```
-
-> [!TIP]
-> If you find yourself experimenting with a variety of models and providers, then you likely want to invest in defining a _profile_ for each configuration like so:
-
-```toml
-[profiles.o3]
-model_provider = "azure"
-model = "o3"
-
-[profiles.mistral]
-model_provider = "ollama"
-model = "mistral"
-```
-
-This way, you can specify one command-line argument (.e.g., `--profile o3`, `--profile mistral`) to override multiple settings together.
-
-</details>
-
-Codex can run fully locally against an OpenAI-compatible OSS host (like Ollama) using the `--oss` flag:
-
-- Interactive UI:
-  - codex --oss
-- Non-interactive (programmatic) mode:
-  - echo "Refactor utils" | codex exec --oss
-
-Model selection when using `--oss`:
-
-- If you omit `-m/--model`, Codex defaults to -m gpt-oss:20b and will verify it exists locally (downloading if needed).
-- To pick a different size, pass one of:
-  - -m "gpt-oss:20b"
-  - -m "gpt-oss:120b"
-
-Point Codex at your own OSS host:
-
-- By default, `--oss` talks to http://localhost:11434/v1.
-- To use a different host, set one of these environment variables before running Codex:
-  - CODEX_OSS_BASE_URL, for example:
-    - CODEX_OSS_BASE_URL="http://my-ollama.example.com:11434/v1" codex --oss -m gpt-oss:20b
-  - or CODEX_OSS_PORT (when the host is localhost):
-    - CODEX_OSS_PORT=11434 codex --oss
-
-Advanced: you can persist this in your config instead of environment variables by overriding the built-in `oss` provider in `~/.codex/config.toml`:
-
-```toml
-[model_providers.oss]
-name = "Open Source"
-base_url = "http://my-ollama.example.com:11434/v1"
-```
-
----
-
-### Platform sandboxing details
-
-The mechanism Codex uses to implement the sandbox policy depends on your OS:
-
-- **macOS 12+** uses **Apple Seatbelt** and runs commands using `sandbox-exec` with a profile (`-p`) that corresponds to the `--sandbox` that was specified.
-- **Linux** uses a combination of Landlock/seccomp APIs to enforce the `sandbox` configuration.
-
-Note that when running Linux in a containerized environment such as Docker, sandboxing may not work if the host/container configuration does not support the necessary Landlock/seccomp APIs. In such cases, we recommend configuring your Docker container so that it provides the sandbox guarantees you are looking for and then running `codex` with `--sandbox danger-full-access` (or, more simply, the `--dangerously-bypass-approvals-and-sandbox` flag) within your container.
-
----
-
-## Experimental technology disclaimer
-
-Codex CLI is an experimental project under active development. It is not yet stable, may contain bugs, incomplete features, or undergo breaking changes. We're building it in the open with the community and welcome:
-
-- Bug reports
-- Feature requests
-- Pull requests
-- Good vibes
-
-Help us improve by filing issues or submitting PRs (see the section below for how to contribute)!
-
----
-
-## System requirements
-
-| Requirement                 | Details                                                         |
-| --------------------------- | --------------------------------------------------------------- |
-| Operating systems           | macOS 12+, Ubuntu 20.04+/Debian 10+, or Windows 11 **via WSL2** |
-| Git (optional, recommended) | 2.23+ for built-in PR helpers                                   |
-| RAM                         | 4-GB minimum (8-GB recommended)                                 |
-
----
-
-## CLI reference
-
-| Command            | Purpose                            | Example                         |
-| ------------------ | ---------------------------------- | ------------------------------- |
-| `codex`            | Interactive TUI                    | `codex`                         |
-| `codex "..."`      | Initial prompt for interactive TUI | `codex "fix lint errors"`       |
-| `codex exec "..."` | Non-interactive "automation mode"  | `codex exec "explain utils.ts"` |
-
-Key flags: `--model/-m`, `--ask-for-approval/-a`.
-
----
-
-## Memory & project docs
-
-You can give Codex extra instructions and guidance using `AGENTS.md` files. Codex looks for `AGENTS.md` files in the following places, and merges them top-down:
-
-1. `~/.codex/AGENTS.md` - personal global guidance
-2. `AGENTS.md` at repo root - shared project notes
-3. `AGENTS.md` in the current working directory - sub-folder/feature specifics
-
----
-
-## Non-interactive / CI mode
-
-Run Codex head-less in pipelines. Example GitHub Action step:
-
-```yaml
-- name: Update changelog via Codex
-  run: |
-    npm install -g @openai/codex
-    export OPENAI_API_KEY="${{ secrets.OPENAI_KEY }}"
-    codex exec --full-auto "update CHANGELOG for next release"
-```
-
-## Model Context Protocol (MCP)
-
-The Codex CLI can be configured to leverage MCP servers by defining an [`mcp_servers`](./codex-rs/config.md#mcp_servers) section in `~/.codex/config.toml`. It is intended to mirror how tools such as Claude and Cursor define `mcpServers` in their respective JSON config files, though the Codex format is slightly different since it uses TOML rather than JSON, e.g.:
-
-```toml
-# IMPORTANT: the top-level key is `mcp_servers` rather than `mcpServers`.
-[mcp_servers.server-name]
-command = "npx"
-args = ["-y", "mcp-server"]
-env = { "API_KEY" = "value" }
-```
-
-> [!TIP]
-> It is somewhat experimental, but the Codex CLI can also be run as an MCP _server_ via `codex mcp`. If you launch it with an MCP client such as `npx @modelcontextprotocol/inspector codex mcp` and send it a `tools/list` request, you will see that there is only one tool, `codex`, that accepts a grab-bag of inputs, including a catch-all `config` map for anything you might want to override. Feel free to play around with it and provide feedback via GitHub issues.
-
-## Tracing / verbose logging
-
-Because Codex is written in Rust, it honors the `RUST_LOG` environment variable to configure its logging behavior.
-
-The TUI defaults to `RUST_LOG=codex_core=info,codex_tui=info` and log messages are written to `~/.codex/log/codex-tui.log`, so you can leave the following running in a separate terminal to monitor log messages as they are written:
-
-```
-tail -F ~/.codex/log/codex-tui.log
-```
-
-By comparison, the non-interactive mode (`codex exec`) defaults to `RUST_LOG=error`, but messages are printed inline, so there is no need to monitor a separate file.
-
-See the Rust documentation on [`RUST_LOG`](https://docs.rs/env_logger/latest/env_logger/#enabling-logging) for more information on the configuration options.
-
----
-
-### DotSlash
-
-The GitHub Release also contains a [DotSlash](https://dotslash-cli.com/) file for the Codex CLI named `codex`. Using a DotSlash file makes it possible to make a lightweight commit to source control to ensure all contributors use the same version of an executable, regardless of what platform they use for development.
-
-</details>
-
-<details>
-<summary><strong>Build from source</strong></summary>
-
-```bash
-# Clone the repository and navigate to the root of the Cargo workspace.
-git clone https://github.com/openai/codex.git
-cd codex/codex-rs
-
-# Install the Rust toolchain, if necessary.
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-source "$HOME/.cargo/env"
-rustup component add rustfmt
-rustup component add clippy
-
-# Build Codex.
-cargo build
-
-# Launch the TUI with a sample prompt.
-cargo run --bin codex -- "explain this codebase to me"
-
-# After making changes, ensure the code is clean.
-cargo fmt -- --config imports_granularity=Item
-cargo clippy --tests
-
-# Run the tests.
-cargo test
-```
-
-</details>
-
----
-
-## Configuration
-
-Codex supports a rich set of configuration options documented in [`codex-rs/config.md`](./codex-rs/config.md).
-
-By default, Codex loads its configuration from `~/.codex/config.toml`.
-
-Though `--config` can be used to set/override ad-hoc config values for individual invocations of `codex`.
-
----
-
-## FAQ
-
-<details>
-<summary>OpenAI released a model called Codex in 2021 - is this related?</summary>
-
-In 2021, OpenAI released Codex, an AI system designed to generate code from natural language prompts. That original Codex model was deprecated as of March 2023 and is separate from the CLI tool.
-
-</details>
-
-<details>
-<summary>Which models are supported?</summary>
-
-Any model available with [Responses API](https://platform.openai.com/docs/api-reference/responses). The default is `o4-mini`, but pass `--model gpt-4.1` or set `model: gpt-4.1` in your config file to override.
-
-</details>
-<details>
-<summary>Why does <code>o3</code> or <code>o4-mini</code> not work for me?</summary>
-
-It's possible that your [API account needs to be verified](https://help.openai.com/en/articles/10910291-api-organization-verification) in order to start streaming responses and seeing chain of thought summaries from the API. If you're still running into issues, please let us know!
-
-</details>
-
-<details>
-<summary>How do I stop Codex from editing my files?</summary>
-
-Codex runs model-generated commands in a sandbox. If a proposed command or file change doesn't look right, you can simply type **n** to deny the command or give the model feedback.
-
-</details>
-<details>
-<summary>Does it work on Windows?</summary>
-
-Not directly. It requires [Windows Subsystem for Linux (WSL2)](https://learn.microsoft.com/en-us/windows/wsl/install) - Codex has been tested on macOS and Linux with Node 22.
-
-</details>
-
----
-
-## Zero data retention (ZDR) usage
-
-Codex CLI **does** support OpenAI organizations with [Zero Data Retention (ZDR)](https://platform.openai.com/docs/guides/your-data#zero-data-retention) enabled. If your OpenAI organization has Zero Data Retention enabled and you still encounter errors such as:
-
-```
-OpenAI rejected the request. Error details: Status: 400, Code: unsupported_parameter, Type: invalid_request_error, Message: 400 Previous response cannot be used for this organization due to Zero Data Retention.
-```
-
-Ensure you are running `codex` with `--config disable_response_storage=true` or add this line to `~/.codex/config.toml` to avoid specifying the command line option each time:
-
-```toml
-disable_response_storage = true
-```
-
-See [the configuration documentation on `disable_response_storage`](./codex-rs/config.md#disable_response_storage) for details.
-
----
-
-## Codex open source fund
-
-We're excited to launch a **$1 million initiative** supporting open source projects that use Codex CLI and other OpenAI models.
-
-- Grants are awarded up to **$25,000** API credits.
-- Applications are reviewed **on a rolling basis**.
-
-**Interested? [Apply here](https://openai.com/form/codex-open-source-fund/).**
-
----
-
-## Contributing
-
-This project is under active development and the code will likely change pretty significantly.
-
-**At the moment, we only plan to prioritize reviewing external contributions for bugs or security fixes.**
-
-If you want to add a new feature or change the behavior of an existing one, please open an issue proposing the feature and get approval from an OpenAI team member before spending time building it.
-
-**New contributions that don't go through this process may be closed** if they aren't aligned with our current roadmap or conflict with other priorities/upcoming features.
-
-### Development workflow
-
-- Create a _topic branch_ from `main` - e.g. `feat/interactive-prompt`.
-- Keep your changes focused. Multiple unrelated fixes should be opened as separate PRs.
-- Following the [development setup](#development-workflow) instructions above, ensure your change is free of lint warnings and test failures.
-
-### Writing high-impact code changes
-
-1. **Start with an issue.** Open a new one or comment on an existing discussion so we can agree on the solution before code is written.
-2. **Add or update tests.** Every new feature or bug-fix should come with test coverage that fails before your change and passes afterwards. 100% coverage is not required, but aim for meaningful assertions.
-3. **Document behaviour.** If your change affects user-facing behaviour, update the README, inline help (`codex --help`), or relevant example projects.
-4. **Keep commits atomic.** Each commit should compile and the tests should pass. This makes reviews and potential rollbacks easier.
-
-### Opening a pull request
-
-- Fill in the PR template (or include similar information) - **What? Why? How?**
-- Run **all** checks locally (`cargo test && cargo clippy --tests && cargo fmt -- --config imports_granularity=Item`). CI failures that could have been caught locally slow down the process.
-- Make sure your branch is up-to-date with `main` and that you have resolved merge conflicts.
-- Mark the PR as **Ready for review** only when you believe it is in a merge-able state.
-
-### Review process
-
-1. One maintainer will be assigned as a primary reviewer.
-2. If your PR adds a new feature that was not previously discussed and approved, we may choose to close your PR (see [Contributing](#contributing)).
-3. We may ask for changes - please do not take this personally. We value the work, but we also value consistency and long-term maintainability.
-5. When there is consensus that the PR meets the bar, a maintainer will squash-and-merge.
-
-### Community values
-
-- **Be kind and inclusive.** Treat others with respect; we follow the [Contributor Covenant](https://www.contributor-covenant.org/).
-- **Assume good intent.** Written communication is hard - err on the side of generosity.
-- **Teach & learn.** If you spot something confusing, open an issue or PR with improvements.
-
-### Getting help
-
-If you run into problems setting up the project, would like feedback on an idea, or just want to say _hi_ - please open a Discussion or jump into the relevant issue. We are happy to help.
-
-Together we can make Codex CLI an incredible tool. **Happy hacking!** :rocket:
-
-### Contributor license agreement (CLA)
-
-All contributors **must** accept the CLA. The process is lightweight:
-
-1. Open your pull request.
-2. Paste the following comment (or reply `recheck` if you've signed before):
-
-   ```text
-   I have read the CLA Document and I hereby sign the CLA
-   ```
-
-3. The CLA-Assistant bot records your signature in the repo and marks the status check as passed.
-
-No special Git commands, email attachments, or commit footers required.
-
-#### Quick fixes
-
-| Scenario          | Command                                          |
-| ----------------- | ------------------------------------------------ |
-| Amend last commit | `git commit --amend -s --no-edit && git push -f` |
-
-The **DCO check** blocks merges until every commit in the PR carries the footer (with squash this is just the one).
-
-### Releasing `codex`
-
-_For admins only._
-
-Make sure you are on `main` and have no local changes. Then run:
-
-```shell
-VERSION=0.2.0  # Can also be 0.2.0-alpha.1 or any valid Rust version.
-./codex-rs/scripts/create_github_release.sh "$VERSION"
-```
-
-This will make a local commit on top of `main` with `version` set to `$VERSION` in `codex-rs/Cargo.toml` (note that on `main`, we leave the version as `version = "0.0.0"`).
-
-This will push the commit using the tag `rust-v${VERSION}`, which in turn kicks off [the release workflow](.github/workflows/rust-release.yml). This will create a new GitHub Release named `$VERSION`.
-
-If everything looks good in the generated GitHub Release, uncheck the **pre-release** box so it is the latest release.
-
-Create a PR to update [`Formula/c/codex.rb`](https://github.com/Homebrew/homebrew-core/blob/main/Formula/c/codex.rb) on Homebrew.
-
----
-
-## Security & responsible AI
-
-Have you discovered a vulnerability or have concerns about model output? Please e-mail **security@openai.com** and we will respond promptly.
-
----
-
-## License
-
-This repository is licensed under the [Apache-2.0 License](LICENSE).
+- For deeper specifics, we can open any file you want to inspect next.

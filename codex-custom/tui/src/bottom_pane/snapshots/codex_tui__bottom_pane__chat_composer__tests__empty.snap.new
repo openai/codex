@@ -1,0 +1,15 @@
+---
+source: tui/src/bottom_pane/chat_composer.rs
+assertion_line: 1392
+expression: terminal.backend()
+---
+"▌ Ask Codex to do anything                                                                          "
+"▌                                                                                                   "
+"▌                                                                                                   "
+"▌                                                                                                   "
+"▌                                                                                                   "
+"▌                                                                                                   "
+"▌                                                                                                   "
+"▌                                                                                                   "
+"▌                                                                                                   "
+" ⏎ send   Shift+⏎ newline   Ctrl+C quit   2x Esc past inputs   ⏵⏵ on-request | workspace-write (Shif"

@@ -1,5 +1,7 @@
 # Release Management
 
+Note: This document describes release processes for the upstream OpenAI Codex CLI. This custom fork (`codex-custom`) is not published to npm or Homebrew; build and distribute it from source or your own internal channels.
+
 Currently, we made Codex binaries available in three places:
 
 - GitHub Releases https://github.com/openai/codex/releases/
@@ -14,7 +16,7 @@ Assuming you are trying to publish `0.21.0`, first you would run:
 
 ```shell
 VERSION=0.21.0
-./codex-rs/scripts/create_github_release.sh "$VERSION"
+./codex-custom/scripts/create_github_release.sh "$VERSION"
 ```
 
 This will kick off a GitHub Action to build the release, so go to https://github.com/openai/codex/actions/workflows/rust-release.yml to find the corresponding workflow. (Note: we should automate finding the workflow URL with `gh`.)
