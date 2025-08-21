@@ -41,6 +41,7 @@ pub fn generate_ts(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
     codex_protocol::mcp_protocol::ApplyPatchApprovalResponse::export_all_to(out_dir)?;
     codex_protocol::mcp_protocol::ExecCommandApprovalParams::export_all_to(out_dir)?;
     codex_protocol::mcp_protocol::ExecCommandApprovalResponse::export_all_to(out_dir)?;
+    codex_protocol::mcp_protocol::ServerNotification::export_all_to(out_dir)?;
 
     // Prepend header to each generated .ts file
     let ts_files = ts_files_in(out_dir)?;
