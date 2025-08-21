@@ -220,38 +220,6 @@ pub async fn run_main(
 
     let _ = tracing_subscriber::registry().with(file_layer).try_init();
 
-    #[allow(clippy::print_stderr)]
-    #[cfg(not(debug_assertions))]
-    if let Some(latest_version) = updates::get_upgrade_version(&config) {
-        let current_version = env!("CARGO_PKG_VERSION");
-        let exe = std::env::current_exe()?;
-        let managed_by_npm = std::env::var_os("CODEX_MANAGED_BY_NPM").is_some();
-
-        eprintln!(
-            "{} {current_version} -> {latest_version}.",
-            "✨⬆️ Update available!".bold().cyan()
-        );
-
-        if managed_by_npm {
-            let npm_cmd = "npm install -g @openai/codex@latest";
-            eprintln!("Run {} to update.", npm_cmd.cyan().on_black());
-        } else if cfg!(target_os = "macos")
-            && (exe.starts_with("/opt/homebrew") || exe.starts_with("/usr/local"))
-        {
-            let brew_cmd = "brew upgrade codex";
-            eprintln!("Run {} to update.", brew_cmd.cyan().on_black());
-        } else {
-            eprintln!(
-                "See {} for the latest releases and installation options.",
-                "https://github.com/openai/codex/releases/latest"
-                    .cyan()
-                    .on_black()
-            );
-        }
-
-        eprintln!("");
-    }
-
     run_ratatui_app(cli, config, should_show_trust_screen)
         .await
         .map_err(|err| std::io::Error::other(err.to_string()))
@@ -276,7 +244,55 @@ async fn run_ratatui_app(
     }));
     let mut terminal = tui::init()?;
     terminal.clear()?;
+
     let mut tui = Tui::new(terminal);
+
+    // Show update banner in terminal history (instead of stderr) so it is visible
+    // within the TUI scrollback. Building spans keeps styling consistent.
+    #[cfg(not(debug_assertions))]
+    if let Some(latest_version) = updates::get_upgrade_version(&config) {
+        use ratatui::style::Stylize as _;
+        use ratatui::text::Line;
+        use ratatui::text::Span;
+
+        let current_version = env!("CARGO_PKG_VERSION");
+        let exe = std::env::current_exe()?;
+        let managed_by_npm = std::env::var_os("CODEX_MANAGED_BY_NPM").is_some();
+
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(Line::from(vec![
+            "✨⬆️ Update available!".bold().cyan(),
+            Span::raw(" "),
+            Span::raw(format!("{current_version} -> {latest_version}.")),
+        ]));
+
+        if managed_by_npm {
+            let npm_cmd = "npm install -g @openai/codex@latest";
+            lines.push(Line::from(vec![
+                Span::raw("Run "),
+                npm_cmd.cyan(),
+                Span::raw(" to update."),
+            ]));
+        } else if cfg!(target_os = "macos")
+            && (exe.starts_with("/opt/homebrew") || exe.starts_with("/usr/local"))
+        {
+            let brew_cmd = "brew upgrade codex";
+            lines.push(Line::from(vec![
+                Span::raw("Run "),
+                brew_cmd.cyan(),
+                Span::raw(" to update."),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                Span::raw("See "),
+                "https://github.com/openai/codex/releases/latest".cyan(),
+                Span::raw(" for the latest releases and installation options."),
+            ]));
+        }
+
+        lines.push(Line::from(""));
+        tui.insert_history_lines(lines);
+    }
 
     // Initialize high-fidelity session event logging if enabled.
     session_log::maybe_init(&config);
