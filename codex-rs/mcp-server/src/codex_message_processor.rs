@@ -46,7 +46,6 @@ use codex_protocol::mcp_protocol::ConversationId;
 use codex_protocol::mcp_protocol::EXEC_COMMAND_APPROVAL_METHOD;
 use codex_protocol::mcp_protocol::ExecCommandApprovalParams;
 use codex_protocol::mcp_protocol::ExecCommandApprovalResponse;
-use codex_protocol::mcp_protocol::ForkConversationParams;
 use codex_protocol::mcp_protocol::InputItem as WireInputItem;
 use codex_protocol::mcp_protocol::InterruptConversationParams;
 use codex_protocol::mcp_protocol::InterruptConversationResponse;
@@ -116,10 +115,6 @@ impl CodexMessageProcessor {
                 // asynchronously because we need to ensure the conversation is
                 // created before processing any subsequent messages.
                 self.process_new_conversation(request_id, params).await;
-            }
-            ClientRequest::ForkConversation { request_id, params } => {
-                // Same reasoning as NewConversation: ensure ordering.
-                self.process_fork_conversation(request_id, params).await;
             }
             ClientRequest::SendUserMessage { request_id, params } => {
                 self.send_user_message(request_id, params).await;
@@ -390,79 +385,6 @@ impl CodexMessageProcessor {
                 let error = JSONRPCErrorError {
                     code: INTERNAL_ERROR_CODE,
                     message: format!("error creating conversation: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-            }
-        }
-    }
-
-    async fn process_fork_conversation(
-        &self,
-        request_id: RequestId,
-        params: ForkConversationParams,
-    ) {
-        let ForkConversationParams {
-            conversation_id,
-            drop_last_messages,
-            overrides,
-        } = params;
-
-        // Verify the base conversation exists.
-        if self
-            .conversation_manager
-            .get_conversation(conversation_id.0)
-            .await
-            .is_err()
-        {
-            let error = JSONRPCErrorError {
-                code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("conversation not found: {conversation_id}"),
-                data: None,
-            };
-            self.outgoing.send_error(request_id, error).await;
-            return;
-        }
-
-        // Derive config from overrides (or defaults) for the new conversation.
-        let new_conv_params = overrides.unwrap_or_default();
-        let config = match derive_config_from_params(
-            new_conv_params,
-            self.codex_linux_sandbox_exe.clone(),
-        ) {
-            Ok(config) => config,
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INVALID_REQUEST_ERROR_CODE,
-                    message: format!("error deriving config: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
-
-        match self
-            .conversation_manager
-            .fork_conversation(conversation_id.0, drop_last_messages, config)
-            .await
-        {
-            Ok(new_conv) => {
-                let NewConversation {
-                    conversation_id,
-                    session_configured,
-                    ..
-                } = new_conv;
-                let response = NewConversationResponse {
-                    conversation_id: ConversationId(conversation_id),
-                    model: session_configured.model,
-                };
-                self.outgoing.send_response(request_id, response).await;
-            }
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("error forking conversation: {err}"),
                     data: None,
                 };
                 self.outgoing.send_error(request_id, error).await;

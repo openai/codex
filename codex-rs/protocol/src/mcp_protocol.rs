@@ -53,15 +53,6 @@ pub enum ClientRequest {
         request_id: RequestId,
         params: NewConversationParams,
     },
-    /// Start a new conversation by forking an existing one and truncating the
-    /// last N user/assistant messages from its transcript. The new
-    /// conversation will have a fresh conversation id; all other
-    /// configuration can be optionally overridden via `overrides`.
-    ForkConversation {
-        #[serde(rename = "id")]
-        request_id: RequestId,
-        params: ForkConversationParams,
-    },
     SendUserMessage {
         #[serde(rename = "id")]
         request_id: RequestId,
@@ -160,20 +151,6 @@ pub struct NewConversationParams {
 pub struct NewConversationResponse {
     pub conversation_id: ConversationId,
     pub model: String,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ForkConversationParams {
-    /// Existing conversation to fork from.
-    pub conversation_id: ConversationId,
-    /// Positive number of trailing user/assistant messages to drop in the
-    /// fork. `1` means the last message is excluded; `2` excludes the last
-    /// two messages, and so on.
-    pub drop_last_messages: usize,
-    /// Optional overrides for the new conversation's initial configuration.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub overrides: Option<NewConversationParams>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]

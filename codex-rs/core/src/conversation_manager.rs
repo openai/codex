@@ -13,6 +13,7 @@ use crate::codex_conversation::CodexConversation;
 use crate::config::Config;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
+use crate::models::ResponseItem;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::SessionConfiguredEvent;
@@ -105,23 +106,19 @@ impl ConversationManager {
     /// caller's `config`). The new conversation will have a fresh id.
     pub async fn fork_conversation(
         &self,
-        base_conversation_id: Uuid,
         drop_last_messages: usize,
         config: Config,
+        items: Vec<ResponseItem>,
     ) -> CodexResult<NewConversation> {
-        // Obtain base conversation currently managed in memory.
-        let base = self.get_conversation(base_conversation_id).await?;
-        let items = base.history_contents();
-
         // Compute the prefix up to the cut point.
         let fork_items = truncate_after_dropping_last_messages(items, drop_last_messages);
 
         // Spawn a new conversation with the computed initial history.
-        let auth = CodexAuth::from_codex_home(&config.codex_home, config.preferred_auth_method)?;
+        let auth_manager = self.auth_manager.clone();
         let CodexSpawnOk {
             codex,
             session_id: conversation_id,
-        } = Codex::spawn(config, auth, Some(fork_items)).await?;
+        } = Codex::spawn(config, auth_manager, Some(fork_items)).await?;
 
         // The first event must be `SessionInitialized`. Validate and forward it
         // to the caller so that they can display it in the conversation

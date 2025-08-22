@@ -22,7 +22,6 @@ pub fn generate_ts(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
     codex_protocol::mcp_protocol::ServerRequest::export_all_to(out_dir)?;
     codex_protocol::mcp_protocol::NewConversationParams::export_all_to(out_dir)?;
     codex_protocol::mcp_protocol::NewConversationResponse::export_all_to(out_dir)?;
-    codex_protocol::mcp_protocol::ForkConversationParams::export_all_to(out_dir)?;
     codex_protocol::mcp_protocol::AddConversationListenerParams::export_all_to(out_dir)?;
     codex_protocol::mcp_protocol::AddConversationSubscriptionResponse::export_all_to(out_dir)?;
     codex_protocol::mcp_protocol::RemoveConversationListenerParams::export_all_to(out_dir)?;

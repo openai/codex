@@ -1,6 +1,5 @@
 use crate::codex::Codex;
 use crate::error::Result as CodexResult;
-use crate::models::ResponseItem;
 use crate::protocol::Event;
 use crate::protocol::Op;
 use crate::protocol::Submission;
@@ -27,10 +26,5 @@ impl CodexConversation {
 
     pub async fn next_event(&self) -> CodexResult<Event> {
         self.codex.next_event().await
-    }
-
-    /// Return a snapshot of the current conversation history (oldest → newest).
-    pub(crate) fn history_contents(&self) -> Vec<ResponseItem> {
-        self.codex.history_contents()
     }
 }

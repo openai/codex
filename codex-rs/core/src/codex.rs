@@ -130,7 +130,6 @@ pub struct Codex {
     next_id: AtomicU64,
     tx_sub: Sender<Submission>,
     rx_event: Receiver<Event>,
-    session: Arc<Session>,
 }
 
 /// Wrapper returned by [`Codex::spawn`] containing the spawned [`Codex`],
@@ -147,8 +146,8 @@ impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
     pub async fn spawn(
         config: Config,
-        initial_history: Option<Vec<ResponseItem>>,
         auth_manager: Arc<AuthManager>,
+        initial_history: Option<Vec<ResponseItem>>,
     ) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(64);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -199,7 +198,6 @@ impl Codex {
             next_id: AtomicU64::new(0),
             tx_sub,
             rx_event,
-            session: Arc::clone(&session),
         };
 
         Ok(CodexSpawnOk { codex, session_id })
@@ -233,11 +231,6 @@ impl Codex {
             .await
             .map_err(|_| CodexErr::InternalAgentDied)?;
         Ok(event)
-    }
-
-    /// Snapshot of the conversation history (oldest → newest).
-    pub(crate) fn history_contents(&self) -> Vec<ResponseItem> {
-        self.session.state.lock_unchecked().history.contents()
     }
 }
 
