@@ -31,6 +31,9 @@ use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
+use std::collections::HashMap;
+use std::path::Path;
+use std::path::PathBuf;
 
 /// If the pasted content exceeds this number of characters, replace it with a
 /// placeholder in the UI.
@@ -41,6 +44,12 @@ pub enum InputResult {
     Submitted(String),
     Command(SlashCommand),
     None,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct AttachedImage {
+    placeholder: String,
+    path: PathBuf,
 }
 
 struct TokenUsageInfo {
@@ -71,6 +80,7 @@ pub(crate) struct ChatComposer {
     pending_pastes: Vec<(String, String)>,
     token_usage_info: Option<TokenUsageInfo>,
     has_focus: bool,
+    attached_images: Vec<AttachedImage>,
     placeholder_text: String,
 }
 
@@ -103,6 +113,7 @@ impl ChatComposer {
             pending_pastes: Vec::new(),
             token_usage_info: None,
             has_focus: has_input_focus,
+            attached_images: Vec::new(),
             placeholder_text,
         }
     }
@@ -194,6 +205,20 @@ impl ChatComposer {
         self.sync_command_popup();
         self.sync_file_search_popup();
         true
+    }
+
+    pub fn attach_image(&mut self, path: PathBuf, width: u32, height: u32, format_label: &str) {
+        let placeholder = format!("[image {width}x{height} {format_label}]");
+        // Insert as an element to match large paste placeholder behavior:
+        // styled distinctly and treated atomically for cursor/mutations.
+        self.textarea.insert_element(&placeholder);
+        self.attached_images
+            .push(AttachedImage { placeholder, path });
+    }
+
+    pub fn take_recent_submission_images(&mut self) -> Vec<PathBuf> {
+        let images = std::mem::take(&mut self.attached_images);
+        images.into_iter().map(|img| img.path).collect()
     }
 
     /// Integrate results from an asynchronous file search.
@@ -346,17 +371,72 @@ impl ChatComposer {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                if let Some(sel) = popup.selected_match() {
-                    let sel_path = sel.to_string();
-                    // Drop popup borrow before using self mutably again.
-                    self.insert_selected_path(&sel_path);
+                let Some(sel) = popup.selected_match() else {
                     self.active_popup = ActivePopup::None;
                     return (InputResult::None, true);
+                };
+
+                let sel_path = sel.to_string();
+                // If selected path looks like an image (png/jpeg), attach as image instead of inserting text.
+                let is_image = Self::is_image_path(&sel_path);
+                if is_image {
+                    // Determine dimensions; if that fails fall back to normal path insertion.
+                    let path_buf = PathBuf::from(&sel_path);
+                    if let Ok((w, h)) = image::image_dimensions(&path_buf) {
+                        // Remove the current @token (mirror logic from insert_selected_path without inserting text)
+                        // using the flat text and byte-offset cursor API.
+                        let cursor_offset = self.textarea.cursor();
+                        let text = self.textarea.text();
+                        let before_cursor = &text[..cursor_offset];
+                        let after_cursor = &text[cursor_offset..];
+
+                        // Determine token boundaries in the full text.
+                        let start_idx = before_cursor
+                            .char_indices()
+                            .rfind(|(_, c)| c.is_whitespace())
+                            .map(|(idx, c)| idx + c.len_utf8())
+                            .unwrap_or(0);
+                        let end_rel_idx = after_cursor
+                            .char_indices()
+                            .find(|(_, c)| c.is_whitespace())
+                            .map(|(idx, _)| idx)
+                            .unwrap_or(after_cursor.len());
+                        let end_idx = cursor_offset + end_rel_idx;
+
+                        self.textarea.replace_range(start_idx..end_idx, "");
+                        self.textarea.set_cursor(start_idx);
+
+                        let format_label = match Path::new(&sel_path)
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .map(|s| s.to_ascii_lowercase())
+                        {
+                            Some(ext) if ext == "png" => "PNG",
+                            Some(ext) if ext == "jpg" || ext == "jpeg" => "JPEG",
+                            _ => "IMG",
+                        };
+                        self.attach_image(path_buf.clone(), w, h, format_label);
+                        // Add a trailing space to keep typing fluid.
+                        self.textarea.insert_str(" ");
+                    } else {
+                        // Fallback to plain path insertion if metadata read fails.
+                        self.insert_selected_path(&sel_path);
+                    }
+                } else {
+                    // Non-image: inserting file path.
+                    self.insert_selected_path(&sel_path);
                 }
-                (InputResult::None, false)
+                // No selection: treat Enter as closing the popup/session.
+                self.active_popup = ActivePopup::None;
+                (InputResult::None, true)
             }
             input => self.handle_input_basic(input),
         }
+    }
+
+    fn is_image_path(path: &str) -> bool {
+        let lower = path.to_ascii_lowercase();
+        lower.ends_with(".png") || lower.ends_with(".jpg") || lower.ends_with(".jpeg")
     }
 
     /// Extract the `@token` that the cursor is currently positioned on, if any.
@@ -545,12 +625,19 @@ impl ChatComposer {
                 }
                 self.pending_pastes.clear();
 
-                if text.is_empty() {
-                    (InputResult::None, true)
-                } else {
-                    self.history.record_local_submission(&text);
-                    (InputResult::Submitted(text), true)
+                // Strip image placeholders from the submitted text; images are retrieved via take_recent_submission_images()
+                for img in &self.attached_images {
+                    if text.contains(&img.placeholder) {
+                        text = text.replace(&img.placeholder, "");
+                    }
                 }
+
+                text = text.trim().to_string();
+                if !text.is_empty() {
+                    self.history.record_local_submission(&text);
+                }
+                // Do not clear attached_images here; ChatWidget drains them via take_recent_submission_images().
+                (InputResult::Submitted(text), true)
             }
             input => self.handle_input_basic(input),
         }
@@ -558,6 +645,16 @@ impl ChatComposer {
 
     /// Handle generic Input events that modify the textarea content.
     fn handle_input_basic(&mut self, input: KeyEvent) -> (InputResult, bool) {
+        // Special handling for backspace on placeholders
+        if let KeyEvent {
+            code: KeyCode::Backspace,
+            ..
+        } = input
+            && self.try_remove_any_placeholder_at_cursor()
+        {
+            return (InputResult::None, true);
+        }
+
         // Normal input handling
         self.textarea.input(input);
         let text_after = self.textarea.text();
@@ -566,7 +663,163 @@ impl ChatComposer {
         self.pending_pastes
             .retain(|(placeholder, _)| text_after.contains(placeholder));
 
+        // Keep attached images in proportion to how many matching placeholders exist in the text.
+        // This handles duplicate placeholders that share the same visible label.
+        if !self.attached_images.is_empty() {
+            let mut needed: HashMap<String, usize> = HashMap::new();
+            for img in &self.attached_images {
+                needed
+                    .entry(img.placeholder.clone())
+                    .or_insert_with(|| text_after.matches(&img.placeholder).count());
+            }
+
+            let mut used: HashMap<String, usize> = HashMap::new();
+            let mut kept: Vec<AttachedImage> = Vec::with_capacity(self.attached_images.len());
+            for img in self.attached_images.drain(..) {
+                let total_needed = *needed.get(&img.placeholder).unwrap_or(&0);
+                let used_count = used.entry(img.placeholder.clone()).or_insert(0);
+                if *used_count < total_needed {
+                    kept.push(img);
+                    *used_count += 1;
+                }
+            }
+            self.attached_images = kept;
+        }
+
         (InputResult::None, true)
+    }
+
+    /// Attempts to remove an image or paste placeholder if the cursor is at the end of one.
+    /// Returns true if a placeholder was removed.
+    fn try_remove_any_placeholder_at_cursor(&mut self) -> bool {
+        let p = self.textarea.cursor();
+        let text = self.textarea.text();
+
+        // Try image placeholders first
+        let mut out: Option<(usize, String)> = None;
+        // Detect if the cursor is at the end of any image placeholder.
+        // If duplicates exist, remove the specific occurrence's mapping.
+        for (i, img) in self.attached_images.iter().enumerate() {
+            let ph = &img.placeholder;
+            if p < ph.len() {
+                continue;
+            }
+            let start = p - ph.len();
+            if text[start..p] != *ph {
+                continue;
+            }
+
+            // Count the number of occurrences of `ph` before `start`.
+            let mut occ_before = 0usize;
+            let mut search_pos = 0usize;
+            while search_pos < start {
+                if let Some(found) = text[search_pos..start].find(ph) {
+                    occ_before += 1;
+                    search_pos += found + ph.len();
+                } else {
+                    break;
+                }
+            }
+
+            // Remove the occ_before-th attached image that shares this placeholder label.
+            out = if let Some((remove_idx, _)) = self
+                .attached_images
+                .iter()
+                .enumerate()
+                .filter(|(_, img2)| img2.placeholder == *ph)
+                .nth(occ_before)
+            {
+                Some((remove_idx, ph.clone()))
+            } else {
+                Some((i, ph.clone()))
+            };
+            break;
+        }
+        if let Some((idx, placeholder)) = out {
+            self.textarea.replace_range(p - placeholder.len()..p, "");
+            self.attached_images.remove(idx);
+            return true;
+        }
+
+        // Also handle when the cursor is at the START of an image placeholder.
+        // let result = 'out: {
+        let out: Option<(usize, String)> = 'out: {
+            for (i, img) in self.attached_images.iter().enumerate() {
+                let ph = &img.placeholder;
+                if p + ph.len() > text.len() {
+                    continue;
+                }
+                if &text[p..p + ph.len()] != ph {
+                    continue;
+                }
+
+                // Count occurrences of `ph` before `p`.
+                let mut occ_before = 0usize;
+                let mut search_pos = 0usize;
+                while search_pos < p {
+                    if let Some(found) = text[search_pos..p].find(ph) {
+                        occ_before += 1;
+                        search_pos += found + ph.len();
+                    } else {
+                        break 'out None;
+                    }
+                }
+
+                if let Some((remove_idx, _)) = self
+                    .attached_images
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, img2)| img2.placeholder == *ph)
+                    .nth(occ_before)
+                {
+                    break 'out Some((remove_idx, ph.clone()));
+                } else {
+                    break 'out Some((i, ph.clone()));
+                }
+            }
+            None
+        };
+
+        if let Some((idx, placeholder)) = out {
+            self.textarea.replace_range(p..p + placeholder.len(), "");
+            self.attached_images.remove(idx);
+            return true;
+        }
+
+        // Then try pasted-content placeholders
+        if let Some(placeholder) = self.pending_pastes.iter().find_map(|(ph, _)| {
+            if p < ph.len() {
+                return None;
+            }
+            let start = p - ph.len();
+            if text[start..p] == *ph {
+                Some(ph.clone())
+            } else {
+                None
+            }
+        }) {
+            self.textarea.replace_range(p - placeholder.len()..p, "");
+            self.pending_pastes.retain(|(ph, _)| ph != &placeholder);
+            return true;
+        }
+
+        // Also handle when the cursor is at the START of a pasted-content placeholder.
+        if let Some(placeholder) = self.pending_pastes.iter().find_map(|(ph, _)| {
+            if p + ph.len() > text.len() {
+                return None;
+            }
+            if &text[p..p + ph.len()] == ph {
+                Some(ph.clone())
+            } else {
+                None
+            }
+        }) {
+            self.textarea.replace_range(p..p + placeholder.len(), "");
+            self.pending_pastes.retain(|(ph, _)| ph != &placeholder);
+            return true;
+        }
+
+        false
     }
 
     /// Synchronize `self.command_popup` with the current text in the
@@ -746,10 +999,14 @@ impl WidgetRef for &ChatComposer {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
     use crate::app_event::AppEvent;
     use crate::bottom_pane::AppEventSender;
     use crate::bottom_pane::ChatComposer;
     use crate::bottom_pane::InputResult;
+    use crate::bottom_pane::chat_composer::AttachedImage;
     use crate::bottom_pane::chat_composer::LARGE_PASTE_CHAR_THRESHOLD;
     use crate::bottom_pane::textarea::TextArea;
     use tokio::sync::mpsc::unbounded_channel;
@@ -1310,6 +1567,114 @@ mod tests {
                 (false, 0), // After deleting from middle
                 (false, 0), // After deleting from end
             ]
+        );
+    }
+
+    // --- Image attachment tests ---
+    #[test]
+    fn attach_image_and_submit_includes_image_paths() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer =
+            ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
+        let path = PathBuf::from("/tmp/image1.png");
+        composer.attach_image(path.clone(), 32, 16, "PNG");
+        composer.handle_paste(" hi".into());
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::Submitted(text) => assert_eq!(text, "hi"),
+            _ => panic!("expected Submitted"),
+        }
+        let imgs = composer.take_recent_submission_images();
+        assert_eq!(vec![path], imgs);
+    }
+
+    #[test]
+    fn attach_image_without_text_submits_empty_text_and_images() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer =
+            ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
+        let path = PathBuf::from("/tmp/image2.png");
+        composer.attach_image(path.clone(), 10, 5, "PNG");
+        let (result, _) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::Submitted(text) => assert!(text.is_empty()),
+            _ => panic!("expected Submitted"),
+        }
+        let imgs = composer.take_recent_submission_images();
+        assert_eq!(imgs.len(), 1);
+        assert_eq!(imgs[0], path);
+        assert!(composer.attached_images.is_empty());
+    }
+
+    #[test]
+    fn image_placeholder_backspace_behaves_like_text_placeholder() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer =
+            ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
+        let path = PathBuf::from("/tmp/image3.png");
+        composer.attach_image(path.clone(), 20, 10, "PNG");
+        let placeholder = composer.attached_images[0].placeholder.clone();
+
+        // Case 1: backspace at end
+        composer.textarea.move_cursor_to_end_of_line(false);
+        composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+        assert!(!composer.textarea.text().contains(&placeholder));
+        assert!(composer.attached_images.is_empty());
+
+        // Re-add and test backspace in middle: should break the placeholder string
+        // and drop the image mapping (same as text placeholder behavior).
+        composer.attach_image(path.clone(), 20, 10, "PNG");
+        let placeholder2 = composer.attached_images[0].placeholder.clone();
+        // Move cursor to roughly middle of placeholder
+        if let Some(start_pos) = composer.textarea.text().find(&placeholder2) {
+            let mid_pos = start_pos + (placeholder2.len() / 2);
+            composer.textarea.set_cursor(mid_pos);
+            composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+            assert!(!composer.textarea.text().contains(&placeholder2));
+            assert!(composer.attached_images.is_empty());
+        } else {
+            panic!("Placeholder not found in textarea");
+        }
+    }
+
+    #[test]
+    fn deleting_one_of_duplicate_image_placeholders_removes_matching_entry() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer =
+            ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
+
+        let path1 = PathBuf::from("/tmp/image_dup1.png");
+        let path2 = PathBuf::from("/tmp/image_dup2.png");
+
+        composer.attach_image(path1.clone(), 10, 5, "PNG");
+        // separate placeholders with a space for clarity
+        composer.handle_paste(" ".into());
+        composer.attach_image(path2.clone(), 10, 5, "PNG");
+
+        let ph = composer.attached_images[0].placeholder.clone();
+        let text = composer.textarea.text().to_string();
+        let start1 = text.find(&ph).expect("first placeholder present");
+        let end1 = start1 + ph.len();
+        composer.textarea.set_cursor(end1);
+
+        // Backspace should delete the first placeholder and its mapping.
+        composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+
+        let new_text = composer.textarea.text().to_string();
+        assert_eq!(1, new_text.matches(&ph).count(), "one placeholder remains");
+        assert_eq!(
+            vec![AttachedImage {
+                path: path2,
+                placeholder: "[image 10x5 PNG]".to_string()
+            }],
+            composer.attached_images,
+            "one image mapping remains"
         );
     }
 }

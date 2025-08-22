@@ -22,6 +22,7 @@ workspace = true
 
 [dependencies]
 anyhow = "1"
+arboard = "3"
 async-stream = "0.3.6"
 base64 = "0.22.1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -41,7 +42,10 @@ codex-protocol = { path = "../protocol" }
 color-eyre = "0.6.3"
 crossterm = { version = "0.28.1", features = ["bracketed-paste", "event-stream"] }
 diffy = "0.4.2"
-image = { version = "^0.25.6", default-features = false, features = ["jpeg"] }
+image = { version = "^0.25.6", default-features = false, features = [
+    "jpeg",
+    "png",
+] }
 lazy_static = "1"
 mcp-types = { path = "../mcp-types" }
 once_cell = "1"
@@ -61,6 +65,7 @@ shlex = "1.3.0"
 strum = "0.27.2"
 strum_macros = "0.27.2"
 supports-color = "3.0.2"
+tempfile = "3"
 textwrap = "0.16.2"
 tokio = { version = "1", features = [
     "io-std",

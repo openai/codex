@@ -1,6 +1,7 @@
 use std::io::Result;
 use std::io::Stdout;
 use std::io::stdout;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -15,7 +16,11 @@ use crossterm::cursor;
 use crossterm::cursor::MoveTo;
 use crossterm::event::DisableBracketedPaste;
 use crossterm::event::EnableBracketedPaste;
+use crossterm::event::Event;
+use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::KeyEventKind;
+use crossterm::event::KeyModifiers;
 use crossterm::event::KeyboardEnhancementFlags;
 use crossterm::event::PopKeyboardEnhancementFlags;
 use crossterm::event::PushKeyboardEnhancementFlags;
@@ -30,6 +35,7 @@ use ratatui::crossterm::terminal::enable_raw_mode;
 use ratatui::layout::Offset;
 use ratatui::text::Line;
 
+use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::custom_terminal;
 use crate::custom_terminal::Terminal as CustomTerminal;
 use tokio::select;
@@ -103,6 +109,12 @@ pub enum TuiEvent {
     Key(KeyEvent),
     Paste(String),
     Draw,
+    AttachImage {
+        path: PathBuf,
+        width: u32,
+        height: u32,
+        format_label: &'static str,
+    },
 }
 
 pub struct Tui {
@@ -236,6 +248,29 @@ impl Tui {
                 select! {
                     Some(Ok(event)) = crossterm_events.next() => {
                         match event {
+                            // Detect Ctrl+V to attach an image from the clipboard.
+                            Event::Key(key_event @ KeyEvent {
+                                code: KeyCode::Char('v'),
+                                modifiers: KeyModifiers::CONTROL,
+                                kind: KeyEventKind::Press,
+                                ..
+                            }) => {
+                                match paste_image_to_temp_png() {
+                                    Ok((path, info)) => {
+                                        yield TuiEvent::AttachImage {
+                                            path,
+                                            width: info.width,
+                                            height: info.height,
+                                            format_label: info.encoded_format.label(),
+                                        };
+                                    }
+                                    Err(_) => {
+                                        // Fall back to normal key handling if no image is available.
+                                        yield TuiEvent::Key(key_event);
+                                    }
+                                }
+                            }
+
                             crossterm::event::Event::Key(key_event) => {
                                 #[cfg(unix)]
                                 if matches!(
@@ -261,10 +296,10 @@ impl Tui {
                                 }
                                 yield TuiEvent::Key(key_event);
                             }
-                            crossterm::event::Event::Resize(_, _) => {
+                            Event::Resize(_, _) => {
                                 yield TuiEvent::Draw;
                             }
-                            crossterm::event::Event::Paste(pasted) => {
+                            Event::Paste(pasted) => {
                                 yield TuiEvent::Paste(pasted);
                             }
                             _ => {}
