@@ -161,7 +161,7 @@ async fn test_apply_patch_tool() -> anyhow::Result<()> {
         );
 
     Mock::given(method("POST"))
-        // .and(path("/v1/responses"))
+        .and(path("/v1/responses"))
         .respond_with(final_completed)
         .expect(1)
         .mount(&server)

@@ -1407,6 +1407,18 @@ async fn run_task(
                             );
                         }
                         (
+                            ResponseItem::CustomToolCall { .. },
+                            Some(ResponseInputItem::CustomToolCallOutput { call_id, output }),
+                        ) => {
+                            items_to_record_in_conversation_history.push(item);
+                            items_to_record_in_conversation_history.push(
+                                ResponseItem::CustomToolCallOutput {
+                                    call_id: call_id.clone(),
+                                    output: output.clone(),
+                                },
+                            );
+                        }
+                        (
                             ResponseItem::FunctionCall { .. },
                             Some(ResponseInputItem::McpToolCallOutput { call_id, result }),
                         ) => {
@@ -1586,6 +1598,7 @@ async fn try_run_turn(
                 call_id: Some(call_id),
                 ..
             } => Some(call_id),
+            ResponseItem::CustomToolCallOutput { call_id, .. } => Some(call_id),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -1603,6 +1616,7 @@ async fn try_run_turn(
                     call_id: Some(call_id),
                     ..
                 } => Some(call_id),
+                ResponseItem::CustomToolCall { call_id, .. } => Some(call_id),
                 _ => None,
             })
             .filter_map(|call_id| {
@@ -1612,12 +1626,9 @@ async fn try_run_turn(
                     Some(call_id.clone())
                 }
             })
-            .map(|call_id| ResponseItem::FunctionCallOutput {
+            .map(|call_id| ResponseItem::CustomToolCallOutput {
                 call_id: call_id.clone(),
-                output: FunctionCallOutputPayload {
-                    content: "aborted".to_string(),
-                    success: Some(false),
-                },
+                output: "aborted".to_string(),
             })
             .collect::<Vec<_>>()
     };
@@ -2074,7 +2085,7 @@ async fn handle_custom_tool_call(
                 with_escalated_permissions: None,
                 justification: None,
             };
-            handle_container_exec_with_params(
+            let resp = handle_container_exec_with_params(
                 exec_params,
                 sess,
                 turn_context,
@@ -2082,7 +2093,19 @@ async fn handle_custom_tool_call(
                 sub_id,
                 call_id,
             )
-            .await
+            .await;
+
+            // Convert function-call style output into a custom tool call output
+            match resp {
+                ResponseInputItem::FunctionCallOutput { call_id, output } => {
+                    ResponseInputItem::CustomToolCallOutput {
+                        call_id,
+                        output: output.content,
+                    }
+                }
+                // Pass through if already a custom tool output or other variant
+                other => other,
+            }
         }
         _ => {
             debug!("unexpected CustomToolCall from stream");
