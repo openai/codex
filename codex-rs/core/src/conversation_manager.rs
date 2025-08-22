@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use codex_login::AuthManager;
 use codex_login::CodexAuth;
 use tokio::sync::RwLock;
 use uuid::Uuid;
@@ -28,33 +29,37 @@ pub struct NewConversation {
 /// maintaining them in memory.
 pub struct ConversationManager {
     conversations: Arc<RwLock<HashMap<Uuid, Arc<CodexConversation>>>>,
-}
-
-impl Default for ConversationManager {
-    fn default() -> Self {
-        Self {
-            conversations: Arc::new(RwLock::new(HashMap::new())),
-        }
-    }
+    auth_manager: Arc<AuthManager>,
 }
 
 impl ConversationManager {
-    pub async fn new_conversation(&self, config: Config) -> CodexResult<NewConversation> {
-        let auth = CodexAuth::from_codex_home(&config.codex_home, config.preferred_auth_method)?;
-        self.new_conversation_with_auth(config, auth).await
+    pub fn new(auth_manager: Arc<AuthManager>) -> Self {
+        Self {
+            conversations: Arc::new(RwLock::new(HashMap::new())),
+            auth_manager,
+        }
     }
 
-    /// Used for integration tests: should not be used by ordinary business
-    /// logic.
-    pub async fn new_conversation_with_auth(
+    /// Construct with a dummy AuthManager containing the provided CodexAuth.
+    /// Used for integration tests: should not be used by ordinary business logic.
+    pub fn with_auth(auth: CodexAuth) -> Self {
+        Self::new(codex_login::AuthManager::from_auth_for_testing(auth))
+    }
+
+    pub async fn new_conversation(&self, config: Config) -> CodexResult<NewConversation> {
+        self.spawn_conversation(config, self.auth_manager.clone())
+            .await
+    }
+
+    async fn spawn_conversation(
         &self,
         config: Config,
-        auth: Option<CodexAuth>,
+        auth_manager: Arc<AuthManager>,
     ) -> CodexResult<NewConversation> {
         let CodexSpawnOk {
             codex,
             session_id: conversation_id,
-        } = Codex::spawn(config, auth).await?;
+        } = Codex::spawn(config, auth_manager).await?;
 
         // The first event must be `SessionInitialized`. Validate and forward it
         // to the caller so that they can display it in the conversation

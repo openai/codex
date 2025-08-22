@@ -56,9 +56,10 @@ async fn default_system_instructions_contain_apply_patch() {
     config.model_provider = model_provider;
     config.user_instructions = Some("be consistent and helpful".to_string());
 
-    let conversation_manager = ConversationManager::default();
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
     let codex = conversation_manager
-        .new_conversation_with_auth(config, Some(CodexAuth::from_api_key("Test API Key")))
+        .new_conversation(config)
         .await
         .expect("create new conversation")
         .conversation;
@@ -137,9 +138,10 @@ async fn prompt_tools_are_consistent_across_requests() {
     config.include_apply_patch_tool = true;
     config.include_plan_tool = true;
 
-    let conversation_manager = ConversationManager::default();
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
     let codex = conversation_manager
-        .new_conversation_with_auth(config, Some(CodexAuth::from_api_key("Test API Key")))
+        .new_conversation(config)
         .await
         .expect("create new conversation")
         .conversation;
@@ -229,9 +231,10 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
     config.model_provider = model_provider;
     config.user_instructions = Some("be consistent and helpful".to_string());
 
-    let conversation_manager = ConversationManager::default();
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
     let codex = conversation_manager
-        .new_conversation_with_auth(config, Some(CodexAuth::from_api_key("Test API Key")))
+        .new_conversation(config)
         .await
         .expect("create new conversation")
         .conversation;
@@ -350,9 +353,10 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() {
     config.model_provider = model_provider;
     config.user_instructions = Some("be consistent and helpful".to_string());
 
-    let conversation_manager = ConversationManager::default();
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
     let codex = conversation_manager
-        .new_conversation_with_auth(config, Some(CodexAuth::from_api_key("Test API Key")))
+        .new_conversation(config)
         .await
         .expect("create new conversation")
         .conversation;
@@ -472,9 +476,10 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() {
     config.model_provider = model_provider;
     config.user_instructions = Some("be consistent and helpful".to_string());
 
-    let conversation_manager = ConversationManager::default();
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
     let codex = conversation_manager
-        .new_conversation_with_auth(config, Some(CodexAuth::from_api_key("Test API Key")))
+        .new_conversation(config)
         .await
         .expect("create new conversation")
         .conversation;
