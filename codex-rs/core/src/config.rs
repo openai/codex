@@ -504,12 +504,16 @@ impl ConfigToml {
     pub fn is_cwd_trusted(&self, resolved_cwd: &Path) -> bool {
         let projects = self.projects.clone().unwrap_or_default();
 
+        let is_path_trusted = |path: &Path| {
+            let path_str = path.to_string_lossy().to_string();
+            projects
+                .get(&path_str)
+                .map(|p| p.trust_level.as_deref() == Some("trusted"))
+                .unwrap_or(false)
+        };
+
         // Fast path: exact cwd match
-        if projects
-            .get(&resolved_cwd.to_string_lossy().to_string())
-            .map(|p| p.trust_level.as_deref() == Some("trusted"))
-            .unwrap_or(false)
-        {
+        if is_path_trusted(resolved_cwd) {
             return true;
         }
 
@@ -517,10 +521,7 @@ impl ConfigToml {
         // (the primary repository working directory) is trusted. This lets
         // worktrees inherit trust from the main project.
         if let Some(root_project) = resolve_root_git_project_for_trust(resolved_cwd) {
-            return projects
-                .get(&root_project.to_string_lossy().to_string())
-                .map(|p| p.trust_level.clone().unwrap_or("".to_string()) == "trusted")
-                .unwrap_or(false);
+            return is_path_trusted(&root_project);
         }
 
         false
