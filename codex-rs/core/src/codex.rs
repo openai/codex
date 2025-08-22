@@ -13,7 +13,7 @@ use async_channel::Sender;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
-use codex_login::CodexAuth;
+use codex_login::AuthManager;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use futures::prelude::*;
@@ -144,7 +144,10 @@ pub(crate) const INITIAL_SUBMIT_ID: &str = "";
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
-    pub async fn spawn(config: Config, auth: Option<CodexAuth>) -> CodexResult<CodexSpawnOk> {
+    pub async fn spawn(
+        config: Config,
+        auth_manager: Arc<AuthManager>,
+    ) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(64);
         let (tx_event, rx_event) = async_channel::unbounded();
 
@@ -169,13 +172,17 @@ impl Codex {
         };
 
         // Generate a unique ID for the lifetime of this Codex session.
-        let (session, turn_context) =
-            Session::new(configure_session, config.clone(), auth, tx_event.clone())
-                .await
-                .map_err(|e| {
-                    error!("Failed to create session: {e:#}");
-                    CodexErr::InternalAgentDied
-                })?;
+        let (session, turn_context) = Session::new(
+            configure_session,
+            config.clone(),
+            auth_manager.clone(),
+            tx_event.clone(),
+        )
+        .await
+        .map_err(|e| {
+            error!("Failed to create session: {e:#}");
+            CodexErr::InternalAgentDied
+        })?;
         let session_id = session.session_id;
 
         // This task will run until Op::Shutdown is received.
@@ -323,7 +330,7 @@ impl Session {
     async fn new(
         configure_session: ConfigureSession,
         config: Arc<Config>,
-        auth: Option<CodexAuth>,
+        auth_manager: Arc<AuthManager>,
         tx_event: Sender<Event>,
     ) -> anyhow::Result<(Arc<Self>, TurnContext)> {
         let ConfigureSession {
@@ -467,7 +474,7 @@ impl Session {
         // construct the model client.
         let client = ModelClient::new(
             config.clone(),
-            auth.clone(),
+            Some(auth_manager.clone()),
             provider.clone(),
             model_reasoning_effort,
             model_reasoning_summary,
@@ -1034,7 +1041,8 @@ async fn submission_loop(
                 let effective_effort = effort.unwrap_or(prev.client.get_reasoning_effort());
                 let effective_summary = summary.unwrap_or(prev.client.get_reasoning_summary());
 
-                let auth = prev.client.get_auth();
+                let auth_manager = prev.client.get_auth_manager();
+
                 // Build updated config for the client
                 let mut updated_config = (*config).clone();
                 updated_config.model = effective_model.clone();
@@ -1042,7 +1050,7 @@ async fn submission_loop(
 
                 let client = ModelClient::new(
                     Arc::new(updated_config),
-                    auth,
+                    auth_manager,
                     provider,
                     effective_effort,
                     effective_summary,

@@ -93,9 +93,10 @@ async fn retries_on_early_close() {
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = model_provider;
-    let conversation_manager = ConversationManager::default();
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
     let codex = conversation_manager
-        .new_conversation_with_auth(config, Some(CodexAuth::from_api_key("Test API Key")))
+        .new_conversation(config)
         .await
         .unwrap()
         .conversation;

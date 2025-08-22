@@ -4,8 +4,8 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use bytes::Bytes;
+use codex_login::AuthManager;
 use codex_login::AuthMode;
-use codex_login::CodexAuth;
 use eventsource_stream::Eventsource;
 use futures::prelude::*;
 use regex_lite::Regex;
@@ -61,7 +61,7 @@ struct Error {
 #[derive(Debug, Clone)]
 pub struct ModelClient {
     config: Arc<Config>,
-    auth: Option<CodexAuth>,
+    auth_manager: Option<Arc<AuthManager>>,
     client: reqwest::Client,
     provider: ModelProviderInfo,
     session_id: Uuid,
@@ -72,7 +72,7 @@ pub struct ModelClient {
 impl ModelClient {
     pub fn new(
         config: Arc<Config>,
-        auth: Option<CodexAuth>,
+        auth_manager: Option<Arc<AuthManager>>,
         provider: ModelProviderInfo,
         effort: ReasoningEffortConfig,
         summary: ReasoningSummaryConfig,
@@ -80,7 +80,7 @@ impl ModelClient {
     ) -> Self {
         Self {
             config,
-            auth,
+            auth_manager,
             client: reqwest::Client::new(),
             provider,
             session_id,
@@ -141,7 +141,8 @@ impl ModelClient {
             return stream_from_fixture(path, self.provider.clone()).await;
         }
 
-        let auth = self.auth.clone();
+        let auth_manager = self.auth_manager.clone();
+        let auth = auth_manager.as_ref().and_then(|m| m.auth());
 
         let auth_mode = auth.as_ref().map(|a| a.mode);
 
@@ -264,9 +265,10 @@ impl ModelClient {
                         .and_then(|s| s.parse::<u64>().ok());
 
                     if status == StatusCode::UNAUTHORIZED
-                        && let Some(a) = auth.as_ref()
+                        && let Some(manager) = auth_manager.as_ref()
+                        && manager.auth().is_some()
                     {
-                        let _ = a.refresh_token().await;
+                        let _ = manager.refresh_token().await;
                     }
 
                     // The OpenAI Responses endpoint returns structured JSON bodies even for 4xx/5xx
@@ -353,8 +355,8 @@ impl ModelClient {
         self.summary
     }
 
-    pub fn get_auth(&self) -> Option<CodexAuth> {
-        self.auth.clone()
+    pub fn get_auth_manager(&self) -> Option<Arc<AuthManager>> {
+        self.auth_manager.clone()
     }
 }
 

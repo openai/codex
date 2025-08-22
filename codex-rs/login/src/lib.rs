@@ -23,12 +23,14 @@ pub use crate::server::run_login_server;
 pub use crate::token_data::TokenData;
 use crate::token_data::parse_id_token;
 
+mod auth_manager;
 mod pkce;
 mod server;
 mod token_data;
 
 pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 pub const OPENAI_API_KEY_ENV_VAR: &str = "OPENAI_API_KEY";
+pub use auth_manager::AuthManager;
 pub use codex_protocol::mcp_protocol::AuthMode;
 
 #[derive(Debug, Clone)]
