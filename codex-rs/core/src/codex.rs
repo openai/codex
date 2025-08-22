@@ -1643,6 +1643,31 @@ async fn try_run_turn(
     let mut stream = turn_context.client.clone().stream(&prompt).await?;
 
     let mut output = Vec::new();
+    // Stage tool calls to execute after the model signals completion.
+    // We do this so multiple tool calls can run in parallel (where possible)
+    // and so we don't block SSE processing.
+    enum StagedCall {
+        Exec {
+            item: ResponseItem,
+            name: String,
+            args: String,
+            call_id: String,
+        },
+        LocalShell {
+            item: ResponseItem,
+            id: Option<String>,
+            call_id: Option<String>,
+            action: crate::models::LocalShellAction,
+        },
+        Mcp {
+            item: ResponseItem,
+            server: String,
+            tool: String,
+            args: String,
+            call_id: String,
+        },
+    }
+    let mut staged: Vec<StagedCall> = Vec::new();
     loop {
         // Poll the next item from the model stream. We must inspect *both* Ok and Err
         // cases so that transient stream failures (e.g., dropped SSE connection before
@@ -1669,15 +1694,59 @@ async fn try_run_turn(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
-                let response = handle_response_item(
-                    sess,
-                    turn_context,
-                    turn_diff_tracker,
-                    sub_id,
-                    item.clone(),
-                )
-                .await?;
-                output.push(ProcessedResponseItem { item, response });
+                match &item {
+                    ResponseItem::FunctionCall {
+                        name,
+                        arguments,
+                        call_id,
+                        ..
+                    } => {
+                        // Classify as MCP vs Exec and stage execution for after completion.
+                        if let Some((server, tool)) =
+                            sess.mcp_connection_manager.parse_tool_name(name)
+                        {
+                            staged.push(StagedCall::Mcp {
+                                item: item.clone(),
+                                server,
+                                tool,
+                                args: arguments.clone(),
+                                call_id: call_id.clone(),
+                            });
+                        } else {
+                            staged.push(StagedCall::Exec {
+                                item: item.clone(),
+                                name: name.clone(),
+                                args: arguments.clone(),
+                                call_id: call_id.clone(),
+                            });
+                        }
+                    }
+                    ResponseItem::LocalShellCall {
+                        id,
+                        call_id,
+                        action,
+                        ..
+                    } => {
+                        staged.push(StagedCall::LocalShell {
+                            item: item.clone(),
+                            id: id.clone(),
+                            call_id: call_id.clone(),
+                            action: action.clone(),
+                        });
+                    }
+                    _ => {
+                        // Non-tool items are handled immediately (messages, reasoning, deltas).
+                        let response = handle_response_item(
+                            sess,
+                            turn_context,
+                            turn_diff_tracker,
+                            sub_id,
+                            item.clone(),
+                        )
+                        .await?;
+                        output.push(ProcessedResponseItem { item, response });
+                    }
+                }
             }
             ResponseEvent::Completed {
                 response_id: _,
@@ -1702,6 +1771,165 @@ async fn try_run_turn(
                     };
                     let _ = sess.tx_event.send(event).await;
                 }
+
+                // Execute any staged tool calls before returning the turn output.
+                use futures::future::join_all;
+
+                // Run MCP, LocalShell, and non-apply exec tool calls fully in parallel.
+                let mut mcp_futs = Vec::new();
+                let mut local_futs = Vec::new();
+                let mut exec_parallel_futs = Vec::new();
+                // Keep apply_patch exec calls sequential for diff tracking.
+                let mut exec_sequential_calls = Vec::new();
+
+                for sc in staged {
+                    match sc {
+                        StagedCall::Mcp {
+                            item,
+                            server,
+                            tool,
+                            args,
+                            call_id,
+                        } => {
+                            let fut = handle_mcp_tool_call(
+                                sess,
+                                sub_id,
+                                call_id.clone(),
+                                server,
+                                tool,
+                                args,
+                                None,
+                            );
+                            mcp_futs.push(async move {
+                                let response = fut.await;
+                                ProcessedResponseItem {
+                                    item,
+                                    response: Some(response),
+                                }
+                            });
+                        }
+                        StagedCall::LocalShell {
+                            item,
+                            id,
+                            call_id,
+                            action,
+                        } => {
+                            let effective_call_id = match (call_id, id) {
+                                (Some(call_id), _) => call_id,
+                                (None, Some(id)) => id,
+                                (None, None) => String::new(),
+                            };
+                            let crate::models::LocalShellAction::Exec(action) = action;
+                            let params = ShellToolCallParams {
+                                command: action.command,
+                                workdir: action.working_directory,
+                                timeout_ms: action.timeout_ms,
+                                with_escalated_permissions: None,
+                                justification: None,
+                            };
+                            let exec_params = to_exec_params(params, turn_context);
+                            let fut = async move {
+                                // Use a fresh tracker – non-apply_patch calls won't emit diffs anyway.
+                                let mut tdt = TurnDiffTracker::new();
+                                let response = handle_container_exec_with_params(
+                                    exec_params,
+                                    sess,
+                                    turn_context,
+                                    &mut tdt,
+                                    sub_id.to_string(),
+                                    effective_call_id,
+                                )
+                                .await;
+                                ProcessedResponseItem {
+                                    item,
+                                    response: Some(response),
+                                }
+                            };
+                            local_futs.push(fut);
+                        }
+                        StagedCall::Exec {
+                            item,
+                            name,
+                            args,
+                            call_id,
+                        } => {
+                            if name == "apply_patch" {
+                                exec_sequential_calls.push(StagedCall::Exec {
+                                    item,
+                                    name,
+                                    args,
+                                    call_id,
+                                });
+                            } else {
+                                let fut = async move {
+                                    let response = match parse_container_exec_arguments(
+                                        args,
+                                        turn_context,
+                                        &call_id,
+                                    ) {
+                                        Ok(params) => {
+                                            let mut tdt = TurnDiffTracker::new();
+                                            handle_container_exec_with_params(
+                                                params,
+                                                sess,
+                                                turn_context,
+                                                &mut tdt,
+                                                sub_id.to_string(),
+                                                call_id,
+                                            )
+                                            .await
+                                        }
+                                        Err(output) => *output,
+                                    };
+                                    ProcessedResponseItem {
+                                        item,
+                                        response: Some(response),
+                                    }
+                                };
+                                exec_parallel_futs.push(fut);
+                            }
+                        }
+                        other => exec_sequential_calls.push(other),
+                    }
+                }
+
+                let mut processed: Vec<ProcessedResponseItem> = join_all(mcp_futs).await;
+                processed.extend(join_all(local_futs).await);
+                processed.extend(join_all(exec_parallel_futs).await);
+
+                // Now handle exec/shell calls one by one so we can use the turn_diff_tracker safely.
+                for sc in exec_sequential_calls {
+                    match sc {
+                        StagedCall::Exec {
+                            item,
+                            name,
+                            args,
+                            call_id,
+                        } => {
+                            // Reuse existing logic for exec tools.
+                            let response = handle_function_call(
+                                sess,
+                                turn_context,
+                                turn_diff_tracker,
+                                sub_id.to_string(),
+                                name,
+                                args,
+                                call_id,
+                            )
+                            .await;
+                            processed.push(ProcessedResponseItem {
+                                item,
+                                response: Some(response),
+                            });
+                        }
+                        StagedCall::LocalShell { .. } => {}
+                        StagedCall::Mcp { .. } => {}
+                    }
+                }
+
+                // Preserve original ordering: non-tool items were already pushed to `output` as they arrived;
+                // now append the processed tool-call items in their staged order.
+                output.extend(processed);
 
                 return Ok(output);
             }

@@ -54,6 +54,7 @@ use crate::history_cell::CommandOutput;
 use crate::history_cell::ExecCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PatchEventType;
+use crate::history_cell::RunningMcpCell;
 use crate::slash_command::SlashCommand;
 use crate::tui::FrameRequester;
 // streaming internals are provided by crate::streaming and crate::markdown_stream
@@ -73,6 +74,8 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_file_search::FileMatch;
+use std::sync::atomic::AtomicBool;
+use std::sync::atomic::Ordering;
 use uuid::Uuid;
 
 // Track information about an in-flight exec command.
@@ -93,6 +96,7 @@ pub(crate) struct ChatWidget {
     // Stream lifecycle controller
     stream: StreamController,
     running_commands: HashMap<String, RunningCommand>,
+    running_mcp: HashMap<String, Arc<AtomicBool>>,
     pending_exec_completions: Vec<(Vec<String>, Vec<ParsedCommand>, CommandOutput)>,
     task_complete_pending: bool,
     // Queue of interruptive UI events deferred during an active write cycle
@@ -486,10 +490,17 @@ impl ChatWidget {
 
     pub(crate) fn handle_mcp_begin_now(&mut self, ev: McpToolCallBeginEvent) {
         self.flush_answer_stream_with_separator();
-        self.add_to_history(history_cell::new_active_mcp_tool_call(ev.invocation));
+        // Track running state so the spinner stops when the call ends.
+        let is_running = Arc::new(AtomicBool::new(true));
+        self.running_mcp
+            .insert(ev.call_id.clone(), Arc::clone(&is_running));
+        self.add_boxed_history(Box::new(RunningMcpCell::new(ev.invocation, is_running)));
     }
     pub(crate) fn handle_mcp_end_now(&mut self, ev: McpToolCallEndEvent) {
         self.flush_answer_stream_with_separator();
+        if let Some(flag) = self.running_mcp.remove(&ev.call_id) {
+            flag.store(false, Ordering::Relaxed);
+        }
         self.add_boxed_history(history_cell::new_completed_mcp_tool_call(
             80,
             ev.invocation,
@@ -558,6 +569,7 @@ impl ChatWidget {
             last_token_usage: TokenUsage::default(),
             stream: StreamController::new(config),
             running_commands: HashMap::new(),
+            running_mcp: HashMap::new(),
             pending_exec_completions: Vec::new(),
             task_complete_pending: false,
             interrupts: InterruptManager::new(),

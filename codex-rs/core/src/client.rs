@@ -185,7 +185,7 @@ impl ModelClient {
             input: &input_with_instructions,
             tools: &tools_json,
             tool_choice: "auto",
-            parallel_tool_calls: false,
+            parallel_tool_calls: true,
             reasoning,
             store,
             stream: true,
