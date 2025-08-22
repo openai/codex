@@ -80,6 +80,7 @@ unicode-segmentation = "1.12.0"
 unicode-width = "0.1"
 uuid = "1"
 rand = "0.9"
+tempfile = "3"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

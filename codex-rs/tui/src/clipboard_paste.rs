@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use tempfile::Builder;
 
 #[derive(Debug)]
 pub enum PasteImageError {
@@ -78,9 +79,16 @@ pub fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageErro
 /// Convenience: write to a temp file and return its path + info.
 pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImageError> {
     let (png, info) = paste_image_as_png()?;
-    let mut path = std::env::temp_dir();
-    let fname = format!("clipboard-{}x{}.png", info.width, info.height);
-    path.push(fname);
-    std::fs::write(&path, &png).map_err(|e| PasteImageError::IoError(e.to_string()))?;
+    // Create a unique temporary file with a .png suffix to avoid collisions.
+    let tmp = Builder::new()
+        .prefix("codex-clipboard-")
+        .suffix(".png")
+        .tempfile()
+        .map_err(|e| PasteImageError::IoError(e.to_string()))?;
+    std::fs::write(tmp.path(), &png).map_err(|e| PasteImageError::IoError(e.to_string()))?;
+    // Persist the file (so it remains after the handle is dropped) and return its PathBuf.
+    let (_file, path) = tmp
+        .keep()
+        .map_err(|e| PasteImageError::IoError(e.error.to_string()))?;
     Ok((path, info))
 }
