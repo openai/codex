@@ -217,8 +217,10 @@ impl CodexMessageProcessor {
                         // Update in-memory auth cache now that login completed.
                         auth_manager.reload();
 
+                        // Notify clients with the actual current auth mode.
+                        let current_auth_method = auth_manager.auth().map(|a| a.mode);
                         let payload = AuthStatusChangeNotification {
-                            auth_method: Some(AuthMode::ChatGPT),
+                            auth_method: current_auth_method,
                         };
                         outgoing_clone
                             .send_server_notification(ServerNotification::AuthStatusChange(payload))
@@ -299,8 +301,12 @@ impl CodexMessageProcessor {
             )
             .await;
 
-        // Send auth status change notification.
-        let payload = AuthStatusChangeNotification { auth_method: None };
+        // Send auth status change notification reflecting the current auth mode
+        // after logout (which may fall back to API key via env var).
+        let current_auth_method = self.auth_manager.auth().map(|auth| auth.mode);
+        let payload = AuthStatusChangeNotification {
+            auth_method: current_auth_method,
+        };
         self.outgoing
             .send_server_notification(ServerNotification::AuthStatusChange(payload))
             .await;
