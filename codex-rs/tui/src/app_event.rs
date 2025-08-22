@@ -8,8 +8,8 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort;
 
-#[derive(Debug)]
 #[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
 pub(crate) enum AppEvent {
     CodexEvent(Event),
 
