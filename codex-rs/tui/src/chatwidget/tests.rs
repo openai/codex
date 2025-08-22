@@ -44,6 +44,31 @@ fn test_config() -> Config {
     .expect("config")
 }
 
+// Backward-compat shim for older session logs that predate the
+// `formatted_output` field on ExecCommandEnd events.
+fn upgrade_event_payload_for_tests(mut payload: serde_json::Value) -> serde_json::Value {
+    if let Some(obj) = payload.as_object_mut()
+        && let Some(msg) = obj.get_mut("msg")
+        && let Some(m) = msg.as_object_mut()
+    {
+        let ty = m.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if ty == "exec_command_end" && !m.contains_key("formatted_output") {
+            let stdout = m.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
+            let stderr = m.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
+            let formatted = if stderr.is_empty() {
+                stdout.to_string()
+            } else {
+                format!("{stdout}{stderr}")
+            };
+            m.insert(
+                "formatted_output".to_string(),
+                serde_json::Value::String(formatted),
+            );
+        }
+    }
+    payload
+}
+
 #[test]
 fn final_answer_without_newline_is_flushed_immediately() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
@@ -157,6 +182,7 @@ fn make_chatwidget_manual() -> (
         full_reasoning_buffer: String::new(),
         session_id: None,
         frame_requester: crate::tui::FrameRequester::test_dummy(),
+        last_history_was_exec: false,
     };
     (widget, rx, op_rx)
 }
@@ -239,6 +265,7 @@ fn exec_history_cell_shows_working_then_completed() {
             stderr: String::new(),
             exit_code: 0,
             duration: std::time::Duration::from_millis(5),
+            formatted_output: "done".into(),
         }),
     });
 
@@ -250,8 +277,12 @@ fn exec_history_cell_shows_working_then_completed() {
     );
     let blob = lines_to_single_string(&cells[0]);
     assert!(
-        blob.contains("Completed"),
-        "expected completed exec cell to show Completed header: {blob:?}"
+        blob.contains('✓'),
+        "expected completed exec cell to show success marker: {blob:?}"
+    );
+    assert!(
+        blob.contains("echo done"),
+        "expected command text to be present: {blob:?}"
     );
 }
 
@@ -284,6 +315,7 @@ fn exec_history_cell_shows_working_then_failed() {
             stderr: "error".into(),
             exit_code: 2,
             duration: std::time::Duration::from_millis(7),
+            formatted_output: "".into(),
         }),
     });
 
@@ -295,9 +327,80 @@ fn exec_history_cell_shows_working_then_failed() {
     );
     let blob = lines_to_single_string(&cells[0]);
     assert!(
-        blob.contains("Failed (exit 2)"),
-        "expected completed exec cell to show Failed header with exit code: {blob:?}"
+        blob.contains('✗'),
+        "expected failure marker present: {blob:?}"
     );
+    assert!(
+        blob.contains("false"),
+        "expected command text present: {blob:?}"
+    );
+}
+
+#[test]
+fn exec_history_extends_previous_when_consecutive() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    // First command
+    chat.handle_codex_event(Event {
+        id: "call-a".into(),
+        msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+            call_id: "call-a".into(),
+            command: vec!["bash".into(), "-lc".into(), "echo one".into()],
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            parsed_cmd: vec![
+                codex_core::parse_command::ParsedCommand::Unknown {
+                    cmd: "echo one".into(),
+                }
+                .into(),
+            ],
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "call-a".into(),
+        msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+            call_id: "call-a".into(),
+            stdout: "one".into(),
+            stderr: String::new(),
+            exit_code: 0,
+            duration: std::time::Duration::from_millis(5),
+            formatted_output: "one".into(),
+        }),
+    });
+    let first_cells = drain_insert_history(&mut rx);
+    assert_eq!(first_cells.len(), 1, "first exec should insert history");
+
+    // Second command
+    chat.handle_codex_event(Event {
+        id: "call-b".into(),
+        msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+            call_id: "call-b".into(),
+            command: vec!["bash".into(), "-lc".into(), "echo two".into()],
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            parsed_cmd: vec![
+                codex_core::parse_command::ParsedCommand::Unknown {
+                    cmd: "echo two".into(),
+                }
+                .into(),
+            ],
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "call-b".into(),
+        msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+            call_id: "call-b".into(),
+            stdout: "two".into(),
+            stderr: String::new(),
+            exit_code: 0,
+            duration: std::time::Duration::from_millis(5),
+            formatted_output: "two".into(),
+        }),
+    });
+    let second_cells = drain_insert_history(&mut rx);
+    assert_eq!(second_cells.len(), 1, "second exec should extend history");
+    let first_blob = lines_to_single_string(&first_cells[0]);
+    let second_blob = lines_to_single_string(&second_cells[0]);
+    assert!(first_blob.contains('✓'));
+    assert!(second_blob.contains("echo two"));
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -340,7 +443,9 @@ async fn binary_size_transcript_matches_ideal_fixture() {
         match kind {
             "codex_event" => {
                 if let Some(payload) = v.get("payload") {
-                    let ev: Event = serde_json::from_value(payload.clone()).expect("parse");
+                    let ev: Event =
+                        serde_json::from_value(upgrade_event_payload_for_tests(payload.clone()))
+                            .expect("parse");
                     chat.handle_codex_event(ev);
                     while let Ok(app_ev) = rx.try_recv() {
                         match app_ev {

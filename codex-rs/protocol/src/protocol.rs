@@ -674,6 +674,8 @@ pub struct ExecCommandEndEvent {
     pub exit_code: i32,
     /// The duration of the command execution.
     pub duration: Duration,
+    /// Formatted output from the command, as seen by the model.
+    pub formatted_output: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

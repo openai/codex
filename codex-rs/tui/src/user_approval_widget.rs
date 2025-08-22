@@ -258,7 +258,7 @@ impl UserApprovalWidget {
     }
 
     fn send_decision_with_feedback(&mut self, decision: ReviewDecision, feedback: String) {
-        let mut lines: Vec<Line<'static>> = Vec::new();
+        let mut lines: Vec<Line<'static>> = vec![Line::from("")];
         match &self.approval_request {
             ApprovalRequest::Exec { command, .. } => {
                 let cmd = strip_bash_lc_and_escape(command);
@@ -327,7 +327,6 @@ impl UserApprovalWidget {
                 lines.push(Line::from(l.to_string()));
             }
         }
-        lines.push(Line::from(""));
         self.app_event_tx.send(AppEvent::InsertHistoryLines(lines));
 
         let op = match &self.approval_request {
