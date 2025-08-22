@@ -12,7 +12,6 @@ use std::time::Instant;
 use crossterm::SynchronizedUpdate;
 use crossterm::cursor;
 use crossterm::cursor::MoveTo;
-use crossterm::cursor::Show;
 use crossterm::event::DisableBracketedPaste;
 use crossterm::event::EnableBracketedPaste;
 use crossterm::event::KeyEvent;
@@ -111,6 +110,7 @@ pub struct Tui {
     pub(crate) terminal: Terminal,
     pending_history_lines: Vec<Line<'static>>,
     alt_saved_viewport: Option<ratatui::layout::Rect>,
+    #[cfg(unix)]
     resume_pending: Arc<AtomicU8>, // Stores a ResumeAction
     // True when overlay alt-screen UI is active
     alt_screen_active: Arc<AtomicBool>,
@@ -210,6 +210,7 @@ impl Tui {
             terminal,
             pending_history_lines: vec![],
             alt_saved_viewport: None,
+            #[cfg(unix)]
             resume_pending: Arc::new(AtomicU8::new(0)),
             alt_screen_active: Arc::new(AtomicBool::new(false)),
         }
@@ -225,7 +226,9 @@ impl Tui {
         use tokio_stream::StreamExt;
         let mut crossterm_events = crossterm::event::EventStream::new();
         let mut draw_rx = self.draw_tx.subscribe();
+        #[cfg(unix)]
         let resume_pending = self.resume_pending.clone();
+        #[cfg(unix)]
         let alt_screen_active = self.alt_screen_active.clone();
         let event_stream = async_stream::stream! {
             loop {
@@ -250,7 +253,7 @@ impl Tui {
                                     } else {
                                         resume_pending.store(ResumeAction::RealignInline as u8, Ordering::Relaxed);
                                     }
-                                    let _ = execute!(stdout(), Show);
+                                    let _ = execute!(stdout(), crossterm::cursor::Show);
                                     let _ = Tui::suspend();
                                     yield TuiEvent::Draw;
                                     continue;
