@@ -108,17 +108,6 @@ impl App {
         event: TuiEvent,
     ) -> Result<bool> {
         if let Some(overlay) = &mut self.transcript_overlay {
-            // Intercept Ctrl+Z while in transcript mode to leave alt screen before suspend.
-            #[cfg(unix)]
-            if let TuiEvent::Key(key_event) = &event
-                && key_event.code == KeyCode::Char('z')
-                && key_event.modifiers == crossterm::event::KeyModifiers::CONTROL
-                && key_event.kind == KeyEventKind::Press
-            {
-                let _ = tui.suspend();
-                return Ok(true);
-            }
-
             overlay.handle_event(tui, event)?;
             if overlay.is_done {
                 // Exit alternate screen and restore viewport.
@@ -133,15 +122,6 @@ impl App {
         } else {
             match event {
                 TuiEvent::Key(key_event) => {
-                    #[cfg(unix)]
-                    if key_event.code == KeyCode::Char('z')
-                        && key_event.modifiers == crossterm::event::KeyModifiers::CONTROL
-                        && key_event.kind == KeyEventKind::Press
-                    {
-                        let _ = tui.suspend();
-                        return Ok(true);
-                    }
-
                     self.handle_key_event(tui, key_event).await;
                 }
                 TuiEvent::Paste(pasted) => {
