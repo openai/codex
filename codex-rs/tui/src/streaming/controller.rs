@@ -70,17 +70,6 @@ impl StreamController {
         self.header.maybe_emit(out_lines)
     }
 
-    #[inline]
-    fn ensure_single_trailing_blank(lines: &mut Lines) {
-        if lines
-            .last()
-            .map(|l| !crate::render::line_utils::is_blank_line_trim(l))
-            .unwrap_or(true)
-        {
-            lines.push(Line::from(""));
-        }
-    }
-
     /// Begin an answer stream. Does not emit header yet; it is emitted on first commit.
     pub(crate) fn begin(&mut self, _sink: &impl HistorySink) {
         // Starting a new stream cancels any pending finish-from-previous-stream animation.
@@ -138,7 +127,6 @@ impl StreamController {
                 let mut lines_with_header: Lines = Vec::new();
                 self.emit_header_if_needed(&mut lines_with_header);
                 lines_with_header.extend(out_lines);
-                Self::ensure_single_trailing_blank(&mut lines_with_header);
                 sink.insert_history(lines_with_header);
             }
 

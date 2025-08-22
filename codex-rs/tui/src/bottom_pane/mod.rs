@@ -9,6 +9,8 @@ use codex_core::protocol::TokenUsage;
 use codex_file_search::FileMatch;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
+use ratatui::layout::Constraint;
+use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::widgets::WidgetRef;
 
@@ -95,8 +97,31 @@ impl BottomPane {
         } else {
             self.composer.desired_height(width)
         };
+        let top_pad = if self.active_view.is_none() || self.status_view_active {
+            1
+        } else {
+            0
+        };
+        view_height
+            .saturating_add(Self::BOTTOM_PAD_LINES)
+            .saturating_add(top_pad)
+    }
 
-        view_height.saturating_add(Self::BOTTOM_PAD_LINES)
+    fn layout(&self, area: Rect) -> Rect {
+        let top = if self.active_view.is_none() || self.status_view_active {
+            1
+        } else {
+            0
+        };
+
+        let [_, content, _] = Layout::vertical([
+            Constraint::Max(top),
+            Constraint::Min(1),
+            Constraint::Max(BottomPane::BOTTOM_PAD_LINES),
+        ])
+        .areas(area);
+
+        content
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
@@ -104,10 +129,11 @@ impl BottomPane {
         // status indicator shown while a task is running, or approval modal).
         // In these states the textarea is not interactable, so we should not
         // show its caret.
-        if self.active_view.is_some() {
+        if self.active_view.is_some() || self.status_view_active {
             None
         } else {
-            self.composer.cursor_pos(area)
+            let content = self.layout(area);
+            self.composer.cursor_pos(content)
         }
     }
 
@@ -365,31 +391,12 @@ impl BottomPane {
 
 impl WidgetRef for &BottomPane {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+        let content = self.layout(area);
+
         if let Some(view) = &self.active_view {
-            // Reserve bottom padding lines; keep at least 1 line for the view.
-            let avail = area.height;
-            if avail > 0 {
-                let pad = BottomPane::BOTTOM_PAD_LINES.min(avail.saturating_sub(1));
-                let view_rect = Rect {
-                    x: area.x,
-                    y: area.y,
-                    width: area.width,
-                    height: avail - pad,
-                };
-                view.render(view_rect, buf);
-            }
+            view.render(content, buf);
         } else {
-            let avail = area.height;
-            if avail > 0 {
-                let composer_rect = Rect {
-                    x: area.x,
-                    y: area.y,
-                    width: area.width,
-                    // Reserve bottom padding
-                    height: avail - BottomPane::BOTTOM_PAD_LINES.min(avail.saturating_sub(1)),
-                };
-                (&self.composer).render_ref(composer_rect, buf);
-            }
+            (&self.composer).render_ref(content, buf);
         }
     }
 }
@@ -495,13 +502,13 @@ mod tests {
         let area = Rect::new(0, 0, 40, 3);
         let mut buf = Buffer::empty(area);
         (&pane).render_ref(area, &mut buf);
-        let mut row0 = String::new();
+        let mut row1 = String::new();
         for x in 0..area.width {
-            row0.push(buf[(x, 0)].symbol().chars().next().unwrap_or(' '));
+            row1.push(buf[(x, 1)].symbol().chars().next().unwrap_or(' '));
         }
         assert!(
-            row0.contains("Working"),
-            "expected Working header after denial: {row0:?}"
+            row1.contains("Working"),
+            "expected Working header after denial on row 1: {row1:?}"
         );
 
         // Drain the channel to avoid unused warnings.
@@ -523,14 +530,13 @@ mod tests {
         // Begin a task: show initial status.
         pane.set_task_running(true);
 
-        // Render and confirm the line contains the "Working" header.
         let area = Rect::new(0, 0, 40, 3);
         let mut buf = Buffer::empty(area);
         (&pane).render_ref(area, &mut buf);
 
         let mut row0 = String::new();
         for x in 0..area.width {
-            row0.push(buf[(x, 0)].symbol().chars().next().unwrap_or(' '));
+            row0.push(buf[(x, 1)].symbol().chars().next().unwrap_or(' '));
         }
         assert!(
             row0.contains("Working"),
@@ -563,12 +569,12 @@ mod tests {
         let mut buf = Buffer::empty(area);
         (&pane).render_ref(area, &mut buf);
 
-        // Top row contains the status header
+        // Row 1 contains the status header (row 0 is the spacer)
         let mut top = String::new();
         for x in 0..area.width {
-            top.push(buf[(x, 0)].symbol().chars().next().unwrap_or(' '));
+            top.push(buf[(x, 1)].symbol().chars().next().unwrap_or(' '));
         }
-        assert_eq!(buf[(0, 0)].symbol().chars().next().unwrap_or(' '), '▌');
+        assert_eq!(buf[(0, 1)].symbol().chars().next().unwrap_or(' '), '▌');
         assert!(
             top.contains("Working"),
             "expected Working header on top row: {top:?}"
@@ -605,7 +611,7 @@ mod tests {
 
         pane.set_task_running(true);
 
-        // Height=2 → pad shrinks to 1; bottom row is blank, top row has spinner.
+        // Height=2 → with spacer, spinner on row 1; no bottom padding.
         let area2 = Rect::new(0, 0, 20, 2);
         let mut buf2 = Buffer::empty(area2);
         (&pane).render_ref(area2, &mut buf2);
@@ -615,13 +621,10 @@ mod tests {
             row0.push(buf2[(x, 0)].symbol().chars().next().unwrap_or(' '));
             row1.push(buf2[(x, 1)].symbol().chars().next().unwrap_or(' '));
         }
+        assert!(row0.trim().is_empty(), "expected spacer on row 0: {row0:?}");
         assert!(
-            row0.contains("Working"),
-            "expected Working header on row 0: {row0:?}"
-        );
-        assert!(
-            row1.trim().is_empty(),
-            "expected bottom padding on row 1: {row1:?}"
+            row1.contains("Working"),
+            "expected Working on row 1: {row1:?}"
         );
 
         // Height=1 → no padding; single row is the spinner.

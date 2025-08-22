@@ -291,6 +291,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 stderr,
                 duration,
                 exit_code,
+                ..
             }) => {
                 let exec_command = self.call_id_to_command.remove(&call_id);
                 let (duration, call) = if let Some(ExecCommandBegin { command, .. }) = exec_command
