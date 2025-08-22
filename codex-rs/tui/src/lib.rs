@@ -30,6 +30,7 @@ mod bottom_pane;
 mod chatwidget;
 mod citation_regex;
 mod cli;
+mod clipboard_paste;
 mod common;
 pub mod custom_terminal;
 mod diff_render;

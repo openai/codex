@@ -1,4 +1,5 @@
 //! Bottom pane: shows the ChatComposer or a BottomPaneView, if one is active.
+use std::path::PathBuf;
 
 use crate::app_event_sender::AppEventSender;
 use crate::tui::FrameRequester;
@@ -341,6 +342,24 @@ impl BottomPane {
     pub(crate) fn on_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
         self.composer.on_file_search_result(query, matches);
         self.request_redraw();
+    }
+
+    pub(crate) fn attach_image(
+        &mut self,
+        path: PathBuf,
+        width: u32,
+        height: u32,
+        format_label: &str,
+    ) {
+        if self.active_view.is_none() {
+            self.composer
+                .attach_image(path, width, height, format_label);
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn take_recent_submission_images(&mut self) -> Vec<PathBuf> {
+        self.composer.take_recent_submission_images()
     }
 }
 
