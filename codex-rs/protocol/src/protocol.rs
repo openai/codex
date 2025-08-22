@@ -836,11 +836,6 @@ pub struct TurnAbortedEvent {
     pub reason: TurnAbortReason,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ConversationHistoryEvent {
-    pub entries: serde_json::Value,
-}
-
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum TurnAbortReason {
