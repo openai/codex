@@ -725,35 +725,33 @@ impl ChatComposer {
         let text_after = self.textarea.text();
 
         // Update paste-burst heuristic for plain Char (no Ctrl/Alt) events.
-        if let crossterm::event::KeyEvent {
+        let crossterm::event::KeyEvent {
             code, modifiers, ..
-        } = input
-        {
-            match code {
-                KeyCode::Char(_) => {
-                    let has_ctrl_or_alt = modifiers.contains(KeyModifiers::CONTROL)
-                        || modifiers.contains(KeyModifiers::ALT);
-                    if has_ctrl_or_alt {
-                        // Modified char: clear burst window.
-                        self.consecutive_plain_char_burst = 0;
-                        self.last_plain_char_time = None;
-                        self.paste_burst_until = None;
-                        self.in_paste_burst_mode = false;
-                        self.paste_burst_buffer.clear();
-                    }
-                    // Plain chars handled above.
-                }
-                KeyCode::Enter => {
-                    // Keep burst window alive (supports blank lines in paste).
-                }
-                _ => {
-                    // Other keys: clear burst window and any buffer (after flushing earlier).
+        } = input;
+        match code {
+            KeyCode::Char(_) => {
+                let has_ctrl_or_alt = modifiers.contains(KeyModifiers::CONTROL)
+                    || modifiers.contains(KeyModifiers::ALT);
+                if has_ctrl_or_alt {
+                    // Modified char: clear burst window.
                     self.consecutive_plain_char_burst = 0;
                     self.last_plain_char_time = None;
                     self.paste_burst_until = None;
                     self.in_paste_burst_mode = false;
-                    // Do not clear paste_burst_buffer here; it should have been flushed above.
+                    self.paste_burst_buffer.clear();
                 }
+                // Plain chars handled above.
+            }
+            KeyCode::Enter => {
+                // Keep burst window alive (supports blank lines in paste).
+            }
+            _ => {
+                // Other keys: clear burst window and any buffer (after flushing earlier).
+                self.consecutive_plain_char_burst = 0;
+                self.last_plain_char_time = None;
+                self.paste_burst_until = None;
+                self.in_paste_burst_mode = false;
+                // Do not clear paste_burst_buffer here; it should have been flushed above.
             }
         }
 
