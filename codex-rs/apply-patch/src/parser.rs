@@ -69,7 +69,7 @@ pub enum Hunk {
         path: PathBuf,
         move_path: Option<PathBuf>,
 
-        /// Chunks should be in order, i.e. the `change_context` of one chunk
+        /// Chunks should be in order, i.e. the first context line of one chunk
         /// should occur later in the file than the previous chunk.
         chunks: Vec<UpdateFileChunk>,
     },
@@ -89,12 +89,13 @@ use Hunk::*;
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct UpdateFileChunk {
-    /// A single line of context used to narrow down the position of the chunk
-    /// (this is usually a class, method, or function definition.)
-    pub change_context: Option<String>,
+    /// Context lines used to narrow down the position of the chunk.
+    /// Each entry is searched sequentially to progressively restrict the
+    /// search to the desired region (e.g. class → method).
+    pub context_lines: Vec<String>,
 
     /// A contiguous block of lines that should be replaced with `new_lines`.
-    /// `old_lines` must occur strictly after `change_context`.
+    /// `old_lines` must occur strictly after the context.
     pub old_lines: Vec<String>,
     pub new_lines: Vec<String>,
 
@@ -344,32 +345,38 @@ fn parse_update_file_chunk(
             line_number,
         });
     }
-    // If we see an explicit context marker @@ or @@ <context>, consume it; otherwise, optionally
-    // allow treating the chunk as starting directly with diff lines.
-    let (change_context, start_index) = if lines[0] == EMPTY_CHANGE_CONTEXT_MARKER {
-        (None, 1)
-    } else if let Some(context) = lines[0].strip_prefix(CHANGE_CONTEXT_MARKER) {
-        (Some(context.to_string()), 1)
-    } else {
-        if !allow_missing_context {
-            return Err(InvalidHunkError {
-                message: format!(
-                    "Expected update hunk to start with a @@ context marker, got: '{}'",
-                    lines[0]
-                ),
-                line_number,
-            });
+    let mut context_lines = Vec::new();
+    let mut start_index = 0;
+    let mut saw_context_marker = false;
+    while start_index < lines.len() {
+        if lines[start_index] == EMPTY_CHANGE_CONTEXT_MARKER {
+            saw_context_marker = true;
+            start_index += 1;
+        } else if let Some(context) = lines[start_index].strip_prefix(CHANGE_CONTEXT_MARKER) {
+            saw_context_marker = true;
+            context_lines.push(context.to_string());
+            start_index += 1;
+        } else {
+            break;
         }
-        (None, 0)
-    };
+    }
+    if !saw_context_marker && !allow_missing_context {
+        return Err(InvalidHunkError {
+            message: format!(
+                "Expected update hunk to start with a @@ context marker, got: '{}'",
+                lines[0]
+            ),
+            line_number,
+        });
+    }
     if start_index >= lines.len() {
         return Err(InvalidHunkError {
             message: "Update hunk does not contain any lines".to_string(),
-            line_number: line_number + 1,
+            line_number: line_number + start_index,
         });
     }
     let mut chunk = UpdateFileChunk {
-        change_context,
+        context_lines,
         old_lines: Vec::new(),
         new_lines: Vec::new(),
         is_end_of_file: false,
@@ -381,7 +388,7 @@ fn parse_update_file_chunk(
                 if parsed_lines == 0 {
                     return Err(InvalidHunkError {
                         message: "Update hunk does not contain any lines".to_string(),
-                        line_number: line_number + 1,
+                        line_number: line_number + start_index,
                     });
                 }
                 chunk.is_end_of_file = true;
@@ -411,7 +418,7 @@ fn parse_update_file_chunk(
                                 message: format!(
                                     "Unexpected line found in update hunk: '{line_contents}'. Every line should start with ' ' (context line), '+' (added line), or '-' (removed line)"
                                 ),
-                                line_number: line_number + 1,
+                                line_number: line_number + start_index,
                             });
                         }
                         // Assume this is the start of the next hunk.
@@ -491,7 +498,7 @@ fn test_parse_patch() {
                 path: PathBuf::from("path/update.py"),
                 move_path: Some(PathBuf::from("path/update2.py")),
                 chunks: vec![UpdateFileChunk {
-                    change_context: Some("def f():".to_string()),
+                    context_lines: vec!["def f():".to_string()],
                     old_lines: vec!["    pass".to_string()],
                     new_lines: vec!["    return 123".to_string()],
                     is_end_of_file: false
@@ -518,7 +525,7 @@ fn test_parse_patch() {
                 path: PathBuf::from("file.py"),
                 move_path: None,
                 chunks: vec![UpdateFileChunk {
-                    change_context: None,
+                    context_lines: Vec::new(),
                     old_lines: vec![],
                     new_lines: vec!["line".to_string()],
                     is_end_of_file: false
@@ -548,7 +555,7 @@ fn test_parse_patch() {
             path: PathBuf::from("file2.py"),
             move_path: None,
             chunks: vec![UpdateFileChunk {
-                change_context: None,
+                context_lines: Vec::new(),
                 old_lines: vec!["import foo".to_string()],
                 new_lines: vec!["import foo".to_string(), "bar".to_string()],
                 is_end_of_file: false,
@@ -568,7 +575,7 @@ fn test_parse_patch_lenient() {
         path: PathBuf::from("file2.py"),
         move_path: None,
         chunks: vec![UpdateFileChunk {
-            change_context: None,
+            context_lines: Vec::new(),
             old_lines: vec!["import foo".to_string()],
             new_lines: vec!["import foo".to_string(), "bar".to_string()],
             is_end_of_file: false,
@@ -701,7 +708,7 @@ fn test_update_file_chunk() {
         ),
         Ok((
             (UpdateFileChunk {
-                change_context: Some("change_context".to_string()),
+                context_lines: vec!["change_context".to_string()],
                 old_lines: vec![
                     "".to_string(),
                     "context".to_string(),
@@ -723,12 +730,37 @@ fn test_update_file_chunk() {
         parse_update_file_chunk(&["@@", "+line", "*** End of File"], 123, false),
         Ok((
             (UpdateFileChunk {
-                change_context: None,
+                context_lines: Vec::new(),
                 old_lines: vec![],
                 new_lines: vec!["line".to_string()],
                 is_end_of_file: true
             }),
             3
+        ))
+    );
+    assert_eq!(
+        parse_update_file_chunk(
+            &[
+                "@@ class BaseClass",
+                "@@     def method()",
+                " context",
+                "-old",
+                "+new",
+            ],
+            123,
+            false
+        ),
+        Ok((
+            (UpdateFileChunk {
+                context_lines: vec![
+                    "class BaseClass".to_string(),
+                    "    def method()".to_string()
+                ],
+                old_lines: vec!["context".to_string(), "old".to_string()],
+                new_lines: vec!["context".to_string(), "new".to_string()],
+                is_end_of_file: false
+            }),
+            5
         ))
     );
 }
