@@ -36,49 +36,6 @@ use std::time::Instant;
 /// Time window for debouncing redraw requests.
 const REDRAW_DEBOUNCE: Duration = Duration::from_millis(1);
 
-// Testable helper: generic over paste function so we can inject stubs in unit tests.
-fn try_handle_ctrl_v_with<F>(
-    app_event_tx: &AppEventSender,
-    key_event: &KeyEvent,
-    paste_fn: F,
-) -> bool
-where
-    F: Fn() -> Result<
-        (std::path::PathBuf, crate::clipboard_paste::PastedImageInfo),
-        crate::clipboard_paste::PasteImageError,
-    >,
-{
-    if key_event.kind == KeyEventKind::Press
-        && key_event.code == KeyCode::Char('v')
-        && key_event
-            .modifiers
-            .contains(crossterm::event::KeyModifiers::CONTROL)
-    {
-        match paste_fn() {
-            Ok((path, info)) => {
-                tracing::info!("ctrl_v_image imported path={path:?} info={info:?}");
-                app_event_tx.send(AppEvent::AttachImage {
-                    path,
-                    width: info.width,
-                    height: info.height,
-                    format_label: info.encoded_format.label(),
-                });
-                return true; // consumed
-            }
-            Err(err) => {
-                tracing::debug!("Ctrl+V image import failed: {err}");
-            }
-        }
-    }
-    false
-}
-
-fn try_handle_ctrl_v(app_event_tx: &AppEventSender, key_event: &KeyEvent) -> bool {
-    try_handle_ctrl_v_with(app_event_tx, key_event, || {
-        crate::clipboard_paste::paste_image_to_temp_png()
-    })
-}
-
 /// Top-level application state: which full-screen view is currently active.
 #[allow(clippy::large_enum_variant)]
 enum AppState<'a> {
@@ -697,6 +654,49 @@ fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool 
         LoginStatus::NotAuthenticated => true,
         LoginStatus::AuthMode(method) => method != config.preferred_auth_method,
     }
+}
+
+// Testable helper: generic over paste function so we can inject stubs in unit tests.
+fn try_handle_ctrl_v_with<F>(
+    app_event_tx: &AppEventSender,
+    key_event: &KeyEvent,
+    paste_fn: F,
+) -> bool
+where
+    F: Fn() -> Result<
+        (std::path::PathBuf, crate::clipboard_paste::PastedImageInfo),
+        crate::clipboard_paste::PasteImageError,
+    >,
+{
+    if key_event.kind == KeyEventKind::Press
+        && key_event.code == KeyCode::Char('v')
+        && key_event
+            .modifiers
+            .contains(crossterm::event::KeyModifiers::CONTROL)
+    {
+        match paste_fn() {
+            Ok((path, info)) => {
+                tracing::info!("ctrl_v_image imported path={path:?} info={info:?}");
+                app_event_tx.send(AppEvent::AttachImage {
+                    path,
+                    width: info.width,
+                    height: info.height,
+                    format_label: info.encoded_format.label(),
+                });
+                return true; // consumed
+            }
+            Err(err) => {
+                tracing::debug!("Ctrl+V image import failed: {err}");
+            }
+        }
+    }
+    false
+}
+
+fn try_handle_ctrl_v(app_event_tx: &AppEventSender, key_event: &KeyEvent) -> bool {
+    try_handle_ctrl_v_with(app_event_tx, key_event, || {
+        crate::clipboard_paste::paste_image_to_temp_png()
+    })
 }
 
 #[cfg(test)]
