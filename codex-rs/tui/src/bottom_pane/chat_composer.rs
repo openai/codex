@@ -32,7 +32,6 @@ use codex_file_search::FileMatch;
 use std::cell::RefCell;
 use std::time::Duration;
 use std::time::Instant;
-use unicode_segmentation::UnicodeSegmentation;
 
 // Heuristic thresholds for detecting paste-like input bursts.
 const PASTE_BURST_MIN_CHARS: u16 = 3;
@@ -567,7 +566,9 @@ impl ChatComposer {
                         .next()
                         .unwrap_or("")
                         .starts_with('/');
-                if (self.in_paste_burst_mode || !self.paste_burst_buffer.is_empty()) && !in_slash_context {
+                if (self.in_paste_burst_mode || !self.paste_burst_buffer.is_empty())
+                    && !in_slash_context
+                {
                     self.paste_burst_buffer.push('\n');
                     let now = Instant::now();
                     // Keep the window alive so subsequent lines are captured too.
@@ -645,9 +646,18 @@ impl ChatComposer {
             self.handle_paste(pasted);
         }
 
+        // If we're capturing a burst and receive Enter, accumulate it instead of inserting.
+        if matches!(input.code, KeyCode::Enter)
+            && (self.in_paste_burst_mode || !self.paste_burst_buffer.is_empty())
+        {
+            self.paste_burst_buffer.push('\n');
+            self.paste_burst_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
+            return (InputResult::None, true);
+        }
+
         // Intercept plain Char inputs to optionally accumulate into a burst buffer.
         if let KeyEvent {
-            code: KeyCode::Char(c),
+            code: KeyCode::Char(ch),
             modifiers,
             ..
         } = input
@@ -655,11 +665,6 @@ impl ChatComposer {
             let has_ctrl_or_alt =
                 modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::ALT);
             if !has_ctrl_or_alt {
-                // First, insert as usual, then possibly roll back into the buffer
-                // if this crosses the burst threshold or we're already buffering.
-                self.textarea.input(input);
-                let text_after = self.textarea.text().to_string();
-
                 // Update burst heuristics.
                 match self.last_plain_char_time {
                     Some(prev) if now.duration_since(prev) <= PASTE_BURST_CHAR_INTERVAL => {
@@ -672,51 +677,38 @@ impl ChatComposer {
                 }
                 self.last_plain_char_time = Some(now);
 
-                // If we're already buffering, move the just-inserted char into the buffer.
+                // If we're already buffering, capture the char into the buffer.
                 if self.in_paste_burst_mode {
-                    // Remove the last grapheme from textarea and append to buffer.
-                    self.textarea.delete_backward(1);
-                    self.paste_burst_buffer.push(c);
+                    self.paste_burst_buffer.push(ch);
                     // Keep the window alive while we receive the burst.
                     self.paste_burst_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
-                    // Pending paste placeholders cleanup uses current textarea text below.
+                    return (InputResult::None, true);
                 } else if self.consecutive_plain_char_burst >= PASTE_BURST_MIN_CHARS {
                     // Do not start burst buffering while typing a slash command (first line starts with '/').
-                    let first_line = text_after.lines().next().unwrap_or("");
+                    let first_line = self.textarea.text().lines().next().unwrap_or("");
                     if first_line.starts_with('/') {
                         // Keep heuristics but do not buffer.
                         self.paste_burst_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
-                        // Cleanup placeholders after the normal insert handled above.
+                        // Insert normally.
+                        self.textarea.input(input);
                         let text_after = self.textarea.text();
                         self.pending_pastes
                             .retain(|(placeholder, _)| text_after.contains(placeholder));
                         return (InputResult::None, true);
                     }
-                    // Begin buffering: move the last N graphemes (the current burst)
-                    // from the textarea into the buffer so we can insert them at once.
-                    let n = self.consecutive_plain_char_burst as usize;
-                    let mut graphemes = text_after.grapheme_indices(true).collect::<Vec<_>>();
-                    // Determine the byte index where the last N graphemes start.
-                    let start_byte = if n >= graphemes.len() {
-                        0
-                    } else {
-                        graphemes[graphemes.len().saturating_sub(n)].0
-                    };
-                    let segment = text_after[start_byte..].to_string();
-                    // Remove from textarea and store to buffer.
-                    self.textarea
-                        .replace_range(start_byte..text_after.len(), "");
-                    self.paste_burst_buffer = segment;
+                    // Begin buffering from this character onward.
+                    self.paste_burst_buffer.push(ch);
                     self.in_paste_burst_mode = true;
                     // Keep the window alive to continue capturing.
                     self.paste_burst_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
+                    return (InputResult::None, true);
                 }
 
-                // After possible textarea changes, clean up pending placeholders.
+                // Not buffering: insert normally and continue.
+                self.textarea.input(input);
                 let text_after = self.textarea.text();
                 self.pending_pastes
                     .retain(|(placeholder, _)| text_after.contains(placeholder));
-
                 return (InputResult::None, true);
             } else {
                 // Modified char ends any burst: flush buffered content before applying.
