@@ -30,6 +30,7 @@ use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::Path;
 
 /// If the pasted content exceeds this number of characters, replace it with a
@@ -662,9 +663,28 @@ impl ChatComposer {
         self.pending_pastes
             .retain(|(placeholder, _)| text_after.contains(placeholder));
 
-        // Keep only attached images whose placeholders still exist in text
-        self.attached_images
-            .retain(|img| text_after.contains(&img.placeholder));
+        // Keep attached images in proportion to how many matching placeholders exist in the text.
+        // This handles duplicate placeholders that share the same visible label.
+        if !self.attached_images.is_empty() {
+            let mut needed: HashMap<String, usize> = HashMap::new();
+            for img in &self.attached_images {
+                needed
+                    .entry(img.placeholder.clone())
+                    .or_insert_with(|| text_after.matches(&img.placeholder).count());
+            }
+
+            let mut used: HashMap<String, usize> = HashMap::new();
+            let mut kept: Vec<AttachedImage> = Vec::with_capacity(self.attached_images.len());
+            for img in self.attached_images.drain(..) {
+                let total_needed = *needed.get(&img.placeholder).unwrap_or(&0);
+                let used_count = used.entry(img.placeholder.clone()).or_insert(0);
+                if *used_count < total_needed {
+                    kept.push(img);
+                    *used_count += 1;
+                }
+            }
+            self.attached_images = kept;
+        }
 
         (InputResult::None, true)
     }
@@ -676,23 +696,48 @@ impl ChatComposer {
         let text = self.textarea.text();
 
         // Try image placeholders first
-        if let Some((idx, placeholder)) =
-            self.attached_images
-                .iter()
-                .enumerate()
-                .find_map(|(i, img)| {
-                    let ph = &img.placeholder;
-                    if p < ph.len() {
-                        return None;
-                    }
-                    let start = p - ph.len();
-                    if text[start..p] == *ph {
-                        Some((i, ph.clone()))
+        if let Some((idx, placeholder)) = {
+            let mut out: Option<(usize, String)> = None;
+            // Detect if the cursor is at the end of any image placeholder.
+            // If duplicates exist, remove the specific occurrence's mapping.
+            for (i, img) in self.attached_images.iter().enumerate() {
+                let ph = &img.placeholder;
+                if p < ph.len() {
+                    continue;
+                }
+                let start = p - ph.len();
+                if text[start..p] != *ph {
+                    continue;
+                }
+
+                // Count the number of occurrences of `ph` before `start`.
+                let mut occ_before = 0usize;
+                let mut search_pos = 0usize;
+                while search_pos < start {
+                    if let Some(found) = text[search_pos..start].find(ph) {
+                        occ_before += 1;
+                        search_pos += found + ph.len();
                     } else {
-                        None
+                        break;
                     }
-                })
-        {
+                }
+
+                // Remove the occ_before-th attached image that shares this placeholder label.
+                if let Some((remove_idx, _)) = self
+                    .attached_images
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, img2)| img2.placeholder == *ph)
+                    .nth(occ_before)
+                {
+                    out = Some((remove_idx, ph.clone()));
+                } else {
+                    out = Some((i, ph.clone()));
+                }
+                break;
+            }
+            out
+        } {
             self.textarea.replace_range(p - placeholder.len()..p, "");
             self.attached_images.remove(idx);
             return true;
@@ -1558,5 +1603,44 @@ mod tests {
         } else {
             panic!("Placeholder not found in textarea");
         }
+    }
+
+    #[test]
+    fn deleting_one_of_duplicate_image_placeholders_removes_matching_entry() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let sender = AppEventSender::new(tx);
+        let mut composer =
+            ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
+
+        let path1 = std::path::PathBuf::from("/tmp/image_dup1.png");
+        let path2 = std::path::PathBuf::from("/tmp/image_dup2.png");
+
+        assert!(composer.attach_image(path1.clone(), 10, 5, "PNG"));
+        // separate placeholders with a space for clarity
+        composer.handle_paste(" ".into());
+        assert!(composer.attach_image(path2.clone(), 10, 5, "PNG"));
+
+        let ph = composer.attached_images[0].placeholder.clone();
+        let text = composer.textarea.text().to_string();
+        let start1 = text.find(&ph).expect("first placeholder present");
+        let end1 = start1 + ph.len();
+        composer.textarea.set_cursor(end1);
+
+        // Backspace should delete the first placeholder and its mapping.
+        composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+
+        let new_text = composer.textarea.text().to_string();
+        assert_eq!(new_text.matches(&ph).count(), 1, "one placeholder remains");
+        assert_eq!(
+            composer.attached_images.len(),
+            1,
+            "one image mapping remains"
+        );
+        // The remaining mapping should be for the second image path.
+        assert_eq!(composer.attached_images[0].path, path2);
     }
 }
