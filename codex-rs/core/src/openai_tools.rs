@@ -175,7 +175,7 @@ fn create_shell_tool_for_sandbox(sandbox_policy: &SandboxPolicy) -> OpenAiTool {
         properties.insert(
         "justification".to_string(),
         JsonSchema::String {
-            description: Some("Only set if ask_for_escalated_permissions is true. 1-sentence explanation of why we want to run this command.".to_string()),
+            description: Some("Only set if with_escalated_permissions is true. 1-sentence explanation of why we want to run this command.".to_string()),
         },
     );
     }
@@ -247,8 +247,8 @@ pub(crate) struct ApplyPatchToolArgs {
     pub(crate) input: String,
 }
 
-fn create_apply_patch_tool() -> OpenAiTool {
-    // Minimal schema: one required string argument containing the patch body
+/// Returns a JSON tool that can be used to edit files. Public for testing, please use `get_openai_tools`.
+fn create_apply_patch_json_tool() -> OpenAiTool {
     let mut properties = BTreeMap::new();
     properties.insert(
         "input".to_string(),
@@ -259,59 +259,73 @@ fn create_apply_patch_tool() -> OpenAiTool {
 
     OpenAiTool::Function(ResponsesApiTool {
         name: "apply_patch".to_string(),
-        description: r#"Use this tool to edit files.
+        description: r#"Use the `apply_patch` tool to edit files.
 Your patch language is a stripped‑down, file‑oriented diff format designed to be easy to parse and safe to apply. You can think of it as a high‑level envelope:
 
-**_ Begin Patch
+*** Begin Patch
 [ one or more file sections ]
-_** End Patch
+*** End Patch
 
 Within that envelope, you get a sequence of file operations.
 You MUST include a header to specify the action you are taking.
 Each operation starts with one of three headers:
 
-**_ Add File: <path> - create a new file. Every following line is a + line (the initial contents).
-_** Delete File: <path> - remove an existing file. Nothing follows.
-\*\*\* Update File: <path> - patch an existing file in place (optionally with a rename).
+*** Add File: <path> - create a new file. Every following line is a + line (the initial contents).
+*** Delete File: <path> - remove an existing file. Nothing follows.
+*** Update File: <path> - patch an existing file in place (optionally with a rename).
 
-May be immediately followed by \*\*\* Move to: <new path> if you want to rename the file.
+May be immediately followed by *** Move to: <new path> if you want to rename the file.
 Then one or more “hunks”, each introduced by @@ (optionally followed by a hunk header).
 Within a hunk each line starts with:
 
-- for inserted text,
+For instructions on [context_before] and [context_after]:
+- By default, show 3 lines of code immediately above and 3 lines immediately below each change. If a change is within 3 lines of a previous change, do NOT duplicate the first change’s [context_after] lines in the second change’s [context_before] lines.
+- If 3 lines of context is insufficient to uniquely identify the snippet of code within the file, use the @@ operator to indicate the class or function to which the snippet belongs. For instance, we might have:
+@@ class BaseClass
+[3 lines of pre-context]
+- [old_code]
++ [new_code]
+[3 lines of post-context]
 
-* for removed text, or
-  space ( ) for context.
-  At the end of a truncated hunk you can emit \*\*\* End of File.
+- If a code block is repeated so many times in a class or function such that even a single `@@` statement and 3 lines of context cannot uniquely identify the snippet of code, you can use multiple `@@` statements to jump to the right context. For instance:
 
+@@ class BaseClass
+@@ 	 def method():
+[3 lines of pre-context]
+- [old_code]
++ [new_code]
+[3 lines of post-context]
+
+The full grammar definition is below:
 Patch := Begin { FileOp } End
-Begin := "**_ Begin Patch" NEWLINE
-End := "_** End Patch" NEWLINE
+Begin := "*** Begin Patch" NEWLINE
+End := "*** End Patch" NEWLINE
 FileOp := AddFile | DeleteFile | UpdateFile
-AddFile := "**_ Add File: " path NEWLINE { "+" line NEWLINE }
-DeleteFile := "_** Delete File: " path NEWLINE
-UpdateFile := "**_ Update File: " path NEWLINE [ MoveTo ] { Hunk }
-MoveTo := "_** Move to: " newPath NEWLINE
+AddFile := "*** Add File: " path NEWLINE { "+" line NEWLINE }
+DeleteFile := "*** Delete File: " path NEWLINE
+UpdateFile := "*** Update File: " path NEWLINE [ MoveTo ] { Hunk }
+MoveTo := "*** Move to: " newPath NEWLINE
 Hunk := "@@" [ header ] NEWLINE { HunkLine } [ "*** End of File" NEWLINE ]
 HunkLine := (" " | "-" | "+") text NEWLINE
 
 A full patch can combine several operations:
 
-**_ Begin Patch
-_** Add File: hello.txt
+*** Begin Patch
+*** Add File: hello.txt
 +Hello world
-**_ Update File: src/app.py
-_** Move to: src/main.py
+*** Update File: src/app.py
+*** Move to: src/main.py
 @@ def greet():
 -print("Hi")
 +print("Hello, world!")
-**_ Delete File: obsolete.txt
-_** End Patch
+*** Delete File: obsolete.txt
+*** End Patch
 
 It is important to remember:
 
 - You must include a header with your intended action (Add/Delete/Update)
 - You must prefix new lines with `+` even when creating a new file
+- File references can only be relative, NEVER ABSOLUTE.
 "#
         .to_string(),
         strict: false,
@@ -326,7 +340,7 @@ It is important to remember:
 /// Returns JSON values that are compatible with Function Calling in the
 /// Responses API:
 /// https://platform.openai.com/docs/guides/function-calling?api-mode=responses
-pub(crate) fn create_tools_json_for_responses_api(
+pub fn create_tools_json_for_responses_api(
     tools: &Vec<OpenAiTool>,
 ) -> crate::error::Result<Vec<serde_json::Value>> {
     let mut tools_json = Vec::new();
@@ -544,7 +558,7 @@ pub(crate) fn get_openai_tools(
     }
 
     if config.apply_patch_tool {
-        tools.push(create_apply_patch_tool());
+        tools.push(create_apply_patch_json_tool());
     }
 
     if let Some(mcp_tools) = mcp_tools {
