@@ -1230,37 +1230,20 @@ disable_response_storage = true
         // Call the function under test
         set_project_trusted(codex_home.path(), project_dir.path())?;
 
-        // Read back the generated config.toml
+        // Read back the generated config.toml and assert exact contents
         let config_path = codex_home.path().join(CONFIG_TOML_FILE);
         let contents = std::fs::read_to_string(&config_path)?;
 
-        // Verify it does not use inline tables for the project entry
-        assert!(
-            !contents.contains("{ trust_level"),
-            "config.toml should not use inline tables:\n{}",
-            contents
-        );
-
-        // Verify the explicit table for the project exists. toml_edit may choose
-        // either basic (double-quoted) or literal (single-quoted) strings for keys
-        // containing backslashes (e.g., on Windows). Accept both forms.
         let path_str = project_dir.path().to_string_lossy();
-        let project_key_double = format!("[projects.\"{}\"]", path_str);
-        let project_key_single = format!("[projects.'{}']", path_str);
-        assert!(
-            contents.contains(&project_key_double) || contents.contains(&project_key_single),
-            "missing explicit project table header: expected to find `{}` or `{}` in:\n{}",
-            project_key_double,
-            project_key_single,
-            contents
-        );
+        let expected = format!(
+            r#"[projects]
 
-        // Verify the trust_level entry
-        assert!(
-            contents.contains("trust_level = \"trusted\""),
-            "missing trust_level entry in:\n{}",
-            contents
+[projects."{}"]
+trust_level = "trusted"
+"#,
+            path_str
         );
+        assert_eq!(contents, expected);
 
         Ok(())
     }
@@ -1275,7 +1258,9 @@ disable_response_storage = true
         let path_str = project_dir.path().to_string_lossy();
         // Use a literal-quoted key so Windows backslashes don't require escaping
         let initial = format!(
-            "[projects]\n'{}' = {{ trust_level = \"untrusted\" }}\n",
+            r#"[projects]
+'{}' = {{ trust_level = "untrusted" }}
+"#,
             path_str
         );
         std::fs::create_dir_all(codex_home.path())?;
@@ -1286,28 +1271,16 @@ disable_response_storage = true
 
         let contents = std::fs::read_to_string(&config_path)?;
 
-        // Should not contain inline table representation anymore (accept both quote styles)
-        let inline_double = format!("\"{}\" = {{ trust_level = \"trusted\" }}", path_str);
-        let inline_single = format!("'{}' = {{ trust_level = \"trusted\" }}", path_str);
-        assert!(
-            !contents.contains(&inline_double) && !contents.contains(&inline_single),
-            "config.toml should not contain inline project table anymore:\n{}",
-            contents
-        );
+        // Assert exact output after conversion to explicit table
+        let expected = format!(
+            r#"[projects]
 
-        // And explicit child table header for the project
-        let project_key_double = format!("[projects.\"{}\"]", path_str);
-        let project_key_single = format!("[projects.'{}']", path_str);
-        assert!(
-            contents.contains(&project_key_double) || contents.contains(&project_key_single),
-            "missing explicit project table header: expected to find `{}` or `{}` in:\n{}",
-            project_key_double,
-            project_key_single,
-            contents
+[projects."{}"]
+trust_level = "trusted"
+"#,
+            path_str
         );
-
-        // And the trust level value
-        assert!(contents.contains("trust_level = \"trusted\""));
+        assert_eq!(contents, expected);
 
         Ok(())
     }
