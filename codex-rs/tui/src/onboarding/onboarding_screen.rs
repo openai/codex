@@ -1,4 +1,5 @@
 use codex_core::util::is_inside_git_repo;
+use codex_login::AuthManager;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -58,6 +59,7 @@ pub(crate) struct OnboardingScreenArgs {
     pub show_login_screen: bool,
     pub login_status: LoginStatus,
     pub preferred_auth_method: AuthMode,
+    pub auth_manager: Arc<AuthManager>,
 }
 
 impl OnboardingScreen {
@@ -69,6 +71,7 @@ impl OnboardingScreen {
             show_login_screen,
             login_status,
             preferred_auth_method,
+            auth_manager,
         } = args;
         let mut steps: Vec<Step> = vec![Step::Welcome(WelcomeWidget {
             is_logged_in: !matches!(login_status, LoginStatus::NotAuthenticated),
@@ -82,6 +85,7 @@ impl OnboardingScreen {
                 codex_home: codex_home.clone(),
                 login_status,
                 preferred_auth_method,
+                auth_manager,
             }))
         }
         let is_git_repo = is_inside_git_repo(&cwd);

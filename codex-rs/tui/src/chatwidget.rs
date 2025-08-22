@@ -583,13 +583,32 @@ impl ChatWidget {
 
         match self.bottom_pane.handle_key_event(key_event) {
             InputResult::Submitted(text) => {
-                self.submit_user_message(text.into());
+                let images = self.bottom_pane.take_recent_submission_images();
+                self.submit_user_message(UserMessage {
+                    text,
+                    image_paths: images,
+                });
             }
             InputResult::Command(cmd) => {
                 self.dispatch_command(cmd);
             }
             InputResult::None => {}
         }
+    }
+
+    pub(crate) fn attach_image(
+        &mut self,
+        path: PathBuf,
+        width: u32,
+        height: u32,
+        format_label: &str,
+    ) {
+        tracing::info!(
+            "attach_image path={path:?} width={width} height={height} format={format_label}",
+        );
+        self.bottom_pane
+            .attach_image(path.clone(), width, height, format_label);
+        self.request_redraw();
     }
 
     fn dispatch_command(&mut self, cmd: SlashCommand) {
@@ -818,9 +837,8 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn add_diff_output(&mut self, diff_output: String) {
+    pub(crate) fn on_diff_complete(&mut self) {
         self.bottom_pane.set_task_running(false);
-        self.add_to_history(history_cell::new_diff_output(diff_output));
         self.mark_needs_redraw();
     }
 

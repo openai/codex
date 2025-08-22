@@ -87,6 +87,11 @@ pub enum ClientRequest {
         request_id: RequestId,
         params: RemoveConversationListenerParams,
     },
+    GitDiffToRemote {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: GitDiffToRemoteParams,
+    },
     LoginChatGpt {
         #[serde(rename = "id")]
         request_id: RequestId,
@@ -103,11 +108,7 @@ pub enum ClientRequest {
     GetAuthStatus {
         #[serde(rename = "id")]
         request_id: RequestId,
-    },
-    GitDiffToRemote {
-        #[serde(rename = "id")]
-        request_id: RequestId,
-        params: GitDiffToRemoteParams,
+        params: GetAuthStatusParams,
     },
 }
 
@@ -218,9 +219,7 @@ pub struct CancelLoginChatGptResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct LogoutChatGptParams {
-    pub login_id: Uuid,
-}
+pub struct LogoutChatGptParams {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
@@ -229,7 +228,12 @@ pub struct LogoutChatGptResponse {}
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct GetAuthStatusParams {
-    pub login_id: Uuid,
+    /// If true, include the current auth token (if available) in the response.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_token: Option<bool>,
+    /// If true, attempt to refresh the token before returning status.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refresh_token: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
@@ -238,6 +242,8 @@ pub struct GetAuthStatusResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_method: Option<AuthMode>,
     pub preferred_auth_method: AuthMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_token: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
