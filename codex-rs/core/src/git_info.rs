@@ -432,57 +432,38 @@ async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
 ///
 /// Behavior:
 /// - If `cwd` is not inside a git repository, returns `None`.
-/// - If `cwd` is inside a regular git repository (with a `.git` directory at
-///   the repository root), returns `None` to fall back to the original logic
-///   (trust by exact cwd or ancestor project entries). We intentionally do not
-///   change behavior for non-worktree repos.
+/// - If `cwd` is inside a regular git repository, returns the root of the
+///   repository.
 /// - If `cwd` is inside a linked worktree (where the repo root contains a
 ///   `.git` file that points at `<main>/.git/worktrees/<name>`), returns the
 ///   path to the main repository working directory (parent of `<main>/.git`).
 pub fn resolve_root_git_project_for_trust(cwd: &Path) -> Option<PathBuf> {
-    // Walk up to find the first directory containing a `.git` entry
-    let mut dir = cwd;
-    if !dir.is_dir() {
-        dir = cwd.parent()?;
-    }
+    let base = if cwd.is_dir() { cwd } else { cwd.parent()? };
 
-    let mut cur = dir.to_path_buf();
-    while cur.parent().is_some() {
-        let git_marker = cur.join(".git");
-        if git_marker.is_dir() {
-            return Some(cur);
-        }
-        if git_marker.is_file() {
-            if let Ok(s) = std::fs::read_to_string(&git_marker) {
-                let s = s.trim();
-                let prefix = "gitdir:";
-                if let Some(rest) = s.strip_prefix(prefix) {
-                    let target = rest.trim();
-                    let gitdir_path = PathBuf::from(target);
-                    // If this points to `<main>/.git/worktrees/<name>`, then the
-                    // main .git dir is its parent().parent(). The main project
-                    // working directory is then parent of that .git dir.
-                    if let Some(parent) = gitdir_path.parent()
-                        && parent
-                            .file_name()
-                            .map(|n| n == "worktrees")
-                            .unwrap_or(false)
-                        && let Some(main_git_dir) = parent.parent()
-                        && let Some(main_project_root) = main_git_dir.parent()
-                    {
-                        return Some(main_project_root.to_path_buf());
-                    }
-                }
-            }
-            // If we cannot parse or it isn't a worktrees path, do not special‑case.
-            return None;
-        }
-
-        if !cur.pop() {
-            break;
-        }
+    // TODO: we should make this async, but it's primarily used deep in
+    // callstacks of sync code, and should almost always be fast
+    let git_dir_out = std::process::Command::new("git")
+        .args(["rev-parse", "--git-common-dir"])
+        .current_dir(base)
+        .output()
+        .ok()?;
+    if !git_dir_out.status.success() {
+        return None;
     }
-    None
+    let git_dir_s = String::from_utf8(git_dir_out.stdout)
+        .ok()?
+        .trim()
+        .to_string();
+
+    let git_dir_path_raw = if Path::new(&git_dir_s).is_absolute() {
+        PathBuf::from(&git_dir_s)
+    } else {
+        base.join(&git_dir_s)
+    };
+
+    // Normalize to handle macOS /var vs /private/var and resolve ".." segments.
+    let git_dir_path = std::fs::canonicalize(&git_dir_path_raw).unwrap_or(git_dir_path_raw);
+    git_dir_path.parent().map(Path::to_path_buf)
 }
 
 #[cfg(test)]
@@ -799,20 +780,26 @@ mod tests {
     }
 
     #[test]
-    fn resolve_root_git_project_for_trust_regular_repo_returns_none() {
+    fn resolve_root_git_project_for_trust_regular_repo_returns_repo_root() {
         let tmp = TempDir::new().expect("tempdir");
         let repo = tmp.path().join("repo");
-        std::fs::create_dir_all(repo.join("sub/dir")).unwrap();
-        // Simulate a normal repo by creating a .git directory at the root
-        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        std::fs::create_dir_all(&repo).unwrap();
+        let _ = std::process::Command::new("git")
+            .arg("init")
+            .current_dir(&repo)
+            .output()
+            .expect("git init");
 
+        let expected = std::fs::canonicalize(&repo).unwrap().to_path_buf();
         assert_eq!(
             resolve_root_git_project_for_trust(&repo),
-            Some(repo.clone())
+            Some(expected.clone())
         );
+        let nested = repo.join("sub/dir");
+        std::fs::create_dir_all(&nested).unwrap();
         assert_eq!(
-            resolve_root_git_project_for_trust(&repo),
-            Some(repo.clone())
+            resolve_root_git_project_for_trust(&nested),
+            Some(expected.clone())
         );
     }
 
@@ -820,28 +807,57 @@ mod tests {
     fn resolve_root_git_project_for_trust_detects_worktree_and_returns_main_root() {
         let tmp = TempDir::new().expect("tempdir");
         let main = tmp.path().join("main_repo");
-        let wt = tmp.path().join("worktree_checkout/subdir");
         std::fs::create_dir_all(&main).unwrap();
-        std::fs::create_dir_all(&wt).unwrap();
 
-        // Layout that mimics a linked worktree:
-        // - worktree checkout contains a `.git` file pointing to `<main>/.git/worktrees/<name>`
-        // - main repo has a `.git` directory
-        std::fs::create_dir_all(main.join(".git/worktrees/wt1")).unwrap();
-        std::fs::write(
-            wt.parent().unwrap().join(".git"),
-            format!("gitdir: {}\n", main.join(".git/worktrees/wt1").display()),
-        )
-        .unwrap();
+        // Initialize a real repo with an initial commit
+        let _ = std::process::Command::new("git")
+            .arg("init")
+            .current_dir(&main)
+            .output()
+            .expect("git init");
+        std::fs::write(main.join("README.md"), "hello").unwrap();
+        let _ = std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&main)
+            .output()
+            .expect("git add");
+        let _ = std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.email=test@example.com",
+                "-c",
+                "user.name=Test",
+                "commit",
+                "-m",
+                "init",
+            ])
+            .current_dir(&main)
+            .output()
+            .expect("git commit");
 
-        // From the worktree root
-        let expected = Some(main.clone());
-        assert_eq!(
-            resolve_root_git_project_for_trust(wt.parent().unwrap()),
-            expected
-        );
-        // From a nested path inside the worktree
-        assert_eq!(resolve_root_git_project_for_trust(&wt), expected);
+        // Create a linked worktree
+        let wt_root = tmp.path().join("wt");
+        let _ = std::process::Command::new("git")
+            .args([
+                "worktree",
+                "add",
+                wt_root.to_str().unwrap(),
+                "-b",
+                "feature/x",
+            ])
+            .current_dir(&main)
+            .output()
+            .expect("git worktree add");
+
+        let expected = std::fs::canonicalize(&main).ok();
+        let got = resolve_root_git_project_for_trust(&wt_root)
+            .and_then(|p| std::fs::canonicalize(p).ok());
+        assert_eq!(got, expected);
+        let nested = wt_root.join("nested/sub");
+        std::fs::create_dir_all(&nested).unwrap();
+        let got_nested =
+            resolve_root_git_project_for_trust(&nested).and_then(|p| std::fs::canonicalize(p).ok());
+        assert_eq!(got_nested, expected);
     }
 
     #[test]
