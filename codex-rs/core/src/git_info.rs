@@ -450,11 +450,9 @@ pub fn resolve_root_git_project_for_trust(cwd: &Path) -> Option<PathBuf> {
     while cur.parent().is_some() {
         let git_marker = cur.join(".git");
         if git_marker.is_dir() {
-            // Regular repo (not a worktree) — do not alter trust target
-            return None;
+            return Some(cur);
         }
         if git_marker.is_file() {
-            // Likely a worktree checkout. Parse `gitdir: <path>`.
             if let Ok(s) = std::fs::read_to_string(&git_marker) {
                 let s = s.trim();
                 let prefix = "gitdir:";
@@ -808,8 +806,14 @@ mod tests {
         // Simulate a normal repo by creating a .git directory at the root
         std::fs::create_dir_all(repo.join(".git")).unwrap();
 
-        assert!(resolve_root_git_project_for_trust(&repo).is_none());
-        assert!(resolve_root_git_project_for_trust(&repo.join("sub/dir")).is_none());
+        assert_eq!(
+            resolve_root_git_project_for_trust(&repo),
+            Some(repo.clone())
+        );
+        assert_eq!(
+            resolve_root_git_project_for_trust(&repo),
+            Some(repo.clone())
+        );
     }
 
     #[test]

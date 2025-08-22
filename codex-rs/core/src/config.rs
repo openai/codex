@@ -507,7 +507,7 @@ impl ConfigToml {
         // Fast path: exact cwd match
         if projects
             .get(&resolved_cwd.to_string_lossy().to_string())
-            .map(|p| p.trust_level.clone().unwrap_or("".to_string()) == "trusted")
+            .map(|p| p.trust_level.as_deref() == Some("trusted"))
             .unwrap_or(false)
         {
             return true;
