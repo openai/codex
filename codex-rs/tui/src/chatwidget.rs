@@ -555,17 +555,13 @@ impl ChatWidget<'_> {
 
     pub(crate) fn attach_image(
         &mut self,
-        path: std::path::PathBuf,
+        path: PathBuf,
         width: u32,
         height: u32,
         format_label: &str,
     ) {
         tracing::info!(
-            "attach_image path={:?} width={} height={} format={}",
-            path,
-            width,
-            height,
-            format_label
+            "attach_image path={path:?} width={width} height={height} format={format_label}",
         );
         // Forward to bottom pane; width/height/format currently only affect placeholder text.
         let _ = (width, height, format_label); // reserved for future use (e.g., status flash)
