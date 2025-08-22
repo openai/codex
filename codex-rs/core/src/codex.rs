@@ -1423,24 +1423,21 @@ async fn run_task(
                             Some(ResponseInputItem::McpToolCallOutput { call_id, result }),
                         ) => {
                             items_to_record_in_conversation_history.push(item);
-                            let (content, success): (String, Option<bool>) = match result {
-                                Ok(CallToolResult {
-                                    content,
-                                    is_error,
-                                    structured_content: _,
-                                }) => match serde_json::to_string(content) {
-                                    Ok(content) => (content, *is_error),
-                                    Err(e) => {
-                                        warn!("Failed to serialize MCP tool call output: {e}");
-                                        (e.to_string(), Some(true))
-                                    }
+                            let output = match result {
+                                Ok(call_tool_result) => {
+                                    convert_call_tool_result_to_function_call_output_payload(
+                                        call_tool_result,
+                                    )
+                                }
+                                Err(err) => FunctionCallOutputPayload {
+                                    content: err.clone(),
+                                    success: Some(false),
                                 },
-                                Err(e) => (e.clone(), Some(true)),
                             };
                             items_to_record_in_conversation_history.push(
                                 ResponseItem::FunctionCallOutput {
                                     call_id: call_id.clone(),
-                                    output: FunctionCallOutputPayload { content, success },
+                                    output,
                                 },
                             );
                         }
@@ -2637,5 +2634,134 @@ async fn drain_to_completed(
             Ok(_) => continue,
             Err(e) => return Err(e),
         }
+    }
+}
+
+fn convert_call_tool_result_to_function_call_output_payload(
+    call_tool_result: &CallToolResult,
+) -> FunctionCallOutputPayload {
+    let CallToolResult {
+        content,
+        is_error,
+        structured_content,
+    } = call_tool_result;
+
+    // In terms of what to send back to the model, we prefer structured_content,
+    // if available, and fallback to content, otherwise.
+    let mut is_success = is_error != &Some(true);
+    let content = if let Some(structured_content) = structured_content
+        && structured_content != &serde_json::Value::Null
+        && let Ok(serialized_structured_content) = serde_json::to_string(&structured_content)
+    {
+        serialized_structured_content
+    } else {
+        match serde_json::to_string(&content) {
+            Ok(serialized_content) => serialized_content,
+            Err(err) => {
+                // If we could not serialize either content or structured_content to
+                // JSON, flag this as an error.
+                is_success = false;
+                err.to_string()
+            }
+        }
+    };
+
+    FunctionCallOutputPayload {
+        content,
+        success: Some(is_success),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mcp_types::ContentBlock;
+    use mcp_types::TextContent;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    fn text_block(s: &str) -> ContentBlock {
+        ContentBlock::TextContent(TextContent {
+            annotations: None,
+            text: s.to_string(),
+            r#type: "text".to_string(),
+        })
+    }
+
+    #[test]
+    fn prefers_structured_content_when_present() {
+        let ctr = CallToolResult {
+            // Content present but should be ignored because structured_content is set.
+            content: vec![text_block("ignored")],
+            is_error: None,
+            structured_content: Some(json!({
+                "ok": true,
+                "value": 42
+            })),
+        };
+
+        let got = convert_call_tool_result_to_function_call_output_payload(&ctr);
+        let expected = FunctionCallOutputPayload {
+            content: serde_json::to_string(&json!({
+                "ok": true,
+                "value": 42
+            }))
+            .unwrap(),
+            success: Some(true),
+        };
+
+        assert_eq!(expected, got);
+    }
+
+    #[test]
+    fn falls_back_to_content_when_structured_is_null() {
+        let ctr = CallToolResult {
+            content: vec![text_block("hello"), text_block("world")],
+            is_error: None,
+            structured_content: Some(serde_json::Value::Null),
+        };
+
+        let got = convert_call_tool_result_to_function_call_output_payload(&ctr);
+        let expected = FunctionCallOutputPayload {
+            content: serde_json::to_string(&vec![text_block("hello"), text_block("world")])
+                .unwrap(),
+            success: Some(true),
+        };
+
+        assert_eq!(expected, got);
+    }
+
+    #[test]
+    fn success_flag_reflects_is_error_true() {
+        let ctr = CallToolResult {
+            content: vec![text_block("unused")],
+            is_error: Some(true),
+            structured_content: Some(json!({ "message": "bad" })),
+        };
+
+        let got = convert_call_tool_result_to_function_call_output_payload(&ctr);
+        let expected = FunctionCallOutputPayload {
+            content: serde_json::to_string(&json!({ "message": "bad" })).unwrap(),
+            success: Some(false),
+        };
+
+        assert_eq!(expected, got);
+    }
+
+    #[test]
+    fn success_flag_true_with_no_error_and_content_used() {
+        let ctr = CallToolResult {
+            content: vec![text_block("alpha")],
+            is_error: Some(false),
+            structured_content: None,
+        };
+
+        let got = convert_call_tool_result_to_function_call_output_payload(&ctr);
+        let expected = FunctionCallOutputPayload {
+            content: serde_json::to_string(&vec![text_block("alpha")]).unwrap(),
+            success: Some(true),
+        };
+
+        assert_eq!(expected, got);
     }
 }
