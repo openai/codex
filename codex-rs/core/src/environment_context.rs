@@ -2,12 +2,12 @@ use serde::Deserialize;
 use serde::Serialize;
 use strum_macros::Display as DeriveDisplay;
 
-use crate::models::ContentItem;
-use crate::models::ResponseItem;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
 use crate::shell::Shell;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use std::path::PathBuf;
 
 /// wraps environment context message in a tag for the model to parse more easily.

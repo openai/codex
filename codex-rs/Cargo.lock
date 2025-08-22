@@ -923,13 +923,16 @@ dependencies = [
 name = "codex-protocol"
 version = "0.0.0"
 dependencies = [
+ "base64 0.22.1",
  "mcp-types",
+ "mime_guess",
  "pretty_assertions",
  "serde",
  "serde_bytes",
  "serde_json",
  "strum 0.27.2",
  "strum_macros 0.27.2",
+ "tracing",
  "ts-rs",
  "uuid",
 ]
