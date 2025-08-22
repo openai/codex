@@ -794,8 +794,6 @@ mod tests {
         assert_eq!(state.sha, GitSha::new(&remote_sha));
     }
 
-    // --- resolve_root_git_project_for_trust tests ---
-
     #[test]
     fn resolve_root_git_project_for_trust_returns_none_outside_repo() {
         let tmp = TempDir::new().expect("tempdir");
@@ -810,7 +808,6 @@ mod tests {
         // Simulate a normal repo by creating a .git directory at the root
         std::fs::create_dir_all(repo.join(".git")).unwrap();
 
-        // Calling from repo root or nested dir should leave trust unchanged (None)
         assert!(resolve_root_git_project_for_trust(&repo).is_none());
         assert!(resolve_root_git_project_for_trust(&repo.join("sub/dir")).is_none());
     }
