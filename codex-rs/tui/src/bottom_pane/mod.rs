@@ -24,7 +24,6 @@ mod list_selection_view;
 mod popup_consts;
 mod scroll_state;
 mod selection_popup_common;
-mod status_indicator_view;
 mod textarea;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,10 +35,10 @@ pub(crate) enum CancellationEvent {
 pub(crate) use chat_composer::ChatComposer;
 pub(crate) use chat_composer::InputResult;
 
+use crate::status_indicator_widget::StatusIndicatorWidget;
 use approval_modal_view::ApprovalModalView;
 pub(crate) use list_selection_view::SelectionAction;
 pub(crate) use list_selection_view::SelectionItem;
-use status_indicator_view::StatusIndicatorView;
 
 /// Pane displayed in the lower half of the chat UI.
 pub(crate) struct BottomPane {
@@ -47,7 +46,7 @@ pub(crate) struct BottomPane {
     /// input state is retained when the view is closed.
     composer: ChatComposer,
 
-    /// If present, this is displayed instead of the `composer`.
+    /// If present, this is displayed instead of the `composer` (e.g. modals).
     active_view: Option<Box<dyn BottomPaneView>>,
 
     app_event_tx: AppEventSender,
@@ -57,9 +56,10 @@ pub(crate) struct BottomPane {
     is_task_running: bool,
     ctrl_c_quit_hint: bool,
 
-    /// True if the active view is the StatusIndicatorView that replaces the
-    /// composer during a running task.
-    status_view_active: bool,
+    /// Inline status indicator shown above the composer while a task is running.
+    status: Option<StatusIndicatorWidget>,
+    /// Queued user message previews to show under the status indicator.
+    queued_user_messages: Vec<String>,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -87,7 +87,8 @@ impl BottomPane {
             has_input_focus: params.has_input_focus,
             is_task_running: false,
             ctrl_c_quit_hint: false,
-            status_view_active: false,
+            status: None,
+            queued_user_messages: Vec::new(),
         }
     }
 
@@ -95,7 +96,12 @@ impl BottomPane {
         let view_height = if let Some(view) = self.active_view.as_ref() {
             view.desired_height(width)
         } else {
-            self.composer.desired_height(width)
+            // Status line (if any) + composer height
+            let mut h = self.composer.desired_height(width);
+            if let Some(status) = self.status.as_ref() {
+                h = h.saturating_add(status.desired_height(width));
+            }
+            h
         };
         let top_pad = if self.active_view.is_none() || self.status_view_active {
             1
@@ -137,24 +143,47 @@ impl BottomPane {
         }
     }
 
+    /// Split the content area into `(status, composer)` rectangles.
+    /// Uses a minimal 1-row header when a task is running but no status widget exists.
+    fn split_status_and_composer(&self, content_area: Rect) -> (Option<Rect>, Rect) {
+        let sh = if let Some(status) = &self.status {
+            status
+                .desired_height(content_area.width)
+                .min(content_area.height)
+        } else if self.is_task_running {
+            1u16.min(content_area.height)
+        } else {
+            0
+        };
+        if sh == 0 {
+            return (None, content_area);
+        }
+        let [status_area, composer_area] =
+            Layout::vertical([Constraint::Length(sh), Constraint::Min(0)]).areas(content_area);
+        (Some(status_area), composer_area)
+    }
+
     /// Forward a key event to the active view or the composer.
     pub fn handle_key_event(&mut self, key_event: KeyEvent) -> InputResult {
         if let Some(mut view) = self.active_view.take() {
             view.handle_key_event(self, key_event);
             if !view.is_complete() {
                 self.active_view = Some(view);
-            } else if self.is_task_running {
-                let mut v = StatusIndicatorView::new(
-                    self.app_event_tx.clone(),
-                    self.frame_requester.clone(),
-                );
-                v.update_text("waiting for model".to_string());
-                self.active_view = Some(Box::new(v));
-                self.status_view_active = true;
             }
             self.request_redraw();
             InputResult::None
         } else {
+            // If a task is running and a status line is visible, allow Esc to
+            // send an interrupt even while the composer has focus.
+            if matches!(key_event.code, crossterm::event::KeyCode::Esc)
+                && self.is_task_running
+                && let Some(status) = &self.status
+            {
+                // Send Op::Interrupt
+                status.interrupt();
+                self.request_redraw();
+                return InputResult::None;
+            }
             let (input_result, needs_redraw) = self.composer.handle_key_event(key_event);
             if needs_redraw {
                 self.request_redraw();
@@ -176,15 +205,6 @@ impl BottomPane {
             CancellationEvent::Handled => {
                 if !view.is_complete() {
                     self.active_view = Some(view);
-                } else if self.is_task_running {
-                    // Modal aborted but task still running – restore status indicator.
-                    let mut v = StatusIndicatorView::new(
-                        self.app_event_tx.clone(),
-                        self.frame_requester.clone(),
-                    );
-                    v.update_text("waiting for model".to_string());
-                    self.active_view = Some(Box::new(v));
-                    self.status_view_active = true;
                 }
                 self.show_ctrl_c_quit_hint();
             }
@@ -210,12 +230,11 @@ impl BottomPane {
     }
 
     /// Update the animated header shown to the left of the brackets in the
-    /// status indicator (defaults to "Working"). This will update the active
-    /// StatusIndicatorView if present; otherwise, if a live overlay is active,
-    /// it will update that. If neither is present, this call is a no-op.
+    /// status indicator (defaults to "Working"). No-ops if the status
+    /// indicator is not active.
     pub(crate) fn update_status_header(&mut self, header: String) {
-        if let Some(view) = self.active_view.as_mut() {
-            view.update_status_header(header.clone());
+        if let Some(status) = self.status.as_mut() {
+            status.update_header(header);
             self.request_redraw();
         }
     }
@@ -244,23 +263,19 @@ impl BottomPane {
         self.is_task_running = running;
 
         if running {
-            if self.active_view.is_none() {
-                self.active_view = Some(Box::new(StatusIndicatorView::new(
+            if self.status.is_none() {
+                self.status = Some(StatusIndicatorWidget::new(
                     self.app_event_tx.clone(),
                     self.frame_requester.clone(),
-                )));
-                self.status_view_active = true;
+                ));
+            }
+            if let Some(status) = self.status.as_mut() {
+                status.set_queued_messages(self.queued_user_messages.clone());
             }
             self.request_redraw();
         } else {
-            // Drop the status view when a task completes, but keep other
-            // modal views (e.g. approval dialogs).
-            if let Some(mut view) = self.active_view.take() {
-                if !view.should_hide_when_task_is_done() {
-                    self.active_view = Some(view);
-                }
-                self.status_view_active = false;
-            }
+            // Hide the status indicator when a task completes, but keep other modal views.
+            self.status = None;
         }
     }
 
@@ -280,21 +295,24 @@ impl BottomPane {
             self.app_event_tx.clone(),
         );
         self.active_view = Some(Box::new(view));
-        self.status_view_active = false;
         self.request_redraw();
     }
 
     /// Update the live status text shown while a task is running.
-    /// If a modal view is active (i.e., not the status indicator), this is a no‑op.
     pub(crate) fn update_status_text(&mut self, text: String) {
-        if !self.is_task_running || !self.status_view_active {
-            return;
-        }
-        if let Some(mut view) = self.active_view.take() {
-            view.update_status_text(text);
-            self.active_view = Some(view);
+        if let Some(status) = self.status.as_mut() {
+            status.update_text(text);
             self.request_redraw();
         }
+    }
+
+    /// Update the queued messages preview shown under the status header.
+    pub(crate) fn set_queued_user_messages(&mut self, queued: Vec<String>) {
+        self.queued_user_messages = queued.clone();
+        if let Some(status) = self.status.as_mut() {
+            status.set_queued_messages(queued);
+        }
+        self.request_redraw();
     }
 
     pub(crate) fn composer_is_empty(&self) -> bool {
@@ -335,7 +353,6 @@ impl BottomPane {
         // Otherwise create a new approval modal overlay.
         let modal = ApprovalModalView::new(request, self.app_event_tx.clone());
         self.active_view = Some(Box::new(modal));
-        self.status_view_active = false;
         self.request_redraw()
     }
 
@@ -467,7 +484,7 @@ mod tests {
     }
 
     #[test]
-    fn composer_not_shown_after_denied_if_task_running() {
+    fn composer_shown_after_denied_while_task_running() {
         let (tx_raw, rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
@@ -478,7 +495,7 @@ mod tests {
             placeholder_text: "Ask Codex to do anything".to_string(),
         });
 
-        // Start a running task so the status indicator replaces the composer.
+        // Start a running task so the status indicator is active above the composer.
         pane.set_task_running(true);
 
         // Push an approval modal (e.g., command approval) which should hide the status view.
@@ -490,16 +507,17 @@ mod tests {
         use crossterm::event::KeyModifiers;
         pane.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
 
-        // After denial, since the task is still running, the status indicator
-        // should be restored as the active view; the composer should NOT be visible.
+        // After denial, since the task is still running, the status indicator should be
+        // visible above the composer. The modal should be gone.
         assert!(
-            pane.status_view_active,
-            "status view should be active after denial"
+            pane.active_view.is_none(),
+            "no active modal view after denial"
         );
-        assert!(pane.active_view.is_some(), "active view should be present");
 
-        // Render and ensure the top row includes the Working header instead of the composer.
-        let area = Rect::new(0, 0, 40, 3);
+        // Render and ensure the top row includes the Working header and a composer line below.
+        // Give the animation thread a moment to tick.
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        let area = Rect::new(0, 0, 40, 6);
         let mut buf = Buffer::empty(area);
         (&pane).render_ref(area, &mut buf);
         let mut row1 = String::new();
@@ -509,6 +527,23 @@ mod tests {
         assert!(
             row1.contains("Working"),
             "expected Working header after denial on row 1: {row1:?}"
+        );
+
+        // Composer placeholder should be visible somewhere below.
+        let mut found_composer = false;
+        for y in 1..area.height.saturating_sub(2) {
+            let mut row = String::new();
+            for x in 0..area.width {
+                row.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
+            }
+            if row.contains("Ask Codex") {
+                found_composer = true;
+                break;
+            }
+        }
+        assert!(
+            found_composer,
+            "expected composer visible under status line"
         );
 
         // Drain the channel to avoid unused warnings.
@@ -545,7 +580,7 @@ mod tests {
     }
 
     #[test]
-    fn bottom_padding_present_for_status_view() {
+    fn bottom_padding_present_with_status_above_composer() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
@@ -580,13 +615,19 @@ mod tests {
             "expected Working header on top row: {top:?}"
         );
 
-        // Bottom two rows are blank padding
+        // Next row (spacer) is blank, and bottom two rows are blank padding
+        let mut spacer = String::new();
         let mut r_last = String::new();
         let mut r_last2 = String::new();
         for x in 0..area.width {
+            spacer.push(buf[(x, 1)].symbol().chars().next().unwrap_or(' '));
             r_last.push(buf[(x, height - 1)].symbol().chars().next().unwrap_or(' '));
             r_last2.push(buf[(x, height - 2)].symbol().chars().next().unwrap_or(' '));
         }
+        assert!(
+            spacer.trim().is_empty(),
+            "expected spacer line blank: {spacer:?}"
+        );
         assert!(
             r_last.trim().is_empty(),
             "expected last row blank: {r_last:?}"

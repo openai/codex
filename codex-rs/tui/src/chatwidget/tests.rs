@@ -183,6 +183,7 @@ fn make_chatwidget_manual() -> (
         session_id: None,
         frame_requester: crate::tui::FrameRequester::test_dummy(),
         last_history_was_exec: false,
+        queued_user_messages: std::collections::VecDeque::new(),
     };
     (widget, rx, op_rx)
 }

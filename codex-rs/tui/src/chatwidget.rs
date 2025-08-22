@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -106,6 +107,8 @@ pub(crate) struct ChatWidget {
     session_id: Option<Uuid>,
     frame_requester: FrameRequester,
     last_history_was_exec: bool,
+    // User messages queued while a turn is in progress
+    queued_user_messages: VecDeque<UserMessage>,
 }
 
 struct UserMessage {
@@ -220,6 +223,9 @@ impl ChatWidget {
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
         self.mark_needs_redraw();
+
+        // If there is a queued user message, send exactly one now to begin the next turn.
+        self.maybe_send_next_queued_input();
     }
 
     fn on_token_count(&mut self, token_usage: TokenUsage) {
@@ -238,6 +244,9 @@ impl ChatWidget {
         self.running_commands.clear();
         self.stream.clear_all();
         self.mark_needs_redraw();
+
+        // After an error ends the turn, try sending the next queued input.
+        self.maybe_send_next_queued_input();
     }
 
     fn on_plan_update(&mut self, update: codex_core::plan_tool::UpdatePlanArgs) {
@@ -580,6 +589,7 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             session_id: None,
             last_history_was_exec: false,
+            queued_user_messages: VecDeque::new(),
         }
     }
 
@@ -598,11 +608,23 @@ impl ChatWidget {
 
         match self.bottom_pane.handle_key_event(key_event) {
             InputResult::Submitted(text) => {
-                let images = self.bottom_pane.take_recent_submission_images();
-                self.submit_user_message(UserMessage {
+                // If a task is running, queue the user input to be sent after the turn completes.
+                let user_message = UserMessage {
                     text,
-                    image_paths: images,
-                });
+                    image_paths: self.bottom_pane.take_recent_submission_images(),
+                };
+                if self.bottom_pane.is_task_running() {
+                    self.queued_user_messages.push_back(user_message);
+                    // Update the status indicator to show the queued messages under the header.
+                    let previews: Vec<String> = self
+                        .queued_user_messages
+                        .iter()
+                        .map(|m| m.text.clone())
+                        .collect();
+                    self.bottom_pane.set_queued_user_messages(previews);
+                } else {
+                    self.submit_user_message(user_message);
+                }
             }
             InputResult::Command(cmd) => {
                 self.dispatch_command(cmd);
@@ -849,6 +871,23 @@ impl ChatWidget {
 
     fn request_redraw(&mut self) {
         self.frame_requester.schedule_frame();
+    }
+
+    // If idle and there are queued inputs, submit exactly one to start the next turn.
+    fn maybe_send_next_queued_input(&mut self) {
+        if self.bottom_pane.is_task_running() {
+            return;
+        }
+        if let Some(user_message) = self.queued_user_messages.pop_front() {
+            self.submit_user_message(user_message);
+        }
+        // Update the preview list to reflect the remaining queue (if any).
+        let previews: Vec<String> = self
+            .queued_user_messages
+            .iter()
+            .map(|m| m.text.clone())
+            .collect();
+        self.bottom_pane.set_queued_user_messages(previews);
     }
 
     pub(crate) fn add_diff_in_progress(&mut self) {
