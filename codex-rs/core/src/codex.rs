@@ -14,7 +14,7 @@ use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
 use codex_login::AuthManager;
-use codex_protocol::protocol::ConversationHistoryEvent;
+use codex_protocol::protocol::ConversationHistoryResponseEvent;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use futures::prelude::*;
@@ -190,7 +190,7 @@ impl Codex {
 
         // This task will run until Op::Shutdown is received.
         tokio::spawn(submission_loop(
-            Arc::clone(&session),
+            session.clone(),
             turn_context,
             config,
             rx_sub,
@@ -400,16 +400,15 @@ impl Session {
         }
         let rollout_result = match rollout_res {
             Ok((session_id, maybe_saved, recorder)) => {
-                let restored_items: Option<Vec<ResponseItem>> = match initial_history {
-                    Some(items) => Some(items),
-                    None => maybe_saved.and_then(|saved_session| {
+                let restored_items: Option<Vec<ResponseItem>> = initial_history.or_else(|| {
+                    maybe_saved.and_then(|saved_session| {
                         if saved_session.items.is_empty() {
                             None
                         } else {
                             Some(saved_session.items)
                         }
-                    }),
-                };
+                    })
+                });
                 RolloutResult {
                     session_id,
                     rollout_recorder: Some(recorder),
@@ -1302,7 +1301,7 @@ async fn submission_loop(
 
                 let event = Event {
                     id: sub_id.clone(),
-                    msg: EventMsg::ConversationHistory(ConversationHistoryEvent {
+                    msg: EventMsg::ConversationHistory(ConversationHistoryResponseEvent {
                         conversation_id: sess.session_id,
                         entries: sess.state.lock_unchecked().history.contents(),
                     }),

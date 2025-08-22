@@ -136,10 +136,11 @@ pub enum Op {
     },
 
     /// Request a single history entry identified by `log_id` + `offset`.
-    GetHistoryEntryRequest {
-        offset: usize,
-        log_id: u64,
-    },
+    GetHistoryEntryRequest { offset: usize, log_id: u64 },
+
+    /// Request the full in-memory conversation transcript for the current session.
+    /// Reply is delivered via `EventMsg::ConversationHistory`.
+    GetHistory,
 
     /// Request the list of MCP tools available across all configured servers.
     /// Reply is delivered via `EventMsg::McpListToolsResponse`.
@@ -151,8 +152,6 @@ pub enum Op {
     Compact,
     /// Request to shut down codex instance.
     Shutdown,
-
-    GetHistory,
 }
 
 /// Determines the conditions under which the user is consulted to approve
@@ -478,7 +477,7 @@ pub enum EventMsg {
     /// Notification that the agent is shutting down.
     ShutdownComplete,
 
-    ConversationHistory(ConversationHistoryEvent),
+    ConversationHistory(ConversationHistoryResponseEvent),
 }
 
 // Individual event payload types matching each `EventMsg` variant.
@@ -659,8 +658,10 @@ impl McpToolCallEndEvent {
     }
 }
 
+/// Response payload for `Op::GetHistory` containing the current session's
+/// in-memory transcript.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ConversationHistoryEvent {
+pub struct ConversationHistoryResponseEvent {
     pub conversation_id: Uuid,
     pub entries: Vec<ResponseItem>,
 }

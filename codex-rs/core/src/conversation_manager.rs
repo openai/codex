@@ -60,8 +60,18 @@ impl ConversationManager {
         let CodexSpawnOk {
             codex,
             session_id: conversation_id,
-        } = Codex::spawn(config, auth_manager, None).await?;
+        } = {
+            let initial_history = None;
+            Codex::spawn(config, auth_manager, initial_history).await?
+        };
+        self.finalize_spawn(codex, conversation_id).await
+    }
 
+    async fn finalize_spawn(
+        &self,
+        codex: Codex,
+        conversation_id: Uuid,
+    ) -> CodexResult<NewConversation> {
         // The first event must be `SessionInitialized`. Validate and forward it
         // to the caller so that they can display it in the conversation
         // history.
@@ -106,45 +116,22 @@ impl ConversationManager {
     /// caller's `config`). The new conversation will have a fresh id.
     pub async fn fork_conversation(
         &self,
-        drop_last_messages: usize,
+        conversation_history: Vec<ResponseItem>,
+        num_messages_to_drop: usize,
         config: Config,
-        items: Vec<ResponseItem>,
     ) -> CodexResult<NewConversation> {
         // Compute the prefix up to the cut point.
-        let fork_items = truncate_after_dropping_last_messages(items, drop_last_messages);
+        let truncated_history =
+            truncate_after_dropping_last_messages(conversation_history, num_messages_to_drop);
 
         // Spawn a new conversation with the computed initial history.
         let auth_manager = self.auth_manager.clone();
         let CodexSpawnOk {
             codex,
             session_id: conversation_id,
-        } = Codex::spawn(config, auth_manager, Some(fork_items)).await?;
+        } = Codex::spawn(config, auth_manager, Some(truncated_history)).await?;
 
-        // The first event must be `SessionInitialized`. Validate and forward it
-        // to the caller so that they can display it in the conversation
-        // history.
-        let event = codex.next_event().await?;
-        let session_configured = match event {
-            Event {
-                id,
-                msg: EventMsg::SessionConfigured(session_configured),
-            } if id == INITIAL_SUBMIT_ID => session_configured,
-            _ => {
-                return Err(CodexErr::SessionConfiguredNotFirstEvent);
-            }
-        };
-
-        let conversation = Arc::new(CodexConversation::new(codex));
-        self.conversations
-            .write()
-            .await
-            .insert(conversation_id, conversation.clone());
-
-        Ok(NewConversation {
-            conversation_id,
-            conversation,
-            session_configured,
-        })
+        self.finalize_spawn(codex, conversation_id).await
     }
 }
 
@@ -172,9 +159,10 @@ fn truncate_after_dropping_last_messages(items: Vec<ResponseItem>, n: usize) -> 
     }
     if count < n {
         // If fewer than n messages exist, drop everything.
-        return Vec::new();
+        Vec::new()
+    } else {
+        items.into_iter().take(cut_index).collect()
     }
-    items.into_iter().take(cut_index).collect()
 }
 
 #[cfg(test)]
