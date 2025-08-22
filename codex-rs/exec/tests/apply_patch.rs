@@ -57,7 +57,7 @@ async fn test_apply_patch_tool() -> anyhow::Result<()> {
     "item": {
       "type": "function_call",
       "name": "apply_patch",
-      "arguments": "{\n  \"input\": \"*** Begin Patch\\n*** Add File: test.md\\n+Hello world\\n*** End Patch\"\n}",
+      "arguments": "*** Begin Patch\n*** Add File: test.md\n+Hello world\n*** End Patch",
       "call_id": "__ID__"
     }
   },
@@ -83,7 +83,7 @@ async fn test_apply_patch_tool() -> anyhow::Result<()> {
     "item": {
       "type": "function_call",
       "name": "apply_patch",
-      "arguments": "{\n  \"input\": \"*** Begin Patch\\n*** Update File: test.md\\n@@\\n-Hello world\\n+Final text\\n*** End Patch\"\n}",
+      "arguments": "*** Begin Patch\n*** Update File: test.md\n@@\n-Hello world\n+Final text\n*** End Patch",
       "call_id": "__ID__"
     }
   },

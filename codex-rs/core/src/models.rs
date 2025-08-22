@@ -77,6 +77,17 @@ pub enum ResponseItem {
         call_id: String,
         output: FunctionCallOutputPayload,
     },
+    CustomToolCall {
+        id: String,
+        call_id: String,
+        name: String,
+        input: String,
+        status: String,
+    },
+    CustomToolCallOutput {
+        call_id: String,
+        output: String,
+    },
     #[serde(other)]
     Other,
 }
