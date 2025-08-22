@@ -56,9 +56,7 @@ where
     {
         match paste_fn() {
             Ok((path, info)) => {
-                tracing::info!(
-                    "ctrl_v_image imported path={path:?} info={info:?}"
-                );
+                tracing::info!("ctrl_v_image imported path={path:?} info={info:?}");
                 app_event_tx.send(AppEvent::AttachImage {
                     path,
                     width: info.width,

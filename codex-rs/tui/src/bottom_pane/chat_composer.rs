@@ -42,6 +42,12 @@ pub enum InputResult {
     None,
 }
 
+#[derive(Clone, Debug)]
+struct AttachedImage {
+    placeholder: String,
+    path: std::path::PathBuf,
+}
+
 struct TokenUsageInfo {
     total_token_usage: TokenUsage,
     last_token_usage: TokenUsage,
@@ -70,7 +76,7 @@ pub(crate) struct ChatComposer {
     pending_pastes: Vec<(String, String)>,
     token_usage_info: Option<TokenUsageInfo>,
     has_focus: bool,
-    attached_images: Vec<(String, std::path::PathBuf)>,
+    attached_images: Vec<AttachedImage>,
     placeholder_text: String,
 }
 
@@ -206,13 +212,14 @@ impl ChatComposer {
     ) -> bool {
         let placeholder = format!("[image {width}x{height} {format_label}]");
         self.textarea.insert_str(&placeholder);
-        self.attached_images.push((placeholder, path));
+        self.attached_images
+            .push(AttachedImage { placeholder, path });
         true
     }
 
     pub fn take_recent_submission_images(&mut self) -> Vec<std::path::PathBuf> {
         let images = std::mem::take(&mut self.attached_images);
-        images.into_iter().map(|(_, path)| path).collect()
+        images.into_iter().map(|img| img.path).collect()
     }
 
     /// Integrate results from an asynchronous file search.
@@ -617,9 +624,9 @@ impl ChatComposer {
                 self.pending_pastes.clear();
 
                 // Strip image placeholders from the submitted text; images are retrieved via take_recent_submission_images()
-                for (placeholder, _) in &self.attached_images {
-                    if text.contains(placeholder) {
-                        text = text.replace(placeholder, "");
+                for img in &self.attached_images {
+                    if text.contains(&img.placeholder) {
+                        text = text.replace(&img.placeholder, "");
                     }
                 }
 
@@ -657,7 +664,7 @@ impl ChatComposer {
 
         // Keep only attached images whose placeholders still exist in text
         self.attached_images
-            .retain(|(placeholder, _)| text_after.contains(placeholder));
+            .retain(|img| text_after.contains(&img.placeholder));
 
         (InputResult::None, true)
     }
@@ -673,7 +680,8 @@ impl ChatComposer {
             self.attached_images
                 .iter()
                 .enumerate()
-                .find_map(|(i, (ph, _))| {
+                .find_map(|(i, img)| {
+                    let ph = &img.placeholder;
                     if p < ph.len() {
                         return None;
                     }
@@ -1528,7 +1536,7 @@ mod tests {
             ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
         let path = std::path::PathBuf::from("/tmp/image3.png");
         assert!(composer.attach_image(path.clone(), 20, 10, "PNG"));
-        let placeholder = composer.attached_images[0].0.clone();
+        let placeholder = composer.attached_images[0].placeholder.clone();
 
         // Case 1: backspace at end
         composer.textarea.move_cursor_to_end_of_line(false);
@@ -1539,7 +1547,7 @@ mod tests {
         // Re-add and test backspace in middle: should break the placeholder string
         // and drop the image mapping (same as text placeholder behavior).
         assert!(composer.attach_image(path.clone(), 20, 10, "PNG"));
-        let placeholder2 = composer.attached_images[0].0.clone();
+        let placeholder2 = composer.attached_images[0].placeholder.clone();
         // Move cursor to roughly middle of placeholder
         if let Some(start_pos) = composer.textarea.text().find(&placeholder2) {
             let mid_pos = start_pos + (placeholder2.len() / 2);
