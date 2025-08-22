@@ -1259,9 +1259,8 @@ trust_level = "trusted"
         // Use a literal-quoted key so Windows backslashes don't require escaping
         let initial = format!(
             r#"[projects]
-'{}' = {{ trust_level = "untrusted" }}
-"#,
-            path_str
+'{path_str}' = {{ trust_level = "untrusted" }}
+"#
         );
         std::fs::create_dir_all(codex_home.path())?;
         std::fs::write(&config_path, initial)?;
@@ -1275,10 +1274,9 @@ trust_level = "trusted"
         let expected = format!(
             r#"[projects]
 
-[projects."{}"]
+[projects."{path_str}"]
 trust_level = "trusted"
-"#,
-            path_str
+"#
         );
         assert_eq!(contents, expected);
 
