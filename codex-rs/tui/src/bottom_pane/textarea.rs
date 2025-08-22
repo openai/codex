@@ -1473,8 +1473,6 @@ mod tests {
             .timestamp() as u64;
         let mut rng = rand::rngs::StdRng::seed_from_u64(pst_today_seed);
 
-        // Keep the default test fast: a few hundred cases with dozens of steps
-        // catches regressions while keeping the suite snappy.
         for _case in 0..500 {
             let mut ta = TextArea::new();
             let mut state = TextAreaState::default();

@@ -504,8 +504,6 @@ mod tests {
         // Begin a task: show initial status.
         pane.set_task_running(true);
 
-        // Render immediately; the status header is always present.
-
         // Render and confirm the line contains the "Working" header.
         let area = Rect::new(0, 0, 40, 3);
         let mut buf = Buffer::empty(area);
