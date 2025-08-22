@@ -22,7 +22,7 @@ use uuid::Uuid;
 use crate::config::Config;
 use crate::git_info::GitInfo;
 use crate::git_info::collect_git_info;
-use crate::models::ResponseItem;
+use codex_protocol::models::ResponseItem;
 
 const SESSIONS_SUBDIR: &str = "sessions";
 

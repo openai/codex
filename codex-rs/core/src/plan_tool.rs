@@ -2,13 +2,13 @@ use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
 use crate::codex::Session;
-use crate::models::FunctionCallOutputPayload;
-use crate::models::ResponseInputItem;
 use crate::openai_tools::JsonSchema;
 use crate::openai_tools::OpenAiTool;
 use crate::openai_tools::ResponsesApiTool;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
+use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ResponseInputItem;
 
 // Use the canonical plan tool types from the protocol crate to ensure
 // type-identity matches events transported via `codex_protocol`.

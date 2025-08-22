@@ -1,8 +1,8 @@
 use crate::config_types::Verbosity as VerbosityConfig;
 use crate::error::Result;
 use crate::model_family::ModelFamily;
-use crate::models::ContentItem;
-use crate::models::ResponseItem;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use crate::openai_tools::OpenAiTool;
 use crate::protocol::TokenUsage;
 use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;

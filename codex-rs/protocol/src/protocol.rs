@@ -135,7 +135,10 @@ pub enum Op {
     },
 
     /// Request a single history entry identified by `log_id` + `offset`.
-    GetHistoryEntryRequest { offset: usize, log_id: u64 },
+    GetHistoryEntryRequest {
+        offset: usize,
+        log_id: u64,
+    },
 
     /// Request the list of MCP tools available across all configured servers.
     /// Reply is delivered via `EventMsg::McpListToolsResponse`.
@@ -147,6 +150,8 @@ pub enum Op {
     Compact,
     /// Request to shut down codex instance.
     Shutdown,
+
+    GetHistory,
 }
 
 /// Determines the conditions under which the user is consulted to approve
@@ -471,6 +476,8 @@ pub enum EventMsg {
 
     /// Notification that the agent is shutting down.
     ShutdownComplete,
+
+    ConversationHistory(ConversationHistoryEvent),
 }
 
 // Individual event payload types matching each `EventMsg` variant.
@@ -834,6 +841,11 @@ pub struct Chunk {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TurnAbortedEvent {
     pub reason: TurnAbortReason,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ConversationHistoryEvent {
+    pub entries: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS)]
