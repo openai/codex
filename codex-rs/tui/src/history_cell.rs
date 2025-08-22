@@ -506,20 +506,6 @@ pub(crate) fn new_completed_mcp_tool_call(
     Box::new(PlainHistoryCell { lines })
 }
 
-pub(crate) fn new_diff_output(message: String) -> PlainHistoryCell {
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(Line::from("/diff".magenta()));
-
-    if message.trim().is_empty() {
-        lines.push(Line::from("No changes detected.".italic()));
-    } else {
-        lines.extend(message.lines().map(ansi_escape_line));
-    }
-
-    lines.push(Line::from(""));
-    PlainHistoryCell { lines }
-}
-
 pub(crate) fn new_status_output(
     config: &Config,
     usage: &TokenUsage,
