@@ -21,6 +21,7 @@ pub(crate) struct TranscriptApp {
     pub(crate) transcript_lines: Vec<Line<'static>>,
     pub(crate) scroll_offset: usize,
     pub(crate) is_done: bool,
+    title: String,
 }
 
 impl TranscriptApp {
@@ -29,6 +30,16 @@ impl TranscriptApp {
             transcript_lines,
             scroll_offset: 0,
             is_done: false,
+            title: "T R A N S C R I P T".to_string(),
+        }
+    }
+
+    pub(crate) fn with_title(transcript_lines: Vec<Line<'static>>, title: String) -> Self {
+        Self {
+            transcript_lines,
+            scroll_offset: 0,
+            is_done: false,
+            title,
         }
     }
 
@@ -114,8 +125,11 @@ impl TranscriptApp {
             } => {
                 self.scroll_offset = usize::MAX;
             }
-            _ => {}
+            _ => {
+                return;
+            }
         }
+        tui.frame_requester().schedule_frame();
     }
 
     fn scroll_area(&self, area: Rect) -> Rect {
@@ -130,9 +144,8 @@ impl TranscriptApp {
         Span::from("/ ".repeat(area.width as usize / 2))
             .dim()
             .render_ref(area, buf);
-        Span::from("/ T R A N S C R I P T")
-            .dim()
-            .render_ref(area, buf);
+        let header = format!("/ {}", self.title);
+        Span::from(header).dim().render_ref(area, buf);
 
         // Main content area (excludes header and bottom status section)
         let content_area = self.scroll_area(area);

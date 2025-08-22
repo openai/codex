@@ -5,6 +5,7 @@ use crate::file_search::FileSearchManager;
 use crate::transcript_app::TranscriptApp;
 use crate::tui;
 use crate::tui::TuiEvent;
+use codex_ansi_escape::ansi_escape_line;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::protocol::TokenUsage;
@@ -17,6 +18,7 @@ use crossterm::terminal::EnterAlternateScreen;
 use crossterm::terminal::LeaveAlternateScreen;
 use crossterm::terminal::supports_keyboard_enhancement;
 use ratatui::layout::Rect;
+use ratatui::style::Stylize;
 use ratatui::text::Line;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -126,8 +128,8 @@ impl App {
                     tui.insert_history_lines(lines);
                 }
                 self.transcript_overlay = None;
+                tui.frame_requester().schedule_frame();
             }
-            tui.frame_requester().schedule_frame();
         } else {
             match event {
                 TuiEvent::Key(key_event) => {
@@ -238,7 +240,29 @@ impl App {
             }
             AppEvent::CodexOp(op) => self.chat_widget.submit_op(op),
             AppEvent::DiffResult(text) => {
-                self.chat_widget.add_diff_output(text);
+                // Clear the in-progress state in the bottom pane
+                self.chat_widget.on_diff_complete();
+
+                // Enter alternate screen and set viewport to full size.
+                let _ = execute!(tui.terminal.backend_mut(), EnterAlternateScreen);
+                if let Ok(size) = tui.terminal.size() {
+                    self.transcript_saved_viewport = Some(tui.terminal.viewport_area);
+                    tui.terminal
+                        .set_viewport_area(Rect::new(0, 0, size.width, size.height));
+                    let _ = tui.terminal.clear();
+                }
+
+                // Build pager lines directly without the "/diff" header
+                let pager_lines: Vec<ratatui::text::Line<'static>> = if text.trim().is_empty() {
+                    vec!["No changes detected.".italic().into()]
+                } else {
+                    text.lines().map(ansi_escape_line).collect()
+                };
+                self.transcript_overlay = Some(TranscriptApp::with_title(
+                    pager_lines,
+                    "D I F F".to_string(),
+                ));
+                tui.frame_requester().schedule_frame();
             }
             AppEvent::StartFileSearch(query) => {
                 if !query.is_empty() {
