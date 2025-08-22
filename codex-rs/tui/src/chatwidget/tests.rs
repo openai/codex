@@ -48,22 +48,23 @@ fn test_config() -> Config {
 fn upgrade_event_payload_for_tests(mut payload: serde_json::Value) -> serde_json::Value {
     if let Some(obj) = payload.as_object_mut()
         && let Some(msg) = obj.get_mut("msg")
-            && let Some(m) = msg.as_object_mut() {
-                let ty = m.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                if ty == "exec_command_end" && !m.contains_key("formatted_output") {
-                    let stdout = m.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
-                    let stderr = m.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
-                    let formatted = if stderr.is_empty() {
-                        stdout.to_string()
-                    } else {
-                        format!("{stdout}{stderr}")
-                    };
-                    m.insert(
-                        "formatted_output".to_string(),
-                        serde_json::Value::String(formatted),
-                    );
-                }
-            }
+        && let Some(m) = msg.as_object_mut()
+    {
+        let ty = m.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        if ty == "exec_command_end" && !m.contains_key("formatted_output") {
+            let stdout = m.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
+            let stderr = m.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
+            let formatted = if stderr.is_empty() {
+                stdout.to_string()
+            } else {
+                format!("{stdout}{stderr}")
+            };
+            m.insert(
+                "formatted_output".to_string(),
+                serde_json::Value::String(formatted),
+            );
+        }
+    }
     payload
 }
 

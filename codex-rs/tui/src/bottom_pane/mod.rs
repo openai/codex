@@ -372,8 +372,10 @@ impl WidgetRef for &BottomPane {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         // Top spacer applies above the composer and the status indicator.
         // For other modals, render flush to the top.
-        let mut top_pad = 1;
         if let Some(view) = &self.active_view {
+            // Match desired_height: no top spacer for modal overlays unless
+            // the status indicator view is active.
+            let mut top_pad: u16 = if self.status_view_active { 1 } else { 0 };
             // Reserve bottom padding lines; keep at least 1 line for the view.
             let avail = area.height;
             if avail > 0 {
@@ -396,6 +398,7 @@ impl WidgetRef for &BottomPane {
                 view.render(view_rect, buf);
             }
         } else {
+            let top_pad: u16 = 1;
             let avail = area.height;
             if avail > 0 {
                 let composer_rect = Rect {
