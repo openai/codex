@@ -728,7 +728,6 @@ dependencies = [
  "libc",
  "maplit",
  "mcp-types",
- "mime_guess",
  "openssl-sys",
  "os_info",
  "predicates",
@@ -925,6 +924,7 @@ version = "0.0.0"
 dependencies = [
  "base64 0.22.1",
  "mcp-types",
+ "mime_guess",
  "pretty_assertions",
  "serde",
  "serde_bytes",
