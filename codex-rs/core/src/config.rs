@@ -7,6 +7,7 @@ use crate::config_types::ShellEnvironmentPolicyToml;
 use crate::config_types::Tui;
 use crate::config_types::UriBasedFileOpener;
 use crate::config_types::Verbosity;
+use crate::git_info::resolve_root_git_project_for_trust;
 use crate::model_family::ModelFamily;
 use crate::model_family::find_family_for_model;
 use crate::model_provider_info::ModelProviderInfo;
@@ -545,66 +546,6 @@ impl ConfigToml {
             None => Ok(ConfigProfile::default()),
         }
     }
-}
-
-/// Resolve the path that should be used for trust checks when running inside a
-/// git worktree.
-///
-/// Behavior:
-/// - If `cwd` is not inside a git repository, returns `None`.
-/// - If `cwd` is inside a regular git repository (with a `.git` directory at
-///   the repository root), returns `None` to fall back to the original logic
-///   (trust by exact cwd or ancestor project entries). We intentionally do not
-///   change behavior for non-worktree repos.
-/// - If `cwd` is inside a linked worktree (where the repo root contains a
-///   `.git` file that points at `<main>/.git/worktrees/<name>`), returns the
-///   path to the main repository working directory (parent of `<main>/.git`).
-pub fn resolve_root_git_project_for_trust(cwd: &Path) -> Option<PathBuf> {
-    // Walk up to find the first directory containing a `.git` entry
-    let mut dir = cwd;
-    if !dir.is_dir() {
-        dir = cwd.parent()?;
-    }
-
-    let mut cur = dir.to_path_buf();
-    while cur.parent().is_some() {
-        let git_marker = cur.join(".git");
-        if git_marker.is_dir() {
-            // Regular repo (not a worktree) — do not alter trust target
-            return None;
-        }
-        if git_marker.is_file() {
-            // Likely a worktree checkout. Parse `gitdir: <path>`.
-            if let Ok(s) = std::fs::read_to_string(&git_marker) {
-                let s = s.trim();
-                let prefix = "gitdir:";
-                if let Some(rest) = s.strip_prefix(prefix) {
-                    let target = rest.trim();
-                    let gitdir_path = PathBuf::from(target);
-                    // If this points to `<main>/.git/worktrees/<name>`, then the
-                    // main .git dir is its parent().parent(). The main project
-                    // working directory is then parent of that .git dir.
-                    if let Some(parent) = gitdir_path.parent()
-                        && parent
-                            .file_name()
-                            .map(|n| n == "worktrees")
-                            .unwrap_or(false)
-                        && let Some(main_git_dir) = parent.parent()
-                        && let Some(main_project_root) = main_git_dir.parent()
-                    {
-                        return Some(main_project_root.to_path_buf());
-                    }
-                }
-            }
-            // If we cannot parse or it isn't a worktrees path, do not special‑case.
-            return None;
-        }
-
-        if !cur.pop() {
-            break;
-        }
-    }
-    None
 }
 
 /// Optional overrides for user configuration (e.g., from CLI flags).

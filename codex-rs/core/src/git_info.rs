@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::path::Path;
+use std::path::PathBuf;
 
 use codex_protocol::mcp_protocol::GitSha;
 use futures::future::join_all;
@@ -425,6 +426,67 @@ async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
     Some(diff)
 }
 
+/// Resolve the path that should be used for trust checks when running inside a
+/// git worktree. Similar to `[utils::is_inside_git_repo]`, but resolves to the
+/// root of the main repository.
+///
+/// Behavior:
+/// - If `cwd` is not inside a git repository, returns `None`.
+/// - If `cwd` is inside a regular git repository (with a `.git` directory at
+///   the repository root), returns `None` to fall back to the original logic
+///   (trust by exact cwd or ancestor project entries). We intentionally do not
+///   change behavior for non-worktree repos.
+/// - If `cwd` is inside a linked worktree (where the repo root contains a
+///   `.git` file that points at `<main>/.git/worktrees/<name>`), returns the
+///   path to the main repository working directory (parent of `<main>/.git`).
+pub fn resolve_root_git_project_for_trust(cwd: &Path) -> Option<PathBuf> {
+    // Walk up to find the first directory containing a `.git` entry
+    let mut dir = cwd;
+    if !dir.is_dir() {
+        dir = cwd.parent()?;
+    }
+
+    let mut cur = dir.to_path_buf();
+    while cur.parent().is_some() {
+        let git_marker = cur.join(".git");
+        if git_marker.is_dir() {
+            // Regular repo (not a worktree) — do not alter trust target
+            return None;
+        }
+        if git_marker.is_file() {
+            // Likely a worktree checkout. Parse `gitdir: <path>`.
+            if let Ok(s) = std::fs::read_to_string(&git_marker) {
+                let s = s.trim();
+                let prefix = "gitdir:";
+                if let Some(rest) = s.strip_prefix(prefix) {
+                    let target = rest.trim();
+                    let gitdir_path = PathBuf::from(target);
+                    // If this points to `<main>/.git/worktrees/<name>`, then the
+                    // main .git dir is its parent().parent(). The main project
+                    // working directory is then parent of that .git dir.
+                    if let Some(parent) = gitdir_path.parent()
+                        && parent
+                            .file_name()
+                            .map(|n| n == "worktrees")
+                            .unwrap_or(false)
+                        && let Some(main_git_dir) = parent.parent()
+                        && let Some(main_project_root) = main_git_dir.parent()
+                    {
+                        return Some(main_project_root.to_path_buf());
+                    }
+                }
+            }
+            // If we cannot parse or it isn't a worktrees path, do not special‑case.
+            return None;
+        }
+
+        if !cur.pop() {
+            break;
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -730,6 +792,75 @@ mod tests {
             .await
             .expect("Should collect working tree state");
         assert_eq!(state.sha, GitSha::new(&remote_sha));
+    }
+
+    // --- resolve_root_git_project_for_trust tests ---
+
+    #[test]
+    fn resolve_root_git_project_for_trust_returns_none_outside_repo() {
+        let tmp = TempDir::new().expect("tempdir");
+        assert!(resolve_root_git_project_for_trust(tmp.path()).is_none());
+    }
+
+    #[test]
+    fn resolve_root_git_project_for_trust_regular_repo_returns_none() {
+        let tmp = TempDir::new().expect("tempdir");
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(repo.join("sub/dir")).unwrap();
+        // Simulate a normal repo by creating a .git directory at the root
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+
+        // Calling from repo root or nested dir should leave trust unchanged (None)
+        assert!(resolve_root_git_project_for_trust(&repo).is_none());
+        assert!(resolve_root_git_project_for_trust(&repo.join("sub/dir")).is_none());
+    }
+
+    #[test]
+    fn resolve_root_git_project_for_trust_detects_worktree_and_returns_main_root() {
+        let tmp = TempDir::new().expect("tempdir");
+        let main = tmp.path().join("main_repo");
+        let wt = tmp.path().join("worktree_checkout/subdir");
+        std::fs::create_dir_all(&main).unwrap();
+        std::fs::create_dir_all(&wt).unwrap();
+
+        // Layout that mimics a linked worktree:
+        // - worktree checkout contains a `.git` file pointing to `<main>/.git/worktrees/<name>`
+        // - main repo has a `.git` directory
+        std::fs::create_dir_all(main.join(".git/worktrees/wt1")).unwrap();
+        std::fs::write(
+            wt.parent().unwrap().join(".git"),
+            format!("gitdir: {}\n", main.join(".git/worktrees/wt1").display()),
+        )
+        .unwrap();
+
+        // From the worktree root
+        let expected = Some(main.clone());
+        assert_eq!(
+            resolve_root_git_project_for_trust(wt.parent().unwrap()),
+            expected
+        );
+        // From a nested path inside the worktree
+        assert_eq!(resolve_root_git_project_for_trust(&wt), expected);
+    }
+
+    #[test]
+    fn resolve_root_git_project_for_trust_non_worktrees_gitdir_returns_none() {
+        let tmp = TempDir::new().expect("tempdir");
+        let proj = tmp.path().join("proj");
+        std::fs::create_dir_all(proj.join("nested")).unwrap();
+
+        // `.git` is a file but does not point to a worktrees path
+        std::fs::write(
+            proj.join(".git"),
+            format!(
+                "gitdir: {}\n",
+                tmp.path().join("some/other/location").display()
+            ),
+        )
+        .unwrap();
+
+        assert!(resolve_root_git_project_for_trust(&proj).is_none());
+        assert!(resolve_root_git_project_for_trust(&proj.join("nested")).is_none());
     }
 
     #[tokio::test]
