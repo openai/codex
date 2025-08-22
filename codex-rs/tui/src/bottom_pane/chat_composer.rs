@@ -210,12 +210,11 @@ impl ChatComposer {
         width: u32,
         height: u32,
         format_label: &str,
-    ) -> bool {
+    ) {
         let placeholder = format!("[image {width}x{height} {format_label}]");
         self.textarea.insert_str(&placeholder);
         self.attached_images
             .push(AttachedImage { placeholder, path });
-        true
     }
 
     pub fn take_recent_submission_images(&mut self) -> Vec<std::path::PathBuf> {
@@ -414,7 +413,7 @@ impl ChatComposer {
                                     Some(ext) if ext == "jpg" || ext == "jpeg" => "JPEG",
                                     _ => "IMG",
                                 };
-                                let _ = self.attach_image(path_buf.clone(), w, h, format_label);
+                                self.attach_image(path_buf.clone(), w, h, format_label);
                                 // Add a trailing space to keep typing fluid.
                                 self.textarea.insert_str(" ");
                             }
@@ -1534,7 +1533,7 @@ mod tests {
         let mut composer =
             ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
         let path = std::path::PathBuf::from("/tmp/image1.png");
-        assert!(composer.attach_image(path.clone(), 32, 16, "PNG"));
+        composer.attach_image(path.clone(), 32, 16, "PNG");
         composer.handle_paste(" hi".into());
         let (result, _) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
@@ -1557,7 +1556,7 @@ mod tests {
         let mut composer =
             ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
         let path = std::path::PathBuf::from("/tmp/image2.png");
-        assert!(composer.attach_image(path.clone(), 10, 5, "PNG"));
+        composer.attach_image(path.clone(), 10, 5, "PNG");
         let (result, _) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         match result {
@@ -1580,7 +1579,7 @@ mod tests {
         let mut composer =
             ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
         let path = std::path::PathBuf::from("/tmp/image3.png");
-        assert!(composer.attach_image(path.clone(), 20, 10, "PNG"));
+        composer.attach_image(path.clone(), 20, 10, "PNG");
         let placeholder = composer.attached_images[0].placeholder.clone();
 
         // Case 1: backspace at end
@@ -1591,7 +1590,7 @@ mod tests {
 
         // Re-add and test backspace in middle: should break the placeholder string
         // and drop the image mapping (same as text placeholder behavior).
-        assert!(composer.attach_image(path.clone(), 20, 10, "PNG"));
+        composer.attach_image(path.clone(), 20, 10, "PNG");
         let placeholder2 = composer.attached_images[0].placeholder.clone();
         // Move cursor to roughly middle of placeholder
         if let Some(start_pos) = composer.textarea.text().find(&placeholder2) {
@@ -1619,10 +1618,10 @@ mod tests {
         let path1 = std::path::PathBuf::from("/tmp/image_dup1.png");
         let path2 = std::path::PathBuf::from("/tmp/image_dup2.png");
 
-        assert!(composer.attach_image(path1.clone(), 10, 5, "PNG"));
+        composer.attach_image(path1.clone(), 10, 5, "PNG");
         // separate placeholders with a space for clarity
         composer.handle_paste(" ".into());
-        assert!(composer.attach_image(path2.clone(), 10, 5, "PNG"));
+        composer.attach_image(path2.clone(), 10, 5, "PNG");
 
         let ph = composer.attached_images[0].placeholder.clone();
         let text = composer.textarea.text().to_string();

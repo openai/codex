@@ -306,12 +306,9 @@ impl BottomPane<'_> {
         format_label: &str,
     ) {
         if self.active_view.is_none() {
-            let needs_redraw = self
-                .composer
+            self.composer
                 .attach_image(path, width, height, format_label);
-            if needs_redraw {
-                self.request_redraw();
-            }
+            self.request_redraw();
         }
     }
 
