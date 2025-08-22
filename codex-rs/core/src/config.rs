@@ -7,6 +7,7 @@ use crate::config_types::ShellEnvironmentPolicyToml;
 use crate::config_types::Tui;
 use crate::config_types::UriBasedFileOpener;
 use crate::config_types::Verbosity;
+use crate::git_info::resolve_root_git_project_for_trust;
 use crate::model_family::ModelFamily;
 use crate::model_family::find_family_for_model;
 use crate::model_provider_info::ModelProviderInfo;
@@ -503,10 +504,27 @@ impl ConfigToml {
     pub fn is_cwd_trusted(&self, resolved_cwd: &Path) -> bool {
         let projects = self.projects.clone().unwrap_or_default();
 
-        projects
-            .get(&resolved_cwd.to_string_lossy().to_string())
-            .map(|p| p.trust_level.clone().unwrap_or("".to_string()) == "trusted")
-            .unwrap_or(false)
+        let is_path_trusted = |path: &Path| {
+            let path_str = path.to_string_lossy().to_string();
+            projects
+                .get(&path_str)
+                .map(|p| p.trust_level.as_deref() == Some("trusted"))
+                .unwrap_or(false)
+        };
+
+        // Fast path: exact cwd match
+        if is_path_trusted(resolved_cwd) {
+            return true;
+        }
+
+        // If cwd lives inside a git worktree, check whether the root git project
+        // (the primary repository working directory) is trusted. This lets
+        // worktrees inherit trust from the main project.
+        if let Some(root_project) = resolve_root_git_project_for_trust(resolved_cwd) {
+            return is_path_trusted(&root_project);
+        }
+
+        false
     }
 
     pub fn get_config_profile(
