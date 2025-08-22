@@ -12,6 +12,7 @@ use codex_core::config::Config;
 use codex_core::plan_tool::PlanItemArg;
 use codex_core::plan_tool::StepStatus;
 use codex_core::plan_tool::UpdatePlanArgs;
+use codex_core::project_doc::discover_project_doc_paths;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SandboxPolicy;
@@ -505,20 +506,6 @@ pub(crate) fn new_completed_mcp_tool_call(
     Box::new(PlainHistoryCell { lines })
 }
 
-pub(crate) fn new_diff_output(message: String) -> PlainHistoryCell {
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(Line::from("/diff".magenta()));
-
-    if message.trim().is_empty() {
-        lines.push(Line::from("No changes detected.".italic()));
-    } else {
-        lines.extend(message.lines().map(ansi_escape_line));
-    }
-
-    lines.push(Line::from(""));
-    PlainHistoryCell { lines }
-}
-
 pub(crate) fn new_status_output(
     config: &Config,
     usage: &TokenUsage,
@@ -560,6 +547,54 @@ pub(crate) fn new_status_output(
         "  • Sandbox: ".into(),
         sandbox_name.into(),
     ]));
+
+    // AGENTS.md files discovered via core's project_doc logic
+    let agents_list = {
+        match discover_project_doc_paths(config) {
+            Ok(paths) => {
+                let mut rels: Vec<String> = Vec::new();
+                for p in paths {
+                    let display = if let Some(parent) = p.parent() {
+                        if parent == config.cwd {
+                            "AGENTS.md".to_string()
+                        } else {
+                            let mut cur = config.cwd.as_path();
+                            let mut ups = 0usize;
+                            let mut reached = false;
+                            while let Some(c) = cur.parent() {
+                                if cur == parent {
+                                    reached = true;
+                                    break;
+                                }
+                                cur = c;
+                                ups += 1;
+                            }
+                            if reached {
+                                format!("{}AGENTS.md", "../".repeat(ups))
+                            } else if let Ok(stripped) = p.strip_prefix(&config.cwd) {
+                                stripped.display().to_string()
+                            } else {
+                                p.display().to_string()
+                            }
+                        }
+                    } else {
+                        p.display().to_string()
+                    };
+                    rels.push(display);
+                }
+                rels
+            }
+            Err(_) => Vec::new(),
+        }
+    };
+    if agents_list.is_empty() {
+        lines.push(Line::from("  • AGENTS files: (none)"));
+    } else {
+        lines.push(Line::from(vec![
+            "  • AGENTS files: ".into(),
+            agents_list.join(", ").into(),
+        ]));
+    }
 
     lines.push(Line::from(""));
 
@@ -748,6 +783,12 @@ pub(crate) fn new_mcp_tools_output(
 
 pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
     let lines: Vec<Line<'static>> = vec![vec!["🖐 ".red().bold(), message.into()].into(), "".into()];
+    PlainHistoryCell { lines }
+}
+
+pub(crate) fn new_stream_error_event(message: String) -> PlainHistoryCell {
+    let lines: Vec<Line<'static>> =
+        vec![vec!["⚠ ".magenta().bold(), message.dim()].into(), "".into()];
     PlainHistoryCell { lines }
 }
 

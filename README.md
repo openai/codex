@@ -383,6 +383,13 @@ base_url = "http://my-ollama.example.com:11434/v1"
 
 ### Platform sandboxing details
 
+By default, Codex CLI runs code and shell commands inside a restricted sandbox to protect your system.  
+
+> [!IMPORTANT]
+> Not all tool calls are sandboxed. Specifically, **trusted Model Context Protocol (MCP) tool calls** are executed outside of the sandbox.  
+> This is intentional: MCP tools are explicitly configured and trusted by you, and they often need to connect to **external applications or services** (e.g. issue trackers, databases, messaging systems).  
+> Running them outside the sandbox allows Codex to integrate with these external systems without being blocked by sandbox restrictions.
+
 The mechanism Codex uses to implement the sandbox policy depends on your OS:
 
 - **macOS 12+** uses **Apple Seatbelt** and runs commands using `sandbox-exec` with a profile (`-p`) that corresponds to the `--sandbox` that was specified.
