@@ -506,7 +506,6 @@ pub(crate) fn new_completed_mcp_tool_call(
     Box::new(PlainHistoryCell { lines })
 }
 
-
 pub(crate) fn new_status_output(
     config: &Config,
     usage: &TokenUsage,
