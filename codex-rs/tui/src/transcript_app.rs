@@ -62,6 +62,7 @@ impl TranscriptApp {
 
     fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
         match key_event {
+            // Ctrl+Z is handled at the App level when transcript overlay is active
             KeyEvent {
                 code: KeyCode::Char('q'),
                 kind: KeyEventKind::Press,
