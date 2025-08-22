@@ -296,7 +296,7 @@ they'll be committed to your working directory.
 
 Codex also allows you to use other providers that support the OpenAI Chat Completions (or Responses) API.
 
-To do so, you must first define custom [providers](./config.md#model_providers) in `~/.codex/config.toml`. For example, the provider for a standard Ollama setup would be defined as follows:
+To do so, you must first define custom [providers](./codex-rs/config.md#model_providers) in `~/.codex/config.toml`. For example, the provider for a standard Ollama setup would be defined as follows:
 
 ```toml
 [model_providers.ollama]
@@ -348,8 +348,9 @@ model = "mistral"
 ```
 
 This way, you can specify one command-line argument (.e.g., `--profile o3`, `--profile mistral`) to override multiple settings together.
-
 </details>
+
+
 
 Codex can run fully locally against an OpenAI-compatible OSS host (like Ollama) using the `--oss` flag:
 
@@ -493,8 +494,6 @@ See the Rust documentation on [`RUST_LOG`](https://docs.rs/env_logger/latest/env
 ### DotSlash
 
 The GitHub Release also contains a [DotSlash](https://dotslash-cli.com/) file for the Codex CLI named `codex`. Using a DotSlash file makes it possible to make a lightweight commit to source control to ensure all contributors use the same version of an executable, regardless of what platform they use for development.
-
-</details>
 
 <details>
 <summary><strong>Build from source</strong></summary>
