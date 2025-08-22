@@ -115,16 +115,20 @@ fn create_shell_tool() -> OpenAiTool {
         "command".to_string(),
         JsonSchema::Array {
             items: Box::new(JsonSchema::String { description: None }),
-            description: None,
+            description: Some("The command to execute".to_string()),
         },
     );
     properties.insert(
         "workdir".to_string(),
-        JsonSchema::String { description: None },
+        JsonSchema::String {
+            description: Some("The working directory to execute the command in".to_string()),
+        },
     );
     properties.insert(
-        "timeout".to_string(),
-        JsonSchema::Number { description: None },
+        "timeout_ms".to_string(),
+        JsonSchema::Number {
+            description: Some("The timeout for the command in milliseconds".to_string()),
+        },
     );
 
     OpenAiTool::Function(ResponsesApiTool {
@@ -155,7 +159,7 @@ fn create_shell_tool_for_sandbox(sandbox_policy: &SandboxPolicy) -> OpenAiTool {
         },
     );
     properties.insert(
-        "timeout".to_string(),
+        "timeout_ms".to_string(),
         JsonSchema::Number {
             description: Some("The timeout for the command in milliseconds".to_string()),
         },
