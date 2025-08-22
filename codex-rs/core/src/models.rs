@@ -82,11 +82,14 @@ pub enum ResponseItem {
         output: FunctionCallOutputPayload,
     },
     CustomToolCall {
-        id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
+
         call_id: String,
         name: String,
         input: String,
-        status: String,
     },
     CustomToolCallOutput {
         call_id: String,
