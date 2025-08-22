@@ -25,6 +25,179 @@ fn sse_completed(id: &str) -> String {
     load_sse_fixture_with_id("tests/fixtures/completed_template.json", id)
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn default_system_instructions_contain_apply_patch() {
+    use pretty_assertions::assert_eq;
+
+    let server = MockServer::start().await;
+
+    let sse = sse_completed("resp");
+    let template = ResponseTemplate::new(200)
+        .insert_header("content-type", "text/event-stream")
+        .set_body_raw(sse, "text/event-stream");
+
+    // Expect two POSTs to /v1/responses
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(template)
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    let cwd = TempDir::new().unwrap();
+    let codex_home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&codex_home);
+    config.cwd = cwd.path().to_path_buf();
+    config.model_provider = model_provider;
+    config.user_instructions = Some("be consistent and helpful".to_string());
+
+    let conversation_manager = ConversationManager::default();
+    let codex = conversation_manager
+        .new_conversation_with_auth(config, Some(CodexAuth::from_api_key("Test API Key")))
+        .await
+        .expect("create new conversation")
+        .conversation;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: "hello 1".into(),
+            }],
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: "hello 2".into(),
+            }],
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2, "expected two POST requests");
+
+    let expected_instructions = [
+        include_str!("../prompt.md"),
+        include_str!("../../apply-patch/apply_patch_tool_instructions.md"),
+    ]
+    .join("\n");
+
+    let body0 = requests[0].body_json::<serde_json::Value>().unwrap();
+    assert_eq!(
+        body0["instructions"],
+        serde_json::json!(expected_instructions),
+    );
+    let body1 = requests[1].body_json::<serde_json::Value>().unwrap();
+    assert_eq!(
+        body1["instructions"],
+        serde_json::json!(expected_instructions),
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn prompt_tools_are_consistent_across_requests() {
+    use pretty_assertions::assert_eq;
+
+    let server = MockServer::start().await;
+
+    let sse = sse_completed("resp");
+    let template = ResponseTemplate::new(200)
+        .insert_header("content-type", "text/event-stream")
+        .set_body_raw(sse, "text/event-stream");
+
+    // Expect two POSTs to /v1/responses
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(template)
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    let cwd = TempDir::new().unwrap();
+    let codex_home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&codex_home);
+    config.cwd = cwd.path().to_path_buf();
+    config.model_provider = model_provider;
+    config.user_instructions = Some("be consistent and helpful".to_string());
+    config.include_apply_patch_tool = true;
+    config.include_plan_tool = true;
+
+    let conversation_manager = ConversationManager::default();
+    let codex = conversation_manager
+        .new_conversation_with_auth(config, Some(CodexAuth::from_api_key("Test API Key")))
+        .await
+        .expect("create new conversation")
+        .conversation;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: "hello 1".into(),
+            }],
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: "hello 2".into(),
+            }],
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2, "expected two POST requests");
+
+    let expected_instructions: &str = include_str!("../prompt.md");
+    // our internal implementation is responsible for keeping tools in sync
+    // with the OpenAI schema, so we just verify the tool presence here
+    let expected_tools_names: &[&str] = &["shell", "update_plan", "apply_patch"];
+    fn assert_tool_names(body: &serde_json::Value, expected_names: &[&str]) {
+        assert_eq!(
+            body["tools"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| t["name"].as_str().unwrap().to_string())
+                .collect::<Vec<_>>(),
+            expected_names
+        );
+    }
+
+    let body0 = requests[0].body_json::<serde_json::Value>().unwrap();
+    assert_eq!(
+        body0["instructions"],
+        serde_json::json!(expected_instructions),
+    );
+    assert_tool_names(&body0, expected_tools_names);
+
+    let body1 = requests[1].body_json::<serde_json::Value>().unwrap();
+    assert_eq!(
+        body1["instructions"],
+        serde_json::json!(expected_instructions),
+    );
+    assert_tool_names(&body1, expected_tools_names);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prefixes_context_and_instructions_once_and_consistently_across_requests() {
     use pretty_assertions::assert_eq;
