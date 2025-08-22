@@ -432,8 +432,6 @@ impl ChatComposer {
         }
     }
 
-    /// Returns true if the provided path string ends with a common image
-    /// extension we support for inline attachments.
     fn is_image_path(path: &str) -> bool {
         let lower = path.to_ascii_lowercase();
         lower.ends_with(".png") || lower.ends_with(".jpg") || lower.ends_with(".jpeg")

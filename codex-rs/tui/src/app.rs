@@ -61,7 +61,7 @@ where
                     path,
                     width: info.width,
                     height: info.height,
-                    format_label: info.encoded_format_label,
+                    format_label: info.encoded_format.label(),
                 });
                 return true; // consumed
             }
@@ -762,7 +762,7 @@ mod tests {
         let dummy_info = crate::clipboard_paste::PastedImageInfo {
             width: 10,
             height: 5,
-            encoded_format_label: "PNG",
+            encoded_format: crate::clipboard_paste::EncodedImageFormat::Png,
         };
         let handled = try_handle_ctrl_v_with(&sender, &key_event, || {
             Ok((

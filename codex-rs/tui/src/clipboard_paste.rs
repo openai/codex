@@ -20,11 +20,24 @@ impl std::fmt::Display for PasteImageError {
 }
 impl std::error::Error for PasteImageError {}
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EncodedImageFormat {
+    Png,
+}
+
+impl EncodedImageFormat {
+    pub fn label(self) -> &'static str {
+        match self {
+            EncodedImageFormat::Png => "PNG",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PastedImageInfo {
     pub width: u32,
     pub height: u32,
-    pub encoded_format_label: &'static str, // Always PNG for now.
+    pub encoded_format: EncodedImageFormat, // Always PNG for now.
 }
 
 /// Capture image from system clipboard, encode to PNG, and return bytes + info.
@@ -57,7 +70,7 @@ pub fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageErro
         PastedImageInfo {
             width: w,
             height: h,
-            encoded_format_label: "PNG",
+            encoded_format: EncodedImageFormat::Png,
         },
     ))
 }

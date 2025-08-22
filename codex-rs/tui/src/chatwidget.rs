@@ -563,8 +563,6 @@ impl ChatWidget<'_> {
         tracing::info!(
             "attach_image path={path:?} width={width} height={height} format={format_label}",
         );
-        // Forward to bottom pane; width/height/format currently only affect placeholder text.
-        let _ = (width, height, format_label); // reserved for future use (e.g., status flash)
         self.bottom_pane
             .attach_image(path.clone(), width, height, format_label);
         self.request_redraw();
