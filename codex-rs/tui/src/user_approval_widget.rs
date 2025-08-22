@@ -77,12 +77,12 @@ static COMMAND_SELECT_OPTIONS: LazyLock<Vec<SelectOption>> = LazyLock::new(|| {
         SelectOption {
             label: Line::from(vec![
                 "No, ".into(),
-                "e".underlined(),
-                "n".into(),
-                "d turn".into(),
+                "provide ".into(),
+                "f".underlined(),
+                "eedback".into(),
             ]),
-            description: "Do not run the command and end this turn",
-            key: KeyCode::Char('e'),
+            description: "Do not run the command; provide feedback",
+            key: KeyCode::Char('f'),
             decision: ReviewDecision::Abort,
         },
     ]
@@ -105,12 +105,12 @@ static PATCH_SELECT_OPTIONS: LazyLock<Vec<SelectOption>> = LazyLock::new(|| {
         SelectOption {
             label: Line::from(vec![
                 "No, ".into(),
-                "e".underlined(),
-                "n".into(),
-                "d turn".into(),
+                "provide ".into(),
+                "f".underlined(),
+                "eedback".into(),
             ]),
-            description: "Do not apply the changes and end this turn",
-            key: KeyCode::Char('e'),
+            description: "Do not apply the changes; provide feedback",
+            key: KeyCode::Char('f'),
             decision: ReviewDecision::Abort,
         },
     ]
