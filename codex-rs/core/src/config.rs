@@ -274,12 +274,14 @@ pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Re
     // Ensure top-level `projects` exists as a non-inline, explicit table. If it
     // exists but was previously represented as a non-table (e.g., inline),
     // replace it with an explicit table.
+    let mut created_projects_table = false;
     {
         let root = doc.as_table_mut();
         let needs_table = !root.contains_key("projects")
             || root.get("projects").and_then(|i| i.as_table()).is_none();
         if needs_table {
             root.insert("projects", toml_edit::table());
+            created_projects_table = true;
         }
     }
     let Some(projects_tbl) = doc["projects"].as_table_mut() else {
@@ -287,6 +289,12 @@ pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Re
             "projects table missing after initialization"
         ));
     };
+
+    // If we created the `projects` table ourselves, keep it implicit so we
+    // don't render a standalone `[projects]` header.
+    if created_projects_table {
+        projects_tbl.set_implicit(true);
+    }
 
     // Ensure the per-project entry is its own explicit table. If it exists but
     // is not a table (e.g., an inline table), replace it with an explicit table.
@@ -1241,9 +1249,7 @@ disable_response_storage = true
             format!("\"{}\"", raw_path)
         };
         let expected = format!(
-            r#"[projects]
-
-[projects.{path_str}]
+            r#"[projects.{path_str}]
 trust_level = "trusted"
 "#
         );
