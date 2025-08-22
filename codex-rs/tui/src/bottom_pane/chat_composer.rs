@@ -31,11 +31,11 @@ use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
-use std::time::Duration;
-use std::time::Instant;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
+use std::time::Instant;
 
 // Heuristic thresholds for detecting paste-like input bursts.
 const PASTE_BURST_MIN_CHARS: u16 = 3;
