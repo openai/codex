@@ -204,7 +204,6 @@ impl From<Vec<InputItem>> for ResponseInputItem {
                             None
                         }
                     },
-                    _ => None,
                 })
                 .collect::<Vec<ContentItem>>(),
         }
