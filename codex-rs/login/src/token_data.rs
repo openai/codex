@@ -25,15 +25,30 @@ pub struct TokenData {
 impl TokenData {
     /// Returns true if this is a plan that should use the traditional
     /// "metered" billing via an API key.
-    pub(crate) fn should_use_api_key(&self, preferred_auth_method: AuthMode) -> bool {
+    pub(crate) fn should_use_api_key(
+        &self,
+        preferred_auth_method: AuthMode,
+        is_openai_email: bool,
+    ) -> bool {
         if preferred_auth_method == AuthMode::ApiKey {
             return true;
+        }
+        // If the email is an OpenAI email, use AuthMode::ChatGPT unless preferred_auth_method is AuthMode::ApiKey.
+        if is_openai_email {
+            return false;
         }
 
         self.id_token
             .chatgpt_plan_type
             .as_ref()
             .is_none_or(|plan| plan.is_plan_that_should_use_api_key())
+    }
+
+    pub fn is_openai_email(&self) -> bool {
+        self.id_token
+            .email
+            .as_deref()
+            .is_some_and(|email| email.trim().to_ascii_lowercase().ends_with("@openai.com"))
     }
 }
 

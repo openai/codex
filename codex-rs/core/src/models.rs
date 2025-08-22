@@ -197,10 +197,8 @@ pub struct ShellToolCallParams {
     pub command: Vec<String>,
     pub workdir: Option<String>,
 
-    /// This is the maximum time in seconds that the command is allowed to run.
-    #[serde(rename = "timeout")]
-    // The wire format uses `timeout`, which has ambiguous units, so we use
-    // `timeout_ms` as the field name so it is clear in code.
+    /// This is the maximum time in milliseconds that the command is allowed to run.
+    #[serde(alias = "timeout")]
     pub timeout_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub with_escalated_permissions: Option<bool>,

@@ -723,7 +723,6 @@ dependencies = [
  "dirs",
  "env-flags",
  "eventsource-stream",
- "fs2",
  "futures",
  "landlock",
  "libc",
@@ -758,6 +757,7 @@ dependencies = [
  "tree-sitter-bash",
  "uuid",
  "walkdir",
+ "which",
  "whoami",
  "wildmatch",
  "wiremock",
@@ -843,6 +843,7 @@ version = "0.0.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
+ "codex-protocol",
  "pretty_assertions",
  "rand 0.8.5",
  "reqwest",
@@ -878,6 +879,7 @@ dependencies = [
  "anyhow",
  "assert_cmd",
  "codex-arg0",
+ "codex-common",
  "codex-core",
  "codex-login",
  "codex-protocol",
@@ -947,6 +949,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "arboard",
+ "async-stream",
  "base64 0.22.1",
  "chrono",
  "clap",
@@ -983,6 +986,7 @@ dependencies = [
  "tempfile",
  "textwrap 0.16.2",
  "tokio",
+ "tokio-stream",
  "tracing",
  "tracing-appender",
  "tracing-subscriber",
@@ -1183,6 +1187,7 @@ checksum = "829d955a0bb380ef178a640b91779e3987da38c9aea133b20614cfed8cdea9c6"
 dependencies = [
  "bitflags 2.9.1",
  "crossterm_winapi",
+ "futures-core",
  "mio",
  "parking_lot",
  "rustix 0.38.44",
@@ -1774,16 +1779,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e13624c2627564efccf4934284bdd98cbaa14e79b0b5a141218e507b3a823456"
 dependencies = [
  "percent-encoding",
-]
-
-[[package]]
-name = "fs2"
-version = "0.4.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9564fc758e15025b46aa6643b1b77d047d1a56a1aea6e01002ac0c7026876213"
-dependencies = [
- "libc",
- "winapi",
 ]
 
 [[package]]
@@ -5697,6 +5692,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a751b3277700db47d3e574514de2eced5e54dc8a5436a3bf7a0b248b2cee16f3"
 
 [[package]]
+name = "which"
+version = "6.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b4ee928febd44d98f2f459a4a79bd4d928591333a494a10a868418ac1b39cf1f"
+dependencies = [
+ "either",
+ "home",
+ "rustix 0.38.44",
+ "winsafe",
+]
+
+[[package]]
 name = "whoami"
 version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6164,6 +6171,12 @@ checksum = "f3edebf492c8125044983378ecb5766203ad3b4c2f7a922bd7dd207f6d443e95"
 dependencies = [
  "memchr",
 ]
+
+[[package]]
+name = "winsafe"
+version = "0.0.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d135d17ab770252ad95e9a872d365cf3090e3be864a34ab46f48555993efc904"
 
 [[package]]
 name = "wiremock"

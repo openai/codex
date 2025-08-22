@@ -13,6 +13,7 @@ use crate::protocol::TurnAbortReason;
 use mcp_types::RequestId;
 use serde::Deserialize;
 use serde::Serialize;
+use strum_macros::Display;
 use ts_rs::TS;
 use uuid::Uuid;
 
@@ -24,6 +25,23 @@ impl Display for ConversationId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, TS)]
+#[ts(type = "string")]
+pub struct GitSha(pub String);
+
+impl GitSha {
+    pub fn new(sha: &str) -> Self {
+        Self(sha.to_string())
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, TS)]
+#[serde(rename_all = "lowercase")]
+pub enum AuthMode {
+    ApiKey,
+    ChatGPT,
 }
 
 /// Request from the client to the server.
@@ -68,6 +86,19 @@ pub enum ClientRequest {
         #[serde(rename = "id")]
         request_id: RequestId,
         params: CancelLoginChatGptParams,
+    },
+    LogoutChatGpt {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+    },
+    GetAuthStatus {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+    },
+    GitDiffToRemote {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: GitDiffToRemoteParams,
     },
 }
 
@@ -139,16 +170,11 @@ pub struct LoginChatGptResponse {
     pub auth_url: String,
 }
 
-// Event name for notifying client of login completion or failure.
-pub const LOGIN_CHATGPT_COMPLETE_EVENT: &str = "codex/event/login_chatgpt_complete";
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct LoginChatGptCompleteNotification {
-    pub login_id: Uuid,
-    pub success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
+pub struct GitDiffToRemoteResponse {
+    pub sha: GitSha,
+    pub diff: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
@@ -159,7 +185,37 @@ pub struct CancelLoginChatGptParams {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+pub struct GitDiffToRemoteParams {
+    pub cwd: PathBuf,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct CancelLoginChatGptResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct LogoutChatGptParams {
+    pub login_id: Uuid,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct LogoutChatGptResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GetAuthStatusParams {
+    pub login_id: Uuid,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GetAuthStatusResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_method: Option<AuthMode>,
+    pub preferred_auth_method: AuthMode,
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
@@ -291,6 +347,34 @@ pub struct ExecCommandApprovalResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 pub struct ApplyPatchApprovalResponse {
     pub decision: ReviewDecision,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginChatGptCompleteNotification {
+    pub login_id: Uuid,
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthStatusChangeNotification {
+    /// Current authentication method; omitted if signed out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_method: Option<AuthMode>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS, Display)]
+#[serde(tag = "type", content = "data", rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum ServerNotification {
+    /// Authentication status changed
+    AuthStatusChange(AuthStatusChangeNotification),
+
+    /// ChatGPT login flow completed
+    LoginChatGptComplete(LoginChatGptCompleteNotification),
 }
 
 #[cfg(test)]

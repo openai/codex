@@ -35,6 +35,8 @@ pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 
 const CONFIG_TOML_FILE: &str = "config.toml";
 
+const DEFAULT_RESPONSES_ORIGINATOR_HEADER: &str = "codex_cli_rs";
+
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -140,8 +142,8 @@ pub struct Config {
     /// When this program is invoked, arg0 will be set to `codex-linux-sandbox`.
     pub codex_linux_sandbox_exe: Option<PathBuf>,
 
-    /// If not "none", the value to use for `reasoning.effort` when making a
-    /// request using the Responses API.
+    /// Value to use for `reasoning.effort` when making a request using the
+    /// Responses API.
     pub model_reasoning_effort: ReasoningEffort,
 
     /// If not "none", the value to use for `reasoning.summary` when making a
@@ -163,7 +165,7 @@ pub struct Config {
     pub include_apply_patch_tool: bool,
 
     /// The value for the `originator` header included with Responses API requests.
-    pub internal_originator: Option<String>,
+    pub responses_originator_header: String,
 
     /// If set to `true`, the API key will be signed with the `originator` header.
     pub preferred_auth_method: AuthMode,
@@ -257,10 +259,53 @@ pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Re
         Err(e) => return Err(e.into()),
     };
 
-    // Mark the project as trusted. toml_edit is very good at handling
-    // missing properties
+    // Ensure we render a human-friendly structure:
+    //
+    // [projects]
+    // [projects."/path/to/project"]
+    // trust_level = "trusted"
+    //
+    // rather than inline tables like:
+    //
+    // [projects]
+    // "/path/to/project" = { trust_level = "trusted" }
     let project_key = project_path.to_string_lossy().to_string();
-    doc["projects"][project_key.as_str()]["trust_level"] = toml_edit::value("trusted");
+
+    // Ensure top-level `projects` exists as a non-inline, explicit table. If it
+    // exists but was previously represented as a non-table (e.g., inline),
+    // replace it with an explicit table.
+    {
+        let root = doc.as_table_mut();
+        let needs_table = !root.contains_key("projects")
+            || root.get("projects").and_then(|i| i.as_table()).is_none();
+        if needs_table {
+            root.insert("projects", toml_edit::table());
+        }
+    }
+    let Some(projects_tbl) = doc["projects"].as_table_mut() else {
+        return Err(anyhow::anyhow!(
+            "projects table missing after initialization"
+        ));
+    };
+
+    // Ensure the per-project entry is its own explicit table. If it exists but
+    // is not a table (e.g., an inline table), replace it with an explicit table.
+    let needs_proj_table = !projects_tbl.contains_key(project_key.as_str())
+        || projects_tbl
+            .get(project_key.as_str())
+            .and_then(|i| i.as_table())
+            .is_none();
+    if needs_proj_table {
+        projects_tbl.insert(project_key.as_str(), toml_edit::table());
+    }
+    let Some(proj_tbl) = projects_tbl
+        .get_mut(project_key.as_str())
+        .and_then(|i| i.as_table_mut())
+    else {
+        return Err(anyhow::anyhow!("project table missing for {}", project_key));
+    };
+    proj_tbl.set_implicit(false);
+    proj_tbl["trust_level"] = toml_edit::value("trusted");
 
     // ensure codex_home exists
     std::fs::create_dir_all(codex_home)?;
@@ -410,7 +455,7 @@ pub struct ConfigToml {
     pub experimental_instructions_file: Option<PathBuf>,
 
     /// The value for the `originator` header included with Responses API requests.
-    pub internal_originator: Option<String>,
+    pub responses_originator_header_internal_override: Option<String>,
 
     pub projects: Option<HashMap<String, ProjectConfig>>,
 
@@ -625,6 +670,10 @@ impl Config {
         let include_apply_patch_tool_val =
             include_apply_patch_tool.unwrap_or(model_family.uses_apply_patch_tool);
 
+        let responses_originator_header: String = cfg
+            .responses_originator_header_internal_override
+            .unwrap_or(DEFAULT_RESPONSES_ORIGINATOR_HEADER.to_owned());
+
         let config = Self {
             model,
             model_family,
@@ -678,7 +727,7 @@ impl Config {
             experimental_resume,
             include_plan_tool: include_plan_tool.unwrap_or(false),
             include_apply_patch_tool: include_apply_patch_tool_val,
-            internal_originator: cfg.internal_originator,
+            responses_originator_header,
             preferred_auth_method: cfg.preferred_auth_method.unwrap_or(AuthMode::ChatGPT),
         };
         Ok(config)
@@ -759,10 +808,10 @@ fn default_model() -> String {
 pub fn find_codex_home() -> std::io::Result<PathBuf> {
     // Honor the `CODEX_HOME` environment variable when it is set to allow users
     // (and tests) to override the default location.
-    if let Ok(val) = std::env::var("CODEX_HOME") {
-        if !val.is_empty() {
-            return PathBuf::from(val).canonicalize();
-        }
+    if let Ok(val) = std::env::var("CODEX_HOME")
+        && !val.is_empty()
+    {
+        return PathBuf::from(val).canonicalize();
     }
 
     let mut p = home_dir().ok_or_else(|| {
@@ -1043,7 +1092,7 @@ disable_response_storage = true
                 base_instructions: None,
                 include_plan_tool: false,
                 include_apply_patch_tool: false,
-                internal_originator: None,
+                responses_originator_header: "codex_cli_rs".to_string(),
                 preferred_auth_method: AuthMode::ChatGPT,
             },
             o3_profile_config
@@ -1096,7 +1145,7 @@ disable_response_storage = true
             base_instructions: None,
             include_plan_tool: false,
             include_apply_patch_tool: false,
-            internal_originator: None,
+            responses_originator_header: "codex_cli_rs".to_string(),
             preferred_auth_method: AuthMode::ChatGPT,
         };
 
@@ -1164,7 +1213,7 @@ disable_response_storage = true
             base_instructions: None,
             include_plan_tool: false,
             include_apply_patch_tool: false,
-            internal_originator: None,
+            responses_originator_header: "codex_cli_rs".to_string(),
             preferred_auth_method: AuthMode::ChatGPT,
         };
 
@@ -1172,4 +1221,96 @@ disable_response_storage = true
 
         Ok(())
     }
+
+    #[test]
+    fn test_set_project_trusted_writes_explicit_tables() -> anyhow::Result<()> {
+        let codex_home = TempDir::new().unwrap();
+        let project_dir = TempDir::new().unwrap();
+
+        // Call the function under test
+        set_project_trusted(codex_home.path(), project_dir.path())?;
+
+        // Read back the generated config.toml
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let contents = std::fs::read_to_string(&config_path)?;
+
+        // Verify it does not use inline tables for the project entry
+        assert!(
+            !contents.contains("{ trust_level"),
+            "config.toml should not use inline tables:\n{}",
+            contents
+        );
+
+        // Verify the explicit table for the project exists. toml_edit may choose
+        // either basic (double-quoted) or literal (single-quoted) strings for keys
+        // containing backslashes (e.g., on Windows). Accept both forms.
+        let path_str = project_dir.path().to_string_lossy();
+        let project_key_double = format!("[projects.\"{}\"]", path_str);
+        let project_key_single = format!("[projects.'{}']", path_str);
+        assert!(
+            contents.contains(&project_key_double) || contents.contains(&project_key_single),
+            "missing explicit project table header: expected to find `{}` or `{}` in:\n{}",
+            project_key_double,
+            project_key_single,
+            contents
+        );
+
+        // Verify the trust_level entry
+        assert!(
+            contents.contains("trust_level = \"trusted\""),
+            "missing trust_level entry in:\n{}",
+            contents
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_set_project_trusted_converts_inline_to_explicit() -> anyhow::Result<()> {
+        let codex_home = TempDir::new().unwrap();
+        let project_dir = TempDir::new().unwrap();
+
+        // Seed config.toml with an inline project entry under [projects]
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let path_str = project_dir.path().to_string_lossy();
+        // Use a literal-quoted key so Windows backslashes don't require escaping
+        let initial = format!(
+            "[projects]\n'{}' = {{ trust_level = \"untrusted\" }}\n",
+            path_str
+        );
+        std::fs::create_dir_all(codex_home.path())?;
+        std::fs::write(&config_path, initial)?;
+
+        // Run the function; it should convert to explicit tables and set trusted
+        set_project_trusted(codex_home.path(), project_dir.path())?;
+
+        let contents = std::fs::read_to_string(&config_path)?;
+
+        // Should not contain inline table representation anymore (accept both quote styles)
+        let inline_double = format!("\"{}\" = {{ trust_level = \"trusted\" }}", path_str);
+        let inline_single = format!("'{}' = {{ trust_level = \"trusted\" }}", path_str);
+        assert!(
+            !contents.contains(&inline_double) && !contents.contains(&inline_single),
+            "config.toml should not contain inline project table anymore:\n{}",
+            contents
+        );
+
+        // And explicit child table header for the project
+        let project_key_double = format!("[projects.\"{}\"]", path_str);
+        let project_key_single = format!("[projects.'{}']", path_str);
+        assert!(
+            contents.contains(&project_key_double) || contents.contains(&project_key_single),
+            "missing explicit project table header: expected to find `{}` or `{}` in:\n{}",
+            project_key_double,
+            project_key_single,
+            contents
+        );
+
+        // And the trust level value
+        assert!(contents.contains("trust_level = \"trusted\""));
+
+        Ok(())
+    }
+
+    // No test enforcing the presence of a standalone [projects] header.
 }

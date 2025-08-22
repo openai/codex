@@ -19,6 +19,7 @@ use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
+use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -30,7 +31,6 @@ use std::io::BufRead;
 use std::io::BufReader;
 use std::io::Read;
 use std::path::PathBuf;
-use std::sync::mpsc::channel;
 use tokio::sync::mpsc::unbounded_channel;
 
 fn test_config() -> Config {
@@ -45,7 +45,7 @@ fn test_config() -> Config {
 
 #[test]
 fn final_answer_without_newline_is_flushed_immediately() {
-    let (mut chat, rx, _op_rx) = make_chatwidget_manual();
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
     // Set up a VT100 test terminal to capture ANSI visual output
     let width: u16 = 80;
@@ -73,7 +73,7 @@ fn final_answer_without_newline_is_flushed_immediately() {
     });
 
     // Drain history insertions and verify the final line is present.
-    let cells = drain_insert_history(&rx);
+    let cells = drain_insert_history(&mut rx);
     assert!(
         cells.iter().any(|lines| {
             let s = lines
@@ -101,27 +101,36 @@ fn final_answer_without_newline_is_flushed_immediately() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn helpers_are_available_and_do_not_panic() {
-    let (tx_raw, _rx) = channel::<AppEvent>();
+    let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
     let tx = AppEventSender::new(tx_raw);
     let cfg = test_config();
     let conversation_manager = Arc::new(ConversationManager::default());
-    let mut w = ChatWidget::new(cfg, conversation_manager, tx, None, Vec::new(), false);
+    let mut w = ChatWidget::new(
+        cfg,
+        conversation_manager,
+        crate::tui::FrameRequester::test_dummy(),
+        tx,
+        None,
+        Vec::new(),
+        false,
+    );
     // Basic construction sanity.
     let _ = &mut w;
 }
 
 // --- Helpers for tests that need direct construction and event draining ---
 fn make_chatwidget_manual() -> (
-    ChatWidget<'static>,
-    std::sync::mpsc::Receiver<AppEvent>,
+    ChatWidget,
+    tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
     tokio::sync::mpsc::UnboundedReceiver<Op>,
 ) {
-    let (tx_raw, rx) = channel::<AppEvent>();
+    let (tx_raw, rx) = unbounded_channel::<AppEvent>();
     let app_event_tx = AppEventSender::new(tx_raw);
     let (op_tx, op_rx) = unbounded_channel::<Op>();
     let cfg = test_config();
     let bottom = BottomPane::new(BottomPaneParams {
         app_event_tx: app_event_tx.clone(),
+        frame_requester: crate::tui::FrameRequester::test_dummy(),
         has_input_focus: true,
         enhanced_keys_supported: false,
         placeholder_text: "Ask Codex to do anything".to_string(),
@@ -136,24 +145,28 @@ fn make_chatwidget_manual() -> (
         total_token_usage: TokenUsage::default(),
         last_token_usage: TokenUsage::default(),
         stream: StreamController::new(cfg),
-        last_stream_kind: None,
         running_commands: HashMap::new(),
         pending_exec_completions: Vec::new(),
         task_complete_pending: false,
         interrupts: InterruptManager::new(),
         needs_redraw: false,
+        reasoning_buffer: String::new(),
+        full_reasoning_buffer: String::new(),
         session_id: None,
+        frame_requester: crate::tui::FrameRequester::test_dummy(),
     };
     (widget, rx, op_rx)
 }
 
 fn drain_insert_history(
-    rx: &std::sync::mpsc::Receiver<AppEvent>,
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
 ) -> Vec<Vec<ratatui::text::Line<'static>>> {
     let mut out = Vec::new();
     while let Ok(ev) = rx.try_recv() {
-        if let AppEvent::InsertHistory(lines) = ev {
-            out.push(lines);
+        match ev {
+            AppEvent::InsertHistoryLines(lines) => out.push(lines),
+            AppEvent::InsertHistoryCell(cell) => out.push(cell.display_lines()),
+            _ => {}
         }
     }
     out
@@ -196,7 +209,7 @@ fn open_fixture(name: &str) -> std::fs::File {
 
 #[test]
 fn exec_history_cell_shows_working_then_completed() {
-    let (mut chat, rx, _op_rx) = make_chatwidget_manual();
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
     // Begin command
     chat.handle_codex_event(Event {
@@ -226,7 +239,7 @@ fn exec_history_cell_shows_working_then_completed() {
         }),
     });
 
-    let cells = drain_insert_history(&rx);
+    let cells = drain_insert_history(&mut rx);
     assert_eq!(
         cells.len(),
         1,
@@ -241,7 +254,7 @@ fn exec_history_cell_shows_working_then_completed() {
 
 #[test]
 fn exec_history_cell_shows_working_then_failed() {
-    let (mut chat, rx, _op_rx) = make_chatwidget_manual();
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
     // Begin command
     chat.handle_codex_event(Event {
@@ -271,7 +284,7 @@ fn exec_history_cell_shows_working_then_failed() {
         }),
     });
 
-    let cells = drain_insert_history(&rx);
+    let cells = drain_insert_history(&mut rx);
     assert_eq!(
         cells.len(),
         1,
@@ -286,7 +299,7 @@ fn exec_history_cell_shows_working_then_failed() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn binary_size_transcript_matches_ideal_fixture() {
-    let (mut chat, rx, _op_rx) = make_chatwidget_manual();
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
     // Set up a VT100 test terminal to capture ANSI visual output
     let width: u16 = 80;
@@ -327,23 +340,8 @@ async fn binary_size_transcript_matches_ideal_fixture() {
                     let ev: Event = serde_json::from_value(payload.clone()).expect("parse");
                     chat.handle_codex_event(ev);
                     while let Ok(app_ev) = rx.try_recv() {
-                        if let AppEvent::InsertHistory(lines) = app_ev {
-                            transcript.push_str(&lines_to_single_string(&lines));
-                            crate::insert_history::insert_history_lines_to_writer(
-                                &mut terminal,
-                                &mut ansi,
-                                lines,
-                            );
-                        }
-                    }
-                }
-            }
-            "app_event" => {
-                if let Some(variant) = v.get("variant").and_then(|s| s.as_str()) {
-                    if variant == "CommitTick" {
-                        chat.on_commit_tick();
-                        while let Ok(app_ev) = rx.try_recv() {
-                            if let AppEvent::InsertHistory(lines) = app_ev {
+                        match app_ev {
+                            AppEvent::InsertHistoryLines(lines) => {
                                 transcript.push_str(&lines_to_single_string(&lines));
                                 crate::insert_history::insert_history_lines_to_writer(
                                     &mut terminal,
@@ -351,6 +349,45 @@ async fn binary_size_transcript_matches_ideal_fixture() {
                                     lines,
                                 );
                             }
+                            AppEvent::InsertHistoryCell(cell) => {
+                                let lines = cell.display_lines();
+                                transcript.push_str(&lines_to_single_string(&lines));
+                                crate::insert_history::insert_history_lines_to_writer(
+                                    &mut terminal,
+                                    &mut ansi,
+                                    lines,
+                                );
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            "app_event" => {
+                if let Some(variant) = v.get("variant").and_then(|s| s.as_str())
+                    && variant == "CommitTick"
+                {
+                    chat.on_commit_tick();
+                    while let Ok(app_ev) = rx.try_recv() {
+                        match app_ev {
+                            AppEvent::InsertHistoryLines(lines) => {
+                                transcript.push_str(&lines_to_single_string(&lines));
+                                crate::insert_history::insert_history_lines_to_writer(
+                                    &mut terminal,
+                                    &mut ansi,
+                                    lines,
+                                );
+                            }
+                            AppEvent::InsertHistoryCell(cell) => {
+                                let lines = cell.display_lines();
+                                transcript.push_str(&lines_to_single_string(&lines));
+                                crate::insert_history::insert_history_lines_to_writer(
+                                    &mut terminal,
+                                    &mut ansi,
+                                    lines,
+                                );
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -366,6 +403,11 @@ async fn binary_size_transcript_matches_ideal_fixture() {
         .expect("read ideal-binary-response.txt");
     // Normalize line endings for Windows vs. Unix checkouts
     let ideal = ideal.replace("\r\n", "\n");
+    let ideal_first_line = ideal
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .to_string();
 
     // Build the final VT100 visual by parsing the ANSI stream. Trim trailing spaces per line
     // and drop trailing empty lines so the shape matches the ideal fixture exactly.
@@ -391,21 +433,67 @@ async fn binary_size_transcript_matches_ideal_fixture() {
     while lines.last().is_some_and(|l| l.is_empty()) {
         lines.pop();
     }
-    // Compare only after the last session banner marker, and start at the next 'thinking' line.
+    // Compare only after the last session banner marker. Skip the transient
+    // 'thinking' header if present, and start from the first non-empty line
+    // of content that follows.
     const MARKER_PREFIX: &str = ">_ You are using OpenAI Codex in ";
     let last_marker_line_idx = lines
         .iter()
         .rposition(|l| l.starts_with(MARKER_PREFIX))
         .expect("marker not found in visible output");
-    let thinking_line_idx = (last_marker_line_idx + 1..lines.len())
-        .find(|&idx| lines[idx].trim_start() == "thinking")
-        .expect("no 'thinking' line found after marker");
+    // Anchor to the first ideal line if present; otherwise use heuristics.
+    let start_idx = (last_marker_line_idx + 1..lines.len())
+        .find(|&idx| lines[idx].trim_start() == ideal_first_line)
+        .or_else(|| {
+            // Prefer the first assistant content line (blockquote '>' prefix) after the marker.
+            (last_marker_line_idx + 1..lines.len())
+                .find(|&idx| lines[idx].trim_start().starts_with('>'))
+        })
+        .unwrap_or_else(|| {
+            // Fallback: first non-empty, non-'thinking' line
+            (last_marker_line_idx + 1..lines.len())
+                .find(|&idx| {
+                    let t = lines[idx].trim_start();
+                    !t.is_empty() && t != "thinking"
+                })
+                .expect("no content line found after marker")
+        });
 
     let mut compare_lines: Vec<String> = Vec::new();
-    // Ensure the first line is exactly 'thinking' without leading spaces to match the fixture
-    compare_lines.push(lines[thinking_line_idx].trim_start().to_string());
-    compare_lines.extend(lines[(thinking_line_idx + 1)..].iter().cloned());
+    // Ensure the first line is trimmed-left to match the fixture shape.
+    compare_lines.push(lines[start_idx].trim_start().to_string());
+    compare_lines.extend(lines[(start_idx + 1)..].iter().cloned());
     let visible_after = compare_lines.join("\n");
+
+    // Normalize: drop a leading 'thinking' line if present in either side to
+    // avoid coupling to whether the reasoning header is rendered in history.
+    fn drop_leading_thinking(s: &str) -> String {
+        let mut it = s.lines();
+        let first = it.next();
+        let rest = it.collect::<Vec<_>>().join("\n");
+        if first.is_some_and(|l| l.trim() == "thinking") {
+            rest
+        } else {
+            s.to_string()
+        }
+    }
+    let visible_after = drop_leading_thinking(&visible_after);
+    let ideal = drop_leading_thinking(&ideal);
+
+    // Normalize: strip leading Markdown blockquote markers ('>' or '> ') which
+    // may be present in rendered transcript lines but not in the ideal text.
+    fn strip_blockquotes(s: &str) -> String {
+        s.lines()
+            .map(|l| {
+                l.strip_prefix("> ")
+                    .or_else(|| l.strip_prefix('>'))
+                    .unwrap_or(l)
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+    let visible_after = strip_blockquotes(&visible_after);
+    let ideal = strip_blockquotes(&ideal);
 
     // Optionally update the fixture when env var is set
     if std::env::var("UPDATE_IDEAL").as_deref() == Ok("1") {
@@ -423,7 +511,7 @@ async fn binary_size_transcript_matches_ideal_fixture() {
 
 #[test]
 fn apply_patch_events_emit_history_cells() {
-    let (mut chat, rx, _op_rx) = make_chatwidget_manual();
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
     // 1) Approval request -> proposed patch summary cell
     let mut changes = HashMap::new();
@@ -443,7 +531,7 @@ fn apply_patch_events_emit_history_cells() {
         id: "s1".into(),
         msg: EventMsg::ApplyPatchApprovalRequest(ev),
     });
-    let cells = drain_insert_history(&rx);
+    let cells = drain_insert_history(&mut rx);
     assert!(!cells.is_empty(), "expected pending patch cell to be sent");
     let blob = lines_to_single_string(cells.last().unwrap());
     assert!(
@@ -468,7 +556,7 @@ fn apply_patch_events_emit_history_cells() {
         id: "s1".into(),
         msg: EventMsg::PatchApplyBegin(begin),
     });
-    let cells = drain_insert_history(&rx);
+    let cells = drain_insert_history(&mut rx);
     assert!(!cells.is_empty(), "expected applying patch cell to be sent");
     let blob = lines_to_single_string(cells.last().unwrap());
     assert!(
@@ -487,7 +575,7 @@ fn apply_patch_events_emit_history_cells() {
         id: "s1".into(),
         msg: EventMsg::PatchApplyEnd(end),
     });
-    let cells = drain_insert_history(&rx);
+    let cells = drain_insert_history(&mut rx);
     assert!(!cells.is_empty(), "expected applied patch cell to be sent");
     let blob = lines_to_single_string(cells.last().unwrap());
     assert!(
@@ -498,7 +586,7 @@ fn apply_patch_events_emit_history_cells() {
 
 #[test]
 fn apply_patch_approval_sends_op_with_submission_id() {
-    let (mut chat, rx, _op_rx) = make_chatwidget_manual();
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
     // Simulate receiving an approval request with a distinct submission id and call id
     let mut changes = HashMap::new();
     changes.insert(
@@ -539,7 +627,7 @@ fn apply_patch_approval_sends_op_with_submission_id() {
 
 #[test]
 fn apply_patch_full_flow_integration_like() {
-    let (mut chat, rx, mut op_rx) = make_chatwidget_manual();
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual();
 
     // 1) Backend requests approval
     let mut changes = HashMap::new();
@@ -655,7 +743,7 @@ fn apply_patch_untrusted_shows_approval_modal() {
 
 #[test]
 fn apply_patch_request_shows_diff_summary() {
-    let (mut chat, rx, _op_rx) = make_chatwidget_manual();
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
     // Ensure we are in OnRequest so an approval is surfaced
     chat.config.approval_policy = codex_core::protocol::AskForApproval::OnRequest;
@@ -680,7 +768,7 @@ fn apply_patch_request_shows_diff_summary() {
     });
 
     // Drain history insertions and verify the diff summary is present
-    let cells = drain_insert_history(&rx);
+    let cells = drain_insert_history(&mut rx);
     assert!(
         !cells.is_empty(),
         "expected a history cell with the proposed patch summary"
@@ -695,14 +783,14 @@ fn apply_patch_request_shows_diff_summary() {
 
     // Per-file summary line should include the file path and counts
     assert!(
-        blob.contains("README.md (+2 -0)"),
+        blob.contains("README.md"),
         "missing per-file diff summary: {blob:?}"
     );
 }
 
 #[test]
 fn plan_update_renders_history_cell() {
-    let (mut chat, rx, _op_rx) = make_chatwidget_manual();
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
     let update = UpdatePlanArgs {
         explanation: Some("Adapting plan".to_string()),
         plan: vec![
@@ -724,7 +812,7 @@ fn plan_update_renders_history_cell() {
         id: "sub-1".into(),
         msg: EventMsg::PlanUpdate(update),
     });
-    let cells = drain_insert_history(&rx);
+    let cells = drain_insert_history(&mut rx);
     assert!(!cells.is_empty(), "expected plan update cell to be sent");
     let blob = lines_to_single_string(cells.last().unwrap());
     assert!(
@@ -737,8 +825,27 @@ fn plan_update_renders_history_cell() {
 }
 
 #[test]
-fn headers_emitted_on_stream_begin_for_answer_and_reasoning() {
-    let (mut chat, rx, _op_rx) = make_chatwidget_manual();
+fn stream_error_is_rendered_to_history() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+    let msg = "stream error: stream disconnected before completion: idle timeout waiting for SSE; retrying 1/5 in 211ms…";
+    chat.handle_codex_event(Event {
+        id: "sub-1".into(),
+        msg: EventMsg::StreamError(StreamErrorEvent {
+            message: msg.to_string(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(!cells.is_empty(), "expected a history cell for StreamError");
+    let blob = lines_to_single_string(cells.last().unwrap());
+    assert!(blob.contains("⚠ "));
+    assert!(blob.contains("stream error:"));
+    assert!(blob.contains("idle timeout waiting for SSE"));
+}
+
+#[test]
+fn headers_emitted_on_stream_begin_for_answer_and_not_for_reasoning() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
     // Answer: no header until a newline commit
     chat.handle_codex_event(Event {
@@ -749,7 +856,7 @@ fn headers_emitted_on_stream_begin_for_answer_and_reasoning() {
     });
     let mut saw_codex_pre = false;
     while let Ok(ev) = rx.try_recv() {
-        if let AppEvent::InsertHistory(lines) = ev {
+        if let AppEvent::InsertHistoryLines(lines) = ev {
             let s = lines
                 .iter()
                 .flat_map(|l| l.spans.iter())
@@ -777,7 +884,7 @@ fn headers_emitted_on_stream_begin_for_answer_and_reasoning() {
     chat.on_commit_tick();
     let mut saw_codex_post = false;
     while let Ok(ev) = rx.try_recv() {
-        if let AppEvent::InsertHistory(lines) = ev {
+        if let AppEvent::InsertHistoryLines(lines) = ev {
             let s = lines
                 .iter()
                 .flat_map(|l| l.spans.iter())
@@ -795,8 +902,8 @@ fn headers_emitted_on_stream_begin_for_answer_and_reasoning() {
         "expected 'codex' header to be emitted after first newline commit"
     );
 
-    // Reasoning: header immediately
-    let (mut chat2, rx2, _op_rx2) = make_chatwidget_manual();
+    // Reasoning: do NOT emit a history header; status text is updated instead
+    let (mut chat2, mut rx2, _op_rx2) = make_chatwidget_manual();
     chat2.handle_codex_event(Event {
         id: "sub-b".into(),
         msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
@@ -805,7 +912,7 @@ fn headers_emitted_on_stream_begin_for_answer_and_reasoning() {
     });
     let mut saw_thinking = false;
     while let Ok(ev) = rx2.try_recv() {
-        if let AppEvent::InsertHistory(lines) = ev {
+        if let AppEvent::InsertHistoryLines(lines) = ev {
             let s = lines
                 .iter()
                 .flat_map(|l| l.spans.iter())
@@ -819,14 +926,14 @@ fn headers_emitted_on_stream_begin_for_answer_and_reasoning() {
         }
     }
     assert!(
-        saw_thinking,
-        "expected 'thinking' header to be emitted at stream start"
+        !saw_thinking,
+        "reasoning deltas should not emit history headers"
     );
 }
 
 #[test]
 fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
-    let (mut chat, rx, _op_rx) = make_chatwidget_manual();
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
     // Begin turn
     chat.handle_codex_event(Event {
@@ -858,7 +965,7 @@ fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
         }),
     });
 
-    let cells = drain_insert_history(&rx);
+    let cells = drain_insert_history(&mut rx);
     let mut header_count = 0usize;
     let mut combined = String::new();
     for lines in &cells {
@@ -894,7 +1001,7 @@ fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
 
 #[test]
 fn final_reasoning_then_message_without_deltas_are_rendered() {
-    let (mut chat, rx, _op_rx) = make_chatwidget_manual();
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
     // No deltas; only final reasoning followed by final message.
     chat.handle_codex_event(Event {
@@ -911,7 +1018,7 @@ fn final_reasoning_then_message_without_deltas_are_rendered() {
     });
 
     // Drain history and snapshot the combined visible content.
-    let cells = drain_insert_history(&rx);
+    let cells = drain_insert_history(&mut rx);
     let combined = cells
         .iter()
         .map(|lines| lines_to_single_string(lines))
@@ -921,7 +1028,7 @@ fn final_reasoning_then_message_without_deltas_are_rendered() {
 
 #[test]
 fn deltas_then_same_final_message_are_rendered_snapshot() {
-    let (mut chat, rx, _op_rx) = make_chatwidget_manual();
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
     // Stream some reasoning deltas first.
     chat.handle_codex_event(Event {
@@ -972,7 +1079,7 @@ fn deltas_then_same_final_message_are_rendered_snapshot() {
 
     // Snapshot the combined visible content to ensure we render as expected
     // when deltas are followed by the identical final message.
-    let cells = drain_insert_history(&rx);
+    let cells = drain_insert_history(&mut rx);
     let combined = cells
         .iter()
         .map(|lines| lines_to_single_string(lines))

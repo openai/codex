@@ -2,12 +2,10 @@
 source: tui/src/diff_render.rs
 expression: terminal.backend()
 ---
-"proposed patch to 1 file (+2 -0)                                                "
+"proposed patch to 1 file (+1 -1)                                                "
 "  └ README.md                                                                   "
-"    1     +first line                                                           "
-"    2     +second line                                                          "
-"                                                                                "
-"                                                                                "
+"    1     -# Codex CLI (Rust Implementation)                                    "
+"    1     +# Codex CLI (Rust Implementation) banana                             "
 "                                                                                "
 "                                                                                "
 "                                                                                "

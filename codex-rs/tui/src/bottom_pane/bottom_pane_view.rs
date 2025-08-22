@@ -7,10 +7,10 @@ use super::BottomPane;
 use super::CancellationEvent;
 
 /// Trait implemented by every view that can be shown in the bottom pane.
-pub(crate) trait BottomPaneView<'a> {
+pub(crate) trait BottomPaneView {
     /// Handle a key event while the view is active. A redraw is always
     /// scheduled after this call.
-    fn handle_key_event(&mut self, _pane: &mut BottomPane<'a>, _key_event: KeyEvent) {}
+    fn handle_key_event(&mut self, _pane: &mut BottomPane, _key_event: KeyEvent) {}
 
     /// Return `true` if the view has finished and should be removed.
     fn is_complete(&self) -> bool {
@@ -18,7 +18,7 @@ pub(crate) trait BottomPaneView<'a> {
     }
 
     /// Handle Ctrl-C while this view is active.
-    fn on_ctrl_c(&mut self, _pane: &mut BottomPane<'a>) -> CancellationEvent {
+    fn on_ctrl_c(&mut self, _pane: &mut BottomPane) -> CancellationEvent {
         CancellationEvent::Ignored
     }
 
@@ -27,6 +27,11 @@ pub(crate) trait BottomPaneView<'a> {
 
     /// Render the view: this will be displayed in place of the composer.
     fn render(&self, area: Rect, buf: &mut Buffer);
+
+    /// Update the status indicator animated header. Default no-op.
+    fn update_status_header(&mut self, _header: String) {
+        // no-op
+    }
 
     /// Called when task completes to check if the view should be hidden.
     fn should_hide_when_task_is_done(&mut self) -> bool {

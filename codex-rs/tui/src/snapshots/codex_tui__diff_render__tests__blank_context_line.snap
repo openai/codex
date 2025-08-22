@@ -2,11 +2,11 @@
 source: tui/src/diff_render.rs
 expression: terminal.backend()
 ---
-"proposed patch to 1 file (+2 -0)                                                "
-"  └ README.md                                                                   "
-"    1     +first line                                                           "
-"    2     +second line                                                          "
-"                                                                                "
+"proposed patch to 1 file (+1 -1)                                                "
+"  └ example.txt                                                                 "
+"    1                                                                           "
+"    2     -Y                                                                    "
+"    2     +Y changed                                                            "
 "                                                                                "
 "                                                                                "
 "                                                                                "

@@ -260,7 +260,7 @@ async fn originator_config_override_is_used() {
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = model_provider;
-    config.internal_originator = Some("my_override".to_string());
+    config.responses_originator_header = "my_override".to_owned();
 
     let conversation_manager = ConversationManager::default();
     let codex = conversation_manager

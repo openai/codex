@@ -94,6 +94,7 @@ use crate::protocol::PatchApplyEndEvent;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
+use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
 use crate::protocol::TaskCompleteEvent;
 use crate::protocol::TurnDiffEvent;
@@ -508,9 +509,10 @@ impl Session {
             conversation_items.push(Prompt::format_user_instructions_message(user_instructions));
         }
         conversation_items.push(ResponseItem::from(EnvironmentContext::new(
-            turn_context.cwd.to_path_buf(),
-            turn_context.approval_policy,
-            turn_context.sandbox_policy.clone(),
+            Some(turn_context.cwd.clone()),
+            Some(turn_context.approval_policy),
+            Some(turn_context.sandbox_policy.clone()),
+            Some(sess.user_shell.clone()),
         )));
         sess.record_conversation_items(&conversation_items).await;
 
@@ -544,10 +546,10 @@ impl Session {
 
     pub fn remove_task(&self, sub_id: &str) {
         let mut state = self.state.lock_unchecked();
-        if let Some(task) = &state.current_task {
-            if task.sub_id == sub_id {
-                state.current_task.take();
-            }
+        if let Some(task) = &state.current_task
+            && task.sub_id == sub_id
+        {
+            state.current_task.take();
         }
     }
 
@@ -814,6 +816,16 @@ impl Session {
         let _ = self.tx_event.send(event).await;
     }
 
+    async fn notify_stream_error(&self, sub_id: &str, message: impl Into<String>) {
+        let event = Event {
+            id: sub_id.to_string(),
+            msg: EventMsg::StreamError(StreamErrorEvent {
+                message: message.into(),
+            }),
+        };
+        let _ = self.tx_event.send(event).await;
+    }
+
     /// Build the full turn input by concatenating the current conversation
     /// history with additional items for this turn.
     pub fn turn_input_with_history(&self, extra: Vec<ResponseItem>) -> Vec<ResponseItem> {
@@ -1067,9 +1079,11 @@ async fn submission_loop(
                 turn_context = Arc::new(new_turn_context);
                 if cwd.is_some() || approval_policy.is_some() || sandbox_policy.is_some() {
                     sess.record_conversation_items(&[ResponseItem::from(EnvironmentContext::new(
-                        new_cwd,
-                        new_approval_policy,
-                        new_sandbox_policy,
+                        cwd,
+                        approval_policy,
+                        sandbox_policy,
+                        // Shell is not configurable from turn to turn
+                        None,
                     ))])
                     .await;
                 }
@@ -1239,18 +1253,18 @@ async fn submission_loop(
                 // Gracefully flush and shutdown rollout recorder on session end so tests
                 // that inspect the rollout file do not race with the background writer.
                 let recorder_opt = sess.rollout.lock_unchecked().take();
-                if let Some(rec) = recorder_opt {
-                    if let Err(e) = rec.shutdown().await {
-                        warn!("failed to shutdown rollout recorder: {e}");
-                        let event = Event {
-                            id: sub.id.clone(),
-                            msg: EventMsg::Error(ErrorEvent {
-                                message: "Failed to shutdown rollout recorder".to_string(),
-                            }),
-                        };
-                        if let Err(e) = sess.tx_event.send(event).await {
-                            warn!("failed to send error message: {e:?}");
-                        }
+                if let Some(rec) = recorder_opt
+                    && let Err(e) = rec.shutdown().await
+                {
+                    warn!("failed to shutdown rollout recorder: {e}");
+                    let event = Event {
+                        id: sub.id.clone(),
+                        msg: EventMsg::Error(ErrorEvent {
+                            message: "Failed to shutdown rollout recorder".to_string(),
+                        }),
+                    };
+                    if let Err(e) = sess.tx_event.send(event).await {
+                        warn!("failed to send error message: {e:?}");
                     }
                 }
 
@@ -1520,7 +1534,7 @@ async fn run_turn(
                     // Surface retry information to any UI/front‑end so the
                     // user understands what is happening instead of staring
                     // at a seemingly frozen screen.
-                    sess.notify_background_event(
+                    sess.notify_stream_error(
                         &sub_id,
                         format!(
                             "stream error: {e}; retrying {retries}/{max_retries} in {delay:?}…"
@@ -1755,7 +1769,7 @@ async fn run_compact_task(
                 if retries < max_retries {
                     retries += 1;
                     let delay = backoff(retries);
-                    sess.notify_background_event(
+                    sess.notify_stream_error(
                         &sub_id,
                         format!(
                             "stream error: {e}; retrying {retries}/{max_retries} in {delay:?}…"
@@ -2051,18 +2065,20 @@ pub struct ExecInvokeArgs<'a> {
     pub stdout_stream: Option<StdoutStream>,
 }
 
-fn maybe_run_with_user_profile(
+fn maybe_translate_shell_command(
     params: ExecParams,
     sess: &Session,
     turn_context: &TurnContext,
 ) -> ExecParams {
-    if turn_context.shell_environment_policy.use_profile {
-        let command = sess
+    let should_translate = matches!(sess.user_shell, crate::shell::Shell::PowerShell(_))
+        || turn_context.shell_environment_policy.use_profile;
+
+    if should_translate
+        && let Some(command) = sess
             .user_shell
-            .format_default_shell_invocation(params.command.clone());
-        if let Some(command) = command {
-            return ExecParams { command, ..params };
-        }
+            .format_default_shell_invocation(params.command.clone())
+    {
+        return ExecParams { command, ..params };
     }
     params
 }
@@ -2227,7 +2243,7 @@ async fn handle_container_exec_with_params(
         ),
     };
 
-    let params = maybe_run_with_user_profile(params, sess, turn_context);
+    let params = maybe_translate_shell_command(params, sess, turn_context);
     let output_result = sess
         .run_exec_with_events(
             turn_diff_tracker,

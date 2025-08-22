@@ -23,7 +23,6 @@ codex-protocol = { path = "../protocol" }
 dirs = "6"
 env-flags = "0.1.1"
 eventsource-stream = "0.2.3"
-fs2 = "0.4.3"
 futures = "0.3"
 libc = "0.2.175"
 mcp-types = { path = "../mcp-types" }
@@ -71,6 +70,9 @@ openssl-sys = { version = "*", features = ["vendored"] }
 # Build OpenSSL from source for musl builds.
 [target.aarch64-unknown-linux-musl.dependencies]
 openssl-sys = { version = "*", features = ["vendored"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+which = "6"
 
 [dev-dependencies]
 assert_cmd = "2"
