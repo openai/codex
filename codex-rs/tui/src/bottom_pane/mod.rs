@@ -8,6 +8,8 @@ use codex_core::protocol::TokenUsage;
 use codex_file_search::FileMatch;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
+use ratatui::layout::Constraint;
+use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::widgets::WidgetRef;
 
@@ -94,8 +96,6 @@ impl BottomPane {
         } else {
             self.composer.desired_height(width)
         };
-        // Always add a top spacer when the composer is visible or when the
-        // status indicator view is active. Avoid adding it above other modals.
         let top_pad = if self.active_view.is_none() || self.status_view_active {
             1
         } else {
@@ -106,31 +106,33 @@ impl BottomPane {
             .saturating_add(top_pad)
     }
 
+    fn layout(&self, area: Rect) -> Rect {
+        let top = if self.active_view.is_none() || self.status_view_active {
+            1
+        } else {
+            0
+        };
+
+        let [_, content, _] = Layout::vertical([
+            Constraint::Max(top),
+            Constraint::Min(1),
+            Constraint::Max(BottomPane::BOTTOM_PAD_LINES),
+        ])
+        .areas(area);
+
+        content
+    }
+
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         // Hide the cursor whenever an overlay view is active (e.g. the
         // status indicator shown while a task is running, or approval modal).
         // In these states the textarea is not interactable, so we should not
         // show its caret.
-        if self.active_view.is_some() {
+        if self.active_view.is_some() || self.status_view_active {
             None
         } else {
-            let avail = area.height;
-            if avail == 0 {
-                return None;
-            }
-            // Mirror render: one-line top spacer above the composer, plus
-            // reserved bottom padding lines, shrinking pad to preserve at
-            // least one line of composer when space is tight.
-            let top_pad: u16 = 1;
-            let bottom_pad =
-                BottomPane::BOTTOM_PAD_LINES.min(avail.saturating_sub(1).saturating_sub(top_pad));
-            let composer_rect = Rect {
-                x: area.x,
-                y: area.y.saturating_add(top_pad),
-                width: area.width,
-                height: avail.saturating_sub(top_pad + bottom_pad),
-            };
-            self.composer.cursor_pos(composer_rect)
+            let content = self.layout(area);
+            self.composer.cursor_pos(content)
         }
     }
 
@@ -370,49 +372,12 @@ impl BottomPane {
 
 impl WidgetRef for &BottomPane {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        // Top spacer applies above the composer and the status indicator.
-        // For other modals, render flush to the top.
+        let content = self.layout(area);
+
         if let Some(view) = &self.active_view {
-            // Match desired_height: no top spacer for modal overlays unless
-            // the status indicator view is active.
-            let mut top_pad: u16 = if self.status_view_active { 1 } else { 0 };
-            // Reserve bottom padding lines; keep at least 1 line for the view.
-            let avail = area.height;
-            if avail > 0 {
-                // Ensure at least one row for the view when space is tiny.
-                if self.status_view_active && avail == 1 {
-                    top_pad = 0;
-                }
-                let pad = if self.status_view_active {
-                    BottomPane::BOTTOM_PAD_LINES
-                        .min(avail.saturating_sub(1).saturating_sub(top_pad))
-                } else {
-                    BottomPane::BOTTOM_PAD_LINES.min(avail.saturating_sub(1))
-                };
-                let view_rect = Rect {
-                    x: area.x,
-                    y: area.y.saturating_add(top_pad),
-                    width: area.width,
-                    height: avail.saturating_sub(pad + top_pad),
-                };
-                view.render(view_rect, buf);
-            }
+            view.render(content, buf);
         } else {
-            let top_pad: u16 = 1;
-            let avail = area.height;
-            if avail > 0 {
-                let composer_rect = Rect {
-                    x: area.x,
-                    y: area.y.saturating_add(top_pad),
-                    width: area.width,
-                    // Reserve top pad (when running) and bottom padding
-                    height: avail
-                        - BottomPane::BOTTOM_PAD_LINES
-                            .min(avail.saturating_sub(1).saturating_sub(top_pad))
-                        - top_pad,
-                };
-                (&self.composer).render_ref(composer_rect, buf);
-            }
+            (&self.composer).render_ref(content, buf);
         }
     }
 }
