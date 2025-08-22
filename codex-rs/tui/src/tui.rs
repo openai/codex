@@ -1,6 +1,7 @@
 use std::io::Result;
 use std::io::Stdout;
 use std::io::stdout;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::time::Duration;
 use std::time::Instant;
@@ -100,6 +101,12 @@ pub enum TuiEvent {
     Draw,
     #[cfg(unix)]
     ResumeFromSuspend,
+    AttachImage {
+        path: PathBuf,
+        width: u32,
+        height: u32,
+        format_label: &'static str,
+    },
 }
 
 pub struct Tui {
@@ -216,7 +223,30 @@ impl Tui {
                                 }
                             }
                             crossterm::event::Event::Key(key_event) => {
-                                yield TuiEvent::Key(key_event);
+                                // Detect Ctrl+V to attach an image from the clipboard.
+                                if key_event.kind == KeyEventKind::Press
+                                    && matches!(key_event.code, KeyCode::Char('v'))
+                                    && key_event
+                                        .modifiers
+                                        .contains(crossterm::event::KeyModifiers::CONTROL)
+                                {
+                                    match crate::clipboard_paste::paste_image_to_temp_png() {
+                                        Ok((path, info)) => {
+                                            yield TuiEvent::AttachImage {
+                                                path,
+                                                width: info.width,
+                                                height: info.height,
+                                                format_label: info.encoded_format.label(),
+                                            };
+                                        }
+                                        Err(_) => {
+                                            // Fall back to normal key handling if no image is available.
+                                            yield TuiEvent::Key(key_event);
+                                        }
+                                    }
+                                } else {
+                                    yield TuiEvent::Key(key_event);
+                                }
                             }
                             crossterm::event::Event::Resize(_, _) => {
                                 yield TuiEvent::Draw;

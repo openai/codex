@@ -214,7 +214,9 @@ impl ChatComposer {
         format_label: &str,
     ) {
         let placeholder = format!("[image {width}x{height} {format_label}]");
-        self.textarea.insert_str(&placeholder);
+        // Insert as an element to match large paste placeholder behavior:
+        // styled distinctly and treated atomically for cursor/mutations.
+        self.textarea.insert_element(&placeholder);
         self.attached_images
             .push(AttachedImage { placeholder, path });
     }
@@ -655,10 +657,9 @@ impl ChatComposer {
             code: KeyCode::Backspace,
             ..
         } = input
+            && self.try_remove_any_placeholder_at_cursor()
         {
-            if self.try_remove_any_placeholder_at_cursor() {
-                return (InputResult::None, true);
-            }
+            return (InputResult::None, true);
         }
 
         // Normal input handling
@@ -749,6 +750,50 @@ impl ChatComposer {
             return true;
         }
 
+        // Also handle when the cursor is at the START of an image placeholder.
+        if let Some((idx, placeholder)) = {
+            let mut out: Option<(usize, String)> = None;
+            for (i, img) in self.attached_images.iter().enumerate() {
+                let ph = &img.placeholder;
+                if p + ph.len() > text.len() {
+                    continue;
+                }
+                if &text[p..p + ph.len()] != ph {
+                    continue;
+                }
+
+                // Count occurrences of `ph` before `p`.
+                let mut occ_before = 0usize;
+                let mut search_pos = 0usize;
+                while search_pos < p {
+                    if let Some(found) = text[search_pos..p].find(ph) {
+                        occ_before += 1;
+                        search_pos += found + ph.len();
+                    } else {
+                        break;
+                    }
+                }
+
+                if let Some((remove_idx, _)) = self
+                    .attached_images
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, img2)| img2.placeholder == *ph)
+                    .nth(occ_before)
+                {
+                    out = Some((remove_idx, ph.clone()));
+                } else {
+                    out = Some((i, ph.clone()));
+                }
+                break;
+            }
+            out
+        } {
+            self.textarea.replace_range(p..p + placeholder.len(), "");
+            self.attached_images.remove(idx);
+            return true;
+        }
+
         // Then try pasted-content placeholders
         if let Some(placeholder) = self.pending_pastes.iter().find_map(|(ph, _)| {
             if p < ph.len() {
@@ -762,6 +807,22 @@ impl ChatComposer {
             }
         }) {
             self.textarea.replace_range(p - placeholder.len()..p, "");
+            self.pending_pastes.retain(|(ph, _)| ph != &placeholder);
+            return true;
+        }
+
+        // Also handle when the cursor is at the START of a pasted-content placeholder.
+        if let Some(placeholder) = self.pending_pastes.iter().find_map(|(ph, _)| {
+            if p + ph.len() > text.len() {
+                return None;
+            }
+            if &text[p..p + ph.len()] == ph {
+                Some(ph.clone())
+            } else {
+                None
+            }
+        }) {
+            self.textarea.replace_range(p..p + placeholder.len(), "");
             self.pending_pastes.retain(|(ph, _)| ph != &placeholder);
             return true;
         }
@@ -1519,7 +1580,7 @@ mod tests {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
-        let (tx, _rx) = std::sync::mpsc::channel();
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
         let mut composer =
             ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
@@ -1542,7 +1603,7 @@ mod tests {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
-        let (tx, _rx) = std::sync::mpsc::channel();
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
         let mut composer =
             ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
@@ -1565,7 +1626,7 @@ mod tests {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
-        let (tx, _rx) = std::sync::mpsc::channel();
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
         let mut composer =
             ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
@@ -1601,7 +1662,7 @@ mod tests {
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
 
-        let (tx, _rx) = std::sync::mpsc::channel();
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
         let mut composer =
             ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
