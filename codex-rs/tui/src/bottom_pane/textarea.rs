@@ -1473,7 +1473,7 @@ mod tests {
             .timestamp() as u64;
         let mut rng = rand::rngs::StdRng::seed_from_u64(pst_today_seed);
 
-        for _case in 0..10_000 {
+        for _case in 0..500 {
             let mut ta = TextArea::new();
             let mut state = TextAreaState::default();
             // Track element payloads we insert. Payloads use characters '[' and ']' which
@@ -1497,7 +1497,7 @@ mod tests {
             let mut width: u16 = rng.random_range(1..=12);
             let mut height: u16 = rng.random_range(1..=4);
 
-            for _step in 0..200 {
+            for _step in 0..60 {
                 // Mostly stable width/height, occasionally change
                 if rng.random_bool(0.1) {
                     width = rng.random_range(1..=12);

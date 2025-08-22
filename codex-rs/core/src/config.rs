@@ -6,6 +6,8 @@ use crate::config_types::ShellEnvironmentPolicy;
 use crate::config_types::ShellEnvironmentPolicyToml;
 use crate::config_types::Tui;
 use crate::config_types::UriBasedFileOpener;
+use crate::config_types::Verbosity;
+use crate::git_info::resolve_root_git_project_for_trust;
 use crate::model_family::ModelFamily;
 use crate::model_family::find_family_for_model;
 use crate::model_provider_info::ModelProviderInfo;
@@ -150,6 +152,9 @@ pub struct Config {
     /// request using the Responses API.
     pub model_reasoning_summary: ReasoningSummary,
 
+    /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
+    pub model_verbosity: Option<Verbosity>,
+
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
 
@@ -274,12 +279,14 @@ pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Re
     // Ensure top-level `projects` exists as a non-inline, explicit table. If it
     // exists but was previously represented as a non-table (e.g., inline),
     // replace it with an explicit table.
+    let mut created_projects_table = false;
     {
         let root = doc.as_table_mut();
         let needs_table = !root.contains_key("projects")
             || root.get("projects").and_then(|i| i.as_table()).is_none();
         if needs_table {
             root.insert("projects", toml_edit::table());
+            created_projects_table = true;
         }
     }
     let Some(projects_tbl) = doc["projects"].as_table_mut() else {
@@ -287,6 +294,12 @@ pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Re
             "projects table missing after initialization"
         ));
     };
+
+    // If we created the `projects` table ourselves, keep it implicit so we
+    // don't render a standalone `[projects]` header.
+    if created_projects_table {
+        projects_tbl.set_implicit(true);
+    }
 
     // Ensure the per-project entry is its own explicit table. If it exists but
     // is not a table (e.g., an inline table), replace it with an explicit table.
@@ -441,6 +454,8 @@ pub struct ConfigToml {
 
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
+    /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
+    pub model_verbosity: Option<Verbosity>,
 
     /// Override to force-enable reasoning summaries for the configured model.
     pub model_supports_reasoning_summaries: Option<bool>,
@@ -497,10 +512,27 @@ impl ConfigToml {
     pub fn is_cwd_trusted(&self, resolved_cwd: &Path) -> bool {
         let projects = self.projects.clone().unwrap_or_default();
 
-        projects
-            .get(&resolved_cwd.to_string_lossy().to_string())
-            .map(|p| p.trust_level.clone().unwrap_or("".to_string()) == "trusted")
-            .unwrap_or(false)
+        let is_path_trusted = |path: &Path| {
+            let path_str = path.to_string_lossy().to_string();
+            projects
+                .get(&path_str)
+                .map(|p| p.trust_level.as_deref() == Some("trusted"))
+                .unwrap_or(false)
+        };
+
+        // Fast path: exact cwd match
+        if is_path_trusted(resolved_cwd) {
+            return true;
+        }
+
+        // If cwd lives inside a git worktree, check whether the root git project
+        // (the primary repository working directory) is trusted. This lets
+        // worktrees inherit trust from the main project.
+        if let Some(root_project) = resolve_root_git_project_for_trust(resolved_cwd) {
+            return is_path_trusted(&root_project);
+        }
+
+        false
     }
 
     pub fn get_config_profile(
@@ -640,7 +672,7 @@ impl Config {
                 needs_special_apply_patch_instructions: false,
                 supports_reasoning_summaries,
                 uses_local_shell_tool: false,
-                uses_apply_patch_tool: false,
+                apply_patch_tool_type: None,
             }
         });
 
@@ -666,9 +698,6 @@ impl Config {
         let file_base_instructions =
             Self::get_base_instructions(experimental_instructions_path, &resolved_cwd)?;
         let base_instructions = base_instructions.or(file_base_instructions);
-
-        let include_apply_patch_tool_val =
-            include_apply_patch_tool.unwrap_or(model_family.uses_apply_patch_tool);
 
         let responses_originator_header: String = cfg
             .responses_originator_header_internal_override
@@ -718,7 +747,7 @@ impl Config {
                 .model_reasoning_summary
                 .or(cfg.model_reasoning_summary)
                 .unwrap_or_default(),
-
+            model_verbosity: config_profile.model_verbosity.or(cfg.model_verbosity),
             chatgpt_base_url: config_profile
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)
@@ -726,7 +755,7 @@ impl Config {
 
             experimental_resume,
             include_plan_tool: include_plan_tool.unwrap_or(false),
-            include_apply_patch_tool: include_apply_patch_tool_val,
+            include_apply_patch_tool: include_apply_patch_tool.unwrap_or(false),
             responses_originator_header,
             preferred_auth_method: cfg.preferred_auth_method.unwrap_or(AuthMode::ChatGPT),
         };
@@ -1087,6 +1116,7 @@ disable_response_storage = true
                 show_raw_agent_reasoning: false,
                 model_reasoning_effort: ReasoningEffort::High,
                 model_reasoning_summary: ReasoningSummary::Detailed,
+                model_verbosity: None,
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 experimental_resume: None,
                 base_instructions: None,
@@ -1140,6 +1170,7 @@ disable_response_storage = true
             show_raw_agent_reasoning: false,
             model_reasoning_effort: ReasoningEffort::default(),
             model_reasoning_summary: ReasoningSummary::default(),
+            model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             experimental_resume: None,
             base_instructions: None,
@@ -1208,6 +1239,7 @@ disable_response_storage = true
             show_raw_agent_reasoning: false,
             model_reasoning_effort: ReasoningEffort::default(),
             model_reasoning_summary: ReasoningSummary::default(),
+            model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             experimental_resume: None,
             base_instructions: None,
@@ -1230,37 +1262,22 @@ disable_response_storage = true
         // Call the function under test
         set_project_trusted(codex_home.path(), project_dir.path())?;
 
-        // Read back the generated config.toml
+        // Read back the generated config.toml and assert exact contents
         let config_path = codex_home.path().join(CONFIG_TOML_FILE);
         let contents = std::fs::read_to_string(&config_path)?;
 
-        // Verify it does not use inline tables for the project entry
-        assert!(
-            !contents.contains("{ trust_level"),
-            "config.toml should not use inline tables:\n{}",
-            contents
+        let raw_path = project_dir.path().to_string_lossy();
+        let path_str = if raw_path.contains('\\') {
+            format!("'{}'", raw_path)
+        } else {
+            format!("\"{}\"", raw_path)
+        };
+        let expected = format!(
+            r#"[projects.{path_str}]
+trust_level = "trusted"
+"#
         );
-
-        // Verify the explicit table for the project exists. toml_edit may choose
-        // either basic (double-quoted) or literal (single-quoted) strings for keys
-        // containing backslashes (e.g., on Windows). Accept both forms.
-        let path_str = project_dir.path().to_string_lossy();
-        let project_key_double = format!("[projects.\"{}\"]", path_str);
-        let project_key_single = format!("[projects.'{}']", path_str);
-        assert!(
-            contents.contains(&project_key_double) || contents.contains(&project_key_single),
-            "missing explicit project table header: expected to find `{}` or `{}` in:\n{}",
-            project_key_double,
-            project_key_single,
-            contents
-        );
-
-        // Verify the trust_level entry
-        assert!(
-            contents.contains("trust_level = \"trusted\""),
-            "missing trust_level entry in:\n{}",
-            contents
-        );
+        assert_eq!(contents, expected);
 
         Ok(())
     }
@@ -1272,11 +1289,17 @@ disable_response_storage = true
 
         // Seed config.toml with an inline project entry under [projects]
         let config_path = codex_home.path().join(CONFIG_TOML_FILE);
-        let path_str = project_dir.path().to_string_lossy();
-        // Use a literal-quoted key so Windows backslashes don't require escaping
+        let raw_path = project_dir.path().to_string_lossy();
+        let path_str = if raw_path.contains('\\') {
+            format!("'{}'", raw_path)
+        } else {
+            format!("\"{}\"", raw_path)
+        };
+        // Use a quoted key so backslashes don't require escaping on Windows
         let initial = format!(
-            "[projects]\n'{}' = {{ trust_level = \"untrusted\" }}\n",
-            path_str
+            r#"[projects]
+{path_str} = {{ trust_level = "untrusted" }}
+"#
         );
         std::fs::create_dir_all(codex_home.path())?;
         std::fs::write(&config_path, initial)?;
@@ -1286,28 +1309,15 @@ disable_response_storage = true
 
         let contents = std::fs::read_to_string(&config_path)?;
 
-        // Should not contain inline table representation anymore (accept both quote styles)
-        let inline_double = format!("\"{}\" = {{ trust_level = \"trusted\" }}", path_str);
-        let inline_single = format!("'{}' = {{ trust_level = \"trusted\" }}", path_str);
-        assert!(
-            !contents.contains(&inline_double) && !contents.contains(&inline_single),
-            "config.toml should not contain inline project table anymore:\n{}",
-            contents
-        );
+        // Assert exact output after conversion to explicit table
+        let expected = format!(
+            r#"[projects]
 
-        // And explicit child table header for the project
-        let project_key_double = format!("[projects.\"{}\"]", path_str);
-        let project_key_single = format!("[projects.'{}']", path_str);
-        assert!(
-            contents.contains(&project_key_double) || contents.contains(&project_key_single),
-            "missing explicit project table header: expected to find `{}` or `{}` in:\n{}",
-            project_key_double,
-            project_key_single,
-            contents
+[projects.{path_str}]
+trust_level = "trusted"
+"#
         );
-
-        // And the trust level value
-        assert!(contents.contains("trust_level = \"trusted\""));
+        assert_eq!(contents, expected);
 
         Ok(())
     }

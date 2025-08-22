@@ -13,7 +13,7 @@ use async_channel::Sender;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
-use codex_login::CodexAuth;
+use codex_login::AuthManager;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use futures::prelude::*;
@@ -56,14 +56,6 @@ use crate::exec_env::create_env;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::model_family::find_family_for_model;
-use crate::models::ContentItem;
-use crate::models::FunctionCallOutputPayload;
-use crate::models::LocalShellAction;
-use crate::models::ReasoningItemContent;
-use crate::models::ReasoningItemReasoningSummary;
-use crate::models::ResponseInputItem;
-use crate::models::ResponseItem;
-use crate::models::ShellToolCallParams;
 use crate::openai_tools::ApplyPatchToolArgs;
 use crate::openai_tools::ToolsConfig;
 use crate::openai_tools::get_openai_tools;
@@ -108,6 +100,14 @@ use crate::user_notification::UserNotification;
 use crate::util::backoff;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::LocalShellAction;
+use codex_protocol::models::ReasoningItemContent;
+use codex_protocol::models::ReasoningItemReasoningSummary;
+use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::models::ShellToolCallParams;
 
 // A convenience extension trait for acquiring mutex locks where poisoning is
 // unrecoverable and should abort the program. This avoids scattered `.unwrap()`
@@ -144,7 +144,10 @@ pub(crate) const INITIAL_SUBMIT_ID: &str = "";
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
-    pub async fn spawn(config: Config, auth: Option<CodexAuth>) -> CodexResult<CodexSpawnOk> {
+    pub async fn spawn(
+        config: Config,
+        auth_manager: Arc<AuthManager>,
+    ) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(64);
         let (tx_event, rx_event) = async_channel::unbounded();
 
@@ -169,13 +172,17 @@ impl Codex {
         };
 
         // Generate a unique ID for the lifetime of this Codex session.
-        let (session, turn_context) =
-            Session::new(configure_session, config.clone(), auth, tx_event.clone())
-                .await
-                .map_err(|e| {
-                    error!("Failed to create session: {e:#}");
-                    CodexErr::InternalAgentDied
-                })?;
+        let (session, turn_context) = Session::new(
+            configure_session,
+            config.clone(),
+            auth_manager.clone(),
+            tx_event.clone(),
+        )
+        .await
+        .map_err(|e| {
+            error!("Failed to create session: {e:#}");
+            CodexErr::InternalAgentDied
+        })?;
         let session_id = session.session_id;
 
         // This task will run until Op::Shutdown is received.
@@ -323,7 +330,7 @@ impl Session {
     async fn new(
         configure_session: ConfigureSession,
         config: Arc<Config>,
-        auth: Option<CodexAuth>,
+        auth_manager: Arc<AuthManager>,
         tx_event: Sender<Event>,
     ) -> anyhow::Result<(Arc<Self>, TurnContext)> {
         let ConfigureSession {
@@ -467,7 +474,7 @@ impl Session {
         // construct the model client.
         let client = ModelClient::new(
             config.clone(),
-            auth.clone(),
+            Some(auth_manager.clone()),
             provider.clone(),
             model_reasoning_effort,
             model_reasoning_summary,
@@ -1035,7 +1042,8 @@ async fn submission_loop(
                 let effective_effort = effort.unwrap_or(prev.client.get_reasoning_effort());
                 let effective_summary = summary.unwrap_or(prev.client.get_reasoning_summary());
 
-                let auth = prev.client.get_auth();
+                let auth_manager = prev.client.get_auth_manager();
+
                 // Build updated config for the client
                 let mut updated_config = (*config).clone();
                 updated_config.model = effective_model.clone();
@@ -1043,7 +1051,7 @@ async fn submission_loop(
 
                 let client = ModelClient::new(
                     Arc::new(updated_config),
-                    auth,
+                    auth_manager,
                     provider,
                     effective_effort,
                     effective_summary,
@@ -1400,28 +1408,37 @@ async fn run_task(
                             );
                         }
                         (
+                            ResponseItem::CustomToolCall { .. },
+                            Some(ResponseInputItem::CustomToolCallOutput { call_id, output }),
+                        ) => {
+                            items_to_record_in_conversation_history.push(item);
+                            items_to_record_in_conversation_history.push(
+                                ResponseItem::CustomToolCallOutput {
+                                    call_id: call_id.clone(),
+                                    output: output.clone(),
+                                },
+                            );
+                        }
+                        (
                             ResponseItem::FunctionCall { .. },
                             Some(ResponseInputItem::McpToolCallOutput { call_id, result }),
                         ) => {
                             items_to_record_in_conversation_history.push(item);
-                            let (content, success): (String, Option<bool>) = match result {
-                                Ok(CallToolResult {
-                                    content,
-                                    is_error,
-                                    structured_content: _,
-                                }) => match serde_json::to_string(content) {
-                                    Ok(content) => (content, *is_error),
-                                    Err(e) => {
-                                        warn!("Failed to serialize MCP tool call output: {e}");
-                                        (e.to_string(), Some(true))
-                                    }
+                            let output = match result {
+                                Ok(call_tool_result) => {
+                                    convert_call_tool_result_to_function_call_output_payload(
+                                        call_tool_result,
+                                    )
+                                }
+                                Err(err) => FunctionCallOutputPayload {
+                                    content: err.clone(),
+                                    success: Some(false),
                                 },
-                                Err(e) => (e.clone(), Some(true)),
                             };
                             items_to_record_in_conversation_history.push(
                                 ResponseItem::FunctionCallOutput {
                                     call_id: call_id.clone(),
-                                    output: FunctionCallOutputPayload { content, success },
+                                    output,
                                 },
                             );
                         }
@@ -1579,6 +1596,7 @@ async fn try_run_turn(
                 call_id: Some(call_id),
                 ..
             } => Some(call_id),
+            ResponseItem::CustomToolCallOutput { call_id, .. } => Some(call_id),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -1596,6 +1614,7 @@ async fn try_run_turn(
                     call_id: Some(call_id),
                     ..
                 } => Some(call_id),
+                ResponseItem::CustomToolCall { call_id, .. } => Some(call_id),
                 _ => None,
             })
             .filter_map(|call_id| {
@@ -1605,12 +1624,9 @@ async fn try_run_turn(
                     Some(call_id.clone())
                 }
             })
-            .map(|call_id| ResponseItem::FunctionCallOutput {
+            .map(|call_id| ResponseItem::CustomToolCallOutput {
                 call_id: call_id.clone(),
-                output: FunctionCallOutputPayload {
-                    content: "aborted".to_string(),
-                    success: Some(false),
-                },
+                output: "aborted".to_string(),
             })
             .collect::<Vec<_>>()
     };
@@ -1875,7 +1891,7 @@ async fn handle_response_item(
             call_id,
             ..
         } => {
-            info!("FunctionCall: {arguments}");
+            info!("FunctionCall: {name}({arguments})");
             Some(
                 handle_function_call(
                     sess,
@@ -1932,8 +1948,30 @@ async fn handle_response_item(
                 .await,
             )
         }
+        ResponseItem::CustomToolCall {
+            id: _,
+            call_id,
+            name,
+            input,
+            status: _,
+        } => Some(
+            handle_custom_tool_call(
+                sess,
+                turn_context,
+                turn_diff_tracker,
+                sub_id.to_string(),
+                name,
+                input,
+                call_id,
+            )
+            .await,
+        ),
         ResponseItem::FunctionCallOutput { .. } => {
             debug!("unexpected FunctionCallOutput from stream");
+            None
+        }
+        ResponseItem::CustomToolCallOutput { .. } => {
+            debug!("unexpected CustomToolCallOutput from stream");
             None
         }
         ResponseItem::Other => None,
@@ -2020,6 +2058,58 @@ async fn handle_function_call(
                         },
                     }
                 }
+            }
+        }
+    }
+}
+
+async fn handle_custom_tool_call(
+    sess: &Session,
+    turn_context: &TurnContext,
+    turn_diff_tracker: &mut TurnDiffTracker,
+    sub_id: String,
+    name: String,
+    input: String,
+    call_id: String,
+) -> ResponseInputItem {
+    info!("CustomToolCall: {name} {input}");
+    match name.as_str() {
+        "apply_patch" => {
+            let exec_params = ExecParams {
+                command: vec!["apply_patch".to_string(), input.clone()],
+                cwd: turn_context.cwd.clone(),
+                timeout_ms: None,
+                env: HashMap::new(),
+                with_escalated_permissions: None,
+                justification: None,
+            };
+            let resp = handle_container_exec_with_params(
+                exec_params,
+                sess,
+                turn_context,
+                turn_diff_tracker,
+                sub_id,
+                call_id,
+            )
+            .await;
+
+            // Convert function-call style output into a custom tool call output
+            match resp {
+                ResponseInputItem::FunctionCallOutput { call_id, output } => {
+                    ResponseInputItem::CustomToolCallOutput {
+                        call_id,
+                        output: output.content,
+                    }
+                }
+                // Pass through if already a custom tool output or other variant
+                other => other,
+            }
+        }
+        _ => {
+            debug!("unexpected CustomToolCall from stream");
+            ResponseInputItem::CustomToolCallOutput {
+                call_id,
+                output: format!("unsupported custom tool call: {name}"),
             }
         }
     }
@@ -2557,5 +2647,134 @@ async fn drain_to_completed(
             Ok(_) => continue,
             Err(e) => return Err(e),
         }
+    }
+}
+
+fn convert_call_tool_result_to_function_call_output_payload(
+    call_tool_result: &CallToolResult,
+) -> FunctionCallOutputPayload {
+    let CallToolResult {
+        content,
+        is_error,
+        structured_content,
+    } = call_tool_result;
+
+    // In terms of what to send back to the model, we prefer structured_content,
+    // if available, and fallback to content, otherwise.
+    let mut is_success = is_error != &Some(true);
+    let content = if let Some(structured_content) = structured_content
+        && structured_content != &serde_json::Value::Null
+        && let Ok(serialized_structured_content) = serde_json::to_string(&structured_content)
+    {
+        serialized_structured_content
+    } else {
+        match serde_json::to_string(&content) {
+            Ok(serialized_content) => serialized_content,
+            Err(err) => {
+                // If we could not serialize either content or structured_content to
+                // JSON, flag this as an error.
+                is_success = false;
+                err.to_string()
+            }
+        }
+    };
+
+    FunctionCallOutputPayload {
+        content,
+        success: Some(is_success),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mcp_types::ContentBlock;
+    use mcp_types::TextContent;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    fn text_block(s: &str) -> ContentBlock {
+        ContentBlock::TextContent(TextContent {
+            annotations: None,
+            text: s.to_string(),
+            r#type: "text".to_string(),
+        })
+    }
+
+    #[test]
+    fn prefers_structured_content_when_present() {
+        let ctr = CallToolResult {
+            // Content present but should be ignored because structured_content is set.
+            content: vec![text_block("ignored")],
+            is_error: None,
+            structured_content: Some(json!({
+                "ok": true,
+                "value": 42
+            })),
+        };
+
+        let got = convert_call_tool_result_to_function_call_output_payload(&ctr);
+        let expected = FunctionCallOutputPayload {
+            content: serde_json::to_string(&json!({
+                "ok": true,
+                "value": 42
+            }))
+            .unwrap(),
+            success: Some(true),
+        };
+
+        assert_eq!(expected, got);
+    }
+
+    #[test]
+    fn falls_back_to_content_when_structured_is_null() {
+        let ctr = CallToolResult {
+            content: vec![text_block("hello"), text_block("world")],
+            is_error: None,
+            structured_content: Some(serde_json::Value::Null),
+        };
+
+        let got = convert_call_tool_result_to_function_call_output_payload(&ctr);
+        let expected = FunctionCallOutputPayload {
+            content: serde_json::to_string(&vec![text_block("hello"), text_block("world")])
+                .unwrap(),
+            success: Some(true),
+        };
+
+        assert_eq!(expected, got);
+    }
+
+    #[test]
+    fn success_flag_reflects_is_error_true() {
+        let ctr = CallToolResult {
+            content: vec![text_block("unused")],
+            is_error: Some(true),
+            structured_content: Some(json!({ "message": "bad" })),
+        };
+
+        let got = convert_call_tool_result_to_function_call_output_payload(&ctr);
+        let expected = FunctionCallOutputPayload {
+            content: serde_json::to_string(&json!({ "message": "bad" })).unwrap(),
+            success: Some(false),
+        };
+
+        assert_eq!(expected, got);
+    }
+
+    #[test]
+    fn success_flag_true_with_no_error_and_content_used() {
+        let ctr = CallToolResult {
+            content: vec![text_block("alpha")],
+            is_error: Some(false),
+            structured_content: None,
+        };
+
+        let got = convert_call_tool_result_to_function_call_output_payload(&ctr);
+        let expected = FunctionCallOutputPayload {
+            content: serde_json::to_string(&vec![text_block("alpha")]).unwrap(),
+            success: Some(true),
+        };
+
+        assert_eq!(expected, got);
     }
 }

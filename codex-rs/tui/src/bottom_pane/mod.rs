@@ -1,4 +1,5 @@
 //! Bottom pane: shows the ChatComposer or a BottomPaneView, if one is active.
+use std::path::PathBuf;
 
 use crate::app_event_sender::AppEventSender;
 use crate::tui::FrameRequester;
@@ -368,6 +369,24 @@ impl BottomPane {
         self.composer.on_file_search_result(query, matches);
         self.request_redraw();
     }
+
+    pub(crate) fn attach_image(
+        &mut self,
+        path: PathBuf,
+        width: u32,
+        height: u32,
+        format_label: &str,
+    ) {
+        if self.active_view.is_none() {
+            self.composer
+                .attach_image(path, width, height, format_label);
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn take_recent_submission_images(&mut self) -> Vec<PathBuf> {
+        self.composer.take_recent_submission_images()
+    }
 }
 
 impl WidgetRef for &BottomPane {
@@ -480,8 +499,6 @@ mod tests {
         assert!(pane.active_view.is_some(), "active view should be present");
 
         // Render and ensure the top row includes the Working header instead of the composer.
-        // Give the animation thread a moment to tick.
-        std::thread::sleep(std::time::Duration::from_millis(120));
         let area = Rect::new(0, 0, 40, 3);
         let mut buf = Buffer::empty(area);
         (&pane).render_ref(area, &mut buf);
@@ -513,10 +530,6 @@ mod tests {
         // Begin a task: show initial status.
         pane.set_task_running(true);
 
-        // Allow some frames so the animation thread ticks.
-        std::thread::sleep(std::time::Duration::from_millis(120));
-
-        // Render and confirm row 1 contains the "Working" header.
         let area = Rect::new(0, 0, 40, 3);
         let mut buf = Buffer::empty(area);
         (&pane).render_ref(area, &mut buf);

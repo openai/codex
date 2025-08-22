@@ -28,7 +28,7 @@ impl TranscriptApp {
     pub(crate) fn new(transcript_lines: Vec<Line<'static>>) -> Self {
         Self {
             transcript_lines,
-            scroll_offset: 0,
+            scroll_offset: usize::MAX,
             is_done: false,
             title: "T R A N S C R I P T".to_string(),
         }
@@ -62,6 +62,7 @@ impl TranscriptApp {
 
     fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
         match key_event {
+            // Ctrl+Z is handled at the App level when transcript overlay is active
             KeyEvent {
                 code: KeyCode::Char('q'),
                 kind: KeyEventKind::Press,
@@ -104,7 +105,7 @@ impl TranscriptApp {
                 self.scroll_offset = self.scroll_offset.saturating_sub(area.height as usize);
             }
             KeyEvent {
-                code: KeyCode::PageDown,
+                code: KeyCode::PageDown | KeyCode::Char(' '),
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
                 ..
             } => {
