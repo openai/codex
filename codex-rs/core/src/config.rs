@@ -1234,14 +1234,18 @@ disable_response_storage = true
         let config_path = codex_home.path().join(CONFIG_TOML_FILE);
         let contents = std::fs::read_to_string(&config_path)?;
 
-        let path_str = project_dir.path().to_string_lossy();
+        let raw_path = project_dir.path().to_string_lossy();
+        let path_str = if raw_path.contains('\\') {
+            format!("'{}'", raw_path)
+        } else {
+            format!("\"{}\"", raw_path)
+        };
         let expected = format!(
             r#"[projects]
 
-[projects."{}"]
+[projects.{path_str}]
 trust_level = "trusted"
-"#,
-            path_str
+"#
         );
         assert_eq!(contents, expected);
 
@@ -1255,11 +1259,16 @@ trust_level = "trusted"
 
         // Seed config.toml with an inline project entry under [projects]
         let config_path = codex_home.path().join(CONFIG_TOML_FILE);
-        let path_str = project_dir.path().to_string_lossy();
-        // Use a literal-quoted key so Windows backslashes don't require escaping
+        let raw_path = project_dir.path().to_string_lossy();
+        let path_str = if raw_path.contains('\\') {
+            format!("'{}'", raw_path)
+        } else {
+            format!("\"{}\"", raw_path)
+        };
+        // Use a quoted key so backslashes don't require escaping on Windows
         let initial = format!(
             r#"[projects]
-'{path_str}' = {{ trust_level = "untrusted" }}
+{path_str} = {{ trust_level = "untrusted" }}
 "#
         );
         std::fs::create_dir_all(codex_home.path())?;
@@ -1274,7 +1283,7 @@ trust_level = "trusted"
         let expected = format!(
             r#"[projects]
 
-[projects."{path_str}"]
+[projects.{path_str}]
 trust_level = "trusted"
 "#
         );
