@@ -426,17 +426,9 @@ async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
     Some(diff)
 }
 
-/// Resolve the path that should be used for trust checks when running inside a
-/// git worktree. Similar to `[utils::is_inside_git_repo]`, but resolves to the
-/// root of the main repository.
-///
-/// Behavior:
-/// - If `cwd` is not inside a git repository, returns `None`.
-/// - If `cwd` is inside a regular git repository, returns the root of the
-///   repository.
-/// - If `cwd` is inside a linked worktree (where the repo root contains a
-///   `.git` file that points at `<main>/.git/worktrees/<name>`), returns the
-///   path to the main repository working directory (parent of `<main>/.git`).
+/// Resolve the path that should be used for trust checks. Similar to
+/// `[utils::is_inside_git_repo]`, but resolves to the root of the main
+/// repository. Handles worktrees.
 pub fn resolve_root_git_project_for_trust(cwd: &Path) -> Option<PathBuf> {
     let base = if cwd.is_dir() { cwd } else { cwd.parent()? };
 
@@ -779,23 +771,17 @@ mod tests {
         assert!(resolve_root_git_project_for_trust(tmp.path()).is_none());
     }
 
-    #[test]
-    fn resolve_root_git_project_for_trust_regular_repo_returns_repo_root() {
-        let tmp = TempDir::new().expect("tempdir");
-        let repo = tmp.path().join("repo");
-        std::fs::create_dir_all(&repo).unwrap();
-        let _ = std::process::Command::new("git")
-            .arg("init")
-            .current_dir(&repo)
-            .output()
-            .expect("git init");
+    #[tokio::test]
+    async fn resolve_root_git_project_for_trust_regular_repo_returns_repo_root() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let repo_path = create_test_git_repo(&temp_dir).await;
+        let expected = std::fs::canonicalize(&repo_path).unwrap().to_path_buf();
 
-        let expected = std::fs::canonicalize(&repo).unwrap().to_path_buf();
         assert_eq!(
-            resolve_root_git_project_for_trust(&repo),
+            resolve_root_git_project_for_trust(&repo_path),
             Some(expected.clone())
         );
-        let nested = repo.join("sub/dir");
+        let nested = repo_path.join("sub/dir");
         std::fs::create_dir_all(&nested).unwrap();
         assert_eq!(
             resolve_root_git_project_for_trust(&nested),
@@ -803,40 +789,13 @@ mod tests {
         );
     }
 
-    #[test]
-    fn resolve_root_git_project_for_trust_detects_worktree_and_returns_main_root() {
-        let tmp = TempDir::new().expect("tempdir");
-        let main = tmp.path().join("main_repo");
-        std::fs::create_dir_all(&main).unwrap();
-
-        // Initialize a real repo with an initial commit
-        let _ = std::process::Command::new("git")
-            .arg("init")
-            .current_dir(&main)
-            .output()
-            .expect("git init");
-        std::fs::write(main.join("README.md"), "hello").unwrap();
-        let _ = std::process::Command::new("git")
-            .args(["add", "."])
-            .current_dir(&main)
-            .output()
-            .expect("git add");
-        let _ = std::process::Command::new("git")
-            .args([
-                "-c",
-                "user.email=test@example.com",
-                "-c",
-                "user.name=Test",
-                "commit",
-                "-m",
-                "init",
-            ])
-            .current_dir(&main)
-            .output()
-            .expect("git commit");
+    #[tokio::test]
+    async fn resolve_root_git_project_for_trust_detects_worktree_and_returns_main_root() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let repo_path = create_test_git_repo(&temp_dir).await;
 
         // Create a linked worktree
-        let wt_root = tmp.path().join("wt");
+        let wt_root = temp_dir.path().join("wt");
         let _ = std::process::Command::new("git")
             .args([
                 "worktree",
@@ -845,11 +804,11 @@ mod tests {
                 "-b",
                 "feature/x",
             ])
-            .current_dir(&main)
+            .current_dir(&repo_path)
             .output()
             .expect("git worktree add");
 
-        let expected = std::fs::canonicalize(&main).ok();
+        let expected = std::fs::canonicalize(&repo_path).ok();
         let got = resolve_root_git_project_for_trust(&wt_root)
             .and_then(|p| std::fs::canonicalize(p).ok());
         assert_eq!(got, expected);
