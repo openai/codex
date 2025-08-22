@@ -24,6 +24,10 @@ pub enum ResponseInputItem {
         call_id: String,
         result: Result<CallToolResult, String>,
     },
+    CustomToolCallOutput {
+        call_id: String,
+        output: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -125,6 +129,9 @@ impl From<ResponseInputItem> for ResponseItem {
                     ),
                 },
             },
+            ResponseInputItem::CustomToolCallOutput { call_id, output } => {
+                Self::CustomToolCallOutput { call_id, output }
+            }
         }
     }
 }

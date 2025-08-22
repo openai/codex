@@ -1997,7 +1997,6 @@ async fn handle_function_call(
             )
             .await
         }
-        // TODO(dylan): maybe deprecate this? after testing with gpt-oss
         "apply_patch" => {
             let args = match serde_json::from_str::<ApplyPatchToolArgs>(&arguments) {
                 Ok(a) => a,
@@ -2087,12 +2086,9 @@ async fn handle_custom_tool_call(
         }
         _ => {
             debug!("unexpected CustomToolCall from stream");
-            ResponseInputItem::FunctionCallOutput {
+            ResponseInputItem::CustomToolCallOutput {
                 call_id,
-                output: FunctionCallOutputPayload {
-                    content: format!("unsupported custom tool call: {name}"),
-                    success: None,
-                },
+                output: format!("unsupported custom tool call: {name}"),
             }
         }
     }
