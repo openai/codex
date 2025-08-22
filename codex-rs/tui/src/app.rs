@@ -13,11 +13,7 @@ use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
-use crossterm::execute;
-use crossterm::terminal::EnterAlternateScreen;
-use crossterm::terminal::LeaveAlternateScreen;
 use crossterm::terminal::supports_keyboard_enhancement;
-use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use std::path::PathBuf;
@@ -44,7 +40,6 @@ pub(crate) struct App {
     // Transcript overlay state
     transcript_overlay: Option<TranscriptApp>,
     deferred_history_lines: Vec<Line<'static>>,
-    transcript_saved_viewport: Option<Rect>,
 
     enhanced_keys_supported: bool,
 
@@ -89,7 +84,6 @@ impl App {
             transcript_lines: Vec::new(),
             transcript_overlay: None,
             deferred_history_lines: Vec::new(),
-            transcript_saved_viewport: None,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
         };
 
@@ -119,10 +113,7 @@ impl App {
             overlay.handle_event(tui, event)?;
             if overlay.is_done {
                 // Exit alternate screen and restore viewport.
-                let _ = execute!(tui.terminal.backend_mut(), LeaveAlternateScreen);
-                if let Some(saved) = self.transcript_saved_viewport.take() {
-                    tui.terminal.set_viewport_area(saved);
-                }
+                let _ = tui.leave_alt_screen();
                 if !self.deferred_history_lines.is_empty() {
                     let lines = std::mem::take(&mut self.deferred_history_lines);
                     tui.insert_history_lines(lines);
@@ -153,16 +144,6 @@ impl App {
                             }
                         },
                     )?;
-                }
-                #[cfg(unix)]
-                TuiEvent::ResumeFromSuspend => {
-                    let cursor_pos = tui.terminal.get_cursor_position()?;
-                    tui.terminal.set_viewport_area(ratatui::layout::Rect::new(
-                        0,
-                        cursor_pos.y,
-                        0,
-                        0,
-                    ));
                 }
             }
         }
@@ -242,17 +223,8 @@ impl App {
             AppEvent::DiffResult(text) => {
                 // Clear the in-progress state in the bottom pane
                 self.chat_widget.on_diff_complete();
-
-                // Enter alternate screen and set viewport to full size.
-                let _ = execute!(tui.terminal.backend_mut(), EnterAlternateScreen);
-                if let Ok(size) = tui.terminal.size() {
-                    self.transcript_saved_viewport = Some(tui.terminal.viewport_area);
-                    tui.terminal
-                        .set_viewport_area(Rect::new(0, 0, size.width, size.height));
-                    let _ = tui.terminal.clear();
-                }
-
-                // Build pager lines directly without the "/diff" header
+                // Enter alternate screen using TUI helper and build pager lines
+                let _ = tui.enter_alt_screen();
                 let pager_lines: Vec<ratatui::text::Line<'static>> = if text.trim().is_empty() {
                     vec!["No changes detected.".italic().into()]
                 } else {
@@ -317,14 +289,7 @@ impl App {
                 ..
             } => {
                 // Enter alternate screen and set viewport to full size.
-                let _ = execute!(tui.terminal.backend_mut(), EnterAlternateScreen);
-                if let Ok(size) = tui.terminal.size() {
-                    self.transcript_saved_viewport = Some(tui.terminal.viewport_area);
-                    tui.terminal
-                        .set_viewport_area(Rect::new(0, 0, size.width, size.height));
-                    let _ = tui.terminal.clear();
-                }
-
+                let _ = tui.enter_alt_screen();
                 self.transcript_overlay = Some(TranscriptApp::new(self.transcript_lines.clone()));
                 tui.frame_requester().schedule_frame();
             }
