@@ -116,6 +116,8 @@ impl From<EnvironmentContext> for ResponseItem {
             content: vec![ContentItem::InputText {
                 text: ec.serialize_to_xml(),
             }],
+            token_usage: None,
+            timestamp: None,
         }
     }
 }

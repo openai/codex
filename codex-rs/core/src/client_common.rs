@@ -76,17 +76,20 @@ impl Prompt {
             content: vec![ContentItem::InputText {
                 text: format!("{USER_INSTRUCTIONS_START}{ui}{USER_INSTRUCTIONS_END}"),
             }],
+            token_usage: None,
+            timestamp: None,
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum ResponseEvent {
     Created,
     OutputItemDone(ResponseItem),
     Completed {
         response_id: String,
         token_usage: Option<TokenUsage>,
+        timestamp: Option<String>,
     },
     OutputTextDelta(String),
     ReasoningSummaryDelta(String),
