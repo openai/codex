@@ -370,12 +370,7 @@ impl ChatComposer {
                 if let Some(sel) = popup.selected_match() {
                     let sel_path = sel.to_string();
                     // If selected path looks like an image (png/jpeg), attach as image instead of inserting text.
-                    let is_image = {
-                        let lower = sel_path.to_ascii_lowercase();
-                        lower.ends_with(".png")
-                            || lower.ends_with(".jpg")
-                            || lower.ends_with(".jpeg")
-                    };
+                    let is_image = Self::is_image_path(&sel_path);
                     if is_image {
                         // Determine dimensions; if that fails fall back to normal path insertion.
                         let path_buf = std::path::PathBuf::from(&sel_path);
@@ -435,6 +430,13 @@ impl ChatComposer {
             }
             input => self.handle_input_basic(input),
         }
+    }
+
+    /// Returns true if the provided path string ends with a common image
+    /// extension we support for inline attachments.
+    fn is_image_path(path: &str) -> bool {
+        let lower = path.to_ascii_lowercase();
+        lower.ends_with(".png") || lower.ends_with(".jpg") || lower.ends_with(".jpeg")
     }
 
     /// Extract the `@token` that the cursor is currently positioned on, if any.
