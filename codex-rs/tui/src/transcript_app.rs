@@ -28,7 +28,7 @@ impl TranscriptApp {
     pub(crate) fn new(transcript_lines: Vec<Line<'static>>) -> Self {
         Self {
             transcript_lines,
-            scroll_offset: 0,
+            scroll_offset: usize::MAX,
             is_done: false,
             title: "T R A N S C R I P T".to_string(),
         }
