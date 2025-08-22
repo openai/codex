@@ -29,10 +29,10 @@ use ratatui::prelude::*;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
+use ratatui::style::Stylize;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
-use shlex::try_join as shlex_try_join;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::PathBuf;
@@ -46,6 +46,7 @@ pub(crate) struct CommandOutput {
     pub(crate) exit_code: i32,
     pub(crate) stdout: String,
     pub(crate) stderr: String,
+    pub(crate) formatted_output: String,
 }
 
 pub(crate) enum PatchEventType {
@@ -104,6 +105,7 @@ pub(crate) struct ExecCell {
     pub(crate) parsed: Vec<ParsedCommand>,
     pub(crate) output: Option<CommandOutput>,
     start_time: Option<Instant>,
+    duration: Option<Duration>,
     include_header: bool,
 }
 impl HistoryCell for ExecCell {
@@ -115,6 +117,44 @@ impl HistoryCell for ExecCell {
             self.start_time,
             self.include_header,
         )
+    }
+
+    fn transcript_lines(&self) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = vec!["".into()];
+
+        let cmd_display = strip_bash_lc_and_escape(&self.command);
+        for (i, part) in cmd_display.lines().enumerate() {
+            if i == 0 {
+                lines.push(Line::from(vec!["$ ".magenta(), part.to_string().into()]));
+            } else {
+                lines.push(Line::from(vec!["    ".into(), part.to_string().into()]));
+            }
+        }
+
+        // Command output: include full stdout and stderr (no truncation)
+        if let Some(output) = self.output.as_ref() {
+            lines.extend(output.formatted_output.lines().map(ansi_escape_line));
+        }
+
+        if let Some(output) = self.output.as_ref() {
+            let duration = self
+                .duration
+                .map(format_duration)
+                .unwrap_or_else(|| "unknown".to_string());
+            let mut result = if output.exit_code == 0 {
+                Line::from("✓".green().bold())
+            } else {
+                Line::from(vec![
+                    "✗".red().bold(),
+                    format!(" ({})", output.exit_code).into(),
+                ])
+            };
+
+            result.push_span(format!(" • {duration}").dim());
+            lines.push(result);
+        }
+
+        lines
     }
 }
 
@@ -240,6 +280,7 @@ pub(crate) fn new_active_exec_command(
         parsed,
         output: None,
         start_time: Some(Instant::now()),
+        duration: None,
         include_header,
     }
 }
@@ -249,12 +290,14 @@ pub(crate) fn new_completed_exec_command(
     parsed: Vec<ParsedCommand>,
     output: CommandOutput,
     include_header: bool,
+    duration: Duration,
 ) -> ExecCell {
     ExecCell {
         command,
         parsed,
         output: Some(output),
         start_time: None,
+        duration: Some(duration),
         include_header,
     }
 }
@@ -272,7 +315,7 @@ fn exec_command_lines(
     }
 }
 fn new_parsed_command(
-    command: &[String],
+    _command: &[String],
     parsed_commands: &[ParsedCommand],
     output: Option<&CommandOutput>,
     start_time: Option<Instant>,
@@ -949,6 +992,7 @@ pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
                 exit_code: 1,
                 stdout: String::new(),
                 stderr,
+                formatted_output: String::new(),
             }),
             true,
             true,
@@ -1028,6 +1072,7 @@ fn output_lines(
         exit_code,
         stdout,
         stderr,
+        ..
     } = match output {
         Some(output) if only_err && output.exit_code == 0 => return vec![],
         Some(output) => output,

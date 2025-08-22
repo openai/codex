@@ -405,6 +405,7 @@ impl ChatWidget {
                 exit_code: ev.exit_code,
                 stdout: ev.stdout.clone(),
                 stderr: ev.stderr.clone(),
+                formatted_output: ev.formatted_output.clone(),
             },
         ));
 
@@ -418,6 +419,7 @@ impl ChatWidget {
                     parsed,
                     output,
                     include_header,
+                    ev.duration,
                 );
                 self.add_to_history(cell);
                 self.last_history_was_exec = true;
