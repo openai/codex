@@ -1,3 +1,4 @@
+use crate::config_types::Verbosity as VerbosityConfig;
 use crate::error::Result;
 use crate::model_family::ModelFamily;
 use crate::models::ContentItem;
@@ -99,6 +100,32 @@ pub(crate) struct Reasoning {
     pub(crate) summary: ReasoningSummaryConfig,
 }
 
+/// Controls under the `text` field in the Responses API for GPT-5.
+#[derive(Debug, Serialize, Default, Clone, Copy)]
+pub(crate) struct TextControls {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) verbosity: Option<OpenAiVerbosity>,
+}
+
+#[derive(Debug, Serialize, Default, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum OpenAiVerbosity {
+    Low,
+    #[default]
+    Medium,
+    High,
+}
+
+impl From<VerbosityConfig> for OpenAiVerbosity {
+    fn from(v: VerbosityConfig) -> Self {
+        match v {
+            VerbosityConfig::Low => OpenAiVerbosity::Low,
+            VerbosityConfig::Medium => OpenAiVerbosity::Medium,
+            VerbosityConfig::High => OpenAiVerbosity::High,
+        }
+    }
+}
+
 /// Request object that is serialized as JSON and POST'ed when using the
 /// Responses API.
 #[derive(Debug, Serialize)]
@@ -119,6 +146,8 @@ pub(crate) struct ResponsesApiRequest<'a> {
     pub(crate) include: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) prompt_cache_key: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) text: Option<TextControls>,
 }
 
 pub(crate) fn create_reasoning_param_for_request(
@@ -131,6 +160,14 @@ pub(crate) fn create_reasoning_param_for_request(
     } else {
         None
     }
+}
+
+pub(crate) fn create_text_param_for_request(
+    verbosity: Option<VerbosityConfig>,
+) -> Option<TextControls> {
+    verbosity.map(|v| TextControls {
+        verbosity: Some(v.into()),
+    })
 }
 
 pub(crate) struct ResponseStream {
@@ -160,5 +197,58 @@ mod tests {
         let model_family = find_family_for_model("gpt-4.1").expect("known model slug");
         let full = prompt.get_full_instructions(&model_family);
         assert_eq!(full, expected);
+    }
+
+    #[test]
+    fn serializes_text_verbosity_when_set() {
+        let input: Vec<ResponseItem> = vec![];
+        let tools: Vec<serde_json::Value> = vec![];
+        let req = ResponsesApiRequest {
+            model: "gpt-5",
+            instructions: "i",
+            input: &input,
+            tools: &tools,
+            tool_choice: "auto",
+            parallel_tool_calls: false,
+            reasoning: None,
+            store: true,
+            stream: true,
+            include: vec![],
+            prompt_cache_key: None,
+            text: Some(TextControls {
+                verbosity: Some(OpenAiVerbosity::Low),
+            }),
+        };
+
+        let v = serde_json::to_value(&req).expect("json");
+        assert_eq!(
+            v.get("text")
+                .and_then(|t| t.get("verbosity"))
+                .and_then(|s| s.as_str()),
+            Some("low")
+        );
+    }
+
+    #[test]
+    fn omits_text_when_not_set() {
+        let input: Vec<ResponseItem> = vec![];
+        let tools: Vec<serde_json::Value> = vec![];
+        let req = ResponsesApiRequest {
+            model: "gpt-5",
+            instructions: "i",
+            input: &input,
+            tools: &tools,
+            tool_choice: "auto",
+            parallel_tool_calls: false,
+            reasoning: None,
+            store: true,
+            stream: true,
+            include: vec![],
+            prompt_cache_key: None,
+            text: None,
+        };
+
+        let v = serde_json::to_value(&req).expect("json");
+        assert!(v.get("text").is_none());
     }
 }
