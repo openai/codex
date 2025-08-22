@@ -563,7 +563,7 @@ mod tests {
             AskForApproval::Never,
             SandboxPolicy::ReadOnly,
             true,
-            model_family.uses_apply_patch_tool,
+            false,
         );
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
@@ -578,7 +578,7 @@ mod tests {
             AskForApproval::Never,
             SandboxPolicy::ReadOnly,
             true,
-            model_family.uses_apply_patch_tool,
+            false,
         );
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
@@ -593,7 +593,7 @@ mod tests {
             AskForApproval::Never,
             SandboxPolicy::ReadOnly,
             false,
-            model_family.uses_apply_patch_tool,
+            false,
         );
         let tools = get_openai_tools(
             &config,
@@ -687,7 +687,7 @@ mod tests {
             AskForApproval::Never,
             SandboxPolicy::ReadOnly,
             false,
-            model_family.uses_apply_patch_tool,
+            false,
         );
 
         let tools = get_openai_tools(
@@ -743,7 +743,7 @@ mod tests {
             AskForApproval::Never,
             SandboxPolicy::ReadOnly,
             false,
-            model_family.uses_apply_patch_tool,
+            false,
         );
 
         let tools = get_openai_tools(
@@ -794,7 +794,7 @@ mod tests {
             AskForApproval::Never,
             SandboxPolicy::ReadOnly,
             false,
-            model_family.uses_apply_patch_tool,
+            false,
         );
 
         let tools = get_openai_tools(
@@ -848,7 +848,7 @@ mod tests {
             AskForApproval::Never,
             SandboxPolicy::ReadOnly,
             false,
-            model_family.uses_apply_patch_tool,
+            false,
         );
 
         let tools = get_openai_tools(
