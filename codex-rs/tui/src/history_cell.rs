@@ -1,6 +1,7 @@
 use crate::diff_render::create_diff_summary;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
+use crate::markdown::append_markdown;
 use crate::slash_command::SlashCommand;
 use crate::text_formatting::format_and_truncate_tool_result;
 use base64::Engine;
@@ -11,6 +12,7 @@ use codex_core::config::Config;
 use codex_core::plan_tool::PlanItemArg;
 use codex_core::plan_tool::StepStatus;
 use codex_core::plan_tool::UpdatePlanArgs;
+use codex_core::project_doc::discover_project_doc_paths;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SandboxPolicy;
@@ -39,7 +41,7 @@ use std::time::Instant;
 use tracing::error;
 use uuid::Uuid;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct CommandOutput {
     pub(crate) exit_code: i32,
     pub(crate) stdout: String,
@@ -54,8 +56,12 @@ pub(crate) enum PatchEventType {
 /// Represents an event to display in the conversation history. Returns its
 /// `Vec<Line<'static>>` representation to make it easier to display in a
 /// scrollable list.
-pub(crate) trait HistoryCell {
+pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync {
     fn display_lines(&self) -> Vec<Line<'static>>;
+
+    fn transcript_lines(&self) -> Vec<Line<'static>> {
+        self.display_lines()
+    }
 
     fn desired_height(&self, width: u16) -> u16 {
         Paragraph::new(Text::from(self.display_lines()))
@@ -66,6 +72,7 @@ pub(crate) trait HistoryCell {
     }
 }
 
+#[derive(Debug)]
 pub(crate) struct PlainHistoryCell {
     lines: Vec<Line<'static>>,
 }
@@ -76,6 +83,22 @@ impl HistoryCell for PlainHistoryCell {
     }
 }
 
+#[derive(Debug)]
+pub(crate) struct TranscriptOnlyHistoryCell {
+    lines: Vec<Line<'static>>,
+}
+
+impl HistoryCell for TranscriptOnlyHistoryCell {
+    fn display_lines(&self) -> Vec<Line<'static>> {
+        Vec::new()
+    }
+
+    fn transcript_lines(&self) -> Vec<Line<'static>> {
+        self.lines.clone()
+    }
+}
+
+#[derive(Debug)]
 pub(crate) struct ExecCell {
     pub(crate) command: Vec<String>,
     pub(crate) parsed: Vec<ParsedCommand>,
@@ -101,6 +124,7 @@ impl WidgetRef for &ExecCell {
     }
 }
 
+#[derive(Debug)]
 struct CompletedMcpToolCallWithImageOutput {
     _image: DynamicImage,
 }
@@ -538,6 +562,54 @@ pub(crate) fn new_status_output(
         sandbox_name.into(),
     ]));
 
+    // AGENTS.md files discovered via core's project_doc logic
+    let agents_list = {
+        match discover_project_doc_paths(config) {
+            Ok(paths) => {
+                let mut rels: Vec<String> = Vec::new();
+                for p in paths {
+                    let display = if let Some(parent) = p.parent() {
+                        if parent == config.cwd {
+                            "AGENTS.md".to_string()
+                        } else {
+                            let mut cur = config.cwd.as_path();
+                            let mut ups = 0usize;
+                            let mut reached = false;
+                            while let Some(c) = cur.parent() {
+                                if cur == parent {
+                                    reached = true;
+                                    break;
+                                }
+                                cur = c;
+                                ups += 1;
+                            }
+                            if reached {
+                                format!("{}AGENTS.md", "../".repeat(ups))
+                            } else if let Ok(stripped) = p.strip_prefix(&config.cwd) {
+                                stripped.display().to_string()
+                            } else {
+                                p.display().to_string()
+                            }
+                        }
+                    } else {
+                        p.display().to_string()
+                    };
+                    rels.push(display);
+                }
+                rels
+            }
+            Err(_) => Vec::new(),
+        }
+    };
+    if agents_list.is_empty() {
+        lines.push(Line::from("  • AGENTS files: (none)"));
+    } else {
+        lines.push(Line::from(vec![
+            "  • AGENTS files: ".into(),
+            agents_list.join(", ").into(),
+        ]));
+    }
+
     lines.push(Line::from(""));
 
     // 👤 Account (only if ChatGPT tokens exist), shown under the first block
@@ -725,6 +797,12 @@ pub(crate) fn new_mcp_tools_output(
 
 pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
     let lines: Vec<Line<'static>> = vec![vec!["🖐 ".red().bold(), message.into()].into(), "".into()];
+    PlainHistoryCell { lines }
+}
+
+pub(crate) fn new_stream_error_event(message: String) -> PlainHistoryCell {
+    let lines: Vec<Line<'static>> =
+        vec![vec!["⚠ ".magenta().bold(), message.dim()].into(), "".into()];
     PlainHistoryCell { lines }
 }
 
@@ -928,6 +1006,17 @@ pub(crate) fn new_patch_apply_success(stdout: String) -> PlainHistoryCell {
     lines.push(Line::from(""));
 
     PlainHistoryCell { lines }
+}
+
+pub(crate) fn new_reasoning_block(
+    full_reasoning_buffer: String,
+    config: &Config,
+) -> TranscriptOnlyHistoryCell {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::from("thinking".magenta().italic()));
+    append_markdown(&full_reasoning_buffer, &mut lines, config);
+    lines.push(Line::from(""));
+    TranscriptOnlyHistoryCell { lines }
 }
 
 fn output_lines(

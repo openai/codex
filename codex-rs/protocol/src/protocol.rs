@@ -446,6 +446,10 @@ pub enum EventMsg {
 
     BackgroundEvent(BackgroundEventEvent),
 
+    /// Notification that a model stream experienced an error or disconnect
+    /// and the system is handling it (e.g., retrying with backoff).
+    StreamError(StreamErrorEvent),
+
     /// Notification that the agent is about to apply a code patch. Mirrors
     /// `ExecCommandBegin` so front‑ends can show progress indicators.
     PatchApplyBegin(PatchApplyBeginEvent),
@@ -718,6 +722,11 @@ pub struct ApplyPatchApprovalRequestEvent {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct BackgroundEventEvent {
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StreamErrorEvent {
     pub message: String,
 }
 

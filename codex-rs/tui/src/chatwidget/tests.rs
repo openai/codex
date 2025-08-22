@@ -19,6 +19,7 @@ use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
+use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -150,6 +151,7 @@ fn make_chatwidget_manual() -> (
         interrupts: InterruptManager::new(),
         needs_redraw: false,
         reasoning_buffer: String::new(),
+        full_reasoning_buffer: String::new(),
         session_id: None,
         frame_requester: crate::tui::FrameRequester::test_dummy(),
     };
@@ -161,8 +163,10 @@ fn drain_insert_history(
 ) -> Vec<Vec<ratatui::text::Line<'static>>> {
     let mut out = Vec::new();
     while let Ok(ev) = rx.try_recv() {
-        if let AppEvent::InsertHistory(lines) = ev {
-            out.push(lines);
+        match ev {
+            AppEvent::InsertHistoryLines(lines) => out.push(lines),
+            AppEvent::InsertHistoryCell(cell) => out.push(cell.display_lines()),
+            _ => {}
         }
     }
     out
@@ -336,13 +340,25 @@ async fn binary_size_transcript_matches_ideal_fixture() {
                     let ev: Event = serde_json::from_value(payload.clone()).expect("parse");
                     chat.handle_codex_event(ev);
                     while let Ok(app_ev) = rx.try_recv() {
-                        if let AppEvent::InsertHistory(lines) = app_ev {
-                            transcript.push_str(&lines_to_single_string(&lines));
-                            crate::insert_history::insert_history_lines_to_writer(
-                                &mut terminal,
-                                &mut ansi,
-                                lines,
-                            );
+                        match app_ev {
+                            AppEvent::InsertHistoryLines(lines) => {
+                                transcript.push_str(&lines_to_single_string(&lines));
+                                crate::insert_history::insert_history_lines_to_writer(
+                                    &mut terminal,
+                                    &mut ansi,
+                                    lines,
+                                );
+                            }
+                            AppEvent::InsertHistoryCell(cell) => {
+                                let lines = cell.display_lines();
+                                transcript.push_str(&lines_to_single_string(&lines));
+                                crate::insert_history::insert_history_lines_to_writer(
+                                    &mut terminal,
+                                    &mut ansi,
+                                    lines,
+                                );
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -353,13 +369,25 @@ async fn binary_size_transcript_matches_ideal_fixture() {
                 {
                     chat.on_commit_tick();
                     while let Ok(app_ev) = rx.try_recv() {
-                        if let AppEvent::InsertHistory(lines) = app_ev {
-                            transcript.push_str(&lines_to_single_string(&lines));
-                            crate::insert_history::insert_history_lines_to_writer(
-                                &mut terminal,
-                                &mut ansi,
-                                lines,
-                            );
+                        match app_ev {
+                            AppEvent::InsertHistoryLines(lines) => {
+                                transcript.push_str(&lines_to_single_string(&lines));
+                                crate::insert_history::insert_history_lines_to_writer(
+                                    &mut terminal,
+                                    &mut ansi,
+                                    lines,
+                                );
+                            }
+                            AppEvent::InsertHistoryCell(cell) => {
+                                let lines = cell.display_lines();
+                                transcript.push_str(&lines_to_single_string(&lines));
+                                crate::insert_history::insert_history_lines_to_writer(
+                                    &mut terminal,
+                                    &mut ansi,
+                                    lines,
+                                );
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -797,6 +825,25 @@ fn plan_update_renders_history_cell() {
 }
 
 #[test]
+fn stream_error_is_rendered_to_history() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+    let msg = "stream error: stream disconnected before completion: idle timeout waiting for SSE; retrying 1/5 in 211ms…";
+    chat.handle_codex_event(Event {
+        id: "sub-1".into(),
+        msg: EventMsg::StreamError(StreamErrorEvent {
+            message: msg.to_string(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(!cells.is_empty(), "expected a history cell for StreamError");
+    let blob = lines_to_single_string(cells.last().unwrap());
+    assert!(blob.contains("⚠ "));
+    assert!(blob.contains("stream error:"));
+    assert!(blob.contains("idle timeout waiting for SSE"));
+}
+
+#[test]
 fn headers_emitted_on_stream_begin_for_answer_and_not_for_reasoning() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
@@ -809,7 +856,7 @@ fn headers_emitted_on_stream_begin_for_answer_and_not_for_reasoning() {
     });
     let mut saw_codex_pre = false;
     while let Ok(ev) = rx.try_recv() {
-        if let AppEvent::InsertHistory(lines) = ev {
+        if let AppEvent::InsertHistoryLines(lines) = ev {
             let s = lines
                 .iter()
                 .flat_map(|l| l.spans.iter())
@@ -837,7 +884,7 @@ fn headers_emitted_on_stream_begin_for_answer_and_not_for_reasoning() {
     chat.on_commit_tick();
     let mut saw_codex_post = false;
     while let Ok(ev) = rx.try_recv() {
-        if let AppEvent::InsertHistory(lines) = ev {
+        if let AppEvent::InsertHistoryLines(lines) = ev {
             let s = lines
                 .iter()
                 .flat_map(|l| l.spans.iter())
@@ -865,7 +912,7 @@ fn headers_emitted_on_stream_begin_for_answer_and_not_for_reasoning() {
     });
     let mut saw_thinking = false;
     while let Ok(ev) = rx2.try_recv() {
-        if let AppEvent::InsertHistory(lines) = ev {
+        if let AppEvent::InsertHistoryLines(lines) = ev {
             let s = lines
                 .iter()
                 .flat_map(|l| l.spans.iter())
