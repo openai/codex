@@ -575,6 +575,8 @@ async fn process_sse<S>(
             }
             "response.content_part.done"
             | "response.function_call_arguments.delta"
+            | "response.custom_tool_call_input.delta"
+            | "response.custom_tool_call_input.done" // also emitted as response.output_item.done
             | "response.in_progress"
             | "response.output_item.added"
             | "response.output_text.done" => {

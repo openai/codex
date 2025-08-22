@@ -24,6 +24,10 @@ pub enum ResponseInputItem {
         call_id: String,
         result: Result<CallToolResult, String>,
     },
+    CustomToolCallOutput {
+        call_id: String,
+        output: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -77,6 +81,20 @@ pub enum ResponseItem {
         call_id: String,
         output: FunctionCallOutputPayload,
     },
+    CustomToolCall {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
+
+        call_id: String,
+        name: String,
+        input: String,
+    },
+    CustomToolCallOutput {
+        call_id: String,
+        output: String,
+    },
     #[serde(other)]
     Other,
 }
@@ -114,6 +132,9 @@ impl From<ResponseInputItem> for ResponseItem {
                     ),
                 },
             },
+            ResponseInputItem::CustomToolCallOutput { call_id, output } => {
+                Self::CustomToolCallOutput { call_id, output }
+            }
         }
     }
 }

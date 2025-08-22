@@ -646,7 +646,7 @@ impl Config {
                 needs_special_apply_patch_instructions: false,
                 supports_reasoning_summaries,
                 uses_local_shell_tool: false,
-                uses_apply_patch_tool: false,
+                apply_patch_tool_type: None,
             }
         });
 
@@ -672,9 +672,6 @@ impl Config {
         let file_base_instructions =
             Self::get_base_instructions(experimental_instructions_path, &resolved_cwd)?;
         let base_instructions = base_instructions.or(file_base_instructions);
-
-        let include_apply_patch_tool_val =
-            include_apply_patch_tool.unwrap_or(model_family.uses_apply_patch_tool);
 
         let responses_originator_header: String = cfg
             .responses_originator_header_internal_override
@@ -732,7 +729,7 @@ impl Config {
 
             experimental_resume,
             include_plan_tool: include_plan_tool.unwrap_or(false),
-            include_apply_patch_tool: include_apply_patch_tool_val,
+            include_apply_patch_tool: include_apply_patch_tool.unwrap_or(false),
             responses_originator_header,
             preferred_auth_method: cfg.preferred_auth_method.unwrap_or(AuthMode::ChatGPT),
         };
