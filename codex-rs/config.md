@@ -237,12 +237,6 @@ If the model name starts with `"o"` (as in `"o3"` or `"o4-mini"`) or `"codex"`, 
 - `"concise"`
 - `"detailed"`
 
-To disable reasoning summaries, set `model_reasoning_summary` to `"none"` in your config:
-
-```toml
-model_reasoning_summary = "none"  # disable reasoning summaries
-```
-
 ## model_supports_reasoning_summaries
 
 By default, `reasoning` is only set on requests to OpenAI models that are known to support them. To force `reasoning` to set on requests to the current model, you can force this behavior by setting the following in `config.toml`:
