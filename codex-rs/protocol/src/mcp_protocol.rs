@@ -196,9 +196,7 @@ pub struct CancelLoginChatGptResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct LogoutChatGptParams {
-    pub login_id: Uuid,
-}
+pub struct LogoutChatGptParams {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
