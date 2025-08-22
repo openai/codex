@@ -9,6 +9,9 @@ use crate::model_family::ModelFamily;
 use crate::plan_tool::PLAN_TOOL;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
+use crate::tool_apply_patch::ApplyPatchToolType;
+use crate::tool_apply_patch::create_apply_patch_freeform_tool;
+use crate::tool_apply_patch::create_apply_patch_json_tool;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ResponsesApiTool {
@@ -59,7 +62,7 @@ pub enum ConfigShellToolType {
 pub struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
     pub plan_tool: bool,
-    pub apply_patch_tool: bool,
+    pub apply_patch_tool_type: Option<ApplyPatchToolType>,
 }
 
 impl ToolsConfig {
@@ -81,10 +84,22 @@ impl ToolsConfig {
             }
         }
 
+        let apply_patch_tool_type = match model_family.apply_patch_tool_type {
+            Some(ApplyPatchToolType::Freeform) => Some(ApplyPatchToolType::Freeform),
+            Some(ApplyPatchToolType::Function) => Some(ApplyPatchToolType::Function),
+            None => {
+                if include_apply_patch_tool {
+                    Some(ApplyPatchToolType::Freeform)
+                } else {
+                    None
+                }
+            }
+        };
+
         Self {
             shell_type,
             plan_tool: include_plan_tool,
-            apply_patch_tool: include_apply_patch_tool || model_family.uses_apply_patch_tool,
+            apply_patch_tool_type,
         }
     }
 }
@@ -261,39 +276,6 @@ The shell tool is used to execute shell commands.
 #[derive(Serialize, Deserialize)]
 pub(crate) struct ApplyPatchToolArgs {
     pub(crate) input: String,
-}
-
-/// Returns a custom tool that can be used to edit files. Well-suited for GPT-5 models
-fn create_apply_patch_freeform_tool() -> OpenAiTool {
-    OpenAiTool::Freeform(FreeformTool {
-        name: "apply_patch".to_string(),
-        description: "Use the `apply_patch` tool to edit files".to_string(),
-        format: FreeformToolFormat {
-            r#type: "grammar".to_string(),
-            syntax: "lark".to_string(),
-            definition: r#"start: begin_patch hunk+ end_patch
-begin_patch: "*** Begin Patch" LF
-end_patch: "*** End Patch" LF?
-
-hunk: add_hunk | delete_hunk | update_hunk
-add_hunk: "*** Add File: " filename LF add_line+
-delete_hunk: "*** Delete File: " filename LF
-update_hunk: "*** Update File: " filename LF change_move? change?
-
-filename: /(.+)/
-add_line: "+" /(.+)/ LF -> line
-
-change_move: "*** Move to: " filename LF
-change: (change_context | change_line)+ eof_line?
-change_context: ("@@" | "@@ " /(.+)/) LF
-change_line: ("+" | "-" | " ") /(.+)/ LF
-eof_line: "*** End of File" LF
-
-%import common.LF
-"#
-            .to_string(),
-        },
-    })
 }
 
 /// Returns JSON values that are compatible with Function Calling in the
@@ -516,9 +498,15 @@ pub(crate) fn get_openai_tools(
         tools.push(PLAN_TOOL.clone());
     }
 
-    // TODO(dylan): bring back json tool for gpt-oss maybe??
-    if config.apply_patch_tool {
-        tools.push(create_apply_patch_freeform_tool());
+    if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
+        match apply_patch_tool_type {
+            ApplyPatchToolType::Freeform => {
+                tools.push(create_apply_patch_freeform_tool());
+            }
+            ApplyPatchToolType::Function => {
+                tools.push(create_apply_patch_json_tool());
+            }
+        }
     }
 
     if let Some(mcp_tools) = mcp_tools {

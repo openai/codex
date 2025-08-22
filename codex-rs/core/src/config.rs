@@ -646,7 +646,7 @@ impl Config {
                 needs_special_apply_patch_instructions: false,
                 supports_reasoning_summaries,
                 uses_local_shell_tool: false,
-                uses_apply_patch_tool: false,
+                apply_patch_tool_type: None,
             }
         });
 
@@ -674,7 +674,7 @@ impl Config {
         let base_instructions = base_instructions.or(file_base_instructions);
 
         let include_apply_patch_tool_val =
-            include_apply_patch_tool.unwrap_or(model_family.uses_apply_patch_tool);
+            include_apply_patch_tool.unwrap_or(model_family.apply_patch_tool_type.is_some());
 
         let responses_originator_header: String = cfg
             .responses_originator_header_internal_override
