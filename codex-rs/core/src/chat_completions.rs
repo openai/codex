@@ -102,6 +102,33 @@ pub(crate) async fn stream_chat_completions(
                     "content": output.content,
                 }));
             }
+            ResponseItem::CustomToolCall {
+                id,
+                call_id: _,
+                name,
+                input,
+                status: _,
+            } => {
+                messages.push(json!({
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": id,
+                        "type": "custom",
+                        "custom": {
+                            "name": name,
+                            "input": input,
+                        }
+                    }]
+                }));
+            }
+            ResponseItem::CustomToolCallOutput { call_id, output } => {
+                messages.push(json!({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": output,
+                }));
+            }
             ResponseItem::Reasoning { .. } | ResponseItem::Other => {
                 // Omit these items from the conversation history.
                 continue;
