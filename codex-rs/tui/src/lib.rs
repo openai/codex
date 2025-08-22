@@ -12,6 +12,7 @@ use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
+use codex_login::AuthManager;
 use codex_login::AuthMode;
 use codex_login::CodexAuth;
 use codex_ollama::DEFAULT_OSS_MODEL;
@@ -300,6 +301,7 @@ async fn run_ratatui_app(
 
     let Cli { prompt, images, .. } = cli;
 
+    let auth_manager = AuthManager::shared(config.codex_home.clone(), config.preferred_auth_method);
     let login_status = get_login_status(&config);
     let should_show_onboarding =
         should_show_onboarding(login_status, &config, should_show_trust_screen);
@@ -312,6 +314,7 @@ async fn run_ratatui_app(
                 show_trust_screen: should_show_trust_screen,
                 login_status,
                 preferred_auth_method: config.preferred_auth_method,
+                auth_manager: auth_manager.clone(),
             },
             &mut tui,
         )
@@ -322,7 +325,7 @@ async fn run_ratatui_app(
         }
     }
 
-    let app_result = App::run(&mut tui, config, prompt, images).await;
+    let app_result = App::run(&mut tui, auth_manager, config, prompt, images).await;
 
     restore();
     // Mark the end of the recorded session.

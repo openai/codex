@@ -774,6 +774,7 @@ dependencies = [
  "codex-arg0",
  "codex-common",
  "codex-core",
+ "codex-login",
  "codex-ollama",
  "codex-protocol",
  "core_test_support",

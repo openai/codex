@@ -13,6 +13,8 @@ use anyhow::Context;
 use assert_cmd::prelude::*;
 use codex_mcp_server::CodexToolCallParam;
 use codex_protocol::mcp_protocol::AddConversationListenerParams;
+use codex_protocol::mcp_protocol::CancelLoginChatGptParams;
+use codex_protocol::mcp_protocol::GetAuthStatusParams;
 use codex_protocol::mcp_protocol::InterruptConversationParams;
 use codex_protocol::mcp_protocol::NewConversationParams;
 use codex_protocol::mcp_protocol::RemoveConversationListenerParams;
@@ -215,6 +217,34 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("interruptConversation", params).await
+    }
+
+    /// Send a `getAuthStatus` JSON-RPC request.
+    pub async fn send_get_auth_status_request(
+        &mut self,
+        params: GetAuthStatusParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("getAuthStatus", params).await
+    }
+
+    /// Send a `loginChatGpt` JSON-RPC request.
+    pub async fn send_login_chat_gpt_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request("loginChatGpt", None).await
+    }
+
+    /// Send a `cancelLoginChatGpt` JSON-RPC request.
+    pub async fn send_cancel_login_chat_gpt_request(
+        &mut self,
+        params: CancelLoginChatGptParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("cancelLoginChatGpt", params).await
+    }
+
+    /// Send a `logoutChatGpt` JSON-RPC request.
+    pub async fn send_logout_chat_gpt_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request("logoutChatGpt", None).await
     }
 
     async fn send_request(

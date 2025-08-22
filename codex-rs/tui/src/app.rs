@@ -9,6 +9,7 @@ use codex_ansi_escape::ansi_escape_line;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::protocol::TokenUsage;
+use codex_login::AuthManager;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -50,6 +51,7 @@ pub(crate) struct App {
 impl App {
     pub async fn run(
         tui: &mut tui::Tui,
+        auth_manager: Arc<AuthManager>,
         config: Config,
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
@@ -58,7 +60,7 @@ impl App {
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
 
-        let conversation_manager = Arc::new(ConversationManager::default());
+        let conversation_manager = Arc::new(ConversationManager::new(auth_manager.clone()));
 
         let enhanced_keys_supported = supports_keyboard_enhancement().unwrap_or(false);
 
