@@ -22,6 +22,7 @@ use uuid::Uuid;
 use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::message_history::HistoryEntry;
+use crate::models::ResponseItem;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
 

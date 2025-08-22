@@ -539,6 +539,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 }
             },
             EventMsg::ShutdownComplete => return CodexStatus::Shutdown,
+            EventMsg::ConversationHistory(_) => {}
         }
         CodexStatus::Running
     }

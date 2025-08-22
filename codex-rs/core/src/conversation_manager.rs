@@ -13,10 +13,10 @@ use crate::codex_conversation::CodexConversation;
 use crate::config::Config;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
-use crate::models::ResponseItem;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::SessionConfiguredEvent;
+use codex_protocol::models::ResponseItem;
 
 /// Represents a newly created Codex conversation, including the first event
 /// (which is [`EventMsg::SessionConfigured`]).
@@ -150,10 +150,7 @@ impl ConversationManager {
 
 /// Return a prefix of `items` obtained by dropping the last `n` user messages
 /// and all items that follow them.
-fn truncate_after_dropping_last_messages(
-    items: Vec<crate::models::ResponseItem>,
-    n: usize,
-) -> Vec<crate::models::ResponseItem> {
+fn truncate_after_dropping_last_messages(items: Vec<ResponseItem>, n: usize) -> Vec<ResponseItem> {
     if n == 0 || items.is_empty() {
         return items;
     }
@@ -162,7 +159,7 @@ fn truncate_after_dropping_last_messages(
     let mut count = 0usize;
     let mut cut_index = 0usize;
     for (idx, item) in items.iter().enumerate().rev() {
-        if let crate::models::ResponseItem::Message { role, .. } = item
+        if let ResponseItem::Message { role, .. } = item
             && role == "user"
         {
             count += 1;
@@ -183,9 +180,9 @@ fn truncate_after_dropping_last_messages(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::ContentItem;
-    use crate::models::ReasoningItemReasoningSummary;
-    use crate::models::ResponseItem;
+    use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ReasoningItemReasoningSummary;
+    use codex_protocol::models::ResponseItem;
 
     fn user_msg(text: &str) -> ResponseItem {
         ResponseItem::Message {

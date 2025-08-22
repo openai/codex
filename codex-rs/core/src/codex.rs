@@ -14,6 +14,7 @@ use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
 use codex_login::AuthManager;
+use codex_protocol::protocol::ConversationHistoryEvent;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use futures::prelude::*;
@@ -1294,6 +1295,21 @@ async fn submission_loop(
                     warn!("failed to send Shutdown event: {e}");
                 }
                 break;
+            }
+            Op::GetHistory => {
+                let tx_event = sess.tx_event.clone();
+                let sub_id = sub.id.clone();
+
+                let event = Event {
+                    id: sub_id.clone(),
+                    msg: EventMsg::ConversationHistory(ConversationHistoryEvent {
+                        conversation_id: sess.session_id,
+                        entries: sess.state.lock_unchecked().history.contents(),
+                    }),
+                };
+                if let Err(e) = tx_event.send(event).await {
+                    warn!("failed to send ConversationHistory event: {e}");
+                }
             }
             _ => {
                 // Ignore unknown ops; enum is non_exhaustive to allow extensions.
