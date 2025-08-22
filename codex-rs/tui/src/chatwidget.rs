@@ -818,9 +818,8 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    pub(crate) fn add_diff_output(&mut self, diff_output: String) {
+    pub(crate) fn on_diff_complete(&mut self) {
         self.bottom_pane.set_task_running(false);
-        self.add_to_history(history_cell::new_diff_output(diff_output));
         self.mark_needs_redraw();
     }
 
