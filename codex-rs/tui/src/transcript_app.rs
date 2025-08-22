@@ -105,7 +105,7 @@ impl TranscriptApp {
                 self.scroll_offset = self.scroll_offset.saturating_sub(area.height as usize);
             }
             KeyEvent {
-                code: KeyCode::PageDown,
+                code: KeyCode::PageDown | KeyCode::Char(' '),
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
                 ..
             } => {
