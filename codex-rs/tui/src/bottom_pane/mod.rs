@@ -492,8 +492,6 @@ mod tests {
         assert!(pane.active_view.is_some(), "active view should be present");
 
         // Render and ensure the top row includes the Working header instead of the composer.
-        // Give the animation thread a moment to tick.
-        std::thread::sleep(std::time::Duration::from_millis(120));
         let area = Rect::new(0, 0, 40, 3);
         let mut buf = Buffer::empty(area);
         (&pane).render_ref(area, &mut buf);
@@ -524,9 +522,6 @@ mod tests {
 
         // Begin a task: show initial status.
         pane.set_task_running(true);
-
-        // Allow some frames so the animation thread ticks.
-        std::thread::sleep(std::time::Duration::from_millis(120));
 
         // Render and confirm the line contains the "Working" header.
         let area = Rect::new(0, 0, 40, 3);
