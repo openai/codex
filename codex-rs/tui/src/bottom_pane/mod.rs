@@ -1,4 +1,5 @@
 //! Bottom pane: shows the ChatComposer or a BottomPaneView, if one is active.
+use std::path::PathBuf;
 
 use crate::app_event_sender::AppEventSender;
 use crate::tui::FrameRequester;
@@ -345,7 +346,7 @@ impl BottomPane {
 
     pub(crate) fn attach_image(
         &mut self,
-        path: std::path::PathBuf,
+        path: PathBuf,
         width: u32,
         height: u32,
         format_label: &str,
@@ -357,11 +358,9 @@ impl BottomPane {
         }
     }
 
-    pub(crate) fn take_recent_submission_images(&mut self) -> Vec<std::path::PathBuf> {
+    pub(crate) fn take_recent_submission_images(&mut self) -> Vec<PathBuf> {
         self.composer.take_recent_submission_images()
     }
-
-    // Removed restart_live_status_with_text – no longer used by the current streaming UI.
 }
 
 impl WidgetRef for &BottomPane {

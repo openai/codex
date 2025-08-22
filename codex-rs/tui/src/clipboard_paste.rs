@@ -57,7 +57,7 @@ pub fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageErro
         return Err(PasteImageError::EncodeFailed("invalid RGBA buffer".into()));
     };
     let dyn_img = image::DynamicImage::ImageRgba8(rgba_img);
-    tracing::debug!("clipboard image decoded RGBA {}x{}", w, h);
+    tracing::debug!("clipboard image decoded RGBA {w}x{h}");
     {
         let mut cursor = std::io::Cursor::new(&mut png);
         dyn_img
@@ -65,7 +65,10 @@ pub fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageErro
             .map_err(|e| PasteImageError::EncodeFailed(e.to_string()))?;
     }
 
-    tracing::debug!("clipboard image encoded to PNG ({} bytes)", png.len());
+    tracing::debug!(
+        "clipboard image encoded to PNG ({len} bytes)",
+        len = png.len()
+    );
     Ok((
         png,
         PastedImageInfo {
