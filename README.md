@@ -214,7 +214,7 @@ When you launch Codex in a new folder, it detects whether the folder is version 
 - Codex can run read-only commands without approval.
 - To edit files, access network, or perform other actions protected by the sandbox, Codex will need your permission.
 - Advanced: You can manually specify this configuration by running `codex --sandbox read-only --ask-for-approval on-request`
-- This is the recommended default non-version-controlled folders.
+- This is the recommended default for non-version-controlled folders.
 
 #### **3. Advanced configuration**
 
