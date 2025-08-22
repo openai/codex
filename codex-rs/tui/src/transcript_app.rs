@@ -28,7 +28,7 @@ impl TranscriptApp {
     pub(crate) fn new(transcript_lines: Vec<Line<'static>>) -> Self {
         Self {
             transcript_lines,
-            scroll_offset: 0,
+            scroll_offset: usize::MAX,
             is_done: false,
             title: "T R A N S C R I P T".to_string(),
         }
@@ -105,7 +105,7 @@ impl TranscriptApp {
                 self.scroll_offset = self.scroll_offset.saturating_sub(area.height as usize);
             }
             KeyEvent {
-                code: KeyCode::PageDown,
+                code: KeyCode::PageDown | KeyCode::Char(' '),
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
                 ..
             } => {
