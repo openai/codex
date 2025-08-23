@@ -715,7 +715,8 @@ pub(crate) fn new_mcp_tools_output(
 }
 
 pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
-    let lines: Vec<Line<'static>> = vec![vec!["🖐 ".red().bold(), message.into()].into(), "".into()];
+    let lines: Vec<Line<'static>> =
+        vec![vec!["💡 ".red().bold(), message.into()].into(), "".into()];
     PlainHistoryCell { lines }
 }
 
