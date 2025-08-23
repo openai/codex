@@ -24,6 +24,10 @@ pub enum ResponseInputItem {
         call_id: String,
         result: Result<CallToolResult, String>,
     },
+    CustomToolCallOutput {
+        call_id: String,
+        output: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -77,6 +81,20 @@ pub enum ResponseItem {
         call_id: String,
         output: FunctionCallOutputPayload,
     },
+    CustomToolCall {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
+
+        call_id: String,
+        name: String,
+        input: String,
+    },
+    CustomToolCallOutput {
+        call_id: String,
+        output: String,
+    },
     #[serde(other)]
     Other,
 }
@@ -114,6 +132,9 @@ impl From<ResponseInputItem> for ResponseItem {
                     ),
                 },
             },
+            ResponseInputItem::CustomToolCallOutput { call_id, output } => {
+                Self::CustomToolCallOutput { call_id, output }
+            }
         }
     }
 }
@@ -183,7 +204,6 @@ impl From<Vec<InputItem>> for ResponseInputItem {
                             None
                         }
                     },
-                    _ => None,
                 })
                 .collect::<Vec<ContentItem>>(),
         }
@@ -197,10 +217,8 @@ pub struct ShellToolCallParams {
     pub command: Vec<String>,
     pub workdir: Option<String>,
 
-    /// This is the maximum time in seconds that the command is allowed to run.
-    #[serde(rename = "timeout")]
-    // The wire format uses `timeout`, which has ambiguous units, so we use
-    // `timeout_ms` as the field name so it is clear in code.
+    /// This is the maximum time in milliseconds that the command is allowed to run.
+    #[serde(alias = "timeout")]
     pub timeout_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub with_escalated_permissions: Option<bool>,
