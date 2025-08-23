@@ -182,6 +182,7 @@ fn make_chatwidget_manual() -> (
         full_reasoning_buffer: String::new(),
         session_id: None,
         frame_requester: crate::tui::FrameRequester::test_dummy(),
+        show_welcome_banner: true,
         last_history_was_exec: false,
     };
     (widget, rx, op_rx)

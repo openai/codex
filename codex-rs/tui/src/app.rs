@@ -25,27 +25,37 @@ use std::thread;
 use std::time::Duration;
 use tokio::select;
 use tokio::sync::mpsc::unbounded_channel;
+// use uuid::Uuid;
 
 pub(crate) struct App {
-    server: Arc<ConversationManager>,
-    app_event_tx: AppEventSender,
-    chat_widget: ChatWidget,
+    pub(crate) server: Arc<ConversationManager>,
+    pub(crate) app_event_tx: AppEventSender,
+    pub(crate) chat_widget: ChatWidget,
 
     /// Config is stored here so we can recreate ChatWidgets as needed.
-    config: Config,
+    pub(crate) config: Config,
 
-    file_search: FileSearchManager,
+    pub(crate) file_search: FileSearchManager,
 
-    transcript_lines: Vec<Line<'static>>,
+    pub(crate) transcript_lines: Vec<Line<'static>>,
 
     // Transcript overlay state
-    transcript_overlay: Option<TranscriptApp>,
-    deferred_history_lines: Vec<Line<'static>>,
+    pub(crate) transcript_overlay: Option<TranscriptApp>,
+    // If true, overlay is opened as an Esc-backtrack preview.
+    pub(crate) transcript_overlay_is_backtrack: bool,
+    pub(crate) deferred_history_lines: Vec<Line<'static>>,
 
-    enhanced_keys_supported: bool,
+    pub(crate) enhanced_keys_supported: bool,
 
     /// Controls the animation thread that sends CommitTick events.
-    commit_anim_running: Arc<AtomicBool>,
+    pub(crate) commit_anim_running: Arc<AtomicBool>,
+
+    // Esc-backtracking state
+    pub(crate) esc_backtrack_primed: bool,
+    pub(crate) esc_backtrack_base: Option<uuid::Uuid>,
+    pub(crate) esc_backtrack_count: usize,
+    // Pending: base_id, drop_count, prefill text
+    pub(crate) pending_backtrack: Option<(uuid::Uuid, usize, String)>,
 }
 
 impl App {
@@ -85,8 +95,13 @@ impl App {
             enhanced_keys_supported,
             transcript_lines: Vec::new(),
             transcript_overlay: None,
+            transcript_overlay_is_backtrack: false,
             deferred_history_lines: Vec::new(),
             commit_anim_running: Arc::new(AtomicBool::new(false)),
+            esc_backtrack_primed: false,
+            esc_backtrack_base: None,
+            esc_backtrack_count: 0,
+            pending_backtrack: None,
         };
 
         let tui_events = tui.event_stream();
@@ -96,7 +111,7 @@ impl App {
 
         while select! {
             Some(event) = app_event_rx.recv() => {
-                app.handle_event(tui, event)?
+                app.handle_event(tui, event).await?
             }
             Some(event) = tui_events.next() => {
                 app.handle_tui_event(tui, event).await?
@@ -111,18 +126,8 @@ impl App {
         tui: &mut tui::Tui,
         event: TuiEvent,
     ) -> Result<bool> {
-        if let Some(overlay) = &mut self.transcript_overlay {
-            overlay.handle_event(tui, event)?;
-            if overlay.is_done {
-                // Exit alternate screen and restore viewport.
-                let _ = tui.leave_alt_screen();
-                if !self.deferred_history_lines.is_empty() {
-                    let lines = std::mem::take(&mut self.deferred_history_lines);
-                    tui.insert_history_lines(lines);
-                }
-                self.transcript_overlay = None;
-                tui.frame_requester().schedule_frame();
-            }
+        if self.transcript_overlay.is_some() {
+            let _ = self.handle_backtrack_overlay_event(tui, event).await?;
         } else {
             match event {
                 TuiEvent::Key(key_event) => {
@@ -161,7 +166,7 @@ impl App {
         Ok(true)
     }
 
-    fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
+    async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
         match event {
             AppEvent::NewSession => {
                 self.chat_widget = ChatWidget::new(
@@ -226,6 +231,55 @@ impl App {
             }
             AppEvent::CodexEvent(event) => {
                 self.chat_widget.handle_codex_event(event);
+            }
+            AppEvent::ConversationHistory(ev) => {
+                // If a backtrack is pending and this history corresponds to the base session, fork.
+                if let Some((base_id, drop_count, prefill)) = self.pending_backtrack.take() {
+                    if ev.conversation_id == base_id {
+                        // Fork using provided history entries.
+                        match self
+                            .server
+                            .fork_conversation(ev.entries.clone(), drop_count, self.config.clone())
+                            .await
+                        {
+                            Ok(new_conv) => {
+                                let conv = new_conv.conversation;
+                                let session_configured = new_conv.session_configured;
+                                self.chat_widget = ChatWidget::new_from_existing(
+                                    self.config.clone(),
+                                    conv,
+                                    session_configured,
+                                    tui.frame_requester(),
+                                    self.app_event_tx.clone(),
+                                    self.enhanced_keys_supported,
+                                );
+
+                                // Trim transcript to preserve only content up to the selected user message.
+                                if let Some(cut_idx) =
+                                    crate::backtrack_helpers::find_nth_last_user_header_index(
+                                        &self.transcript_lines,
+                                        drop_count,
+                                    )
+                                {
+                                    self.transcript_lines.truncate(cut_idx);
+                                } else {
+                                    self.transcript_lines.clear();
+                                }
+                                self.render_transcript_once(tui);
+
+                                if !prefill.is_empty() {
+                                    self.chat_widget.insert_str(&prefill);
+                                }
+                                tui.frame_requester().schedule_frame();
+                            }
+                            Err(e) => {
+                                tracing::error!("error forking conversation: {e:#}");
+                            }
+                        }
+                    } else {
+                        // Not matching base; ignore.
+                    }
+                }
             }
             AppEvent::ExitRequest => {
                 return Ok(false);
@@ -303,6 +357,37 @@ impl App {
                 let _ = tui.enter_alt_screen();
                 self.transcript_overlay = Some(TranscriptApp::new(self.transcript_lines.clone()));
                 tui.frame_requester().schedule_frame();
+            }
+            // Esc primes/advances backtracking when composer is empty.
+            KeyEvent {
+                code: KeyCode::Esc,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            } => {
+                self.handle_backtrack_esc_key(tui);
+            }
+            // Enter confirms backtrack when primed + count > 0. Otherwise pass to widget.
+            KeyEvent {
+                code: KeyCode::Enter,
+                kind: KeyEventKind::Press,
+                ..
+            } if self.esc_backtrack_primed
+                && self.esc_backtrack_count > 0
+                && self.chat_widget.composer_is_empty() =>
+            {
+                if let Some(base_id) = self.esc_backtrack_base {
+                    let drop_last_messages = self.esc_backtrack_count;
+                    let prefill = crate::backtrack_helpers::nth_last_user_text(
+                        &self.transcript_lines,
+                        drop_last_messages,
+                    )
+                    .unwrap_or_default();
+                    self.request_backtrack(prefill, base_id, drop_last_messages);
+                }
+                // Reset backtrack state after confirming.
+                self.esc_backtrack_primed = false;
+                self.esc_backtrack_base = None;
+                self.esc_backtrack_count = 0;
             }
             KeyEvent {
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,

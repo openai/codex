@@ -18,28 +18,37 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 
 pub(crate) struct TranscriptApp {
+    // Base (unmodified) transcript lines
+    base_transcript_lines: Vec<Line<'static>>,
+    // Renderable transcript lines (may include highlight styling)
     pub(crate) transcript_lines: Vec<Line<'static>>,
     pub(crate) scroll_offset: usize,
     pub(crate) is_done: bool,
     title: String,
+    // Optional highlight range [start, end) in terms of base_transcript_lines indices
+    highlight_range: Option<(usize, usize)>,
 }
 
 impl TranscriptApp {
     pub(crate) fn new(transcript_lines: Vec<Line<'static>>) -> Self {
         Self {
+            base_transcript_lines: transcript_lines.clone(),
             transcript_lines,
             scroll_offset: usize::MAX,
             is_done: false,
             title: "T R A N S C R I P T".to_string(),
+            highlight_range: None,
         }
     }
 
     pub(crate) fn with_title(transcript_lines: Vec<Line<'static>>, title: String) -> Self {
         Self {
+            base_transcript_lines: transcript_lines.clone(),
             transcript_lines,
             scroll_offset: 0,
             is_done: false,
             title,
+            highlight_range: None,
         }
     }
 
@@ -57,7 +66,47 @@ impl TranscriptApp {
     }
 
     pub(crate) fn insert_lines(&mut self, lines: Vec<Line<'static>>) {
-        self.transcript_lines.extend(lines);
+        self.base_transcript_lines.extend(lines.clone());
+        // If a highlight is active, rebuild with highlight; else append directly.
+        if self.highlight_range.is_some() {
+            self.rebuild_highlighted_lines();
+        } else {
+            self.transcript_lines.extend(lines);
+        }
+    }
+
+    /// Highlight the specified range [start, end) of base transcript lines.
+    pub(crate) fn set_highlight_range(&mut self, range: Option<(usize, usize)>) {
+        self.highlight_range = range;
+        self.rebuild_highlighted_lines();
+    }
+
+    fn rebuild_highlighted_lines(&mut self) {
+        // Start from base and optionally apply highlight styles to the target range.
+        let mut out = self.base_transcript_lines.clone();
+        if let Some((start, end)) = self.highlight_range {
+            use ratatui::style::Modifier;
+            let len = out.len();
+            let start = start.min(len);
+            let end = end.min(len);
+            for (idx, line) in out.iter_mut().enumerate().take(end).skip(start) {
+                // Apply REVERSED to all spans; add BOLD on the first line (header)
+                let mut spans = Vec::with_capacity(line.spans.len());
+                for (i, s) in line.spans.iter().enumerate() {
+                    let mut style = s.style;
+                    style.add_modifier |= Modifier::REVERSED;
+                    if idx == start && i == 0 {
+                        style.add_modifier |= Modifier::BOLD;
+                    }
+                    spans.push(ratatui::text::Span {
+                        style,
+                        content: s.content.clone(),
+                    });
+                }
+                line.spans = spans;
+            }
+        }
+        self.transcript_lines = out;
     }
 
     fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
