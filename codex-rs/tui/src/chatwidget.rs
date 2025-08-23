@@ -57,7 +57,6 @@ use crate::history_cell::CommandOutput;
 use crate::history_cell::ExecCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PatchEventType;
-use crate::slash_command::SlashCommand;
 use crate::tui::FrameRequester;
 // streaming internals are provided by crate::streaming and crate::markdown_stream
 use crate::user_approval_widget::ApprovalRequest;
@@ -907,8 +906,8 @@ impl ChatWidget {
                         }
                     };
 
-                if let Some(cfg) = cfg_toml.as_ref() {
-                    if !cfg.profiles.is_empty() {
+                if let Some(cfg) = cfg_toml.as_ref()
+                    && !cfg.profiles.is_empty() {
                         // Header
                         items.push(SelectionItem {
                             name: "Profiles".to_string(),
@@ -952,7 +951,7 @@ impl ChatWidget {
                                 // Send a single OverrideTurnContext so the backend
                                 // receives the profile choices, then update the
                                 // local widget state so the UI reflects the change.
-                                let _ = tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                                tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
                                     cwd: None,
                                     approval_policy: approval,
                                     sandbox_policy: None,
@@ -963,19 +962,19 @@ impl ChatWidget {
                                 }));
 
                                 if let Some(m) = model.clone() {
-                                    let _ = tx.send(AppEvent::UpdateModel(m));
+                                    tx.send(AppEvent::UpdateModel(m));
                                 }
                                 if let Some(e) = effort {
-                                    let _ = tx.send(AppEvent::UpdateReasoningEffort(e));
+                                    tx.send(AppEvent::UpdateReasoningEffort(e));
                                 }
                                 if let Some(a) = approval {
-                                    let _ = tx.send(AppEvent::UpdateAskForApprovalPolicy(a));
+                                    tx.send(AppEvent::UpdateAskForApprovalPolicy(a));
                                 }
                                 // If the profile specifies a model provider explicitly,
                                 // update the UI and runtime selection so the provider
                                 // shown in status reflects the profile.
                                 if let Some(mp) = model_provider.clone() {
-                                    let _ = tx.send(AppEvent::UpdateModelProvider(mp));
+                                    tx.send(AppEvent::UpdateModelProvider(mp));
                                 }
                             })];
 
@@ -997,7 +996,6 @@ impl ChatWidget {
                         // We've shown the config profiles; nothing more to do.
                         return;
                     }
-                }
 
                 // Fallback: show builtin model and approval presets as before.
                 // Models header
