@@ -9,7 +9,7 @@ codex
 I’m going to scan the workspace and Cargo manifests to see build profiles and
 dependencies that impact binary size. Then I’ll summarize the main causes.
 
->_
+_
   ✓ ls -la
   └ total 6696
     drwxr-xr-x@ 39 easong  staff     1248 Aug  9 08:49 .
