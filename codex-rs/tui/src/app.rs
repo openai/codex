@@ -234,8 +234,10 @@ impl App {
             }
             AppEvent::ConversationHistory(ev) => {
                 // If a backtrack is pending and this history corresponds to the base session, fork.
-                if let Some((base_id, drop_count, prefill)) = self.pending_backtrack.take() {
-                    if ev.conversation_id == base_id {
+                if let Some((base_id, _, _)) = self.pending_backtrack.as_ref() {
+                    if ev.conversation_id == *base_id {
+                        // Safe to take now that we know it's the matching response.
+                        let (_, drop_count, prefill) = self.pending_backtrack.take().unwrap();
                         // Fork using provided history entries.
                         match self
                             .server
@@ -277,7 +279,7 @@ impl App {
                             }
                         }
                     } else {
-                        // Not matching base; ignore.
+                        // Not matching base; ignore and keep pending.
                     }
                 }
             }

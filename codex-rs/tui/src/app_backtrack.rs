@@ -83,11 +83,6 @@ impl App {
             overlay.handle_event(tui, event)?;
             if overlay.is_done {
                 self.close_transcript_overlay(tui);
-                if self.transcript_overlay_is_backtrack {
-                    self.esc_backtrack_primed = false;
-                    self.esc_backtrack_base = None;
-                    self.esc_backtrack_count = 0;
-                }
             }
         }
         tui.frame_requester().schedule_frame();
@@ -107,6 +102,9 @@ impl App {
                 // Open transcript overlay in backtrack preview mode and jump to the target message.
                 self.open_transcript_overlay(tui);
                 self.transcript_overlay_is_backtrack = true;
+                if let Some(overlay) = &mut self.transcript_overlay {
+                    overlay.set_backtrack_mode(true);
+                }
                 self.esc_backtrack_count = self.esc_backtrack_count.saturating_add(1);
                 let header_idx = backtrack_helpers::find_nth_last_user_header_index(
                     &self.transcript_lines,
@@ -180,12 +178,19 @@ impl App {
     /// Close transcript overlay and restore normal UI.
     pub(crate) fn close_transcript_overlay(&mut self, tui: &mut tui::Tui) {
         let _ = tui.leave_alt_screen();
+        let was_backtrack = self.transcript_overlay_is_backtrack;
         if !self.deferred_history_lines.is_empty() {
             let lines = std::mem::take(&mut self.deferred_history_lines);
             tui.insert_history_lines(lines);
         }
         self.transcript_overlay = None;
         self.transcript_overlay_is_backtrack = false;
+        if was_backtrack {
+            // Ensure backtrack state is fully reset when overlay closes (e.g. via 'q').
+            self.esc_backtrack_primed = false;
+            self.esc_backtrack_base = None;
+            self.esc_backtrack_count = 0;
+        }
     }
 
     /// Re-render the full transcript into the terminal scrollback in one call.

@@ -27,6 +27,8 @@ pub(crate) struct TranscriptApp {
     title: String,
     // Optional highlight range [start, end) in terms of base_transcript_lines indices
     highlight_range: Option<(usize, usize)>,
+    // When true, show backtracking key hints (Esc to step, etc.)
+    backtrack_mode: bool,
 }
 
 impl TranscriptApp {
@@ -38,6 +40,7 @@ impl TranscriptApp {
             is_done: false,
             title: "T R A N S C R I P T".to_string(),
             highlight_range: None,
+            backtrack_mode: false,
         }
     }
 
@@ -49,6 +52,7 @@ impl TranscriptApp {
             is_done: false,
             title,
             highlight_range: None,
+            backtrack_mode: false,
         }
     }
 
@@ -79,6 +83,11 @@ impl TranscriptApp {
     pub(crate) fn set_highlight_range(&mut self, range: Option<(usize, usize)>) {
         self.highlight_range = range;
         self.rebuild_highlighted_lines();
+    }
+
+    /// Enable or disable backtrack mode to show appropriate key hints.
+    pub(crate) fn set_backtrack_mode(&mut self, enabled: bool) {
+        self.backtrack_mode = enabled;
     }
 
     fn rebuild_highlighted_lines(&mut self) {
@@ -265,7 +274,15 @@ impl TranscriptApp {
             " jump".into(),
         ];
 
-        let hints2 = vec![" ".into(), "q".set_style(key_hint_style), " quit".into()];
+        let mut hints2 = vec![" ".into(), "q".set_style(key_hint_style), " quit".into()];
+        if self.backtrack_mode {
+            // Include Esc hint when previewing backtrack in the transcript overlay
+            hints2.extend([
+                "   ".into(),
+                "Esc".set_style(key_hint_style),
+                " backtrack".into(),
+            ]);
+        }
         Paragraph::new(vec![Line::from(hints1).dim(), Line::from(hints2).dim()])
             .render_ref(hints_rect, buf);
     }
