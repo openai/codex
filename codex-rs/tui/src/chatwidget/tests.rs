@@ -14,6 +14,7 @@ use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
+use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::FileChange;
@@ -264,6 +265,7 @@ fn exec_history_cell_shows_working_then_completed() {
             call_id: "call-1".into(),
             stdout: "done".into(),
             stderr: String::new(),
+            aggregated_output: "done".into(),
             exit_code: 0,
             duration: std::time::Duration::from_millis(5),
             formatted_output: "done".into(),
@@ -314,6 +316,7 @@ fn exec_history_cell_shows_working_then_failed() {
             call_id: "call-2".into(),
             stdout: String::new(),
             stderr: "error".into(),
+            aggregated_output: "error".into(),
             exit_code: 2,
             duration: std::time::Duration::from_millis(7),
             formatted_output: "".into(),
@@ -362,6 +365,7 @@ fn exec_history_extends_previous_when_consecutive() {
             call_id: "call-a".into(),
             stdout: "one".into(),
             stderr: String::new(),
+            aggregated_output: "one".into(),
             exit_code: 0,
             duration: std::time::Duration::from_millis(5),
             formatted_output: "one".into(),
@@ -391,6 +395,7 @@ fn exec_history_extends_previous_when_consecutive() {
             call_id: "call-b".into(),
             stdout: "two".into(),
             stderr: String::new(),
+            aggregated_output: "two".into(),
             exit_code: 0,
             duration: std::time::Duration::from_millis(5),
             formatted_output: "two".into(),
@@ -616,6 +621,74 @@ async fn binary_size_transcript_matches_ideal_fixture() {
 
     // Exact equality with pretty diff on failure
     assert_eq!(visible_after, ideal);
+}
+
+//
+// Snapshot test: command approval modal
+//
+// Synthesizes a Codex ExecApprovalRequest event to trigger the approval modal
+// and snapshots the visual output using the ratatui TestBackend.
+#[test]
+fn approval_modal_exec_snapshot() {
+    // Build a chat widget with manual channels to avoid spawning the agent.
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+    // Ensure policy allows surfacing approvals explicitly (not strictly required for direct event).
+    chat.config.approval_policy = codex_core::protocol::AskForApproval::OnRequest;
+    // Inject an exec approval request to display the approval modal.
+    let ev = ExecApprovalRequestEvent {
+        call_id: "call-approve-cmd".into(),
+        command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
+        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        reason: Some("Model wants to run a command".into()),
+    };
+    chat.handle_codex_event(Event {
+        id: "sub-approve".into(),
+        msg: EventMsg::ExecApprovalRequest(ev),
+    });
+    // Render to a fixed-size test terminal and snapshot.
+    // Call desired_height first and use that exact height for rendering.
+    let height = chat.desired_height(80);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
+        .unwrap_or_else(|e| panic!("Failed to create terminal: {e}"));
+    terminal
+        .draw(|f| f.render_widget_ref(&chat, f.area()))
+        .unwrap_or_else(|e| panic!("Failed to draw approval modal: {e}"));
+    assert_snapshot!("approval_modal_exec", terminal.backend());
+}
+
+// Snapshot test: patch approval modal
+#[test]
+fn approval_modal_patch_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+    chat.config.approval_policy = codex_core::protocol::AskForApproval::OnRequest;
+
+    // Build a small changeset and a reason/grant_root to exercise the prompt text.
+    let mut changes = std::collections::HashMap::new();
+    changes.insert(
+        PathBuf::from("README.md"),
+        FileChange::Add {
+            content: "hello\nworld\n".into(),
+        },
+    );
+    let ev = ApplyPatchApprovalRequestEvent {
+        call_id: "call-approve-patch".into(),
+        changes,
+        reason: Some("The model wants to apply changes".into()),
+        grant_root: Some(PathBuf::from("/tmp")),
+    };
+    chat.handle_codex_event(Event {
+        id: "sub-approve-patch".into(),
+        msg: EventMsg::ApplyPatchApprovalRequest(ev),
+    });
+
+    // Render at the widget's desired height and snapshot.
+    let height = chat.desired_height(80);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
+        .unwrap_or_else(|e| panic!("Failed to create terminal: {e}"));
+    terminal
+        .draw(|f| f.render_widget_ref(&chat, f.area()))
+        .unwrap_or_else(|e| panic!("Failed to draw patch approval modal: {e}"));
+    assert_snapshot!("approval_modal_patch", terminal.backend());
 }
 
 #[test]
