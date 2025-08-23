@@ -96,6 +96,7 @@ use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
 use crate::protocol::TaskCompleteEvent;
 use crate::protocol::TurnDiffEvent;
+use crate::protocol::WebSearchBeginEvent;
 use crate::rollout::RolloutRecorder;
 use crate::safety::SafetyCheck;
 use crate::safety::assess_command_safety;
@@ -1680,6 +1681,7 @@ async fn try_run_turn(
     let mut stream = turn_context.client.clone().stream(&prompt).await?;
 
     let mut output = Vec::new();
+
     loop {
         // Poll the next item from the model stream. We must inspect *both* Ok and Err
         // cases so that transient stream failures (e.g., dropped SSE connection before
@@ -1715,6 +1717,16 @@ async fn try_run_turn(
                 )
                 .await?;
                 output.push(ProcessedResponseItem { item, response });
+            }
+            ResponseEvent::WebSearchCallBegin { call_id, query } => {
+                let q = query.unwrap_or_else(|| "Searching Web...".to_string());
+                let _ = sess
+                    .tx_event
+                    .send(Event {
+                        id: sub_id.to_string(),
+                        msg: EventMsg::WebSearchBegin(WebSearchBeginEvent { call_id, query: q }),
+                    })
+                    .await;
             }
             ResponseEvent::Completed {
                 response_id: _,

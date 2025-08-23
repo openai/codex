@@ -163,6 +163,7 @@ impl ModelClient {
                 }
             }
         }
+
         let reasoning = create_reasoning_param_for_request(
             &self.config.model_family,
             self.effort,
@@ -479,7 +480,8 @@ async fn process_sse<S>(
             }
         };
 
-        trace!("SSE event: {}", sse.data);
+        let raw = sse.data.clone();
+        trace!("SSE event: {}", raw);
 
         let event: SseEvent = match serde_json::from_str(&sse.data) {
             Ok(event) => event,
@@ -593,8 +595,24 @@ async fn process_sse<S>(
             | "response.in_progress"
             | "response.output_item.added"
             | "response.output_text.done" => {
-                // Currently, we ignore this event, but we handle it
-                // separately to skip the logging message in the `other` case.
+                if event.kind == "response.output_item.added"
+                    && let Some(item) = event.item.as_ref()
+                {
+                    // Detect web_search_call begin and forward a synthetic event upstream.
+                    if let Some(ty) = item.get("type").and_then(|v| v.as_str())
+                        && ty == "web_search_call"
+                    {
+                        let call_id = item
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let ev = ResponseEvent::WebSearchCallBegin { call_id, query: None };
+                        if tx_event.send(Ok(ev)).await.is_err() {
+                            return;
+                        }
+                    }
+                }
             }
             "response.reasoning_summary_part.added" => {
                 // Boundary between reasoning summary sections (e.g., titles).
@@ -604,7 +622,7 @@ async fn process_sse<S>(
                 }
             }
             "response.reasoning_summary_text.done" => {}
-            other => debug!(other, "sse event"),
+            _ => {}
         }
     }
 }
