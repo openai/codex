@@ -27,9 +27,14 @@ impl App {
                 }) => {
                     if self.esc_backtrack_base.is_some() {
                         self.esc_backtrack_count = self.esc_backtrack_count.saturating_add(1);
-                        let header_idx = backtrack_helpers::find_nth_last_user_header_index(
+                        let nth = backtrack_helpers::normalize_backtrack_n(
                             &self.transcript_lines,
                             self.esc_backtrack_count,
+                        );
+                        self.esc_backtrack_count = nth;
+                        let header_idx = backtrack_helpers::find_nth_last_user_header_index(
+                            &self.transcript_lines,
+                            nth,
                         );
                         let offset = header_idx.map(|idx| {
                             backtrack_helpers::wrapped_offset_before(
@@ -40,7 +45,7 @@ impl App {
                         });
                         let hl = backtrack_helpers::highlight_range_for_nth_last_user(
                             &self.transcript_lines,
-                            self.esc_backtrack_count,
+                            nth,
                         );
                         if let Some(overlay) = &mut self.transcript_overlay {
                             if let Some(off) = offset {
@@ -77,6 +82,25 @@ impl App {
                 }
                 _ => {}
             }
+        } else {
+            // Not in backtrack mode yet: allow priming from transcript overlay with a hint.
+            if let TuiEvent::Key(KeyEvent {
+                code: KeyCode::Esc,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            }) = event
+            {
+                // Prime backtrack and show overlay hint, but do not highlight yet.
+                self.esc_backtrack_primed = true;
+                self.esc_backtrack_count = 0;
+                self.esc_backtrack_base = self.chat_widget.session_id();
+                self.transcript_overlay_is_backtrack = true;
+                if let Some(overlay) = &mut self.transcript_overlay {
+                    overlay.set_backtrack_mode(true);
+                }
+                tui.frame_requester().schedule_frame();
+                handled = true;
+            }
         }
         // Forward to overlay if not handled
         if !handled && let Some(overlay) = &mut self.transcript_overlay {
@@ -106,10 +130,13 @@ impl App {
                     overlay.set_backtrack_mode(true);
                 }
                 self.esc_backtrack_count = self.esc_backtrack_count.saturating_add(1);
-                let header_idx = backtrack_helpers::find_nth_last_user_header_index(
+                let nth = backtrack_helpers::normalize_backtrack_n(
                     &self.transcript_lines,
                     self.esc_backtrack_count,
                 );
+                self.esc_backtrack_count = nth;
+                let header_idx =
+                    backtrack_helpers::find_nth_last_user_header_index(&self.transcript_lines, nth);
                 let offset = header_idx.map(|idx| {
                     backtrack_helpers::wrapped_offset_before(
                         &self.transcript_lines,
@@ -119,7 +146,7 @@ impl App {
                 });
                 let hl = backtrack_helpers::highlight_range_for_nth_last_user(
                     &self.transcript_lines,
-                    self.esc_backtrack_count,
+                    nth,
                 );
                 if let Some(overlay) = &mut self.transcript_overlay {
                     if let Some(off) = offset {
@@ -130,10 +157,13 @@ impl App {
             } else if self.transcript_overlay_is_backtrack {
                 // Already previewing: step to the next older message.
                 self.esc_backtrack_count = self.esc_backtrack_count.saturating_add(1);
-                let header_idx = backtrack_helpers::find_nth_last_user_header_index(
+                let nth = backtrack_helpers::normalize_backtrack_n(
                     &self.transcript_lines,
                     self.esc_backtrack_count,
                 );
+                self.esc_backtrack_count = nth;
+                let header_idx =
+                    backtrack_helpers::find_nth_last_user_header_index(&self.transcript_lines, nth);
                 let offset = header_idx.map(|idx| {
                     backtrack_helpers::wrapped_offset_before(
                         &self.transcript_lines,
@@ -143,7 +173,7 @@ impl App {
                 });
                 let hl = backtrack_helpers::highlight_range_for_nth_last_user(
                     &self.transcript_lines,
-                    self.esc_backtrack_count,
+                    nth,
                 );
                 if let Some(overlay) = &mut self.transcript_overlay {
                     if let Some(off) = offset {

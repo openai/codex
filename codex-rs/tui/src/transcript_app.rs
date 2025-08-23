@@ -287,3 +287,32 @@ impl TranscriptApp {
             .render_ref(hints_rect, buf);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backtrack_hint_is_visible_when_enabled() {
+        let mut app = TranscriptApp::new(vec![Line::from("hello")]);
+        app.set_backtrack_mode(true);
+
+        // Render into a small buffer and assert the backtrack hint is present
+        let area = Rect::new(0, 0, 40, 10);
+        let mut buf = Buffer::empty(area);
+        app.render(area, &mut buf);
+
+        // Flatten buffer to a string and check for the hint text
+        let mut s = String::new();
+        for y in area.y..area.bottom() {
+            for x in area.x..area.right() {
+                s.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
+            }
+            s.push('\n');
+        }
+        assert!(
+            s.contains("backtrack"),
+            "expected backtrack hint in overlay footer, got: {s:?}"
+        );
+    }
+}

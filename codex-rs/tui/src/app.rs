@@ -397,6 +397,14 @@ impl App {
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
                 ..
             } => {
+                // Any non-Esc key press should cancel a primed backtrack.
+                // This avoids stale "Esc-primed" state after the user starts typing
+                // (even if they later backspace to empty).
+                if key_event.code != KeyCode::Esc && self.esc_backtrack_primed {
+                    self.esc_backtrack_primed = false;
+                    self.esc_backtrack_base = None;
+                    self.esc_backtrack_count = 0;
+                }
                 self.chat_widget.handle_key_event(key_event);
             }
             _ => {
