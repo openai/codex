@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_core::config::Config;
+use codex_core::config::ConfigToml;
+use codex_core::config::load_config_as_toml;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -626,102 +628,6 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn dispatch_command(&mut self, cmd: SlashCommand) {
-        match cmd {
-            SlashCommand::New => {
-                self.app_event_tx.send(AppEvent::NewSession);
-            }
-            SlashCommand::Init => {
-                // Guard: do not run if a task is active.
-                const INIT_PROMPT: &str = include_str!("../prompt_for_init_command.md");
-                self.submit_text_message(INIT_PROMPT.to_string());
-            }
-            SlashCommand::Compact => {
-                self.clear_token_usage();
-                self.app_event_tx.send(AppEvent::CodexOp(Op::Compact));
-            }
-            SlashCommand::Model => {
-                self.open_model_popup();
-            }
-            SlashCommand::Approvals => {
-                self.open_approvals_popup();
-            }
-            SlashCommand::Quit => {
-                self.app_event_tx.send(AppEvent::ExitRequest);
-            }
-            SlashCommand::Logout => {
-                if let Err(e) = codex_login::logout(&self.config.codex_home) {
-                    tracing::error!("failed to logout: {e}");
-                }
-                self.app_event_tx.send(AppEvent::ExitRequest);
-            }
-            SlashCommand::Diff => {
-                self.add_diff_in_progress();
-                let tx = self.app_event_tx.clone();
-                tokio::spawn(async move {
-                    let text = match get_git_diff().await {
-                        Ok((is_git_repo, diff_text)) => {
-                            if is_git_repo {
-                                diff_text
-                            } else {
-                                "`/diff` — _not inside a git repository_".to_string()
-                            }
-                        }
-                        Err(e) => format!("Failed to compute diff: {e}"),
-                    };
-                    tx.send(AppEvent::DiffResult(text));
-                });
-            }
-            SlashCommand::Mention => {
-                self.insert_str("@");
-            }
-            SlashCommand::Status => {
-                self.add_status_output();
-            }
-            SlashCommand::Mcp => {
-                self.add_mcp_output();
-            }
-            #[cfg(debug_assertions)]
-            SlashCommand::TestApproval => {
-                use codex_core::protocol::EventMsg;
-                use std::collections::HashMap;
-
-                use codex_core::protocol::ApplyPatchApprovalRequestEvent;
-                use codex_core::protocol::FileChange;
-
-                self.app_event_tx.send(AppEvent::CodexEvent(Event {
-                    id: "1".to_string(),
-                    // msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
-                    //     call_id: "1".to_string(),
-                    //     command: vec!["git".into(), "apply".into()],
-                    //     cwd: self.config.cwd.clone(),
-                    //     reason: Some("test".to_string()),
-                    // }),
-                    msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
-                        call_id: "1".to_string(),
-                        changes: HashMap::from([
-                            (
-                                PathBuf::from("/tmp/test.txt"),
-                                FileChange::Add {
-                                    content: "test".to_string(),
-                                },
-                            ),
-                            (
-                                PathBuf::from("/tmp/test2.txt"),
-                                FileChange::Update {
-                                    unified_diff: "+test\n-test2".to_string(),
-                                    move_path: None,
-                                },
-                            ),
-                        ]),
-                        reason: None,
-                        grant_root: Some(PathBuf::from("/tmp")),
-                    }),
-                }));
-            }
-        }
-    }
-
     pub(crate) fn handle_paste(&mut self, text: String) {
         self.bottom_pane.handle_paste(text);
     }
@@ -893,6 +799,7 @@ impl ChatWidget {
                     model: Some(model_slug.clone()),
                     effort: Some(effort),
                     summary: None,
+                    model_provider: None,
                 }));
                 tx.send(AppEvent::UpdateModel(model_slug.clone()));
                 tx.send(AppEvent::UpdateReasoningEffort(effort));
@@ -934,6 +841,7 @@ impl ChatWidget {
                     model: None,
                     effort: None,
                     summary: None,
+                    model_provider: None,
                 }));
                 tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
                 tx.send(AppEvent::UpdateSandboxPolicy(sandbox.clone()));
@@ -954,6 +862,274 @@ impl ChatWidget {
         );
     }
 
+    /// Dispatch a slash command selected from the composer.
+    pub(crate) fn dispatch_command(&mut self, cmd: crate::slash_command::SlashCommand) {
+        match cmd {
+            crate::slash_command::SlashCommand::New => {
+                self.app_event_tx.send(AppEvent::NewSession);
+            }
+            crate::slash_command::SlashCommand::Init => {
+                const INIT_PROMPT: &str = include_str!("../prompt_for_init_command.md");
+                self.submit_text_message(INIT_PROMPT.to_string());
+            }
+            crate::slash_command::SlashCommand::Compact => {
+                self.clear_token_usage();
+                self.app_event_tx.send(AppEvent::CodexOp(Op::Compact));
+            }
+            crate::slash_command::SlashCommand::Model => {
+                self.open_model_popup();
+            }
+            crate::slash_command::SlashCommand::Approvals => {
+                self.open_approvals_popup();
+            }
+            crate::slash_command::SlashCommand::Profile => {
+                // Read user's `config.toml` and list named profiles. If this
+                // fails or no profiles exist, fall back to builtin presets.
+                let mut items: Vec<SelectionItem> = Vec::new();
+
+                let cfg_toml: Option<ConfigToml> =
+                    match load_config_as_toml(&self.config.codex_home).and_then(|tv| {
+                        let cfg: Result<ConfigToml, _> = tv.try_into();
+                        cfg.map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+                    }) {
+                        Ok(cfg) => Some(cfg),
+                        Err(e) => {
+                            tracing::debug!("failed to load config.toml for profiles: {e}");
+                            None
+                        }
+                    };
+
+                if let Some(cfg) = cfg_toml.as_ref() {
+                    if !cfg.profiles.is_empty() {
+                        // Header
+                        items.push(SelectionItem {
+                            name: "Profiles".to_string(),
+                            description: Some("Profiles defined in config.toml".to_string()),
+                            is_current: false,
+                            actions: Vec::new(),
+                        });
+
+                        for (key, profile) in cfg.profiles.iter() {
+                            let name = key.to_string();
+                            let mut desc_parts: Vec<String> = Vec::new();
+                            if let Some(m) = profile.model.as_ref() {
+                                desc_parts.push(format!("model={m}"));
+                            }
+                            if let Some(mp) = profile.model_provider.as_ref() {
+                                desc_parts.push(format!("provider={mp}"));
+                            }
+                            if let Some(a) = profile.approval_policy.as_ref() {
+                                desc_parts.push(format!("approval={a:?}"));
+                            }
+                            let desc = if desc_parts.is_empty() {
+                                None
+                            } else {
+                                Some(desc_parts.join(" "))
+                            };
+
+                            // Rough heuristic for whether this matches current config.
+                            let is_current = profile
+                                .model
+                                .as_ref()
+                                .map(|m| m == &self.config.model)
+                                .unwrap_or(false);
+
+                            let model = profile.model.clone();
+                            let effort = profile.model_reasoning_effort;
+                            let summary = profile.model_reasoning_summary;
+                            let approval = profile.approval_policy;
+                            let model_provider = profile.model_provider.clone();
+
+                            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                                // Send a single OverrideTurnContext so the backend
+                                // receives the profile choices, then update the
+                                // local widget state so the UI reflects the change.
+                                let _ = tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                                    cwd: None,
+                                    approval_policy: approval,
+                                    sandbox_policy: None,
+                                    model: model.clone(),
+                                    effort,
+                                    summary,
+                                    model_provider: model_provider.clone(),
+                                }));
+
+                                if let Some(m) = model.clone() {
+                                    let _ = tx.send(AppEvent::UpdateModel(m));
+                                }
+                                if let Some(e) = effort {
+                                    let _ = tx.send(AppEvent::UpdateReasoningEffort(e));
+                                }
+                                if let Some(a) = approval {
+                                    let _ = tx.send(AppEvent::UpdateAskForApprovalPolicy(a));
+                                }
+                                // If the profile specifies a model provider explicitly,
+                                // update the UI and runtime selection so the provider
+                                // shown in status reflects the profile.
+                                if let Some(mp) = model_provider.clone() {
+                                    let _ = tx.send(AppEvent::UpdateModelProvider(mp));
+                                }
+                            })];
+
+                            items.push(SelectionItem {
+                                name,
+                                description: desc,
+                                is_current,
+                                actions,
+                            });
+                        }
+
+                        self.bottom_pane.show_selection_view(
+                            "Profiles".to_string(),
+                            Some("Select a profile from config.toml".to_string()),
+                            Some("Enter to apply".to_string()),
+                            items,
+                        );
+
+                        // We've shown the config profiles; nothing more to do.
+                        return;
+                    }
+                }
+
+                // Fallback: show builtin model and approval presets as before.
+                // Models header
+                items.push(SelectionItem {
+                    name: "Models".to_string(),
+                    description: None,
+                    is_current: false,
+                    actions: Vec::new(),
+                });
+
+                for mp in builtin_model_presets().iter() {
+                    let name = mp.label.to_string();
+                    let desc = Some(mp.description.to_string());
+                    let is_current = self.config.model == mp.model
+                        && self.config.model_reasoning_effort == mp.effort;
+                    let model = mp.model.to_string();
+                    let effort = mp.effort;
+                    let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                        tx.send(AppEvent::UpdateModel(model.clone()));
+                        tx.send(AppEvent::UpdateReasoningEffort(effort));
+                    })];
+                    items.push(SelectionItem {
+                        name,
+                        description: desc,
+                        is_current,
+                        actions,
+                    });
+                }
+
+                // Spacer
+                items.push(SelectionItem {
+                    name: "".to_string(),
+                    description: None,
+                    is_current: false,
+                    actions: Vec::new(),
+                });
+
+                // Approvals header
+                items.push(SelectionItem {
+                    name: "Approval Presets".to_string(),
+                    description: None,
+                    is_current: false,
+                    actions: Vec::new(),
+                });
+
+                for ap in builtin_approval_presets().into_iter() {
+                    let name = ap.label.to_string();
+                    let desc = Some(ap.description.to_string());
+                    let is_current = self.config.approval_policy == ap.approval
+                        && self.config.sandbox_policy == ap.sandbox;
+                    let approval = ap.approval;
+                    let sandbox = ap.sandbox.clone();
+                    let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                        tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
+                        tx.send(AppEvent::UpdateSandboxPolicy(sandbox.clone()));
+                    })];
+                    items.push(SelectionItem {
+                        name,
+                        description: desc,
+                        is_current,
+                        actions,
+                    });
+                }
+
+                self.bottom_pane.show_selection_view(
+                    "Profiles".to_string(),
+                    Some("Select a model preset or approval preset".to_string()),
+                    Some("Enter to apply".to_string()),
+                    items,
+                );
+            }
+            crate::slash_command::SlashCommand::Quit => {
+                self.app_event_tx.send(AppEvent::ExitRequest);
+            }
+            crate::slash_command::SlashCommand::Logout => {
+                if let Err(e) = codex_login::logout(&self.config.codex_home) {
+                    tracing::error!("failed to logout: {e}");
+                }
+                self.app_event_tx.send(AppEvent::ExitRequest);
+            }
+            crate::slash_command::SlashCommand::Diff => {
+                self.add_diff_in_progress();
+                let tx = self.app_event_tx.clone();
+                tokio::spawn(async move {
+                    let text = match get_git_diff().await {
+                        Ok((is_git_repo, diff_text)) => {
+                            if is_git_repo {
+                                diff_text
+                            } else {
+                                "`/diff` — _not inside a git repository_".to_string()
+                            }
+                        }
+                        Err(e) => format!("Failed to compute diff: {e}"),
+                    };
+                    tx.send(AppEvent::DiffResult(text));
+                });
+            }
+            crate::slash_command::SlashCommand::Mention => {
+                self.insert_str("@");
+            }
+            crate::slash_command::SlashCommand::Status => {
+                self.add_status_output();
+            }
+            crate::slash_command::SlashCommand::Mcp => {
+                self.add_mcp_output();
+            }
+            #[cfg(debug_assertions)]
+            crate::slash_command::SlashCommand::TestApproval => {
+                use codex_core::protocol::ApplyPatchApprovalRequestEvent;
+                use codex_core::protocol::EventMsg;
+                use codex_core::protocol::FileChange;
+                use std::collections::HashMap;
+
+                self.app_event_tx.send(AppEvent::CodexEvent(Event {
+                    id: "1".to_string(),
+                    msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
+                        call_id: "1".to_string(),
+                        changes: HashMap::from([
+                            (
+                                PathBuf::from("/tmp/test.txt"),
+                                FileChange::Add {
+                                    content: "test".to_string(),
+                                },
+                            ),
+                            (
+                                PathBuf::from("/tmp/test2.txt"),
+                                FileChange::Update {
+                                    unified_diff: "+test\n-test2".to_string(),
+                                    move_path: None,
+                                },
+                            ),
+                        ]),
+                        reason: None,
+                        grant_root: Some(PathBuf::from("/tmp")),
+                    }),
+                }));
+            }
+        }
+    }
+
     /// Set the approval policy in the widget's config copy.
     pub(crate) fn set_approval_policy(&mut self, policy: AskForApproval) {
         self.config.approval_policy = policy;
@@ -972,6 +1148,22 @@ impl ChatWidget {
     /// Set the model in the widget's config copy.
     pub(crate) fn set_model(&mut self, model: String) {
         self.config.model = model;
+    }
+
+    /// Set the model provider id in the widget's config copy. This updates the
+    /// provider id and replaces the resolved `ModelProviderInfo` if the id is
+    /// present in the `model_providers` map. If the provider id cannot be
+    /// resolved, logs an error and leaves the current provider unchanged.
+    pub(crate) fn set_model_provider(&mut self, provider_id: String) {
+        if let Some(provider) = self.config.model_providers.get(&provider_id) {
+            self.config.model_provider_id = provider_id.clone();
+            self.config.model_provider = provider.clone();
+        } else {
+            tracing::error!(
+                "requested model provider `{}` not found in config",
+                provider_id
+            );
+        }
     }
 
     pub(crate) fn add_mcp_output(&mut self) {

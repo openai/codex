@@ -108,6 +108,9 @@ pub enum Op {
         /// Updated reasoning summary preference (honored only for reasoning-capable models).
         #[serde(skip_serializing_if = "Option::is_none")]
         summary: Option<ReasoningSummaryConfig>,
+        /// Updated model provider id (key into the `model_providers` map).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        model_provider: Option<String>,
     },
 
     /// Approve a command execution
