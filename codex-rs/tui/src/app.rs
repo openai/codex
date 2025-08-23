@@ -239,20 +239,17 @@ impl App {
                         // Safe to take now that we know it's the matching response.
                         if let Some((_, drop_count, prefill)) = self.pending_backtrack.take() {
                             // Fork using provided history entries.
+                            let cfg = self.chat_widget.config_ref().clone();
                             match self
                                 .server
-                                .fork_conversation(
-                                    ev.entries.clone(),
-                                    drop_count,
-                                    self.config.clone(),
-                                )
+                                .fork_conversation(ev.entries.clone(), drop_count, cfg.clone())
                                 .await
                             {
                                 Ok(new_conv) => {
                                     let conv = new_conv.conversation;
                                     let session_configured = new_conv.session_configured;
                                     self.chat_widget = ChatWidget::new_from_existing(
-                                        self.config.clone(),
+                                        cfg,
                                         conv,
                                         session_configured,
                                         tui.frame_requester(),

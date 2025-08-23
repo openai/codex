@@ -1102,6 +1102,12 @@ impl ChatWidget {
         self.session_id
     }
 
+    /// Return a reference to the widget's current config (includes any
+    /// runtime overrides applied via TUI, e.g., model or approval policy).
+    pub(crate) fn config_ref(&self) -> &Config {
+        &self.config
+    }
+
     pub(crate) fn clear_token_usage(&mut self) {
         self.total_token_usage = TokenUsage::default();
         self.bottom_pane.set_token_usage(
