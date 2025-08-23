@@ -237,45 +237,50 @@ impl App {
                 if let Some((base_id, _, _)) = self.pending_backtrack.as_ref() {
                     if ev.conversation_id == *base_id {
                         // Safe to take now that we know it's the matching response.
-                        let (_, drop_count, prefill) = self.pending_backtrack.take().unwrap();
-                        // Fork using provided history entries.
-                        match self
-                            .server
-                            .fork_conversation(ev.entries.clone(), drop_count, self.config.clone())
-                            .await
-                        {
-                            Ok(new_conv) => {
-                                let conv = new_conv.conversation;
-                                let session_configured = new_conv.session_configured;
-                                self.chat_widget = ChatWidget::new_from_existing(
+                        if let Some((_, drop_count, prefill)) = self.pending_backtrack.take() {
+                            // Fork using provided history entries.
+                            match self
+                                .server
+                                .fork_conversation(
+                                    ev.entries.clone(),
+                                    drop_count,
                                     self.config.clone(),
-                                    conv,
-                                    session_configured,
-                                    tui.frame_requester(),
-                                    self.app_event_tx.clone(),
-                                    self.enhanced_keys_supported,
-                                );
+                                )
+                                .await
+                            {
+                                Ok(new_conv) => {
+                                    let conv = new_conv.conversation;
+                                    let session_configured = new_conv.session_configured;
+                                    self.chat_widget = ChatWidget::new_from_existing(
+                                        self.config.clone(),
+                                        conv,
+                                        session_configured,
+                                        tui.frame_requester(),
+                                        self.app_event_tx.clone(),
+                                        self.enhanced_keys_supported,
+                                    );
 
-                                // Trim transcript to preserve only content up to the selected user message.
-                                if let Some(cut_idx) =
-                                    crate::backtrack_helpers::find_nth_last_user_header_index(
-                                        &self.transcript_lines,
-                                        drop_count,
-                                    )
-                                {
-                                    self.transcript_lines.truncate(cut_idx);
-                                } else {
-                                    self.transcript_lines.clear();
-                                }
-                                self.render_transcript_once(tui);
+                                    // Trim transcript to preserve only content up to the selected user message.
+                                    if let Some(cut_idx) =
+                                        crate::backtrack_helpers::find_nth_last_user_header_index(
+                                            &self.transcript_lines,
+                                            drop_count,
+                                        )
+                                    {
+                                        self.transcript_lines.truncate(cut_idx);
+                                    } else {
+                                        self.transcript_lines.clear();
+                                    }
+                                    self.render_transcript_once(tui);
 
-                                if !prefill.is_empty() {
-                                    self.chat_widget.insert_str(&prefill);
+                                    if !prefill.is_empty() {
+                                        self.chat_widget.insert_str(&prefill);
+                                    }
+                                    tui.frame_requester().schedule_frame();
                                 }
-                                tui.frame_requester().schedule_frame();
-                            }
-                            Err(e) => {
-                                tracing::error!("error forking conversation: {e:#}");
+                                Err(e) => {
+                                    tracing::error!("error forking conversation: {e:#}");
+                                }
                             }
                         }
                     } else {
