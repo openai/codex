@@ -93,41 +93,44 @@ impl BottomPane {
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
-        let view_height = if let Some(view) = self.active_view.as_ref() {
+        let top_margin = if self.active_view.is_some() { 0 } else { 1 };
+
+        // Base height depends on whether a modal/overlay is active.
+        let mut base = if let Some(view) = self.active_view.as_ref() {
             view.desired_height(width)
         } else {
-            // Status line (if any) + composer height
-            let mut h = self.composer.desired_height(width);
-            if let Some(status) = self.status.as_ref() {
-                h = h.saturating_add(status.desired_height(width));
-            }
-            h
+            self.composer.desired_height(width)
         };
-        let top_pad = if self.active_view.is_none() || self.status_view_active {
-            1
-        } else {
-            0
-        };
-        view_height
-            .saturating_add(Self::BOTTOM_PAD_LINES)
-            .saturating_add(top_pad)
+        // If a status indicator is active and no modal is covering the composer,
+        // include its height above the composer.
+        if self.active_view.is_none()
+            && let Some(status) = self.status.as_ref()
+        {
+            base = base.saturating_add(status.desired_height(width));
+        }
+        // Account for bottom padding rows. Top spacing is handled in layout().
+        base.saturating_add(Self::BOTTOM_PAD_LINES)
+            .saturating_add(top_margin)
     }
 
-    fn layout(&self, area: Rect) -> Rect {
-        let top = if self.active_view.is_none() || self.status_view_active {
-            1
+    fn layout(&self, area: Rect) -> [Rect; 2] {
+        let top_margin = if self.active_view.is_some() { 0 } else { 1 };
+
+        let status_height = if let Some(status) = self.status.as_ref() {
+            status.desired_height(area.width)
         } else {
             0
         };
 
-        let [_, content, _] = Layout::vertical([
-            Constraint::Max(top),
+        let [_, status, content, _] = Layout::vertical([
+            Constraint::Max(top_margin),
+            Constraint::Max(status_height),
             Constraint::Min(1),
             Constraint::Max(BottomPane::BOTTOM_PAD_LINES),
         ])
         .areas(area);
 
-        content
+        [status, content]
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
@@ -135,32 +138,12 @@ impl BottomPane {
         // status indicator shown while a task is running, or approval modal).
         // In these states the textarea is not interactable, so we should not
         // show its caret.
-        if self.active_view.is_some() || self.status_view_active {
+        if self.active_view.is_some() {
             None
         } else {
-            let content = self.layout(area);
+            let [_, content] = self.layout(area);
             self.composer.cursor_pos(content)
         }
-    }
-
-    /// Split the content area into `(status, composer)` rectangles.
-    /// Uses a minimal 1-row header when a task is running but no status widget exists.
-    fn split_status_and_composer(&self, content_area: Rect) -> (Option<Rect>, Rect) {
-        let sh = if let Some(status) = &self.status {
-            status
-                .desired_height(content_area.width)
-                .min(content_area.height)
-        } else if self.is_task_running {
-            1u16.min(content_area.height)
-        } else {
-            0
-        };
-        if sh == 0 {
-            return (None, content_area);
-        }
-        let [status_area, composer_area] =
-            Layout::vertical([Constraint::Length(sh), Constraint::Min(0)]).areas(content_area);
-        (Some(status_area), composer_area)
     }
 
     /// Forward a key event to the active view or the composer.
@@ -408,13 +391,22 @@ impl BottomPane {
 
 impl WidgetRef for &BottomPane {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let content = self.layout(area);
+        let [status_area, content] = self.layout(area);
 
+        // When a modal view is active, it owns the whole content area.
         if let Some(view) = &self.active_view {
             view.render(content, buf);
-        } else {
-            (&self.composer).render_ref(content, buf);
+            return;
         }
+
+        // No active modal:
+        // If a status indicator is active, render it above the composer.
+        if let Some(status) = &self.status {
+            status.render_ref(status_area, buf);
+        }
+
+        // Render the composer in the remaining area.
+        (&self.composer).render_ref(content, buf);
     }
 }
 

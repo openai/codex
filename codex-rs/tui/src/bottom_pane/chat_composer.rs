@@ -153,7 +153,7 @@ impl ChatComposer {
             ActivePopup::None => 1,
         };
         let [textarea_rect, _] =
-            Layout::vertical([Constraint::Min(0), Constraint::Max(popup_height)]).areas(area);
+            Layout::vertical([Constraint::Min(1), Constraint::Max(popup_height)]).areas(area);
         let mut textarea_rect = textarea_rect;
         textarea_rect.width = textarea_rect.width.saturating_sub(1);
         textarea_rect.x += 1;
@@ -1101,7 +1101,7 @@ impl WidgetRef for &ChatComposer {
             ActivePopup::None => 1,
         };
         let [textarea_rect, popup_rect] =
-            Layout::vertical([Constraint::Min(0), Constraint::Max(popup_height)]).areas(area);
+            Layout::vertical([Constraint::Min(1), Constraint::Max(popup_height)]).areas(area);
         match &self.active_popup {
             ActivePopup::Command(popup) => {
                 popup.render_ref(popup_rect, buf);
