@@ -20,6 +20,7 @@ use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
+use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnDiffEvent;
@@ -174,6 +175,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
                 ts_println!(self, "{}", message.style(self.dimmed));
             }
+            EventMsg::StreamError(StreamErrorEvent { message }) => {
+                ts_println!(self, "{}", message.style(self.dimmed));
+            }
             EventMsg::TaskStarted => {
                 // Ignore.
             }
@@ -287,6 +291,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 stderr,
                 duration,
                 exit_code,
+                ..
             }) => {
                 let exec_command = self.call_id_to_command.remove(&call_id);
                 let (duration, call) = if let Some(ExecCommandBegin { command, .. }) = exec_command
@@ -535,6 +540,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 }
             },
             EventMsg::ShutdownComplete => return CodexStatus::Shutdown,
+            EventMsg::ConversationHistory(_) => {}
         }
         CodexStatus::Running
     }

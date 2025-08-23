@@ -9,6 +9,9 @@ use crate::model_family::ModelFamily;
 use crate::plan_tool::PLAN_TOOL;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
+use crate::tool_apply_patch::ApplyPatchToolType;
+use crate::tool_apply_patch::create_apply_patch_freeform_tool;
+use crate::tool_apply_patch::create_apply_patch_json_tool;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ResponsesApiTool {
@@ -21,6 +24,20 @@ pub struct ResponsesApiTool {
     pub(crate) parameters: JsonSchema,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FreeformTool {
+    pub(crate) name: String,
+    pub(crate) description: String,
+    pub(crate) format: FreeformToolFormat,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct FreeformToolFormat {
+    pub(crate) r#type: String,
+    pub(crate) syntax: String,
+    pub(crate) definition: String,
+}
+
 /// When serialized as JSON, this produces a valid "Tool" in the OpenAI
 /// Responses API.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -30,6 +47,8 @@ pub(crate) enum OpenAiTool {
     Function(ResponsesApiTool),
     #[serde(rename = "local_shell")]
     LocalShell {},
+    #[serde(rename = "custom")]
+    Freeform(FreeformTool),
 }
 
 #[derive(Debug, Clone)]
@@ -37,13 +56,14 @@ pub enum ConfigShellToolType {
     DefaultShell,
     ShellWithRequest { sandbox_policy: SandboxPolicy },
     LocalShell,
+    StreamableShell,
 }
 
 #[derive(Debug, Clone)]
 pub struct ToolsConfig {
     pub shell_type: ConfigShellToolType,
     pub plan_tool: bool,
-    pub apply_patch_tool: bool,
+    pub apply_patch_tool_type: Option<ApplyPatchToolType>,
 }
 
 impl ToolsConfig {
@@ -53,22 +73,37 @@ impl ToolsConfig {
         sandbox_policy: SandboxPolicy,
         include_plan_tool: bool,
         include_apply_patch_tool: bool,
+        use_streamable_shell_tool: bool,
     ) -> Self {
-        let mut shell_type = if model_family.uses_local_shell_tool {
+        let mut shell_type = if use_streamable_shell_tool {
+            ConfigShellToolType::StreamableShell
+        } else if model_family.uses_local_shell_tool {
             ConfigShellToolType::LocalShell
         } else {
             ConfigShellToolType::DefaultShell
         };
-        if matches!(approval_policy, AskForApproval::OnRequest) {
+        if matches!(approval_policy, AskForApproval::OnRequest) && !use_streamable_shell_tool {
             shell_type = ConfigShellToolType::ShellWithRequest {
                 sandbox_policy: sandbox_policy.clone(),
             }
         }
 
+        let apply_patch_tool_type = match model_family.apply_patch_tool_type {
+            Some(ApplyPatchToolType::Freeform) => Some(ApplyPatchToolType::Freeform),
+            Some(ApplyPatchToolType::Function) => Some(ApplyPatchToolType::Function),
+            None => {
+                if include_apply_patch_tool {
+                    Some(ApplyPatchToolType::Freeform)
+                } else {
+                    None
+                }
+            }
+        };
+
         Self {
             shell_type,
             plan_tool: include_plan_tool,
-            apply_patch_tool: include_apply_patch_tool || model_family.uses_apply_patch_tool,
+            apply_patch_tool_type,
         }
     }
 }
@@ -115,16 +150,20 @@ fn create_shell_tool() -> OpenAiTool {
         "command".to_string(),
         JsonSchema::Array {
             items: Box::new(JsonSchema::String { description: None }),
-            description: None,
+            description: Some("The command to execute".to_string()),
         },
     );
     properties.insert(
         "workdir".to_string(),
-        JsonSchema::String { description: None },
+        JsonSchema::String {
+            description: Some("The working directory to execute the command in".to_string()),
+        },
     );
     properties.insert(
-        "timeout".to_string(),
-        JsonSchema::Number { description: None },
+        "timeout_ms".to_string(),
+        JsonSchema::Number {
+            description: Some("The timeout for the command in milliseconds".to_string()),
+        },
     );
 
     OpenAiTool::Function(ResponsesApiTool {
@@ -155,7 +194,7 @@ fn create_shell_tool_for_sandbox(sandbox_policy: &SandboxPolicy) -> OpenAiTool {
         },
     );
     properties.insert(
-        "timeout".to_string(),
+        "timeout_ms".to_string(),
         JsonSchema::Number {
             description: Some("The timeout for the command in milliseconds".to_string()),
         },
@@ -171,7 +210,7 @@ fn create_shell_tool_for_sandbox(sandbox_policy: &SandboxPolicy) -> OpenAiTool {
         properties.insert(
         "justification".to_string(),
         JsonSchema::String {
-            description: Some("Only set if ask_for_escalated_permissions is true. 1-sentence explanation of why we want to run this command.".to_string()),
+            description: Some("Only set if with_escalated_permissions is true. 1-sentence explanation of why we want to run this command.".to_string()),
         },
     );
     }
@@ -237,92 +276,16 @@ The shell tool is used to execute shell commands.
         },
     })
 }
-
+/// TODO(dylan): deprecate once we get rid of json tool
 #[derive(Serialize, Deserialize)]
 pub(crate) struct ApplyPatchToolArgs {
     pub(crate) input: String,
 }
 
-fn create_apply_patch_tool() -> OpenAiTool {
-    // Minimal schema: one required string argument containing the patch body
-    let mut properties = BTreeMap::new();
-    properties.insert(
-        "input".to_string(),
-        JsonSchema::String {
-            description: Some(r#"The entire contents of the apply_patch command"#.to_string()),
-        },
-    );
-
-    OpenAiTool::Function(ResponsesApiTool {
-        name: "apply_patch".to_string(),
-        description: r#"Use this tool to edit files.
-Your patch language is a stripped‑down, file‑oriented diff format designed to be easy to parse and safe to apply. You can think of it as a high‑level envelope:
-
-**_ Begin Patch
-[ one or more file sections ]
-_** End Patch
-
-Within that envelope, you get a sequence of file operations.
-You MUST include a header to specify the action you are taking.
-Each operation starts with one of three headers:
-
-**_ Add File: <path> - create a new file. Every following line is a + line (the initial contents).
-_** Delete File: <path> - remove an existing file. Nothing follows.
-\*\*\* Update File: <path> - patch an existing file in place (optionally with a rename).
-
-May be immediately followed by \*\*\* Move to: <new path> if you want to rename the file.
-Then one or more “hunks”, each introduced by @@ (optionally followed by a hunk header).
-Within a hunk each line starts with:
-
-- for inserted text,
-
-* for removed text, or
-  space ( ) for context.
-  At the end of a truncated hunk you can emit \*\*\* End of File.
-
-Patch := Begin { FileOp } End
-Begin := "**_ Begin Patch" NEWLINE
-End := "_** End Patch" NEWLINE
-FileOp := AddFile | DeleteFile | UpdateFile
-AddFile := "**_ Add File: " path NEWLINE { "+" line NEWLINE }
-DeleteFile := "_** Delete File: " path NEWLINE
-UpdateFile := "**_ Update File: " path NEWLINE [ MoveTo ] { Hunk }
-MoveTo := "_** Move to: " newPath NEWLINE
-Hunk := "@@" [ header ] NEWLINE { HunkLine } [ "*** End of File" NEWLINE ]
-HunkLine := (" " | "-" | "+") text NEWLINE
-
-A full patch can combine several operations:
-
-**_ Begin Patch
-_** Add File: hello.txt
-+Hello world
-**_ Update File: src/app.py
-_** Move to: src/main.py
-@@ def greet():
--print("Hi")
-+print("Hello, world!")
-**_ Delete File: obsolete.txt
-_** End Patch
-
-It is important to remember:
-
-- You must include a header with your intended action (Add/Delete/Update)
-- You must prefix new lines with `+` even when creating a new file
-"#
-        .to_string(),
-        strict: false,
-        parameters: JsonSchema::Object {
-            properties,
-            required: Some(vec!["input".to_string()]),
-            additional_properties: Some(false),
-        },
-    })
-}
-
 /// Returns JSON values that are compatible with Function Calling in the
 /// Responses API:
 /// https://platform.openai.com/docs/guides/function-calling?api-mode=responses
-pub(crate) fn create_tools_json_for_responses_api(
+pub fn create_tools_json_for_responses_api(
     tools: &Vec<OpenAiTool>,
 ) -> crate::error::Result<Vec<serde_json::Value>> {
     let mut tools_json = Vec::new();
@@ -533,14 +496,29 @@ pub(crate) fn get_openai_tools(
         ConfigShellToolType::LocalShell => {
             tools.push(OpenAiTool::LocalShell {});
         }
+        ConfigShellToolType::StreamableShell => {
+            tools.push(OpenAiTool::Function(
+                crate::exec_command::create_exec_command_tool_for_responses_api(),
+            ));
+            tools.push(OpenAiTool::Function(
+                crate::exec_command::create_write_stdin_tool_for_responses_api(),
+            ));
+        }
     }
 
     if config.plan_tool {
         tools.push(PLAN_TOOL.clone());
     }
 
-    if config.apply_patch_tool {
-        tools.push(create_apply_patch_tool());
+    if let Some(apply_patch_tool_type) = &config.apply_patch_tool_type {
+        match apply_patch_tool_type {
+            ApplyPatchToolType::Freeform => {
+                tools.push(create_apply_patch_freeform_tool());
+            }
+            ApplyPatchToolType::Function => {
+                tools.push(create_apply_patch_json_tool());
+            }
+        }
     }
 
     if let Some(mcp_tools) = mcp_tools {
@@ -571,6 +549,7 @@ mod tests {
             .map(|tool| match tool {
                 OpenAiTool::Function(ResponsesApiTool { name, .. }) => name,
                 OpenAiTool::LocalShell {} => "local_shell",
+                OpenAiTool::Freeform(FreeformTool { name, .. }) => name,
             })
             .collect::<Vec<_>>();
 
@@ -596,7 +575,8 @@ mod tests {
             AskForApproval::Never,
             SandboxPolicy::ReadOnly,
             true,
-            model_family.uses_apply_patch_tool,
+            false,
+            /*use_experimental_streamable_shell_tool*/ false,
         );
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
@@ -611,7 +591,8 @@ mod tests {
             AskForApproval::Never,
             SandboxPolicy::ReadOnly,
             true,
-            model_family.uses_apply_patch_tool,
+            false,
+            /*use_experimental_streamable_shell_tool*/ false,
         );
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
@@ -626,7 +607,8 @@ mod tests {
             AskForApproval::Never,
             SandboxPolicy::ReadOnly,
             false,
-            model_family.uses_apply_patch_tool,
+            false,
+            /*use_experimental_streamable_shell_tool*/ false,
         );
         let tools = get_openai_tools(
             &config,
@@ -720,7 +702,8 @@ mod tests {
             AskForApproval::Never,
             SandboxPolicy::ReadOnly,
             false,
-            model_family.uses_apply_patch_tool,
+            false,
+            /*use_experimental_streamable_shell_tool*/ false,
         );
 
         let tools = get_openai_tools(
@@ -776,7 +759,8 @@ mod tests {
             AskForApproval::Never,
             SandboxPolicy::ReadOnly,
             false,
-            model_family.uses_apply_patch_tool,
+            false,
+            /*use_experimental_streamable_shell_tool*/ false,
         );
 
         let tools = get_openai_tools(
@@ -827,7 +811,8 @@ mod tests {
             AskForApproval::Never,
             SandboxPolicy::ReadOnly,
             false,
-            model_family.uses_apply_patch_tool,
+            false,
+            /*use_experimental_streamable_shell_tool*/ false,
         );
 
         let tools = get_openai_tools(
@@ -881,7 +866,8 @@ mod tests {
             AskForApproval::Never,
             SandboxPolicy::ReadOnly,
             false,
-            model_family.uses_apply_patch_tool,
+            false,
+            /*use_experimental_streamable_shell_tool*/ false,
         );
 
         let tools = get_openai_tools(

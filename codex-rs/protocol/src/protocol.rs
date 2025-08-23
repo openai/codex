@@ -22,6 +22,7 @@ use uuid::Uuid;
 use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::message_history::HistoryEntry;
+use crate::models::ResponseItem;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
 
@@ -136,6 +137,10 @@ pub enum Op {
 
     /// Request a single history entry identified by `log_id` + `offset`.
     GetHistoryEntryRequest { offset: usize, log_id: u64 },
+
+    /// Request the full in-memory conversation transcript for the current session.
+    /// Reply is delivered via `EventMsg::ConversationHistory`.
+    GetHistory,
 
     /// Request the list of MCP tools available across all configured servers.
     /// Reply is delivered via `EventMsg::McpListToolsResponse`.
@@ -446,6 +451,10 @@ pub enum EventMsg {
 
     BackgroundEvent(BackgroundEventEvent),
 
+    /// Notification that a model stream experienced an error or disconnect
+    /// and the system is handling it (e.g., retrying with backoff).
+    StreamError(StreamErrorEvent),
+
     /// Notification that the agent is about to apply a code patch. Mirrors
     /// `ExecCommandBegin` so front‑ends can show progress indicators.
     PatchApplyBegin(PatchApplyBeginEvent),
@@ -467,6 +476,8 @@ pub enum EventMsg {
 
     /// Notification that the agent is shutting down.
     ShutdownComplete,
+
+    ConversationHistory(ConversationHistoryResponseEvent),
 }
 
 // Individual event payload types matching each `EventMsg` variant.
@@ -647,6 +658,14 @@ impl McpToolCallEndEvent {
     }
 }
 
+/// Response payload for `Op::GetHistory` containing the current session's
+/// in-memory transcript.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ConversationHistoryResponseEvent {
+    pub conversation_id: Uuid,
+    pub entries: Vec<ResponseItem>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ExecCommandBeginEvent {
     /// Identifier so this can be paired with the ExecCommandEnd event.
@@ -670,6 +689,8 @@ pub struct ExecCommandEndEvent {
     pub exit_code: i32,
     /// The duration of the command execution.
     pub duration: Duration,
+    /// Formatted output from the command, as seen by the model.
+    pub formatted_output: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -718,6 +739,11 @@ pub struct ApplyPatchApprovalRequestEvent {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct BackgroundEventEvent {
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StreamErrorEvent {
     pub message: String,
 }
 

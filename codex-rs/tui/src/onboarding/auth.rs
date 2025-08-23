@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
+use codex_login::AuthManager;
 use codex_login::CLIENT_ID;
 use codex_login::ServerOptions;
 use codex_login::ShutdownHandle;
@@ -112,6 +113,7 @@ pub(crate) struct AuthModeWidget {
     pub codex_home: PathBuf,
     pub login_status: LoginStatus,
     pub preferred_auth_method: AuthMode,
+    pub auth_manager: Arc<AuthManager>,
 }
 
 impl AuthModeWidget {
@@ -338,6 +340,7 @@ impl AuthModeWidget {
             Ok(child) => {
                 let sign_in_state = self.sign_in_state.clone();
                 let request_frame = self.request_frame.clone();
+                let auth_manager = self.auth_manager.clone();
                 tokio::spawn(async move {
                     let auth_url = child.auth_url.clone();
                     {
@@ -351,6 +354,9 @@ impl AuthModeWidget {
                     let r = child.block_until_done().await;
                     match r {
                         Ok(()) => {
+                            // Force the auth manager to reload the new auth information.
+                            auth_manager.reload();
+
                             *sign_in_state.write().unwrap() = SignInState::ChatGptSuccessMessage;
                             request_frame.schedule_frame();
                         }

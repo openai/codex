@@ -6,6 +6,8 @@ use crate::config_types::ShellEnvironmentPolicy;
 use crate::config_types::ShellEnvironmentPolicyToml;
 use crate::config_types::Tui;
 use crate::config_types::UriBasedFileOpener;
+use crate::config_types::Verbosity;
+use crate::git_info::resolve_root_git_project_for_trust;
 use crate::model_family::ModelFamily;
 use crate::model_family::find_family_for_model;
 use crate::model_provider_info::ModelProviderInfo;
@@ -150,6 +152,9 @@ pub struct Config {
     /// request using the Responses API.
     pub model_reasoning_summary: ReasoningSummary,
 
+    /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
+    pub model_verbosity: Option<Verbosity>,
+
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
 
@@ -169,6 +174,8 @@ pub struct Config {
 
     /// If set to `true`, the API key will be signed with the `originator` header.
     pub preferred_auth_method: AuthMode,
+
+    pub use_experimental_streamable_shell_tool: bool,
 }
 
 impl Config {
@@ -259,10 +266,61 @@ pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Re
         Err(e) => return Err(e.into()),
     };
 
-    // Mark the project as trusted. toml_edit is very good at handling
-    // missing properties
+    // Ensure we render a human-friendly structure:
+    //
+    // [projects]
+    // [projects."/path/to/project"]
+    // trust_level = "trusted"
+    //
+    // rather than inline tables like:
+    //
+    // [projects]
+    // "/path/to/project" = { trust_level = "trusted" }
     let project_key = project_path.to_string_lossy().to_string();
-    doc["projects"][project_key.as_str()]["trust_level"] = toml_edit::value("trusted");
+
+    // Ensure top-level `projects` exists as a non-inline, explicit table. If it
+    // exists but was previously represented as a non-table (e.g., inline),
+    // replace it with an explicit table.
+    let mut created_projects_table = false;
+    {
+        let root = doc.as_table_mut();
+        let needs_table = !root.contains_key("projects")
+            || root.get("projects").and_then(|i| i.as_table()).is_none();
+        if needs_table {
+            root.insert("projects", toml_edit::table());
+            created_projects_table = true;
+        }
+    }
+    let Some(projects_tbl) = doc["projects"].as_table_mut() else {
+        return Err(anyhow::anyhow!(
+            "projects table missing after initialization"
+        ));
+    };
+
+    // If we created the `projects` table ourselves, keep it implicit so we
+    // don't render a standalone `[projects]` header.
+    if created_projects_table {
+        projects_tbl.set_implicit(true);
+    }
+
+    // Ensure the per-project entry is its own explicit table. If it exists but
+    // is not a table (e.g., an inline table), replace it with an explicit table.
+    let needs_proj_table = !projects_tbl.contains_key(project_key.as_str())
+        || projects_tbl
+            .get(project_key.as_str())
+            .and_then(|i| i.as_table())
+            .is_none();
+    if needs_proj_table {
+        projects_tbl.insert(project_key.as_str(), toml_edit::table());
+    }
+    let Some(proj_tbl) = projects_tbl
+        .get_mut(project_key.as_str())
+        .and_then(|i| i.as_table_mut())
+    else {
+        return Err(anyhow::anyhow!("project table missing for {}", project_key));
+    };
+    proj_tbl.set_implicit(false);
+    proj_tbl["trust_level"] = toml_edit::value("trusted");
 
     // ensure codex_home exists
     std::fs::create_dir_all(codex_home)?;
@@ -398,6 +456,8 @@ pub struct ConfigToml {
 
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
+    /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
+    pub model_verbosity: Option<Verbosity>,
 
     /// Override to force-enable reasoning summaries for the configured model.
     pub model_supports_reasoning_summaries: Option<bool>,
@@ -410,6 +470,8 @@ pub struct ConfigToml {
 
     /// Experimental path to a file whose contents replace the built-in BASE_INSTRUCTIONS.
     pub experimental_instructions_file: Option<PathBuf>,
+
+    pub experimental_use_exec_command_tool: Option<bool>,
 
     /// The value for the `originator` header included with Responses API requests.
     pub responses_originator_header_internal_override: Option<String>,
@@ -454,10 +516,27 @@ impl ConfigToml {
     pub fn is_cwd_trusted(&self, resolved_cwd: &Path) -> bool {
         let projects = self.projects.clone().unwrap_or_default();
 
-        projects
-            .get(&resolved_cwd.to_string_lossy().to_string())
-            .map(|p| p.trust_level.clone().unwrap_or("".to_string()) == "trusted")
-            .unwrap_or(false)
+        let is_path_trusted = |path: &Path| {
+            let path_str = path.to_string_lossy().to_string();
+            projects
+                .get(&path_str)
+                .map(|p| p.trust_level.as_deref() == Some("trusted"))
+                .unwrap_or(false)
+        };
+
+        // Fast path: exact cwd match
+        if is_path_trusted(resolved_cwd) {
+            return true;
+        }
+
+        // If cwd lives inside a git worktree, check whether the root git project
+        // (the primary repository working directory) is trusted. This lets
+        // worktrees inherit trust from the main project.
+        if let Some(root_project) = resolve_root_git_project_for_trust(resolved_cwd) {
+            return is_path_trusted(&root_project);
+        }
+
+        false
     }
 
     pub fn get_config_profile(
@@ -597,7 +676,7 @@ impl Config {
                 needs_special_apply_patch_instructions: false,
                 supports_reasoning_summaries,
                 uses_local_shell_tool: false,
-                uses_apply_patch_tool: false,
+                apply_patch_tool_type: None,
             }
         });
 
@@ -623,9 +702,6 @@ impl Config {
         let file_base_instructions =
             Self::get_base_instructions(experimental_instructions_path, &resolved_cwd)?;
         let base_instructions = base_instructions.or(file_base_instructions);
-
-        let include_apply_patch_tool_val =
-            include_apply_patch_tool.unwrap_or(model_family.uses_apply_patch_tool);
 
         let responses_originator_header: String = cfg
             .responses_originator_header_internal_override
@@ -675,7 +751,7 @@ impl Config {
                 .model_reasoning_summary
                 .or(cfg.model_reasoning_summary)
                 .unwrap_or_default(),
-
+            model_verbosity: config_profile.model_verbosity.or(cfg.model_verbosity),
             chatgpt_base_url: config_profile
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)
@@ -683,9 +759,12 @@ impl Config {
 
             experimental_resume,
             include_plan_tool: include_plan_tool.unwrap_or(false),
-            include_apply_patch_tool: include_apply_patch_tool_val,
+            include_apply_patch_tool: include_apply_patch_tool.unwrap_or(false),
             responses_originator_header,
             preferred_auth_method: cfg.preferred_auth_method.unwrap_or(AuthMode::ChatGPT),
+            use_experimental_streamable_shell_tool: cfg
+                .experimental_use_exec_command_tool
+                .unwrap_or(false),
         };
         Ok(config)
     }
@@ -1044,6 +1123,7 @@ disable_response_storage = true
                 show_raw_agent_reasoning: false,
                 model_reasoning_effort: ReasoningEffort::High,
                 model_reasoning_summary: ReasoningSummary::Detailed,
+                model_verbosity: None,
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
                 experimental_resume: None,
                 base_instructions: None,
@@ -1051,6 +1131,7 @@ disable_response_storage = true
                 include_apply_patch_tool: false,
                 responses_originator_header: "codex_cli_rs".to_string(),
                 preferred_auth_method: AuthMode::ChatGPT,
+                use_experimental_streamable_shell_tool: false,
             },
             o3_profile_config
         );
@@ -1097,6 +1178,7 @@ disable_response_storage = true
             show_raw_agent_reasoning: false,
             model_reasoning_effort: ReasoningEffort::default(),
             model_reasoning_summary: ReasoningSummary::default(),
+            model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             experimental_resume: None,
             base_instructions: None,
@@ -1104,6 +1186,7 @@ disable_response_storage = true
             include_apply_patch_tool: false,
             responses_originator_header: "codex_cli_rs".to_string(),
             preferred_auth_method: AuthMode::ChatGPT,
+            use_experimental_streamable_shell_tool: false,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -1165,6 +1248,7 @@ disable_response_storage = true
             show_raw_agent_reasoning: false,
             model_reasoning_effort: ReasoningEffort::default(),
             model_reasoning_summary: ReasoningSummary::default(),
+            model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
             experimental_resume: None,
             base_instructions: None,
@@ -1172,10 +1256,81 @@ disable_response_storage = true
             include_apply_patch_tool: false,
             responses_originator_header: "codex_cli_rs".to_string(),
             preferred_auth_method: AuthMode::ChatGPT,
+            use_experimental_streamable_shell_tool: false,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
 
         Ok(())
     }
+
+    #[test]
+    fn test_set_project_trusted_writes_explicit_tables() -> anyhow::Result<()> {
+        let codex_home = TempDir::new().unwrap();
+        let project_dir = TempDir::new().unwrap();
+
+        // Call the function under test
+        set_project_trusted(codex_home.path(), project_dir.path())?;
+
+        // Read back the generated config.toml and assert exact contents
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let contents = std::fs::read_to_string(&config_path)?;
+
+        let raw_path = project_dir.path().to_string_lossy();
+        let path_str = if raw_path.contains('\\') {
+            format!("'{}'", raw_path)
+        } else {
+            format!("\"{}\"", raw_path)
+        };
+        let expected = format!(
+            r#"[projects.{path_str}]
+trust_level = "trusted"
+"#
+        );
+        assert_eq!(contents, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_set_project_trusted_converts_inline_to_explicit() -> anyhow::Result<()> {
+        let codex_home = TempDir::new().unwrap();
+        let project_dir = TempDir::new().unwrap();
+
+        // Seed config.toml with an inline project entry under [projects]
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let raw_path = project_dir.path().to_string_lossy();
+        let path_str = if raw_path.contains('\\') {
+            format!("'{}'", raw_path)
+        } else {
+            format!("\"{}\"", raw_path)
+        };
+        // Use a quoted key so backslashes don't require escaping on Windows
+        let initial = format!(
+            r#"[projects]
+{path_str} = {{ trust_level = "untrusted" }}
+"#
+        );
+        std::fs::create_dir_all(codex_home.path())?;
+        std::fs::write(&config_path, initial)?;
+
+        // Run the function; it should convert to explicit tables and set trusted
+        set_project_trusted(codex_home.path(), project_dir.path())?;
+
+        let contents = std::fs::read_to_string(&config_path)?;
+
+        // Assert exact output after conversion to explicit table
+        let expected = format!(
+            r#"[projects]
+
+[projects.{path_str}]
+trust_level = "trusted"
+"#
+        );
+        assert_eq!(contents, expected);
+
+        Ok(())
+    }
+
+    // No test enforcing the presence of a standalone [projects] header.
 }

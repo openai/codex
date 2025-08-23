@@ -28,6 +28,7 @@ libc = "0.2.175"
 mcp-types = { path = "../mcp-types" }
 mime_guess = "2.0"
 os_info = "3.12.0"
+portable-pty = "0.9.0"
 rand = "0.9"
 regex-lite = "0.1.6"
 reqwest = { version = "0.12", features = ["json", "stream"] }
@@ -70,6 +71,9 @@ openssl-sys = { version = "*", features = ["vendored"] }
 # Build OpenSSL from source for musl builds.
 [target.aarch64-unknown-linux-musl.dependencies]
 openssl-sys = { version = "*", features = ["vendored"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+which = "6"
 
 [dev-dependencies]
 assert_cmd = "2"
