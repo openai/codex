@@ -839,6 +839,7 @@ impl ChatWidget {
                 self.on_background_event(message)
             }
             EventMsg::StreamError(StreamErrorEvent { message }) => self.on_stream_error(message),
+            EventMsg::ConversationHistory(_) => {}
         }
         // Coalesce redraws: issue at most one after handling the event
         if self.needs_redraw {

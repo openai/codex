@@ -14,6 +14,7 @@ use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
 use codex_login::AuthManager;
+use codex_protocol::protocol::ConversationHistoryResponseEvent;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use futures::prelude::*;
@@ -147,6 +148,7 @@ impl Codex {
     pub async fn spawn(
         config: Config,
         auth_manager: Arc<AuthManager>,
+        initial_history: Option<Vec<ResponseItem>>,
     ) -> CodexResult<CodexSpawnOk> {
         let (tx_sub, rx_sub) = async_channel::bounded(64);
         let (tx_event, rx_event) = async_channel::unbounded();
@@ -177,6 +179,7 @@ impl Codex {
             config.clone(),
             auth_manager.clone(),
             tx_event.clone(),
+            initial_history,
         )
         .await
         .map_err(|e| {
@@ -186,7 +189,12 @@ impl Codex {
         let session_id = session.session_id;
 
         // This task will run until Op::Shutdown is received.
-        tokio::spawn(submission_loop(session, turn_context, config, rx_sub));
+        tokio::spawn(submission_loop(
+            session.clone(),
+            turn_context,
+            config,
+            rx_sub,
+        ));
         let codex = Codex {
             next_id: AtomicU64::new(0),
             tx_sub,
@@ -332,6 +340,7 @@ impl Session {
         config: Arc<Config>,
         auth_manager: Arc<AuthManager>,
         tx_event: Sender<Event>,
+        initial_history: Option<Vec<ResponseItem>>,
     ) -> anyhow::Result<(Arc<Self>, TurnContext)> {
         let ConfigureSession {
             provider,
@@ -391,14 +400,15 @@ impl Session {
         }
         let rollout_result = match rollout_res {
             Ok((session_id, maybe_saved, recorder)) => {
-                let restored_items: Option<Vec<ResponseItem>> =
+                let restored_items: Option<Vec<ResponseItem>> = initial_history.or_else(|| {
                     maybe_saved.and_then(|saved_session| {
                         if saved_session.items.is_empty() {
                             None
                         } else {
                             Some(saved_session.items)
                         }
-                    });
+                    })
+                });
                 RolloutResult {
                     session_id,
                     rollout_recorder: Some(recorder),
@@ -1285,6 +1295,21 @@ async fn submission_loop(
                     warn!("failed to send Shutdown event: {e}");
                 }
                 break;
+            }
+            Op::GetHistory => {
+                let tx_event = sess.tx_event.clone();
+                let sub_id = sub.id.clone();
+
+                let event = Event {
+                    id: sub_id.clone(),
+                    msg: EventMsg::ConversationHistory(ConversationHistoryResponseEvent {
+                        conversation_id: sess.session_id,
+                        entries: sess.state.lock_unchecked().history.contents(),
+                    }),
+                };
+                if let Err(e) = tx_event.send(event).await {
+                    warn!("failed to send ConversationHistory event: {e}");
+                }
             }
             _ => {
                 // Ignore unknown ops; enum is non_exhaustive to allow extensions.
