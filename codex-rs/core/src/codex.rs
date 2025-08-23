@@ -58,7 +58,6 @@ use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::model_family::find_family_for_model;
 use crate::openai_tools::ApplyPatchToolArgs;
-use crate::openai_tools::OpenAiTool;
 use crate::openai_tools::ToolsConfig;
 use crate::openai_tools::get_openai_tools;
 use crate::parse_command::parse_command;
@@ -499,7 +498,6 @@ impl Session {
                 sandbox_policy.clone(),
                 config.include_plan_tool,
                 config.include_apply_patch_tool,
-                config.tools_web_search_request,
             ),
             user_instructions,
             base_instructions,
@@ -1082,7 +1080,6 @@ async fn submission_loop(
                     new_sandbox_policy.clone(),
                     config.include_plan_tool,
                     config.include_apply_patch_tool,
-                    config.tools_web_search_request,
                 );
 
                 let new_turn_context = TurnContext {
@@ -1161,7 +1158,6 @@ async fn submission_loop(
                             sandbox_policy.clone(),
                             config.include_plan_tool,
                             config.include_apply_patch_tool,
-                            config.tools_web_search_request,
                         ),
                         user_instructions: turn_context.user_instructions.clone(),
                         base_instructions: turn_context.base_instructions.clone(),
@@ -1566,50 +1562,6 @@ async fn run_turn(
                 return Err(e);
             }
             Err(e) => {
-                let prompt_has_web_search = prompt
-                    .tools
-                    .iter()
-                    .any(|t| matches!(t, OpenAiTool::WebSearch { .. }));
-                if prompt_has_web_search {
-                    sess.notify_background_event(
-                        &sub_id,
-                        "web search attempt failed; continuing without web",
-                    )
-                    .await;
-                    let tools_no_web: Vec<OpenAiTool> = prompt
-                        .tools
-                        .iter()
-                        .filter(|t| !matches!(t, OpenAiTool::WebSearch { .. }))
-                        .cloned()
-                        .collect();
-                    let mut input_with_hint = Vec::with_capacity(prompt.input.len() + 1);
-                    input_with_hint.push(ResponseItem::Message {
-                        id: None,
-                        role: "assistant".to_string(),
-                        content: vec![ContentItem::OutputText {
-                            text: "Web search isn't available right now; I'll continue without browsing.".to_string(),
-                        }],
-                    });
-                    input_with_hint.extend(prompt.input.clone());
-                    let prompt_no_web = Prompt {
-                        input: input_with_hint,
-                        store: prompt.store,
-                        tools: tools_no_web,
-                        base_instructions_override: prompt.base_instructions_override.clone(),
-                    };
-                    match try_run_turn(
-                        sess,
-                        turn_context,
-                        turn_diff_tracker,
-                        &sub_id,
-                        &prompt_no_web,
-                    )
-                    .await
-                    {
-                        Ok(output) => return Ok(output),
-                        Err(e2) => return Err(e2),
-                    }
-                }
                 // Use the configured provider-specific stream retry budget.
                 let max_retries = turn_context.client.get_provider().stream_max_retries();
                 if retries < max_retries {
@@ -1634,15 +1586,9 @@ async fn run_turn(
                     .await;
 
                     tokio::time::sleep(delay).await;
-                    continue;
+                } else {
+                    return Err(e);
                 }
-
-                // Retries exhausted: bail out with last error code so callers can handle it.
-                let status = match e {
-                    CodexErr::RetryLimit(status) => status,
-                    _ => reqwest::StatusCode::SERVICE_UNAVAILABLE,
-                };
-                return Err(CodexErr::RetryLimit(status));
             }
         }
     }
