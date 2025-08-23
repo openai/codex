@@ -27,8 +27,7 @@ pub(crate) struct TranscriptApp {
     title: String,
     // Optional highlight range [start, end) in terms of base_transcript_lines indices
     highlight_range: Option<(usize, usize)>,
-    // When true, show backtracking key hints (Esc to step, etc.)
-    backtrack_mode: bool,
+    // Deprecated: previously used to toggle backtrack hints; hints now always shown.
 }
 
 impl TranscriptApp {
@@ -40,7 +39,6 @@ impl TranscriptApp {
             is_done: false,
             title: "T R A N S C R I P T".to_string(),
             highlight_range: None,
-            backtrack_mode: false,
         }
     }
 
@@ -52,7 +50,6 @@ impl TranscriptApp {
             is_done: false,
             title,
             highlight_range: None,
-            backtrack_mode: false,
         }
     }
 
@@ -85,10 +82,7 @@ impl TranscriptApp {
         self.rebuild_highlighted_lines();
     }
 
-    /// Enable or disable backtrack mode to show appropriate key hints.
-    pub(crate) fn set_backtrack_mode(&mut self, enabled: bool) {
-        self.backtrack_mode = enabled;
-    }
+    // set_backtrack_mode removed: overlay always shows backtrack guidance now.
 
     fn rebuild_highlighted_lines(&mut self) {
         // Start from base and optionally apply highlight styles to the target range.
@@ -275,14 +269,12 @@ impl TranscriptApp {
         ];
 
         let mut hints2 = vec![" ".into(), "q".set_style(key_hint_style), " quit".into()];
-        if self.backtrack_mode {
-            // Include Esc hint when previewing backtrack in the transcript overlay
-            hints2.extend([
-                "   ".into(),
-                "Esc".set_style(key_hint_style),
-                " backtrack".into(),
-            ]);
-        }
+        // Always include guidance to initiate edit-previous from transcript overlay
+        hints2.extend([
+            "   ".into(),
+            "Esc".set_style(key_hint_style),
+            " edit prev".into(),
+        ]);
         Paragraph::new(vec![Line::from(hints1).dim(), Line::from(hints2).dim()])
             .render_ref(hints_rect, buf);
     }
@@ -293,9 +285,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn backtrack_hint_is_visible_when_enabled() {
+    fn edit_prev_hint_is_visible() {
         let mut app = TranscriptApp::new(vec![Line::from("hello")]);
-        app.set_backtrack_mode(true);
 
         // Render into a small buffer and assert the backtrack hint is present
         let area = Rect::new(0, 0, 40, 10);
@@ -311,8 +302,8 @@ mod tests {
             s.push('\n');
         }
         assert!(
-            s.contains("backtrack"),
-            "expected backtrack hint in overlay footer, got: {s:?}"
+            s.contains("edit prev"),
+            "expected 'edit prev' hint in overlay footer, got: {s:?}"
         );
     }
 }

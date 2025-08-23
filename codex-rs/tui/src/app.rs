@@ -404,6 +404,7 @@ impl App {
                     self.esc_backtrack_primed = false;
                     self.esc_backtrack_base = None;
                     self.esc_backtrack_count = 0;
+                    self.chat_widget.clear_esc_backtrack_hint();
                 }
                 self.chat_widget.handle_key_event(key_event);
             }

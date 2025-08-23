@@ -82,25 +82,38 @@ impl App {
                 }
                 _ => {}
             }
-        } else {
-            // Not in backtrack mode yet: allow priming from transcript overlay with a hint.
-            if let TuiEvent::Key(KeyEvent {
-                code: KeyCode::Esc,
-                kind: KeyEventKind::Press | KeyEventKind::Repeat,
-                ..
-            }) = event
-            {
-                // Prime backtrack and show overlay hint, but do not highlight yet.
-                self.esc_backtrack_primed = true;
-                self.esc_backtrack_count = 0;
-                self.esc_backtrack_base = self.chat_widget.session_id();
-                self.transcript_overlay_is_backtrack = true;
-                if let Some(overlay) = &mut self.transcript_overlay {
-                    overlay.set_backtrack_mode(true);
+        } else if let TuiEvent::Key(KeyEvent {
+            code: KeyCode::Esc,
+            kind: KeyEventKind::Press | KeyEventKind::Repeat,
+            ..
+        }) = event
+        {
+            // First Esc in transcript overlay: immediately begin backtrack preview at latest user message.
+            self.esc_backtrack_primed = true;
+            self.esc_backtrack_base = self.chat_widget.session_id();
+            self.transcript_overlay_is_backtrack = true;
+            self.esc_backtrack_count = 1;
+            let nth = backtrack_helpers::normalize_backtrack_n(&self.transcript_lines, 1);
+            self.esc_backtrack_count = nth;
+            let header_idx =
+                backtrack_helpers::find_nth_last_user_header_index(&self.transcript_lines, nth);
+            let offset = header_idx.map(|idx| {
+                backtrack_helpers::wrapped_offset_before(
+                    &self.transcript_lines,
+                    idx,
+                    tui.terminal.viewport_area.width,
+                )
+            });
+            let hl =
+                backtrack_helpers::highlight_range_for_nth_last_user(&self.transcript_lines, nth);
+            if let Some(overlay) = &mut self.transcript_overlay {
+                if let Some(off) = offset {
+                    overlay.scroll_offset = off;
                 }
-                tui.frame_requester().schedule_frame();
-                handled = true;
+                overlay.set_highlight_range(hl);
             }
+            tui.frame_requester().schedule_frame();
+            handled = true;
         }
         // Forward to overlay if not handled
         if !handled && let Some(overlay) = &mut self.transcript_overlay {
@@ -122,13 +135,15 @@ impl App {
                 self.esc_backtrack_primed = true;
                 self.esc_backtrack_count = 0;
                 self.esc_backtrack_base = self.chat_widget.session_id();
+                // Show hint in composer to guide Esc-then-Esc flow.
+                self.chat_widget.show_esc_backtrack_hint();
             } else if self.transcript_overlay.is_none() {
                 // Open transcript overlay in backtrack preview mode and jump to the target message.
                 self.open_transcript_overlay(tui);
                 self.transcript_overlay_is_backtrack = true;
-                if let Some(overlay) = &mut self.transcript_overlay {
-                    overlay.set_backtrack_mode(true);
-                }
+                // Overlay footer already shows the backtrack guidance unconditionally.
+                // Composer is hidden by overlay; clear its hint.
+                self.chat_widget.clear_esc_backtrack_hint();
                 self.esc_backtrack_count = self.esc_backtrack_count.saturating_add(1);
                 let nth = backtrack_helpers::normalize_backtrack_n(
                     &self.transcript_lines,
@@ -220,6 +235,7 @@ impl App {
             self.esc_backtrack_primed = false;
             self.esc_backtrack_base = None;
             self.esc_backtrack_count = 0;
+            self.chat_widget.clear_esc_backtrack_hint();
         }
     }
 

@@ -1071,6 +1071,14 @@ impl ChatWidget {
     pub(crate) fn insert_str(&mut self, text: &str) {
         self.bottom_pane.insert_str(text);
     }
+
+    pub(crate) fn show_esc_backtrack_hint(&mut self) {
+        self.bottom_pane.show_esc_backtrack_hint();
+    }
+
+    pub(crate) fn clear_esc_backtrack_hint(&mut self) {
+        self.bottom_pane.clear_esc_backtrack_hint();
+    }
     /// Forward an `Op` directly to codex.
     pub(crate) fn submit_op(&self, op: Op) {
         // Record outbound operation for session replay fidelity.

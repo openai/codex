@@ -43,11 +43,11 @@ To run Codex non-interactively, run `codex exec PROMPT` (you can also pass the p
 
 Typing `@` triggers a fuzzy-filename search over the workspace root. Use up/down to select among the results and Tab or Enter to replace the `@` with the selected path. You can use Esc to cancel the search.
 
-### Esc–Esc backtrack to edit a previous message
+### Esc–Esc to edit a previous message
 
 When the chat composer is empty, press Esc to prime “backtrack” mode. Press Esc again to open a transcript preview highlighting the last user message; press Esc repeatedly to step to older user messages. Press Enter to confirm and Codex will fork the conversation from that point, trim the visible transcript accordingly, and pre‑fill the composer with the selected user message so you can edit and resubmit it.
 
-In the transcript preview, the footer shows an `Esc backtrack` hint while backtracking is active.
+In the transcript preview, the footer shows an `Esc edit prev` hint while editing is active.
 
 ### `--cd`/`-C` flag
 
