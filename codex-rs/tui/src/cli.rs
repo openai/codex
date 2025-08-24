@@ -56,7 +56,7 @@ pub struct Cli {
 
     /// Enable web search (off by default). When enabled, the native Responses `web_search` tool is available to the model (no per‑call approval).
     #[arg(long = "search", default_value_t = false)]
-    pub search: bool,
+    pub web_search: bool,
 
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
