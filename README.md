@@ -93,7 +93,6 @@ If you encounter problems with the login flow, please comment on [this issue](ht
   - [System Requirements](./docs/install.md#system-requirements)
   - [DotSlash](./docs/install.md#dotslash)
   - [Build from source](./docs/install.md#build-from-source)
-- [**Models & providers**](./docs/models.md)
 - [**Advanced**](./docs/advanced.md)
   - [Non-interactive / CI mode](./docs/advanced.md#non-interactive--ci-mode)
   - [Tracing / verbose logging](./docs/advanced.md#tracing--verbose-logging)

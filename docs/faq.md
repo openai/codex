@@ -6,7 +6,7 @@ In 2021, OpenAI released Codex, an AI system designed to generate code from natu
 
 ### Which models are supported?
 
-Any model available with [Responses API](https://platform.openai.com/docs/api-reference/responses). The default is `o4-mini`, but pass `--model gpt-4.1` or set `model: gpt-4.1` in your config file to override.
+We recommend using gpt-5. However, any model available with the [Responses API](https://platform.openai.com/docs/api-reference/responses) is supported. Use the `--model` flag to specify the model you want to use.
 
 ### Why does `o3` or `o4-mini` not work for me?
 
@@ -14,8 +14,8 @@ It's possible that your [API account needs to be verified](https://help.openai.c
 
 ### How do I stop Codex from editing my files?
 
-Codex runs model-generated commands in a sandbox. If a proposed command or file change doesn't look right, you can simply type **n** to deny the command or give the model feedback.
+By default, Codex can modify files in your current working directory (Auto mode). To prevent edits, run `codex` in read-only mode with the CLI flag `--sandbox read-only`. Alternatively, you can change the approval level mid-conversation with `/approvals`.
 
 ### Does it work on Windows?
 
-Not directly. It requires [Windows Subsystem for Linux (WSL2)](https://learn.microsoft.com/en-us/windows/wsl/install) - Codex has been tested on macOS and Linux with Node 22. 
+Running Codex directly on Windows may work, but is not officially supported. We recommend using [Windows Subsystem for Linux (WSL2)](https://learn.microsoft.com/en-us/windows/wsl/install). 
