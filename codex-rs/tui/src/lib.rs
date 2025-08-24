@@ -128,11 +128,9 @@ pub async fn run_main(
         include_apply_patch_tool: None,
         disable_response_storage: cli.oss.then_some(true),
         show_raw_agent_reasoning: cli.oss.then_some(true),
+        tools_web_search_request: cli.search.then_some(true),
     };
-    let mut raw_overrides = cli.config_overrides.raw_overrides.clone();
-    if cli.search {
-        raw_overrides.push("tools.web_search=true".to_string());
-    }
+    let raw_overrides = cli.config_overrides.raw_overrides.clone();
     let overrides_cli = codex_common::CliConfigOverrides { raw_overrides };
     let cli_kv_overrides = match overrides_cli.parse_overrides() {
         Ok(v) => v,

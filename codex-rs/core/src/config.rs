@@ -588,6 +588,7 @@ pub struct ConfigOverrides {
     pub include_apply_patch_tool: Option<bool>,
     pub disable_response_storage: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
+    pub tools_web_search_request: Option<bool>,
 }
 
 impl Config {
@@ -614,6 +615,7 @@ impl Config {
             include_apply_patch_tool,
             disable_response_storage,
             show_raw_agent_reasoning,
+            tools_web_search_request: override_tools_web_search_request,
         } = overrides;
 
         let config_profile = match config_profile_key.as_ref().or(cfg.profile.as_ref()) {
@@ -676,10 +678,8 @@ impl Config {
         let history = cfg.history.clone().unwrap_or_default();
 
         // Compute feature flags before moving fields out of cfg
-        let tools_web_search_request = cfg
-            .tools
-            .as_ref()
-            .and_then(|t| t.web_search)
+        let tools_web_search_request = override_tools_web_search_request
+            .or(cfg.tools.as_ref().and_then(|t| t.web_search))
             .unwrap_or(false);
 
         let model = model
