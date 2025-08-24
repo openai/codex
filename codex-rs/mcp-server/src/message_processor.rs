@@ -13,6 +13,7 @@ use codex_protocol::mcp_protocol::ClientRequest;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::protocol::Submission;
+use codex_login::AuthManager;
 use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
 use mcp_types::ClientRequest as McpClientRequest;
@@ -52,8 +53,11 @@ impl MessageProcessor {
         config: Arc<Config>,
     ) -> Self {
         let outgoing = Arc::new(outgoing);
-        let conversation_manager = Arc::new(ConversationManager::default());
+        let auth_manager =
+            AuthManager::shared(config.codex_home.clone(), config.preferred_auth_method);
+        let conversation_manager = Arc::new(ConversationManager::new(auth_manager.clone()));
         let codex_message_processor = CodexMessageProcessor::new(
+            auth_manager,
             conversation_manager.clone(),
             outgoing.clone(),
             codex_linux_sandbox_exe.clone(),

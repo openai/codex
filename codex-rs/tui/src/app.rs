@@ -1,3 +1,4 @@
+use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::chatwidget::ChatWidget;
@@ -5,18 +6,17 @@ use crate::file_search::FileSearchManager;
 use crate::transcript_app::TranscriptApp;
 use crate::tui;
 use crate::tui::TuiEvent;
+use codex_ansi_escape::ansi_escape_line;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::protocol::TokenUsage;
+use codex_login::AuthManager;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
-use crossterm::execute;
-use crossterm::terminal::EnterAlternateScreen;
-use crossterm::terminal::LeaveAlternateScreen;
 use crossterm::terminal::supports_keyboard_enhancement;
-use ratatui::layout::Rect;
+use ratatui::style::Stylize;
 use ratatui::text::Line;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -26,33 +26,37 @@ use std::thread;
 use std::time::Duration;
 use tokio::select;
 use tokio::sync::mpsc::unbounded_channel;
+// use uuid::Uuid;
 
 pub(crate) struct App {
-    server: Arc<ConversationManager>,
-    app_event_tx: AppEventSender,
-    chat_widget: ChatWidget,
+    pub(crate) server: Arc<ConversationManager>,
+    pub(crate) app_event_tx: AppEventSender,
+    pub(crate) chat_widget: ChatWidget,
 
     /// Config is stored here so we can recreate ChatWidgets as needed.
-    config: Config,
+    pub(crate) config: Config,
 
-    file_search: FileSearchManager,
+    pub(crate) file_search: FileSearchManager,
 
-    transcript_lines: Vec<Line<'static>>,
+    pub(crate) transcript_lines: Vec<Line<'static>>,
 
     // Transcript overlay state
-    transcript_overlay: Option<TranscriptApp>,
-    deferred_history_lines: Vec<Line<'static>>,
-    transcript_saved_viewport: Option<Rect>,
+    pub(crate) transcript_overlay: Option<TranscriptApp>,
+    pub(crate) deferred_history_lines: Vec<Line<'static>>,
 
-    enhanced_keys_supported: bool,
+    pub(crate) enhanced_keys_supported: bool,
 
     /// Controls the animation thread that sends CommitTick events.
-    commit_anim_running: Arc<AtomicBool>,
+    pub(crate) commit_anim_running: Arc<AtomicBool>,
+
+    // Esc-backtracking state grouped
+    pub(crate) backtrack: crate::app_backtrack::BacktrackState,
 }
 
 impl App {
     pub async fn run(
         tui: &mut tui::Tui,
+        auth_manager: Arc<AuthManager>,
         config: Config,
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
@@ -61,7 +65,7 @@ impl App {
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
 
-        let conversation_manager = Arc::new(ConversationManager::default());
+        let conversation_manager = Arc::new(ConversationManager::new(auth_manager.clone()));
 
         let enhanced_keys_supported = supports_keyboard_enhancement().unwrap_or(false);
 
@@ -87,8 +91,8 @@ impl App {
             transcript_lines: Vec::new(),
             transcript_overlay: None,
             deferred_history_lines: Vec::new(),
-            transcript_saved_viewport: None,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
+            backtrack: BacktrackState::default(),
         };
 
         let tui_events = tui.event_stream();
@@ -98,7 +102,7 @@ impl App {
 
         while select! {
             Some(event) = app_event_rx.recv() => {
-                app.handle_event(tui, event)?
+                app.handle_event(tui, event).await?
             }
             Some(event) = tui_events.next() => {
                 app.handle_tui_event(tui, event).await?
@@ -113,21 +117,8 @@ impl App {
         tui: &mut tui::Tui,
         event: TuiEvent,
     ) -> Result<bool> {
-        if let Some(overlay) = &mut self.transcript_overlay {
-            overlay.handle_event(tui, event)?;
-            if overlay.is_done {
-                // Exit alternate screen and restore viewport.
-                let _ = execute!(tui.terminal.backend_mut(), LeaveAlternateScreen);
-                if let Some(saved) = self.transcript_saved_viewport.take() {
-                    tui.terminal.set_viewport_area(saved);
-                }
-                if !self.deferred_history_lines.is_empty() {
-                    let lines = std::mem::take(&mut self.deferred_history_lines);
-                    tui.insert_history_lines(lines);
-                }
-                self.transcript_overlay = None;
-            }
-            tui.frame_requester().schedule_frame();
+        if self.transcript_overlay.is_some() {
+            let _ = self.handle_backtrack_overlay_event(tui, event).await?;
         } else {
             match event {
                 TuiEvent::Key(key_event) => {
@@ -152,22 +143,21 @@ impl App {
                         },
                     )?;
                 }
-                #[cfg(unix)]
-                TuiEvent::ResumeFromSuspend => {
-                    let cursor_pos = tui.terminal.get_cursor_position()?;
-                    tui.terminal.set_viewport_area(ratatui::layout::Rect::new(
-                        0,
-                        cursor_pos.y,
-                        0,
-                        0,
-                    ));
+                TuiEvent::AttachImage {
+                    path,
+                    width,
+                    height,
+                    format_label,
+                } => {
+                    self.chat_widget
+                        .attach_image(path, width, height, format_label);
                 }
             }
         }
         Ok(true)
     }
 
-    fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
+    async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
         match event {
             AppEvent::NewSession => {
                 self.chat_widget = ChatWidget::new(
@@ -233,12 +223,28 @@ impl App {
             AppEvent::CodexEvent(event) => {
                 self.chat_widget.handle_codex_event(event);
             }
+            AppEvent::ConversationHistory(ev) => {
+                self.on_conversation_history_for_backtrack(tui, ev).await?;
+            }
             AppEvent::ExitRequest => {
                 return Ok(false);
             }
             AppEvent::CodexOp(op) => self.chat_widget.submit_op(op),
             AppEvent::DiffResult(text) => {
-                self.chat_widget.add_diff_output(text);
+                // Clear the in-progress state in the bottom pane
+                self.chat_widget.on_diff_complete();
+                // Enter alternate screen using TUI helper and build pager lines
+                let _ = tui.enter_alt_screen();
+                let pager_lines: Vec<ratatui::text::Line<'static>> = if text.trim().is_empty() {
+                    vec!["No changes detected.".italic().into()]
+                } else {
+                    text.lines().map(ansi_escape_line).collect()
+                };
+                self.transcript_overlay = Some(TranscriptApp::with_title(
+                    pager_lines,
+                    "D I F F".to_string(),
+                ));
+                tui.frame_requester().schedule_frame();
             }
             AppEvent::StartFileSearch(query) => {
                 if !query.is_empty() {
@@ -293,21 +299,40 @@ impl App {
                 ..
             } => {
                 // Enter alternate screen and set viewport to full size.
-                let _ = execute!(tui.terminal.backend_mut(), EnterAlternateScreen);
-                if let Ok(size) = tui.terminal.size() {
-                    self.transcript_saved_viewport = Some(tui.terminal.viewport_area);
-                    tui.terminal
-                        .set_viewport_area(Rect::new(0, 0, size.width, size.height));
-                    let _ = tui.terminal.clear();
-                }
-
+                let _ = tui.enter_alt_screen();
                 self.transcript_overlay = Some(TranscriptApp::new(self.transcript_lines.clone()));
                 tui.frame_requester().schedule_frame();
+            }
+            // Esc primes/advances backtracking when composer is empty.
+            KeyEvent {
+                code: KeyCode::Esc,
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            } => {
+                self.handle_backtrack_esc_key(tui);
+            }
+            // Enter confirms backtrack when primed + count > 0. Otherwise pass to widget.
+            KeyEvent {
+                code: KeyCode::Enter,
+                kind: KeyEventKind::Press,
+                ..
+            } if self.backtrack.primed
+                && self.backtrack.count > 0
+                && self.chat_widget.composer_is_empty() =>
+            {
+                // Delegate to helper for clarity; preserves behavior.
+                self.confirm_backtrack_from_main();
             }
             KeyEvent {
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
                 ..
             } => {
+                // Any non-Esc key press should cancel a primed backtrack.
+                // This avoids stale "Esc-primed" state after the user starts typing
+                // (even if they later backspace to empty).
+                if key_event.code != KeyCode::Esc && self.backtrack.primed {
+                    self.reset_backtrack_state();
+                }
                 self.chat_widget.handle_key_event(key_event);
             }
             _ => {

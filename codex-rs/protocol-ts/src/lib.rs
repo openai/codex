@@ -32,11 +32,16 @@ pub fn generate_ts(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
     codex_protocol::mcp_protocol::SendUserTurnResponse::export_all_to(out_dir)?;
     codex_protocol::mcp_protocol::InterruptConversationParams::export_all_to(out_dir)?;
     codex_protocol::mcp_protocol::InterruptConversationResponse::export_all_to(out_dir)?;
+    codex_protocol::mcp_protocol::GitDiffToRemoteParams::export_all_to(out_dir)?;
+    codex_protocol::mcp_protocol::GitDiffToRemoteResponse::export_all_to(out_dir)?;
     codex_protocol::mcp_protocol::LoginChatGptResponse::export_all_to(out_dir)?;
     codex_protocol::mcp_protocol::LoginChatGptCompleteNotification::export_all_to(out_dir)?;
     codex_protocol::mcp_protocol::CancelLoginChatGptParams::export_all_to(out_dir)?;
     codex_protocol::mcp_protocol::CancelLoginChatGptResponse::export_all_to(out_dir)?;
-    codex_protocol::mcp_protocol::GitDiffToRemoteParams::export_all_to(out_dir)?;
+    codex_protocol::mcp_protocol::LogoutChatGptParams::export_all_to(out_dir)?;
+    codex_protocol::mcp_protocol::LogoutChatGptResponse::export_all_to(out_dir)?;
+    codex_protocol::mcp_protocol::GetAuthStatusParams::export_all_to(out_dir)?;
+    codex_protocol::mcp_protocol::GetAuthStatusResponse::export_all_to(out_dir)?;
     codex_protocol::mcp_protocol::ApplyPatchApprovalParams::export_all_to(out_dir)?;
     codex_protocol::mcp_protocol::ApplyPatchApprovalResponse::export_all_to(out_dir)?;
     codex_protocol::mcp_protocol::ExecCommandApprovalParams::export_all_to(out_dir)?;
