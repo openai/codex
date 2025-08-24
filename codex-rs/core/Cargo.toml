@@ -6,6 +6,7 @@ version = { workspace = true }
 [lib]
 name = "codex_core"
 path = "src/lib.rs"
+doctest = false
 
 [lints]
 workspace = true
