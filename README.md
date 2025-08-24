@@ -10,10 +10,6 @@
 
 ---
 
-
-
----
-
 ## Quickstart
 
 ### Installing and running Codex CLI
@@ -74,6 +70,19 @@ Notes:
 - If you have signed in with ChatGPT, Codex will default to using your ChatGPT credits. If you wish to use your API key, use the `/logout` command to clear your ChatGPT authentication.
 
 If you encounter problems with the login flow, please comment on [this issue](https://github.com/openai/codex/issues/1243).
+
+---
+
+### Model Context Protocol (MCP)
+
+Codex CLI supports [MCP servers](./docs/advanced.md#model-context-protocol-mcp). Enable by adding an `mcp_servers` section to your `~/.codex/config.toml`.
+
+```toml
+[mcp_servers.example]
+command = "npx"
+args = ["-y", "mcp-server"]
+```
+```
 
 ---
 
