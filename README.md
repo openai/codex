@@ -85,6 +85,10 @@ args = ["-y", "mcp-server"]
 
 ---
 
+### Configuration
+
+Codex is highly configurable; set preferences in `~/.codex/config.toml`. For full configuration options, see [docs/config.md](./docs/config.md).
+
 ### Docs & FAQ
 
 - [**Getting started**](./docs/getting-started.md)

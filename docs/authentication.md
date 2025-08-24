@@ -28,6 +28,7 @@ Notes:
 
 - When `preferred_auth_method = "apikey"` and an API key is available, the login screen is skipped.
 - When `preferred_auth_method = "chatgpt"` (default), Codex prefers ChatGPT auth if present; if only an API key is present, it will use the API key. Certain account types may also require API-key mode.
+- To check which auth method is being used during a session, use the `/status` command in the TUI.
 
 ## Connecting on a "Headless" Machine
 

@@ -48,10 +48,28 @@ You can give Codex extra instructions and guidance using `AGENTS.md` files. Code
 2. `AGENTS.md` at repo root - shared project notes
 3. `AGENTS.md` in the current working directory - sub-folder/feature specifics
 
-### Configuration
+### Tips & shortcuts
 
-Codex supports a rich set of configuration options documented in [`docs/config.md`](./config.md).
+#### Use `@` for file search
 
-By default, Codex loads its configuration from `~/.codex/config.toml`.
+Typing `@` triggers a fuzzy-filename search over the workspace root. Use up/down to select among the results and Tab or Enter to replace the `@` with the selected path. You can use Esc to cancel the search.
 
-Though `--config` can be used to set/override ad-hoc config values for individual invocations of `codex`. 
+#### Esc–Esc to edit a previous message
+
+When the chat composer is empty, press Esc to prime “backtrack” mode. Press Esc again to open a transcript preview highlighting the last user message; press Esc repeatedly to step to older user messages. Press Enter to confirm and Codex will fork the conversation from that point, trim the visible transcript accordingly, and pre‑fill the composer with the selected user message so you can edit and resubmit it.
+
+In the transcript preview, the footer shows an `Esc edit prev` hint while editing is active.
+
+#### Shell completions
+
+Generate shell completion scripts via:
+
+```shell
+codex completion bash
+codex completion zsh
+codex completion fish
+```
+
+#### `--cd`/`-C` flag
+
+Sometimes it is not convenient to `cd` to the directory you want Codex to use as the "working root" before running Codex. Fortunately, `codex` supports a `--cd` option so you can specify whatever folder you want. You can confirm that Codex is honoring `--cd` by double-checking the **workdir** it reports in the TUI at the start of a new session.
