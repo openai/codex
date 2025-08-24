@@ -690,31 +690,30 @@ fn approval_modal_patch_snapshot() {
         .expect("draw patch approval modal");
     assert_snapshot!("approval_modal_patch", terminal.backend());
 }
- 
+
 // Snapshot test: ChatWidget at very small heights (idle)
 // Ensures overall layout behaves when terminal height is extremely constrained.
 #[test]
 fn ui_snapshots_small_heights_idle() {
-    use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
     let (chat, _rx, _op_rx) = make_chatwidget_manual();
     for h in [1u16, 2, 3] {
         let name = format!("chat_small_idle_h{h}");
-        let mut terminal =
-            Terminal::new(TestBackend::new(40, h)).expect("create terminal");
+        let mut terminal = Terminal::new(TestBackend::new(40, h)).expect("create terminal");
         terminal
             .draw(|f| f.render_widget_ref(&chat, f.area()))
             .expect("draw chat idle");
         assert_snapshot!(name, terminal.backend());
     }
 }
- 
+
 // Snapshot test: ChatWidget at very small heights (task running)
 // Validates how status + composer are presented within tight space.
 #[test]
 fn ui_snapshots_small_heights_task_running() {
-    use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
     // Activate status line
     chat.handle_codex_event(Event {
@@ -729,8 +728,7 @@ fn ui_snapshots_small_heights_task_running() {
     });
     for h in [1u16, 2, 3] {
         let name = format!("chat_small_running_h{h}");
-        let mut terminal =
-            Terminal::new(TestBackend::new(40, h)).expect("create terminal");
+        let mut terminal = Terminal::new(TestBackend::new(40, h)).expect("create terminal");
         terminal
             .draw(|f| f.render_widget_ref(&chat, f.area()))
             .expect("draw chat running");
