@@ -116,8 +116,12 @@ impl BottomPane {
     fn layout(&self, area: Rect) -> [Rect; 2] {
         let top_margin = if self.active_view.is_some() { 0 } else { 1 };
 
-        let status_height = if let Some(status) = self.status.as_ref() {
-            status.desired_height(area.width)
+        let status_height = if self.active_view.is_none() {
+            if let Some(status) = self.status.as_ref() {
+                status.desired_height(area.width)
+            } else {
+                0
+            }
         } else {
             0
         };
