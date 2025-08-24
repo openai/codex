@@ -57,7 +57,7 @@ tracing = { version = "0.1.41", features = ["log"] }
 tree-sitter = "0.25.8"
 tree-sitter-bash = "0.25.0"
 uuid = { version = "1", features = ["serde", "v4"] }
-whoami = "1.6.0"
+whoami = "1.6.1"
 wildmatch = "2.4.0"
 
 
