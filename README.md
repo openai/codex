@@ -77,17 +77,11 @@ If you encounter problems with the login flow, please comment on [this issue](ht
 
 Codex CLI supports [MCP servers](./docs/advanced.md#model-context-protocol-mcp). Enable by adding an `mcp_servers` section to your `~/.codex/config.toml`.
 
-```toml
-[mcp_servers.example]
-command = "npx"
-args = ["-y", "mcp-server"]
-```
-
 ---
 
 ### Configuration
 
-Codex is highly configurable; set preferences in `~/.codex/config.toml`. For full configuration options, see [docs/config.md](./docs/config.md).
+Codex CLI supports a rich set of configuration options. Set preferences in `~/.codex/config.toml`. For full configuration options, see [Configuration](./docs/config.md).
 
 ### Docs & FAQ
 
