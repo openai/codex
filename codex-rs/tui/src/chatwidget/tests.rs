@@ -649,10 +649,10 @@ fn approval_modal_exec_snapshot() {
     // Call desired_height first and use that exact height for rendering.
     let height = chat.desired_height(80);
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
-        .unwrap_or_else(|e| panic!("Failed to create terminal: {e}"));
+        .expect("create terminal");
     terminal
         .draw(|f| f.render_widget_ref(&chat, f.area()))
-        .unwrap_or_else(|e| panic!("Failed to draw approval modal: {e}"));
+        .expect("draw approval modal");
     assert_snapshot!("approval_modal_exec", terminal.backend());
 }
 
@@ -684,11 +684,38 @@ fn approval_modal_patch_snapshot() {
     // Render at the widget's desired height and snapshot.
     let height = chat.desired_height(80);
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
-        .unwrap_or_else(|e| panic!("Failed to create terminal: {e}"));
+        .expect("create terminal");
     terminal
         .draw(|f| f.render_widget_ref(&chat, f.area()))
-        .unwrap_or_else(|e| panic!("Failed to draw patch approval modal: {e}"));
+        .expect("draw patch approval modal");
     assert_snapshot!("approval_modal_patch", terminal.backend());
+}
+
+// Snapshot test: status widget active (StatusIndicatorView)
+// Ensures the VT100 rendering of the status indicator is stable when active.
+#[test]
+fn status_widget_active_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+    // Activate the status indicator by simulating a task start.
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TaskStarted,
+    });
+    // Provide a deterministic header via a bold reasoning chunk.
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Analyzing**".into(),
+        }),
+    });
+    // Render and snapshot.
+    let height = chat.desired_height(80);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
+        .expect("create terminal");
+    terminal
+        .draw(|f| f.render_widget_ref(&chat, f.area()))
+        .expect("draw status widget");
+    assert_snapshot!("status_widget_active", terminal.backend());
 }
 
 #[test]
