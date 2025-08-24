@@ -547,7 +547,7 @@ In 2021, OpenAI released Codex, an AI system designed to generate code from natu
 <details>
 <summary>Which models are supported?</summary>
 
-Any model available with [Responses API](https://platform.openai.com/docs/api-reference/responses). The default is `o4-mini`, but pass `--model gpt-4.1` or set `model: gpt-4.1` in your config file to override.
+Any model available with [Responses API](https://platform.openai.com/docs/api-reference/responses). The default is `gpt-5`, but pass `--model gpt-4.1` or set `model: gpt-4.1` in your config file to override.
 
 </details>
 <details>
