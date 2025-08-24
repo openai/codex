@@ -80,7 +80,7 @@ impl App {
         base_id: uuid::Uuid,
         drop_last_messages: usize,
     ) {
-        self.pending_backtrack = Some((base_id, drop_last_messages, prefill));
+        self.backtrack.pending = Some((base_id, drop_last_messages, prefill));
         self.app_event_tx.send(crate::app_event::AppEvent::CodexOp(
             codex_core::protocol::Op::GetHistory,
         ));
@@ -181,7 +181,7 @@ impl App {
         selection: (usize, Option<usize>, Option<(usize, usize)>),
     ) {
         let (nth, offset, hl) = selection;
-        self.esc_backtrack_count = nth;
+        self.backtrack.count = nth;
         if let Some(overlay) = &mut self.transcript_overlay {
             if let Some(off) = offset {
                 overlay.scroll_offset = off;
@@ -204,8 +204,8 @@ impl App {
 
     /// Handle Enter in overlay backtrack preview: confirm selection and reset state.
     fn overlay_confirm_backtrack(&mut self, tui: &mut tui::Tui) {
-        if let Some(base_id) = self.esc_backtrack_base {
-            let drop_last_messages = self.esc_backtrack_count;
+        if let Some(base_id) = self.backtrack.base_id {
+            let drop_last_messages = self.backtrack.count;
             let prefill =
                 backtrack_helpers::nth_last_user_text(&self.transcript_lines, drop_last_messages)
                     .unwrap_or_default();
@@ -217,7 +217,7 @@ impl App {
 
     /// Handle Esc in overlay backtrack preview: step selection if armed, else forward.
     fn overlay_step_backtrack(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
-        if self.esc_backtrack_base.is_some() {
+        if self.backtrack.base_id.is_some() {
             self.step_backtrack_and_highlight(tui);
         } else {
             self.overlay_forward_event(tui, event)?;
@@ -228,8 +228,8 @@ impl App {
     /// Confirm a primed backtrack from the main view (no overlay visible).
     /// Computes the prefill from the selected user message and requests history.
     pub(crate) fn confirm_backtrack_from_main(&mut self) {
-        if let Some(base_id) = self.esc_backtrack_base {
-            let drop_last_messages = self.esc_backtrack_count;
+        if let Some(base_id) = self.backtrack.base_id {
+            let drop_last_messages = self.backtrack.count;
             let prefill =
                 backtrack_helpers::nth_last_user_text(&self.transcript_lines, drop_last_messages)
                     .unwrap_or_default();
@@ -240,9 +240,9 @@ impl App {
 
     /// Clear all backtrack-related state and composer hints.
     fn reset_backtrack_state(&mut self) {
-        self.esc_backtrack_primed = false;
-        self.esc_backtrack_base = None;
-        self.esc_backtrack_count = 0;
+        self.backtrack.primed = false;
+        self.backtrack.base_id = None;
+        self.backtrack.count = 0;
         // In case a hint is somehow still visible (e.g., race with overlay open/close).
         self.chat_widget.clear_esc_backtrack_hint();
     }
@@ -254,9 +254,9 @@ impl App {
         tui: &mut tui::Tui,
         ev: ConversationHistoryResponseEvent,
     ) -> Result<()> {
-        if let Some((base_id, _, _)) = self.pending_backtrack.as_ref()
+        if let Some((base_id, _, _)) = self.backtrack.pending.as_ref()
             && ev.conversation_id == *base_id
-            && let Some((_, drop_count, prefill)) = self.pending_backtrack.take()
+            && let Some((_, drop_count, prefill)) = self.backtrack.pending.take()
         {
             self.fork_and_switch_to_new_conversation(tui, ev, drop_count, prefill)
                 .await;

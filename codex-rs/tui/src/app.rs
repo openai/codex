@@ -1,3 +1,4 @@
+use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::chatwidget::ChatWidget;
@@ -41,8 +42,6 @@ pub(crate) struct App {
 
     // Transcript overlay state
     pub(crate) transcript_overlay: Option<TranscriptApp>,
-    // If true, overlay is opened as an Esc-backtrack preview.
-    pub(crate) transcript_overlay_is_backtrack: bool,
     pub(crate) deferred_history_lines: Vec<Line<'static>>,
 
     pub(crate) enhanced_keys_supported: bool,
@@ -50,12 +49,8 @@ pub(crate) struct App {
     /// Controls the animation thread that sends CommitTick events.
     pub(crate) commit_anim_running: Arc<AtomicBool>,
 
-    // Esc-backtracking state
-    pub(crate) esc_backtrack_primed: bool,
-    pub(crate) esc_backtrack_base: Option<uuid::Uuid>,
-    pub(crate) esc_backtrack_count: usize,
-    // Pending: base_id, drop_count, prefill text
-    pub(crate) pending_backtrack: Option<(uuid::Uuid, usize, String)>,
+    // Esc-backtracking state grouped
+    pub(crate) backtrack: crate::app_backtrack::BacktrackState,
 }
 
 impl App {
@@ -95,13 +90,9 @@ impl App {
             enhanced_keys_supported,
             transcript_lines: Vec::new(),
             transcript_overlay: None,
-            transcript_overlay_is_backtrack: false,
             deferred_history_lines: Vec::new(),
             commit_anim_running: Arc::new(AtomicBool::new(false)),
-            esc_backtrack_primed: false,
-            esc_backtrack_base: None,
-            esc_backtrack_count: 0,
-            pending_backtrack: None,
+            backtrack: BacktrackState::default(),
         };
 
         let tui_events = tui.event_stream();
@@ -325,8 +316,8 @@ impl App {
                 code: KeyCode::Enter,
                 kind: KeyEventKind::Press,
                 ..
-            } if self.esc_backtrack_primed
-                && self.esc_backtrack_count > 0
+            } if self.backtrack.primed
+                && self.backtrack.count > 0
                 && self.chat_widget.composer_is_empty() =>
             {
                 // Delegate to helper for clarity; preserves behavior.
@@ -339,11 +330,8 @@ impl App {
                 // Any non-Esc key press should cancel a primed backtrack.
                 // This avoids stale "Esc-primed" state after the user starts typing
                 // (even if they later backspace to empty).
-                if key_event.code != KeyCode::Esc && self.esc_backtrack_primed {
-                    self.esc_backtrack_primed = false;
-                    self.esc_backtrack_base = None;
-                    self.esc_backtrack_count = 0;
-                    self.chat_widget.clear_esc_backtrack_hint();
+                if key_event.code != KeyCode::Esc && self.backtrack.primed {
+                    self.reset_backtrack_state();
                 }
                 self.chat_widget.handle_key_event(key_event);
             }
