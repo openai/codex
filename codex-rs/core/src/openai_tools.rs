@@ -731,7 +731,7 @@ mod tests {
                     name: "search".to_string(),
                     input_schema: ToolInputSchema {
                         properties: Some(serde_json::json!({
-                            "string_argument": {
+                            "query": {
                                 "description": "search query"
                             }
                         })),
@@ -754,7 +754,7 @@ mod tests {
                 name: "dash/search".to_string(),
                 parameters: JsonSchema::Object {
                     properties: BTreeMap::from([(
-                        "string_argument".to_string(),
+                        "query".to_string(),
                         JsonSchema::String {
                             description: Some("search query".to_string())
                         }

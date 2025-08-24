@@ -677,7 +677,6 @@ impl Config {
 
         let history = cfg.history.clone().unwrap_or_default();
 
-        // Compute feature flags before moving fields out of cfg
         let tools_web_search_request = override_tools_web_search_request
             .or(cfg.tools.as_ref().and_then(|t| t.web_search))
             .unwrap_or(false);
