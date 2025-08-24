@@ -405,17 +405,16 @@ impl WidgetRef for &BottomPane {
         // When a modal view is active, it owns the whole content area.
         if let Some(view) = &self.active_view {
             view.render(content, buf);
-            return;
-        }
+        } else {
+            // No active modal:
+            // If a status indicator is active, render it above the composer.
+            if let Some(status) = &self.status {
+                status.render_ref(status_area, buf);
+            }
 
-        // No active modal:
-        // If a status indicator is active, render it above the composer.
-        if let Some(status) = &self.status {
-            status.render_ref(status_area, buf);
+            // Render the composer in the remaining area.
+            self.composer.render_ref(content, buf);
         }
-
-        // Render the composer in the remaining area.
-        (&self.composer).render_ref(content, buf);
     }
 }
 
@@ -580,10 +579,6 @@ mod tests {
             "expected Working header: {row0:?}"
         );
     }
-
- 
-
- 
 
     #[test]
     fn bottom_padding_present_with_status_above_composer() {
