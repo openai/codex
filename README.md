@@ -71,17 +71,16 @@ Notes:
 
 If you encounter problems with the login flow, please comment on [this issue](https://github.com/openai/codex/issues/1243).
 
----
-
 ### Model Context Protocol (MCP)
 
 Codex CLI supports [MCP servers](./docs/advanced.md#model-context-protocol-mcp). Enable by adding an `mcp_servers` section to your `~/.codex/config.toml`.
 
----
 
 ### Configuration
 
 Codex CLI supports a rich set of configuration options. Set preferences in `~/.codex/config.toml`. For full configuration options, see [Configuration](./docs/config.md).
+
+---
 
 ### Docs & FAQ
 
