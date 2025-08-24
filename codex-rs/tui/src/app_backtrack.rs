@@ -3,6 +3,7 @@ use crate::backtrack_helpers;
 use crate::transcript_app::TranscriptApp;
 use crate::tui;
 use crate::tui::TuiEvent;
+use codex_core::protocol::ConversationHistoryResponseEvent;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -211,9 +212,7 @@ impl App {
             self.close_transcript_overlay(tui);
             self.request_backtrack(prefill, base_id, drop_last_messages);
         }
-        self.esc_backtrack_primed = false;
-        self.esc_backtrack_base = None;
-        self.esc_backtrack_count = 0;
+        self.reset_backtrack_state();
     }
 
     /// Handle Esc in overlay backtrack preview: step selection if armed, else forward.
@@ -224,5 +223,116 @@ impl App {
             self.overlay_forward_event(tui, event)?;
         }
         Ok(())
+    }
+
+    /// Confirm a primed backtrack from the main view (no overlay visible).
+    /// Computes the prefill from the selected user message and requests history.
+    pub(crate) fn confirm_backtrack_from_main(&mut self) {
+        if let Some(base_id) = self.esc_backtrack_base {
+            let drop_last_messages = self.esc_backtrack_count;
+            let prefill =
+                backtrack_helpers::nth_last_user_text(&self.transcript_lines, drop_last_messages)
+                    .unwrap_or_default();
+            self.request_backtrack(prefill, base_id, drop_last_messages);
+        }
+        self.reset_backtrack_state();
+    }
+
+    /// Clear all backtrack-related state and composer hints.
+    fn reset_backtrack_state(&mut self) {
+        self.esc_backtrack_primed = false;
+        self.esc_backtrack_base = None;
+        self.esc_backtrack_count = 0;
+        // In case a hint is somehow still visible (e.g., race with overlay open/close).
+        self.chat_widget.clear_esc_backtrack_hint();
+    }
+
+    /// Handle a ConversationHistory response while a backtrack is pending.
+    /// If it matches the primed base session, fork and switch to the new conversation.
+    pub(crate) async fn on_conversation_history_for_backtrack(
+        &mut self,
+        tui: &mut tui::Tui,
+        ev: ConversationHistoryResponseEvent,
+    ) -> Result<()> {
+        if let Some((base_id, _, _)) = self.pending_backtrack.as_ref()
+            && ev.conversation_id == *base_id
+            && let Some((_, drop_count, prefill)) = self.pending_backtrack.take()
+        {
+            self.fork_and_switch_to_new_conversation(tui, ev, drop_count, prefill)
+                .await;
+        }
+        Ok(())
+    }
+
+    /// Fork the conversation using provided history and switch UI/state accordingly.
+    async fn fork_and_switch_to_new_conversation(
+        &mut self,
+        tui: &mut tui::Tui,
+        ev: ConversationHistoryResponseEvent,
+        drop_count: usize,
+        prefill: String,
+    ) {
+        let cfg = self.chat_widget.config_ref().clone();
+        // Perform the fork via a thin wrapper for clarity/testability.
+        let result = self
+            .perform_fork(ev.entries.clone(), drop_count, cfg.clone())
+            .await;
+        match result {
+            Ok(new_conv) => {
+                self.install_forked_conversation(tui, cfg, new_conv, drop_count, &prefill)
+            }
+            Err(e) => tracing::error!("error forking conversation: {e:#}"),
+        }
+    }
+
+    /// Thin wrapper around ConversationManager::fork_conversation.
+    async fn perform_fork(
+        &self,
+        entries: Vec<codex_protocol::models::ResponseItem>,
+        drop_count: usize,
+        cfg: codex_core::config::Config,
+    ) -> codex_core::error::Result<codex_core::NewConversation> {
+        self.server
+            .fork_conversation(entries, drop_count, cfg)
+            .await
+    }
+
+    /// Install a forked conversation into the ChatWidget and update UI to reflect selection.
+    fn install_forked_conversation(
+        &mut self,
+        tui: &mut tui::Tui,
+        cfg: codex_core::config::Config,
+        new_conv: codex_core::NewConversation,
+        drop_count: usize,
+        prefill: &str,
+    ) {
+        let conv = new_conv.conversation;
+        let session_configured = new_conv.session_configured;
+        self.chat_widget = crate::chatwidget::ChatWidget::new_from_existing(
+            cfg,
+            conv,
+            session_configured,
+            tui.frame_requester(),
+            self.app_event_tx.clone(),
+            self.enhanced_keys_supported,
+        );
+        // Trim transcript up to the selected user message and re-render it.
+        self.trim_transcript_for_backtrack(drop_count);
+        self.render_transcript_once(tui);
+        if !prefill.is_empty() {
+            self.chat_widget.insert_str(prefill);
+        }
+        tui.frame_requester().schedule_frame();
+    }
+
+    /// Trim transcript_lines to preserve only content up to the selected user message.
+    fn trim_transcript_for_backtrack(&mut self, drop_count: usize) {
+        if let Some(cut_idx) =
+            backtrack_helpers::find_nth_last_user_header_index(&self.transcript_lines, drop_count)
+        {
+            self.transcript_lines.truncate(cut_idx);
+        } else {
+            self.transcript_lines.clear();
+        }
     }
 }

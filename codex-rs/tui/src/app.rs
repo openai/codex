@@ -233,57 +233,7 @@ impl App {
                 self.chat_widget.handle_codex_event(event);
             }
             AppEvent::ConversationHistory(ev) => {
-                // If a backtrack is pending and this history corresponds to the base session, fork.
-                if let Some((base_id, _, _)) = self.pending_backtrack.as_ref() {
-                    if ev.conversation_id == *base_id {
-                        // Safe to take now that we know it's the matching response.
-                        if let Some((_, drop_count, prefill)) = self.pending_backtrack.take() {
-                            // Fork using provided history entries.
-                            let cfg = self.chat_widget.config_ref().clone();
-                            match self
-                                .server
-                                .fork_conversation(ev.entries.clone(), drop_count, cfg.clone())
-                                .await
-                            {
-                                Ok(new_conv) => {
-                                    let conv = new_conv.conversation;
-                                    let session_configured = new_conv.session_configured;
-                                    self.chat_widget = ChatWidget::new_from_existing(
-                                        cfg,
-                                        conv,
-                                        session_configured,
-                                        tui.frame_requester(),
-                                        self.app_event_tx.clone(),
-                                        self.enhanced_keys_supported,
-                                    );
-
-                                    // Trim transcript to preserve only content up to the selected user message.
-                                    if let Some(cut_idx) =
-                                        crate::backtrack_helpers::find_nth_last_user_header_index(
-                                            &self.transcript_lines,
-                                            drop_count,
-                                        )
-                                    {
-                                        self.transcript_lines.truncate(cut_idx);
-                                    } else {
-                                        self.transcript_lines.clear();
-                                    }
-                                    self.render_transcript_once(tui);
-
-                                    if !prefill.is_empty() {
-                                        self.chat_widget.insert_str(&prefill);
-                                    }
-                                    tui.frame_requester().schedule_frame();
-                                }
-                                Err(e) => {
-                                    tracing::error!("error forking conversation: {e:#}");
-                                }
-                            }
-                        }
-                    } else {
-                        // Not matching base; ignore and keep pending.
-                    }
-                }
+                self.on_conversation_history_for_backtrack(tui, ev).await?;
             }
             AppEvent::ExitRequest => {
                 return Ok(false);
@@ -379,19 +329,8 @@ impl App {
                 && self.esc_backtrack_count > 0
                 && self.chat_widget.composer_is_empty() =>
             {
-                if let Some(base_id) = self.esc_backtrack_base {
-                    let drop_last_messages = self.esc_backtrack_count;
-                    let prefill = crate::backtrack_helpers::nth_last_user_text(
-                        &self.transcript_lines,
-                        drop_last_messages,
-                    )
-                    .unwrap_or_default();
-                    self.request_backtrack(prefill, base_id, drop_last_messages);
-                }
-                // Reset backtrack state after confirming.
-                self.esc_backtrack_primed = false;
-                self.esc_backtrack_base = None;
-                self.esc_backtrack_count = 0;
+                // Delegate to helper for clarity; preserves behavior.
+                self.confirm_backtrack_from_main();
             }
             KeyEvent {
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,

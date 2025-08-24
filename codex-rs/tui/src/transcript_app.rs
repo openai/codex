@@ -208,8 +208,22 @@ impl TranscriptApp {
             "Esc".set_style(key_hint_style),
             " edit prev".into(),
         ]);
+        self.maybe_append_enter_edit_hint(&mut hints2, key_hint_style);
         Paragraph::new(vec![Line::from(hints1).dim(), Line::from(hints2).dim()])
             .render_ref(hints_rect, buf);
+    }
+
+    /// Conditionally append the "⏎ edit message" hint when a valid highlight is active.
+    fn maybe_append_enter_edit_hint(&self, hints: &mut Vec<Span<'static>>, key_hint_style: Style) {
+        if let Some((start, end)) = self.highlight_range
+            && end > start
+        {
+            hints.extend([
+                "   ".into(),
+                "⏎".set_style(key_hint_style),
+                " edit message".into(),
+            ]);
+        }
     }
 
     fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
