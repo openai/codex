@@ -16,4 +16,5 @@ codex-apply-patch = { path = "../apply-patch" }
 codex-core = { path = "../core" }
 codex-linux-sandbox = { path = "../linux-sandbox" }
 dotenvy = "0.15.7"
+tempfile = "3"
 tokio = { version = "1", features = ["rt-multi-thread"] }
