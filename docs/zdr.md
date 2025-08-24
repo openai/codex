@@ -12,4 +12,4 @@ Ensure you are running `codex` with `--config disable_response_storage=true` or 
 disable_response_storage = true
 ```
 
-See [the configuration documentation on `disable_response_storage`](../codex-rs/config.md#disable_response_storage) for details. 
+See [the configuration documentation on `disable_response_storage`](./config.md#disable_response_storage) for details. 

@@ -82,7 +82,6 @@ Codex CLI supports [MCP servers](./docs/advanced.md#model-context-protocol-mcp).
 command = "npx"
 args = ["-y", "mcp-server"]
 ```
-```
 
 ---
 

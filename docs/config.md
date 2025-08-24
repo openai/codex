@@ -391,9 +391,9 @@ include_only = ["PATH", "HOME"]
 | ------------------------- | -------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | `inherit`                 | string                     | `all`   | Starting template for the environment:<br>`all` (clone full parent env), `core` (`HOME`, `PATH`, `USER`, …), or `none` (start empty).           |
 | `ignore_default_excludes` | boolean                    | `false` | When `false`, Codex removes any var whose **name** contains `KEY`, `SECRET`, or `TOKEN` (case-insensitive) before other rules run.              |
-| `exclude`                 | array&lt;string&gt;        | `[]`    | Case-insensitive glob patterns to drop after the default filter.<br>Examples: `"AWS_*"`, `"AZURE_*"`.                                           |
-| `set`                     | table&lt;string,string&gt; | `{}`    | Explicit key/value overrides or additions – always win over inherited values.                                                                   |
-| `include_only`            | array&lt;string&gt;        | `[]`    | If non-empty, a whitelist of patterns; only variables that match _one_ pattern survive the final step. (Generally used with `inherit = "all"`.) |
+| `exclude`                 | array<string>        | `[]`    | Case-insensitive glob patterns to drop after the default filter.<br>Examples: `"AWS_*"`, `"AZURE_*"`.                                           |
+| `set`                     | table<string,string> | `{}`    | Explicit key/value overrides or additions – always win over inherited values.                                                                   |
+| `include_only`            | array<string>        | `[]`    | If non-empty, a whitelist of patterns; only variables that match _one_ pattern survive the final step. (Generally used with `inherit = "all"`.) |
 
 The patterns are **glob style**, not full regular expressions: `*` matches any
 number of characters, `?` matches exactly one, and character classes like
@@ -561,4 +561,4 @@ Options that are specific to the TUI.
 ```toml
 [tui]
 # More to come here
-```
+``` 

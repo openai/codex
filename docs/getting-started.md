@@ -50,7 +50,7 @@ You can give Codex extra instructions and guidance using `AGENTS.md` files. Code
 
 ### Configuration
 
-Codex supports a rich set of configuration options documented in [`codex-rs/config.md`](../codex-rs/config.md).
+Codex supports a rich set of configuration options documented in [`docs/config.md`](./config.md).
 
 By default, Codex loads its configuration from `~/.codex/config.toml`.
 
