@@ -8,6 +8,20 @@ use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+/// Aggregates all backtrack-related state used by the App.
+#[derive(Default)]
+pub(crate) struct BacktrackState {
+    /// True when Esc has primed backtrack mode in the main view.
+    pub(crate) primed: bool,
+    /// Session id of the base conversation to fork from.
+    pub(crate) base_id: Option<uuid::Uuid>,
+    /// Current step count (Nth last user message).
+    pub(crate) count: usize,
+    /// True when the transcript overlay is showing a backtrack preview.
+    pub(crate) overlay_preview_active: bool,
+    /// Pending fork request: (base_id, drop_count, prefill).
+    pub(crate) pending: Option<(uuid::Uuid, usize, String)>,
+}
 
 impl App {
     /// Route overlay events when transcript overlay is active.
@@ -19,7 +33,7 @@ impl App {
         tui: &mut tui::Tui,
         event: TuiEvent,
     ) -> Result<bool> {
-        if self.transcript_overlay_is_backtrack {
+        if self.backtrack.overlay_preview_active {
             match event {
                 TuiEvent::Key(KeyEvent {
                     code: KeyCode::Esc,
@@ -63,11 +77,11 @@ impl App {
     pub(crate) fn handle_backtrack_esc_key(&mut self, tui: &mut tui::Tui) {
         // Only handle backtracking when composer is empty to avoid clobbering edits.
         if self.chat_widget.composer_is_empty() {
-            if !self.esc_backtrack_primed {
+            if !self.backtrack.primed {
                 self.prime_backtrack();
             } else if self.transcript_overlay.is_none() {
                 self.open_backtrack_preview(tui);
-            } else if self.transcript_overlay_is_backtrack {
+            } else if self.backtrack.overlay_preview_active {
                 self.step_backtrack_and_highlight(tui);
             }
         }
@@ -96,19 +110,16 @@ impl App {
     /// Close transcript overlay and restore normal UI.
     pub(crate) fn close_transcript_overlay(&mut self, tui: &mut tui::Tui) {
         let _ = tui.leave_alt_screen();
-        let was_backtrack = self.transcript_overlay_is_backtrack;
+        let was_backtrack = self.backtrack.overlay_preview_active;
         if !self.deferred_history_lines.is_empty() {
             let lines = std::mem::take(&mut self.deferred_history_lines);
             tui.insert_history_lines(lines);
         }
         self.transcript_overlay = None;
-        self.transcript_overlay_is_backtrack = false;
+        self.backtrack.overlay_preview_active = false;
         if was_backtrack {
             // Ensure backtrack state is fully reset when overlay closes (e.g. via 'q').
-            self.esc_backtrack_primed = false;
-            self.esc_backtrack_base = None;
-            self.esc_backtrack_count = 0;
-            self.chat_widget.clear_esc_backtrack_hint();
+            self.reset_backtrack_state();
         }
     }
 
@@ -122,16 +133,16 @@ impl App {
 
     /// Initialize backtrack state and show composer hint.
     fn prime_backtrack(&mut self) {
-        self.esc_backtrack_primed = true;
-        self.esc_backtrack_count = 0;
-        self.esc_backtrack_base = self.chat_widget.session_id();
+        self.backtrack.primed = true;
+        self.backtrack.count = 0;
+        self.backtrack.base_id = self.chat_widget.session_id();
         self.chat_widget.show_esc_backtrack_hint();
     }
 
     /// Open overlay and begin backtrack preview flow (first step + highlight).
     fn open_backtrack_preview(&mut self, tui: &mut tui::Tui) {
         self.open_transcript_overlay(tui);
-        self.transcript_overlay_is_backtrack = true;
+        self.backtrack.overlay_preview_active = true;
         // Composer is hidden by overlay; clear its hint.
         self.chat_widget.clear_esc_backtrack_hint();
         self.step_backtrack_and_highlight(tui);
@@ -139,9 +150,9 @@ impl App {
 
     /// When overlay is already open, begin preview mode and select latest user message.
     fn begin_overlay_backtrack_preview(&mut self, tui: &mut tui::Tui) {
-        self.esc_backtrack_primed = true;
-        self.esc_backtrack_base = self.chat_widget.session_id();
-        self.transcript_overlay_is_backtrack = true;
+        self.backtrack.primed = true;
+        self.backtrack.base_id = self.chat_widget.session_id();
+        self.backtrack.overlay_preview_active = true;
         let sel = self.compute_backtrack_selection(tui, 1);
         self.apply_backtrack_selection(sel);
         tui.frame_requester().schedule_frame();
@@ -149,7 +160,7 @@ impl App {
 
     /// Step selection to the next older user message and update overlay.
     fn step_backtrack_and_highlight(&mut self, tui: &mut tui::Tui) {
-        let next = self.esc_backtrack_count.saturating_add(1);
+        let next = self.backtrack.count.saturating_add(1);
         let sel = self.compute_backtrack_selection(tui, next);
         self.apply_backtrack_selection(sel);
         tui.frame_requester().schedule_frame();
@@ -239,7 +250,7 @@ impl App {
     }
 
     /// Clear all backtrack-related state and composer hints.
-    fn reset_backtrack_state(&mut self) {
+    pub(crate) fn reset_backtrack_state(&mut self) {
         self.backtrack.primed = false;
         self.backtrack.base_id = None;
         self.backtrack.count = 0;
