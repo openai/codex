@@ -61,6 +61,18 @@ approval_policy = "never"
 sandbox_mode    = "read-only"
 ```
 
+### Experimenting with the Codex Sandbox
+
+To test to see what happens when a command is run under the sandbox provided by Codex, we provide the following subcommands in Codex CLI:
+
+```
+# macOS
+codex debug seatbelt [--full-auto] [COMMAND]...
+
+# Linux
+codex debug landlock [--full-auto] [COMMAND]...
+```
+
 ### Platform sandboxing details
 
 The mechanism Codex uses to implement the sandbox policy depends on your OS:
