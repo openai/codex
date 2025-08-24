@@ -128,10 +128,11 @@ pub async fn run_main(
         include_apply_patch_tool: None,
         disable_response_storage: cli.oss.then_some(true),
         show_raw_agent_reasoning: cli.oss.then_some(true),
+        tools_web_search_request: cli.web_search.then_some(true),
     };
-
-    // Parse `-c` overrides from the CLI.
-    let cli_kv_overrides = match cli.config_overrides.parse_overrides() {
+    let raw_overrides = cli.config_overrides.raw_overrides.clone();
+    let overrides_cli = codex_common::CliConfigOverrides { raw_overrides };
+    let cli_kv_overrides = match overrides_cli.parse_overrides() {
         Ok(v) => v,
         #[allow(clippy::print_stderr)]
         Err(e) => {

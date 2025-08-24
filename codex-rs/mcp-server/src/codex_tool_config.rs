@@ -163,6 +163,7 @@ impl CodexToolCallParam {
             include_apply_patch_tool: None,
             disable_response_storage: None,
             show_raw_agent_reasoning: None,
+            tools_web_search_request: None,
         };
 
         let cli_overrides = cli_overrides

@@ -24,6 +24,7 @@ use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnDiffEvent;
+use codex_core::protocol::WebSearchBeginEvent;
 use owo_colors::OwoColorize;
 use owo_colors::Style;
 use shlex::try_join;
@@ -360,6 +361,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                         println!("{}", line.style(self.dimmed));
                     }
                 }
+            }
+            EventMsg::WebSearchBegin(WebSearchBeginEvent { call_id: _, query }) => {
+                ts_println!(self, "🌐 {query}");
             }
             EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
                 call_id,
