@@ -77,8 +77,7 @@ If you encounter problems with the login flow, please comment on [this issue](ht
 
 ---
 
-<details>
-<summary><strong>Docs & FAQ</strong></summary>
+### Docs & FAQ
 
 - [**Getting started**](./docs/getting-started.md)
   - [CLI usage](./docs/getting-started.md#cli-usage)
@@ -103,8 +102,6 @@ If you encounter problems with the login flow, please comment on [this issue](ht
 - [**Contributing**](./docs/contributing.md)
 - [**FAQ**](./docs/faq.md)
 - [**Open source fund**](./docs/open-source-fund.md)
-
-</details>
 
 ---
 

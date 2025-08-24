@@ -1,4 +1,6 @@
-#### Forcing a specific auth method (advanced)
+# Authentication
+
+## Forcing a specific auth method (advanced)
 
 You can explicitly choose which authentication Codex should prefer when both are available.
 
@@ -27,11 +29,11 @@ Notes:
 - When `preferred_auth_method = "apikey"` and an API key is available, the login screen is skipped.
 - When `preferred_auth_method = "chatgpt"` (default), Codex prefers ChatGPT auth if present; if only an API key is present, it will use the API key. Certain account types may also require API-key mode.
 
-### Connecting on a "Headless" Machine
+## Connecting on a "Headless" Machine
 
 Today, the login process entails running a server on `localhost:1455`. If you are on a "headless" server, such as a Docker container or are `ssh`'d into a remote machine, loading `localhost:1455` in the browser on your local machine will not automatically connect to the webserver running on the _headless_ machine, so you must use one of the following workarounds:
 
-#### Authenticate locally and copy your credentials to the "headless" machine
+### Authenticate locally and copy your credentials to the "headless" machine
 
 The easiest solution is likely to run through the `codex login` process on your local machine such that `localhost:1455` _is_ accessible in your web browser. When you complete the authentication process, an `auth.json` file should be available at `$CODEX_HOME/auth.json` (on Mac/Linux, `$CODEX_HOME` defaults to `~/.codex` whereas on Windows, it defaults to `%USERPROFILE%\\.codex`).
 
@@ -57,7 +59,7 @@ or try this one-liner:
 ssh user@remote 'mkdir -p ~/.codex && cat > ~/.codex/auth.json' < ~/.codex/auth.json
 ```
 
-#### Connecting through VPS or remote
+### Connecting through VPS or remote
 
 If you run Codex on a remote machine (VPS/server) without a local browser, the login helper starts a server on `localhost:1455` on the remote host. To complete login in your local browser, forward that port to your machine before starting the login flow:
 
