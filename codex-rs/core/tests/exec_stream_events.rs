@@ -139,3 +139,34 @@ async fn test_exec_stderr_stream_events_echo() {
     }
     assert_eq!(String::from_utf8_lossy(&err), "oops\n");
 }
+
+#[tokio::test]
+async fn test_aggregated_output_interleaves_in_order() {
+    // Spawn a shell that alternates stdout and stderr with sleeps to enforce order.
+    let cmd = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "printf 'O1\\n'; sleep 0.01; printf 'E1\\n' 1>&2; sleep 0.01; printf 'O2\\n'; sleep 0.01; printf 'E2\\n' 1>&2".to_string(),
+    ];
+
+    let params = ExecParams {
+        command: cmd,
+        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        timeout_ms: Some(5_000),
+        env: HashMap::new(),
+        with_escalated_permissions: None,
+        justification: None,
+    };
+
+    let policy = SandboxPolicy::new_read_only_policy();
+
+    let result = process_exec_tool_call(params, SandboxType::None, &policy, &None, None)
+        .await
+        .expect("process_exec_tool_call");
+
+    assert_eq!(result.exit_code, 0);
+    assert_eq!(result.stdout.text, "O1\nO2\n");
+    assert_eq!(result.stderr.text, "E1\nE2\n");
+    assert_eq!(result.aggregated_output.text, "O1\nE1\nO2\nE2\n");
+    assert_eq!(result.aggregated_output.truncated_after_lines, None);
+}

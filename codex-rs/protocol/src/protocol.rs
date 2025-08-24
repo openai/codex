@@ -685,6 +685,9 @@ pub struct ExecCommandEndEvent {
     pub stdout: String,
     /// Captured stderr
     pub stderr: String,
+    /// Captured aggregated output
+    #[serde(default)]
+    pub aggregated_output: String,
     /// The command's exit code.
     pub exit_code: i32,
     /// The duration of the command execution.
