@@ -3,9 +3,10 @@ use std::path::PathBuf;
 pub fn normalize_pasted_path(pasted: &str) -> Option<PathBuf> {
     // file:// URL → filesystem path
     if let Ok(url) = url::Url::parse(pasted)
-        && url.scheme() == "file" {
-            return url.to_file_path().ok();
-        }
+        && url.scheme() == "file"
+    {
+        return url.to_file_path().ok();
+    }
 
     // shell-escaped single path → unescaped
     let parts: Vec<String> = shlex::Shlex::new(pasted).collect();
@@ -29,6 +30,7 @@ pub fn get_img_format_label(path: PathBuf) -> String {
     .into()
 }
 
+#[cfg(target_os = "macos")]
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -62,14 +64,6 @@ mod tests {
     }
 
     #[test]
-    fn normalize_single_quoted_windows_path() {
-        let input = r"'C:\Users\Alice\My File.jpeg'";
-        let result =
-            normalize_pasted_path(input).expect("should trim single quotes on windows path");
-        assert_eq!(result, PathBuf::from(r"C:\Users\Alice\My File.jpeg"));
-    }
-
-    #[test]
     fn normalize_multiple_tokens_returns_none() {
         // Two tokens after shell splitting → not a single path
         let input = "/home/user/a\\ b.png /home/user/c.png";
@@ -84,6 +78,20 @@ mod tests {
         assert_eq!(get_img_format_label(PathBuf::from("/a/b/c.JPEG")), "JPEG");
         assert_eq!(get_img_format_label(PathBuf::from("/a/b/c")), "IMG");
         assert_eq!(get_img_format_label(PathBuf::from("/a/b/c.webp")), "IMG");
+    }
+}
+
+#[cfg(windows)]
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalize_single_quoted_windows_path() {
+        let input = r"'C:\Users\Alice\My File.jpeg'";
+        let result =
+            normalize_pasted_path(input).expect("should trim single quotes on windows path");
+        assert_eq!(result, PathBuf::from(r"C:\Users\Alice\My File.jpeg"));
     }
 
     #[test]
