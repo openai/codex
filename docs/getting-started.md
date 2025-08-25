@@ -40,13 +40,15 @@ Below are a few bite-size examples you can copy-paste. Replace the text in quote
 | 6   | `codex "Carefully review this repo, and propose 3 high impact well-scoped PRs"` | Suggests impactful PRs in the current codebase.                            |
 | 7   | `codex "Look for vulnerabilities and create a security review report"`          | Finds and explains security bugs.                                          |
 
-### Memory & project docs
+### Memory with AGENTS.md
 
 You can give Codex extra instructions and guidance using `AGENTS.md` files. Codex looks for `AGENTS.md` files in the following places, and merges them top-down:
 
 1. `~/.codex/AGENTS.md` - personal global guidance
 2. `AGENTS.md` at repo root - shared project notes
 3. `AGENTS.md` in the current working directory - sub-folder/feature specifics
+
+For more information on how to use AGENTS.md, see the [official AGENTS.md documentation](./agents.md).
 
 ### Tips & shortcuts
 
