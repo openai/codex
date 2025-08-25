@@ -27,10 +27,10 @@ use crate::slash_command::SlashCommand;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
-use crate::bottom_pane::string_utils::get_img_format_label;
-use crate::bottom_pane::string_utils::normalize_pasted_path;
 use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
+use crate::clipboard_paste::normalize_pasted_path;
+use crate::clipboard_paste::pasted_image_format;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -219,8 +219,8 @@ impl ChatComposer {
         match image::image_dimensions(&path_buf) {
             Ok((w, h)) => {
                 tracing::info!("OK: {pasted}");
-                let format_label = get_img_format_label(path_buf.clone());
-                self.attach_image(path_buf, w, h, &format_label);
+                let format_label = pasted_image_format(&path_buf).label();
+                self.attach_image(path_buf, w, h, format_label);
                 true
             }
             Err(err) => {
@@ -1016,7 +1016,10 @@ impl WidgetRef for &ChatComposer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::ImageBuffer;
+    use image::Rgba;
     use std::path::PathBuf;
+    use tempfile::tempdir;
 
     use crate::app_event::AppEvent;
     use crate::bottom_pane::AppEventSender;
@@ -1696,12 +1699,8 @@ mod tests {
 
     #[test]
     fn pasting_filepath_attaches_image() {
-        use image::ImageBuffer;
-        use image::Rgba;
-        use std::fs;
-        use std::path::PathBuf;
-
-        let tmp_path: PathBuf = std::env::temp_dir().join("codex_tui_test_paste_image.png");
+        let tmp = tempdir().expect("create TempDir");
+        let tmp_path: PathBuf = tmp.path().join("codex_tui_test_paste_image.png");
         let img: ImageBuffer<Rgba<u8>, Vec<u8>> =
             ImageBuffer::from_fn(3, 2, |_x, _y| Rgba([1, 2, 3, 255]));
         img.save(&tmp_path).expect("failed to write temp png");
@@ -1717,7 +1716,5 @@ mod tests {
 
         let imgs = composer.take_recent_submission_images();
         assert_eq!(imgs, vec![tmp_path.clone()]);
-
-        let _ = fs::remove_file(tmp_path);
     }
 }

@@ -23,7 +23,6 @@ mod popup_consts;
 mod scroll_state;
 mod selection_popup_common;
 mod status_indicator_view;
-mod string_utils;
 mod textarea;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
