@@ -537,7 +537,7 @@ impl ChatWidget {
             ev.result,
         ));
     }
-    // Removed: unified to event-driven interrupts via TurnAborted.
+
     fn layout_areas(&self, area: Rect) -> [Rect; 2] {
         Layout::vertical([
             Constraint::Max(
@@ -650,48 +650,65 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
-        if key_event.kind == KeyEventKind::Press {
-            self.bottom_pane.clear_ctrl_c_quit_hint();
+        match key_event {
+            KeyEvent {
+                code: KeyCode::Char('c'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                self.on_ctrl_c();
+                return;
+            }
+            other if other.kind == KeyEventKind::Press => {
+                self.bottom_pane.clear_ctrl_c_quit_hint();
+            }
+            _ => {}
         }
 
-        // Alt+Up: Edit the most recent queued user message (if any).
-        if matches!(
-            key_event,
+        match key_event {
+            KeyEvent {
+                code: KeyCode::Char('d'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } if self.bottom_pane.composer_is_empty() => {
+                self.app_event_tx.send(AppEvent::ExitRequest);
+            }
             KeyEvent {
                 code: KeyCode::Up,
                 modifiers: KeyModifiers::ALT,
                 kind: KeyEventKind::Press,
                 ..
-            }
-        ) && !self.queued_user_messages.is_empty()
-        {
-            // Prefer the most recently queued item.
-            if let Some(user_message) = self.queued_user_messages.pop_back() {
-                self.bottom_pane.set_composer_text(user_message.text);
-                self.refresh_queued_user_messages();
-                self.request_redraw();
-            }
-            return;
-        }
-
-        match self.bottom_pane.handle_key_event(key_event) {
-            InputResult::Submitted(text) => {
-                // If a task is running, queue the user input to be sent after the turn completes.
-                let user_message = UserMessage {
-                    text,
-                    image_paths: self.bottom_pane.take_recent_submission_images(),
-                };
-                if self.bottom_pane.is_task_running() {
-                    self.queued_user_messages.push_back(user_message);
+            } if !self.queued_user_messages.is_empty() => {
+                // Prefer the most recently queued item.
+                if let Some(user_message) = self.queued_user_messages.pop_back() {
+                    self.bottom_pane.set_composer_text(user_message.text);
                     self.refresh_queued_user_messages();
-                } else {
-                    self.submit_user_message(user_message);
+                    self.request_redraw();
                 }
             }
-            InputResult::Command(cmd) => {
-                self.dispatch_command(cmd);
+            _ => {
+                match self.bottom_pane.handle_key_event(key_event) {
+                    InputResult::Submitted(text) => {
+                        // If a task is running, queue the user input to be sent after the turn completes.
+                        let user_message = UserMessage {
+                            text,
+                            image_paths: self.bottom_pane.take_recent_submission_images(),
+                        };
+                        if self.bottom_pane.is_task_running() {
+                            self.queued_user_messages.push_back(user_message);
+                            self.refresh_queued_user_messages();
+                        } else {
+                            self.submit_user_message(user_message);
+                        }
+                    }
+                    InputResult::Command(cmd) => {
+                        self.dispatch_command(cmd);
+                    }
+                    InputResult::None => {}
+                }
             }
-            InputResult::None => {}
         }
     }
 
@@ -1105,23 +1122,15 @@ impl ChatWidget {
     }
 
     /// Handle Ctrl-C key press.
-    /// Returns CancellationEvent::Handled if the event was consumed by the UI, or
-    /// CancellationEvent::Ignored if the caller should handle it (e.g. exit).
-    pub(crate) fn on_ctrl_c(&mut self) -> CancellationEvent {
-        match self.bottom_pane.on_ctrl_c() {
-            CancellationEvent::Handled => return CancellationEvent::Handled,
-            CancellationEvent::Ignored => {}
-        }
-        if self.bottom_pane.is_task_running() {
-            // Event-driven: send interrupt; UI finalizes upon TurnAborted.
-            self.submit_op(Op::Interrupt);
-            CancellationEvent::Ignored
-        } else if self.bottom_pane.ctrl_c_quit_hint_visible() {
-            self.submit_op(Op::Shutdown);
-            CancellationEvent::Handled
-        } else {
-            self.bottom_pane.show_ctrl_c_quit_hint();
-            CancellationEvent::Ignored
+    fn on_ctrl_c(&mut self) {
+        if self.bottom_pane.on_ctrl_c() == CancellationEvent::Ignored {
+            if self.bottom_pane.is_task_running() {
+                self.submit_op(Op::Interrupt);
+            } else if self.bottom_pane.ctrl_c_quit_hint_visible() {
+                self.submit_op(Op::Shutdown);
+            } else {
+                self.bottom_pane.show_ctrl_c_quit_hint();
+            }
         }
     }
 
