@@ -307,6 +307,11 @@ impl ChatComposer {
         result
     }
 
+    /// Return true if either the slash-command popup or the file-search popup is active.
+    pub(crate) fn popup_active(&self) -> bool {
+        !matches!(self.active_popup, ActivePopup::None)
+    }
+
     /// Handle key event when the slash-command popup is visible.
     fn handle_key_event_with_slash_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
         let ActivePopup::Command(popup) = &mut self.active_popup else {
@@ -325,6 +330,13 @@ impl ChatComposer {
                 ..
             } => {
                 popup.move_down();
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Esc, ..
+            } => {
+                // Dismiss the slash popup; keep the current input untouched.
+                self.active_popup = ActivePopup::None;
                 (InputResult::None, true)
             }
             KeyEvent {

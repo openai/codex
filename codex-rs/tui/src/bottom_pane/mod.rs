@@ -337,6 +337,13 @@ impl BottomPane {
         self.is_task_running
     }
 
+    /// Return true when the pane is in the regular composer state without any
+    /// overlays or popups and not running a task. This is the safe context to
+    /// use Esc-Esc for backtracking from the main view.
+    pub(crate) fn is_normal_backtrack_mode(&self) -> bool {
+        !self.is_task_running && self.active_view.is_none() && !self.composer.popup_active()
+    }
+
     /// Update the *context-window remaining* indicator in the composer. This
     /// is forwarded directly to the underlying `ChatComposer`.
     pub(crate) fn set_token_usage(
