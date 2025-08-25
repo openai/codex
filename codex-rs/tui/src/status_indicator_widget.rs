@@ -22,11 +22,6 @@ use crate::tui::FrameRequester;
 use textwrap::Options as TwOptions;
 use textwrap::WordSplitter;
 
-// We render the live text using markdown so it visually matches the history
-// cells. Before rendering we strip any ANSI escape sequences to avoid writing
-// raw control bytes into the back buffer.
-use codex_ansi_escape::ansi_escape_line;
-
 pub(crate) struct StatusIndicatorWidget {
     /// Latest text to display (truncated to the available width at render
     /// time).
@@ -89,36 +84,6 @@ impl StatusIndicatorWidget {
         total.saturating_add(1) // spacer line
     }
 
-    /// Update the line that is displayed in the widget.
-    pub(crate) fn update_text(&mut self, text: String) {
-        // If the text hasn't changed, don't reset the baseline; let the
-        // animation continue advancing naturally.
-        if text == self.text {
-            return;
-        }
-        // Update the target text, preserving newlines so wrapping matches history cells.
-        // Strip ANSI escapes for the character count so the typewriter animation speed is stable.
-        let stripped = {
-            let line = ansi_escape_line(&text);
-            line.spans
-                .iter()
-                .map(|s| s.content.as_ref())
-                .collect::<Vec<_>>()
-                .join("")
-        };
-        let new_len = stripped.chars().count();
-
-        // Compute how many characters are currently revealed so we can carry
-        // this forward as the new baseline when target text changes.
-        let current_frame = self.current_frame();
-        let shown_now = self.current_shown_len(current_frame);
-
-        self.text = text;
-        self.last_target_len = new_len;
-        self.base_frame = current_frame;
-        self.reveal_len_at_base = shown_now.min(new_len);
-    }
-
     pub(crate) fn interrupt(&self) {
         self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
     }
@@ -142,7 +107,7 @@ impl StatusIndicatorWidget {
     pub(crate) fn restart_with_text(&mut self, text: String) {
         let sanitized = text.replace(['\n', '\r'], " ");
         let stripped = {
-            let line = ansi_escape_line(&sanitized);
+            let line = codex_ansi_escape::ansi_escape_line(&sanitized);
             line.spans
                 .iter()
                 .map(|s| s.content.as_ref())
@@ -209,7 +174,8 @@ impl WidgetRef for StatusIndicatorWidget {
         let inner_width = area.width as usize;
 
         let mut spans: Vec<Span<'static>> = Vec::new();
-        // Animated header at the start of the line (no left bar)
+        // Indent the animated header by one space
+        spans.push(Span::raw(" "));
         spans.extend(animated_spans);
         // Space between header and bracket block
         spans.push(Span::raw(" "));
@@ -324,9 +290,15 @@ mod tests {
         let mut buf = ratatui::buffer::Buffer::empty(area);
         w.render_ref(area, &mut buf);
 
-        // No left bar at column 0; header starts immediately.
-        let ch0 = buf[(0, 0)].symbol().chars().next().unwrap_or(' ');
-        assert_eq!(ch0, 'W', "expected Working header at col 0: {ch0:?}");
+        // Compare the full first-line string (trimmed) to the expected value.
+        let mut row0 = String::new();
+        for x in 0..area.width {
+            row0.push(buf[(x, 0)].symbol().chars().next().unwrap_or(' '));
+        }
+        let row0 = row0.trim_end();
+        // Width is 30, so the rendered line truncates before the long
+        // " to interrupt)" tail and before the log text. Expect this prefix:
+        assert_eq!(row0, " Working (0s • Esc");
         // Second line is a blank spacer
         let mut r1 = String::new();
         for x in 0..area.width {
@@ -371,7 +343,12 @@ mod tests {
         let mut buf = ratatui::buffer::Buffer::empty(area);
         w.render_ref(area, &mut buf);
 
-        let ch = buf[(0, 0)].symbol().chars().next().unwrap_or(' ');
-        assert_eq!(ch, 'W', "expected Working header at col 0: {ch:?}");
+        // Check the entire rendered first line matches the expected prefix.
+        let mut row0 = String::new();
+        for x in 0..area.width {
+            row0.push(buf[(x, 0)].symbol().chars().next().unwrap_or(' '));
+        }
+        let row0 = row0.trim_end();
+        assert_eq!(row0, " Working (0s • Esc");
     }
 }

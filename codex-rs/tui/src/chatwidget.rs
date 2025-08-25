@@ -101,8 +101,6 @@ pub(crate) struct ChatWidget {
     task_complete_pending: bool,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
-    // Whether a redraw is needed after handling the current event
-    needs_redraw: bool,
     // Accumulates the current reasoning block text to extract a header
     reasoning_buffer: String,
     // Accumulates full reasoning content for transcript-only recording
@@ -139,10 +137,6 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 }
 
 impl ChatWidget {
-    #[inline]
-    fn mark_needs_redraw(&mut self) {
-        self.needs_redraw = true;
-    }
     fn flush_answer_stream_with_separator(&mut self) {
         let sink = AppEventHistorySink(self.app_event_tx.clone());
         let _ = self.stream.finalize(true, &sink);
@@ -160,14 +154,14 @@ impl ChatWidget {
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
         }
-        self.mark_needs_redraw();
+        self.request_redraw();
     }
 
     fn on_agent_message(&mut self, message: String) {
         let sink = AppEventHistorySink(self.app_event_tx.clone());
         let finished = self.stream.apply_final_answer(&message, &sink);
         self.handle_if_stream_finished(finished);
-        self.mark_needs_redraw();
+        self.request_redraw();
     }
 
     fn on_agent_message_delta(&mut self, delta: String) {
@@ -186,7 +180,7 @@ impl ChatWidget {
         } else {
             // Fallback while we don't yet have a bold header: leave existing header as-is.
         }
-        self.mark_needs_redraw();
+        self.request_redraw();
     }
 
     fn on_agent_reasoning_final(&mut self) {
@@ -200,7 +194,7 @@ impl ChatWidget {
         }
         self.reasoning_buffer.clear();
         self.full_reasoning_buffer.clear();
-        self.mark_needs_redraw();
+        self.request_redraw();
     }
 
     fn on_reasoning_section_break(&mut self) {
@@ -218,7 +212,7 @@ impl ChatWidget {
         self.stream.reset_headers_for_new_turn();
         self.full_reasoning_buffer.clear();
         self.reasoning_buffer.clear();
-        self.mark_needs_redraw();
+        self.request_redraw();
     }
 
     fn on_task_complete(&mut self) {
@@ -231,7 +225,7 @@ impl ChatWidget {
         // Mark task stopped and request redraw now that all content is in history.
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
-        self.mark_needs_redraw();
+        self.request_redraw();
 
         // If there is a queued user message, send exactly one now to begin the next turn.
         self.maybe_send_next_queued_input();
@@ -252,7 +246,7 @@ impl ChatWidget {
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
         self.stream.clear_all();
-        self.mark_needs_redraw();
+        self.request_redraw();
 
         // After an error ends the turn, try sending the next queued input.
         self.maybe_send_next_queued_input();
@@ -358,7 +352,7 @@ impl ChatWidget {
     fn on_stream_error(&mut self, message: String) {
         // Show stream errors in the transcript so users see retry/backoff info.
         self.add_to_history(history_cell::new_stream_error_event(message));
-        self.mark_needs_redraw();
+        self.request_redraw();
     }
     /// Periodic tick to commit at most one queued line to history with a small delay,
     /// animating the output.
@@ -412,7 +406,7 @@ impl ChatWidget {
         let sink = AppEventHistorySink(self.app_event_tx.clone());
         self.stream.begin(&sink);
         self.stream.push_and_maybe_commit(&delta, &sink);
-        self.mark_needs_redraw();
+        self.request_redraw();
     }
 
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
@@ -470,7 +464,7 @@ impl ChatWidget {
             reason: ev.reason,
         };
         self.bottom_pane.push_approval_request(request);
-        self.mark_needs_redraw();
+        self.request_redraw();
     }
 
     pub(crate) fn handle_apply_patch_approval_now(
@@ -490,7 +484,7 @@ impl ChatWidget {
             grant_root: ev.grant_root,
         };
         self.bottom_pane.push_approval_request(request);
-        self.mark_needs_redraw();
+        self.request_redraw();
     }
 
     pub(crate) fn handle_exec_begin_now(&mut self, ev: ExecCommandBeginEvent) {
@@ -518,7 +512,7 @@ impl ChatWidget {
         }
 
         // Request a redraw so the working header and command list are visible immediately.
-        self.mark_needs_redraw();
+        self.request_redraw();
     }
 
     pub(crate) fn handle_mcp_begin_now(&mut self, ev: McpToolCallBeginEvent) {
@@ -598,7 +592,6 @@ impl ChatWidget {
             pending_exec_completions: Vec::new(),
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
-            needs_redraw: false,
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             session_id: None,
@@ -644,7 +637,6 @@ impl ChatWidget {
             pending_exec_completions: Vec::new(),
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
-            needs_redraw: false,
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             session_id: None,
@@ -871,8 +863,6 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
-        // Reset redraw flag for this dispatch
-        self.needs_redraw = false;
         let Event { id, msg } = event;
 
         match msg {
@@ -936,11 +926,6 @@ impl ChatWidget {
                     .send(crate::app_event::AppEvent::ConversationHistory(ev));
             }
         }
-        // Coalesce redraws: issue at most one after handling the event
-        if self.needs_redraw {
-            self.request_redraw();
-            self.needs_redraw = false;
-        }
     }
 
     fn request_redraw(&mut self) {
@@ -965,15 +950,11 @@ impl ChatWidget {
     }
 
     pub(crate) fn add_diff_in_progress(&mut self) {
-        self.bottom_pane.set_task_running(true);
-        self.bottom_pane
-            .update_status_text("computing diff".to_string());
         self.request_redraw();
     }
 
     pub(crate) fn on_diff_complete(&mut self) {
-        self.bottom_pane.set_task_running(false);
-        self.mark_needs_redraw();
+        self.request_redraw();
     }
 
     pub(crate) fn add_status_output(&mut self) {

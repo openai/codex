@@ -308,14 +308,6 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    /// Update the live status text shown while a task is running.
-    pub(crate) fn update_status_text(&mut self, text: String) {
-        if let Some(status) = self.status.as_mut() {
-            status.update_text(text);
-            self.request_redraw();
-        }
-    }
-
     /// Update the queued messages preview shown under the status header.
     pub(crate) fn set_queued_user_messages(&mut self, queued: Vec<String>) {
         self.queued_user_messages = queued.clone();
