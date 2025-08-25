@@ -23,6 +23,8 @@ pub enum SlashCommand {
     Mcp,
     Logout,
     Quit,
+    Verbose,
+    Expand,
     #[cfg(debug_assertions)]
     TestApproval,
 }
@@ -42,6 +44,8 @@ impl SlashCommand {
             SlashCommand::Approvals => "choose what Codex can do without approval",
             SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Logout => "log out of Codex",
+            SlashCommand::Verbose => "toggle verbose output mode or set verbosity level",
+            SlashCommand::Expand => "show full output of the last command",
             #[cfg(debug_assertions)]
             SlashCommand::TestApproval => "test approval request",
         }
