@@ -26,7 +26,7 @@ use super::command_popup::CommandPopup;
 use super::file_search_popup::FileSearchPopup;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
-use super::paste_burst::retro_start_index;
+use super::paste_burst::RetroGrab;
 use crate::slash_command::SlashCommand;
 
 use crate::app_event::AppEvent;
@@ -108,23 +108,6 @@ enum ActivePopup {
 }
 
 impl ChatComposer {
-    #[inline]
-    fn retro_grab_if_pastey(&mut self, retro_chars: usize) -> Option<String> {
-        let cur = self.textarea.cursor();
-        let txt = self.textarea.text();
-        let before = &txt[..cur];
-        let start_byte = retro_start_index(before, retro_chars);
-        let grabbed = before[start_byte..].to_string();
-        let looks_pastey = grabbed.chars().any(|c| c.is_whitespace()) || grabbed.len() >= 16;
-        if looks_pastey {
-            if !grabbed.is_empty() {
-                self.textarea.replace_range(start_byte..cur, "");
-            }
-            Some(grabbed)
-        } else {
-            None
-        }
-    }
     // Handles plain-char burst logic; returns Some if handled and no further processing is needed.
     fn process_plain_char_paste_burst(
         &mut self,
@@ -137,13 +120,24 @@ impl ChatComposer {
                 Some((InputResult::None, true))
             }
             CharDecision::BeginBuffer { retro_chars } => {
-                match self.retro_grab_if_pastey(retro_chars as usize) {
-                    Some(grabbed) => {
-                        self.paste_burst.begin_with_retro_grabbed(grabbed, now);
-                        self.paste_burst.append_char_to_buffer(ch, now);
-                        Some((InputResult::None, true))
+                let cur = self.textarea.cursor();
+                let txt = self.textarea.text();
+                let before = &txt[..cur];
+                if let Some(RetroGrab {
+                    start_byte,
+                    grabbed,
+                }) = self
+                    .paste_burst
+                    .decide_begin_buffer(now, before, retro_chars as usize)
+                {
+                    if !grabbed.is_empty() {
+                        self.textarea.replace_range(start_byte..cur, "");
                     }
-                    None => None,
+                    // Buffer already began inside decide_begin_buffer; append this char too.
+                    self.paste_burst.append_char_to_buffer(ch, now);
+                    Some((InputResult::None, true))
+                } else {
+                    None
                 }
             }
             CharDecision::Passthrough => None,

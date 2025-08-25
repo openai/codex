@@ -854,22 +854,6 @@ impl ChatWidget {
         }
     }
 
-    pub(crate) fn flush_paste_burst_if_due(&mut self) -> bool {
-        if self.bottom_pane.flush_paste_burst_if_due() {
-            self.mark_needs_redraw();
-            return true;
-        }
-        false
-    }
-
-    pub(crate) fn handle_paste(&mut self, text: String) {
-        self.bottom_pane.handle_paste(text);
-    }
-
-    pub(crate) fn is_in_paste_burst(&self) -> bool {
-        self.bottom_pane.is_in_paste_burst()
-    }
-
     // Returns true if caller should skip rendering this frame (a future tick is scheduled).
     pub(crate) fn handle_paste_burst_tick(
         &mut self,
@@ -883,6 +867,22 @@ impl ChatWidget {
             return true;
         }
         false
+    }
+
+    pub(crate) fn flush_paste_burst_if_due(&mut self) -> bool {
+        if self.bottom_pane.flush_paste_burst_if_due() {
+            self.mark_needs_redraw();
+            return true;
+        }
+        false
+    }
+
+    pub(crate) fn is_in_paste_burst(&self) -> bool {
+        self.bottom_pane.is_in_paste_burst()
+    }
+
+    pub(crate) fn handle_paste(&mut self, text: String) {
+        self.bottom_pane.handle_paste(text);
     }
 
     fn flush_active_exec_cell(&mut self) {
