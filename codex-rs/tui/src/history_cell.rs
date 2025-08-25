@@ -224,7 +224,10 @@ pub(crate) fn new_session_info(
     } = event;
     if is_first_event {
         let cwd_str = match relativize_to_home(&config.cwd) {
-            Some(rel) if !rel.as_os_str().is_empty() => format!("~/{}", rel.display()),
+            Some(rel) if !rel.as_os_str().is_empty() => {
+                let sep = std::path::MAIN_SEPARATOR;
+                format!("~{sep}{}", rel.display())
+            }
             Some(_) => "~".to_string(),
             None => config.cwd.display().to_string(),
         };
@@ -594,7 +597,10 @@ pub(crate) fn new_status_output(
     lines.push(Line::from(vec!["📂 ".into(), "Workspace".bold()]));
     // Path (home-relative, e.g., ~/code/project)
     let cwd_str = match relativize_to_home(&config.cwd) {
-        Some(rel) if !rel.as_os_str().is_empty() => format!("~/{}", rel.display()),
+        Some(rel) if !rel.as_os_str().is_empty() => {
+            let sep = std::path::MAIN_SEPARATOR;
+            format!("~{sep}{}", rel.display())
+        }
         Some(_) => "~".to_string(),
         None => config.cwd.display().to_string(),
     };
@@ -637,7 +643,8 @@ pub(crate) fn new_status_output(
                                 ups += 1;
                             }
                             if reached {
-                                format!("{}AGENTS.md", "../".repeat(ups))
+                                let up = format!("..{}", std::path::MAIN_SEPARATOR);
+                                format!("{}AGENTS.md", up.repeat(ups))
                             } else if let Ok(stripped) = p.strip_prefix(&config.cwd) {
                                 stripped.display().to_string()
                             } else {
