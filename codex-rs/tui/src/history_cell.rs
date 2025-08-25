@@ -107,6 +107,10 @@ pub(crate) struct ExecCell {
     start_time: Option<Instant>,
     duration: Option<Duration>,
     include_header: bool,
+    /// Maximum number of output lines to display when rendering this cell.
+    /// A higher limit is used for local `!` commands while model tool calls
+    /// use a conservative default to keep the UI compact.
+    output_max_lines: usize,
 }
 impl HistoryCell for ExecCell {
     fn display_lines(&self) -> Vec<Line<'static>> {
@@ -116,6 +120,7 @@ impl HistoryCell for ExecCell {
             self.output.as_ref(),
             self.start_time,
             self.include_header,
+            self.output_max_lines,
         )
     }
 
@@ -173,6 +178,23 @@ impl WidgetRef for &ExecCell {
             .wrap(Wrap { trim: false })
             .render(content_area, buf);
     }
+}
+
+/// Create a simple history cell that renders only the output of a local
+/// `!` command. On success, stdout is shown; on failure, stderr is shown.
+pub(crate) fn new_local_command_output(
+    stdout: String,
+    stderr: String,
+    exit_code: i32,
+) -> PlainHistoryCell {
+    let src = if exit_code == 0 { stdout } else { stderr };
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    // Leading blank separator for readability.
+    lines.push(Line::from(""));
+    for raw in src.lines() {
+        lines.push(ansi_escape_line(raw));
+    }
+    PlainHistoryCell { lines }
 }
 
 #[derive(Debug)]
@@ -246,6 +268,7 @@ pub(crate) fn new_session_info(
             Line::from(format!(" /status - {}", SlashCommand::Status.description()).dim()),
             Line::from(format!(" /approvals - {}", SlashCommand::Approvals.description()).dim()),
             Line::from(format!(" /model - {}", SlashCommand::Model.description()).dim()),
+            Line::from(" !<cmd> - run a local command (e.g. !ls)".dim()),
         ];
         PlainHistoryCell { lines }
     } else if config.model == model {
@@ -282,6 +305,7 @@ pub(crate) fn new_active_exec_command(
         start_time: Some(Instant::now()),
         duration: None,
         include_header,
+        output_max_lines: TOOL_CALL_MAX_LINES,
     }
 }
 
@@ -299,6 +323,27 @@ pub(crate) fn new_completed_exec_command(
         start_time: None,
         duration: Some(duration),
         include_header,
+        output_max_lines: TOOL_CALL_MAX_LINES,
+    }
+}
+/// Same as `new_completed_exec_command` but with a custom line cap for output.
+#[allow(dead_code)]
+pub(crate) fn new_completed_exec_command_with_limit(
+    command: Vec<String>,
+    parsed: Vec<ParsedCommand>,
+    output: CommandOutput,
+    include_header: bool,
+    duration: Duration,
+    output_max_lines: usize,
+) -> ExecCell {
+    ExecCell {
+        command,
+        parsed,
+        output: Some(output),
+        start_time: None,
+        duration: Some(duration),
+        include_header,
+        output_max_lines,
     }
 }
 
@@ -308,10 +353,24 @@ fn exec_command_lines(
     output: Option<&CommandOutput>,
     start_time: Option<Instant>,
     include_header: bool,
+    output_max_lines: usize,
 ) -> Vec<Line<'static>> {
     match parsed.is_empty() {
-        true => new_exec_command_generic(command, output, start_time, include_header),
-        false => new_parsed_command(command, parsed, output, start_time, include_header),
+        true => new_exec_command_generic(
+            command,
+            output,
+            start_time,
+            include_header,
+            output_max_lines,
+        ),
+        false => new_parsed_command(
+            command,
+            parsed,
+            output,
+            start_time,
+            include_header,
+            output_max_lines,
+        ),
     }
 }
 fn new_parsed_command(
@@ -320,6 +379,7 @@ fn new_parsed_command(
     output: Option<&CommandOutput>,
     start_time: Option<Instant>,
     include_header: bool,
+    output_max_lines: usize,
 ) -> Vec<Line<'static>> {
     let mut lines: Vec<Line> = Vec::new();
     // Leading spacer and header line above command list
@@ -380,7 +440,7 @@ fn new_parsed_command(
         }
     }
 
-    lines.extend(output_lines(output, true, false));
+    lines.extend(output_lines(output, true, false, output_max_lines));
 
     lines
 }
@@ -390,6 +450,7 @@ fn new_exec_command_generic(
     output: Option<&CommandOutput>,
     start_time: Option<Instant>,
     include_header: bool,
+    output_max_lines: usize,
 ) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     // Leading spacer and header line above command list
@@ -429,7 +490,7 @@ fn new_exec_command_generic(
         }
     }
 
-    lines.extend(output_lines(output, false, true));
+    lines.extend(output_lines(output, false, true, output_max_lines));
 
     lines
 }
@@ -448,6 +509,20 @@ pub(crate) fn new_active_mcp_tool_call(invocation: McpInvocation) -> PlainHistor
 pub(crate) fn new_web_search_call(query: String) -> PlainHistoryCell {
     let lines: Vec<Line<'static>> =
         vec![Line::from(""), Line::from(vec!["🌐 ".into(), query.into()])];
+    PlainHistoryCell { lines }
+}
+
+pub(crate) fn new_running_local_command(command: Vec<String>) -> PlainHistoryCell {
+    let cmd_display = strip_bash_lc_and_escape(&command);
+    let lines: Vec<Line<'static>> = vec![
+        Line::from(""),
+        Line::from(vec![
+            ">_".magenta(),
+            " ".into(),
+            "Running local cmd: ".into(),
+            cmd_display.into(),
+        ]),
+    ];
     PlainHistoryCell { lines }
 }
 
@@ -1002,6 +1077,7 @@ pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
             }),
             true,
             true,
+            TOOL_CALL_MAX_LINES,
         ));
     }
 
@@ -1073,6 +1149,7 @@ fn output_lines(
     output: Option<&CommandOutput>,
     only_err: bool,
     include_angle_pipe: bool,
+    limit: usize,
 ) -> Vec<Line<'static>> {
     let CommandOutput {
         exit_code,
@@ -1088,7 +1165,6 @@ fn output_lines(
     let src = if *exit_code == 0 { stdout } else { stderr };
     let lines: Vec<&str> = src.lines().collect();
     let total = lines.len();
-    let limit = TOOL_CALL_MAX_LINES;
 
     let mut out = Vec::new();
 
@@ -1161,7 +1237,7 @@ mod tests {
         let parsed = vec![ParsedCommand::Unknown {
             cmd: "printf 'foo\nbar'".to_string(),
         }];
-        let lines = exec_command_lines(&[], &parsed, None, None, true);
+        let lines = exec_command_lines(&[], &parsed, None, None, true, TOOL_CALL_MAX_LINES);
         assert!(lines.len() >= 4);
         // Leading spacer then header line
         assert!(lines[0].spans.is_empty() || lines[0].spans[0].content.is_empty());

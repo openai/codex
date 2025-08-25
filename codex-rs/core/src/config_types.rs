@@ -76,7 +76,14 @@ pub enum HistoryPersistence {
 
 /// Collection of settings that are specific to the TUI.
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
-pub struct Tui {}
+pub struct Tui {
+    /// Maximum number of lines to display for the output of a locally executed
+    /// shell command entered via a leading `!` in the composer. Output beyond
+    /// this limit is summarized with an ellipsis in the UI. The full output is
+    /// still retained in the transcript.
+    #[serde(default)]
+    pub local_shell_max_lines: Option<usize>,
+}
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct SandboxWorkspaceWrite {

@@ -91,6 +91,18 @@ codex --sandbox danger-full-access
 ```
 
 The same setting can be persisted in `~/.codex/config.toml` via the top-level `sandbox_mode = "MODE"` key, e.g. `sandbox_mode = "workspace-write"`.
+ 
+### Run a local command with `!`
+ 
+Inside the TUI, prefix your input with `!` to run it locally in your shell instead of sending it to the model. For example:
+ 
+```text
+!ls -la src
+```
+ 
+- While running, Codex shows a “working” indicator with a spinner.
+- Press Ctrl-C to interrupt the running command (sends SIGINT on Unix).
+- Output is shown directly in the chat history with a sensible line cap (default 100 lines). You can change this via `tui.local_shell_max_lines` in `config.toml`. See [`config.md`](./config.md#tuilocal_shell_max_lines).
 
 ## Code Organization
 

@@ -4,6 +4,7 @@ To get started, describe a task or try one of these commands:
  /status - show current session configuration and token usage
  /approvals - choose what Codex can do without approval
  /model - choose what model and reasoning effort to use
+ !<cmd> - run a local command (e.g. !ls)
 
 codex
 I’m going to scan the workspace and Cargo manifests to see build profiles and

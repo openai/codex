@@ -14,6 +14,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::FileChange;
+use codex_core::protocol::LocalCommandEndEvent;
 use codex_core::protocol::McpInvocation;
 use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
@@ -269,7 +270,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 call_id,
                 command,
                 cwd,
-                parsed_cmd: _,
+                ..
             }) => {
                 self.call_id_to_command.insert(
                     call_id.clone(),
@@ -321,6 +322,25 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 }
                 println!("{}", truncated_output.style(self.dimmed));
             }
+            EventMsg::LocalCommandBegin(_) => {
+                // no-op; print only at end
+            }
+            EventMsg::LocalCommandEnd(LocalCommandEndEvent {
+                stdout,
+                stderr,
+                exit_code,
+            }) => match exit_code {
+                0 => {
+                    for line in stdout.lines().take(MAX_OUTPUT_LINES_FOR_EXEC_TOOL_CALL) {
+                        println!("{}", line.style(self.dimmed));
+                    }
+                }
+                _ => {
+                    for line in stderr.lines().take(MAX_OUTPUT_LINES_FOR_EXEC_TOOL_CALL) {
+                        println!("{}", line.style(self.dimmed));
+                    }
+                }
+            },
             EventMsg::McpToolCallBegin(McpToolCallBeginEvent {
                 call_id: _,
                 invocation,

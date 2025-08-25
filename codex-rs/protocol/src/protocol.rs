@@ -44,6 +44,12 @@ pub enum Op {
     /// Abort current task.
     /// This server sends [`EventMsg::TurnAborted`] in response.
     Interrupt,
+    /// User-initiated local command execution (non-model). Runs a shell
+    /// command immediately without involving the model.
+    LocalExec {
+        /// Raw command following a "!". Only whitespace is stripped.
+        raw_cmd: String,
+    },
 
     /// Input from the user
     UserInput {
@@ -447,6 +453,12 @@ pub enum EventMsg {
 
     ExecCommandEnd(ExecCommandEndEvent),
 
+    /// Local user-initiated command (bang command) begin.
+    LocalCommandBegin(LocalCommandBeginEvent),
+
+    /// Local user-initiated command (bang command) end.
+    LocalCommandEnd(LocalCommandEndEvent),
+
     ExecApprovalRequest(ExecApprovalRequestEvent),
 
     ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent),
@@ -702,6 +714,22 @@ pub struct ExecCommandEndEvent {
     pub duration: Duration,
     /// Formatted output from the command, as seen by the model.
     pub formatted_output: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LocalCommandBeginEvent {
+    /// The command to be executed (post shell-translation), for transparency.
+    pub command: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct LocalCommandEndEvent {
+    /// Captured stdout
+    pub stdout: String,
+    /// Captured stderr
+    pub stderr: String,
+    /// The command's exit code.
+    pub exit_code: i32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

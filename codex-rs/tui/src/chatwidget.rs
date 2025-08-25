@@ -301,6 +301,13 @@ impl ChatWidget {
         );
     }
 
+    fn on_local_command_end(&mut self, ev: codex_core::protocol::LocalCommandEndEvent) {
+        self.bottom_pane.set_task_running(false);
+        let cell = history_cell::new_local_command_output(ev.stdout, ev.stderr, ev.exit_code);
+        self.add_to_history(cell);
+        self.mark_needs_redraw();
+    }
+
     fn on_exec_command_end(&mut self, ev: ExecCommandEndEvent) {
         let ev2 = ev.clone();
         self.defer_or_handle(|q| q.push_exec_end(ev), |s| s.handle_exec_end_now(ev2));
@@ -658,11 +665,20 @@ impl ChatWidget {
 
         match self.bottom_pane.handle_key_event(key_event) {
             InputResult::Submitted(text) => {
-                let images = self.bottom_pane.take_recent_submission_images();
-                self.submit_user_message(UserMessage {
-                    text,
-                    image_paths: images,
-                });
+                // Detect local shell command (bang)
+                let trimmed = text.trim_start().to_string();
+                if let Some(cmd) = trimmed.strip_prefix("!") {
+                    let raw_cmd = cmd.trim().to_string();
+                    if !raw_cmd.is_empty() {
+                        self.submit_op(Op::LocalExec { raw_cmd });
+                    }
+                } else {
+                    let images = self.bottom_pane.take_recent_submission_images();
+                    self.submit_user_message(UserMessage {
+                        text,
+                        image_paths: images,
+                    });
+                }
             }
             InputResult::Command(cmd) => {
                 self.dispatch_command(cmd);
@@ -896,6 +912,13 @@ impl ChatWidget {
             EventMsg::PatchApplyBegin(ev) => self.on_patch_apply_begin(ev),
             EventMsg::PatchApplyEnd(ev) => self.on_patch_apply_end(ev),
             EventMsg::ExecCommandEnd(ev) => self.on_exec_command_end(ev),
+            EventMsg::LocalCommandBegin(ev) => {
+                // Mark a running task so Ctrl+C submits Op::Interrupt to core
+                self.bottom_pane.set_task_running(true);
+                self.add_to_history(history_cell::new_running_local_command(ev.command));
+                self.mark_needs_redraw();
+            }
+            EventMsg::LocalCommandEnd(ev) => self.on_local_command_end(ev),
             EventMsg::McpToolCallBegin(ev) => self.on_mcp_tool_call_begin(ev),
             EventMsg::McpToolCallEnd(ev) => self.on_mcp_tool_call_end(ev),
             EventMsg::WebSearchBegin(ev) => self.on_web_search_begin(ev),

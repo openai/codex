@@ -87,6 +87,8 @@ use crate::protocol::ExecCommandBeginEvent;
 use crate::protocol::ExecCommandEndEvent;
 use crate::protocol::FileChange;
 use crate::protocol::InputItem;
+use crate::protocol::LocalCommandBeginEvent;
+use crate::protocol::LocalCommandEndEvent;
 use crate::protocol::Op;
 use crate::protocol::PatchApplyBeginEvent;
 use crate::protocol::PatchApplyEndEvent;
@@ -282,6 +284,7 @@ pub(crate) struct Session {
     codex_linux_sandbox_exe: Option<PathBuf>,
     user_shell: shell::Shell,
     show_raw_agent_reasoning: bool,
+    local_exec: crate::local_exec::LocalExecRuntime,
 }
 
 /// The context needed for a single turn of the conversation.
@@ -536,6 +539,7 @@ impl Session {
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             user_shell: default_shell,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+            local_exec: crate::local_exec::LocalExecRuntime::new(),
         });
 
         // record the initial user instructions and environment context,
@@ -1047,6 +1051,94 @@ async fn submission_loop(
         match sub.op {
             Op::Interrupt => {
                 sess.interrupt_task();
+                // Also interrupt any running local exec.
+                crate::local_exec::interrupt(&sess.local_exec);
+            }
+            Op::LocalExec { raw_cmd } => {
+                // Wrap into a default shell invocation (bash -lc)
+                let mut argv = vec!["bash".to_string(), "-lc".to_string(), raw_cmd];
+                // Allow shell translation (e.g., PowerShell, zsh profile) if applicable
+                if let Some(cmd) = sess
+                    .user_shell
+                    .format_default_shell_invocation(argv.clone())
+                {
+                    argv = cmd;
+                }
+
+                // Emit LocalCommandBegin
+                let begin_event = Event {
+                    id: sub.id.clone(),
+                    msg: EventMsg::LocalCommandBegin(LocalCommandBeginEvent {
+                        command: argv.clone(),
+                    }),
+                };
+                let _ = sess.tx_event.send(begin_event).await;
+
+                // Spawn child process in background to keep submission loop responsive
+                let cwd_to_use = turn_context.cwd.clone();
+                let env = create_env(&turn_context.shell_environment_policy);
+                let program = argv.first().cloned().unwrap_or_default();
+                let args = argv.iter().skip(1).cloned().collect::<Vec<_>>();
+                let sess_for_local = sess.clone();
+                let tx_event = sess.tx_event.clone();
+                let sub_id = sub.id.clone();
+                tokio::spawn(async move {
+                    let mut cmd = tokio::process::Command::new(&program);
+                    cmd.args(&args)
+                        .current_dir(&cwd_to_use)
+                        .stdout(std::process::Stdio::piped())
+                        .stderr(std::process::Stdio::piped());
+
+                    crate::local_exec::configure_child(&mut cmd);
+
+                    // Start from a clean environment to avoid inheriting unpredictable or
+                    // sensitive variables from the parent process (PATH tweaks, proxies,
+                    // credentials, locale, toolchain settings, etc.). We then repopulate
+                    // only the approved set via `create_env(...)` for deterministic, safe
+                    // command execution aligned with the session's policy.
+                    cmd.env_clear();
+                    for (k, v) in env.into_iter() {
+                        cmd.env(k, v);
+                    }
+
+                    match cmd.spawn() {
+                        Ok(child) => {
+                            crate::local_exec::record_child(&sess_for_local.local_exec, child.id());
+                            let out_res = child.wait_with_output().await;
+                            crate::local_exec::clear(&sess_for_local.local_exec);
+
+                            let (exit_code, stdout, stderr) = match out_res {
+                                Ok(output) => (
+                                    output.status.code().unwrap_or(-1),
+                                    String::from_utf8_lossy(&output.stdout).to_string(),
+                                    String::from_utf8_lossy(&output.stderr).to_string(),
+                                ),
+                                Err(e) => (1, String::new(), format!("failed to wait: {e}")),
+                            };
+                            let end_event = Event {
+                                id: sub_id.clone(),
+                                msg: EventMsg::LocalCommandEnd(LocalCommandEndEvent {
+                                    stdout,
+                                    stderr,
+                                    exit_code,
+                                }),
+                            };
+                            let _ = tx_event.send(end_event).await;
+                        }
+                        Err(e) => {
+                            crate::local_exec::clear(&sess_for_local.local_exec);
+                            let end_event = Event {
+                                id: sub_id.clone(),
+                                msg: EventMsg::LocalCommandEnd(LocalCommandEndEvent {
+                                    stdout: String::new(),
+                                    stderr: format!("failed to spawn: {e}"),
+                                    exit_code: 1,
+                                }),
+                            };
+                            let _ = tx_event.send(end_event).await;
+                        }
+                    }
+                });
             }
             Op::OverrideTurnContext {
                 cwd,
