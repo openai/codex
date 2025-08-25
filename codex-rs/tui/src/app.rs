@@ -303,13 +303,21 @@ impl App {
                 self.transcript_overlay = Some(TranscriptApp::new(self.transcript_lines.clone()));
                 tui.frame_requester().schedule_frame();
             }
-            // Esc primes/advances backtracking when composer is empty.
+            // Esc primes/advances backtracking only in normal (not working) mode
+            // with an empty composer. In any other state, forward Esc so the
+            // active UI (e.g. status indicator, modals, popups) handles it.
             KeyEvent {
                 code: KeyCode::Esc,
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
                 ..
             } => {
-                self.handle_backtrack_esc_key(tui);
+                if self.chat_widget.is_normal_backtrack_mode()
+                    && self.chat_widget.composer_is_empty()
+                {
+                    self.handle_backtrack_esc_key(tui);
+                } else {
+                    self.chat_widget.handle_key_event(key_event);
+                }
             }
             // Enter confirms backtrack when primed + count > 0. Otherwise pass to widget.
             KeyEvent {
