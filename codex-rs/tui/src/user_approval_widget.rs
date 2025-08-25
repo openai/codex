@@ -373,7 +373,11 @@ impl UserApprovalWidget {
     }
 
     pub(crate) fn desired_height(&self, width: u16) -> u16 {
-        self.get_confirmation_prompt_height(width) + self.select_options.len() as u16
+        // Reserve space for:
+        // - 1 title line ("Allow command?" or "Apply changes?")
+        // - 1 buttons line (options rendered horizontally on a single row)
+        // - 1 description line (context for the currently selected option)
+        self.get_confirmation_prompt_height(width) + 3
     }
 }
 
