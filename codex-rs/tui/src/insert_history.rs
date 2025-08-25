@@ -363,7 +363,7 @@ fn slice_line_spans(
         if seg_end > seg_start {
             let local_start = seg_start - *s;
             let local_end = seg_end - *s;
-            let content: &str = original.spans[i].content.as_ref();
+            let content = original.spans[i].content.as_ref();
             let slice = &content[local_start..local_end];
             acc.push(Span {
                 style: *style,

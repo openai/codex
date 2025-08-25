@@ -1,24 +1,6 @@
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::Builder;
-use typed_path::WindowsComponent;
-use typed_path::WindowsPath;
-use typed_path::WindowsPrefix;
-
-/// Detect Windows drive paths (e.g., `C:\foo`)
-/// or a UNC paths (e.g., `\\server\share\path`).
-fn is_windows_or_unc_path(input: &str) -> bool {
-    match WindowsPath::new(input).components().next() {
-        Some(WindowsComponent::Prefix(prefix_component)) => matches!(
-            prefix_component.kind(),
-            WindowsPrefix::Disk(_)
-                | WindowsPrefix::VerbatimDisk(_)
-                | WindowsPrefix::UNC(_, _)
-                | WindowsPrefix::VerbatimUNC(_, _)
-        ),
-        _ => false,
-    }
-}
 
 #[derive(Debug)]
 pub enum PasteImageError {
@@ -134,7 +116,26 @@ pub fn normalize_pasted_path(pasted: &str) -> Option<PathBuf> {
         return url.to_file_path().ok();
     }
 
-    if is_windows_or_unc_path(pasted) {
+    // Detect unquoted Windows paths and bypass POSIX shlex which
+    // treats backslashes as escapes (e.g., C:\Users\Alice\file.png).
+    // Also handles UNC paths (\\server\share\path).
+    let looks_like_windows_path = {
+        // Drive letter path: C:\ or C:/
+        let drive = pasted
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_alphabetic())
+            .unwrap_or(false)
+            && pasted.get(1..2) == Some(":")
+            && pasted
+                .get(2..3)
+                .map(|s| s == "\\" || s == "/")
+                .unwrap_or(false);
+        // UNC path: \\server\share
+        let unc = pasted.starts_with("\\\\");
+        drive || unc
+    };
+    if looks_like_windows_path {
         return Some(PathBuf::from(pasted));
     }
 

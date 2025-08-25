@@ -70,10 +70,10 @@ fn extract_message_text_after_header(lines: &[Line<'_>], header_idx: usize) -> O
     let start = header_idx + 1;
     let mut out: Vec<String> = Vec::new();
     for line in lines.iter().skip(start) {
-        let is_blank = line.spans.iter().all(|s| {
-            let c: &str = s.content.as_ref();
-            c.trim().is_empty()
-        });
+        let is_blank = line
+            .spans
+            .iter()
+            .all(|s| s.content.as_ref().trim().is_empty());
         if is_blank {
             break;
         }
@@ -98,10 +98,10 @@ fn extract_message_text_after_header(lines: &[Line<'_>], header_idx: usize) -> O
 fn highlight_range_from_header(lines: &[Line<'_>], header_idx: usize) -> (usize, usize) {
     let mut end = header_idx + 1;
     while end < lines.len() {
-        let is_blank = lines[end].spans.iter().all(|s| {
-            let c: &str = s.content.as_ref();
-            c.trim().is_empty()
-        });
+        let is_blank = lines[end]
+            .spans
+            .iter()
+            .all(|s| s.content.as_ref().trim().is_empty());
         if is_blank {
             break;
         }
