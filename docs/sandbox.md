@@ -25,13 +25,21 @@ When you launch Codex in a new folder, it detects whether the folder is version 
 
 Codex gives you fine-grained control over the sandbox with the `--sandbox` option, and over when it requests approval with the `--ask-for-approval` option. Run `codex help` for more on these options.
 
-#### Can I run without ANY approvals?
+### Can I run without ANY approvals?
 
 Yes, run codex non-interactively with `--ask-for-approval never`. This option works with all `--sandbox` options, so you still have full control over Codex's level of autonomy. It will make its best attempt with whatever contrainsts you provide. For example:
 
-- Use `codex --ask-for-approval never --sandbox read-only` when you are running many agents to answer questions in parallel in the same workspace.
-- Use `codex --ask-for-approval never --sandbox workspace-write` when you want the agent to non-interactively take time to produce the best outcome, with strong guardrails around its behavior.
-- Use `codex --ask-for-approval never --sandbox danger-full-access` to dangerously give the agent full autonomy. Because this disables important safety mechanisms, we recommend against using this unless running Codex in an isolated environment.
+### Common sandbox + approvals combinations
+
+| Intent                                  | Flags                                                                                  | Effect                                                                                  |
+| --------------------------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Safe read-only browsing                 | `--sandbox read-only --ask-for-approval on-request`                                            | Codex can read files and answer questions. Codex requires approval to make edits, run commands, or access network. |
+| Read-only non-interactive (CI)          | `--sandbox read-only --ask-for-approval never`                                                 | Reads only; never escalates                                                                     |
+| Let it edit the repo, ask if risky      | `--sandbox workspace-write --ask-for-approval on-request`                                      | Codex can read files, make edits, and run commands in the workspace. Codex requires approval for actions outside the workspace or for network access. |
+| Auto (preset)                           | `--full-auto` (equivalent to `--sandbox workspace-write` + `--ask-for-approval on-failure`)     | Codex can read files, make edits, and run commands in the workspace. Codex requires approval when a sandboxed command fails or needs escalation. |
+| YOLO (not recommended)                  | `--dangerously-bypass-approvals-and-sandbox` (alias: `--yolo`)                                 | No sandbox; no prompts                                                                          |
+
+> Note: In `workspace-write`, network is disabled by default unless enabled in config (`[sandbox_workspace_write].network_access = true`).
 
 #### Fine-tuning in `config.toml`
 
