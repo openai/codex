@@ -64,6 +64,7 @@ use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::model_family::find_family_for_model;
 use crate::openai_tools::ApplyPatchToolArgs;
 use crate::openai_tools::ToolsConfig;
+use crate::openai_tools::ToolsConfigParams;
 use crate::openai_tools::get_openai_tools;
 use crate::parse_command::parse_command;
 use crate::plan_tool::handle_update_plan;
@@ -506,15 +507,15 @@ impl Session {
         );
         let turn_context = TurnContext {
             client,
-            tools_config: ToolsConfig::new(
-                &config.model_family,
+            tools_config: ToolsConfig::new(&ToolsConfigParams {
+                model_family: &config.model_family,
                 approval_policy,
-                sandbox_policy.clone(),
-                config.include_plan_tool,
-                config.include_apply_patch_tool,
-                config.tools_web_search_request,
-                config.use_experimental_streamable_shell_tool,
-            ),
+                sandbox_policy: sandbox_policy.clone(),
+                include_plan_tool: config.include_plan_tool,
+                include_apply_patch_tool: config.include_apply_patch_tool,
+                include_web_search_request: config.tools_web_search_request,
+                use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
+            }),
             user_instructions,
             base_instructions,
             approval_policy,
@@ -1092,15 +1093,15 @@ async fn submission_loop(
                     .unwrap_or(prev.sandbox_policy.clone());
                 let new_cwd = cwd.clone().unwrap_or_else(|| prev.cwd.clone());
 
-                let tools_config = ToolsConfig::new(
-                    &effective_family,
-                    new_approval_policy,
-                    new_sandbox_policy.clone(),
-                    config.include_plan_tool,
-                    config.include_apply_patch_tool,
-                    config.tools_web_search_request,
-                    config.use_experimental_streamable_shell_tool,
-                );
+                let tools_config = ToolsConfig::new(&ToolsConfigParams {
+                    model_family: &effective_family,
+                    approval_policy: new_approval_policy,
+                    sandbox_policy: new_sandbox_policy.clone(),
+                    include_plan_tool: config.include_plan_tool,
+                    include_apply_patch_tool: config.include_apply_patch_tool,
+                    include_web_search_request: config.tools_web_search_request,
+                    use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
+                });
 
                 let new_turn_context = TurnContext {
                     client,
@@ -1172,15 +1173,16 @@ async fn submission_loop(
 
                     let fresh_turn_context = TurnContext {
                         client,
-                        tools_config: ToolsConfig::new(
-                            &model_family,
+                        tools_config: ToolsConfig::new(&ToolsConfigParams {
+                            model_family: &model_family,
                             approval_policy,
-                            sandbox_policy.clone(),
-                            config.include_plan_tool,
-                            config.include_apply_patch_tool,
-                            config.tools_web_search_request,
-                            config.use_experimental_streamable_shell_tool,
-                        ),
+                            sandbox_policy: sandbox_policy.clone(),
+                            include_plan_tool: config.include_plan_tool,
+                            include_apply_patch_tool: config.include_apply_patch_tool,
+                            include_web_search_request: config.tools_web_search_request,
+                            use_streamable_shell_tool: config
+                                .use_experimental_streamable_shell_tool,
+                        }),
                         user_instructions: turn_context.user_instructions.clone(),
                         base_instructions: turn_context.base_instructions.clone(),
                         approval_policy,
