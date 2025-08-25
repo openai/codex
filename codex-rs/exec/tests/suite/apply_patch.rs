@@ -41,148 +41,31 @@ fn test_standalone_exec_cli_can_use_apply_patch() -> anyhow::Result<()> {
 }
 
 #[cfg(not(target_os = "windows"))]
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_apply_patch_tool() -> anyhow::Result<()> {
-    use core_test_support::load_sse_fixture_with_id_from_str;
-    use tempfile::TempDir;
-    use wiremock::Mock;
-    use wiremock::MockServer;
-    use wiremock::ResponseTemplate;
-    use wiremock::matchers::method;
-    use wiremock::matchers::path;
+    use crate::suite::common::run_e2e_exec_test;
+    use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 
-    const SSE_TOOL_CALL_ADD: &str = r#"[
-  {
-    "type": "response.output_item.done",
-    "item": {
-      "type": "function_call",
-      "name": "apply_patch",
-      "arguments": "{\n  \"input\": \"*** Begin Patch\\n*** Add File: test.md\\n+Hello world\\n*** End Patch\"\n}",
-      "call_id": "__ID__"
-    }
-  },
-  {
-    "type": "response.completed",
-    "response": {
-      "id": "__ID__",
-      "usage": {
-        "input_tokens": 0,
-        "input_tokens_details": null,
-        "output_tokens": 0,
-        "output_tokens_details": null,
-        "total_tokens": 0
-      },
-      "output": []
-    }
-  }
-]"#;
-
-    const SSE_TOOL_CALL_UPDATE: &str = r#"[
-  {
-    "type": "response.output_item.done",
-    "item": {
-      "type": "function_call",
-      "name": "apply_patch",
-      "arguments": "{\n  \"input\": \"*** Begin Patch\\n*** Update File: test.md\\n@@\\n-Hello world\\n+Final text\\n*** End Patch\"\n}",
-      "call_id": "__ID__"
-    }
-  },
-  {
-    "type": "response.completed",
-    "response": {
-      "id": "__ID__",
-      "usage": {
-        "input_tokens": 0,
-        "input_tokens_details": null,
-        "output_tokens": 0,
-        "output_tokens_details": null,
-        "total_tokens": 0
-      },
-      "output": []
-    }
-  }
-]"#;
-
-    const SSE_TOOL_CALL_COMPLETED: &str = r#"[
-  {
-    "type": "response.completed",
-    "response": {
-      "id": "__ID__",
-      "usage": {
-        "input_tokens": 0,
-        "input_tokens_details": null,
-        "output_tokens": 0,
-        "output_tokens_details": null,
-        "total_tokens": 0
-      },
-      "output": []
-    }
-  }
-]"#;
-
-    // Start a mock model server
-    let server = MockServer::start().await;
-
-    // First response: model calls apply_patch to create test.md
-    let first = ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_raw(
-            load_sse_fixture_with_id_from_str(SSE_TOOL_CALL_ADD, "call1"),
-            "text/event-stream",
+    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
         );
+        return Ok(());
+    }
 
-    Mock::given(method("POST"))
-        // .and(path("/v1/responses"))
-        .respond_with(first)
-        .up_to_n_times(1)
-        .mount(&server)
-        .await;
+    let tmp_cwd = tempdir().expect("failed to create temp dir");
+    let tmp_path = tmp_cwd.path().to_path_buf();
+    run_e2e_exec_test(
+        tmp_cwd.path(),
+        vec![
+            include_str!("../fixtures/sse_apply_patch_add.json").to_string(),
+            include_str!("../fixtures/sse_apply_patch_update.json").to_string(),
+            include_str!("../fixtures/sse_response_completed.json").to_string(),
+        ],
+    )
+    .await;
 
-    // Second response: model calls apply_patch to update test.md
-    let second = ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_raw(
-            load_sse_fixture_with_id_from_str(SSE_TOOL_CALL_UPDATE, "call2"),
-            "text/event-stream",
-        );
-
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(second)
-        .up_to_n_times(1)
-        .mount(&server)
-        .await;
-
-    let final_completed = ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_raw(
-            load_sse_fixture_with_id_from_str(SSE_TOOL_CALL_COMPLETED, "resp3"),
-            "text/event-stream",
-        );
-
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(final_completed)
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    let tmp_cwd = TempDir::new().unwrap();
-    Command::cargo_bin("codex-exec")
-        .context("should find binary for codex-exec")?
-        .current_dir(tmp_cwd.path())
-        .env("CODEX_HOME", tmp_cwd.path())
-        .env("OPENAI_API_KEY", "dummy")
-        .env("OPENAI_BASE_URL", format!("{}/v1", server.uri()))
-        .arg("--skip-git-repo-check")
-        .arg("-s")
-        .arg("workspace-write")
-        .arg("foo")
-        .assert()
-        .success();
-
-    // Verify final file contents
-    let final_path = tmp_cwd.path().join("test.md");
+    let final_path = tmp_path.join("test.md");
     let contents = std::fs::read_to_string(&final_path)
         .unwrap_or_else(|e| panic!("failed reading {}: {e}", final_path.display()));
     assert_eq!(contents, "Final text\n");
@@ -190,150 +73,36 @@ async fn test_apply_patch_tool() -> anyhow::Result<()> {
 }
 
 #[cfg(not(target_os = "windows"))]
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_apply_patch_freeform_tool() -> anyhow::Result<()> {
-    use core_test_support::load_sse_fixture_with_id_from_str;
-    use tempfile::TempDir;
-    use wiremock::Mock;
-    use wiremock::MockServer;
-    use wiremock::ResponseTemplate;
-    use wiremock::matchers::method;
-    use wiremock::matchers::path;
+    use crate::suite::common::run_e2e_exec_test;
+    use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 
-    const SSE_TOOL_CALL_ADD: &str = r#"[
-  {
-    "type": "response.output_item.done",
-    "item": {
-      "type": "custom_tool_call",
-      "name": "apply_patch",
-      "input": "*** Begin Patch\n*** Add File: test.md\n+Hello world\n*** End Patch",
-      "call_id": "__ID__"
-    }
-  },
-  {
-    "type": "response.completed",
-    "response": {
-      "id": "__ID__",
-      "usage": {
-        "input_tokens": 0,
-        "input_tokens_details": null,
-        "output_tokens": 0,
-        "output_tokens_details": null,
-        "total_tokens": 0
-      },
-      "output": []
-    }
-  }
-]"#;
-
-    const SSE_TOOL_CALL_UPDATE: &str = r#"[
-  {
-    "type": "response.output_item.done",
-    "item": {
-      "type": "custom_tool_call",
-      "name": "apply_patch",
-      "input": "*** Begin Patch\n*** Update File: test.md\n@@\n-Hello world\n+Final text\n*** End Patch",
-      "call_id": "__ID__"
-    }
-  },
-  {
-    "type": "response.completed",
-    "response": {
-      "id": "__ID__",
-      "usage": {
-        "input_tokens": 0,
-        "input_tokens_details": null,
-        "output_tokens": 0,
-        "output_tokens_details": null,
-        "total_tokens": 0
-      },
-      "output": []
-    }
-  }
-]"#;
-
-    const SSE_TOOL_CALL_COMPLETED: &str = r#"[
-  {
-    "type": "response.completed",
-    "response": {
-      "id": "__ID__",
-      "usage": {
-        "input_tokens": 0,
-        "input_tokens_details": null,
-        "output_tokens": 0,
-        "output_tokens_details": null,
-        "total_tokens": 0
-      },
-      "output": []
-    }
-  }
-]"#;
-
-    // Start a mock model server
-    let server = MockServer::start().await;
-
-    // First response: model calls apply_patch to create test.md
-    let first = ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_raw(
-            load_sse_fixture_with_id_from_str(SSE_TOOL_CALL_ADD, "call1"),
-            "text/event-stream",
+    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
         );
+        return Ok(());
+    }
 
-    Mock::given(method("POST"))
-        // .and(path("/v1/responses"))
-        .respond_with(first)
-        .up_to_n_times(1)
-        .mount(&server)
-        .await;
-
-    // Second response: model calls apply_patch to update test.md
-    let second = ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_raw(
-            load_sse_fixture_with_id_from_str(SSE_TOOL_CALL_UPDATE, "call2"),
-            "text/event-stream",
-        );
-
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(second)
-        .up_to_n_times(1)
-        .mount(&server)
-        .await;
-
-    let final_completed = ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_raw(
-            load_sse_fixture_with_id_from_str(SSE_TOOL_CALL_COMPLETED, "resp3"),
-            "text/event-stream",
-        );
-
-    Mock::given(method("POST"))
-        // .and(path("/v1/responses"))
-        .respond_with(final_completed)
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    let tmp_cwd = TempDir::new().unwrap();
-    Command::cargo_bin("codex-exec")
-        .context("should find binary for codex-exec")?
-        .current_dir(tmp_cwd.path())
-        .env("CODEX_HOME", tmp_cwd.path())
-        .env("OPENAI_API_KEY", "dummy")
-        .env("OPENAI_BASE_URL", format!("{}/v1", server.uri()))
-        .arg("--skip-git-repo-check")
-        .arg("-s")
-        .arg("workspace-write")
-        .arg("foo")
-        .assert()
-        .success();
+    let tmp_cwd = tempdir().expect("failed to create temp dir");
+    run_e2e_exec_test(
+        tmp_cwd.path(),
+        vec![
+            include_str!("../fixtures/sse_apply_patch_freeform_add.json").to_string(),
+            include_str!("../fixtures/sse_apply_patch_freeform_update.json").to_string(),
+            include_str!("../fixtures/sse_response_completed.json").to_string(),
+        ],
+    )
+    .await;
 
     // Verify final file contents
-    let final_path = tmp_cwd.path().join("test.md");
+    let final_path = tmp_cwd.path().join("app.py");
     let contents = std::fs::read_to_string(&final_path)
         .unwrap_or_else(|e| panic!("failed reading {}: {e}", final_path.display()));
-    assert_eq!(contents, "Final text\n");
+    assert_eq!(
+        contents,
+        include_str!("../fixtures/apply_patch_freeform_final.txt")
+    );
     Ok(())
 }
