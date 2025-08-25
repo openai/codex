@@ -18,6 +18,7 @@ use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TokenUsage;
+use codex_core::protocol::format_token_count;
 use codex_login::get_auth_file;
 use codex_login::try_read_auth_json;
 use codex_protocol::parse_command::ParsedCommand;
@@ -734,23 +735,24 @@ pub(crate) fn new_status_output(
     // Input: <input> [+ <cached> cached]
     let mut input_line_spans: Vec<Span<'static>> = vec![
         "  • Input: ".into(),
-        usage.non_cached_input().to_string().into(),
+        format_token_count(usage.non_cached_input()).into(),
     ];
     if let Some(cached) = usage.cached_input_tokens
         && cached > 0
     {
-        input_line_spans.push(format!(" (+ {cached} cached)").into());
+        let cached_tokens = format_token_count(cached);
+        input_line_spans.push(format!(" (+ {cached_tokens} cached)").into());
     }
     lines.push(Line::from(input_line_spans));
     // Output: <output>
     lines.push(Line::from(vec![
         "  • Output: ".into(),
-        usage.output_tokens.to_string().into(),
+        format_token_count(usage.output_tokens).into(),
     ]));
     // Total: <total>
     lines.push(Line::from(vec![
         "  • Total: ".into(),
-        usage.blended_total().to_string().into(),
+        format_token_count(usage.blended_total()).into(),
     ]));
 
     PlainHistoryCell { lines }

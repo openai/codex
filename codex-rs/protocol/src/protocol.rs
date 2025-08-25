@@ -558,6 +558,17 @@ impl TokenUsage {
     }
 }
 
+/// Format a token count with thousands separators for readability.
+pub fn format_token_count(value: u64) -> String {
+    let mut s = value.to_string();
+    let mut i = s.len();
+    while i > 3 {
+        i -= 3;
+        s.insert(i, ',');
+    }
+    s
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct FinalOutput {
     pub token_usage: TokenUsage,
@@ -572,21 +583,26 @@ impl From<TokenUsage> for FinalOutput {
 impl fmt::Display for FinalOutput {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let token_usage = &self.token_usage;
+        let total = format_token_count(token_usage.blended_total());
+        let input = format_token_count(token_usage.non_cached_input());
+        let cached = token_usage.cached_input();
+        let cached_str = if cached > 0 {
+            let cached_tokens = format_token_count(cached);
+            format!(" (+ {cached_tokens} cached)")
+        } else {
+            String::new()
+        };
+        let output = format_token_count(token_usage.output_tokens);
+        let reasoning = token_usage
+            .reasoning_output_tokens
+            .map(|r| {
+                let reasoning_tokens = format_token_count(r);
+                format!(" (reasoning {reasoning_tokens})")
+            })
+            .unwrap_or_default();
         write!(
             f,
-            "Token usage: total={} input={}{} output={}{}",
-            token_usage.blended_total(),
-            token_usage.non_cached_input(),
-            if token_usage.cached_input() > 0 {
-                format!(" (+ {} cached)", token_usage.cached_input())
-            } else {
-                String::new()
-            },
-            token_usage.output_tokens,
-            token_usage
-                .reasoning_output_tokens
-                .map(|r| format!(" (reasoning {r})"))
-                .unwrap_or_default()
+            "Token usage: total={total} input={input}{cached_str} output={output}{reasoning}"
         )
     }
 }
