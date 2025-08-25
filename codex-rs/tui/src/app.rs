@@ -133,11 +133,10 @@ impl App {
                     self.chat_widget.handle_paste(pasted);
                 }
                 TuiEvent::Draw => {
-                    let flushed = self.chat_widget.flush_paste_burst_if_due();
-                    if !flushed && self.chat_widget.is_in_paste_burst() {
-                        tui.frame_requester().schedule_frame_in(
-                            crate::bottom_pane::ChatComposer::recommended_paste_flush_delay(),
-                        );
+                    if self
+                        .chat_widget
+                        .handle_paste_burst_tick(&tui.frame_requester())
+                    {
                         return Ok(true);
                     }
                     tui.draw(

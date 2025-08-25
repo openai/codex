@@ -108,6 +108,43 @@ enum ActivePopup {
 }
 
 impl ChatComposer {
+    fn first_line_starts_with_slash(&self) -> bool {
+        self.textarea
+            .text()
+            .lines()
+            .next()
+            .unwrap_or("")
+            .starts_with('/')
+    }
+
+    // Handles plain-char burst logic; returns Some if handled and no further processing is needed.
+    fn process_plain_char_paste_burst(
+        &mut self,
+        ch: char,
+        now: Instant,
+    ) -> Option<(InputResult, bool)> {
+        let in_slash_context = self.first_line_starts_with_slash();
+        match self.paste_burst.on_plain_char(now, in_slash_context) {
+            CharDecision::BufferAppend => {
+                self.paste_burst.append_char_to_buffer(ch, now);
+                Some((InputResult::None, true))
+            }
+            CharDecision::BeginBuffer { retro_chars } => {
+                let cur = self.textarea.cursor();
+                let txt = self.textarea.text();
+                let before = &txt[..cur];
+                let start_byte = retro_start_index(before, retro_chars as usize);
+                let grabbed = before[start_byte..].to_string();
+                if !grabbed.is_empty() {
+                    self.textarea.replace_range(start_byte..cur, "");
+                }
+                self.paste_burst.begin_with_retro_grabbed(grabbed, now);
+                self.paste_burst.append_char_to_buffer(ch, now);
+                Some((InputResult::None, true))
+            }
+            CharDecision::Passthrough => None,
+        }
+    }
     pub fn new(
         has_input_focus: bool,
         app_event_tx: AppEventSender,
@@ -813,10 +850,12 @@ impl ChatComposer {
         }
 
         // If we're capturing a burst and receive Enter, accumulate it instead of inserting.
-        if matches!(input.code, KeyCode::Enter) && self.paste_burst.is_active()
-            && self.paste_burst.append_newline_if_active(now) {
-                return (InputResult::None, true);
-            }
+        if matches!(input.code, KeyCode::Enter)
+            && self.paste_burst.is_active()
+            && self.paste_burst.append_newline_if_active(now)
+        {
+            return (InputResult::None, true);
+        }
 
         // Intercept plain Char inputs to optionally accumulate into a burst buffer.
         if let KeyEvent {
@@ -869,14 +908,8 @@ impl ChatComposer {
                         return (InputResult::None, true);
                     }
                 }
-
-                // Not buffering: insert normally and continue.
-                self.textarea.input(input);
-                let text_after = self.textarea.text();
-                self.pending_pastes
-                    .retain(|(placeholder, _)| text_after.contains(placeholder));
-                return (InputResult::None, true);
-            } else if let Some(pasted) = self.paste_burst.flush_before_modified_input() {
+            }
+            if let Some(pasted) = self.paste_burst.flush_before_modified_input() {
                 self.handle_paste(pasted);
             }
         }

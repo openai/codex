@@ -870,6 +870,21 @@ impl ChatWidget {
         self.bottom_pane.is_in_paste_burst()
     }
 
+    // Returns true if caller should skip rendering this frame (a future tick is scheduled).
+    pub(crate) fn handle_paste_burst_tick(
+        &mut self,
+        frame_requester: &crate::tui::FrameRequester,
+    ) -> bool {
+        let flushed = self.flush_paste_burst_if_due();
+        if !flushed && self.is_in_paste_burst() {
+            frame_requester.schedule_frame_in(
+                crate::bottom_pane::ChatComposer::recommended_paste_flush_delay(),
+            );
+            return true;
+        }
+        false
+    }
+
     fn flush_active_exec_cell(&mut self) {
         if let Some(active) = self.active_exec_cell.take() {
             self.last_history_was_exec = true;
