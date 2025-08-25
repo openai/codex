@@ -1055,10 +1055,30 @@ async fn submission_loop(
                 model,
                 effort,
                 summary,
+                model_provider,
             } => {
                 // Recalculate the persistent turn context with provided overrides.
                 let prev = Arc::clone(&turn_context);
-                let provider = prev.client.get_provider();
+                // Resolve the provider to use for the updated context.
+                // Precedence: explicit `model_provider` in the override, otherwise
+                // reuse the previous client's provider.
+                let provider = if let Some(provider_id) = model_provider.clone() {
+                    match config.model_providers.get(&provider_id) {
+                        Some(p) => p.clone(),
+                        None => {
+                            let msg = format!("Model provider `{provider_id}` not found");
+                            let event = Event {
+                                id: sub.id.clone(),
+                                msg: EventMsg::Error(ErrorEvent { message: msg }),
+                            };
+                            let _ = sess.tx_event.send(event).await;
+                            // Skip applying overrides if provider not found.
+                            continue;
+                        }
+                    }
+                } else {
+                    prev.client.get_provider()
+                };
 
                 // Effective model + family
                 let (effective_model, effective_family) = if let Some(m) = model {
@@ -1079,6 +1099,13 @@ async fn submission_loop(
                 let mut updated_config = (*config).clone();
                 updated_config.model = effective_model.clone();
                 updated_config.model_family = effective_family.clone();
+                // If a provider id override was provided, update the per-turn
+                // config to reflect the chosen provider id and info so the
+                // constructed client has the correct defaults.
+                if let Some(provider_id) = model_provider {
+                    updated_config.model_provider_id = provider_id.clone();
+                    updated_config.model_provider = provider.clone();
+                }
 
                 let client = ModelClient::new(
                     Arc::new(updated_config),
