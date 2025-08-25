@@ -36,6 +36,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
+use unicode_width::UnicodeWidthChar;
 
 // Heuristic thresholds for detecting paste-like input bursts.
 const PASTE_BURST_MIN_CHARS: u16 = 3;
@@ -97,6 +98,7 @@ pub(crate) struct ChatComposer {
     // Buffer to accumulate characters during a detected non-bracketed paste burst.
     paste_burst_buffer: String,
     in_paste_burst_mode: bool,
+    suggestion: Option<String>,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -136,6 +138,7 @@ impl ChatComposer {
             paste_burst_until: None,
             paste_burst_buffer: String::new(),
             in_paste_burst_mode: false,
+            suggestion: None,
         }
     }
 
@@ -166,6 +169,24 @@ impl ChatComposer {
     /// Returns true if the composer currently contains no user input.
     pub(crate) fn is_empty(&self) -> bool {
         self.textarea.is_empty()
+    }
+
+    fn update_suggestion(&mut self) {
+        if !matches!(self.active_popup, ActivePopup::None) {
+            self.suggestion = None;
+            return;
+        }
+        let cursor = self.textarea.cursor();
+        let text = self.textarea.text();
+        if cursor != text.len() || text.is_empty() {
+            self.suggestion = None;
+            return;
+        }
+        if text.starts_with('/') || text.starts_with('@') {
+            self.suggestion = None;
+            return;
+        }
+        self.suggestion = self.history.suggest(text);
     }
 
     /// Update the cached *context-left* percentage and refresh the placeholder
@@ -229,6 +250,7 @@ impl ChatComposer {
         self.paste_burst_until = None;
         self.sync_command_popup();
         self.sync_file_search_popup();
+        self.update_suggestion();
         true
     }
 
@@ -239,6 +261,7 @@ impl ChatComposer {
         self.textarea.insert_element(&placeholder);
         self.attached_images
             .push(AttachedImage { placeholder, path });
+        self.update_suggestion();
     }
 
     pub fn take_recent_submission_images(&mut self) -> Vec<PathBuf> {
@@ -272,6 +295,7 @@ impl ChatComposer {
         self.textarea.insert_str(text);
         self.sync_command_popup();
         self.sync_file_search_popup();
+        self.update_suggestion();
     }
 
     /// Handle a key event coming from the main UI.
@@ -290,6 +314,7 @@ impl ChatComposer {
             self.sync_file_search_popup();
         }
 
+        self.update_suggestion();
         result
     }
 
@@ -603,11 +628,23 @@ impl ChatComposer {
         self.textarea.set_text(&new_text);
         let new_cursor = start_idx.saturating_add(path.len()).saturating_add(1);
         self.textarea.set_cursor(new_cursor);
+        self.update_suggestion();
     }
 
     /// Handle key event when no popup is visible.
     fn handle_key_event_without_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
         match key_event {
+            KeyEvent {
+                code: KeyCode::Tab,
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => {
+                if let Some(s) = self.suggestion.take() {
+                    self.textarea.insert_str(&s);
+                    return (InputResult::None, true);
+                }
+                (InputResult::None, false)
+            }
             // -------------------------------------------------------------
             // History navigation (Up / Down) – only when the composer is not
             // empty or when the cursor is at the correct position, to avoid
@@ -1199,6 +1236,30 @@ impl WidgetRef for &ChatComposer {
 
         let mut state = self.textarea_state.borrow_mut();
         StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
+        if let (Some(suggestion), Some((cx, cy))) = (
+            self.suggestion.as_ref(),
+            self.textarea.cursor_pos_with_state(textarea_rect, &state),
+        ) {
+            let max_width = textarea_rect.x + textarea_rect.width - cx;
+            if max_width > 0 {
+                let mut display = String::new();
+                let mut width = 0usize;
+                for ch in suggestion.chars() {
+                    let w = ch.width().unwrap_or(0);
+                    if width + w > max_width as usize {
+                        break;
+                    }
+                    display.push(ch);
+                    width += w;
+                }
+                buf.set_string(
+                    cx,
+                    cy,
+                    display,
+                    Style::default().add_modifier(Modifier::DIM),
+                );
+            }
+        }
         if self.textarea.text().is_empty() {
             Line::from(self.placeholder_text.as_str())
                 .style(Style::default().dim())
@@ -1886,5 +1947,22 @@ mod tests {
             composer.attached_images,
             "one image mapping remains"
         );
+    }
+
+    #[test]
+    fn suggests_from_history_and_accepts_with_tab() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer =
+            ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
+        composer
+            .history
+            .record_local_submission("now run the tests");
+        composer.textarea.set_text("now run");
+        composer.textarea.set_cursor("now run".len());
+        composer.update_suggestion();
+        assert_eq!(composer.suggestion.as_deref(), Some(" the tests"));
+        composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        assert_eq!(composer.textarea.text(), "now run the tests");
     }
 }

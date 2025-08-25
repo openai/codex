@@ -135,6 +135,19 @@ impl ChatComposerHistory {
         }
     }
 
+    /// Return the tail of the most recent history entry that starts with `prefix`.
+    pub(crate) fn suggest(&self, prefix: &str) -> Option<String> {
+        if prefix.is_empty() {
+            return None;
+        }
+        self.local_history
+            .iter()
+            .rev()
+            .chain(self.fetched_history.values())
+            .find(|entry| entry.starts_with(prefix) && entry.len() > prefix.len())
+            .map(|entry| entry[prefix.len()..].to_string())
+    }
+
     /// Integrate a GetHistoryEntryResponse event.
     pub fn on_entry_response(
         &mut self,
