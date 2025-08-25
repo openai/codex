@@ -7,6 +7,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 #[cfg(unix)]
 use std::sync::atomic::AtomicU8;
+#[cfg(unix)]
+use std::sync::atomic::AtomicU16;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
@@ -33,6 +35,7 @@ use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::disable_raw_mode;
 use ratatui::crossterm::terminal::enable_raw_mode;
 use ratatui::layout::Offset;
+use ratatui::layout::Position;
 use ratatui::text::Line;
 
 use crate::clipboard_paste::paste_image_to_temp_png;
@@ -125,6 +128,8 @@ pub struct Tui {
     alt_saved_viewport: Option<ratatui::layout::Rect>,
     #[cfg(unix)]
     resume_pending: Arc<AtomicU8>, // Stores a ResumeAction
+    #[cfg(unix)]
+    suspend_cursor_y: Arc<AtomicU16>, // Bottom line of inline viewport
     // True when overlay alt-screen UI is active
     alt_screen_active: Arc<AtomicBool>,
 }
@@ -231,6 +236,8 @@ impl Tui {
             alt_saved_viewport: None,
             #[cfg(unix)]
             resume_pending: Arc::new(AtomicU8::new(0)),
+            #[cfg(unix)]
+            suspend_cursor_y: Arc::new(AtomicU16::new(0)),
             alt_screen_active: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -249,6 +256,8 @@ impl Tui {
         let resume_pending = self.resume_pending.clone();
         #[cfg(unix)]
         let alt_screen_active = self.alt_screen_active.clone();
+        #[cfg(unix)]
+        let suspend_cursor_y = self.suspend_cursor_y.clone();
         let event_stream = async_stream::stream! {
             loop {
                 select! {
@@ -294,6 +303,11 @@ impl Tui {
                                         resume_pending.store(ResumeAction::RestoreAlt as u8, Ordering::Relaxed);
                                     } else {
                                         resume_pending.store(ResumeAction::RealignInline as u8, Ordering::Relaxed);
+                                    }
+                                    #[cfg(unix)]
+                                    {
+                                        let y = suspend_cursor_y.load(Ordering::Relaxed);
+                                        let _ = execute!(stdout(), MoveTo(0, y));
                                     }
                                     let _ = execute!(stdout(), crossterm::cursor::Show);
                                     let _ = Tui::suspend();
@@ -351,7 +365,7 @@ impl Tui {
                 )))
             }
             ResumeAction::RestoreAlt => {
-                if let Ok((_x, y)) = crossterm::cursor::position()
+                if let Ok(Position { y, .. }) = self.terminal.get_cursor_position()
                     && let Some(saved) = self.alt_saved_viewport.as_mut()
                 {
                     saved.y = y;
@@ -480,6 +494,19 @@ impl Tui {
                     self.pending_history_lines.clone(),
                 );
                 self.pending_history_lines.clear();
+            }
+            // Update the y position for suspending so Ctrl-Z can place the cursor correctly.
+            #[cfg(unix)]
+            {
+                let inline_area_bottom = if self.alt_screen_active.load(Ordering::Relaxed) {
+                    self.alt_saved_viewport
+                        .map(|r| r.bottom().saturating_sub(1))
+                        .unwrap_or_else(|| area.bottom().saturating_sub(1))
+                } else {
+                    area.bottom().saturating_sub(1)
+                };
+                self.suspend_cursor_y
+                    .store(inline_area_bottom, Ordering::Relaxed);
             }
             terminal.draw(|frame| {
                 draw_fn(frame);
