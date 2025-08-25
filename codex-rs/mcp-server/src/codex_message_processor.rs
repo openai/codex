@@ -52,6 +52,8 @@ use codex_protocol::mcp_protocol::ExecArbitraryCommandResponse;
 use codex_protocol::mcp_protocol::ExecCommandApprovalParams;
 use codex_protocol::mcp_protocol::ExecCommandApprovalResponse;
 use codex_protocol::mcp_protocol::ExecOneOffCommandParams;
+use codex_protocol::mcp_protocol::FuzzyFileSearchParams;
+use codex_protocol::mcp_protocol::FuzzyFileSearchResponse;
 use codex_protocol::mcp_protocol::GetUserAgentResponse;
 use codex_protocol::mcp_protocol::GetUserSavedConfigResponse;
 use codex_protocol::mcp_protocol::GitDiffToRemoteResponse;
@@ -88,6 +90,7 @@ use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 use tokio::select;
 use tokio::sync::Mutex;
@@ -205,6 +208,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::UserInfo { request_id } => {
                 self.get_user_info(request_id).await;
+            }
+            ClientRequest::FuzzyFileSearch { request_id, params } => {
+                self.fuzzy_file_search(request_id, params).await;
             }
             ClientRequest::ExecOneOffCommand { request_id, params } => {
                 self.exec_one_off_command(request_id, params).await;
@@ -1166,6 +1172,59 @@ impl CodexMessageProcessor {
                 self.outgoing.send_error(request_id, error).await;
             }
         }
+    }
+
+    async fn fuzzy_file_search(&self, request_id: RequestId, params: FuzzyFileSearchParams) {
+        let FuzzyFileSearchParams { query, roots } = params;
+
+        // Execute fuzzy search across provided roots using codex-file-search.
+        use codex_file_search as file_search;
+        use std::collections::HashSet;
+        use std::num::NonZero;
+        use std::path::PathBuf;
+
+        let mut files: Vec<String> = Vec::new();
+        let mut seen: HashSet<String> = HashSet::new();
+        #[expect(clippy::expect_used)]
+        let limit_per_root = NonZero::new(50).expect("50 is a valid non-zero usize");
+        #[expect(clippy::expect_used)]
+        let threads = NonZero::new(2).expect("2 is a valid non-zero usize");
+        let compute_indices = false;
+
+        for root in roots {
+            let search_dir = PathBuf::from(&root);
+            // TODO: offer a way to cancel outdated requests in the interface
+            let cancel_flag = std::sync::Arc::new(AtomicBool::new(false));
+
+            // because message_processor runs each request in a separate thread, we don't need to spawn a new thread
+            match file_search::run(
+                &query,
+                limit_per_root,
+                &search_dir,
+                Vec::new(),
+                threads,
+                cancel_flag,
+                compute_indices,
+            ) {
+                Ok(res) => {
+                    for m in res.matches {
+                        // Join root + relative match path for clarity across multiple roots.
+                        let full_path = PathBuf::from(&root).join(m.path);
+                        if let Some(s) = full_path.to_str()
+                            && seen.insert(s.to_string())
+                        {
+                            files.push(s.to_string());
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("fuzzy-file-search root '{}' failed: {}", root, e);
+                }
+            }
+        }
+
+        let response = FuzzyFileSearchResponse { files };
+        self.outgoing.send_response(request_id, response).await;
     }
 }
 

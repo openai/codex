@@ -184,6 +184,11 @@ pub enum ClientRequest {
         #[serde(rename = "id")]
         request_id: RequestId,
     },
+    FuzzyFileSearch {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: FuzzyFileSearchParams,
+    },
     /// Execute a command (argv vector) under the server's sandbox.
     ExecOneOffCommand {
         #[serde(rename = "id")]
@@ -660,6 +665,17 @@ pub struct ExecCommandApprovalResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 pub struct ApplyPatchApprovalResponse {
     pub decision: ReviewDecision,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+pub struct FuzzyFileSearchParams {
+    pub query: String,
+    pub roots: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+pub struct FuzzyFileSearchResponse {
+    pub files: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
