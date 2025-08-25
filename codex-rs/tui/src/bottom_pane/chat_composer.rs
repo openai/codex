@@ -108,23 +108,13 @@ enum ActivePopup {
 }
 
 impl ChatComposer {
-    fn first_line_starts_with_slash(&self) -> bool {
-        self.textarea
-            .text()
-            .lines()
-            .next()
-            .unwrap_or("")
-            .starts_with('/')
-    }
-
     // Handles plain-char burst logic; returns Some if handled and no further processing is needed.
     fn process_plain_char_paste_burst(
         &mut self,
         ch: char,
         now: Instant,
     ) -> Option<(InputResult, bool)> {
-        let in_slash_context = self.first_line_starts_with_slash();
-        match self.paste_burst.on_plain_char(now, in_slash_context) {
+        match self.paste_burst.on_plain_char(now) {
             CharDecision::BufferAppend => {
                 self.paste_burst.append_char_to_buffer(ch, now);
                 Some((InputResult::None, true))
@@ -135,12 +125,18 @@ impl ChatComposer {
                 let before = &txt[..cur];
                 let start_byte = retro_start_index(before, retro_chars as usize);
                 let grabbed = before[start_byte..].to_string();
-                if !grabbed.is_empty() {
-                    self.textarea.replace_range(start_byte..cur, "");
+                let looks_pastey =
+                    grabbed.chars().any(|c| c.is_whitespace()) || grabbed.len() >= 16;
+                if looks_pastey {
+                    if !grabbed.is_empty() {
+                        self.textarea.replace_range(start_byte..cur, "");
+                    }
+                    self.paste_burst.begin_with_retro_grabbed(grabbed, now);
+                    self.paste_burst.append_char_to_buffer(ch, now);
+                    Some((InputResult::None, true))
+                } else {
+                    None
                 }
-                self.paste_burst.begin_with_retro_grabbed(grabbed, now);
-                self.paste_burst.append_char_to_buffer(ch, now);
-                Some((InputResult::None, true))
             }
             CharDecision::Passthrough => None,
         }
