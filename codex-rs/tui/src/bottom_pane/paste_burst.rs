@@ -55,11 +55,13 @@ impl PasteBurst {
 
         // If we already held a first char and receive a second fast char,
         // start buffering without retro-grabbing (we never rendered the first).
-        if let Some((_held, held_at)) = self.pending_first_char
+        if let Some((held, held_at)) = self.pending_first_char
             && now.duration_since(held_at) <= PASTE_BURST_CHAR_INTERVAL
         {
             self.active = true;
-            self.buffer.push(self.pending_first_char.take().unwrap().0);
+            // take() to clear pending; we already captured the held char above
+            let _ = self.pending_first_char.take();
+            self.buffer.push(held);
             self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
             return CharDecision::BeginBufferFromPending;
         }
