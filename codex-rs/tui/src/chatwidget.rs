@@ -537,18 +537,20 @@ impl ChatWidget {
             ev.result,
         ));
     }
-    fn interrupt_running_task(&mut self) {
-        if self.bottom_pane.is_task_running() {
-            // Finalize the active exec as failed before clearing state.
-            self.finalize_active_exec_cell_as_failed();
-            self.active_exec_cell = None;
-            self.running_commands.clear();
-            self.bottom_pane.clear_ctrl_c_quit_hint();
-            self.submit_op(Op::Interrupt);
-            self.bottom_pane.set_task_running(false);
-            self.stream.clear_all();
-            self.request_redraw();
+    /// Single interrupt path used by both Ctrl-C and Esc-triggered interrupts.
+    pub(crate) fn interrupt_now(&mut self) {
+        if !self.bottom_pane.is_task_running() {
+            return;
         }
+        // Finalize the active exec as failed before clearing state.
+        self.finalize_active_exec_cell_as_failed();
+        self.active_exec_cell = None;
+        self.running_commands.clear();
+        self.bottom_pane.clear_ctrl_c_quit_hint();
+        self.submit_op(Op::Interrupt);
+        self.bottom_pane.set_task_running(false);
+        self.stream.clear_all();
+        self.request_redraw();
     }
     fn layout_areas(&self, area: Rect) -> [Rect; 2] {
         Layout::vertical([
@@ -1125,7 +1127,7 @@ impl ChatWidget {
             CancellationEvent::Ignored => {}
         }
         if self.bottom_pane.is_task_running() {
-            self.interrupt_running_task();
+            self.interrupt_now();
             CancellationEvent::Ignored
         } else if self.bottom_pane.ctrl_c_quit_hint_visible() {
             self.submit_op(Op::Shutdown);

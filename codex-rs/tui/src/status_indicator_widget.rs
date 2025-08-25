@@ -4,7 +4,6 @@
 use std::time::Duration;
 use std::time::Instant;
 
-use codex_core::protocol::Op;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
@@ -71,7 +70,9 @@ impl StatusIndicatorWidget {
     }
 
     pub(crate) fn interrupt(&self) {
-        self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
+        // Single path: request an interrupt via the app. The widget layer
+        // does not send protocol ops directly.
+        self.app_event_tx.send(AppEvent::InterruptRequest);
     }
 
     /// Update the animated header label (left of the brackets).
