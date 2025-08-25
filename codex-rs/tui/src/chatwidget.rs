@@ -865,7 +865,7 @@ impl ChatWidget {
     ) -> bool {
         let flushed = self.bottom_pane.flush_paste_burst_if_due();
         if flushed {
-            self.mark_needs_redraw();
+            self.request_redraw();
             return false;
         }
         if self.bottom_pane.is_in_paste_burst() {
