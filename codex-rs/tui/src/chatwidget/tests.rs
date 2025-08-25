@@ -178,7 +178,6 @@ fn make_chatwidget_manual() -> (
         pending_exec_completions: Vec::new(),
         task_complete_pending: false,
         interrupts: InterruptManager::new(),
-        needs_redraw: false,
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
         session_id: None,

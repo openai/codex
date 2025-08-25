@@ -621,7 +621,7 @@ mod tests {
             top.push(buf[(x, 1)].symbol().chars().next().unwrap_or(' '));
         }
         assert!(
-            top.starts_with("Working"),
+            top.trim_start().starts_with("Working"),
             "expected top row to start with 'Working': {top:?}"
         );
         assert!(
