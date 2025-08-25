@@ -116,6 +116,9 @@ pub fn normalize_pasted_path(pasted: &str) -> Option<PathBuf> {
         return url.to_file_path().ok();
     }
 
+    // TODO: We'll improve the implementation/unit tests over time, as appropriate.
+    // Possibly use typed-path: https://github.com/openai/codex/pull/2567/commits/3cc92b78e0a1f94e857cf4674d3a9db918ed352e
+    //
     // Detect unquoted Windows paths and bypass POSIX shlex which
     // treats backslashes as escapes (e.g., C:\Users\Alice\file.png).
     // Also handles UNC paths (\\server\share\path).
