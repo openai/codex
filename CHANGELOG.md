@@ -2,6 +2,9 @@
 
 You can install any of these versions: `npm install -g codex@version`
 
+> [!IMPORTANT]
+> This file is no longer maintained. For newer release notes, visit https://github.com/openai/codex/releases instead.
+
 ## `0.1.2505172129`
 
 ### 🪲 Bug Fixes
