@@ -389,14 +389,6 @@ impl BottomPane {
         self.composer.set_history_metadata(log_id, entry_count);
     }
 
-    pub(crate) fn flush_paste_burst_if_due(&mut self) -> bool {
-        self.composer.flush_paste_burst_if_due()
-    }
-
-    pub(crate) fn is_in_paste_burst(&self) -> bool {
-        self.composer.is_in_paste_burst()
-    }
-
     pub(crate) fn on_history_entry_response(
         &mut self,
         log_id: u64,

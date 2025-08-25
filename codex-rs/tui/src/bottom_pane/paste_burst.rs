@@ -151,10 +151,6 @@ impl PasteBurst {
         self.active || !self.buffer.is_empty()
     }
 
-    pub fn recommended_flush_delay() -> Duration {
-        PASTE_BURST_CHAR_INTERVAL + Duration::from_millis(10)
-    }
-
     pub fn new() -> Self {
         Self::default()
     }
