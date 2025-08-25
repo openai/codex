@@ -105,6 +105,7 @@ pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImag
 ///
 /// Supports:
 /// - `file://` URLs (converted to local paths)
+/// - Windows/UNC paths
 /// - shell-escaped single paths (via `shlex`)
 pub fn normalize_pasted_path(pasted: &str) -> Option<PathBuf> {
     let pasted = pasted.trim();
