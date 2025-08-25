@@ -254,6 +254,36 @@ impl ChatWidget {
         self.maybe_send_next_queued_input();
     }
 
+    /// Handle a turn aborted due to user interrupt (Esc).
+    /// When there are queued user messages, restore them into the composer
+    /// separated by newlines rather than auto‑submitting the next one.
+    fn on_interrupted_turn(&mut self) {
+        // Show a gentle prompt in history encouraging the user to refine.
+        self.add_to_history(history_cell::new_error_event(
+            "Tell the model what to do differently".to_owned(),
+        ));
+        // Stop the running task and clear streaming state.
+        self.bottom_pane.set_task_running(false);
+        self.running_commands.clear();
+        self.stream.clear_all();
+
+        // If any messages were queued during the task, restore them into the composer.
+        if !self.queued_user_messages.is_empty() {
+            let combined = self
+                .queued_user_messages
+                .iter()
+                .map(|m| m.text.clone())
+                .collect::<Vec<_>>()
+                .join("\n");
+            self.bottom_pane.set_composer_text(combined);
+            // Clear the queue and update the status indicator list.
+            self.queued_user_messages.clear();
+            self.refresh_queued_user_messages();
+        }
+
+        self.request_redraw();
+    }
+
     fn on_plan_update(&mut self, update: codex_core::plan_tool::UpdatePlanArgs) {
         self.add_to_history(history_cell::new_plan_update(update));
     }
@@ -911,7 +941,7 @@ impl ChatWidget {
             EventMsg::Error(ErrorEvent { message }) => self.on_error(message),
             EventMsg::TurnAborted(ev) => match ev.reason {
                 TurnAbortReason::Interrupted => {
-                    self.on_error("Tell the model what to do differently".to_owned())
+                    self.on_interrupted_turn();
                 }
                 TurnAbortReason::Replaced => {
                     self.on_error("Turn aborted: replaced by a new task".to_owned())
