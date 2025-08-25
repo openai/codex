@@ -890,8 +890,20 @@ impl ChatComposer {
     /// Attempts to remove an image or paste placeholder if the cursor is at the end of one.
     /// Returns true if a placeholder was removed.
     fn try_remove_any_placeholder_at_cursor(&mut self) -> bool {
-        let p = self.textarea.cursor();
+        // The cursor may occasionally end up inside a multi-byte character
+        // (e.g. when the composer contains non-ASCII text and we compute
+        // offsets using byte lengths). Clamp it to the nearest previous
+        // character boundary to avoid panicking when slicing.
+        let mut p = self.textarea.cursor().min(self.textarea.text().len());
         let text = self.textarea.text();
+        if p < text.len() && !text.is_char_boundary(p) {
+            p = text
+                .char_indices()
+                .map(|(i, _)| i)
+                .take_while(|&i| i <= p)
+                .last()
+                .unwrap_or(0);
+        }
 
         // Try image placeholders first
         let mut out: Option<(usize, String)> = None;
@@ -903,7 +915,7 @@ impl ChatComposer {
                 continue;
             }
             let start = p - ph.len();
-            if text[start..p] != *ph {
+            if text.get(start..p) != Some(ph.as_str()) {
                 continue;
             }
 
@@ -911,7 +923,11 @@ impl ChatComposer {
             let mut occ_before = 0usize;
             let mut search_pos = 0usize;
             while search_pos < start {
-                if let Some(found) = text[search_pos..start].find(ph) {
+                let segment = match text.get(search_pos..start) {
+                    Some(s) => s,
+                    None => break,
+                };
+                if let Some(found) = segment.find(ph) {
                     occ_before += 1;
                     search_pos += found + ph.len();
                 } else {
@@ -947,7 +963,7 @@ impl ChatComposer {
                 if p + ph.len() > text.len() {
                     continue;
                 }
-                if &text[p..p + ph.len()] != ph {
+                if text.get(p..p + ph.len()) != Some(ph.as_str()) {
                     continue;
                 }
 
@@ -955,7 +971,11 @@ impl ChatComposer {
                 let mut occ_before = 0usize;
                 let mut search_pos = 0usize;
                 while search_pos < p {
-                    if let Some(found) = text[search_pos..p].find(ph) {
+                    let segment = match text.get(search_pos..p) {
+                        Some(s) => s,
+                        None => break 'out None,
+                    };
+                    if let Some(found) = segment.find(ph) {
                         occ_before += 1;
                         search_pos += found + ph.len();
                     } else {
@@ -990,7 +1010,7 @@ impl ChatComposer {
                 return None;
             }
             let start = p - ph.len();
-            if text[start..p] == *ph {
+            if text.get(start..p) == Some(ph.as_str()) {
                 Some(ph.clone())
             } else {
                 None
@@ -1006,7 +1026,7 @@ impl ChatComposer {
             if p + ph.len() > text.len() {
                 return None;
             }
-            if &text[p..p + ph.len()] == ph {
+            if text.get(p..p + ph.len()) == Some(ph.as_str()) {
                 Some(ph.clone())
             } else {
                 None
@@ -1850,6 +1870,31 @@ mod tests {
         } else {
             panic!("Placeholder not found in textarea");
         }
+    }
+
+    #[test]
+    fn backspace_with_multibyte_text_before_placeholder_does_not_panic() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer =
+            ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
+
+        // Insert an image placeholder at the start
+        let path = PathBuf::from("/tmp/image_multibyte.png");
+        composer.attach_image(path, 10, 5, "PNG");
+        // Add multibyte text after the placeholder
+        composer.textarea.insert_str("日本語");
+
+        // Cursor is at end; pressing backspace should delete the last character
+        // without panicking and leave the placeholder intact.
+        composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
+
+        assert_eq!(composer.attached_images.len(), 1);
+        assert!(composer.textarea.text().starts_with("[image 10x5 PNG]"));
     }
 
     #[test]
