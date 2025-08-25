@@ -88,9 +88,10 @@ async fn continue_after_stream_error() {
     config.base_instructions = Some("You are a helpful assistant".to_string());
     config.model_provider = provider;
 
-    let conversation_manager = ConversationManager::default();
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
     let codex = conversation_manager
-        .new_conversation_with_auth(config, Some(CodexAuth::from_api_key("Test API Key")))
+        .new_conversation(config)
         .await
         .unwrap()
         .conversation;

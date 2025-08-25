@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::path::Path;
+use std::path::PathBuf;
 
 use codex_protocol::mcp_protocol::GitSha;
 use futures::future::join_all;
@@ -425,6 +426,38 @@ async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
     Some(diff)
 }
 
+/// Resolve the path that should be used for trust checks. Similar to
+/// `[utils::is_inside_git_repo]`, but resolves to the root of the main
+/// repository. Handles worktrees.
+pub fn resolve_root_git_project_for_trust(cwd: &Path) -> Option<PathBuf> {
+    let base = if cwd.is_dir() { cwd } else { cwd.parent()? };
+
+    // TODO: we should make this async, but it's primarily used deep in
+    // callstacks of sync code, and should almost always be fast
+    let git_dir_out = std::process::Command::new("git")
+        .args(["rev-parse", "--git-common-dir"])
+        .current_dir(base)
+        .output()
+        .ok()?;
+    if !git_dir_out.status.success() {
+        return None;
+    }
+    let git_dir_s = String::from_utf8(git_dir_out.stdout)
+        .ok()?
+        .trim()
+        .to_string();
+
+    let git_dir_path_raw = if Path::new(&git_dir_s).is_absolute() {
+        PathBuf::from(&git_dir_s)
+    } else {
+        base.join(&git_dir_s)
+    };
+
+    // Normalize to handle macOS /var vs /private/var and resolve ".." segments.
+    let git_dir_path = std::fs::canonicalize(&git_dir_path_raw).unwrap_or(git_dir_path_raw);
+    git_dir_path.parent().map(Path::to_path_buf)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -730,6 +763,80 @@ mod tests {
             .await
             .expect("Should collect working tree state");
         assert_eq!(state.sha, GitSha::new(&remote_sha));
+    }
+
+    #[test]
+    fn resolve_root_git_project_for_trust_returns_none_outside_repo() {
+        let tmp = TempDir::new().expect("tempdir");
+        assert!(resolve_root_git_project_for_trust(tmp.path()).is_none());
+    }
+
+    #[tokio::test]
+    async fn resolve_root_git_project_for_trust_regular_repo_returns_repo_root() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let repo_path = create_test_git_repo(&temp_dir).await;
+        let expected = std::fs::canonicalize(&repo_path).unwrap().to_path_buf();
+
+        assert_eq!(
+            resolve_root_git_project_for_trust(&repo_path),
+            Some(expected.clone())
+        );
+        let nested = repo_path.join("sub/dir");
+        std::fs::create_dir_all(&nested).unwrap();
+        assert_eq!(
+            resolve_root_git_project_for_trust(&nested),
+            Some(expected.clone())
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_root_git_project_for_trust_detects_worktree_and_returns_main_root() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let repo_path = create_test_git_repo(&temp_dir).await;
+
+        // Create a linked worktree
+        let wt_root = temp_dir.path().join("wt");
+        let _ = std::process::Command::new("git")
+            .args([
+                "worktree",
+                "add",
+                wt_root.to_str().unwrap(),
+                "-b",
+                "feature/x",
+            ])
+            .current_dir(&repo_path)
+            .output()
+            .expect("git worktree add");
+
+        let expected = std::fs::canonicalize(&repo_path).ok();
+        let got = resolve_root_git_project_for_trust(&wt_root)
+            .and_then(|p| std::fs::canonicalize(p).ok());
+        assert_eq!(got, expected);
+        let nested = wt_root.join("nested/sub");
+        std::fs::create_dir_all(&nested).unwrap();
+        let got_nested =
+            resolve_root_git_project_for_trust(&nested).and_then(|p| std::fs::canonicalize(p).ok());
+        assert_eq!(got_nested, expected);
+    }
+
+    #[test]
+    fn resolve_root_git_project_for_trust_non_worktrees_gitdir_returns_none() {
+        let tmp = TempDir::new().expect("tempdir");
+        let proj = tmp.path().join("proj");
+        std::fs::create_dir_all(proj.join("nested")).unwrap();
+
+        // `.git` is a file but does not point to a worktrees path
+        std::fs::write(
+            proj.join(".git"),
+            format!(
+                "gitdir: {}\n",
+                tmp.path().join("some/other/location").display()
+            ),
+        )
+        .unwrap();
+
+        assert!(resolve_root_git_project_for_trust(&proj).is_none());
+        assert!(resolve_root_git_project_for_trust(&proj.join("nested")).is_none());
     }
 
     #[tokio::test]

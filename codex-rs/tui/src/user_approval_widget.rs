@@ -74,6 +74,17 @@ static COMMAND_SELECT_OPTIONS: LazyLock<Vec<SelectOption>> = LazyLock::new(|| {
             key: KeyCode::Char('n'),
             decision: ReviewDecision::Denied,
         },
+        SelectOption {
+            label: Line::from(vec![
+                "No, ".into(),
+                "provide ".into(),
+                "f".underlined(),
+                "eedback".into(),
+            ]),
+            description: "Do not run the command; provide feedback",
+            key: KeyCode::Char('f'),
+            decision: ReviewDecision::Abort,
+        },
     ]
 });
 
@@ -90,6 +101,17 @@ static PATCH_SELECT_OPTIONS: LazyLock<Vec<SelectOption>> = LazyLock::new(|| {
             description: "Do not apply the changes",
             key: KeyCode::Char('n'),
             decision: ReviewDecision::Denied,
+        },
+        SelectOption {
+            label: Line::from(vec![
+                "No, ".into(),
+                "provide ".into(),
+                "f".underlined(),
+                "eedback".into(),
+            ]),
+            description: "Do not apply the changes; provide feedback",
+            key: KeyCode::Char('f'),
+            decision: ReviewDecision::Abort,
         },
     ]
 });
@@ -258,7 +280,7 @@ impl UserApprovalWidget {
     }
 
     fn send_decision_with_feedback(&mut self, decision: ReviewDecision, feedback: String) {
-        let mut lines: Vec<Line<'static>> = Vec::new();
+        let mut lines: Vec<Line<'static>> = vec![Line::from("")];
         match &self.approval_request {
             ApprovalRequest::Exec { command, .. } => {
                 let cmd = strip_bash_lc_and_escape(command);
@@ -327,7 +349,6 @@ impl UserApprovalWidget {
                 lines.push(Line::from(l.to_string()));
             }
         }
-        lines.push(Line::from(""));
         self.app_event_tx.send(AppEvent::InsertHistoryLines(lines));
 
         let op = match &self.approval_request {

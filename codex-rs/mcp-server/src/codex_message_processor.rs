@@ -14,6 +14,7 @@ use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ReviewDecision;
+use codex_login::AuthManager;
 use codex_protocol::mcp_protocol::AuthMode;
 use codex_protocol::mcp_protocol::GitDiffToRemoteResponse;
 use mcp_types::JSONRPCErrorError;
@@ -31,10 +32,8 @@ use crate::outgoing_message::OutgoingNotification;
 use codex_core::protocol::InputItem as CoreInputItem;
 use codex_core::protocol::Op;
 use codex_login::CLIENT_ID;
-use codex_login::CodexAuth;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
-use codex_login::logout;
 use codex_login::run_login_server;
 use codex_protocol::mcp_protocol::APPLY_PATCH_APPROVAL_METHOD;
 use codex_protocol::mcp_protocol::AddConversationListenerParams;
@@ -78,6 +77,7 @@ impl ActiveLogin {
 
 /// Handles JSON-RPC messages for Codex conversations.
 pub(crate) struct CodexMessageProcessor {
+    auth_manager: Arc<AuthManager>,
     conversation_manager: Arc<ConversationManager>,
     outgoing: Arc<OutgoingMessageSender>,
     codex_linux_sandbox_exe: Option<PathBuf>,
@@ -90,12 +90,14 @@ pub(crate) struct CodexMessageProcessor {
 
 impl CodexMessageProcessor {
     pub fn new(
+        auth_manager: Arc<AuthManager>,
         conversation_manager: Arc<ConversationManager>,
         outgoing: Arc<OutgoingMessageSender>,
         codex_linux_sandbox_exe: Option<PathBuf>,
         config: Arc<Config>,
     ) -> Self {
         Self {
+            auth_manager,
             conversation_manager,
             outgoing,
             codex_linux_sandbox_exe,
@@ -129,6 +131,9 @@ impl CodexMessageProcessor {
             ClientRequest::RemoveConversationListener { request_id, params } => {
                 self.remove_conversation_listener(request_id, params).await;
             }
+            ClientRequest::GitDiffToRemote { request_id, params } => {
+                self.git_diff_to_origin(request_id, params.cwd).await;
+            }
             ClientRequest::LoginChatGpt { request_id } => {
                 self.login_chatgpt(request_id).await;
             }
@@ -138,11 +143,8 @@ impl CodexMessageProcessor {
             ClientRequest::LogoutChatGpt { request_id } => {
                 self.logout_chatgpt(request_id).await;
             }
-            ClientRequest::GetAuthStatus { request_id } => {
-                self.get_auth_status(request_id).await;
-            }
-            ClientRequest::GitDiffToRemote { request_id, params } => {
-                self.git_diff_to_origin(request_id, params.cwd).await;
+            ClientRequest::GetAuthStatus { request_id, params } => {
+                self.get_auth_status(request_id, params).await;
             }
         }
     }
@@ -185,6 +187,7 @@ impl CodexMessageProcessor {
                 // Spawn background task to monitor completion.
                 let outgoing_clone = self.outgoing.clone();
                 let active_login = self.active_login.clone();
+                let auth_manager = self.auth_manager.clone();
                 tokio::spawn(async move {
                     let (success, error_msg) = match tokio::time::timeout(
                         LOGIN_CHATGPT_TIMEOUT,
@@ -211,8 +214,13 @@ impl CodexMessageProcessor {
 
                     // Send an auth status change notification.
                     if success {
+                        // Update in-memory auth cache now that login completed.
+                        auth_manager.reload();
+
+                        // Notify clients with the actual current auth mode.
+                        let current_auth_method = auth_manager.auth().map(|a| a.mode);
                         let payload = AuthStatusChangeNotification {
-                            auth_method: Some(AuthMode::ChatGPT),
+                            auth_method: current_auth_method,
                         };
                         outgoing_clone
                             .send_server_notification(ServerNotification::AuthStatusChange(payload))
@@ -276,10 +284,7 @@ impl CodexMessageProcessor {
             }
         }
 
-        // Load config to locate codex_home for persistent logout.
-        let config = self.config.as_ref();
-
-        if let Err(err) = logout(&config.codex_home) {
+        if let Err(err) = self.auth_manager.logout() {
             let error = JSONRPCErrorError {
                 code: INTERNAL_ERROR_CODE,
                 message: format!("logout failed: {err}"),
@@ -296,45 +301,55 @@ impl CodexMessageProcessor {
             )
             .await;
 
-        // Send auth status change notification.
-        let payload = AuthStatusChangeNotification { auth_method: None };
+        // Send auth status change notification reflecting the current auth mode
+        // after logout (which may fall back to API key via env var).
+        let current_auth_method = self.auth_manager.auth().map(|auth| auth.mode);
+        let payload = AuthStatusChangeNotification {
+            auth_method: current_auth_method,
+        };
         self.outgoing
             .send_server_notification(ServerNotification::AuthStatusChange(payload))
             .await;
     }
 
-    async fn get_auth_status(&self, request_id: RequestId) {
-        // Load config to determine codex_home and preferred auth method.
-        let config = self.config.as_ref();
+    async fn get_auth_status(
+        &self,
+        request_id: RequestId,
+        params: codex_protocol::mcp_protocol::GetAuthStatusParams,
+    ) {
+        let preferred_auth_method: AuthMode = self.auth_manager.preferred_auth_method();
+        let include_token = params.include_token.unwrap_or(false);
+        let do_refresh = params.refresh_token.unwrap_or(false);
 
-        let preferred_auth_method: AuthMode = config.preferred_auth_method;
-        let response =
-            match CodexAuth::from_codex_home(&config.codex_home, config.preferred_auth_method) {
-                Ok(Some(auth)) => {
-                    // Verify that the current auth mode has a valid, non-empty token.
-                    // If token acquisition fails or is empty, treat as unauthenticated.
-                    let reported_auth_method = match auth.get_token().await {
-                        Ok(token) if !token.is_empty() => Some(auth.mode),
-                        Ok(_) => None, // Empty token
-                        Err(err) => {
-                            tracing::warn!("failed to get token for auth status: {err}");
-                            None
-                        }
-                    };
-                    codex_protocol::mcp_protocol::GetAuthStatusResponse {
-                        auth_method: reported_auth_method,
-                        preferred_auth_method,
+        if do_refresh && let Err(err) = self.auth_manager.refresh_token().await {
+            tracing::warn!("failed to refresh token while getting auth status: {err}");
+        }
+
+        let response = match self.auth_manager.auth() {
+            Some(auth) => {
+                let (reported_auth_method, token_opt) = match auth.get_token().await {
+                    Ok(token) if !token.is_empty() => {
+                        let tok = if include_token { Some(token) } else { None };
+                        (Some(auth.mode), tok)
                     }
+                    Ok(_) => (None, None),
+                    Err(err) => {
+                        tracing::warn!("failed to get token for auth status: {err}");
+                        (None, None)
+                    }
+                };
+                codex_protocol::mcp_protocol::GetAuthStatusResponse {
+                    auth_method: reported_auth_method,
+                    preferred_auth_method,
+                    auth_token: token_opt,
                 }
-                Ok(None) => codex_protocol::mcp_protocol::GetAuthStatusResponse {
-                    auth_method: None,
-                    preferred_auth_method,
-                },
-                Err(_) => codex_protocol::mcp_protocol::GetAuthStatusResponse {
-                    auth_method: None,
-                    preferred_auth_method,
-                },
-            };
+            }
+            None => codex_protocol::mcp_protocol::GetAuthStatusResponse {
+                auth_method: None,
+                preferred_auth_method,
+                auth_token: None,
+            },
+        };
 
         self.outgoing.send_response(request_id, response).await;
     }
@@ -723,6 +738,7 @@ fn derive_config_from_params(
         include_apply_patch_tool,
         disable_response_storage: None,
         show_raw_agent_reasoning: None,
+        tools_web_search_request: None,
     };
 
     let cli_overrides = cli_overrides
