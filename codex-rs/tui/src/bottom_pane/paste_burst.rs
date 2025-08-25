@@ -2,8 +2,8 @@ use std::time::Duration;
 use std::time::Instant;
 
 // Heuristic thresholds for detecting paste-like input bursts.
-// Require a slightly larger burst to reduce false positives during fast typing
-const PASTE_BURST_MIN_CHARS: u16 = 6;
+// Detect quickly to avoid showing typed prefix before paste is recognized
+const PASTE_BURST_MIN_CHARS: u16 = 2;
 const PASTE_BURST_CHAR_INTERVAL: Duration = Duration::from_millis(8);
 const PASTE_ENTER_SUPPRESS_WINDOW: Duration = Duration::from_millis(120);
 

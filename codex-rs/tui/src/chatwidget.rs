@@ -872,7 +872,8 @@ impl ChatWidget {
             frame_requester.schedule_frame_in(
                 crate::bottom_pane::ChatComposer::recommended_paste_flush_delay(),
             );
-            return true;
+            // Do not skip rendering; draw the textarea without the retro-captured prefix
+            return false;
         }
         false
     }
