@@ -866,6 +866,10 @@ impl ChatWidget {
         self.bottom_pane.handle_paste(text);
     }
 
+    pub(crate) fn is_in_paste_burst(&self) -> bool {
+        self.bottom_pane.is_in_paste_burst()
+    }
+
     fn flush_active_exec_cell(&mut self) {
         if let Some(active) = self.active_exec_cell.take() {
             self.last_history_was_exec = true;
