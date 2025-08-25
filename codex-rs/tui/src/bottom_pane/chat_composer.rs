@@ -280,7 +280,7 @@ impl ChatComposer {
         ch: char,
         now: Instant,
     ) -> Option<(InputResult, bool)> {
-        match self.paste_burst.on_plain_char(now) {
+        match self.paste_burst.on_plain_char(ch, now) {
             CharDecision::BufferAppend => {
                 self.paste_burst.append_char_to_buffer(ch, now);
                 Some((InputResult::None, true))
@@ -292,6 +292,15 @@ impl ChatComposer {
                 } else {
                     None
                 }
+            }
+            CharDecision::BeginBufferFromPending => {
+                // First char was held; we just need to append the current one.
+                self.paste_burst.append_char_to_buffer(ch, now);
+                Some((InputResult::None, true))
+            }
+            CharDecision::HoldFirstChar => {
+                // Do not insert into textarea yet. A tick will flush if no burst follows.
+                Some((InputResult::None, true))
             }
             CharDecision::Passthrough => None,
         }

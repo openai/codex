@@ -14,12 +14,18 @@ pub(crate) struct PasteBurst {
     burst_window_until: Option<Instant>,
     buffer: String,
     active: bool,
+    // Hold first fast char briefly to avoid rendering flicker
+    pending_first_char: Option<(char, Instant)>,
 }
 
 pub(crate) enum CharDecision {
     Passthrough,
     BeginBuffer { retro_chars: u16 },
     BufferAppend,
+    // Do not insert/render this char yet; we are holding briefly.
+    HoldFirstChar,
+    // Begin buffering using the previously held first char (no retro grab needed).
+    BeginBufferFromPending,
 }
 
 pub(crate) struct RetroGrab {
@@ -32,7 +38,7 @@ impl PasteBurst {
         PASTE_BURST_CHAR_INTERVAL + Duration::from_millis(1)
     }
     // Entry point: decide how to treat a plain char with current timing.
-    pub fn on_plain_char(&mut self, now: Instant) -> CharDecision {
+    pub fn on_plain_char(&mut self, ch: char, now: Instant) -> CharDecision {
         match self.last_plain_char_time {
             Some(prev) if now.duration_since(prev) <= PASTE_BURST_CHAR_INTERVAL => {
                 self.consecutive_plain_char_burst =
@@ -47,13 +53,26 @@ impl PasteBurst {
             return CharDecision::BufferAppend;
         }
 
+        // If we already held a first char and receive a second fast char,
+        // start buffering without retro-grabbing (we never rendered the first).
+        if let Some((_held, held_at)) = self.pending_first_char
+            && now.duration_since(held_at) <= PASTE_BURST_CHAR_INTERVAL
+        {
+            self.active = true;
+            self.buffer.push(self.pending_first_char.take().unwrap().0);
+            self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
+            return CharDecision::BeginBufferFromPending;
+        }
+
         if self.consecutive_plain_char_burst >= PASTE_BURST_MIN_CHARS {
             return CharDecision::BeginBuffer {
                 retro_chars: self.consecutive_plain_char_burst.saturating_sub(1),
             };
         }
 
-        CharDecision::Passthrough
+        // Hold the first fast char very briefly to see if a burst follows.
+        self.pending_first_char = Some((ch, now));
+        CharDecision::HoldFirstChar
     }
 
     // Timer: flush buffered burst if timeout elapsed.
@@ -61,10 +80,17 @@ impl PasteBurst {
         let timed_out = self
             .last_plain_char_time
             .is_some_and(|t| now.duration_since(t) > PASTE_BURST_CHAR_INTERVAL);
-        if timed_out && self.is_active() {
+        if timed_out && self.is_active_internal() {
             self.active = false;
             let out = std::mem::take(&mut self.buffer);
             Some(out)
+        } else if timed_out {
+            // If we were holding a single fast char and no burst followed,
+            // flush it as normal typed input.
+            if let Some((ch, _at)) = self.pending_first_char.take() {
+                return Some(ch.to_string());
+            }
+            None
         } else {
             None
         }
@@ -147,10 +173,15 @@ impl PasteBurst {
         self.last_plain_char_time = None;
         self.burst_window_until = None;
         self.active = false;
+        self.pending_first_char = None;
     }
 
     // Utility
     pub fn is_active(&self) -> bool {
+        self.is_active_internal() || self.pending_first_char.is_some()
+    }
+
+    fn is_active_internal(&self) -> bool {
         self.active || !self.buffer.is_empty()
     }
 
@@ -164,6 +195,7 @@ impl PasteBurst {
         self.burst_window_until = None;
         self.active = false;
         self.buffer.clear();
+        self.pending_first_char = None;
     }
 }
 
