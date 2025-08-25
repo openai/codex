@@ -1484,7 +1484,7 @@ mod tests {
             }
 
             terminal
-                .draw(|f| f.render_widget_ref(&composer, f.area()))
+                .draw(|f| f.render_widget_ref(composer, f.area()))
                 .unwrap_or_else(|e| panic!("Failed to draw {name} composer: {e}"));
 
             assert_snapshot!(name, terminal.backend());
