@@ -1,6 +1,5 @@
 ---
 source: tui/src/diff_render.rs
-assertion_line: 380
 expression: terminal.backend()
 ---
 "proposed patch to 1 file (+1 -1)                                                "

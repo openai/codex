@@ -4,8 +4,8 @@ use std::sync::OnceLock;
 use std::time::Duration;
 
 use bytes::Bytes;
+use codex_login::AuthManager;
 use codex_login::AuthMode;
-use codex_login::CodexAuth;
 use eventsource_stream::Eventsource;
 use futures::prelude::*;
 use regex_lite::Regex;
@@ -28,6 +28,7 @@ use crate::client_common::ResponseEvent;
 use crate::client_common::ResponseStream;
 use crate::client_common::ResponsesApiRequest;
 use crate::client_common::create_reasoning_param_for_request;
+use crate::client_common::create_text_param_for_request;
 use crate::config::Config;
 use crate::error::CodexErr;
 use crate::error::Result;
@@ -36,13 +37,13 @@ use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::model_family::ModelFamily;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
-use crate::models::ResponseItem;
 use crate::openai_tools::create_tools_json_for_responses_api;
 use crate::protocol::TokenUsage;
 use crate::user_agent::get_codex_user_agent;
 use crate::util::backoff;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::models::ResponseItem;
 use std::sync::Arc;
 
 #[derive(Debug, Deserialize)]
@@ -60,7 +61,7 @@ struct Error {
 #[derive(Debug, Clone)]
 pub struct ModelClient {
     config: Arc<Config>,
-    auth: Option<CodexAuth>,
+    auth_manager: Option<Arc<AuthManager>>,
     client: reqwest::Client,
     provider: ModelProviderInfo,
     session_id: Uuid,
@@ -71,7 +72,7 @@ pub struct ModelClient {
 impl ModelClient {
     pub fn new(
         config: Arc<Config>,
-        auth: Option<CodexAuth>,
+        auth_manager: Option<Arc<AuthManager>>,
         provider: ModelProviderInfo,
         effort: ReasoningEffortConfig,
         summary: ReasoningSummaryConfig,
@@ -79,7 +80,7 @@ impl ModelClient {
     ) -> Self {
         Self {
             config,
-            auth,
+            auth_manager,
             client: reqwest::Client::new(),
             provider,
             session_id,
@@ -140,14 +141,29 @@ impl ModelClient {
             return stream_from_fixture(path, self.provider.clone()).await;
         }
 
-        let auth = self.auth.clone();
+        let auth_manager = self.auth_manager.clone();
+        let auth = auth_manager.as_ref().and_then(|m| m.auth());
 
         let auth_mode = auth.as_ref().map(|a| a.mode);
 
         let store = prompt.store && auth_mode != Some(AuthMode::ChatGPT);
 
         let full_instructions = prompt.get_full_instructions(&self.config.model_family);
-        let tools_json = create_tools_json_for_responses_api(&prompt.tools)?;
+        let mut tools_json = create_tools_json_for_responses_api(&prompt.tools)?;
+        // ChatGPT backend expects the preview name for web search.
+        if auth_mode == Some(AuthMode::ChatGPT) {
+            for tool in &mut tools_json {
+                if let Some(map) = tool.as_object_mut()
+                    && map.get("type").and_then(|v| v.as_str()) == Some("web_search")
+                {
+                    map.insert(
+                        "type".to_string(),
+                        serde_json::Value::String("web_search_preview".to_string()),
+                    );
+                }
+            }
+        }
+
         let reasoning = create_reasoning_param_for_request(
             &self.config.model_family,
             self.effort,
@@ -164,6 +180,19 @@ impl ModelClient {
 
         let input_with_instructions = prompt.get_formatted_input();
 
+        // Only include `text.verbosity` for GPT-5 family models
+        let text = if self.config.model_family.family == "gpt-5" {
+            create_text_param_for_request(self.config.model_verbosity)
+        } else {
+            if self.config.model_verbosity.is_some() {
+                warn!(
+                    "model_verbosity is set but ignored for non-gpt-5 model family: {}",
+                    self.config.model_family.family
+                );
+            }
+            None
+        };
+
         let payload = ResponsesApiRequest {
             model: &self.config.model,
             instructions: &full_instructions,
@@ -176,6 +205,7 @@ impl ModelClient {
             stream: true,
             include,
             prompt_cache_key: Some(self.session_id.to_string()),
+            text,
         };
 
         let mut attempt = 0;
@@ -249,9 +279,10 @@ impl ModelClient {
                         .and_then(|s| s.parse::<u64>().ok());
 
                     if status == StatusCode::UNAUTHORIZED
-                        && let Some(a) = auth.as_ref()
+                        && let Some(manager) = auth_manager.as_ref()
+                        && manager.auth().is_some()
                     {
-                        let _ = a.refresh_token().await;
+                        let _ = manager.refresh_token().await;
                     }
 
                     // The OpenAI Responses endpoint returns structured JSON bodies even for 4xx/5xx
@@ -338,8 +369,8 @@ impl ModelClient {
         self.summary
     }
 
-    pub fn get_auth(&self) -> Option<CodexAuth> {
-        self.auth.clone()
+    pub fn get_auth_manager(&self) -> Option<Arc<AuthManager>> {
+        self.auth_manager.clone()
     }
 }
 
@@ -449,7 +480,8 @@ async fn process_sse<S>(
             }
         };
 
-        trace!("SSE event: {}", sse.data);
+        let raw = sse.data.clone();
+        trace!("SSE event: {}", raw);
 
         let event: SseEvent = match serde_json::from_str(&sse.data) {
             Ok(event) => event,
@@ -558,11 +590,29 @@ async fn process_sse<S>(
             }
             "response.content_part.done"
             | "response.function_call_arguments.delta"
+            | "response.custom_tool_call_input.delta"
+            | "response.custom_tool_call_input.done" // also emitted as response.output_item.done
             | "response.in_progress"
             | "response.output_item.added"
             | "response.output_text.done" => {
-                // Currently, we ignore this event, but we handle it
-                // separately to skip the logging message in the `other` case.
+                if event.kind == "response.output_item.added"
+                    && let Some(item) = event.item.as_ref()
+                {
+                    // Detect web_search_call begin and forward a synthetic event upstream.
+                    if let Some(ty) = item.get("type").and_then(|v| v.as_str())
+                        && ty == "web_search_call"
+                    {
+                        let call_id = item
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let ev = ResponseEvent::WebSearchCallBegin { call_id, query: None };
+                        if tx_event.send(Ok(ev)).await.is_err() {
+                            return;
+                        }
+                    }
+                }
             }
             "response.reasoning_summary_part.added" => {
                 // Boundary between reasoning summary sections (e.g., titles).
@@ -572,7 +622,7 @@ async fn process_sse<S>(
                 }
             }
             "response.reasoning_summary_text.done" => {}
-            other => debug!(other, "sse event"),
+            _ => {}
         }
     }
 }

@@ -1,21 +1,23 @@
+use crate::app_backtrack::BacktrackState;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::chatwidget::ChatWidget;
 use crate::file_search::FileSearchManager;
-use crate::get_git_diff::get_git_diff;
-use crate::slash_command::SlashCommand;
+use crate::transcript_app::TranscriptApp;
 use crate::tui;
 use crate::tui::TuiEvent;
+use codex_ansi_escape::ansi_escape_line;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
-use codex_core::protocol::Event;
-use codex_core::protocol::Op;
 use codex_core::protocol::TokenUsage;
+use codex_login::AuthManager;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
 use crossterm::terminal::supports_keyboard_enhancement;
+use ratatui::style::Stylize;
+use ratatui::text::Line;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -24,26 +26,37 @@ use std::thread;
 use std::time::Duration;
 use tokio::select;
 use tokio::sync::mpsc::unbounded_channel;
+// use uuid::Uuid;
 
 pub(crate) struct App {
-    server: Arc<ConversationManager>,
-    app_event_tx: AppEventSender,
-    chat_widget: ChatWidget,
+    pub(crate) server: Arc<ConversationManager>,
+    pub(crate) app_event_tx: AppEventSender,
+    pub(crate) chat_widget: ChatWidget,
 
     /// Config is stored here so we can recreate ChatWidgets as needed.
-    config: Config,
+    pub(crate) config: Config,
 
-    file_search: FileSearchManager,
+    pub(crate) file_search: FileSearchManager,
 
-    enhanced_keys_supported: bool,
+    pub(crate) transcript_lines: Vec<Line<'static>>,
+
+    // Transcript overlay state
+    pub(crate) transcript_overlay: Option<TranscriptApp>,
+    pub(crate) deferred_history_lines: Vec<Line<'static>>,
+
+    pub(crate) enhanced_keys_supported: bool,
 
     /// Controls the animation thread that sends CommitTick events.
-    commit_anim_running: Arc<AtomicBool>,
+    pub(crate) commit_anim_running: Arc<AtomicBool>,
+
+    // Esc-backtracking state grouped
+    pub(crate) backtrack: crate::app_backtrack::BacktrackState,
 }
 
 impl App {
     pub async fn run(
         tui: &mut tui::Tui,
+        auth_manager: Arc<AuthManager>,
         config: Config,
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
@@ -52,7 +65,7 @@ impl App {
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
 
-        let conversation_manager = Arc::new(ConversationManager::default());
+        let conversation_manager = Arc::new(ConversationManager::new(auth_manager.clone()));
 
         let enhanced_keys_supported = supports_keyboard_enhancement().unwrap_or(false);
 
@@ -75,7 +88,11 @@ impl App {
             config,
             file_search,
             enhanced_keys_supported,
+            transcript_lines: Vec::new(),
+            transcript_overlay: None,
+            deferred_history_lines: Vec::new(),
             commit_anim_running: Arc::new(AtomicBool::new(false)),
+            backtrack: BacktrackState::default(),
         };
 
         let tui_events = tui.event_stream();
@@ -85,7 +102,7 @@ impl App {
 
         while select! {
             Some(event) = app_event_rx.recv() => {
-                app.handle_event(tui, event)?
+                app.handle_event(tui, event).await?
             }
             Some(event) = tui_events.next() => {
                 app.handle_tui_event(tui, event).await?
@@ -100,43 +117,86 @@ impl App {
         tui: &mut tui::Tui,
         event: TuiEvent,
     ) -> Result<bool> {
-        match event {
-            TuiEvent::Key(key_event) => {
-                self.handle_key_event(key_event).await;
-            }
-            TuiEvent::Paste(pasted) => {
-                // Many terminals convert newlines to \r when pasting (e.g., iTerm2),
-                // but tui-textarea expects \n. Normalize CR to LF.
-                // [tui-textarea]: https://github.com/rhysd/tui-textarea/blob/4d18622eeac13b309e0ff6a55a46ac6706da68cf/src/textarea.rs#L782-L783
-                // [iTerm2]: https://github.com/gnachman/iTerm2/blob/5d0c0d9f68523cbd0494dad5422998964a2ecd8d/sources/iTermPasteHelper.m#L206-L216
-                let pasted = pasted.replace("\r", "\n");
-                self.chat_widget.handle_paste(pasted);
-            }
-            TuiEvent::Draw => {
-                tui.draw(
-                    self.chat_widget.desired_height(tui.terminal.size()?.width),
-                    |frame| {
-                        frame.render_widget_ref(&self.chat_widget, frame.area());
-                        if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
-                            frame.set_cursor_position((x, y));
-                        }
-                    },
-                )?;
-            }
-            #[cfg(unix)]
-            TuiEvent::ResumeFromSuspend => {
-                let cursor_pos = tui.terminal.get_cursor_position()?;
-                tui.terminal
-                    .set_viewport_area(ratatui::layout::Rect::new(0, cursor_pos.y, 0, 0));
+        if self.transcript_overlay.is_some() {
+            let _ = self.handle_backtrack_overlay_event(tui, event).await?;
+        } else {
+            match event {
+                TuiEvent::Key(key_event) => {
+                    self.handle_key_event(tui, key_event).await;
+                }
+                TuiEvent::Paste(pasted) => {
+                    // Many terminals convert newlines to \r when pasting (e.g., iTerm2),
+                    // but tui-textarea expects \n. Normalize CR to LF.
+                    // [tui-textarea]: https://github.com/rhysd/tui-textarea/blob/4d18622eeac13b309e0ff6a55a46ac6706da68cf/src/textarea.rs#L782-L783
+                    // [iTerm2]: https://github.com/gnachman/iTerm2/blob/5d0c0d9f68523cbd0494dad5422998964a2ecd8d/sources/iTermPasteHelper.m#L206-L216
+                    let pasted = pasted.replace("\r", "\n");
+                    self.chat_widget.handle_paste(pasted);
+                }
+                TuiEvent::Draw => {
+                    tui.draw(
+                        self.chat_widget.desired_height(tui.terminal.size()?.width),
+                        |frame| {
+                            frame.render_widget_ref(&self.chat_widget, frame.area());
+                            if let Some((x, y)) = self.chat_widget.cursor_pos(frame.area()) {
+                                frame.set_cursor_position((x, y));
+                            }
+                        },
+                    )?;
+                }
+                TuiEvent::AttachImage {
+                    path,
+                    width,
+                    height,
+                    format_label,
+                } => {
+                    self.chat_widget
+                        .attach_image(path, width, height, format_label);
+                }
             }
         }
         Ok(true)
     }
 
-    fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
+    async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
         match event {
-            AppEvent::InsertHistory(lines) => {
-                tui.insert_history_lines(lines);
+            AppEvent::NewSession => {
+                self.chat_widget = ChatWidget::new(
+                    self.config.clone(),
+                    self.server.clone(),
+                    tui.frame_requester(),
+                    self.app_event_tx.clone(),
+                    None,
+                    Vec::new(),
+                    self.enhanced_keys_supported,
+                );
+                tui.frame_requester().schedule_frame();
+            }
+            AppEvent::InsertHistoryLines(lines) => {
+                if let Some(overlay) = &mut self.transcript_overlay {
+                    overlay.insert_lines(lines.clone());
+                    tui.frame_requester().schedule_frame();
+                }
+                self.transcript_lines.extend(lines.clone());
+                if self.transcript_overlay.is_some() {
+                    self.deferred_history_lines.extend(lines);
+                } else {
+                    tui.insert_history_lines(lines);
+                }
+            }
+            AppEvent::InsertHistoryCell(cell) => {
+                if let Some(overlay) = &mut self.transcript_overlay {
+                    overlay.insert_lines(cell.transcript_lines());
+                    tui.frame_requester().schedule_frame();
+                }
+                self.transcript_lines.extend(cell.transcript_lines());
+                let display = cell.display_lines();
+                if !display.is_empty() {
+                    if self.transcript_overlay.is_some() {
+                        self.deferred_history_lines.extend(display);
+                    } else {
+                        tui.insert_history_lines(display);
+                    }
+                }
             }
             AppEvent::StartCommitAnimation => {
                 if self
@@ -163,118 +223,29 @@ impl App {
             AppEvent::CodexEvent(event) => {
                 self.chat_widget.handle_codex_event(event);
             }
+            AppEvent::ConversationHistory(ev) => {
+                self.on_conversation_history_for_backtrack(tui, ev).await?;
+            }
             AppEvent::ExitRequest => {
                 return Ok(false);
             }
             AppEvent::CodexOp(op) => self.chat_widget.submit_op(op),
             AppEvent::DiffResult(text) => {
-                self.chat_widget.add_diff_output(text);
+                // Clear the in-progress state in the bottom pane
+                self.chat_widget.on_diff_complete();
+                // Enter alternate screen using TUI helper and build pager lines
+                let _ = tui.enter_alt_screen();
+                let pager_lines: Vec<ratatui::text::Line<'static>> = if text.trim().is_empty() {
+                    vec!["No changes detected.".italic().into()]
+                } else {
+                    text.lines().map(ansi_escape_line).collect()
+                };
+                self.transcript_overlay = Some(TranscriptApp::with_title(
+                    pager_lines,
+                    "D I F F".to_string(),
+                ));
+                tui.frame_requester().schedule_frame();
             }
-            AppEvent::DispatchCommand(command) => match command {
-                SlashCommand::New => {
-                    // User accepted – switch to chat view.
-                    let new_widget = ChatWidget::new(
-                        self.config.clone(),
-                        self.server.clone(),
-                        tui.frame_requester(),
-                        self.app_event_tx.clone(),
-                        None,
-                        Vec::new(),
-                        self.enhanced_keys_supported,
-                    );
-                    self.chat_widget = new_widget;
-                    tui.frame_requester().schedule_frame();
-                }
-                SlashCommand::Init => {
-                    // Guard: do not run if a task is active.
-                    const INIT_PROMPT: &str = include_str!("../prompt_for_init_command.md");
-                    self.chat_widget
-                        .submit_text_message(INIT_PROMPT.to_string());
-                }
-                SlashCommand::Compact => {
-                    self.chat_widget.clear_token_usage();
-                    self.app_event_tx.send(AppEvent::CodexOp(Op::Compact));
-                }
-                SlashCommand::Model => {
-                    self.chat_widget.open_model_popup();
-                }
-                SlashCommand::Approvals => {
-                    self.chat_widget.open_approvals_popup();
-                }
-                SlashCommand::Quit => {
-                    return Ok(false);
-                }
-                SlashCommand::Logout => {
-                    if let Err(e) = codex_login::logout(&self.config.codex_home) {
-                        tracing::error!("failed to logout: {e}");
-                    }
-                    return Ok(false);
-                }
-                SlashCommand::Diff => {
-                    self.chat_widget.add_diff_in_progress();
-                    let tx = self.app_event_tx.clone();
-                    tokio::spawn(async move {
-                        let text = match get_git_diff().await {
-                            Ok((is_git_repo, diff_text)) => {
-                                if is_git_repo {
-                                    diff_text
-                                } else {
-                                    "`/diff` — _not inside a git repository_".to_string()
-                                }
-                            }
-                            Err(e) => format!("Failed to compute diff: {e}"),
-                        };
-                        tx.send(AppEvent::DiffResult(text));
-                    });
-                }
-                SlashCommand::Mention => {
-                    self.chat_widget.insert_str("@");
-                }
-                SlashCommand::Status => {
-                    self.chat_widget.add_status_output();
-                }
-                SlashCommand::Mcp => {
-                    self.chat_widget.add_mcp_output();
-                }
-                #[cfg(debug_assertions)]
-                SlashCommand::TestApproval => {
-                    use codex_core::protocol::EventMsg;
-                    use std::collections::HashMap;
-
-                    use codex_core::protocol::ApplyPatchApprovalRequestEvent;
-                    use codex_core::protocol::FileChange;
-
-                    self.app_event_tx.send(AppEvent::CodexEvent(Event {
-                        id: "1".to_string(),
-                        // msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
-                        //     call_id: "1".to_string(),
-                        //     command: vec!["git".into(), "apply".into()],
-                        //     cwd: self.config.cwd.clone(),
-                        //     reason: Some("test".to_string()),
-                        // }),
-                        msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
-                            call_id: "1".to_string(),
-                            changes: HashMap::from([
-                                (
-                                    PathBuf::from("/tmp/test.txt"),
-                                    FileChange::Add {
-                                        content: "test".to_string(),
-                                    },
-                                ),
-                                (
-                                    PathBuf::from("/tmp/test2.txt"),
-                                    FileChange::Update {
-                                        unified_diff: "+test\n-test2".to_string(),
-                                        move_path: None,
-                                    },
-                                ),
-                            ]),
-                            reason: None,
-                            grant_root: Some(PathBuf::from("/tmp")),
-                        }),
-                    }));
-                }
-            },
             AppEvent::StartFileSearch(query) => {
                 if !query.is_empty() {
                     self.file_search.on_user_query(query);
@@ -303,7 +274,7 @@ impl App {
         self.chat_widget.token_usage().clone()
     }
 
-    async fn handle_key_event(&mut self, key_event: KeyEvent) {
+    async fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
         match key_event {
             KeyEvent {
                 code: KeyCode::Char('c'),
@@ -322,9 +293,46 @@ impl App {
                 self.app_event_tx.send(AppEvent::ExitRequest);
             }
             KeyEvent {
+                code: KeyCode::Char('t'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                // Enter alternate screen and set viewport to full size.
+                let _ = tui.enter_alt_screen();
+                self.transcript_overlay = Some(TranscriptApp::new(self.transcript_lines.clone()));
+                tui.frame_requester().schedule_frame();
+            }
+            // Esc primes/advances backtracking when composer is empty.
+            KeyEvent {
+                code: KeyCode::Esc,
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
                 ..
             } => {
+                self.handle_backtrack_esc_key(tui);
+            }
+            // Enter confirms backtrack when primed + count > 0. Otherwise pass to widget.
+            KeyEvent {
+                code: KeyCode::Enter,
+                kind: KeyEventKind::Press,
+                ..
+            } if self.backtrack.primed
+                && self.backtrack.count > 0
+                && self.chat_widget.composer_is_empty() =>
+            {
+                // Delegate to helper for clarity; preserves behavior.
+                self.confirm_backtrack_from_main();
+            }
+            KeyEvent {
+                kind: KeyEventKind::Press | KeyEventKind::Repeat,
+                ..
+            } => {
+                // Any non-Esc key press should cancel a primed backtrack.
+                // This avoids stale "Esc-primed" state after the user starts typing
+                // (even if they later backspace to empty).
+                if key_event.code != KeyCode::Esc && self.backtrack.primed {
+                    self.reset_backtrack_state();
+                }
                 self.chat_widget.handle_key_event(key_event);
             }
             _ => {

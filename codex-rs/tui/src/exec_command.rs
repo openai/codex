@@ -9,13 +9,7 @@ pub(crate) fn escape_command(command: &[String]) -> String {
 
 pub(crate) fn strip_bash_lc_and_escape(command: &[String]) -> String {
     match command {
-        // exactly three items
-        [first, second, third]
-            // first two must be "bash", "-lc"
-            if first == "bash" && second == "-lc" =>
-        {
-            third.clone()        // borrow `third`
-        }
+        [first, second, third] if first == "bash" && second == "-lc" => third.clone(),
         _ => escape_command(command),
     }
 }

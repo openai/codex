@@ -22,7 +22,7 @@ use uuid::Uuid;
 use crate::config::Config;
 use crate::git_info::GitInfo;
 use crate::git_info::collect_git_info;
-use crate::models::ResponseItem;
+use codex_protocol::models::ResponseItem;
 
 const SESSIONS_SUBDIR: &str = "sessions";
 
@@ -132,6 +132,8 @@ impl RolloutRecorder {
                 | ResponseItem::LocalShellCall { .. }
                 | ResponseItem::FunctionCall { .. }
                 | ResponseItem::FunctionCallOutput { .. }
+                | ResponseItem::CustomToolCall { .. }
+                | ResponseItem::CustomToolCallOutput { .. }
                 | ResponseItem::Reasoning { .. } => filtered.push(item.clone()),
                 ResponseItem::Other => {
                     // These should never be serialized.
@@ -194,6 +196,8 @@ impl RolloutRecorder {
                     | ResponseItem::LocalShellCall { .. }
                     | ResponseItem::FunctionCall { .. }
                     | ResponseItem::FunctionCallOutput { .. }
+                    | ResponseItem::CustomToolCall { .. }
+                    | ResponseItem::CustomToolCallOutput { .. }
                     | ResponseItem::Reasoning { .. } => items.push(item),
                     ResponseItem::Other => {}
                 },
@@ -317,6 +321,8 @@ async fn rollout_writer(
                         | ResponseItem::LocalShellCall { .. }
                         | ResponseItem::FunctionCall { .. }
                         | ResponseItem::FunctionCallOutput { .. }
+                        | ResponseItem::CustomToolCall { .. }
+                        | ResponseItem::CustomToolCallOutput { .. }
                         | ResponseItem::Reasoning { .. } => {
                             writer.write_line(&item).await?;
                         }
