@@ -157,7 +157,7 @@ impl ChatComposer {
             ActivePopup::None => 1,
         };
         let [textarea_rect, _] =
-            Layout::vertical([Constraint::Min(0), Constraint::Max(popup_height)]).areas(area);
+            Layout::vertical([Constraint::Min(1), Constraint::Max(popup_height)]).areas(area);
         let mut textarea_rect = textarea_rect;
         textarea_rect.width = textarea_rect.width.saturating_sub(1);
         textarea_rect.x += 1;
@@ -253,6 +253,20 @@ impl ChatComposer {
                 false
             }
         }
+    }
+
+    /// Replace the entire composer content with `text` and reset cursor.
+    pub(crate) fn set_text_content(&mut self, text: String) {
+        self.textarea.set_text(&text);
+        self.textarea.set_cursor(0);
+        self.sync_command_popup();
+        self.sync_file_search_popup();
+    }
+
+    /// Get the current composer text.
+    #[cfg(test)]
+    pub(crate) fn current_text(&self) -> String {
+        self.textarea.text().to_string()
     }
 
     pub fn attach_image(&mut self, path: PathBuf, width: u32, height: u32, format_label: &str) {
@@ -1115,7 +1129,7 @@ impl ChatComposer {
     }
 }
 
-impl WidgetRef for &ChatComposer {
+impl WidgetRef for ChatComposer {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let popup_height = match &self.active_popup {
             ActivePopup::Command(popup) => popup.calculate_required_height(),
@@ -1123,7 +1137,7 @@ impl WidgetRef for &ChatComposer {
             ActivePopup::None => 1,
         };
         let [textarea_rect, popup_rect] =
-            Layout::vertical([Constraint::Min(0), Constraint::Max(popup_height)]).areas(area);
+            Layout::vertical([Constraint::Min(1), Constraint::Max(popup_height)]).areas(area);
         match &self.active_popup {
             ActivePopup::Command(popup) => {
                 popup.render_ref(popup_rect, buf);
@@ -1515,7 +1529,7 @@ mod tests {
             }
 
             terminal
-                .draw(|f| f.render_widget_ref(&composer, f.area()))
+                .draw(|f| f.render_widget_ref(composer, f.area()))
                 .unwrap_or_else(|e| panic!("Failed to draw {name} composer: {e}"));
 
             assert_snapshot!(name, terminal.backend());
