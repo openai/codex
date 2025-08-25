@@ -166,6 +166,7 @@ pub fn pasted_image_format(path: &Path) -> EncodedImageFormat {
 mod pasted_paths_tests {
     use super::*;
 
+    #[cfg(not(windows))]
     #[test]
     fn normalize_file_url() {
         let input = "file:///tmp/example.png";
@@ -174,7 +175,7 @@ mod pasted_paths_tests {
     }
 
     #[test]
-    fn normalize_file_url_windoes() {
+    fn normalize_file_url_windows() {
         let input = r"C:\Temp\example.png";
         let result = normalize_pasted_path(input).expect("should parse file URL");
         assert_eq!(result, PathBuf::from(r"C:\Temp\example.png"));
