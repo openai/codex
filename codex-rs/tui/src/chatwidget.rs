@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -30,8 +31,10 @@ use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnDiffEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_protocol::parse_command::ParsedCommand;
+use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use crossterm::event::KeyModifiers;
 use rand::Rng;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
@@ -100,8 +103,6 @@ pub(crate) struct ChatWidget {
     task_complete_pending: bool,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
-    // Whether a redraw is needed after handling the current event
-    needs_redraw: bool,
     // Accumulates the current reasoning block text to extract a header
     reasoning_buffer: String,
     // Accumulates full reasoning content for transcript-only recording
@@ -111,6 +112,8 @@ pub(crate) struct ChatWidget {
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
     last_history_was_exec: bool,
+    // User messages queued while a turn is in progress
+    queued_user_messages: VecDeque<UserMessage>,
 }
 
 struct UserMessage {
@@ -136,10 +139,6 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 }
 
 impl ChatWidget {
-    #[inline]
-    fn mark_needs_redraw(&mut self) {
-        self.needs_redraw = true;
-    }
     fn flush_answer_stream_with_separator(&mut self) {
         let sink = AppEventHistorySink(self.app_event_tx.clone());
         let _ = self.stream.finalize(true, &sink);
@@ -157,14 +156,14 @@ impl ChatWidget {
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
         }
-        self.mark_needs_redraw();
+        self.request_redraw();
     }
 
     fn on_agent_message(&mut self, message: String) {
         let sink = AppEventHistorySink(self.app_event_tx.clone());
         let finished = self.stream.apply_final_answer(&message, &sink);
         self.handle_if_stream_finished(finished);
-        self.mark_needs_redraw();
+        self.request_redraw();
     }
 
     fn on_agent_message_delta(&mut self, delta: String) {
@@ -183,7 +182,7 @@ impl ChatWidget {
         } else {
             // Fallback while we don't yet have a bold header: leave existing header as-is.
         }
-        self.mark_needs_redraw();
+        self.request_redraw();
     }
 
     fn on_agent_reasoning_final(&mut self) {
@@ -197,7 +196,7 @@ impl ChatWidget {
         }
         self.reasoning_buffer.clear();
         self.full_reasoning_buffer.clear();
-        self.mark_needs_redraw();
+        self.request_redraw();
     }
 
     fn on_reasoning_section_break(&mut self) {
@@ -215,7 +214,7 @@ impl ChatWidget {
         self.stream.reset_headers_for_new_turn();
         self.full_reasoning_buffer.clear();
         self.reasoning_buffer.clear();
-        self.mark_needs_redraw();
+        self.request_redraw();
     }
 
     fn on_task_complete(&mut self) {
@@ -228,7 +227,10 @@ impl ChatWidget {
         // Mark task stopped and request redraw now that all content is in history.
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
-        self.mark_needs_redraw();
+        self.request_redraw();
+
+        // If there is a queued user message, send exactly one now to begin the next turn.
+        self.maybe_send_next_queued_input();
     }
 
     fn on_token_count(&mut self, token_usage: TokenUsage) {
@@ -246,7 +248,10 @@ impl ChatWidget {
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
         self.stream.clear_all();
-        self.mark_needs_redraw();
+        self.request_redraw();
+
+        // After an error ends the turn, try sending the next queued input.
+        self.maybe_send_next_queued_input();
     }
 
     fn on_plan_update(&mut self, update: codex_core::plan_tool::UpdatePlanArgs) {
@@ -349,7 +354,7 @@ impl ChatWidget {
     fn on_stream_error(&mut self, message: String) {
         // Show stream errors in the transcript so users see retry/backoff info.
         self.add_to_history(history_cell::new_stream_error_event(message));
-        self.mark_needs_redraw();
+        self.request_redraw();
     }
     /// Periodic tick to commit at most one queued line to history with a small delay,
     /// animating the output.
@@ -403,7 +408,7 @@ impl ChatWidget {
         let sink = AppEventHistorySink(self.app_event_tx.clone());
         self.stream.begin(&sink);
         self.stream.push_and_maybe_commit(&delta, &sink);
-        self.mark_needs_redraw();
+        self.request_redraw();
     }
 
     pub(crate) fn handle_exec_end_now(&mut self, ev: ExecCommandEndEvent) {
@@ -461,7 +466,7 @@ impl ChatWidget {
             reason: ev.reason,
         };
         self.bottom_pane.push_approval_request(request);
-        self.mark_needs_redraw();
+        self.request_redraw();
     }
 
     pub(crate) fn handle_apply_patch_approval_now(
@@ -481,7 +486,7 @@ impl ChatWidget {
             grant_root: ev.grant_root,
         };
         self.bottom_pane.push_approval_request(request);
-        self.mark_needs_redraw();
+        self.request_redraw();
     }
 
     pub(crate) fn handle_exec_begin_now(&mut self, ev: ExecCommandBeginEvent) {
@@ -509,7 +514,7 @@ impl ChatWidget {
         }
 
         // Request a redraw so the working header and command list are visible immediately.
-        self.mark_needs_redraw();
+        self.request_redraw();
     }
 
     pub(crate) fn handle_mcp_begin_now(&mut self, ev: McpToolCallBeginEvent) {
@@ -589,11 +594,11 @@ impl ChatWidget {
             pending_exec_completions: Vec::new(),
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
-            needs_redraw: false,
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             session_id: None,
             last_history_was_exec: false,
+            queued_user_messages: VecDeque::new(),
             show_welcome_banner: true,
         }
     }
@@ -634,11 +639,11 @@ impl ChatWidget {
             pending_exec_completions: Vec::new(),
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
-            needs_redraw: false,
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             session_id: None,
             last_history_was_exec: false,
+            queued_user_messages: VecDeque::new(),
             show_welcome_banner: false,
         }
     }
@@ -656,13 +661,39 @@ impl ChatWidget {
             self.bottom_pane.clear_ctrl_c_quit_hint();
         }
 
+        // Alt+Up: Edit the most recent queued user message (if any).
+        if matches!(
+            key_event,
+            KeyEvent {
+                code: KeyCode::Up,
+                modifiers: KeyModifiers::ALT,
+                kind: KeyEventKind::Press,
+                ..
+            }
+        ) && !self.queued_user_messages.is_empty()
+        {
+            // Prefer the most recently queued item.
+            if let Some(user_message) = self.queued_user_messages.pop_back() {
+                self.bottom_pane.set_composer_text(user_message.text);
+                self.refresh_queued_user_messages();
+                self.request_redraw();
+            }
+            return;
+        }
+
         match self.bottom_pane.handle_key_event(key_event) {
             InputResult::Submitted(text) => {
-                let images = self.bottom_pane.take_recent_submission_images();
-                self.submit_user_message(UserMessage {
+                // If a task is running, queue the user input to be sent after the turn completes.
+                let user_message = UserMessage {
                     text,
-                    image_paths: images,
-                });
+                    image_paths: self.bottom_pane.take_recent_submission_images(),
+                };
+                if self.bottom_pane.is_task_running() {
+                    self.queued_user_messages.push_back(user_message);
+                    self.refresh_queued_user_messages();
+                } else {
+                    self.submit_user_message(user_message);
+                }
             }
             InputResult::Command(cmd) => {
                 self.dispatch_command(cmd);
@@ -848,8 +879,6 @@ impl ChatWidget {
     }
 
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
-        // Reset redraw flag for this dispatch
-        self.needs_redraw = false;
         let Event { id, msg } = event;
 
         match msg {
@@ -913,27 +942,40 @@ impl ChatWidget {
                     .send(crate::app_event::AppEvent::ConversationHistory(ev));
             }
         }
-        // Coalesce redraws: issue at most one after handling the event
-        if self.needs_redraw {
-            self.request_redraw();
-            self.needs_redraw = false;
-        }
     }
 
     fn request_redraw(&mut self) {
         self.frame_requester.schedule_frame();
     }
 
+    // If idle and there are queued inputs, submit exactly one to start the next turn.
+    fn maybe_send_next_queued_input(&mut self) {
+        if self.bottom_pane.is_task_running() {
+            return;
+        }
+        if let Some(user_message) = self.queued_user_messages.pop_front() {
+            self.submit_user_message(user_message);
+        }
+        // Update the list to reflect the remaining queued messages (if any).
+        self.refresh_queued_user_messages();
+    }
+
+    /// Rebuild and update the queued user messages from the current queue.
+    fn refresh_queued_user_messages(&mut self) {
+        let messages: Vec<String> = self
+            .queued_user_messages
+            .iter()
+            .map(|m| m.text.clone())
+            .collect();
+        self.bottom_pane.set_queued_user_messages(messages);
+    }
+
     pub(crate) fn add_diff_in_progress(&mut self) {
-        self.bottom_pane.set_task_running(true);
-        self.bottom_pane
-            .update_status_text("computing diff".to_string());
         self.request_redraw();
     }
 
     pub(crate) fn on_diff_complete(&mut self) {
-        self.bottom_pane.set_task_running(false);
-        self.mark_needs_redraw();
+        self.request_redraw();
     }
 
     pub(crate) fn add_status_output(&mut self) {
