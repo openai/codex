@@ -19,7 +19,6 @@ pub(crate) struct PasteBurst {
 }
 
 pub(crate) enum CharDecision {
-    Passthrough,
     BeginBuffer { retro_chars: u16 },
     BufferAppend,
     // Do not insert/render this char yet; we are holding briefly.
