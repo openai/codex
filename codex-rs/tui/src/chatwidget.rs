@@ -854,6 +854,10 @@ impl ChatWidget {
         }
     }
 
+    pub(crate) fn handle_paste(&mut self, text: String) {
+        self.bottom_pane.handle_paste(text);
+    }
+
     // Returns true if caller should skip rendering this frame (a future tick is scheduled).
     pub(crate) fn handle_paste_burst_tick(
         &mut self,
@@ -879,10 +883,6 @@ impl ChatWidget {
 
     pub(crate) fn is_in_paste_burst(&self) -> bool {
         self.bottom_pane.is_in_paste_burst()
-    }
-
-    pub(crate) fn handle_paste(&mut self, text: String) {
-        self.bottom_pane.handle_paste(text);
     }
 
     fn flush_active_exec_cell(&mut self) {
