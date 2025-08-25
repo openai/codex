@@ -87,15 +87,6 @@ impl StatusIndicatorWidget {
         // Ensure a redraw so changes are visible.
         self.frame_requester.schedule_frame();
     }
-
-    /// Test-only helper to fast-forward the internal clock so animations
-    /// advance without sleeping.
-    #[cfg(test)]
-    pub(crate) fn test_fast_forward_frames(&mut self, frames: usize) {
-        let advance_ms = (frames as u64).saturating_mul(100);
-        // Move the start time into the past so `current_frame()` advances.
-        self.start_time = std::time::Instant::now() - std::time::Duration::from_millis(advance_ms);
-    }
 }
 
 impl WidgetRef for StatusIndicatorWidget {
@@ -152,77 +143,51 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use crate::app_event_sender::AppEventSender;
+    use insta::assert_snapshot;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
     use tokio::sync::mpsc::unbounded_channel;
 
     #[test]
-    fn renders_without_left_bar_and_with_margin() {
+    fn renders_with_working_header() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy());
+        let w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy());
 
-        let area = ratatui::layout::Rect::new(0, 0, 30, 2);
-        // Advance animation without sleeping.
-        w.test_fast_forward_frames(2);
-        let mut buf = ratatui::buffer::Buffer::empty(area);
-        w.render_ref(area, &mut buf);
-
-        // Compare the full first-line string (trimmed) to the expected value.
-        let mut row0 = String::new();
-        for x in 0..area.width {
-            row0.push(buf[(x, 0)].symbol().chars().next().unwrap_or(' '));
-        }
-        let row0 = row0.trim_end();
-        // Width is 30; the rendered line truncates partway through the
-        // " to interrupt)" tail. Expect this clipped prefix:
-        assert_eq!(row0, " Working (0s • Esc to interrup");
-        // Second line is a blank spacer
-        let mut r1 = String::new();
-        for x in 0..area.width {
-            r1.push(buf[(x, 1)].symbol().chars().next().unwrap_or(' '));
-        }
-        assert!(
-            r1.trim().is_empty(),
-            "expected blank spacer line below status: {r1:?}"
-        );
+        // Render into a fixed-size test terminal and snapshot the backend.
+        let mut terminal = Terminal::new(TestBackend::new(80, 2)).expect("terminal");
+        terminal
+            .draw(|f| w.render_ref(f.area(), f.buffer_mut()))
+            .expect("draw");
+        assert_snapshot!(terminal.backend());
     }
 
     #[test]
-    fn working_header_is_present_on_last_line() {
+    fn renders_truncated() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
-        let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy());
-        // Advance animation without sleeping.
-        w.test_fast_forward_frames(2);
+        let w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy());
 
-        let area = ratatui::layout::Rect::new(0, 0, 30, 2);
-        let mut buf = ratatui::buffer::Buffer::empty(area);
-        w.render_ref(area, &mut buf);
-
-        // First line should contain the animated "Working" header.
-        let mut row = String::new();
-        for x in 0..area.width {
-            row.push(buf[(x, 0)].symbol().chars().next().unwrap_or(' '));
-        }
-        assert!(row.contains("Working"), "expected Working header: {row:?}");
+        // Render into a fixed-size test terminal and snapshot the backend.
+        let mut terminal = Terminal::new(TestBackend::new(20, 2)).expect("terminal");
+        terminal
+            .draw(|f| w.render_ref(f.area(), f.buffer_mut()))
+            .expect("draw");
+        assert_snapshot!(terminal.backend());
     }
 
     #[test]
-    fn header_starts_at_expected_position() {
+    fn renders_with_queued_messages() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy());
-        w.test_fast_forward_frames(2);
+        w.set_queued_messages(vec!["first".to_string(), "second".to_string()]);
 
-        let area = ratatui::layout::Rect::new(0, 0, 30, 2);
-        let mut buf = ratatui::buffer::Buffer::empty(area);
-        w.render_ref(area, &mut buf);
-
-        // Check the entire rendered first line matches the expected prefix.
-        let mut row0 = String::new();
-        for x in 0..area.width {
-            row0.push(buf[(x, 0)].symbol().chars().next().unwrap_or(' '));
-        }
-        let row0 = row0.trim_end();
-        assert_eq!(row0, " Working (0s • Esc to interrup");
+        // Render into a fixed-size test terminal and snapshot the backend.
+        let mut terminal = Terminal::new(TestBackend::new(80, 8)).expect("terminal");
+        terminal
+            .draw(|f| w.render_ref(f.area(), f.buffer_mut()))
+            .expect("draw");
+        assert_snapshot!(terminal.backend());
     }
 }
