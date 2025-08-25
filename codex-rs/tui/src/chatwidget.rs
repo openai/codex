@@ -1125,6 +1125,13 @@ impl ChatWidget {
         self.bottom_pane.composer_is_empty()
     }
 
+    /// True when the UI is in the regular composer state with no running task,
+    /// no modal overlay (e.g. approvals or status indicator), and no composer popups.
+    /// In this state Esc-Esc backtracking is enabled.
+    pub(crate) fn is_normal_backtrack_mode(&self) -> bool {
+        self.bottom_pane.is_normal_backtrack_mode()
+    }
+
     pub(crate) fn insert_str(&mut self, text: &str) {
         self.bottom_pane.insert_str(text);
     }
