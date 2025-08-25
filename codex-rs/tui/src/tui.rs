@@ -255,10 +255,13 @@ impl Tui {
                     Some(Ok(event)) = crossterm_events.next() => {
                         match event {
                             // Detect Ctrl+V to attach an image from the clipboard.
+                            // Handle both Press and Release to work across all platforms:
+                            // - Windows typically sends Release events
+                            // - Linux/macOS typically send Press events
                             Event::Key(key_event @ KeyEvent {
                                 code: KeyCode::Char('v'),
                                 modifiers: KeyModifiers::CONTROL,
-                                kind: KeyEventKind::Press,
+                                kind: KeyEventKind::Press | KeyEventKind::Release,
                                 ..
                             }) => {
                                 match paste_image_to_temp_png() {
