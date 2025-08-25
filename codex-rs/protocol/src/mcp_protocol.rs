@@ -101,6 +101,11 @@ pub enum ClientRequest {
         request_id: RequestId,
         params: GetAuthStatusParams,
     },
+    FuzzyFileSearch {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: FuzzyFileSearchParams,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, TS)]
@@ -353,6 +358,17 @@ pub struct ExecCommandApprovalResponse {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 pub struct ApplyPatchApprovalResponse {
     pub decision: ReviewDecision,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+pub struct FuzzyFileSearchParams {
+    pub query: String,
+    pub roots: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+pub struct FuzzyFileSearchResponse {
+    pub files: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
