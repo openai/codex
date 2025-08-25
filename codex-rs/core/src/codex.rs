@@ -2810,6 +2810,8 @@ async fn drain_to_completed(
                 response_id: _,
                 token_usage,
             }) => {
+                // some providers don't return token usage, so we default
+                // TODO: consider approximate token usage
                 let token_usage = token_usage.unwrap_or_default();
                 sess.tx_event
                     .send(Event {
