@@ -18,6 +18,8 @@ use codex_tui::Cli as TuiCli;
 use std::path::PathBuf;
 
 use crate::proto::ProtoCli;
+mod review;
+use review::ReviewCommand;
 
 /// Codex CLI
 ///
@@ -76,6 +78,9 @@ enum Subcommand {
     /// Internal: generate TypeScript protocol bindings.
     #[clap(hide = true)]
     GenerateTs(GenerateTsCommand),
+
+    /// Review the diff for merging one branch into another.
+    Review(ReviewCommand),
 }
 
 #[derive(Debug, Parser)]
@@ -211,6 +216,10 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         }
         Some(Subcommand::GenerateTs(gen_cli)) => {
             codex_protocol_ts::generate_ts(&gen_cli.out_dir, gen_cli.prettier.as_deref())?;
+        }
+        Some(Subcommand::Review(mut review_cli)) => {
+            prepend_config_flags(&mut review_cli.config_overrides, cli.config_overrides);
+            review::run_review_command(review_cli, codex_linux_sandbox_exe).await?;
         }
     }
 
