@@ -445,6 +445,12 @@ pub(crate) fn new_active_mcp_tool_call(invocation: McpInvocation) -> PlainHistor
     PlainHistoryCell { lines }
 }
 
+pub(crate) fn new_web_search_call(query: String) -> PlainHistoryCell {
+    let lines: Vec<Line<'static>> =
+        vec![Line::from(""), Line::from(vec!["🌐 ".into(), query.into()])];
+    PlainHistoryCell { lines }
+}
+
 /// If the first content is an image, return a new cell with the image.
 /// TODO(rgwood-dd): Handle images properly even if they're not the first result.
 fn try_new_completed_mcp_tool_call_with_image_output(

@@ -55,6 +55,7 @@ pub(crate) struct BottomPane {
     has_input_focus: bool,
     is_task_running: bool,
     ctrl_c_quit_hint: bool,
+    esc_backtrack_hint: bool,
 
     /// Inline status indicator shown above the composer while a task is running.
     status: Option<StatusIndicatorWidget>,
@@ -89,6 +90,7 @@ impl BottomPane {
             ctrl_c_quit_hint: false,
             status: None,
             queued_user_messages: Vec::new(),
+            esc_backtrack_hint: false,
         }
     }
 
@@ -250,6 +252,22 @@ impl BottomPane {
     pub(crate) fn ctrl_c_quit_hint_visible(&self) -> bool {
         self.ctrl_c_quit_hint
     }
+
+    pub(crate) fn show_esc_backtrack_hint(&mut self) {
+        self.esc_backtrack_hint = true;
+        self.composer.set_esc_backtrack_hint(true);
+        self.request_redraw();
+    }
+
+    pub(crate) fn clear_esc_backtrack_hint(&mut self) {
+        if self.esc_backtrack_hint {
+            self.esc_backtrack_hint = false;
+            self.composer.set_esc_backtrack_hint(false);
+            self.request_redraw();
+        }
+    }
+
+    // esc_backtrack_hint_visible removed; hints are controlled internally.
 
     pub fn set_task_running(&mut self, running: bool) {
         self.is_task_running = running;
