@@ -78,6 +78,59 @@ pub enum HistoryPersistence {
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct Tui {}
 
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum OutputVerbosity {
+    #[default]
+    Summary,
+    Auto,
+    Verbose,
+    Full,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone, Copy, PartialEq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum OutputTruncateStrategy {
+    #[default]
+    Head,
+    Tail,
+    Middle,
+}
+
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+pub struct OutputConfig {
+    #[serde(default)]
+    pub verbosity: OutputVerbosity,
+    
+    #[serde(default = "default_max_lines")]
+    pub max_lines: usize,
+    
+    #[serde(default)]
+    pub truncate_strategy: OutputTruncateStrategy,
+    
+    #[serde(default = "default_error_detection")]
+    pub auto_expand_errors: bool,
+}
+
+impl Default for OutputConfig {
+    fn default() -> Self {
+        Self {
+            verbosity: OutputVerbosity::default(),
+            max_lines: default_max_lines(),
+            truncate_strategy: OutputTruncateStrategy::default(),
+            auto_expand_errors: default_error_detection(),
+        }
+    }
+}
+
+fn default_max_lines() -> usize {
+    100
+}
+
+fn default_error_detection() -> bool {
+    true
+}
+
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct SandboxWorkspaceWrite {
     #[serde(default)]

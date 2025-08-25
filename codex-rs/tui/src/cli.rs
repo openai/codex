@@ -58,6 +58,14 @@ pub struct Cli {
     #[arg(long = "search", default_value_t = false)]
     pub web_search: bool,
 
+    /// Set output verbosity level for command outputs
+    #[arg(long = "verbose", short = 'v', value_enum)]
+    pub verbose: Option<String>,
+
+    /// Maximum number of lines to show in verbose output
+    #[arg(long = "max-output-lines", value_name = "NUMBER")]
+    pub max_output_lines: Option<usize>,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 }

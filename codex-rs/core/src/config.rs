@@ -1,6 +1,7 @@
 use crate::config_profile::ConfigProfile;
 use crate::config_types::History;
 use crate::config_types::McpServerConfig;
+use crate::config_types::OutputConfig;
 use crate::config_types::SandboxWorkspaceWrite;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::config_types::ShellEnvironmentPolicyToml;
@@ -178,6 +179,8 @@ pub struct Config {
     pub preferred_auth_method: AuthMode,
 
     pub use_experimental_streamable_shell_tool: bool,
+    
+    pub output: OutputConfig,
 }
 
 impl Config {
@@ -485,6 +488,9 @@ pub struct ConfigToml {
 
     /// Nested tools section for feature toggles
     pub tools: Option<ToolsToml>,
+    
+    /// Output configuration for controlling command output display
+    pub output: Option<OutputConfig>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -784,6 +790,7 @@ impl Config {
             use_experimental_streamable_shell_tool: cfg
                 .experimental_use_exec_command_tool
                 .unwrap_or(false),
+            output: cfg.output.unwrap_or_default(),
         };
         Ok(config)
     }
@@ -890,6 +897,7 @@ pub fn log_dir(cfg: &Config) -> std::io::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use crate::config_types::HistoryPersistence;
+    use crate::config_types::OutputConfig;
 
     use super::*;
     use pretty_assertions::assert_eq;
@@ -1152,6 +1160,7 @@ disable_response_storage = true
                 responses_originator_header: "codex_cli_rs".to_string(),
                 preferred_auth_method: AuthMode::ChatGPT,
                 use_experimental_streamable_shell_tool: false,
+                output: OutputConfig::default(),
             },
             o3_profile_config
         );
@@ -1208,6 +1217,7 @@ disable_response_storage = true
             responses_originator_header: "codex_cli_rs".to_string(),
             preferred_auth_method: AuthMode::ChatGPT,
             use_experimental_streamable_shell_tool: false,
+            output: OutputConfig::default(),
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -1279,6 +1289,7 @@ disable_response_storage = true
             responses_originator_header: "codex_cli_rs".to_string(),
             preferred_auth_method: AuthMode::ChatGPT,
             use_experimental_streamable_shell_tool: false,
+            output: OutputConfig::default(),
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);

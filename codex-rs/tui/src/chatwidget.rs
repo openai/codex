@@ -741,6 +741,12 @@ impl ChatWidget {
             SlashCommand::Mcp => {
                 self.add_mcp_output();
             }
+            SlashCommand::Verbose => {
+                self.submit_text_message("/verbose command received".to_string());
+            }
+            SlashCommand::Expand => {
+                self.submit_text_message("/expand command received".to_string());
+            }
             #[cfg(debug_assertions)]
             SlashCommand::TestApproval => {
                 use codex_core::protocol::EventMsg;
