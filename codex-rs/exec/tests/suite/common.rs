@@ -1,3 +1,5 @@
+// this file is only used for e2e tests which are currently disabled on windows
+#![cfg(not(target_os = "windows"))]
 #![allow(clippy::expect_used)]
 
 use anyhow::Context;
