@@ -325,6 +325,9 @@ impl ModelClient {
                         if status == StatusCode::INTERNAL_SERVER_ERROR {
                             return Err(CodexErr::InternalServerError);
                         }
+                        if status == StatusCode::UNAUTHORIZED {
+                            return Err(CodexErr::UnauthorizedError);
+                        }
 
                         return Err(CodexErr::RetryLimit(status));
                     }
