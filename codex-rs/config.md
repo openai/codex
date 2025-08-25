@@ -331,7 +331,7 @@ You can further customize how Codex runs at the command line using the `--ask-fo
 
 ## mcp_servers
 
-Defines the list of MCP servers that Codex can consult for tool use. Currently, only servers that are launched by executing a program that communicate over stdio are supported. For servers that use the SSE transport, consider an adapter like [mcp-proxy](https://github.com/sparfenyuk/mcp-proxy).
+Defines the list of MCP servers that Codex can consult for tool use. Servers may either be launched as subprocesses that communicate over stdio or accessed via the Streamable HTTP transport.
 
 **Note:** Codex may cache the list of tools and resources from an MCP server so that Codex can include this information in context at startup without spawning all the servers. This is designed to save resources by loading MCP servers lazily.
 
@@ -359,7 +359,14 @@ Should be represented as follows in `~/.codex/config.toml`:
 command = "npx"
 args = ["-y", "mcp-server"]
 env = { "API_KEY" = "value" }
+
+# Streamable HTTP remote servers
+[mcp_servers.my_mcp_sever]
+url = "https://{the-actual-domain-here}/mcp"
+# headers = { Authorization = "Bearer {token}" }
 ```
+
+When you start a new session, it automatically begins fetching the list of tools in the background. If some tools may take a little longer to load, you can run `/mcp` command to confirm everything is ready before sending your prompt.
 
 ## disable_response_storage
 
