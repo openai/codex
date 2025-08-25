@@ -142,6 +142,28 @@ impl ChatComposer {
         }
     }
 
+    pub(crate) fn flush_paste_burst_if_due(&mut self) -> bool {
+        let now = Instant::now();
+        let timed_out = self
+            .last_plain_char_time
+            .is_some_and(|t| now.duration_since(t) > PASTE_BURST_CHAR_INTERVAL);
+        if timed_out && (!self.paste_burst_buffer.is_empty() || self.in_paste_burst_mode) {
+            let pasted = std::mem::take(&mut self.paste_burst_buffer);
+            self.in_paste_burst_mode = false;
+            let _ = self.handle_paste(pasted);
+            return true;
+        }
+        false
+    }
+
+    pub(crate) fn is_in_paste_burst(&self) -> bool {
+        self.in_paste_burst_mode || !self.paste_burst_buffer.is_empty()
+    }
+
+    pub(crate) fn recommended_paste_flush_delay() -> Duration {
+        PASTE_BURST_CHAR_INTERVAL + Duration::from_millis(10)
+    }
+
     pub fn desired_height(&self, width: u16) -> u16 {
         self.textarea.desired_height(width - 1)
             + match &self.active_popup {
@@ -877,10 +899,26 @@ impl ChatComposer {
                             .retain(|(placeholder, _)| text_after.contains(placeholder));
                         return (InputResult::None, true);
                     }
-                    // Begin buffering from this character onward.
+                    let burst_len_before: usize =
+                        self.consecutive_plain_char_burst.saturating_sub(1) as usize;
+                    if burst_len_before > 0 {
+                        let cur = self.textarea.cursor();
+                        let txt = self.textarea.text();
+                        let before = &txt[..cur];
+                        let start_byte = before
+                            .char_indices()
+                            .rev()
+                            .nth(burst_len_before - 1)
+                            .map(|(idx, _)| idx)
+                            .unwrap_or(0);
+                        let grabbed = before[start_byte..].to_string();
+                        if !grabbed.is_empty() {
+                            self.textarea.replace_range(start_byte..cur, "");
+                            self.paste_burst_buffer.push_str(&grabbed);
+                        }
+                    }
                     self.paste_burst_buffer.push(ch);
                     self.in_paste_burst_mode = true;
-                    // Keep the window alive to continue capturing.
                     self.paste_burst_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
                     return (InputResult::None, true);
                 }

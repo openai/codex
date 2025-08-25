@@ -854,6 +854,14 @@ impl ChatWidget {
         }
     }
 
+    pub(crate) fn flush_paste_burst_if_due(&mut self) -> bool {
+        if self.bottom_pane.flush_paste_burst_if_due() {
+            self.mark_needs_redraw();
+            return true;
+        }
+        false
+    }
+
     pub(crate) fn handle_paste(&mut self, text: String) {
         self.bottom_pane.handle_paste(text);
     }
