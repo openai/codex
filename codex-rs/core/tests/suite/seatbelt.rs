@@ -159,6 +159,33 @@ async fn read_only_forbids_all_writes() {
         .await;
 }
 
+#[tokio::test]
+async fn sysconf_arg_max_is_allowed() {
+    if std::env::var(CODEX_SANDBOX_ENV_VAR) == Ok("seatbelt".to_string()) {
+        eprintln!("{CODEX_SANDBOX_ENV_VAR} is set to 'seatbelt', skipping test.");
+        return;
+    }
+
+    let policy = SandboxPolicy::ReadOnly;
+    let mut child = spawn_command_under_seatbelt(
+        vec!["/usr/bin/getconf".to_string(), "ARG_MAX".to_string()],
+        &policy,
+        std::env::current_dir().expect("should be able to get current dir"),
+        StdioPolicy::RedirectForShellTool,
+        HashMap::new(),
+    )
+    .await
+    .expect("should be able to spawn getconf");
+    assert!(
+        child
+            .wait()
+            .await
+            .expect("should be able to wait for child process")
+            .success(),
+        "getconf ARG_MAX should succeed",
+    );
+}
+
 #[expect(clippy::expect_used)]
 fn create_test_scenario(tmp: &TempDir) -> TestScenario {
     let repo_parent = tmp.path().to_path_buf();
