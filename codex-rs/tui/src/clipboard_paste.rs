@@ -143,9 +143,19 @@ mod pasted_paths_tests {
 
     #[test]
     fn normalize_file_url() {
-        let input = "file:///tmp/example.png";
-        let result = normalize_pasted_path(input).expect("should parse file URL");
-        assert_eq!(result, PathBuf::from("/tmp/example.png"));
+        // Use platform-appropriate file:// URL expectations.
+        #[cfg(windows)]
+        {
+            let input = "file:///C:/Temp/example.png";
+            let result = normalize_pasted_path(input).expect("should parse file URL");
+            assert_eq!(result, PathBuf::from(r"C:\\Temp\\example.png"));
+        }
+        #[cfg(not(windows))]
+        {
+            let input = "file:///tmp/example.png";
+            let result = normalize_pasted_path(input).expect("should parse file URL");
+            assert_eq!(result, PathBuf::from("/tmp/example.png"));
+        }
     }
 
     #[test]
