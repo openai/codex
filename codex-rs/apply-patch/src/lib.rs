@@ -532,32 +532,51 @@ fn compute_replacements(
     let mut line_index: usize = 0;
 
     for chunk in chunks {
-        // If a chunk has a `change_context`, we use seek_sequence to find it, then
-        // adjust our `line_index` to continue from there.
-        if let Some(ctx_line) = &chunk.change_context {
-            if let Some(idx) = seek_sequence::seek_sequence(
-                original_lines,
-                std::slice::from_ref(ctx_line),
-                line_index,
-                false,
-            ) {
-                line_index = idx + 1;
-            } else {
-                return Err(ApplyPatchError::ComputeReplacements(format!(
-                    "Failed to find context '{}' in {}",
-                    ctx_line,
-                    path.display()
-                )));
+        // If a chunk has context lines, we use seek_sequence to find each in order,
+        // then adjust our `line_index` to continue from there.
+        if !chunk.context_lines.is_empty() {
+            let total = chunk.context_lines.len();
+            for (i, ctx_line) in chunk.context_lines.iter().enumerate() {
+                if let Some(idx) = seek_sequence::seek_sequence(
+                    original_lines,
+                    std::slice::from_ref(ctx_line),
+                    line_index,
+                    false,
+                ) {
+                    line_index = idx + 1;
+                } else {
+                    return Err(ApplyPatchError::ComputeReplacements(format!(
+                        "Failed to find context {}/{}: '{}' in {}",
+                        i + 1,
+                        total,
+                        ctx_line,
+                        path.display()
+                    )));
+                }
             }
         }
 
         if chunk.old_lines.is_empty() {
-            // Pure addition (no old lines). We'll add them at the end or just
-            // before the final empty line if one exists.
-            let insertion_idx = if original_lines.last().is_some_and(|s| s.is_empty()) {
-                original_lines.len() - 1
+            // Pure addition (no old lines).
+            // Prefer to insert at the matched context anchor if one exists and
+            // the hunk is not explicitly marked as end-of-file.
+            let insertion_idx = if chunk.is_end_of_file {
+                if original_lines.last().is_some_and(|s| s.is_empty()) {
+                    original_lines.len() - 1
+                } else {
+                    original_lines.len()
+                }
+            } else if !chunk.context_lines.is_empty() {
+                // Insert immediately after the last matched context line.
+                line_index
             } else {
-                original_lines.len()
+                // No context provided: fall back to appending at the end (before
+                // the trailing empty line if present).
+                if original_lines.last().is_some_and(|s| s.is_empty()) {
+                    original_lines.len() - 1
+                } else {
+                    original_lines.len()
+                }
             };
             replacements.push((insertion_idx, 0, chunk.new_lines.clone()));
             continue;
@@ -1267,6 +1286,57 @@ E
 f
 g
 "#
+        );
+    }
+
+    #[test]
+    fn test_insert_addition_after_single_context_anchor() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("single_ctx.txt");
+        fs::write(&path, "class BaseClass:\n    def method():\nline1\nline2\n").unwrap();
+
+        let patch = wrap_patch(&format!(
+            r#"*** Update File: {}
+@@ class BaseClass:
++INSERTED
+"#,
+            path.display()
+        ));
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        apply_patch(&patch, &mut stdout, &mut stderr).unwrap();
+
+        let contents = fs::read_to_string(path).unwrap();
+        assert_eq!(
+            contents,
+            "class BaseClass:\nINSERTED\n    def method():\nline1\nline2\n"
+        );
+    }
+
+    #[test]
+    fn test_insert_addition_after_multi_context_anchor() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("multi_ctx.txt");
+        fs::write(&path, "class BaseClass:\n    def method():\nline1\nline2\n").unwrap();
+
+        let patch = wrap_patch(&format!(
+            r#"*** Update File: {}
+@@ class BaseClass:
+@@     def method():
++INSERTED
+"#,
+            path.display()
+        ));
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        apply_patch(&patch, &mut stdout, &mut stderr).unwrap();
+
+        let contents = fs::read_to_string(path).unwrap();
+        assert_eq!(
+            contents,
+            "class BaseClass:\n    def method():\nINSERTED\nline1\nline2\n"
         );
     }
 

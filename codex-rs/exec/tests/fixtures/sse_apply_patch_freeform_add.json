@@ -1,0 +1,25 @@
+[
+  {
+    "type": "response.output_item.done",
+    "item": {
+      "type": "custom_tool_call",
+      "name": "apply_patch",
+      "input": "*** Begin Patch\n*** Add File: app.py\n+class BaseClass:\n+  def method():\n+    return False\n*** End Patch",
+      "call_id": "__ID__"
+    }
+  },
+  {
+    "type": "response.completed",
+    "response": {
+      "id": "__ID__",
+      "usage": {
+        "input_tokens": 0,
+        "input_tokens_details": null,
+        "output_tokens": 0,
+        "output_tokens_details": null,
+        "total_tokens": 0
+      },
+      "output": []
+    }
+  }
+]
