@@ -9,10 +9,8 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
-use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
-use unicode_width::UnicodeWidthStr;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -27,13 +25,6 @@ pub(crate) struct StatusIndicatorWidget {
     /// Queued user messages to display under the status line.
     queued_messages: Vec<String>,
 
-    /// Animation state: reveal target `text` progressively like a typewriter.
-    /// We compute the currently visible prefix length based on the current
-    /// frame index and a constant typing speed.  The `base_frame` and
-    /// `reveal_len_at_base` form the anchor from which we advance.
-    last_target_len: usize,
-    base_frame: usize,
-    reveal_len_at_base: usize,
     start_time: Instant,
     app_event_tx: AppEventSender,
     frame_requester: FrameRequester,
@@ -44,9 +35,6 @@ impl StatusIndicatorWidget {
         Self {
             header: String::from("Working"),
             queued_messages: Vec::new(),
-            last_target_len: 0,
-            base_frame: 0,
-            reveal_len_at_base: 0,
             start_time: Instant::now(),
 
             app_event_tx,
@@ -95,25 +83,6 @@ impl StatusIndicatorWidget {
         self.queued_messages = queued;
         // Ensure a redraw so changes are visible.
         self.frame_requester.schedule_frame();
-    }
-
-    /// Calculate how many characters should currently be visible given the
-    /// animation baseline and frame counter.
-    fn current_shown_len(&self, current_frame: usize) -> usize {
-        // Increase typewriter speed (~5x): reveal more characters per frame.
-        const TYPING_CHARS_PER_FRAME: usize = 7;
-        let frames = current_frame.saturating_sub(self.base_frame);
-        let advanced = self
-            .reveal_len_at_base
-            .saturating_add(frames.saturating_mul(TYPING_CHARS_PER_FRAME));
-        advanced.min(self.last_target_len)
-    }
-
-    fn current_frame(&self) -> usize {
-        // Derive frame index from wall-clock time. 100ms per frame to match
-        // the previous ticker cadence.
-        let since_start = self.start_time.elapsed();
-        (since_start.as_millis() / 100) as usize
     }
 
     /// Test-only helper to fast-forward the internal clock so animations
