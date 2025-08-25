@@ -60,6 +60,9 @@ impl StatusIndicatorWidget {
                     total = total.saturating_add(1); // ellipsis line
                 }
             }
+            if !self.queued_messages.is_empty() {
+                total = total.saturating_add(1); // keybind hint line
+            }
         } else {
             // At least one line per message if width is extremely narrow
             total = total.saturating_add(self.queued_messages.len() as u16);
@@ -135,6 +138,9 @@ impl WidgetRef for StatusIndicatorWidget {
                 lines.push(Line::from("   …".dim()));
             }
         }
+        if !self.queued_messages.is_empty() {
+            lines.push(Line::from(vec!["   ".into(), "Alt+↑".cyan(), " edit".into()]).dim());
+        }
 
         let paragraph = Paragraph::new(lines);
         paragraph.render_ref(area, buf);
@@ -166,9 +172,9 @@ mod tests {
             row0.push(buf[(x, 0)].symbol().chars().next().unwrap_or(' '));
         }
         let row0 = row0.trim_end();
-        // Width is 30, so the rendered line truncates before the long
-        // " to interrupt)" tail and before the log text. Expect this prefix:
-        assert_eq!(row0, " Working (0s • Esc");
+        // Width is 30; the rendered line truncates partway through the
+        // " to interrupt)" tail. Expect this clipped prefix:
+        assert_eq!(row0, " Working (0s • Esc to interrup");
         // Second line is a blank spacer
         let mut r1 = String::new();
         for x in 0..area.width {
@@ -217,6 +223,6 @@ mod tests {
             row0.push(buf[(x, 0)].symbol().chars().next().unwrap_or(' '));
         }
         let row0 = row0.trim_end();
-        assert_eq!(row0, " Working (0s • Esc");
+        assert_eq!(row0, " Working (0s • Esc to interrup");
     }
 }

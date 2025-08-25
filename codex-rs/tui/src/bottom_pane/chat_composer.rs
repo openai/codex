@@ -232,6 +232,19 @@ impl ChatComposer {
         true
     }
 
+    /// Replace the entire composer content with `text` and reset cursor.
+    pub(crate) fn set_text_content(&mut self, text: String) {
+        self.textarea.set_text(&text);
+        self.textarea.set_cursor(0);
+        self.sync_command_popup();
+        self.sync_file_search_popup();
+    }
+
+    /// Get the current composer text.
+    pub(crate) fn current_text(&self) -> String {
+        self.textarea.text().to_string()
+    }
+
     pub fn attach_image(&mut self, path: PathBuf, width: u32, height: u32, format_label: &str) {
         let placeholder = format!("[image {width}x{height} {format_label}]");
         // Insert as an element to match large paste placeholder behavior:

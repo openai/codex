@@ -31,8 +31,10 @@ use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnDiffEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_protocol::parse_command::ParsedCommand;
+use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+use crossterm::event::KeyModifiers;
 use rand::Rng;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
@@ -657,6 +659,26 @@ impl ChatWidget {
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
         if key_event.kind == KeyEventKind::Press {
             self.bottom_pane.clear_ctrl_c_quit_hint();
+        }
+
+        // Alt+Up: Edit the most recent queued user message (if any).
+        if matches!(
+            key_event,
+            KeyEvent {
+                code: KeyCode::Up,
+                modifiers: KeyModifiers::ALT,
+                kind: KeyEventKind::Press,
+                ..
+            }
+        ) && !self.queued_user_messages.is_empty()
+        {
+            // Prefer the most recently queued item.
+            if let Some(user_message) = self.queued_user_messages.pop_back() {
+                self.bottom_pane.set_composer_text(user_message.text);
+                self.refresh_queued_user_messages();
+                self.request_redraw();
+            }
+            return;
         }
 
         match self.bottom_pane.handle_key_event(key_event) {

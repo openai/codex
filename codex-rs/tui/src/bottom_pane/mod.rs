@@ -223,6 +223,17 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    /// Replace the composer text with `text`.
+    pub(crate) fn set_composer_text(&mut self, text: String) {
+        self.composer.set_text_content(text);
+        self.request_redraw();
+    }
+
+    /// Get the current composer text (for tests and programmatic checks).
+    pub(crate) fn composer_text(&self) -> String {
+        self.composer.current_text()
+    }
+
     /// Update the animated header shown to the left of the brackets in the
     /// status indicator (defaults to "Working"). No-ops if the status
     /// indicator is not active.
