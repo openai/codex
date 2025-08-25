@@ -28,6 +28,9 @@ pub(crate) struct RetroGrab {
 }
 
 impl PasteBurst {
+    pub fn recommended_flush_delay() -> Duration {
+        PASTE_BURST_CHAR_INTERVAL + Duration::from_millis(1)
+    }
     // Entry point: decide how to treat a plain char with current timing.
     pub fn on_plain_char(&mut self, now: Instant) -> CharDecision {
         match self.last_plain_char_time {

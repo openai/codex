@@ -183,6 +183,12 @@ impl BottomPane {
             if needs_redraw {
                 self.request_redraw();
             }
+            if self.composer.is_in_paste_burst() {
+                self.request_redraw_in(
+                    crate::bottom_pane::chat_composer::ChatComposer::recommended_paste_flush_delay(
+                    ),
+                );
+            }
             input_result
         }
     }
@@ -383,10 +389,22 @@ impl BottomPane {
         self.frame_requester.schedule_frame();
     }
 
+    pub(crate) fn request_redraw_in(&self, dur: std::time::Duration) {
+        self.frame_requester.schedule_frame_in(dur);
+    }
+
     // --- History helpers ---
 
     pub(crate) fn set_history_metadata(&mut self, log_id: u64, entry_count: usize) {
         self.composer.set_history_metadata(log_id, entry_count);
+    }
+
+    pub(crate) fn flush_paste_burst_if_due(&mut self) -> bool {
+        self.composer.flush_paste_burst_if_due()
+    }
+
+    pub(crate) fn is_in_paste_burst(&self) -> bool {
+        self.composer.is_in_paste_burst()
     }
 
     pub(crate) fn on_history_entry_response(

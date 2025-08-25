@@ -39,6 +39,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
+use std::time::Duration;
 use std::time::Instant;
 
 /// If the pasted content exceeds this number of characters, replace it with a
@@ -308,6 +309,23 @@ impl ChatComposer {
     pub fn take_recent_submission_images(&mut self) -> Vec<PathBuf> {
         let images = std::mem::take(&mut self.attached_images);
         images.into_iter().map(|img| img.path).collect()
+    }
+
+    pub(crate) fn flush_paste_burst_if_due(&mut self) -> bool {
+        let now = Instant::now();
+        if let Some(pasted) = self.paste_burst.flush_if_due(now) {
+            let _ = self.handle_paste(pasted);
+            return true;
+        }
+        false
+    }
+
+    pub(crate) fn is_in_paste_burst(&self) -> bool {
+        self.paste_burst.is_active()
+    }
+
+    pub(crate) fn recommended_paste_flush_delay() -> Duration {
+        PasteBurst::recommended_flush_delay()
     }
 
     /// Integrate results from an asynchronous file search.
