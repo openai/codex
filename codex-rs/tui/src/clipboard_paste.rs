@@ -107,11 +107,36 @@ pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImag
 /// - `file://` URLs (converted to local paths)
 /// - shell-escaped single paths (via `shlex`)
 pub fn normalize_pasted_path(pasted: &str) -> Option<PathBuf> {
+    let pasted = pasted.trim();
+
     // file:// URL → filesystem path
     if let Ok(url) = url::Url::parse(pasted)
         && url.scheme() == "file"
     {
         return url.to_file_path().ok();
+    }
+
+    // Detect unquoted Windows paths and bypass POSIX shlex which
+    // treats backslashes as escapes (e.g., C:\Users\Alice\file.png).
+    // Also handles UNC paths (\\server\share\path).
+    let looks_like_windows_path = {
+        // Drive letter path: C:\ or C:/
+        let drive = pasted
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_alphabetic())
+            .unwrap_or(false)
+            && pasted.get(1..2) == Some(":")
+            && pasted
+                .get(2..3)
+                .map(|s| s == "\\" || s == "/")
+                .unwrap_or(false);
+        // UNC path: \\server\share
+        let unc = pasted.starts_with("\\\\");
+        drive || unc
+    };
+    if looks_like_windows_path {
+        return Some(PathBuf::from(pasted));
     }
 
     // shell-escaped single path → unescaped
@@ -143,18 +168,16 @@ mod pasted_paths_tests {
 
     #[test]
     fn normalize_file_url() {
-        #[cfg(windows)]
-        {
-            let input = "file:///C:/Temp/example.png";
-            let result = normalize_pasted_path(input).expect("should parse file URL");
-            assert_eq!(result, PathBuf::from(r"C:\\Temp\\example.png"));
-        }
-        #[cfg(not(windows))]
-        {
-            let input = "file:///tmp/example.png";
-            let result = normalize_pasted_path(input).expect("should parse file URL");
-            assert_eq!(result, PathBuf::from("/tmp/example.png"));
-        }
+        let input = "file:///tmp/example.png";
+        let result = normalize_pasted_path(input).expect("should parse file URL");
+        assert_eq!(result, PathBuf::from("/tmp/example.png"));
+    }
+
+    #[test]
+    fn normalize_file_url_windoes() {
+        let input = r"C:\Temp\example.png";
+        let result = normalize_pasted_path(input).expect("should parse file URL");
+        assert_eq!(result, PathBuf::from(r"C:\Temp\example.png"));
     }
 
     #[test]
@@ -216,6 +239,26 @@ mod pasted_paths_tests {
         let result =
             normalize_pasted_path(input).expect("should trim single quotes on windows path");
         assert_eq!(result, PathBuf::from(r"C:\\Users\\Alice\\My File.jpeg"));
+    }
+
+    #[test]
+    fn normalize_unquoted_windows_path_with_spaces() {
+        let input = r"C:\\Users\\Alice\\My Pictures\\example image.png";
+        let result = normalize_pasted_path(input).expect("should accept unquoted windows path");
+        assert_eq!(
+            result,
+            PathBuf::from(r"C:\\Users\\Alice\\My Pictures\\example image.png")
+        );
+    }
+
+    #[test]
+    fn normalize_unc_windows_path() {
+        let input = r"\\\\server\\share\\folder\\file.jpg";
+        let result = normalize_pasted_path(input).expect("should accept UNC windows path");
+        assert_eq!(
+            result,
+            PathBuf::from(r"\\\\server\\share\\folder\\file.jpg")
+        );
     }
 
     #[test]
