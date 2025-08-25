@@ -782,13 +782,14 @@ impl ChatComposer {
             let has_ctrl_or_alt =
                 modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::ALT);
             if !has_ctrl_or_alt {
-                // 日本語などの非ASCII文字はIME確定で高速に連続送信されやすく、
-                // 「非ブラケット化ペースト」のバースト検知に誤検出されると
-                // 最後の1文字がバッファに滞留して表示されない。
-                // これを防ぐため、非ASCII文字ではバースト検知を無効化し、
-                // 逐次挿入する。
+                // Non-ASCII characters such as Japanese characters are easily sent 
+                // continuously at high speed with IME confirmation, and if they are 
+                // mistakenly detected by “non-bracketed paste” burst detection, 
+                // the last character remains in the buffer and is not displayed.
+                //  To prevent this, burst detection is disabled for non-ASCII 
+                // characters, and they are inserted sequentially.
                 if !ch.is_ascii() {
-                    // 既にASCIIの連打で蓄積中のバッファがあれば先にフラッシュ。
+                    //  If there is already a buffer accumulated by repeated ASCII keystrokes, flash it first.
                     if !self.paste_burst_buffer.is_empty() || self.in_paste_burst_mode {
                         let pasted = std::mem::take(&mut self.paste_burst_buffer);
                         self.in_paste_burst_mode = false;
