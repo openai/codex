@@ -7,8 +7,7 @@ use std::time::Instant;
 use codex_core::protocol::Op;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Modifier;
-use ratatui::style::Style;
+use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
@@ -23,9 +22,6 @@ use textwrap::Options as TwOptions;
 use textwrap::WordSplitter;
 
 pub(crate) struct StatusIndicatorWidget {
-    /// Latest text to display (truncated to the available width at render
-    /// time).
-    text: String,
     /// Animated header text (defaults to "Working").
     header: String,
     /// Queued user messages to display under the status line.
@@ -46,7 +42,6 @@ pub(crate) struct StatusIndicatorWidget {
 impl StatusIndicatorWidget {
     pub(crate) fn new(app_event_tx: AppEventSender, frame_requester: FrameRequester) -> Self {
         Self {
-            text: String::from("waiting for model"),
             header: String::from("Working"),
             queued_messages: Vec::new(),
             last_target_len: 0,
@@ -102,29 +97,6 @@ impl StatusIndicatorWidget {
         self.frame_requester.schedule_frame();
     }
 
-    /// Reset the animation and start revealing `text` from the beginning.
-    #[cfg(test)]
-    pub(crate) fn restart_with_text(&mut self, text: String) {
-        let sanitized = text.replace(['\n', '\r'], " ");
-        let stripped = {
-            let line = codex_ansi_escape::ansi_escape_line(&sanitized);
-            line.spans
-                .iter()
-                .map(|s| s.content.as_ref())
-                .collect::<Vec<_>>()
-                .join("")
-        };
-
-        let new_len = stripped.chars().count();
-        let current_frame = self.current_frame();
-
-        self.text = sanitized;
-        self.last_target_len = new_len;
-        self.base_frame = current_frame;
-        // Start from zero revealed characters for a fresh typewriter cycle.
-        self.reveal_len_at_base = 0;
-    }
-
     /// Calculate how many characters should currently be visible given the
     /// animation baseline and frame counter.
     fn current_shown_len(&self, current_frame: usize) -> usize {
@@ -156,114 +128,44 @@ impl StatusIndicatorWidget {
 
 impl WidgetRef for StatusIndicatorWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        // Ensure minimal height
-        if area.height == 0 || area.width == 0 {
+        if area.is_empty() {
             return;
         }
 
         // Schedule next animation frame.
         self.frame_requester
             .schedule_frame_in(Duration::from_millis(32));
-        let idx = self.current_frame();
         let elapsed = self.start_time.elapsed().as_secs();
-        let shown_now = self.current_shown_len(idx);
-        let status_prefix: String = self.text.chars().take(shown_now).collect();
-        let animated_spans = shimmer_spans(&self.header);
 
         // Plain rendering: no borders or padding so the live cell is visually indistinguishable from terminal scrollback.
-        let inner_width = area.width as usize;
+        let mut spans = vec![" ".into()];
+        spans.extend(shimmer_spans(&self.header));
+        spans.extend(vec![
+            " ".into(),
+            format!("({elapsed}s • ").dim(),
+            "Esc".dim().bold(),
+            " to interrupt)".dim(),
+        ]);
 
-        let mut spans: Vec<Span<'static>> = Vec::new();
-        // Indent the animated header by one space
-        spans.push(Span::raw(" "));
-        spans.extend(animated_spans);
-        // Space between header and bracket block
-        spans.push(Span::raw(" "));
-        // Non-animated, dim bracket content, with keys bold
-        let bracket_prefix = format!("({elapsed}s • ");
-        spans.push(Span::styled(
-            bracket_prefix,
-            Style::default().add_modifier(Modifier::DIM),
-        ));
-        spans.push(Span::styled(
-            "Esc",
-            Style::default().add_modifier(Modifier::DIM | Modifier::BOLD),
-        ));
-        spans.push(Span::styled(
-            " to interrupt)",
-            Style::default().add_modifier(Modifier::DIM),
-        ));
-        // Add a space and then the log text (not animated by the gradient)
-        if !status_prefix.is_empty() {
-            spans.push(Span::styled(
-                " ",
-                Style::default().add_modifier(Modifier::DIM),
-            ));
-            spans.push(Span::styled(
-                status_prefix,
-                Style::default().add_modifier(Modifier::DIM),
-            ));
-        }
-
-        // Truncate spans to fit the width.
-        let mut acc: Vec<Span<'static>> = Vec::new();
-        let mut used = 0usize;
-        for s in spans {
-            let w = s.content.width();
-            if used + w <= inner_width {
-                acc.push(s);
-                used += w;
-            } else {
-                break;
-            }
-        }
         // Build lines: status, then queued messages, then spacer.
         let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(Line::from(acc));
+        lines.push(Line::from(spans));
         // Wrap queued messages using textwrap and show up to the first 3 lines per message.
-        let text_width = inner_width.saturating_sub(3); // space + arrow + space
-        if text_width > 0 {
-            let opts = TwOptions::new(text_width)
-                .break_words(false)
-                .word_splitter(WordSplitter::NoHyphenation);
-            for q in &self.queued_messages {
-                let wrapped = textwrap::wrap(q, &opts);
-                for (i, piece) in wrapped.iter().take(3).enumerate() {
-                    let pref = if i == 0 { " ↳ " } else { "   " };
-                    let content = format!("{pref}{piece}");
-                    lines.push(Line::from(Span::styled(
-                        content,
-                        Style::default().add_modifier(Modifier::DIM),
-                    )));
-                }
-                if wrapped.len() > 3 {
-                    lines.push(Line::from(Span::styled(
-                        "   …",
-                        Style::default().add_modifier(Modifier::DIM),
-                    )));
-                }
+        let text_width = area.width.saturating_sub(3); // " ↳ " prefix
+        let opts = TwOptions::new(text_width as usize)
+            .break_words(false)
+            .word_splitter(WordSplitter::NoHyphenation);
+        for q in &self.queued_messages {
+            let wrapped = textwrap::wrap(q, &opts);
+            for (i, piece) in wrapped.iter().take(3).enumerate() {
+                let prefix = if i == 0 { " ↳ " } else { "   " };
+                let content = format!("{prefix}{piece}");
+                lines.push(Line::from(content.dim()));
             }
-        } else {
-            // Extremely narrow: still show a bullet per message
-            for q in &self.queued_messages {
-                lines.push(Line::from(Span::styled(
-                    " ↳",
-                    Style::default().add_modifier(Modifier::DIM),
-                )));
-                // If the message would be truncated, still add an ellipsis line
-                // to hint there is more content.
-                // With no wrap info at this width, assume long content may exist; keep simple.
-                if !q.is_empty() {
-                    lines.push(Line::from(Span::styled(
-                        "   …",
-                        Style::default().add_modifier(Modifier::DIM),
-                    )));
-                }
+            if wrapped.len() > 3 {
+                lines.push(Line::from("   …".dim()));
             }
         }
-        lines.push(Line::from(""));
-
-        // No-op once full text is revealed; the app no longer reacts to a completion event.
 
         let paragraph = Paragraph::new(lines);
         paragraph.render_ref(area, buf);
@@ -282,7 +184,6 @@ mod tests {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy());
-        w.restart_with_text("Hello".to_string());
 
         let area = ratatui::layout::Rect::new(0, 0, 30, 2);
         // Advance animation without sleeping.
@@ -315,7 +216,6 @@ mod tests {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy());
-        w.restart_with_text("Hi".to_string());
         // Advance animation without sleeping.
         w.test_fast_forward_frames(2);
 
@@ -336,7 +236,6 @@ mod tests {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
         let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy());
-        w.restart_with_text("Hello".to_string());
         w.test_fast_forward_frames(2);
 
         let area = ratatui::layout::Rect::new(0, 0, 30, 2);
