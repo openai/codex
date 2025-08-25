@@ -485,6 +485,14 @@ pub struct ConfigToml {
 
     /// Nested tools section for feature toggles
     pub tools: Option<ToolsToml>,
+
+    /// Include an experimental plan tool that the model can use to update its
+    /// current plan and status of each step.
+    pub include_plan_tool: Option<bool>,
+
+    /// Include the `apply_patch` tool for models that benefit from invoking
+    /// file edits as a structured tool call.
+    pub include_apply_patch_tool: Option<bool>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -776,8 +784,11 @@ impl Config {
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
 
             experimental_resume,
-            include_plan_tool: include_plan_tool.unwrap_or(false),
-            include_apply_patch_tool: include_apply_patch_tool.unwrap_or(false),
+            // Precedence: CLI typed override > TOML/`-c` > default(false)
+            include_plan_tool: include_plan_tool.or(cfg.include_plan_tool).unwrap_or(false),
+            include_apply_patch_tool: include_apply_patch_tool
+                .or(cfg.include_apply_patch_tool)
+                .unwrap_or(false),
             tools_web_search_request,
             responses_originator_header,
             preferred_auth_method: cfg.preferred_auth_method.unwrap_or(AuthMode::ChatGPT),
