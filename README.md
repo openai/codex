@@ -346,6 +346,16 @@ model = "mistral"
 
 This way, you can specify one command-line argument (.e.g., `--profile o3`, `--profile mistral`) to override multiple settings together.
 
+> [!TIP]
+> To make a custom profile like `o3` the default (so you can run just `codex` instead of `codex --profile o3`), set `profile = "o3"` at the top level of `~/.codex/config.toml`:
+>
+> ```toml
+> # ~/.codex/config.toml
+> profile = "o3"
+> ```
+>
+> Now `codex` will automatically use the `o3` profile settings, no need for `--profile o3` each time.
+
 </details>
 
 Codex can run fully locally against an OpenAI-compatible OSS host (like Ollama) using the `--oss` flag:
