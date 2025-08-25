@@ -181,6 +181,8 @@ impl CodexErr {
 pub fn get_error_message_ui(e: &CodexErr) -> String {
     match e {
         CodexErr::Sandbox(SandboxErr::Denied(_, _, stderr)) => stderr.to_string(),
+        // Timeouts are not sandbox errors from a UX perspective; present them plainly
+        CodexErr::Sandbox(SandboxErr::Timeout) => "error: command timed out".to_string(),
         _ => e.to_string(),
     }
 }
