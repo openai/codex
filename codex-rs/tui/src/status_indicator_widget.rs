@@ -28,7 +28,7 @@ pub(crate) struct StatusIndicatorWidget {
     text: String,
     /// Animated header text (defaults to "Working").
     header: String,
-    /// Previews of queued user inputs to display under the status line.
+    /// Queued user messages to display under the status line.
     queued_messages: Vec<String>,
 
     /// Animation state: reveal target `text` progressively like a typewriter.
@@ -60,7 +60,7 @@ impl StatusIndicatorWidget {
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
-        // Status line + wrapped queued previews (up to 3 lines per message)
+        // Status line + wrapped queued messages (up to 3 lines per message)
         // + optional ellipsis line per truncated message + 1 spacer line
         let inner_width = width.max(1) as usize;
         let mut total: u16 = 1; // status line
@@ -95,7 +95,7 @@ impl StatusIndicatorWidget {
         }
     }
 
-    /// Replace the queued message previews displayed beneath the header.
+    /// Replace the queued messages displayed beneath the header.
     pub(crate) fn set_queued_messages(&mut self, queued: Vec<String>) {
         self.queued_messages = queued;
         // Ensure a redraw so changes are visible.
@@ -217,10 +217,10 @@ impl WidgetRef for StatusIndicatorWidget {
                 break;
             }
         }
-        // Build lines: status, then queued previews, then spacer.
+        // Build lines: status, then queued messages, then spacer.
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from(acc));
-        // Wrap queued message previews using textwrap and show up to the first 3 lines per message.
+        // Wrap queued messages using textwrap and show up to the first 3 lines per message.
         let text_width = inner_width.saturating_sub(3); // space + arrow + space
         if text_width > 0 {
             let opts = TwOptions::new(text_width)

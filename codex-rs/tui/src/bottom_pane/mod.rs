@@ -59,7 +59,7 @@ pub(crate) struct BottomPane {
 
     /// Inline status indicator shown above the composer while a task is running.
     status: Option<StatusIndicatorWidget>,
-    /// Queued user message previews to show under the status indicator.
+    /// Queued user messages to show under the status indicator.
     queued_user_messages: Vec<String>,
 }
 
@@ -308,7 +308,7 @@ impl BottomPane {
         self.request_redraw();
     }
 
-    /// Update the queued messages preview shown under the status header.
+    /// Update the queued messages shown under the status header.
     pub(crate) fn set_queued_user_messages(&mut self, queued: Vec<String>) {
         self.queued_user_messages = queued.clone();
         if let Some(status) = self.status.as_mut() {

@@ -668,7 +668,7 @@ impl ChatWidget {
                 };
                 if self.bottom_pane.is_task_running() {
                     self.queued_user_messages.push_back(user_message);
-                    self.refresh_queued_user_previews();
+                    self.refresh_queued_user_messages();
                 } else {
                     self.submit_user_message(user_message);
                 }
@@ -934,18 +934,18 @@ impl ChatWidget {
         if let Some(user_message) = self.queued_user_messages.pop_front() {
             self.submit_user_message(user_message);
         }
-        // Update the preview list to reflect the remaining queue (if any).
-        self.refresh_queued_user_previews();
+        // Update the list to reflect the remaining queued messages (if any).
+        self.refresh_queued_user_messages();
     }
 
-    /// Rebuild and update the queued user message previews from the current queue.
-    fn refresh_queued_user_previews(&mut self) {
-        let previews: Vec<String> = self
+    /// Rebuild and update the queued user messages from the current queue.
+    fn refresh_queued_user_messages(&mut self) {
+        let messages: Vec<String> = self
             .queued_user_messages
             .iter()
             .map(|m| m.text.clone())
             .collect();
-        self.bottom_pane.set_queued_user_messages(previews);
+        self.bottom_pane.set_queued_user_messages(messages);
     }
 
     pub(crate) fn add_diff_in_progress(&mut self) {
