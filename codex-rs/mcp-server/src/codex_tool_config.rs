@@ -161,6 +161,7 @@ impl CodexToolCallParam {
             base_instructions,
             include_plan_tool,
             include_apply_patch_tool: None,
+            include_subagent_tool: None,
             disable_response_storage: None,
             show_raw_agent_reasoning: None,
             tools_web_search_request: None,

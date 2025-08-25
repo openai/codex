@@ -1,0 +1,8 @@
+{
+  "name": "hello",
+  "description": "Built-in test subagent that replies with a greeting",
+  "instructions": "Reply with exactly this text and nothing else, as a JSON string: Hello from subagent",
+  "output_schema": { "type": "string" },
+  "tools": [],
+  "reasoning_effort": "minimal"
+}

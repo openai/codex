@@ -77,7 +77,6 @@ use crate::protocol::AgentReasoningRawContentEvent;
 use crate::protocol::AgentReasoningSectionBreakEvent;
 use crate::protocol::ApplyPatchApprovalRequestEvent;
 use crate::protocol::AskForApproval;
-use crate::protocol::BackgroundEventEvent;
 use crate::protocol::ErrorEvent;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
@@ -297,6 +296,9 @@ pub(crate) struct TurnContext {
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) disable_response_storage: bool,
     pub(crate) tools_config: ToolsConfig,
+    pub(crate) subagents_registry: crate::subagents::registry::SubagentRegistry,
+    pub(crate) auth_manager: Arc<AuthManager>,
+    pub(crate) base_config: Arc<Config>,
 }
 
 impl TurnContext {
@@ -504,6 +506,22 @@ impl Session {
             model_reasoning_summary,
             session_id,
         );
+        // Build subagent registry paths and load once per session
+        let project_agents_dir = {
+            let mut p = cwd.clone();
+            p.push(".codex");
+            p.push("agents");
+            if p.exists() { Some(p) } else { None }
+        };
+        let user_agents_dir = {
+            let mut p = config.codex_home.clone();
+            p.push("agents");
+            if p.exists() { Some(p) } else { None }
+        };
+        let mut subagents_registry =
+            crate::subagents::registry::SubagentRegistry::new(project_agents_dir, user_agents_dir);
+        subagents_registry.load();
+
         let turn_context = TurnContext {
             client,
             tools_config: ToolsConfig::new(
@@ -514,15 +532,20 @@ impl Session {
                 config.include_apply_patch_tool,
                 config.tools_web_search_request,
                 config.use_experimental_streamable_shell_tool,
+                config.include_subagent_tool,
             ),
             user_instructions,
             base_instructions,
             approval_policy,
             sandbox_policy,
             shell_environment_policy: config.shell_environment_policy.clone(),
-            cwd,
+            cwd: cwd.clone(),
             disable_response_storage,
+            subagents_registry,
+            auth_manager: auth_manager.clone(),
+            base_config: config.clone(),
         };
+
         let sess = Arc::new(Session {
             session_id,
             tx_event: tx_event.clone(),
@@ -839,18 +862,8 @@ impl Session {
         result
     }
 
-    /// Helper that emits a BackgroundEvent with the given message. This keeps
-    /// the call‑sites terse so adding more diagnostics does not clutter the
-    /// core agent logic.
-    async fn notify_background_event(&self, sub_id: &str, message: impl Into<String>) {
-        let event = Event {
-            id: sub_id.to_string(),
-            msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
-                message: message.into(),
-            }),
-        };
-        let _ = self.tx_event.send(event).await;
-    }
+    /// Background events are disabled; this is a no-op to preserve call-sites.
+    async fn notify_background_event(&self, _sub_id: &str, _message: impl Into<String>) {}
 
     async fn notify_stream_error(&self, sub_id: &str, message: impl Into<String>) {
         let event = Event {
@@ -1100,6 +1113,7 @@ async fn submission_loop(
                     config.include_apply_patch_tool,
                     config.tools_web_search_request,
                     config.use_experimental_streamable_shell_tool,
+                    config.include_subagent_tool,
                 );
 
                 let new_turn_context = TurnContext {
@@ -1112,6 +1126,9 @@ async fn submission_loop(
                     shell_environment_policy: prev.shell_environment_policy.clone(),
                     cwd: new_cwd.clone(),
                     disable_response_storage: prev.disable_response_storage,
+                    subagents_registry: prev.subagents_registry.clone(),
+                    auth_manager: prev.auth_manager.clone(),
+                    base_config: prev.base_config.clone(),
                 };
 
                 // Install the new persistent context for subsequent tasks/turns.
@@ -1180,6 +1197,7 @@ async fn submission_loop(
                             config.include_apply_patch_tool,
                             config.tools_web_search_request,
                             config.use_experimental_streamable_shell_tool,
+                            config.include_subagent_tool,
                         ),
                         user_instructions: turn_context.user_instructions.clone(),
                         base_instructions: turn_context.base_instructions.clone(),
@@ -1188,6 +1206,9 @@ async fn submission_loop(
                         shell_environment_policy: turn_context.shell_environment_policy.clone(),
                         cwd,
                         disable_response_storage: turn_context.disable_response_storage,
+                        subagents_registry: turn_context.subagents_registry.clone(),
+                        auth_manager: turn_context.auth_manager.clone(),
+                        base_config: turn_context.base_config.clone(),
                     };
                     // TODO: record the new environment context in the conversation history
                     // no current task, spawn a new one with the per‑turn context
@@ -2096,6 +2117,131 @@ async fn handle_function_call(
             .await
         }
         "update_plan" => handle_update_plan(sess, arguments, sub_id, call_id).await,
+        "subagent_run" => {
+            #[derive(serde::Deserialize)]
+            struct Args {
+                name: String,
+                input: String,
+                #[serde(default)]
+                context: Option<String>,
+            }
+            let args = match serde_json::from_str::<Args>(&arguments) {
+                Ok(a) => a,
+                Err(e) => {
+                    return ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: FunctionCallOutputPayload {
+                            content: format!("failed to parse function arguments: {e}"),
+                            success: Some(false),
+                        },
+                    };
+                }
+            };
+
+            let agent_name = args.name.clone();
+            let result = crate::subagents::runner::run(
+                sess,
+                turn_context,
+                crate::subagents::runner::RunSubagentArgs {
+                    name: agent_name.clone(),
+                    input: args.input,
+                    context: args.context,
+                },
+                &sub_id,
+            )
+            .await;
+
+            match result {
+                Ok(message) => {
+                    // Validate against the subagent's output schema and return
+                    // the JSON body unmodified.
+                    if let Some(def) = turn_context.subagents_registry.get(&agent_name) {
+                        let schema = def.output_schema();
+                        match serde_json::from_str::<serde_json::Value>(&message) {
+                            Ok(val) => {
+                                if let Err(err) =
+                                    crate::subagents::runner::validate_json_against_schema(
+                                        &val, schema,
+                                    )
+                                {
+                                    return ResponseInputItem::FunctionCallOutput {
+                                        call_id,
+                                        output: FunctionCallOutputPayload {
+                                            content: format!(
+                                                "subagent structured output validation failed: {err}"
+                                            ),
+                                            success: Some(false),
+                                        },
+                                    };
+                                }
+                                // Valid JSON: pass through as-is
+                                ResponseInputItem::FunctionCallOutput {
+                                    call_id,
+                                    output: FunctionCallOutputPayload {
+                                        content: message,
+                                        success: Some(true),
+                                    },
+                                }
+                            }
+                            Err(e) => ResponseInputItem::FunctionCallOutput {
+                                call_id,
+                                output: FunctionCallOutputPayload {
+                                    content: format!(
+                                        "subagent must return valid JSON per its schema: {e}"
+                                    ),
+                                    success: Some(false),
+                                },
+                            },
+                        }
+                    } else {
+                        ResponseInputItem::FunctionCallOutput {
+                            call_id,
+                            output: FunctionCallOutputPayload {
+                                content: format!(
+                                    "subagent not found when validating output: {}",
+                                    agent_name
+                                ),
+                                success: Some(false),
+                            },
+                        }
+                    }
+                }
+                Err(e) => ResponseInputItem::FunctionCallOutput {
+                    call_id,
+                    output: FunctionCallOutputPayload {
+                        content: format!("subagent failed: {e}"),
+                        success: Some(false),
+                    },
+                },
+            }
+        }
+        "subagent_list" => {
+            #[derive(serde::Serialize)]
+            struct SubagentBrief<'a> {
+                name: &'a str,
+                description: &'a str,
+            }
+            let mut list = Vec::new();
+            for name in turn_context.subagents_registry.all_names() {
+                if let Some(def) = turn_context.subagents_registry.get(&name) {
+                    list.push(SubagentBrief {
+                        name: &def.name,
+                        description: &def.description,
+                    });
+                }
+            }
+            let payload = match serde_json::to_string(&list) {
+                Ok(s) => s,
+                Err(e) => format!("failed to serialize subagent list: {e}"),
+            };
+            ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: FunctionCallOutputPayload {
+                    content: payload,
+                    success: Some(true),
+                },
+            }
+        }
         EXEC_COMMAND_TOOL_NAME => {
             // TODO(mbolin): Sandbox check.
             let exec_params = match serde_json::from_str::<ExecCommandParams>(&arguments) {

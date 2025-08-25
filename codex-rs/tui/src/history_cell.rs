@@ -1152,6 +1152,12 @@ fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
     Line::from(invocation_spans)
 }
 
+/// Simple one-line log entry (dim) to surface traces and diagnostics in the transcript.
+pub(crate) fn new_log_line(message: String) -> TranscriptOnlyHistoryCell {
+    let lines: Vec<Line<'static>> = vec![Line::from(""), Line::from(message).dim()];
+    TranscriptOnlyHistoryCell { lines }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -480,6 +480,13 @@ pub enum EventMsg {
     ShutdownComplete,
 
     ConversationHistory(ConversationHistoryResponseEvent),
+
+    /// Emitted when a subagent starts.
+    SubagentBegin(SubagentBeginEvent),
+    /// Forwards a nested event produced by a running subagent.
+    SubagentForwarded(SubagentForwardedEvent),
+    /// Emitted when a subagent finishes.
+    SubagentEnd(SubagentEndEvent),
 }
 
 // Individual event payload types matching each `EventMsg` variant.
@@ -589,6 +596,28 @@ impl fmt::Display for FinalOutput {
                 .unwrap_or_default()
         )
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SubagentBeginEvent {
+    pub subagent_id: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SubagentEndEvent {
+    pub subagent_id: String,
+    pub name: String,
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_agent_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SubagentForwardedEvent {
+    pub subagent_id: String,
+    pub name: String,
+    pub event: Box<EventMsg>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

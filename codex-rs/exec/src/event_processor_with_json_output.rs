@@ -41,6 +41,12 @@ impl EventProcessor for EventProcessorWithJsonOutput {
 
     fn process_event(&mut self, event: Event) -> CodexStatus {
         match event.msg {
+            EventMsg::SubagentBegin(_)
+            | EventMsg::SubagentForwarded(_)
+            | EventMsg::SubagentEnd(_) => {
+                // Ignored for JSON output in exec for now.
+                CodexStatus::Running
+            }
             EventMsg::AgentMessageDelta(_) | EventMsg::AgentReasoningDelta(_) => {
                 // Suppress streaming events in JSON mode.
                 CodexStatus::Running

@@ -169,6 +169,15 @@ impl EventProcessor for EventProcessorWithHumanOutput {
     fn process_event(&mut self, event: Event) -> CodexStatus {
         let Event { id: _, msg } = event;
         match msg {
+            EventMsg::SubagentBegin(_) => {
+                // Ignore in human output for now.
+            }
+            EventMsg::SubagentForwarded(_) => {
+                // Ignore; TUI will render forwarded events.
+            }
+            EventMsg::SubagentEnd(_) => {
+                // Ignore in human output for now.
+            }
             EventMsg::Error(ErrorEvent { message }) => {
                 let prefix = "ERROR:".style(self.red);
                 ts_println!(self, "{prefix} {message}");

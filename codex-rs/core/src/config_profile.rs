@@ -21,4 +21,6 @@ pub struct ConfigProfile {
     pub model_verbosity: Option<Verbosity>,
     pub chatgpt_base_url: Option<String>,
     pub experimental_instructions_file: Option<PathBuf>,
+    /// Include the `subagent.run` tool allowing the model to invoke configured subagents.
+    pub include_subagent_tool: Option<bool>,
 }
