@@ -531,7 +531,12 @@ pub(crate) fn get_openai_tools(
     }
 
     if let Some(mcp_tools) = mcp_tools {
-        for (name, tool) in mcp_tools {
+        // Ensure deterministic ordering to maximize prompt cache hits.
+        // HashMap iteration order is non-deterministic, so sort by fully-qualified tool name.
+        let mut entries: Vec<(String, mcp_types::Tool)> = mcp_tools.into_iter().collect();
+        entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+        for (name, tool) in entries.into_iter() {
             match mcp_tool_to_openai_tool(name.clone(), tool.clone()) {
                 Ok(converted_tool) => tools.push(OpenAiTool::Function(converted_tool)),
                 Err(e) => {
@@ -707,6 +712,80 @@ mod tests {
                 description: "Do something cool".to_string(),
                 strict: false,
             })
+        );
+    }
+
+    #[test]
+    fn test_get_openai_tools_mcp_tools_sorted_by_name() {
+        let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
+        let config = ToolsConfig::new(
+            &model_family,
+            AskForApproval::Never,
+            SandboxPolicy::ReadOnly,
+            false,
+            false,
+            /*use_experimental_streamable_shell_tool*/ false,
+        );
+
+        // Intentionally construct a map with keys that would sort alphabetically.
+        let tools_map: HashMap<String, mcp_types::Tool> = HashMap::from([
+            (
+                "test_server/do".to_string(),
+                mcp_types::Tool {
+                    name: "a".to_string(),
+                    input_schema: ToolInputSchema {
+                        properties: Some(serde_json::json!({})),
+                        required: None,
+                        r#type: "object".to_string(),
+                    },
+                    output_schema: None,
+                    title: None,
+                    annotations: None,
+                    description: Some("a".to_string()),
+                },
+            ),
+            (
+                "test_server/something".to_string(),
+                mcp_types::Tool {
+                    name: "b".to_string(),
+                    input_schema: ToolInputSchema {
+                        properties: Some(serde_json::json!({})),
+                        required: None,
+                        r#type: "object".to_string(),
+                    },
+                    output_schema: None,
+                    title: None,
+                    annotations: None,
+                    description: Some("b".to_string()),
+                },
+            ),
+            (
+                "test_server/cool".to_string(),
+                mcp_types::Tool {
+                    name: "c".to_string(),
+                    input_schema: ToolInputSchema {
+                        properties: Some(serde_json::json!({})),
+                        required: None,
+                        r#type: "object".to_string(),
+                    },
+                    output_schema: None,
+                    title: None,
+                    annotations: None,
+                    description: Some("c".to_string()),
+                },
+            ),
+        ]);
+
+        let tools = get_openai_tools(&config, Some(tools_map));
+        // Expect shell first, followed by MCP tools sorted by fully-qualified name.
+        assert_eq_tool_names(
+            &tools,
+            &[
+                "shell",
+                "test_server/cool",
+                "test_server/do",
+                "test_server/something",
+            ],
         );
     }
 
