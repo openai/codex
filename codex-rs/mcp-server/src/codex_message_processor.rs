@@ -17,6 +17,7 @@ use codex_core::protocol::ReviewDecision;
 use codex_login::AuthManager;
 use codex_protocol::mcp_protocol::AuthMode;
 use codex_protocol::mcp_protocol::GitDiffToRemoteResponse;
+use codex_protocol::mcp_protocol::RunSubagentParams;
 use mcp_types::JSONRPCErrorError;
 use mcp_types::RequestId;
 use tokio::sync::Mutex;
@@ -27,6 +28,7 @@ use uuid::Uuid;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::json_to_toml::json_to_toml;
+use crate::mock_data::subagent_mock_response_from_diff;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
 use codex_core::protocol::InputItem as CoreInputItem;
@@ -145,6 +147,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::GetAuthStatus { request_id, params } => {
                 self.get_auth_status(request_id, params).await;
+            }
+            ClientRequest::RunSubagent { request_id, params } => {
+                self.run_subagent(request_id, params).await;
             }
         }
     }
@@ -351,6 +356,33 @@ impl CodexMessageProcessor {
             },
         };
 
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn run_subagent(&self, request_id: RequestId, params: RunSubagentParams) {
+        let RunSubagentParams {
+            conversation_id,
+            subagant,
+            input: _input,
+        } = params;
+        let Ok(_conversation) = self
+            .conversation_manager
+            .get_conversation(conversation_id.0)
+            .await
+        else {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: format!("conversation not found: {conversation_id}"),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        };
+        // Build findings exclusively from the actual git diff used by the TUI.
+        let response = match git_diff_to_remote(&self.config.cwd).await {
+            Some(diff) => subagent_mock_response_from_diff(subagant, &self.config.cwd, &diff.diff),
+            None => subagent_mock_response_from_diff(subagant, &self.config.cwd, ""),
+        };
         self.outgoing.send_response(request_id, response).await;
     }
 

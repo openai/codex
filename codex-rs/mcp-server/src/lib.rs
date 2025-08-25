@@ -27,6 +27,7 @@ mod error_code;
 mod exec_approval;
 mod json_to_toml;
 pub(crate) mod message_processor;
+mod mock_data;
 mod outgoing_message;
 mod patch_approval;
 
