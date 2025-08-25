@@ -668,13 +668,7 @@ impl ChatWidget {
                 };
                 if self.bottom_pane.is_task_running() {
                     self.queued_user_messages.push_back(user_message);
-                    // Update the status indicator to show the queued messages under the header.
-                    let previews: Vec<String> = self
-                        .queued_user_messages
-                        .iter()
-                        .map(|m| m.text.clone())
-                        .collect();
-                    self.bottom_pane.set_queued_user_messages(previews);
+                    self.refresh_queued_user_previews();
                 } else {
                     self.submit_user_message(user_message);
                 }
@@ -941,6 +935,11 @@ impl ChatWidget {
             self.submit_user_message(user_message);
         }
         // Update the preview list to reflect the remaining queue (if any).
+        self.refresh_queued_user_previews();
+    }
+
+    /// Rebuild and update the queued user message previews from the current queue.
+    fn refresh_queued_user_previews(&mut self) {
         let previews: Vec<String> = self
             .queued_user_messages
             .iter()
