@@ -1152,6 +1152,7 @@ async fn submission_loop(
                 if let Err(items) = sess.inject_input(items) {
                     // Derive a fresh TurnContext for this turn using the provided overrides.
                     let provider = turn_context.client.get_provider();
+                    let auth_manager = turn_context.client.get_auth_manager();
 
                     // Derive a model family for the requested model; fall back to the session's.
                     let model_family = find_family_for_model(&model)
@@ -1166,7 +1167,7 @@ async fn submission_loop(
                     // Reuse the same provider and session id; auth defaults to env/API key.
                     let client = ModelClient::new(
                         Arc::new(per_turn_config),
-                        None,
+                        auth_manager,
                         provider,
                         effort,
                         summary,
