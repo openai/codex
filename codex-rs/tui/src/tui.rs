@@ -76,8 +76,7 @@ impl Command for EnableAlternateScroll {
 
     #[cfg(windows)]
     fn execute_winapi(&self) -> std::io::Result<()> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        Err(std::io::Error::other(
             "tried to execute EnableAlternateScroll using WinAPI; use ANSI instead",
         ))
     }
@@ -98,8 +97,7 @@ impl Command for DisableAlternateScroll {
 
     #[cfg(windows)]
     fn execute_winapi(&self) -> std::io::Result<()> {
-        Err(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        Err(std::io::Error::other(
             "tried to execute DisableAlternateScroll using WinAPI; use ANSI instead",
         ))
     }
