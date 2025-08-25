@@ -244,6 +244,9 @@ impl ChatWidget {
     }
 
     fn on_error(&mut self, message: String) {
+        // Before emitting the error message, finalize the active exec as failed
+        // so spinners are replaced with a red ✗ marker.
+        self.finalize_active_exec_cell_as_failed();
         self.add_to_history(history_cell::new_error_event(message));
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
@@ -536,6 +539,8 @@ impl ChatWidget {
     }
     fn interrupt_running_task(&mut self) {
         if self.bottom_pane.is_task_running() {
+            // Finalize the active exec as failed before clearing state.
+            self.finalize_active_exec_cell_as_failed();
             self.active_exec_cell = None;
             self.running_commands.clear();
             self.bottom_pane.clear_ctrl_c_quit_hint();
@@ -946,6 +951,16 @@ impl ChatWidget {
 
     fn request_redraw(&mut self) {
         self.frame_requester.schedule_frame();
+    }
+
+    /// Mark the active exec cell as failed (✗) and flush it into history.
+    fn finalize_active_exec_cell_as_failed(&mut self) {
+        if let Some(cell) = self.active_exec_cell.take() {
+            let cell = cell.into_failed();
+            // Insert finalized exec into history and keep grouping consistent.
+            self.add_to_history(cell);
+            self.last_history_was_exec = true;
+        }
     }
 
     // If idle and there are queued inputs, submit exactly one to start the next turn.
