@@ -55,7 +55,7 @@ use crate::exec::StreamOutput;
 use crate::exec::process_exec_tool_call;
 use crate::exec_command::EXEC_COMMAND_TOOL_NAME;
 use crate::exec_command::ExecCommandParams;
-use crate::exec_command::SESSION_MANAGER;
+use crate::exec_command::ExecSessionManager;
 use crate::exec_command::WRITE_STDIN_TOOL_NAME;
 use crate::exec_command::WriteStdinParams;
 use crate::exec_env::create_env;
@@ -269,6 +269,7 @@ pub(crate) struct Session {
 
     /// Manager for external MCP servers/tools.
     mcp_connection_manager: McpConnectionManager,
+    session_manager: ExecSessionManager,
 
     /// External notifier command (will be passed as args to exec()). When
     /// `None` this feature is disabled.
@@ -528,6 +529,7 @@ impl Session {
             session_id,
             tx_event: tx_event.clone(),
             mcp_connection_manager,
+            session_manager: ExecSessionManager::default(),
             notify,
             state: Mutex::new(state),
             rollout: Mutex::new(rollout_recorder),
@@ -2112,7 +2114,8 @@ async fn handle_function_call(
                     };
                 }
             };
-            let result = SESSION_MANAGER
+            let result = sess
+                .session_manager
                 .handle_exec_command_request(exec_params)
                 .await;
             let function_call_output = crate::exec_command::result_into_payload(result);
@@ -2134,7 +2137,8 @@ async fn handle_function_call(
                     };
                 }
             };
-            let result = SESSION_MANAGER
+            let result = sess
+                .session_manager
                 .handle_write_stdin_request(write_stdin_params)
                 .await;
             let function_call_output: FunctionCallOutputPayload =
