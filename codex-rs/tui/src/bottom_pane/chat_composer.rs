@@ -26,7 +26,6 @@ use super::command_popup::CommandPopup;
 use super::file_search_popup::FileSearchPopup;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
-use super::paste_burst::RetroGrab;
 use crate::slash_command::SlashCommand;
 
 use crate::app_event::AppEvent;
@@ -108,41 +107,6 @@ enum ActivePopup {
 }
 
 impl ChatComposer {
-    // Handles plain-char burst logic; returns Some if handled and no further processing is needed.
-    fn process_plain_char_paste_burst(
-        &mut self,
-        ch: char,
-        now: Instant,
-    ) -> Option<(InputResult, bool)> {
-        match self.paste_burst.on_plain_char(now) {
-            CharDecision::BufferAppend => {
-                self.paste_burst.append_char_to_buffer(ch, now);
-                Some((InputResult::None, true))
-            }
-            CharDecision::BeginBuffer { retro_chars } => {
-                let cur = self.textarea.cursor();
-                let txt = self.textarea.text();
-                let before = &txt[..cur];
-                if let Some(RetroGrab {
-                    start_byte,
-                    grabbed,
-                }) = self
-                    .paste_burst
-                    .decide_begin_buffer(now, before, retro_chars as usize)
-                {
-                    if !grabbed.is_empty() {
-                        self.textarea.replace_range(start_byte..cur, "");
-                    }
-                    // Buffer already began inside decide_begin_buffer; append this char too.
-                    self.paste_burst.append_char_to_buffer(ch, now);
-                    Some((InputResult::None, true))
-                } else {
-                    None
-                }
-            }
-            CharDecision::Passthrough => None,
-        }
-    }
     pub fn new(
         has_input_focus: bool,
         app_event_tx: AppEventSender,
@@ -312,6 +276,47 @@ impl ChatComposer {
     #[cfg(test)]
     pub(crate) fn current_text(&self) -> String {
         self.textarea.text().to_string()
+    }
+
+    // Attempt to start a burst by retro-capturing recent chars before the cursor.
+    // Returns true if a burst began and the textarea slice was removed.
+    fn try_begin_burst_from_cursor(&mut self, retro_chars: usize, now: Instant) -> bool {
+        let cur = self.textarea.cursor();
+        let txt = self.textarea.text();
+        let before = &txt[..cur];
+        if let Some(grab) = self
+            .paste_burst
+            .decide_begin_buffer(now, before, retro_chars)
+        {
+            if !grab.grabbed.is_empty() {
+                self.textarea.replace_range(grab.start_byte..cur, "");
+            }
+            return true;
+        }
+        false
+    }
+
+    // Handles plain-char burst logic; returns Some if handled and no further processing is needed.
+    fn process_plain_char_paste_burst(
+        &mut self,
+        ch: char,
+        now: Instant,
+    ) -> Option<(InputResult, bool)> {
+        match self.paste_burst.on_plain_char(now) {
+            CharDecision::BufferAppend => {
+                self.paste_burst.append_char_to_buffer(ch, now);
+                Some((InputResult::None, true))
+            }
+            CharDecision::BeginBuffer { retro_chars } => {
+                if self.try_begin_burst_from_cursor(retro_chars as usize, now) {
+                    self.paste_burst.append_char_to_buffer(ch, now);
+                    Some((InputResult::None, true))
+                } else {
+                    None
+                }
+            }
+            CharDecision::Passthrough => None,
+        }
     }
 
     pub fn attach_image(&mut self, path: PathBuf, width: u32, height: u32, format_label: &str) {
