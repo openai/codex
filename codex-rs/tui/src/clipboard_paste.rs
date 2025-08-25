@@ -143,7 +143,6 @@ mod pasted_paths_tests {
 
     #[test]
     fn normalize_file_url() {
-        // Use platform-appropriate file:// URL expectations.
         #[cfg(windows)]
         {
             let input = "file:///C:/Temp/example.png";
