@@ -48,6 +48,8 @@ pub fn generate_ts(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
     codex_protocol::mcp_protocol::ExecCommandApprovalResponse::export_all_to(out_dir)?;
     codex_protocol::mcp_protocol::ServerNotification::export_all_to(out_dir)?;
 
+    generate_index_ts(out_dir)?;
+
     // Prepend header to each generated .ts file
     let ts_files = ts_files_in(out_dir)?;
     for file in &ts_files {
@@ -109,5 +111,39 @@ fn ts_files_in(dir: &Path) -> Result<Vec<PathBuf>> {
             files.push(path);
         }
     }
+    files.sort();
     Ok(files)
+}
+
+/// Generate an index.ts file that re-exports all generated types.
+/// This allows consumers to import all types from a single file.
+fn generate_index_ts(out_dir: &Path) -> Result<PathBuf> {
+    let mut entries: Vec<String> = Vec::new();
+    let mut stems: Vec<String> = ts_files_in(out_dir)?
+        .into_iter()
+        .filter_map(|p| {
+            let stem = p.file_stem()?.to_string_lossy().into_owned();
+            if stem == "index" { None } else { Some(stem) }
+        })
+        .collect();
+    stems.sort();
+    stems.dedup();
+
+    for name in stems {
+        entries.push(format!("export type {{ {name} }} from \"./{name}\";\n"));
+    }
+
+    let mut content =
+        String::with_capacity(HEADER.len() + entries.iter().map(|s| s.len()).sum::<usize>());
+    content.push_str(HEADER);
+    for line in &entries {
+        content.push_str(line);
+    }
+
+    let index_path = out_dir.join("index.ts");
+    let mut f = fs::File::create(&index_path)
+        .with_context(|| format!("Failed to create {}", index_path.display()))?;
+    f.write_all(content.as_bytes())
+        .with_context(|| format!("Failed to write {}", index_path.display()))?;
+    Ok(index_path)
 }
