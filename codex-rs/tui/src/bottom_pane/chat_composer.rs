@@ -756,6 +756,24 @@ impl ChatComposer {
             let has_ctrl_or_alt =
                 modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::ALT);
             if !has_ctrl_or_alt {
+                // 日本語などの非ASCII文字はIME確定で高速に連続送信されやすく、
+                // 「非ブラケット化ペースト」のバースト検知に誤検出されると
+                // 最後の1文字がバッファに滞留して表示されない。
+                // これを防ぐため、非ASCII文字ではバースト検知を無効化し、
+                // 逐次挿入する。
+                if !ch.is_ascii() {
+                    // 既にASCIIの連打で蓄積中のバッファがあれば先にフラッシュ。
+                    if !self.paste_burst_buffer.is_empty() || self.in_paste_burst_mode {
+                        let pasted = std::mem::take(&mut self.paste_burst_buffer);
+                        self.in_paste_burst_mode = false;
+                        self.handle_paste(pasted);
+                    }
+                    self.textarea.input(input);
+                    let text_after = self.textarea.text();
+                    self.pending_pastes
+                        .retain(|(placeholder, _)| text_after.contains(placeholder));
+                    return (InputResult::None, true);
+                }
                 // Update burst heuristics.
                 match self.last_plain_char_time {
                     Some(prev) if now.duration_since(prev) <= PASTE_BURST_CHAR_INTERVAL => {
