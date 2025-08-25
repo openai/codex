@@ -724,6 +724,7 @@ mod tests {
             SandboxPolicy::ReadOnly,
             false,
             false,
+            true,
             /*use_experimental_streamable_shell_tool*/ false,
         );
 
