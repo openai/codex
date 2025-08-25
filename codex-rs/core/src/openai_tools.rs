@@ -783,6 +783,7 @@ mod tests {
             &tools,
             &[
                 "shell",
+                "web_search",
                 "test_server/cool",
                 "test_server/do",
                 "test_server/something",
