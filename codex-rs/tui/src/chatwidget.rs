@@ -249,6 +249,16 @@ impl ChatWidget {
         self.mark_needs_redraw();
     }
 
+    /// Allow the app loop to flush any buffered non-bracketed paste before rendering.
+    pub(crate) fn flush_paste_burst_if_due(&mut self) -> bool {
+        if self.bottom_pane.flush_paste_burst_if_due() {
+            // Composer content changed; request a redraw to ensure UI updates propagate.
+            self.mark_needs_redraw();
+            return true;
+        }
+        false
+    }
+
     fn on_plan_update(&mut self, update: codex_core::plan_tool::UpdatePlanArgs) {
         self.add_to_history(history_cell::new_plan_update(update));
     }

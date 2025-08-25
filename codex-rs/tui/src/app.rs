@@ -133,6 +133,9 @@ impl App {
                     self.chat_widget.handle_paste(pasted);
                 }
                 TuiEvent::Draw => {
+                    // Give the composer a chance to auto-flush any buffered non-bracketed paste
+                    // before rendering, so pasted text appears without needing another key.
+                    let _ = self.chat_widget.flush_paste_burst_if_due();
                     tui.draw(
                         self.chat_widget.desired_height(tui.terminal.size()?.width),
                         |frame| {

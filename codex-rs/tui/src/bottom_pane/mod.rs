@@ -1,5 +1,6 @@
 //! Bottom pane: shows the ChatComposer or a BottomPaneView, if one is active.
 use std::path::PathBuf;
+use std::time::Duration;
 
 use crate::app_event_sender::AppEventSender;
 use crate::tui::FrameRequester;
@@ -160,6 +161,11 @@ impl BottomPane {
             let (input_result, needs_redraw) = self.composer.handle_key_event(key_event);
             if needs_redraw {
                 self.request_redraw();
+            }
+            // If we're in a non-bracketed paste burst, schedule a delayed draw so the
+            // buffered content can auto-flush even if the user doesn't press another key.
+            if self.composer.is_in_paste_burst() {
+                self.request_redraw_in(crate::bottom_pane::chat_composer::ChatComposer::recommended_paste_flush_delay());
             }
             input_result
         }
@@ -362,6 +368,11 @@ impl BottomPane {
         self.frame_requester.schedule_frame();
     }
 
+    /// Request a redraw after a delay; used to auto-flush non-bracketed paste bursts.
+    pub(crate) fn request_redraw_in(&self, dur: Duration) {
+        self.frame_requester.schedule_frame_in(dur);
+    }
+
     // --- History helpers ---
 
     pub(crate) fn set_history_metadata(&mut self, log_id: u64, entry_count: usize) {
@@ -386,6 +397,12 @@ impl BottomPane {
     pub(crate) fn on_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
         self.composer.on_file_search_result(query, matches);
         self.request_redraw();
+    }
+
+    /// Flush any buffered non-bracketed paste if the heuristic timeout has elapsed.
+    /// Returns true if the composer content changed.
+    pub(crate) fn flush_paste_burst_if_due(&mut self) -> bool {
+        self.composer.flush_paste_burst_if_due()
     }
 
     pub(crate) fn attach_image(

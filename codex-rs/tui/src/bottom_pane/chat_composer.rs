@@ -139,6 +139,36 @@ impl ChatComposer {
         }
     }
 
+    /// Returns true if we're currently buffering a non-bracketed paste burst.
+    pub(crate) fn is_in_paste_burst(&self) -> bool {
+        self.in_paste_burst_mode || !self.paste_burst_buffer.is_empty()
+    }
+
+    /// Recommended delay before attempting an auto-flush of a detected
+    /// non-bracketed paste burst. Adds a small slack over the inter-char
+    /// heuristic so the last character of a paste is captured.
+    pub(crate) fn recommended_paste_flush_delay() -> Duration {
+        PASTE_BURST_CHAR_INTERVAL + Duration::from_millis(10)
+    }
+
+    /// If a non-bracketed paste burst has timed out, flush the buffered
+    /// content through the normal paste path so it appears without waiting
+    /// for another keystroke. Returns true if any content was flushed.
+    pub(crate) fn flush_paste_burst_if_due(&mut self) -> bool {
+        let now = Instant::now();
+        let timed_out = self
+            .last_plain_char_time
+            .is_some_and(|t| now.duration_since(t) > PASTE_BURST_CHAR_INTERVAL);
+        if timed_out && (!self.paste_burst_buffer.is_empty() || self.in_paste_burst_mode) {
+            let pasted = std::mem::take(&mut self.paste_burst_buffer);
+            self.in_paste_burst_mode = false;
+            // Reuse normal paste path (handles large-paste placeholders, popup sync, etc.).
+            let _ = self.handle_paste(pasted);
+            return true;
+        }
+        false
+    }
+
     pub fn desired_height(&self, width: u16) -> u16 {
         self.textarea.desired_height(width - 1)
             + match &self.active_popup {
@@ -787,7 +817,35 @@ impl ChatComposer {
                             .retain(|(placeholder, _)| text_after.contains(placeholder));
                         return (InputResult::None, true);
                     }
-                    // Begin buffering from this character onward.
+                    // Begin buffering for this non-bracketed paste.
+                    // Retroactively capture the last (burst_len_before) plain characters
+                    // that were inserted before we crossed the threshold, so they are
+                    // included in the buffered paste instead of remaining in the textarea.
+                    let burst_len_before: usize = self
+                        .consecutive_plain_char_burst
+                        .saturating_sub(1) as usize;
+                    if burst_len_before > 0 {
+                        let cur = self.textarea.cursor();
+                        let txt = self.textarea.text();
+                        let before = &txt[..cur];
+                        let start_byte = if burst_len_before == 0 {
+                            before.len()
+                        } else {
+                            before
+                                .char_indices()
+                                .rev()
+                                .nth(burst_len_before - 1)
+                                .map(|(idx, _)| idx)
+                                .unwrap_or(0)
+                        };
+                        let grabbed = before[start_byte..].to_string();
+                        if !grabbed.is_empty() {
+                            // Remove from textarea and prepend to buffer.
+                            self.textarea.replace_range(start_byte..cur, "");
+                            self.paste_burst_buffer.push_str(&grabbed);
+                        }
+                    }
+                    // Capture the current character as part of the burst.
                     self.paste_burst_buffer.push(ch);
                     self.in_paste_burst_mode = true;
                     // Keep the window alive to continue capturing.
