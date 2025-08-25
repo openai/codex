@@ -40,7 +40,10 @@ codex-login = { path = "../login" }
 codex-ollama = { path = "../ollama" }
 codex-protocol = { path = "../protocol" }
 color-eyre = "0.6.3"
-crossterm = { version = "0.28.1", features = ["bracketed-paste", "event-stream"] }
+crossterm = { version = "0.28.1", features = [
+    "bracketed-paste",
+    "event-stream",
+] }
 diffy = "0.4.2"
 image = { version = "^0.25.6", default-features = false, features = [
     "jpeg",
@@ -82,6 +85,7 @@ tui-input = "0.14.0"
 tui-markdown = "0.3.3"
 unicode-segmentation = "1.12.0"
 unicode-width = "0.1"
+url = "2"
 uuid = "1"
 
 [target.'cfg(unix)'.dependencies]
