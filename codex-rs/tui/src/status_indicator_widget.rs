@@ -15,6 +15,7 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::shimmer::shimmer_spans;
 use crate::tui::FrameRequester;
+use codex_core::protocol::Op;
 use textwrap::Options as TwOptions;
 use textwrap::WordSplitter;
 
@@ -70,9 +71,8 @@ impl StatusIndicatorWidget {
     }
 
     pub(crate) fn interrupt(&self) {
-        // Single path: request an interrupt via the app. The widget layer
-        // does not send protocol ops directly.
-        self.app_event_tx.send(AppEvent::InterruptRequest);
+        // Event-driven: signal interrupt to the agent; UI finalizes on TurnAborted.
+        self.app_event_tx.send(AppEvent::CodexOp(Op::Interrupt));
     }
 
     /// Update the animated header label (left of the brackets).

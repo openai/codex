@@ -230,10 +230,6 @@ impl App {
                 return Ok(false);
             }
             AppEvent::CodexOp(op) => self.chat_widget.submit_op(op),
-            AppEvent::InterruptRequest => {
-                // Single path for interrupts (Esc or Ctrl-C).
-                self.chat_widget.interrupt_now();
-            }
             AppEvent::DiffResult(text) => {
                 // Clear the in-progress state in the bottom pane
                 self.chat_widget.on_diff_complete();

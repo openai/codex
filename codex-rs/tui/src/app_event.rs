@@ -47,10 +47,6 @@ pub(crate) enum AppEvent {
     StopCommitAnimation,
     CommitTick,
 
-    /// UI-level request to interrupt the current task immediately (e.g., Esc
-    /// on the status indicator). This consolidates behavior with Ctrl-C.
-    InterruptRequest,
-
     /// Update the current reasoning effort in the running app and widget.
     UpdateReasoningEffort(ReasoningEffort),
 
