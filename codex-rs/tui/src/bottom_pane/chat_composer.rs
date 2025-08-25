@@ -108,6 +108,23 @@ enum ActivePopup {
 }
 
 impl ChatComposer {
+    #[inline]
+    fn retro_grab_if_pastey(&mut self, retro_chars: usize) -> Option<String> {
+        let cur = self.textarea.cursor();
+        let txt = self.textarea.text();
+        let before = &txt[..cur];
+        let start_byte = retro_start_index(before, retro_chars);
+        let grabbed = before[start_byte..].to_string();
+        let looks_pastey = grabbed.chars().any(|c| c.is_whitespace()) || grabbed.len() >= 16;
+        if looks_pastey {
+            if !grabbed.is_empty() {
+                self.textarea.replace_range(start_byte..cur, "");
+            }
+            Some(grabbed)
+        } else {
+            None
+        }
+    }
     // Handles plain-char burst logic; returns Some if handled and no further processing is needed.
     fn process_plain_char_paste_burst(
         &mut self,
@@ -120,22 +137,13 @@ impl ChatComposer {
                 Some((InputResult::None, true))
             }
             CharDecision::BeginBuffer { retro_chars } => {
-                let cur = self.textarea.cursor();
-                let txt = self.textarea.text();
-                let before = &txt[..cur];
-                let start_byte = retro_start_index(before, retro_chars as usize);
-                let grabbed = before[start_byte..].to_string();
-                let looks_pastey =
-                    grabbed.chars().any(|c| c.is_whitespace()) || grabbed.len() >= 16;
-                if looks_pastey {
-                    if !grabbed.is_empty() {
-                        self.textarea.replace_range(start_byte..cur, "");
+                match self.retro_grab_if_pastey(retro_chars as usize) {
+                    Some(grabbed) => {
+                        self.paste_burst.begin_with_retro_grabbed(grabbed, now);
+                        self.paste_burst.append_char_to_buffer(ch, now);
+                        Some((InputResult::None, true))
                     }
-                    self.paste_burst.begin_with_retro_grabbed(grabbed, now);
-                    self.paste_burst.append_char_to_buffer(ch, now);
-                    Some((InputResult::None, true))
-                } else {
-                    None
+                    None => None,
                 }
             }
             CharDecision::Passthrough => None,
