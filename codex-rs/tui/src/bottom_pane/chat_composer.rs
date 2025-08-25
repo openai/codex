@@ -241,6 +241,7 @@ impl ChatComposer {
     }
 
     /// Get the current composer text.
+    #[cfg(test)]
     pub(crate) fn current_text(&self) -> String {
         self.textarea.text().to_string()
     }
