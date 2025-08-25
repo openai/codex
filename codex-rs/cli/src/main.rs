@@ -40,6 +40,10 @@ struct MultitoolCli {
     #[clap(flatten)]
     interactive: TuiCli,
 
+    /// Self-update Codex to the latest available version
+    #[arg(long = "upgrade", default_value_t = false)]
+    upgrade: bool,
+
     #[clap(subcommand)]
     subcommand: Option<Subcommand>,
 }
@@ -145,6 +149,11 @@ fn main() -> anyhow::Result<()> {
 async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     let cli = MultitoolCli::parse();
 
+    if cli.upgrade {
+        run_upgrade().await?;
+        return Ok(());
+    }
+
     match cli.subcommand {
         None => {
             let mut tui_cli = cli.interactive;
@@ -232,4 +241,56 @@ fn print_completion(cmd: CompletionCommand) {
     let mut app = MultitoolCli::command();
     let name = "codex";
     generate(cmd.shell, &mut app, name, &mut std::io::stdout());
+}
+
+async fn run_upgrade() -> anyhow::Result<()> {
+    let managed_by_npm = std::env::var_os("CODEX_MANAGED_BY_NPM").is_some();
+    if managed_by_npm {
+        println!("Updating codex via npm");
+
+        let mut cmd = tokio::process::Command::new("npm");
+        cmd.arg("install").arg("-g").arg("@openai/codex@latest");
+        cmd.stdin(std::process::Stdio::inherit());
+        cmd.stdout(std::process::Stdio::inherit());
+        cmd.stderr(std::process::Stdio::inherit());
+
+        let status = cmd.status().await?;
+        if status.success() {
+            println!("Updated via npm: @openai/codex@latest");
+            return Ok(());
+        }
+        return Err(anyhow::anyhow!(
+            "npm failed with exit code {}",
+            status.code().unwrap_or(-1)
+        ));
+    }
+
+    let exe = std::env::current_exe()?;
+    #[cfg(target_os = "macos")]
+    if exe.starts_with("/opt/homebrew") || exe.starts_with("/usr/local") {
+        println!("Updating codex via brew");
+
+        let mut cmd = tokio::process::Command::new("brew");
+        cmd.arg("upgrade").arg("codex");
+        cmd.stdin(std::process::Stdio::inherit());
+        cmd.stdout(std::process::Stdio::inherit());
+        cmd.stderr(std::process::Stdio::inherit());
+
+        let status = cmd.status().await?;
+        if status.success() {
+            println!("Updated via Homebrew: brew upgrade codex");
+            return Ok(());
+        }
+        return Err(anyhow::anyhow!(
+            "brew failed with exit code {}",
+            status.code().unwrap_or(-1)
+        ));
+    }
+
+    let current_version = env!("CARGO_PKG_VERSION");
+    println!(
+        "No supported package manager detected for self-update.\nCurrent version: {}\nSee https://github.com/openai/codex/releases/latest for binaries and installation options.",
+        current_version
+    );
+    Ok(())
 }
