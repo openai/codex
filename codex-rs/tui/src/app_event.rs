@@ -1,3 +1,4 @@
+use codex_core::protocol::ConversationHistoryResponseEvent;
 use codex_core::protocol::Event;
 use codex_file_search::FileMatch;
 use ratatui::text::Line;
@@ -57,4 +58,7 @@ pub(crate) enum AppEvent {
 
     /// Update the current sandbox policy in the running app and widget.
     UpdateSandboxPolicy(SandboxPolicy),
+
+    /// Forwarded conversation history snapshot from the current conversation.
+    ConversationHistory(ConversationHistoryResponseEvent),
 }

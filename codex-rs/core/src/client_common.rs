@@ -1,13 +1,13 @@
 use crate::config_types::Verbosity as VerbosityConfig;
 use crate::error::Result;
 use crate::model_family::ModelFamily;
-use crate::models::ContentItem;
-use crate::models::ResponseItem;
 use crate::openai_tools::OpenAiTool;
 use crate::protocol::TokenUsage;
 use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
 use futures::Stream;
 use serde::Serialize;
 use std::borrow::Cow;
@@ -49,13 +49,14 @@ impl Prompt {
             .unwrap_or(BASE_INSTRUCTIONS);
         let mut sections: Vec<&str> = vec![base];
 
-        // When there are no custom instructions, add apply_patch if either:
-        // - the model needs special instructions, or
+        // When there are no custom instructions, add apply_patch_tool_instructions if either:
+        // - the model needs special instructions (4.1), or
         // - there is no apply_patch tool present
-        let is_apply_patch_tool_present = self
-            .tools
-            .iter()
-            .any(|t| matches!(t, OpenAiTool::Function(f) if f.name == "apply_patch"));
+        let is_apply_patch_tool_present = self.tools.iter().any(|tool| match tool {
+            OpenAiTool::Function(f) => f.name == "apply_patch",
+            OpenAiTool::Freeform(f) => f.name == "apply_patch",
+            _ => false,
+        });
         if self.base_instructions_override.is_none()
             && (model.needs_special_apply_patch_instructions || !is_apply_patch_tool_present)
         {
@@ -92,6 +93,10 @@ pub enum ResponseEvent {
     ReasoningSummaryDelta(String),
     ReasoningContentDelta(String),
     ReasoningSummaryPartAdded,
+    WebSearchCallBegin {
+        call_id: String,
+        query: Option<String>,
+    },
 }
 
 #[derive(Debug, Serialize)]

@@ -70,20 +70,6 @@ impl Frame<'_> {
     /// Usually the area argument is the size of the current frame or a sub-area of the current
     /// frame (which can be obtained using [`Layout`] to split the total area).
     ///
-    /// # Example
-    ///
-    /// ```rust
-    /// # use ratatui::{backend::TestBackend, Terminal};
-    /// # let backend = TestBackend::new(5, 5);
-    /// # let mut terminal = Terminal::new(backend).unwrap();
-    /// # let mut frame = terminal.get_frame();
-    /// use ratatui::{layout::Rect, widgets::Block};
-    ///
-    /// let block = Block::new();
-    /// let area = Rect::new(0, 0, 5, 5);
-    /// frame.render_widget(block, area);
-    /// ```
-    ///
     /// [`Layout`]: crate::layout::Layout
     pub fn render_widget<W: Widget>(&mut self, widget: W, area: Rect) {
         widget.render(area, self.buffer);
@@ -93,22 +79,6 @@ impl Frame<'_> {
     ///
     /// Usually the area argument is the size of the current frame or a sub-area of the current
     /// frame (which can be obtained using [`Layout`] to split the total area).
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// # #[cfg(feature = "unstable-widget-ref")] {
-    /// # use ratatui::{backend::TestBackend, Terminal};
-    /// # let backend = TestBackend::new(5, 5);
-    /// # let mut terminal = Terminal::new(backend).unwrap();
-    /// # let mut frame = terminal.get_frame();
-    /// use ratatui::{layout::Rect, widgets::Block};
-    ///
-    /// let block = Block::new();
-    /// let area = Rect::new(0, 0, 5, 5);
-    /// frame.render_widget_ref(block, area);
-    /// # }
-    /// ```
     #[allow(clippy::needless_pass_by_value)]
     pub fn render_widget_ref<W: WidgetRef>(&mut self, widget: W, area: Rect) {
         widget.render_ref(area, self.buffer);
@@ -121,24 +91,6 @@ impl Frame<'_> {
     ///
     /// The last argument should be an instance of the [`StatefulWidget::State`] associated to the
     /// given [`StatefulWidget`].
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// # use ratatui::{backend::TestBackend, Terminal};
-    /// # let backend = TestBackend::new(5, 5);
-    /// # let mut terminal = Terminal::new(backend).unwrap();
-    /// # let mut frame = terminal.get_frame();
-    /// use ratatui::{
-    ///     layout::Rect,
-    ///     widgets::{List, ListItem, ListState},
-    /// };
-    ///
-    /// let mut state = ListState::default().with_selected(Some(1));
-    /// let list = List::new(vec![ListItem::new("Item 1"), ListItem::new("Item 2")]);
-    /// let area = Rect::new(0, 0, 5, 5);
-    /// frame.render_stateful_widget(list, area, &mut state);
-    /// ```
     ///
     /// [`Layout`]: crate::layout::Layout
     pub fn render_stateful_widget<W>(&mut self, widget: W, area: Rect, state: &mut W::State)
@@ -156,26 +108,6 @@ impl Frame<'_> {
     ///
     /// The last argument should be an instance of the [`StatefulWidgetRef::State`] associated to
     /// the given [`StatefulWidgetRef`].
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// # #[cfg(feature = "unstable-widget-ref")] {
-    /// # use ratatui::{backend::TestBackend, Terminal};
-    /// # let backend = TestBackend::new(5, 5);
-    /// # let mut terminal = Terminal::new(backend).unwrap();
-    /// # let mut frame = terminal.get_frame();
-    /// use ratatui::{
-    ///     layout::Rect,
-    ///     widgets::{List, ListItem, ListState},
-    /// };
-    ///
-    /// let mut state = ListState::default().with_selected(Some(1));
-    /// let list = List::new(vec![ListItem::new("Item 1"), ListItem::new("Item 2")]);
-    /// let area = Rect::new(0, 0, 5, 5);
-    /// frame.render_stateful_widget_ref(list, area, &mut state);
-    /// # }
-    /// ```
     #[allow(clippy::needless_pass_by_value)]
     pub fn render_stateful_widget_ref<W>(&mut self, widget: W, area: Rect, state: &mut W::State)
     where
@@ -216,17 +148,6 @@ impl Frame<'_> {
     /// This count is particularly useful when dealing with dynamic content or animations where the
     /// state of the display changes over time. By tracking the frame count, developers can
     /// synchronize updates or changes to the content with the rendering process.
-    ///
-    /// # Examples
-    ///
-    /// ```rust
-    /// # use ratatui::{backend::TestBackend, Terminal};
-    /// # let backend = TestBackend::new(5, 5);
-    /// # let mut terminal = Terminal::new(backend).unwrap();
-    /// # let mut frame = terminal.get_frame();
-    /// let current_count = frame.count();
-    /// println!("Current frame count: {}", current_count);
-    /// ```
     pub const fn count(&self) -> usize {
         self.count
     }
@@ -277,19 +198,6 @@ where
     B: Backend,
 {
     /// Creates a new [`Terminal`] with the given [`Backend`] and [`TerminalOptions`].
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use std::io::stdout;
-    ///
-    /// use ratatui::{backend::CrosstermBackend, layout::Rect, Terminal, TerminalOptions, Viewport};
-    ///
-    /// let backend = CrosstermBackend::new(stdout());
-    /// let viewport = Viewport::Fixed(Rect::new(0, 0, 10, 10));
-    /// let terminal = Terminal::with_options(backend, TerminalOptions { viewport })?;
-    /// # std::io::Result::Ok(())
-    /// ```
     pub fn with_options(mut backend: B) -> io::Result<Self> {
         let screen_size = backend.size()?;
         let cursor_pos = backend.get_cursor_position()?;
@@ -394,29 +302,6 @@ where
     /// previous frame to determine what has changed, and only the changes are written to the
     /// terminal. If the render callback does not fully render the frame, the terminal will not be
     /// in a consistent state.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// # let backend = ratatui::backend::TestBackend::new(10, 10);
-    /// # let mut terminal = ratatui::Terminal::new(backend)?;
-    /// use ratatui::{layout::Position, widgets::Paragraph};
-    ///
-    /// // with a closure
-    /// terminal.draw(|frame| {
-    ///     let area = frame.area();
-    ///     frame.render_widget(Paragraph::new("Hello World!"), area);
-    ///     frame.set_cursor_position(Position { x: 0, y: 0 });
-    /// })?;
-    ///
-    /// // or with a function
-    /// terminal.draw(render)?;
-    ///
-    /// fn render(frame: &mut ratatui::Frame) {
-    ///     frame.render_widget(Paragraph::new("Hello World!"), frame.area());
-    /// }
-    /// # std::io::Result::Ok(())
-    /// ```
     pub fn draw<F>(&mut self, render_callback: F) -> io::Result<()>
     where
         F: FnOnce(&mut Frame),
@@ -462,36 +347,6 @@ where
     /// previous frame to determine what has changed, and only the changes are written to the
     /// terminal. If the render function does not fully render the frame, the terminal will not be
     /// in a consistent state.
-    ///
-    /// # Examples
-    ///
-    /// ```should_panic
-    /// # use ratatui::layout::Position;;
-    /// # let backend = ratatui::backend::TestBackend::new(10, 10);
-    /// # let mut terminal = ratatui::Terminal::new(backend)?;
-    /// use std::io;
-    ///
-    /// use ratatui::widgets::Paragraph;
-    ///
-    /// // with a closure
-    /// terminal.try_draw(|frame| {
-    ///     let value: u8 = "not a number".parse().map_err(io::Error::other)?;
-    ///     let area = frame.area();
-    ///     frame.render_widget(Paragraph::new("Hello World!"), area);
-    ///     frame.set_cursor_position(Position { x: 0, y: 0 });
-    ///     io::Result::Ok(())
-    /// })?;
-    ///
-    /// // or with a function
-    /// terminal.try_draw(render)?;
-    ///
-    /// fn render(frame: &mut ratatui::Frame) -> io::Result<()> {
-    ///     let value: u8 = "not a number".parse().map_err(io::Error::other)?;
-    ///     frame.render_widget(Paragraph::new("Hello World!"), frame.area());
-    ///     Ok(())
-    /// }
-    /// # io::Result::Ok(())
-    /// ```
     pub fn try_draw<F, E>(&mut self, render_callback: F) -> io::Result<()>
     where
         F: FnOnce(&mut Frame) -> Result<(), E>,

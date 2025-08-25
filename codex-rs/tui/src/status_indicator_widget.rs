@@ -146,6 +146,15 @@ impl StatusIndicatorWidget {
         let since_start = self.start_time.elapsed();
         (since_start.as_millis() / 100) as usize
     }
+
+    /// Test-only helper to fast-forward the internal clock so animations
+    /// advance without sleeping.
+    #[cfg(test)]
+    pub(crate) fn test_fast_forward_frames(&mut self, frames: usize) {
+        let advance_ms = (frames as u64).saturating_mul(100);
+        // Move the start time into the past so `current_frame()` advances.
+        self.start_time = std::time::Instant::now() - std::time::Duration::from_millis(advance_ms);
+    }
 }
 
 impl WidgetRef for StatusIndicatorWidget {
@@ -236,8 +245,8 @@ mod tests {
         w.restart_with_text("Hello".to_string());
 
         let area = ratatui::layout::Rect::new(0, 0, 30, 1);
-        // Allow a short delay so the typewriter reveals the first character.
-        std::thread::sleep(std::time::Duration::from_millis(120));
+        // Advance animation without sleeping.
+        w.test_fast_forward_frames(2);
         let mut buf = ratatui::buffer::Buffer::empty(area);
         w.render_ref(area, &mut buf);
 
@@ -252,8 +261,8 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy());
         w.restart_with_text("Hi".to_string());
-        // Ensure some frames elapse so we get a stable state.
-        std::thread::sleep(std::time::Duration::from_millis(120));
+        // Advance animation without sleeping.
+        w.test_fast_forward_frames(2);
 
         let area = ratatui::layout::Rect::new(0, 0, 30, 1);
         let mut buf = ratatui::buffer::Buffer::empty(area);
@@ -273,7 +282,7 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let mut w = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy());
         w.restart_with_text("Hello".to_string());
-        std::thread::sleep(std::time::Duration::from_millis(120));
+        w.test_fast_forward_frames(2);
 
         let area = ratatui::layout::Rect::new(0, 0, 30, 1);
         let mut buf = ratatui::buffer::Buffer::empty(area);

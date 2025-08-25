@@ -1,6 +1,7 @@
 use std::io::Result;
 use std::io::Stdout;
 use std::io::stdout;
+use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -15,7 +16,11 @@ use crossterm::cursor;
 use crossterm::cursor::MoveTo;
 use crossterm::event::DisableBracketedPaste;
 use crossterm::event::EnableBracketedPaste;
+use crossterm::event::Event;
+use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::KeyEventKind;
+use crossterm::event::KeyModifiers;
 use crossterm::event::KeyboardEnhancementFlags;
 use crossterm::event::PopKeyboardEnhancementFlags;
 use crossterm::event::PushKeyboardEnhancementFlags;
@@ -30,6 +35,7 @@ use ratatui::crossterm::terminal::enable_raw_mode;
 use ratatui::layout::Offset;
 use ratatui::text::Line;
 
+use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::custom_terminal;
 use crate::custom_terminal::Terminal as CustomTerminal;
 use tokio::select;
@@ -103,6 +109,12 @@ pub enum TuiEvent {
     Key(KeyEvent),
     Paste(String),
     Draw,
+    AttachImage {
+        path: PathBuf,
+        width: u32,
+        height: u32,
+        format_label: &'static str,
+    },
 }
 
 pub struct Tui {
@@ -124,6 +136,12 @@ enum ResumeAction {
     None = 0,
     RealignInline = 1,
     RestoreAlt = 2,
+}
+
+#[cfg(unix)]
+enum PreparedResumeAction {
+    RestoreAltScreen,
+    RealignViewport(ratatui::layout::Rect),
 }
 
 #[cfg(unix)]
@@ -236,6 +254,29 @@ impl Tui {
                 select! {
                     Some(Ok(event)) = crossterm_events.next() => {
                         match event {
+                            // Detect Ctrl+V to attach an image from the clipboard.
+                            Event::Key(key_event @ KeyEvent {
+                                code: KeyCode::Char('v'),
+                                modifiers: KeyModifiers::CONTROL,
+                                kind: KeyEventKind::Press,
+                                ..
+                            }) => {
+                                match paste_image_to_temp_png() {
+                                    Ok((path, info)) => {
+                                        yield TuiEvent::AttachImage {
+                                            path,
+                                            width: info.width,
+                                            height: info.height,
+                                            format_label: info.encoded_format.label(),
+                                        };
+                                    }
+                                    Err(_) => {
+                                        // Fall back to normal key handling if no image is available.
+                                        yield TuiEvent::Key(key_event);
+                                    }
+                                }
+                            }
+
                             crossterm::event::Event::Key(key_event) => {
                                 #[cfg(unix)]
                                 if matches!(
@@ -261,10 +302,10 @@ impl Tui {
                                 }
                                 yield TuiEvent::Key(key_event);
                             }
-                            crossterm::event::Event::Resize(_, _) => {
+                            Event::Resize(_, _) => {
                                 yield TuiEvent::Draw;
                             }
-                            crossterm::event::Event::Paste(pasted) => {
+                            Event::Paste(pasted) => {
                                 yield TuiEvent::Paste(pasted);
                             }
                             _ => {}
@@ -298,23 +339,37 @@ impl Tui {
     }
 
     #[cfg(unix)]
-    fn apply_resume_action(&mut self, action: ResumeAction) -> Result<()> {
+    fn prepare_resume_action(
+        &mut self,
+        action: ResumeAction,
+    ) -> Result<Option<PreparedResumeAction>> {
         match action {
             ResumeAction::RealignInline => {
                 let cursor_pos = self.terminal.get_cursor_position()?;
-                self.terminal
-                    .set_viewport_area(ratatui::layout::Rect::new(0, cursor_pos.y, 0, 0));
+                Ok(Some(PreparedResumeAction::RealignViewport(
+                    ratatui::layout::Rect::new(0, cursor_pos.y, 0, 0),
+                )))
             }
             ResumeAction::RestoreAlt => {
-                // When we're resuming from alt screen, we need to save what the cursor position
-                // _was_ when we resumed. That way, when we leave the alt screen, we can restore
-                // the cursor to the new position.
                 if let Ok((_x, y)) = crossterm::cursor::position()
                     && let Some(saved) = self.alt_saved_viewport.as_mut()
                 {
                     saved.y = y;
                 }
-                let _ = execute!(self.terminal.backend_mut(), EnterAlternateScreen);
+                Ok(Some(PreparedResumeAction::RestoreAltScreen))
+            }
+            ResumeAction::None => Ok(None),
+        }
+    }
+
+    #[cfg(unix)]
+    fn apply_prepared_resume_action(&mut self, prepared: PreparedResumeAction) -> Result<()> {
+        match prepared {
+            PreparedResumeAction::RealignViewport(area) => {
+                self.terminal.set_viewport_area(area);
+            }
+            PreparedResumeAction::RestoreAltScreen => {
+                execute!(self.terminal.backend_mut(), EnterAlternateScreen)?;
                 if let Ok(size) = self.terminal.size() {
                     self.terminal.set_viewport_area(ratatui::layout::Rect::new(
                         0,
@@ -325,12 +380,9 @@ impl Tui {
                     self.terminal.clear()?;
                 }
             }
-            ResumeAction::None => {}
         }
         Ok(())
     }
-
-    // Public suspend() removed; Ctrl+Z is handled internally via event_stream + draw.
 
     /// Enter alternate screen and expand the viewport to full terminal size, saving the current
     /// inline viewport for restoration when leaving.
@@ -370,12 +422,13 @@ impl Tui {
         height: u16,
         draw_fn: impl FnOnce(&mut custom_terminal::Frame),
     ) -> Result<()> {
-        std::io::stdout().sync_update(|_| {
-            #[cfg(unix)]
-            {
-                // Apply any post-resume action before layout/clear/draw.
-                self.apply_resume_action(take_resume_action(&self.resume_pending))?;
-            }
+        // Precompute any viewport updates that need a cursor-position query before entering
+        // the synchronized update, to avoid racing with the event reader.
+        let mut pending_viewport_area: Option<ratatui::layout::Rect> = None;
+        #[cfg(unix)]
+        let mut prepared_resume =
+            self.prepare_resume_action(take_resume_action(&self.resume_pending))?;
+        {
             let terminal = &mut self.terminal;
             let screen_size = terminal.size()?;
             let last_known_screen_size = terminal.last_known_screen_size;
@@ -384,14 +437,26 @@ impl Tui {
                 let last_known_cursor_pos = terminal.last_known_cursor_pos;
                 if cursor_pos.y != last_known_cursor_pos.y {
                     let cursor_delta = cursor_pos.y as i32 - last_known_cursor_pos.y as i32;
-
                     let new_viewport_area = terminal.viewport_area.offset(Offset {
                         x: 0,
                         y: cursor_delta,
                     });
-                    terminal.set_viewport_area(new_viewport_area);
-                    terminal.clear()?;
+                    pending_viewport_area = Some(new_viewport_area);
                 }
+            }
+        }
+
+        std::io::stdout().sync_update(|_| {
+            #[cfg(unix)]
+            {
+                if let Some(prepared) = prepared_resume.take() {
+                    self.apply_prepared_resume_action(prepared)?;
+                }
+            }
+            let terminal = &mut self.terminal;
+            if let Some(new_area) = pending_viewport_area.take() {
+                terminal.set_viewport_area(new_area);
+                terminal.clear()?;
             }
 
             let size = terminal.size()?;
