@@ -21,6 +21,7 @@ mod chat_composer_history;
 mod command_popup;
 mod file_search_popup;
 mod list_selection_view;
+mod paste_burst;
 mod popup_consts;
 mod scroll_state;
 mod selection_popup_common;

@@ -24,6 +24,9 @@ use ratatui::widgets::WidgetRef;
 use super::chat_composer_history::ChatComposerHistory;
 use super::command_popup::CommandPopup;
 use super::file_search_popup::FileSearchPopup;
+use super::paste_burst::CharDecision;
+use super::paste_burst::PasteBurst;
+use super::paste_burst::retro_start_index;
 use crate::slash_command::SlashCommand;
 
 use crate::app_event::AppEvent;
@@ -93,13 +96,8 @@ pub(crate) struct ChatComposer {
     has_focus: bool,
     attached_images: Vec<AttachedImage>,
     placeholder_text: String,
-    // Heuristic state to detect non-bracketed paste bursts.
-    last_plain_char_time: Option<Instant>,
-    consecutive_plain_char_burst: u16,
-    paste_burst_until: Option<Instant>,
-    // Buffer to accumulate characters during a detected non-bracketed paste burst.
-    paste_burst_buffer: String,
-    in_paste_burst_mode: bool,
+    // Non-bracketed paste burst tracker.
+    paste_burst: PasteBurst,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -134,22 +132,13 @@ impl ChatComposer {
             has_focus: has_input_focus,
             attached_images: Vec::new(),
             placeholder_text,
-            last_plain_char_time: None,
-            consecutive_plain_char_burst: 0,
-            paste_burst_until: None,
-            paste_burst_buffer: String::new(),
-            in_paste_burst_mode: false,
+            paste_burst: PasteBurst::default(),
         }
     }
 
     pub(crate) fn flush_paste_burst_if_due(&mut self) -> bool {
         let now = Instant::now();
-        let timed_out = self
-            .last_plain_char_time
-            .is_some_and(|t| now.duration_since(t) > PASTE_BURST_CHAR_INTERVAL);
-        if timed_out && (!self.paste_burst_buffer.is_empty() || self.in_paste_burst_mode) {
-            let pasted = std::mem::take(&mut self.paste_burst_buffer);
-            self.in_paste_burst_mode = false;
+        if let Some(pasted) = self.paste_burst.flush_if_due(now) {
             let _ = self.handle_paste(pasted);
             return true;
         }
@@ -157,11 +146,11 @@ impl ChatComposer {
     }
 
     pub(crate) fn is_in_paste_burst(&self) -> bool {
-        self.in_paste_burst_mode || !self.paste_burst_buffer.is_empty()
+        self.paste_burst.is_active()
     }
 
     pub(crate) fn recommended_paste_flush_delay() -> Duration {
-        PASTE_BURST_CHAR_INTERVAL + Duration::from_millis(10)
+        PasteBurst::recommended_flush_delay()
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
@@ -251,9 +240,7 @@ impl ChatComposer {
             self.textarea.insert_str(&pasted);
         }
         // Explicit paste events should not trigger Enter suppression.
-        self.last_plain_char_time = None;
-        self.consecutive_plain_char_burst = 0;
-        self.paste_burst_until = None;
+        self.paste_burst.clear_after_explicit_paste();
         self.sync_command_popup();
         self.sync_file_search_popup();
         true
@@ -445,9 +432,7 @@ impl ChatComposer {
 
     #[inline]
     fn handle_non_ascii_char(&mut self, input: KeyEvent) -> (InputResult, bool) {
-        if !self.paste_burst_buffer.is_empty() || self.in_paste_burst_mode {
-            let pasted = std::mem::take(&mut self.paste_burst_buffer);
-            self.in_paste_burst_mode = false;
+        if let Some(pasted) = self.paste_burst.flush_before_modified_input() {
             self.handle_paste(pasted);
         }
         self.textarea.input(input);
@@ -762,14 +747,11 @@ impl ChatComposer {
                         .next()
                         .unwrap_or("")
                         .starts_with('/');
-                if (self.in_paste_burst_mode || !self.paste_burst_buffer.is_empty())
-                    && !in_slash_context
-                {
-                    self.paste_burst_buffer.push('\n');
+                if self.paste_burst.is_active() && !in_slash_context {
                     let now = Instant::now();
-                    // Keep the window alive so subsequent lines are captured too.
-                    self.paste_burst_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
-                    return (InputResult::None, true);
+                    if self.paste_burst.append_newline_if_active(now) {
+                        return (InputResult::None, true);
+                    }
                 }
                 // If we have pending placeholder pastes, submit immediately to expand them.
                 if !self.pending_pastes.is_empty() {
@@ -790,19 +772,12 @@ impl ChatComposer {
 
                 // During a paste-like burst, treat Enter as a newline instead of submit.
                 let now = Instant::now();
-                let tight_after_char = self
-                    .last_plain_char_time
-                    .is_some_and(|t| now.duration_since(t) <= PASTE_BURST_CHAR_INTERVAL);
-                let recent_after_char = self
-                    .last_plain_char_time
-                    .is_some_and(|t| now.duration_since(t) <= PASTE_ENTER_SUPPRESS_WINDOW);
-                let burst_by_count =
-                    recent_after_char && self.consecutive_plain_char_burst >= PASTE_BURST_MIN_CHARS;
-                let in_burst_window = self.paste_burst_until.is_some_and(|until| now <= until);
-
-                if tight_after_char || burst_by_count || in_burst_window {
+                if self
+                    .paste_burst
+                    .newline_should_insert_instead_of_submit(now)
+                {
                     self.textarea.insert_str("\n");
-                    self.paste_burst_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
+                    self.paste_burst.extend_window(now);
                     return (InputResult::None, true);
                 }
                 let mut text = self.textarea.text().to_string();
@@ -832,24 +807,16 @@ impl ChatComposer {
         // If we have a buffered non-bracketed paste burst and enough time has
         // elapsed since the last char, flush it before handling a new input.
         let now = Instant::now();
-        let timed_out = self
-            .last_plain_char_time
-            .is_some_and(|t| now.duration_since(t) > PASTE_BURST_CHAR_INTERVAL);
-        if timed_out && (!self.paste_burst_buffer.is_empty() || self.in_paste_burst_mode) {
-            let pasted = std::mem::take(&mut self.paste_burst_buffer);
-            self.in_paste_burst_mode = false;
+        if let Some(pasted) = self.paste_burst.flush_if_due(now) {
             // Reuse normal paste path (handles large-paste placeholders).
             self.handle_paste(pasted);
         }
 
         // If we're capturing a burst and receive Enter, accumulate it instead of inserting.
-        if matches!(input.code, KeyCode::Enter)
-            && (self.in_paste_burst_mode || !self.paste_burst_buffer.is_empty())
-        {
-            self.paste_burst_buffer.push('\n');
-            self.paste_burst_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
-            return (InputResult::None, true);
-        }
+        if matches!(input.code, KeyCode::Enter) && self.paste_burst.is_active()
+            && self.paste_burst.append_newline_if_active(now) {
+                return (InputResult::None, true);
+            }
 
         // Intercept plain Char inputs to optionally accumulate into a burst buffer.
         if let KeyEvent {
@@ -862,65 +829,45 @@ impl ChatComposer {
                 modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::ALT);
             if !has_ctrl_or_alt {
                 // Non-ASCII characters (e.g., from IMEs) can arrive in quick bursts and be
-                // misclassified by our non-bracketed paste heuristic. To avoid leaving
-                // residual buffered content or misdetecting a paste, flush any burst buffer
-                // and insert non-ASCII characters directly.
+                // misclassified by paste heuristics. Flush any active burst buffer and insert
+                // non-ASCII characters directly.
                 if !ch.is_ascii() {
                     return self.handle_non_ascii_char(input);
                 }
-                // Update burst heuristics.
-                match self.last_plain_char_time {
-                    Some(prev) if now.duration_since(prev) <= PASTE_BURST_CHAR_INTERVAL => {
-                        self.consecutive_plain_char_burst =
-                            self.consecutive_plain_char_burst.saturating_add(1);
-                    }
-                    _ => {
-                        self.consecutive_plain_char_burst = 1;
-                    }
-                }
-                self.last_plain_char_time = Some(now);
 
-                // If we're already buffering, capture the char into the buffer.
-                if self.in_paste_burst_mode {
-                    self.paste_burst_buffer.push(ch);
-                    // Keep the window alive while we receive the burst.
-                    self.paste_burst_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
-                    return (InputResult::None, true);
-                } else if self.consecutive_plain_char_burst >= PASTE_BURST_MIN_CHARS {
-                    // Do not start burst buffering while typing a slash command (first line starts with '/').
-                    let first_line = self.textarea.text().lines().next().unwrap_or("");
-                    if first_line.starts_with('/') {
-                        // Keep heuristics but do not buffer.
-                        self.paste_burst_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
-                        // Insert normally.
-                        self.textarea.input(input);
-                        let text_after = self.textarea.text();
-                        self.pending_pastes
-                            .retain(|(placeholder, _)| text_after.contains(placeholder));
+                match self.paste_burst.on_plain_char(ch, now) {
+                    CharDecision::BufferAppend => {
+                        self.paste_burst.append_char_to_buffer(ch, now);
                         return (InputResult::None, true);
                     }
-                    let burst_len_before: usize =
-                        self.consecutive_plain_char_burst.saturating_sub(1) as usize;
-                    if burst_len_before > 0 {
+                    CharDecision::BeginBuffer { retro_chars } => {
                         let cur = self.textarea.cursor();
                         let txt = self.textarea.text();
-                        let before = &txt[..cur];
-                        let start_byte = before
-                            .char_indices()
-                            .rev()
-                            .nth(burst_len_before - 1)
-                            .map(|(idx, _)| idx)
-                            .unwrap_or(0);
-                        let grabbed = before[start_byte..].to_string();
-                        if !grabbed.is_empty() {
-                            self.textarea.replace_range(start_byte..cur, "");
-                            self.paste_burst_buffer.push_str(&grabbed);
+                        let safe_cur = Self::clamp_to_char_boundary(txt, cur);
+                        let before = &txt[..safe_cur];
+                        if let Some(grab) = self
+                            .paste_burst
+                            .decide_begin_buffer(now, before, retro_chars as usize)
+                        {
+                            if !grab.grabbed.is_empty() {
+                                self.textarea.replace_range(grab.start_byte..safe_cur, "");
+                            }
+                            self.paste_burst.begin_with_retro_grabbed(grab.grabbed, now);
+                            self.paste_burst.append_char_to_buffer(ch, now);
+                            return (InputResult::None, true);
                         }
+                        // If decide_begin_buffer opted not to start buffering,
+                        // fall through to normal insertion below.
                     }
-                    self.paste_burst_buffer.push(ch);
-                    self.in_paste_burst_mode = true;
-                    self.paste_burst_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
-                    return (InputResult::None, true);
+                    CharDecision::BeginBufferFromPending => {
+                        // First char was held; now append the current one.
+                        self.paste_burst.append_char_to_buffer(ch, now);
+                        return (InputResult::None, true);
+                    }
+                    CharDecision::RetainFirstChar => {
+                        // Keep the first fast char pending momentarily.
+                        return (InputResult::None, true);
+                    }
                 }
 
                 // Not buffering: insert normally and continue.
@@ -929,13 +876,8 @@ impl ChatComposer {
                 self.pending_pastes
                     .retain(|(placeholder, _)| text_after.contains(placeholder));
                 return (InputResult::None, true);
-            } else {
-                // Modified char ends any burst: flush buffered content before applying.
-                if !self.paste_burst_buffer.is_empty() || self.in_paste_burst_mode {
-                    let pasted = std::mem::take(&mut self.paste_burst_buffer);
-                    self.in_paste_burst_mode = false;
-                    self.handle_paste(pasted);
-                }
+            } else if let Some(pasted) = self.paste_burst.flush_before_modified_input() {
+                self.handle_paste(pasted);
             }
         }
 
@@ -963,25 +905,15 @@ impl ChatComposer {
                 let has_ctrl_or_alt = modifiers.contains(KeyModifiers::CONTROL)
                     || modifiers.contains(KeyModifiers::ALT);
                 if has_ctrl_or_alt {
-                    // Modified char: clear burst window.
-                    self.consecutive_plain_char_burst = 0;
-                    self.last_plain_char_time = None;
-                    self.paste_burst_until = None;
-                    self.in_paste_burst_mode = false;
-                    self.paste_burst_buffer.clear();
+                    self.paste_burst.clear_window_after_non_char();
                 }
-                // Plain chars handled above.
             }
             KeyCode::Enter => {
                 // Keep burst window alive (supports blank lines in paste).
             }
             _ => {
-                // Other keys: clear burst window and any buffer (after flushing earlier).
-                self.consecutive_plain_char_burst = 0;
-                self.last_plain_char_time = None;
-                self.paste_burst_until = None;
-                self.in_paste_burst_mode = false;
-                // Do not clear paste_burst_buffer here; it should have been flushed above.
+                // Other keys: clear burst window (buffer should have been flushed above if needed).
+                self.paste_burst.clear_window_after_non_char();
             }
         }
 
