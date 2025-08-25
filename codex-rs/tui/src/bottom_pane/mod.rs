@@ -56,6 +56,7 @@ pub(crate) struct BottomPane {
     has_input_focus: bool,
     is_task_running: bool,
     ctrl_c_quit_hint: bool,
+    esc_backtrack_hint: bool,
 
     /// True if the active view is the StatusIndicatorView that replaces the
     /// composer during a running task.
@@ -87,6 +88,7 @@ impl BottomPane {
             has_input_focus: params.has_input_focus,
             is_task_running: false,
             ctrl_c_quit_hint: false,
+            esc_backtrack_hint: false,
             status_view_active: false,
         }
     }
@@ -239,6 +241,22 @@ impl BottomPane {
     pub(crate) fn ctrl_c_quit_hint_visible(&self) -> bool {
         self.ctrl_c_quit_hint
     }
+
+    pub(crate) fn show_esc_backtrack_hint(&mut self) {
+        self.esc_backtrack_hint = true;
+        self.composer.set_esc_backtrack_hint(true);
+        self.request_redraw();
+    }
+
+    pub(crate) fn clear_esc_backtrack_hint(&mut self) {
+        if self.esc_backtrack_hint {
+            self.esc_backtrack_hint = false;
+            self.composer.set_esc_backtrack_hint(false);
+            self.request_redraw();
+        }
+    }
+
+    // esc_backtrack_hint_visible removed; hints are controlled internally.
 
     pub fn set_task_running(&mut self, running: bool) {
         self.is_task_running = running;

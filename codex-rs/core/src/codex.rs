@@ -55,7 +55,7 @@ use crate::exec::StreamOutput;
 use crate::exec::process_exec_tool_call;
 use crate::exec_command::EXEC_COMMAND_TOOL_NAME;
 use crate::exec_command::ExecCommandParams;
-use crate::exec_command::SESSION_MANAGER;
+use crate::exec_command::ExecSessionManager;
 use crate::exec_command::WRITE_STDIN_TOOL_NAME;
 use crate::exec_command::WriteStdinParams;
 use crate::exec_env::create_env;
@@ -64,6 +64,7 @@ use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::model_family::find_family_for_model;
 use crate::openai_tools::ApplyPatchToolArgs;
 use crate::openai_tools::ToolsConfig;
+use crate::openai_tools::ToolsConfigParams;
 use crate::openai_tools::get_openai_tools;
 use crate::parse_command::parse_command;
 use crate::plan_tool::handle_update_plan;
@@ -96,6 +97,7 @@ use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
 use crate::protocol::TaskCompleteEvent;
 use crate::protocol::TurnDiffEvent;
+use crate::protocol::WebSearchBeginEvent;
 use crate::rollout::RolloutRecorder;
 use crate::safety::SafetyCheck;
 use crate::safety::assess_command_safety;
@@ -147,6 +149,14 @@ pub struct CodexSpawnOk {
 }
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
+pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 64;
+
+// Model-formatting limits: clients get full streams; oonly content sent to the model is truncated.
+pub(crate) const MODEL_FORMAT_MAX_BYTES: usize = 10 * 1024; // 10 KiB
+pub(crate) const MODEL_FORMAT_MAX_LINES: usize = 256; // lines
+pub(crate) const MODEL_FORMAT_HEAD_LINES: usize = MODEL_FORMAT_MAX_LINES / 2;
+pub(crate) const MODEL_FORMAT_TAIL_LINES: usize = MODEL_FORMAT_MAX_LINES - MODEL_FORMAT_HEAD_LINES; // 128
+pub(crate) const MODEL_FORMAT_HEAD_BYTES: usize = MODEL_FORMAT_MAX_BYTES / 2;
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
@@ -155,7 +165,7 @@ impl Codex {
         auth_manager: Arc<AuthManager>,
         initial_history: Option<Vec<ResponseItem>>,
     ) -> CodexResult<CodexSpawnOk> {
-        let (tx_sub, rx_sub) = async_channel::bounded(64);
+        let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
         let user_instructions = get_user_instructions(&config).await;
@@ -259,6 +269,7 @@ pub(crate) struct Session {
 
     /// Manager for external MCP servers/tools.
     mcp_connection_manager: McpConnectionManager,
+    session_manager: ExecSessionManager,
 
     /// External notifier command (will be passed as args to exec()). When
     /// `None` this feature is disabled.
@@ -497,14 +508,15 @@ impl Session {
         );
         let turn_context = TurnContext {
             client,
-            tools_config: ToolsConfig::new(
-                &config.model_family,
+            tools_config: ToolsConfig::new(&ToolsConfigParams {
+                model_family: &config.model_family,
                 approval_policy,
-                sandbox_policy.clone(),
-                config.include_plan_tool,
-                config.include_apply_patch_tool,
-                config.use_experimental_streamable_shell_tool,
-            ),
+                sandbox_policy: sandbox_policy.clone(),
+                include_plan_tool: config.include_plan_tool,
+                include_apply_patch_tool: config.include_apply_patch_tool,
+                include_web_search_request: config.tools_web_search_request,
+                use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
+            }),
             user_instructions,
             base_instructions,
             approval_policy,
@@ -517,6 +529,7 @@ impl Session {
             session_id,
             tx_event: tx_event.clone(),
             mcp_connection_manager,
+            session_manager: ExecSessionManager::default(),
             notify,
             state: Mutex::new(state),
             rollout: Mutex::new(rollout_recorder),
@@ -728,15 +741,15 @@ impl Session {
         let ExecToolCallOutput {
             stdout,
             stderr,
+            aggregated_output,
             duration,
             exit_code,
         } = output;
-        // Because stdout and stderr could each be up to 100 KiB, we send
-        // truncated versions.
-        const MAX_STREAM_OUTPUT: usize = 5 * 1024; // 5KiB
-        let stdout = stdout.text.chars().take(MAX_STREAM_OUTPUT).collect();
-        let stderr = stderr.text.chars().take(MAX_STREAM_OUTPUT).collect();
+        // Send full stdout/stderr to clients; do not truncate.
+        let stdout = stdout.text.clone();
+        let stderr = stderr.text.clone();
         let formatted_output = format_exec_output_str(output);
+        let aggregated_output: String = aggregated_output.text.clone();
 
         let msg = if is_apply_patch {
             EventMsg::PatchApplyEnd(PatchApplyEndEvent {
@@ -750,9 +763,10 @@ impl Session {
                 call_id: call_id.to_string(),
                 stdout,
                 stderr,
-                formatted_output,
-                duration: *duration,
+                aggregated_output,
                 exit_code: *exit_code,
+                duration: *duration,
+                formatted_output,
             })
         };
 
@@ -810,6 +824,7 @@ impl Session {
                     exit_code: -1,
                     stdout: StreamOutput::new(String::new()),
                     stderr: StreamOutput::new(get_error_message_ui(e)),
+                    aggregated_output: StreamOutput::new(get_error_message_ui(e)),
                     duration: Duration::default(),
                 };
                 &output_stderr
@@ -1080,14 +1095,15 @@ async fn submission_loop(
                     .unwrap_or(prev.sandbox_policy.clone());
                 let new_cwd = cwd.clone().unwrap_or_else(|| prev.cwd.clone());
 
-                let tools_config = ToolsConfig::new(
-                    &effective_family,
-                    new_approval_policy,
-                    new_sandbox_policy.clone(),
-                    config.include_plan_tool,
-                    config.include_apply_patch_tool,
-                    config.use_experimental_streamable_shell_tool,
-                );
+                let tools_config = ToolsConfig::new(&ToolsConfigParams {
+                    model_family: &effective_family,
+                    approval_policy: new_approval_policy,
+                    sandbox_policy: new_sandbox_policy.clone(),
+                    include_plan_tool: config.include_plan_tool,
+                    include_apply_patch_tool: config.include_apply_patch_tool,
+                    include_web_search_request: config.tools_web_search_request,
+                    use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
+                });
 
                 let new_turn_context = TurnContext {
                     client,
@@ -1159,14 +1175,16 @@ async fn submission_loop(
 
                     let fresh_turn_context = TurnContext {
                         client,
-                        tools_config: ToolsConfig::new(
-                            &model_family,
+                        tools_config: ToolsConfig::new(&ToolsConfigParams {
+                            model_family: &model_family,
                             approval_policy,
-                            sandbox_policy.clone(),
-                            config.include_plan_tool,
-                            config.include_apply_patch_tool,
-                            config.use_experimental_streamable_shell_tool,
-                        ),
+                            sandbox_policy: sandbox_policy.clone(),
+                            include_plan_tool: config.include_plan_tool,
+                            include_apply_patch_tool: config.include_apply_patch_tool,
+                            include_web_search_request: config.tools_web_search_request,
+                            use_streamable_shell_tool: config
+                                .use_experimental_streamable_shell_tool,
+                        }),
                         user_instructions: turn_context.user_instructions.clone(),
                         base_instructions: turn_context.base_instructions.clone(),
                         approval_policy,
@@ -1677,6 +1695,7 @@ async fn try_run_turn(
     let mut stream = turn_context.client.clone().stream(&prompt).await?;
 
     let mut output = Vec::new();
+
     loop {
         // Poll the next item from the model stream. We must inspect *both* Ok and Err
         // cases so that transient stream failures (e.g., dropped SSE connection before
@@ -1712,6 +1731,16 @@ async fn try_run_turn(
                 )
                 .await?;
                 output.push(ProcessedResponseItem { item, response });
+            }
+            ResponseEvent::WebSearchCallBegin { call_id, query } => {
+                let q = query.unwrap_or_else(|| "Searching Web...".to_string());
+                let _ = sess
+                    .tx_event
+                    .send(Event {
+                        id: sub_id.to_string(),
+                        msg: EventMsg::WebSearchBegin(WebSearchBeginEvent { call_id, query: q }),
+                    })
+                    .await;
             }
             ResponseEvent::Completed {
                 response_id: _,
@@ -2085,7 +2114,8 @@ async fn handle_function_call(
                     };
                 }
             };
-            let result = SESSION_MANAGER
+            let result = sess
+                .session_manager
                 .handle_exec_command_request(exec_params)
                 .await;
             let function_call_output = crate::exec_command::result_into_payload(result);
@@ -2107,7 +2137,8 @@ async fn handle_function_call(
                     };
                 }
             };
-            let result = SESSION_MANAGER
+            let result = sess
+                .session_manager
                 .handle_write_stdin_request(write_stdin_params)
                 .await;
             let function_call_output: FunctionCallOutputPayload =
@@ -2604,23 +2635,103 @@ async fn handle_sandbox_error(
 
 fn format_exec_output_str(exec_output: &ExecToolCallOutput) -> String {
     let ExecToolCallOutput {
-        exit_code,
-        stdout,
-        stderr,
-        ..
+        aggregated_output, ..
     } = exec_output;
 
-    let is_success = *exit_code == 0;
-    let output = if is_success { stdout } else { stderr };
+    // Head+tail truncation for the model: show the beginning and end with an elision.
+    // Clients still receive full streams; only this formatted summary is capped.
 
-    let mut formatted_output = output.text.clone();
-    if let Some(truncated_after_lines) = output.truncated_after_lines {
-        formatted_output.push_str(&format!(
-            "\n\n[Output truncated after {truncated_after_lines} lines: too many lines or bytes.]",
-        ));
+    let s = aggregated_output.text.as_str();
+    let total_lines = s.lines().count();
+    if s.len() <= MODEL_FORMAT_MAX_BYTES && total_lines <= MODEL_FORMAT_MAX_LINES {
+        return s.to_string();
     }
 
-    formatted_output
+    let lines: Vec<&str> = s.lines().collect();
+    let head_take = MODEL_FORMAT_HEAD_LINES.min(lines.len());
+    let tail_take = MODEL_FORMAT_TAIL_LINES.min(lines.len().saturating_sub(head_take));
+    let omitted = lines.len().saturating_sub(head_take + tail_take);
+
+    // Join head and tail blocks (lines() strips newlines; reinsert them)
+    let head_block = lines
+        .iter()
+        .take(head_take)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+    let tail_block = if tail_take > 0 {
+        lines[lines.len() - tail_take..].join("\n")
+    } else {
+        String::new()
+    };
+    let marker = format!("\n[... omitted {omitted} of {total_lines} lines ...]\n\n");
+
+    // Byte budgets for head/tail around the marker
+    let mut head_budget = MODEL_FORMAT_HEAD_BYTES.min(MODEL_FORMAT_MAX_BYTES);
+    let tail_budget = MODEL_FORMAT_MAX_BYTES.saturating_sub(head_budget + marker.len());
+    if tail_budget == 0 && marker.len() >= MODEL_FORMAT_MAX_BYTES {
+        // Degenerate case: marker alone exceeds budget; return a clipped marker
+        return take_bytes_at_char_boundary(&marker, MODEL_FORMAT_MAX_BYTES).to_string();
+    }
+    if tail_budget == 0 {
+        // Make room for the marker by shrinking head
+        head_budget = MODEL_FORMAT_MAX_BYTES.saturating_sub(marker.len());
+    }
+
+    // Enforce line-count cap by trimming head/tail lines
+    let head_lines_text = head_block;
+    let tail_lines_text = tail_block;
+    // Build final string respecting byte budgets
+    let head_part = take_bytes_at_char_boundary(&head_lines_text, head_budget);
+    let mut result = String::with_capacity(MODEL_FORMAT_MAX_BYTES.min(s.len()));
+    result.push_str(head_part);
+    result.push_str(&marker);
+
+    let remaining = MODEL_FORMAT_MAX_BYTES.saturating_sub(result.len());
+    let tail_budget_final = remaining;
+    let tail_part = take_last_bytes_at_char_boundary(&tail_lines_text, tail_budget_final);
+    result.push_str(tail_part);
+
+    result
+}
+
+// Truncate a &str to a byte budget at a char boundary (prefix)
+#[inline]
+fn take_bytes_at_char_boundary(s: &str, maxb: usize) -> &str {
+    if s.len() <= maxb {
+        return s;
+    }
+    let mut last_ok = 0;
+    for (i, ch) in s.char_indices() {
+        let nb = i + ch.len_utf8();
+        if nb > maxb {
+            break;
+        }
+        last_ok = nb;
+    }
+    &s[..last_ok]
+}
+
+// Take a suffix of a &str within a byte budget at a char boundary
+#[inline]
+fn take_last_bytes_at_char_boundary(s: &str, maxb: usize) -> &str {
+    if s.len() <= maxb {
+        return s;
+    }
+    let mut start = s.len();
+    let mut used = 0usize;
+    for (i, ch) in s.char_indices().rev() {
+        let nb = ch.len_utf8();
+        if used + nb > maxb {
+            break;
+        }
+        start = i;
+        used += nb;
+        if start == 0 {
+            break;
+        }
+    }
+    &s[start..]
 }
 
 /// Exec output is a pre-serialized JSON payload
@@ -2705,15 +2816,9 @@ async fn drain_to_completed(
                 response_id: _,
                 token_usage,
             }) => {
-                let token_usage = match token_usage {
-                    Some(usage) => usage,
-                    None => {
-                        return Err(CodexErr::Stream(
-                            "token_usage was None in ResponseEvent::Completed".into(),
-                            None,
-                        ));
-                    }
-                };
+                // some providers don't return token usage, so we default
+                // TODO: consider approximate token usage
+                let token_usage = token_usage.unwrap_or_default();
                 sess.tx_event
                     .send(Event {
                         id: sub_id.to_string(),
@@ -2721,6 +2826,7 @@ async fn drain_to_completed(
                     })
                     .await
                     .ok();
+
                 return Ok(());
             }
             Ok(_) => continue,
@@ -2771,6 +2877,7 @@ mod tests {
     use mcp_types::TextContent;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::time::Duration as StdDuration;
 
     fn text_block(s: &str) -> ContentBlock {
         ContentBlock::TextContent(TextContent {
@@ -2803,6 +2910,82 @@ mod tests {
         };
 
         assert_eq!(expected, got);
+    }
+
+    #[test]
+    fn model_truncation_head_tail_by_lines() {
+        // Build 400 short lines so line-count limit, not byte budget, triggers truncation
+        let lines: Vec<String> = (1..=400).map(|i| format!("line{i}")).collect();
+        let full = lines.join("\n");
+
+        let exec = ExecToolCallOutput {
+            exit_code: 0,
+            stdout: StreamOutput::new(String::new()),
+            stderr: StreamOutput::new(String::new()),
+            aggregated_output: StreamOutput::new(full.clone()),
+            duration: StdDuration::from_secs(1),
+        };
+
+        let out = format_exec_output_str(&exec);
+
+        // Expect elision marker with correct counts
+        let omitted = 400 - MODEL_FORMAT_MAX_LINES; // 144
+        let marker = format!("\n[... omitted {omitted} of 400 lines ...]\n\n");
+        assert!(out.contains(&marker), "missing marker: {out}");
+
+        // Validate head and tail
+        let parts: Vec<&str> = out.split(&marker).collect();
+        assert_eq!(parts.len(), 2, "expected one marker split");
+        let head = parts[0];
+        let tail = parts[1];
+
+        let expected_head: String = (1..=MODEL_FORMAT_HEAD_LINES)
+            .map(|i| format!("line{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(head.starts_with(&expected_head), "head mismatch");
+
+        let expected_tail: String = ((400 - MODEL_FORMAT_TAIL_LINES + 1)..=400)
+            .map(|i| format!("line{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(tail.ends_with(&expected_tail), "tail mismatch");
+    }
+
+    #[test]
+    fn model_truncation_respects_byte_budget() {
+        // Construct a large output (about 100kB) so byte budget dominates
+        let big_line = "x".repeat(100);
+        let full = std::iter::repeat_n(big_line.clone(), 1000)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let exec = ExecToolCallOutput {
+            exit_code: 0,
+            stdout: StreamOutput::new(String::new()),
+            stderr: StreamOutput::new(String::new()),
+            aggregated_output: StreamOutput::new(full.clone()),
+            duration: StdDuration::from_secs(1),
+        };
+
+        let out = format_exec_output_str(&exec);
+        assert!(out.len() <= MODEL_FORMAT_MAX_BYTES, "exceeds byte budget");
+        assert!(out.contains("omitted"), "should contain elision marker");
+
+        // Ensure head and tail are drawn from the original
+        assert!(full.starts_with(out.chars().take(8).collect::<String>().as_str()));
+        assert!(
+            full.ends_with(
+                out.chars()
+                    .rev()
+                    .take(8)
+                    .collect::<String>()
+                    .chars()
+                    .rev()
+                    .collect::<String>()
+                    .as_str()
+            )
+        );
     }
 
     #[test]

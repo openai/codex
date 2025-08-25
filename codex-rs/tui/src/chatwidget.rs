@@ -28,6 +28,7 @@ use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnDiffEvent;
+use codex_core::protocol::WebSearchBeginEvent;
 use codex_protocol::parse_command::ParsedCommand;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -63,6 +64,7 @@ mod interrupts;
 use self::interrupts::InterruptManager;
 mod agent;
 use self::agent::spawn_agent;
+use self::agent::spawn_agent_from_existing;
 use crate::streaming::controller::AppEventHistorySink;
 use crate::streaming::controller::StreamController;
 use codex_common::approval_presets::ApprovalPreset;
@@ -106,6 +108,8 @@ pub(crate) struct ChatWidget {
     full_reasoning_buffer: String,
     session_id: Option<Uuid>,
     frame_requester: FrameRequester,
+    // Whether to include the initial welcome banner on session configured
+    show_welcome_banner: bool,
     last_history_was_exec: bool,
 }
 
@@ -145,7 +149,11 @@ impl ChatWidget {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.session_id = Some(event.session_id);
-        self.add_to_history(history_cell::new_session_info(&self.config, event, true));
+        self.add_to_history(history_cell::new_session_info(
+            &self.config,
+            event,
+            self.show_welcome_banner,
+        ));
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
         }
@@ -306,6 +314,11 @@ impl ChatWidget {
     fn on_mcp_tool_call_end(&mut self, ev: McpToolCallEndEvent) {
         let ev2 = ev.clone();
         self.defer_or_handle(|q| q.push_mcp_end(ev), |s| s.handle_mcp_end_now(ev2));
+    }
+
+    fn on_web_search_begin(&mut self, ev: WebSearchBeginEvent) {
+        self.flush_answer_stream_with_separator();
+        self.add_to_history(history_cell::new_web_search_call(ev.query));
     }
 
     fn on_get_history_entry_response(
@@ -581,6 +594,52 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             session_id: None,
             last_history_was_exec: false,
+            show_welcome_banner: true,
+        }
+    }
+
+    /// Create a ChatWidget attached to an existing conversation (e.g., a fork).
+    pub(crate) fn new_from_existing(
+        config: Config,
+        conversation: std::sync::Arc<codex_core::CodexConversation>,
+        session_configured: codex_core::protocol::SessionConfiguredEvent,
+        frame_requester: FrameRequester,
+        app_event_tx: AppEventSender,
+        enhanced_keys_supported: bool,
+    ) -> Self {
+        let mut rng = rand::rng();
+        let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
+
+        let codex_op_tx =
+            spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
+
+        Self {
+            app_event_tx: app_event_tx.clone(),
+            frame_requester: frame_requester.clone(),
+            codex_op_tx,
+            bottom_pane: BottomPane::new(BottomPaneParams {
+                frame_requester,
+                app_event_tx,
+                has_input_focus: true,
+                enhanced_keys_supported,
+                placeholder_text: placeholder,
+            }),
+            active_exec_cell: None,
+            config: config.clone(),
+            initial_user_message: None,
+            total_token_usage: TokenUsage::default(),
+            last_token_usage: TokenUsage::default(),
+            stream: StreamController::new(config),
+            running_commands: HashMap::new(),
+            pending_exec_completions: Vec::new(),
+            task_complete_pending: false,
+            interrupts: InterruptManager::new(),
+            needs_redraw: false,
+            reasoning_buffer: String::new(),
+            full_reasoning_buffer: String::new(),
+            session_id: None,
+            last_history_was_exec: false,
+            show_welcome_banner: false,
         }
     }
 
@@ -839,6 +898,7 @@ impl ChatWidget {
             EventMsg::ExecCommandEnd(ev) => self.on_exec_command_end(ev),
             EventMsg::McpToolCallBegin(ev) => self.on_mcp_tool_call_begin(ev),
             EventMsg::McpToolCallEnd(ev) => self.on_mcp_tool_call_end(ev),
+            EventMsg::WebSearchBegin(ev) => self.on_web_search_begin(ev),
             EventMsg::GetHistoryEntryResponse(ev) => self.on_get_history_entry_response(ev),
             EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
             EventMsg::ShutdownComplete => self.on_shutdown_complete(),
@@ -847,7 +907,11 @@ impl ChatWidget {
                 self.on_background_event(message)
             }
             EventMsg::StreamError(StreamErrorEvent { message }) => self.on_stream_error(message),
-            EventMsg::ConversationHistory(_) => {}
+            EventMsg::ConversationHistory(ev) => {
+                // Forward to App so it can process backtrack flows.
+                self.app_event_tx
+                    .send(crate::app_event::AppEvent::ConversationHistory(ev));
+            }
         }
         // Coalesce redraws: issue at most one after handling the event
         if self.needs_redraw {
@@ -1022,6 +1086,14 @@ impl ChatWidget {
     pub(crate) fn insert_str(&mut self, text: &str) {
         self.bottom_pane.insert_str(text);
     }
+
+    pub(crate) fn show_esc_backtrack_hint(&mut self) {
+        self.bottom_pane.show_esc_backtrack_hint();
+    }
+
+    pub(crate) fn clear_esc_backtrack_hint(&mut self) {
+        self.bottom_pane.clear_esc_backtrack_hint();
+    }
     /// Forward an `Op` directly to codex.
     pub(crate) fn submit_op(&self, op: Op) {
         // Record outbound operation for session replay fidelity.
@@ -1047,6 +1119,16 @@ impl ChatWidget {
 
     pub(crate) fn token_usage(&self) -> &TokenUsage {
         &self.total_token_usage
+    }
+
+    pub(crate) fn session_id(&self) -> Option<Uuid> {
+        self.session_id
+    }
+
+    /// Return a reference to the widget's current config (includes any
+    /// runtime overrides applied via TUI, e.g., model or approval policy).
+    pub(crate) fn config_ref(&self) -> &Config {
+        &self.config
     }
 
     pub(crate) fn clear_token_usage(&mut self) {

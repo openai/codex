@@ -437,6 +437,8 @@ pub enum EventMsg {
 
     McpToolCallEnd(McpToolCallEndEvent),
 
+    WebSearchBegin(WebSearchBeginEvent),
+
     /// Notification that the server is about to execute a command.
     ExecCommandBegin(ExecCommandBeginEvent),
 
@@ -658,6 +660,12 @@ impl McpToolCallEndEvent {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct WebSearchBeginEvent {
+    pub call_id: String,
+    pub query: String,
+}
+
 /// Response payload for `Op::GetHistory` containing the current session's
 /// in-memory transcript.
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -685,6 +693,9 @@ pub struct ExecCommandEndEvent {
     pub stdout: String,
     /// Captured stderr
     pub stderr: String,
+    /// Captured aggregated output
+    #[serde(default)]
+    pub aggregated_output: String,
     /// The command's exit code.
     pub exit_code: i32,
     /// The duration of the command execution.

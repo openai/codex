@@ -107,8 +107,8 @@ async fn codex_mini_latest_tools() {
     assert_eq!(requests.len(), 2, "expected two POST requests");
 
     let expected_instructions = [
-        include_str!("../prompt.md"),
-        include_str!("../../apply-patch/apply_patch_tool_instructions.md"),
+        include_str!("../../prompt.md"),
+        include_str!("../../../apply-patch/apply_patch_tool_instructions.md"),
     ]
     .join("\n");
 
@@ -188,7 +188,7 @@ async fn prompt_tools_are_consistent_across_requests() {
     let requests = server.received_requests().await.unwrap();
     assert_eq!(requests.len(), 2, "expected two POST requests");
 
-    let expected_instructions: &str = include_str!("../prompt.md");
+    let expected_instructions: &str = include_str!("../../prompt.md");
     // our internal implementation is responsible for keeping tools in sync
     // with the OpenAI schema, so we just verify the tool presence here
     let expected_tools_names: &[&str] = &["shell", "update_plan", "apply_patch"];
