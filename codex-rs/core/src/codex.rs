@@ -55,7 +55,7 @@ use crate::exec::StreamOutput;
 use crate::exec::process_exec_tool_call;
 use crate::exec_command::EXEC_COMMAND_TOOL_NAME;
 use crate::exec_command::ExecCommandParams;
-use crate::exec_command::SESSION_MANAGER;
+use crate::exec_command::ExecSessionManager;
 use crate::exec_command::WRITE_STDIN_TOOL_NAME;
 use crate::exec_command::WriteStdinParams;
 use crate::exec_env::create_env;
@@ -64,6 +64,7 @@ use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::model_family::find_family_for_model;
 use crate::openai_tools::ApplyPatchToolArgs;
 use crate::openai_tools::ToolsConfig;
+use crate::openai_tools::ToolsConfigParams;
 use crate::openai_tools::get_openai_tools;
 use crate::parse_command::parse_command;
 use crate::plan_tool::handle_update_plan;
@@ -96,6 +97,7 @@ use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
 use crate::protocol::TaskCompleteEvent;
 use crate::protocol::TurnDiffEvent;
+use crate::protocol::WebSearchBeginEvent;
 use crate::rollout::RolloutRecorder;
 use crate::safety::SafetyCheck;
 use crate::safety::assess_command_safety;
@@ -267,6 +269,7 @@ pub(crate) struct Session {
 
     /// Manager for external MCP servers/tools.
     mcp_connection_manager: McpConnectionManager,
+    session_manager: ExecSessionManager,
 
     /// External notifier command (will be passed as args to exec()). When
     /// `None` this feature is disabled.
@@ -505,14 +508,15 @@ impl Session {
         );
         let turn_context = TurnContext {
             client,
-            tools_config: ToolsConfig::new(
-                &config.model_family,
+            tools_config: ToolsConfig::new(&ToolsConfigParams {
+                model_family: &config.model_family,
                 approval_policy,
-                sandbox_policy.clone(),
-                config.include_plan_tool,
-                config.include_apply_patch_tool,
-                config.use_experimental_streamable_shell_tool,
-            ),
+                sandbox_policy: sandbox_policy.clone(),
+                include_plan_tool: config.include_plan_tool,
+                include_apply_patch_tool: config.include_apply_patch_tool,
+                include_web_search_request: config.tools_web_search_request,
+                use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
+            }),
             user_instructions,
             base_instructions,
             approval_policy,
@@ -525,6 +529,7 @@ impl Session {
             session_id,
             tx_event: tx_event.clone(),
             mcp_connection_manager,
+            session_manager: ExecSessionManager::default(),
             notify,
             state: Mutex::new(state),
             rollout: Mutex::new(rollout_recorder),
@@ -1117,14 +1122,15 @@ async fn submission_loop(
                     .unwrap_or(prev.sandbox_policy.clone());
                 let new_cwd = cwd.clone().unwrap_or_else(|| prev.cwd.clone());
 
-                let tools_config = ToolsConfig::new(
-                    &effective_family,
-                    new_approval_policy,
-                    new_sandbox_policy.clone(),
-                    config.include_plan_tool,
-                    config.include_apply_patch_tool,
-                    config.use_experimental_streamable_shell_tool,
-                );
+                let tools_config = ToolsConfig::new(&ToolsConfigParams {
+                    model_family: &effective_family,
+                    approval_policy: new_approval_policy,
+                    sandbox_policy: new_sandbox_policy.clone(),
+                    include_plan_tool: config.include_plan_tool,
+                    include_apply_patch_tool: config.include_apply_patch_tool,
+                    include_web_search_request: config.tools_web_search_request,
+                    use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
+                });
 
                 let new_turn_context = TurnContext {
                     client,
@@ -1173,6 +1179,7 @@ async fn submission_loop(
                 if let Err(items) = sess.inject_input(items) {
                     // Derive a fresh TurnContext for this turn using the provided overrides.
                     let provider = turn_context.client.get_provider();
+                    let auth_manager = turn_context.client.get_auth_manager();
 
                     // Derive a model family for the requested model; fall back to the session's.
                     let model_family = find_family_for_model(&model)
@@ -1187,7 +1194,7 @@ async fn submission_loop(
                     // Reuse the same provider and session id; auth defaults to env/API key.
                     let client = ModelClient::new(
                         Arc::new(per_turn_config),
-                        None,
+                        auth_manager,
                         provider,
                         effort,
                         summary,
@@ -1196,14 +1203,16 @@ async fn submission_loop(
 
                     let fresh_turn_context = TurnContext {
                         client,
-                        tools_config: ToolsConfig::new(
-                            &model_family,
+                        tools_config: ToolsConfig::new(&ToolsConfigParams {
+                            model_family: &model_family,
                             approval_policy,
-                            sandbox_policy.clone(),
-                            config.include_plan_tool,
-                            config.include_apply_patch_tool,
-                            config.use_experimental_streamable_shell_tool,
-                        ),
+                            sandbox_policy: sandbox_policy.clone(),
+                            include_plan_tool: config.include_plan_tool,
+                            include_apply_patch_tool: config.include_apply_patch_tool,
+                            include_web_search_request: config.tools_web_search_request,
+                            use_streamable_shell_tool: config
+                                .use_experimental_streamable_shell_tool,
+                        }),
                         user_instructions: turn_context.user_instructions.clone(),
                         base_instructions: turn_context.base_instructions.clone(),
                         approval_policy,
@@ -1714,6 +1723,7 @@ async fn try_run_turn(
     let mut stream = turn_context.client.clone().stream(&prompt).await?;
 
     let mut output = Vec::new();
+
     loop {
         // Poll the next item from the model stream. We must inspect *both* Ok and Err
         // cases so that transient stream failures (e.g., dropped SSE connection before
@@ -1749,6 +1759,16 @@ async fn try_run_turn(
                 )
                 .await?;
                 output.push(ProcessedResponseItem { item, response });
+            }
+            ResponseEvent::WebSearchCallBegin { call_id, query } => {
+                let q = query.unwrap_or_else(|| "Searching Web...".to_string());
+                let _ = sess
+                    .tx_event
+                    .send(Event {
+                        id: sub_id.to_string(),
+                        msg: EventMsg::WebSearchBegin(WebSearchBeginEvent { call_id, query: q }),
+                    })
+                    .await;
             }
             ResponseEvent::Completed {
                 response_id: _,
@@ -2122,7 +2142,8 @@ async fn handle_function_call(
                     };
                 }
             };
-            let result = SESSION_MANAGER
+            let result = sess
+                .session_manager
                 .handle_exec_command_request(exec_params)
                 .await;
             let function_call_output = crate::exec_command::result_into_payload(result);
@@ -2144,7 +2165,8 @@ async fn handle_function_call(
                     };
                 }
             };
-            let result = SESSION_MANAGER
+            let result = sess
+                .session_manager
                 .handle_write_stdin_request(write_stdin_params)
                 .await;
             let function_call_output: FunctionCallOutputPayload =
@@ -2822,15 +2844,9 @@ async fn drain_to_completed(
                 response_id: _,
                 token_usage,
             }) => {
-                let token_usage = match token_usage {
-                    Some(usage) => usage,
-                    None => {
-                        return Err(CodexErr::Stream(
-                            "token_usage was None in ResponseEvent::Completed".into(),
-                            None,
-                        ));
-                    }
-                };
+                // some providers don't return token usage, so we default
+                // TODO: consider approximate token usage
+                let token_usage = token_usage.unwrap_or_default();
                 sess.tx_event
                     .send(Event {
                         id: sub_id.to_string(),
@@ -2838,6 +2854,7 @@ async fn drain_to_completed(
                     })
                     .await
                     .ok();
+
                 return Ok(());
             }
             Ok(_) => continue,

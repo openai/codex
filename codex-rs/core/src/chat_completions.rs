@@ -623,6 +623,12 @@ where
                 Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryPartAdded))) => {
                     continue;
                 }
+                Poll::Ready(Some(Ok(ResponseEvent::WebSearchCallBegin { .. }))) => {
+                    return Poll::Ready(Some(Ok(ResponseEvent::WebSearchCallBegin {
+                        call_id: String::new(),
+                        query: None,
+                    })));
+                }
             }
         }
     }
