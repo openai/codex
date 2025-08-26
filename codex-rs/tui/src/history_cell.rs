@@ -175,6 +175,26 @@ impl WidgetRef for &ExecCell {
     }
 }
 
+impl ExecCell {
+    /// Convert an active exec cell into a failed, completed exec cell.
+    /// Replaces the spinner with a red ✗ and sets a zero/elapsed duration.
+    pub(crate) fn into_failed(mut self) -> ExecCell {
+        let elapsed = self
+            .start_time
+            .map(|st| st.elapsed())
+            .unwrap_or_else(|| Duration::from_millis(0));
+        self.start_time = None;
+        self.duration = Some(elapsed);
+        self.output = Some(CommandOutput {
+            exit_code: 1,
+            stdout: String::new(),
+            stderr: String::new(),
+            formatted_output: String::new(),
+        });
+        self
+    }
+}
+
 #[derive(Debug)]
 struct CompletedMcpToolCallWithImageOutput {
     _image: DynamicImage,
