@@ -44,13 +44,6 @@ impl PagerOverlay {
             PagerOverlay::Static(o) => o.is_done(),
         }
     }
-
-    pub(crate) fn set_scroll_offset(&mut self, offset: usize) {
-        match self {
-            PagerOverlay::Transcript(o) => o.set_scroll_offset(offset),
-            PagerOverlay::Static(o) => o.set_scroll_offset(offset),
-        }
-    }
 }
 struct PagerView {
     lines: Vec<Line<'static>>,
@@ -368,9 +361,6 @@ impl StaticOverlay {
     }
     pub(crate) fn is_done(&self) -> bool {
         self.view.is_done
-    }
-    pub(crate) fn set_scroll_offset(&mut self, offset: usize) {
-        self.view.scroll_offset = offset;
     }
 }
 

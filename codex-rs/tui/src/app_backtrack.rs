@@ -193,13 +193,11 @@ impl App {
     ) {
         let (nth, offset, hl) = selection;
         self.backtrack.count = nth;
-        if let Some(overlay) = &mut self.pager_overlay {
+        if let Some(PagerOverlay::Transcript(t)) = &mut self.pager_overlay {
             if let Some(off) = offset {
-                overlay.set_scroll_offset(off);
+                t.set_scroll_offset(off);
             }
-            if let PagerOverlay::Transcript(t) = overlay {
-                t.set_highlight_range(hl);
-            }
+            t.set_highlight_range(hl);
         }
     }
 
