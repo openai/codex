@@ -250,7 +250,10 @@ mod tests {
             plan_type: None,
             resets_in_seconds: None,
         };
-        assert_eq!(err.to_string(), "You've hit your usage limit.");
+        assert_eq!(
+            err.to_string(),
+            "You've hit your usage limit. Try again later."
+        );
     }
 
     #[test]
@@ -259,7 +262,10 @@ mod tests {
             plan_type: Some("pro".to_string()),
             resets_in_seconds: None,
         };
-        assert_eq!(err.to_string(), "You've hit your usage limit.");
+        assert_eq!(
+            err.to_string(),
+            "You've hit your usage limit. Try again later."
+        );
     }
 
     #[test]
