@@ -35,7 +35,6 @@ use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::disable_raw_mode;
 use ratatui::crossterm::terminal::enable_raw_mode;
 use ratatui::layout::Offset;
-use ratatui::layout::Position;
 use ratatui::text::Line;
 
 use crate::clipboard_paste::paste_image_to_temp_png;
@@ -365,7 +364,7 @@ impl Tui {
                 )))
             }
             ResumeAction::RestoreAlt => {
-                if let Ok(Position { y, .. }) = self.terminal.get_cursor_position()
+                if let Ok(ratatui::layout::Position { y, .. }) = self.terminal.get_cursor_position()
                     && let Some(saved) = self.alt_saved_viewport.as_mut()
                 {
                     saved.y = y;
