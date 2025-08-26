@@ -45,6 +45,38 @@ impl PagerOverlay {
         }
     }
 }
+
+fn render_key_hints(area: Rect, buf: &mut Buffer, extra_pairs: &[(&str, &str)]) {
+    let key_hint_style = Style::default().fg(Color::Cyan);
+    let hints1 = vec![
+        " ".into(),
+        "↑".set_style(key_hint_style),
+        "/".into(),
+        "↓".set_style(key_hint_style),
+        " scroll   ".into(),
+        "PgUp".set_style(key_hint_style),
+        "/".into(),
+        "PgDn".set_style(key_hint_style),
+        " page   ".into(),
+        "Home".set_style(key_hint_style),
+        "/".into(),
+        "End".set_style(key_hint_style),
+        " jump".into(),
+    ];
+    let mut line2: Vec<Span<'static>> = vec![" ".into()];
+    let mut first = true;
+    for (key, desc) in extra_pairs {
+        if !first {
+            line2.push("   ".into());
+        }
+        line2.push(Span::from(key.to_string()).set_style(key_hint_style));
+        line2.push(" ".into());
+        line2.push(Span::from(desc.to_string()));
+        first = false;
+    }
+    Paragraph::new(vec![Line::from(hints1).dim(), Line::from(line2).dim()])
+        .render_ref(area, buf);
+}
 struct PagerView {
     lines: Vec<Line<'static>>,
     scroll_offset: usize,
@@ -134,25 +166,6 @@ impl PagerView {
     fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) -> Result<()> {
         match key_event {
             KeyEvent {
-                code: KeyCode::Char('q'),
-                kind: KeyEventKind::Press,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('t'),
-                modifiers: crossterm::event::KeyModifiers::CONTROL,
-                kind: KeyEventKind::Press,
-                ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('c'),
-                modifiers: crossterm::event::KeyModifiers::CONTROL,
-                kind: KeyEventKind::Press,
-                ..
-            } => {
-                self.is_done = true;
-            }
-            KeyEvent {
                 code: KeyCode::Up,
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
                 ..
@@ -238,40 +251,13 @@ impl TranscriptOverlay {
     }
 
     fn render_hints(&self, area: Rect, buf: &mut Buffer) {
-        let key_hint_style = Style::default().fg(Color::Cyan);
-        let hints1 = vec![
-            " ".into(),
-            "↑".set_style(key_hint_style),
-            "/".into(),
-            "↓".set_style(key_hint_style),
-            " scroll   ".into(),
-            "PgUp".set_style(key_hint_style),
-            "/".into(),
-            "PgDn".set_style(key_hint_style),
-            " page   ".into(),
-            "Home".set_style(key_hint_style),
-            "/".into(),
-            "End".set_style(key_hint_style),
-            " jump".into(),
-        ];
-        let mut hints2 = vec![" ".into(), "q".set_style(key_hint_style), " quit".into()];
-        // Always include Esc edit prev for transcript overlays
-        hints2.extend([
-            "   ".into(),
-            "Esc".set_style(key_hint_style),
-            " edit prev".into(),
-        ]);
+        let mut pairs: Vec<(&str, &str)> = vec![("q", "quit"), ("Esc", "edit prev")];
         if let Some((start, end)) = self.highlight_range
             && end > start
         {
-            hints2.extend([
-                "   ".into(),
-                "⏎".set_style(key_hint_style),
-                " edit message".into(),
-            ]);
+            pairs.push(("⏎", "edit message"));
         }
-        Paragraph::new(vec![Line::from(hints1).dim(), Line::from(hints2).dim()])
-            .render_ref(area, buf);
+        render_key_hints(area, buf, &pairs);
     }
 
     pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer) {
@@ -309,7 +295,25 @@ impl TranscriptOverlay {
 impl TranscriptOverlay {
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         match event {
-            TuiEvent::Key(key_event) => self.view.handle_key_event(tui, key_event),
+            TuiEvent::Key(key_event) => match key_event {
+                KeyEvent { code: KeyCode::Char('q'), kind: KeyEventKind::Press, .. }
+                | KeyEvent {
+                    code: KeyCode::Char('t'),
+                    modifiers: crossterm::event::KeyModifiers::CONTROL,
+                    kind: KeyEventKind::Press,
+                    ..
+                }
+                | KeyEvent {
+                    code: KeyCode::Char('c'),
+                    modifiers: crossterm::event::KeyModifiers::CONTROL,
+                    kind: KeyEventKind::Press,
+                    ..
+                } => {
+                    self.view.is_done = true;
+                    Ok(())
+                }
+                other => self.view.handle_key_event(tui, other),
+            },
             TuiEvent::Draw => {
                 tui.draw(u16::MAX, |frame| {
                     self.render(frame.area(), frame.buffer);
@@ -339,25 +343,8 @@ impl StaticOverlay {
     }
 
     fn render_hints(&self, area: Rect, buf: &mut Buffer) {
-        let key_hint_style = Style::default().fg(Color::Cyan);
-        let hints1 = vec![
-            " ".into(),
-            "↑".set_style(key_hint_style),
-            "/".into(),
-            "↓".set_style(key_hint_style),
-            " scroll   ".into(),
-            "PgUp".set_style(key_hint_style),
-            "/".into(),
-            "PgDn".set_style(key_hint_style),
-            " page   ".into(),
-            "Home".set_style(key_hint_style),
-            "/".into(),
-            "End".set_style(key_hint_style),
-            " jump".into(),
-        ];
-        let hints2 = vec![" ".into(), "q".set_style(key_hint_style), " quit".into()];
-        Paragraph::new(vec![Line::from(hints1).dim(), Line::from(hints2).dim()])
-            .render_ref(area, buf);
+        let pairs = [("q", "quit")];
+        render_key_hints(area, buf, &pairs);
     }
 
     pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer) {
@@ -372,7 +359,19 @@ impl StaticOverlay {
 impl StaticOverlay {
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         match event {
-            TuiEvent::Key(key_event) => self.view.handle_key_event(tui, key_event),
+            TuiEvent::Key(key_event) => match key_event {
+                KeyEvent { code: KeyCode::Char('q'), kind: KeyEventKind::Press, .. }
+                | KeyEvent {
+                    code: KeyCode::Char('c'),
+                    modifiers: crossterm::event::KeyModifiers::CONTROL,
+                    kind: KeyEventKind::Press,
+                    ..
+                } => {
+                    self.view.is_done = true;
+                    Ok(())
+                }
+                other => self.view.handle_key_event(tui, other),
+            },
             TuiEvent::Draw => {
                 tui.draw(u16::MAX, |frame| {
                     self.render(frame.area(), frame.buffer);
