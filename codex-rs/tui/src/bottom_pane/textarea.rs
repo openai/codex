@@ -1203,6 +1203,32 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_h_backspace() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        // Test Ctrl+H as backspace
+        let mut t = ta_with("hello");
+        t.set_cursor(3); // cursor after 'l'
+        t.input(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
+        assert_eq!(t.text(), "helo");
+        assert_eq!(t.cursor(), 2);
+
+        // Test Ctrl+H at beginning (should be no-op)
+        t.set_cursor(0);
+        t.input(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
+        assert_eq!(t.text(), "helo");
+        assert_eq!(t.cursor(), 0);
+
+        // Test Ctrl+H at end
+        t.set_cursor(t.text().len());
+        t.input(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
+        assert_eq!(t.text(), "hel");
+        assert_eq!(t.cursor(), 3);
+    }
+
+    #[test]
     fn cursor_vertical_movement_across_lines_and_bounds() {
         let mut t = ta_with("short\nloooooooooong\nmid");
         // Place cursor on second line, column 5
