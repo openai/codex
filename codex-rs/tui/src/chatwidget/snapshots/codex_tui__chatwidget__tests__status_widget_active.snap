@@ -1,6 +1,6 @@
 ---
 source: tui/src/chatwidget/tests.rs
-assertion_line: 806
+assertion_line: 878
 expression: terminal.backend()
 ---
 "                                                                                "
@@ -8,5 +8,4 @@ expression: terminal.backend()
 "                                                                                "
 "▌ Ask Codex to do anything                                                      "
 " ⏎ send   Ctrl+J newline   Ctrl+T transcript   Ctrl+C quit                      "
-"                                                                                "
 "                                                                                "
