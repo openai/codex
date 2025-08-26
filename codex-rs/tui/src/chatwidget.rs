@@ -604,6 +604,7 @@ impl ChatWidget {
                 has_input_focus: true,
                 enhanced_keys_supported,
                 placeholder_text: placeholder,
+                disable_paste_burst: config.tui.disable_paste_burst.unwrap_or(false),
             }),
             active_exec_cell: None,
             config: config.clone(),
@@ -652,6 +653,7 @@ impl ChatWidget {
                 has_input_focus: true,
                 enhanced_keys_supported,
                 placeholder_text: placeholder,
+                disable_paste_burst: config.tui.disable_paste_burst.unwrap_or(false),
             }),
             active_exec_cell: None,
             config: config.clone(),
@@ -858,12 +860,7 @@ impl ChatWidget {
         self.bottom_pane.handle_paste(text);
     }
 
-    /// Handle timing for non-bracketed paste bursts.
-    ///
-    /// Schedules a follow-up frame when a burst is in progress, and requests
-    /// a redraw if the buffer was flushed this tick.
-    ///
-    /// Always returns false; callers should render this frame as usual.
+    // Returns true if caller should skip rendering this frame (a future tick is scheduled).
     pub(crate) fn handle_paste_burst_tick(
         &mut self,
         frame_requester: &crate::tui::FrameRequester,

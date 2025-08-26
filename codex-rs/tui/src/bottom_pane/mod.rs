@@ -70,6 +70,7 @@ pub(crate) struct BottomPaneParams {
     pub(crate) has_input_focus: bool,
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) placeholder_text: String,
+    pub(crate) disable_paste_burst: bool,
 }
 
 impl BottomPane {
@@ -82,6 +83,7 @@ impl BottomPane {
                 params.app_event_tx.clone(),
                 enhanced_keys_supported,
                 params.placeholder_text,
+                params.disable_paste_burst,
             ),
             active_view: None,
             app_event_tx: params.app_event_tx,
@@ -492,6 +494,7 @@ mod tests {
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
         });
         pane.push_approval_request(exec_request());
         assert_eq!(CancellationEvent::Handled, pane.on_ctrl_c());
@@ -511,6 +514,7 @@ mod tests {
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
         });
 
         // Create an approval modal (active view).
@@ -541,6 +545,7 @@ mod tests {
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
         });
 
         // Start a running task so the status indicator is active above the composer.
@@ -608,6 +613,7 @@ mod tests {
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
         });
 
         // Begin a task: show initial status.
@@ -638,6 +644,7 @@ mod tests {
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
         });
 
         // Activate spinner (status view replaces composer) with no live ring.
@@ -688,6 +695,7 @@ mod tests {
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
         });
 
         pane.set_task_running(true);
