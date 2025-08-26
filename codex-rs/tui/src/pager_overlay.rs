@@ -54,10 +54,13 @@ struct PagerView {
 
 impl PagerView {
     fn new(lines: Vec<Line<'static>>, title: String, scroll_offset: usize) -> Self {
-        Self { lines, scroll_offset, is_done: false, title }
+        Self {
+            lines,
+            scroll_offset,
+            is_done: false,
+            title,
+        }
     }
-
-    // no public event handling; overlays drive rendering
 
     fn render(&mut self, area: Rect, buf: &mut Buffer) {
         self.render_header(area, buf);
@@ -74,8 +77,6 @@ impl PagerView {
         let header = format!("/ {}", self.title);
         Span::from(header).dim().render_ref(area, buf);
     }
-
-    // No highlight application: overlays pre-process content if needed
 
     fn render_content_page(&mut self, area: Rect, buf: &mut Buffer, wrapped: &[Line<'static>]) {
         self.scroll_offset = self
@@ -219,7 +220,11 @@ pub(crate) struct TranscriptOverlay {
 impl TranscriptOverlay {
     pub(crate) fn new(transcript_lines: Vec<Line<'static>>) -> Self {
         Self {
-            view: PagerView::new(transcript_lines, "T R A N S C R I P T".to_string(), usize::MAX),
+            view: PagerView::new(
+                transcript_lines,
+                "T R A N S C R I P T".to_string(),
+                usize::MAX,
+            ),
             highlight_range: None,
         }
     }
@@ -251,11 +256,19 @@ impl TranscriptOverlay {
         ];
         let mut hints2 = vec![" ".into(), "q".set_style(key_hint_style), " quit".into()];
         // Always include Esc edit prev for transcript overlays
-        hints2.extend(["   ".into(), "Esc".set_style(key_hint_style), " edit prev".into()]);
+        hints2.extend([
+            "   ".into(),
+            "Esc".set_style(key_hint_style),
+            " edit prev".into(),
+        ]);
         if let Some((start, end)) = self.highlight_range
             && end > start
         {
-            hints2.extend(["   ".into(), "⏎".set_style(key_hint_style), " edit message".into()]);
+            hints2.extend([
+                "   ".into(),
+                "⏎".set_style(key_hint_style),
+                " edit message".into(),
+            ]);
         }
         Paragraph::new(vec![Line::from(hints1).dim(), Line::from(hints2).dim()])
             .render_ref(area, buf);
@@ -280,7 +293,10 @@ impl TranscriptOverlay {
                     if idx == start && i == 0 {
                         style.add_modifier |= Modifier::BOLD;
                     }
-                    spans.push(Span { style, content: s.content.clone() });
+                    spans.push(Span {
+                        style,
+                        content: s.content.clone(),
+                    });
                 }
                 line.spans = spans;
             }
@@ -375,8 +391,8 @@ impl StaticOverlay {
 mod tests {
     use super::*;
     use insta::assert_snapshot;
-    use ratatui::backend::TestBackend;
     use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
 
     #[test]
     fn edit_prev_hint_is_visible() {
