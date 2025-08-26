@@ -142,9 +142,12 @@ impl ModelClient {
         }
 
         let auth_manager = self.auth_manager.clone();
-        let auth = auth_manager.as_ref().and_then(|m| m.auth());
 
-        let auth_mode = auth.as_ref().map(|a| a.mode);
+        let auth_mode = auth_manager
+            .as_ref()
+            .and_then(|m| m.auth())
+            .as_ref()
+            .map(|a| a.mode);
 
         let store = prompt.store && auth_mode != Some(AuthMode::ChatGPT);
 
@@ -211,14 +214,17 @@ impl ModelClient {
         let mut attempt = 0;
         let max_retries = self.provider.request_max_retries();
 
-        trace!(
-            "POST to {}: {}",
-            self.provider.get_full_url(&auth),
-            serde_json::to_string(&payload)?
-        );
-
         loop {
             attempt += 1;
+
+            // Always fetch the latest auth in case a prior attempt refreshed the token.
+            let auth = auth_manager.as_ref().and_then(|m| m.auth());
+
+            trace!(
+                "POST to {}: {}",
+                self.provider.get_full_url(&auth),
+                serde_json::to_string(&payload)?
+            );
 
             let mut req_builder = self
                 .provider

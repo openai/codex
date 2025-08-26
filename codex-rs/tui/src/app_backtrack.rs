@@ -207,9 +207,9 @@ impl App {
             overlay.handle_event(tui, event)?;
             if overlay.is_done {
                 self.close_transcript_overlay(tui);
+                tui.frame_requester().schedule_frame();
             }
         }
-        tui.frame_requester().schedule_frame();
         Ok(())
     }
 
