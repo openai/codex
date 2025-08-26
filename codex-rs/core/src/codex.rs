@@ -66,6 +66,7 @@ use crate::model_family::find_family_for_model;
 use crate::openai_model_info::get_model_info;
 use crate::openai_tools::ApplyPatchToolArgs;
 use crate::openai_tools::ToolsConfig;
+use crate::openai_tools::OpenAiTool;
 use crate::openai_tools::ToolsConfigParams;
 use crate::openai_tools::get_openai_tools;
 use crate::parse_command::parse_command;
@@ -260,6 +261,7 @@ struct State {
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
     pending_input: Vec<ResponseInputItem>,
     history: ConversationHistory,
+    enable_web_search_next_turn: bool,
 }
 
 /// Context for an initialized model agent
@@ -946,6 +948,21 @@ impl Session {
             warn!("failed to spawn notifier '{}': {e}", notify_command[0]);
         }
     }
+
+    pub fn enable_web_search_next_turn(&self) {
+        let mut state = self.state.lock_unchecked();
+        state.enable_web_search_next_turn = true;
+    }
+
+    pub fn consume_enable_web_search_next_turn(&self) -> bool {
+        let mut state = self.state.lock_unchecked();
+        if state.enable_web_search_next_turn {
+            state.enable_web_search_next_turn = false;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 impl Drop for Session {
@@ -1580,10 +1597,24 @@ async fn run_turn(
     sub_id: String,
     input: Vec<ResponseItem>,
 ) -> CodexResult<Vec<ProcessedResponseItem>> {
-    let tools = get_openai_tools(
+    let mut tools = get_openai_tools(
         &turn_context.tools_config,
         Some(sess.mcp_connection_manager.list_all_tools()),
     );
+    // One-shot: expose native web_search only when pre-approved.
+    if sess.consume_enable_web_search_next_turn() {
+        tools.push(OpenAiTool::WebSearch {});
+    } else if matches!(turn_context.approval_policy, AskForApproval::Never) {
+        // YOLO: allow native web_search and hide request tool for direct use.
+        let has_web = tools.iter().any(|t| matches!(t, OpenAiTool::WebSearch {}));
+        if !has_web {
+            tools.push(OpenAiTool::WebSearch {});
+        }
+        tools.retain(|t| match t {
+            OpenAiTool::Function(f) => f.name != "web_search_request",
+            _ => true,
+        });
+    }
 
     let prompt = Prompt {
         input,
@@ -2063,6 +2094,54 @@ async fn handle_function_call(
     call_id: String,
 ) -> ResponseInputItem {
     match name.as_str() {
+        "web_search_request" => {
+            #[derive(serde::Deserialize)]
+            struct WebSearchRequestArgs {
+                query: String,
+            }
+            let args: WebSearchRequestArgs = match serde_json::from_str(&arguments) {
+                Ok(a) => a,
+                Err(_) => {
+                    return ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: FunctionCallOutputPayload {
+                            content: "failed to parse function arguments".to_string(),
+                            success: None,
+                        },
+                    };
+                }
+            };
+
+            // Ask the user for approval using the existing Exec approval path.
+            let rx = sess
+                .request_command_approval(
+                    sub_id.clone(),
+                    call_id.clone(),
+                    vec!["web_search".to_string(), args.query.clone()],
+                    turn_context.cwd.clone(),
+                    Some("Request to perform a web search".to_string()),
+                )
+                .await;
+            match rx.await.unwrap_or(ReviewDecision::Denied) {
+                ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {
+                    sess.enable_web_search_next_turn();
+                    ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: FunctionCallOutputPayload {
+                            content: "approved".to_string(),
+                            success: Some(true),
+                        },
+                    }
+                }
+                ReviewDecision::Denied | ReviewDecision::Abort => ResponseInputItem::FunctionCallOutput {
+                    call_id,
+                    output: FunctionCallOutputPayload {
+                        content: "denied".to_string(),
+                        success: Some(false),
+                    },
+                },
+            }
+        }
         "container.exec" | "shell" => {
             let params = match parse_container_exec_arguments(arguments, turn_context, &call_id) {
                 Ok(params) => params,

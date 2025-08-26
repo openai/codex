@@ -151,9 +151,14 @@ impl UserApprovalWidget {
                 );
 
                 contents.push(Line::from(""));
-                if let Some(reason) = reason {
+                // Suppress the generic reason line for web_search approvals to
+                // keep the UI concise.
+                let is_web_search = command.first().map(|s| s == "web_search").unwrap_or(false);
+                if !is_web_search {
+                    if let Some(reason) = reason {
                     contents.push(Line::from(reason.clone().italic()));
                     contents.push(Line::from(""));
+                    }
                 }
                 Paragraph::new(contents).wrap(Wrap { trim: false })
             }
@@ -388,7 +393,13 @@ impl WidgetRef for &UserApprovalWidget {
         ])
         .areas(response_chunk.inner(Margin::new(1, 0)));
         let title = match &self.approval_request {
-            ApprovalRequest::Exec { .. } => "Allow command?",
+            ApprovalRequest::Exec { command, .. } => {
+                if command.first().map(|s| s == "web_search").unwrap_or(false) {
+                    "Allow search?"
+                } else {
+                    "Allow command?"
+                }
+            }
             ApprovalRequest::ApplyPatch { .. } => "Apply changes?",
         };
         Line::from(title).render(title_area, buf);
