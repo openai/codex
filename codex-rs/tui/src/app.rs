@@ -3,7 +3,9 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::chatwidget::ChatWidget;
 use crate::file_search::FileSearchManager;
-use crate::transcript_app::TranscriptApp;
+use crate::pager_overlay::PagerOverlay as PagerOverlayTrait;
+use crate::pager_overlay::StaticOverlay;
+use crate::pager_overlay::TranscriptOverlay;
 use crate::tui;
 use crate::tui::TuiEvent;
 use codex_ansi_escape::ansi_escape_line;
@@ -40,8 +42,8 @@ pub(crate) struct App {
 
     pub(crate) transcript_lines: Vec<Line<'static>>,
 
-    // Transcript overlay state
-    pub(crate) transcript_overlay: Option<TranscriptApp>,
+    // Pager overlay state (Transcript or Static like Diff)
+    pub(crate) pager_overlay: Option<Box<dyn PagerOverlayTrait>>,
     pub(crate) deferred_history_lines: Vec<Line<'static>>,
 
     pub(crate) enhanced_keys_supported: bool,
@@ -89,7 +91,7 @@ impl App {
             file_search,
             enhanced_keys_supported,
             transcript_lines: Vec::new(),
-            transcript_overlay: None,
+            pager_overlay: None,
             deferred_history_lines: Vec::new(),
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
@@ -117,7 +119,7 @@ impl App {
         tui: &mut tui::Tui,
         event: TuiEvent,
     ) -> Result<bool> {
-        if self.transcript_overlay.is_some() {
+        if self.pager_overlay.is_some() {
             let _ = self.handle_backtrack_overlay_event(tui, event).await?;
         } else {
             match event {
@@ -172,26 +174,27 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::InsertHistoryLines(lines) => {
-                if let Some(overlay) = &mut self.transcript_overlay {
+                if let Some(overlay) = &mut self.pager_overlay {
                     overlay.insert_lines(lines.clone());
                     tui.frame_requester().schedule_frame();
                 }
                 self.transcript_lines.extend(lines.clone());
-                if self.transcript_overlay.is_some() {
+                if self.pager_overlay.is_some() {
                     self.deferred_history_lines.extend(lines);
                 } else {
                     tui.insert_history_lines(lines);
                 }
             }
             AppEvent::InsertHistoryCell(cell) => {
-                if let Some(overlay) = &mut self.transcript_overlay {
-                    overlay.insert_lines(cell.transcript_lines());
+                let cell_transcript = cell.transcript_lines();
+                if let Some(overlay) = &mut self.pager_overlay {
+                    overlay.insert_lines(cell_transcript.clone());
                     tui.frame_requester().schedule_frame();
                 }
-                self.transcript_lines.extend(cell.transcript_lines());
+                self.transcript_lines.extend(cell_transcript.clone());
                 let display = cell.display_lines();
                 if !display.is_empty() {
-                    if self.transcript_overlay.is_some() {
+                    if self.pager_overlay.is_some() {
                         self.deferred_history_lines.extend(display);
                     } else {
                         tui.insert_history_lines(display);
@@ -240,10 +243,10 @@ impl App {
                 } else {
                     text.lines().map(ansi_escape_line).collect()
                 };
-                self.transcript_overlay = Some(TranscriptApp::with_title(
+                self.pager_overlay = Some(Box::new(StaticOverlay::with_title(
                     pager_lines,
                     "D I F F".to_string(),
-                ));
+                )));
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::StartFileSearch(query) => {
@@ -300,7 +303,9 @@ impl App {
             } => {
                 // Enter alternate screen and set viewport to full size.
                 let _ = tui.enter_alt_screen();
-                self.transcript_overlay = Some(TranscriptApp::new(self.transcript_lines.clone()));
+                self.pager_overlay = Some(Box::new(TranscriptOverlay::new(
+                    self.transcript_lines.clone(),
+                )));
                 tui.frame_requester().schedule_frame();
             }
             // Esc primes/advances backtracking when composer is empty.
