@@ -46,36 +46,24 @@ impl PagerOverlay {
     }
 }
 
-fn render_key_hints(area: Rect, buf: &mut Buffer, extra_pairs: &[(&str, &str)]) {
+// Common pager navigation hints rendered on the first line
+const PAGER_KEY_HINTS: &[(&str, &str)] = &[("↑/↓", "scroll"), ("PgUp/PgDn", "page"), ("Home/End", "jump")];
+
+// Render a single line of key hints from (key, description) pairs.
+fn render_key_hints(area: Rect, buf: &mut Buffer, pairs: &[(&str, &str)]) {
     let key_hint_style = Style::default().fg(Color::Cyan);
-    let hints1 = vec![
-        " ".into(),
-        "↑".set_style(key_hint_style),
-        "/".into(),
-        "↓".set_style(key_hint_style),
-        " scroll   ".into(),
-        "PgUp".set_style(key_hint_style),
-        "/".into(),
-        "PgDn".set_style(key_hint_style),
-        " page   ".into(),
-        "Home".set_style(key_hint_style),
-        "/".into(),
-        "End".set_style(key_hint_style),
-        " jump".into(),
-    ];
-    let mut line2: Vec<Span<'static>> = vec![" ".into()];
+    let mut spans: Vec<Span<'static>> = vec![" ".into()];
     let mut first = true;
-    for (key, desc) in extra_pairs {
+    for (key, desc) in pairs {
         if !first {
-            line2.push("   ".into());
+            spans.push("   ".into());
         }
-        line2.push(Span::from(key.to_string()).set_style(key_hint_style));
-        line2.push(" ".into());
-        line2.push(Span::from(desc.to_string()));
+        spans.push(Span::from(key.to_string()).set_style(key_hint_style));
+        spans.push(" ".into());
+        spans.push(Span::from(desc.to_string()));
         first = false;
     }
-    Paragraph::new(vec![Line::from(hints1).dim(), Line::from(line2).dim()])
-        .render_ref(area, buf);
+    Paragraph::new(vec![Line::from(spans).dim()]).render_ref(area, buf);
 }
 struct PagerView {
     lines: Vec<Line<'static>>,
@@ -247,13 +235,16 @@ impl TranscriptOverlay {
     }
 
     fn render_hints(&self, area: Rect, buf: &mut Buffer) {
+        let line1 = Rect::new(area.x, area.y, area.width, 1);
+        let line2 = Rect::new(area.x, area.y.saturating_add(1), area.width, 1);
+        render_key_hints(line1, buf, PAGER_KEY_HINTS);
         let mut pairs: Vec<(&str, &str)> = vec![("q", "quit"), ("Esc", "edit prev")];
         if let Some((start, end)) = self.highlight_range
             && end > start
         {
             pairs.push(("⏎", "edit message"));
         }
-        render_key_hints(area, buf, &pairs);
+        render_key_hints(line2, buf, &pairs);
     }
 
     pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer) {
@@ -336,8 +327,11 @@ impl StaticOverlay {
     }
 
     fn render_hints(&self, area: Rect, buf: &mut Buffer) {
+        let line1 = Rect::new(area.x, area.y, area.width, 1);
+        let line2 = Rect::new(area.x, area.y.saturating_add(1), area.width, 1);
+        render_key_hints(line1, buf, PAGER_KEY_HINTS);
         let pairs = [("q", "quit")];
-        render_key_hints(area, buf, &pairs);
+        render_key_hints(line2, buf, &pairs);
     }
 
     pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer) {
