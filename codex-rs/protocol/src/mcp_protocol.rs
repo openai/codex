@@ -673,9 +673,19 @@ pub struct FuzzyFileSearchParams {
     pub roots: Vec<String>,
 }
 
+/// Superset of [`codex_file_search::FileMatch`]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+pub struct FuzzyFileSearchResult {
+    pub root: String,
+    pub path: String,
+    pub score: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub indices: Option<Vec<u32>>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 pub struct FuzzyFileSearchResponse {
-    pub files: Vec<String>,
+    pub files: Vec<FuzzyFileSearchResult>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]

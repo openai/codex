@@ -33,6 +33,7 @@ use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::InputItem as CoreInputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
+use codex_file_search as file_search;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
@@ -54,6 +55,7 @@ use codex_protocol::mcp_protocol::ExecCommandApprovalResponse;
 use codex_protocol::mcp_protocol::ExecOneOffCommandParams;
 use codex_protocol::mcp_protocol::FuzzyFileSearchParams;
 use codex_protocol::mcp_protocol::FuzzyFileSearchResponse;
+use codex_protocol::mcp_protocol::FuzzyFileSearchResult;
 use codex_protocol::mcp_protocol::GetUserAgentResponse;
 use codex_protocol::mcp_protocol::GetUserSavedConfigResponse;
 use codex_protocol::mcp_protocol::GitDiffToRemoteResponse;
@@ -88,6 +90,7 @@ use mcp_types::JSONRPCErrorError;
 use mcp_types::RequestId;
 use std::collections::HashMap;
 use std::ffi::OsStr;
+use std::num::NonZero;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -95,6 +98,7 @@ use std::time::Duration;
 use tokio::select;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
+use tokio::task::JoinSet;
 use tracing::error;
 use tracing::info;
 use tracing::warn;
@@ -1177,52 +1181,65 @@ impl CodexMessageProcessor {
     async fn fuzzy_file_search(&self, request_id: RequestId, params: FuzzyFileSearchParams) {
         let FuzzyFileSearchParams { query, roots } = params;
 
-        // Execute fuzzy search across provided roots using codex-file-search.
-        use codex_file_search as file_search;
-        use std::collections::HashSet;
-        use std::num::NonZero;
-        use std::path::PathBuf;
-
-        let mut files: Vec<String> = Vec::new();
-        let mut seen: HashSet<String> = HashSet::new();
+        let mut files: Vec<FuzzyFileSearchResult> = Vec::new();
         #[expect(clippy::expect_used)]
         let limit_per_root = NonZero::new(50).expect("50 is a valid non-zero usize");
         #[expect(clippy::expect_used)]
         let threads = NonZero::new(2).expect("2 is a valid non-zero usize");
-        let compute_indices = false;
+        let compute_indices = true;
+
+        // TODO: offer a way to cancel outdated requests in the interface
+        let cancel_flag = std::sync::Arc::new(AtomicBool::new(false));
+        let mut join_set = JoinSet::new();
 
         for root in roots {
             let search_dir = PathBuf::from(&root);
-            // TODO: offer a way to cancel outdated requests in the interface
-            let cancel_flag = std::sync::Arc::new(AtomicBool::new(false));
+            let query = query.clone();
+            let cancel_flag = cancel_flag.clone();
 
-            // because message_processor runs each request in a separate thread, we don't need to spawn a new thread
-            match file_search::run(
-                &query,
-                limit_per_root,
-                &search_dir,
-                Vec::new(),
-                threads,
-                cancel_flag,
-                compute_indices,
-            ) {
-                Ok(res) => {
+            join_set.spawn(async move {
+                match file_search::run(
+                    query.as_str(),
+                    limit_per_root,
+                    &search_dir,
+                    Vec::new(),
+                    threads,
+                    cancel_flag,
+                    compute_indices,
+                ) {
+                    Ok(res) => Ok((root, res)),
+                    Err(e) => Err((root, e)),
+                }
+            });
+        }
+
+        while let Some(res) = join_set.join_next().await {
+            match res {
+                Ok(Ok((root, res))) => {
                     for m in res.matches {
-                        // Join root + relative match path for clarity across multiple roots.
-                        let full_path = PathBuf::from(&root).join(m.path);
-                        if let Some(s) = full_path.to_str()
-                            && seen.insert(s.to_string())
-                        {
-                            files.push(s.to_string());
-                        }
+                        let result = FuzzyFileSearchResult {
+                            root: root.clone(),
+                            path: m.path,
+                            score: m.score,
+                            indices: m.indices,
+                        };
+                        files.push(result);
                     }
                 }
+                Ok(Err((root, e))) => {
+                    tracing::warn!("fuzzy-file-search in dir '{}' failed: {}", root, e);
+                }
                 Err(e) => {
-                    tracing::warn!("fuzzy-file-search root '{}' failed: {}", root, e);
+                    tracing::warn!("fuzzy-file-search join_next failed: {}", e);
                 }
             }
         }
 
+        files.sort_by(file_search::cmp_by_score_desc_then_path_asc::<
+            FuzzyFileSearchResult,
+            _,
+            _,
+        >(|f| f.score, |f| f.path.as_str()));
         let response = FuzzyFileSearchResponse { files };
         self.outgoing.send_response(request_id, response).await;
     }
