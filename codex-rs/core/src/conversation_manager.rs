@@ -110,6 +110,10 @@ impl ConversationManager {
             .ok_or_else(|| CodexErr::ConversationNotFound(conversation_id))
     }
 
+    pub async fn remove_conversation(&self, conversation_id: Uuid) {
+        self.conversations.write().await.remove(&conversation_id);
+    }
+
     /// Fork an existing conversation by dropping the last `drop_last_messages`
     /// user/assistant messages from its transcript and starting a new
     /// conversation with identical configuration (unless overridden by the
