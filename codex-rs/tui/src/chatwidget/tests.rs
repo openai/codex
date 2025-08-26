@@ -126,6 +126,63 @@ fn final_answer_without_newline_is_flushed_immediately() {
     );
 }
 
+#[test]
+fn dash_split_deltas_do_not_emit_standalone_dash_line() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    // Start with a line that includes a newline so streaming activates.
+    chat.handle_codex_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: "Intro line.\n".into(),
+        }),
+    });
+
+    // Now stream a list item with the dash split across chunks: ["-", " some", " words"].
+    chat.handle_codex_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta: "-".into() }),
+    });
+    chat.handle_codex_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: " some".into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
+            delta: " words".into(),
+        }),
+    });
+
+    // Finalize the answer so any remaining buffered content is flushed.
+    chat.handle_codex_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent {
+            message: "Intro line.\n- some words".into(),
+        }),
+    });
+
+    // Drain any inserted history and ensure no standalone '-' line was emitted.
+    let cells = drain_insert_history(&mut rx);
+    let mut found_dangling_dash = false;
+    for lines in cells {
+        for l in lines {
+            let s = l
+                .spans
+                .iter()
+                .map(|sp| sp.content.clone())
+                .collect::<String>();
+            if s.trim() == "-" {
+                found_dangling_dash = true;
+                break;
+            }
+        }
+    }
+    assert!(!found_dangling_dash, "should not emit a dangling '-' line");
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn helpers_are_available_and_do_not_panic() {
     let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
