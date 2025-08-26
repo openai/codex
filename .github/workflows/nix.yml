@@ -37,5 +37,5 @@ jobs:
       - uses: cachix/install-nix-action@v31
         with:
           nix_path: nixpkgs=channel:nixos-unstable
-      - name: nix build . for x86_64-darwin
+      - name: nix build for x86_64-darwin
         run: nix build .
