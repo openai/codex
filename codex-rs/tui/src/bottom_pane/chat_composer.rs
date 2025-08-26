@@ -317,7 +317,7 @@ impl ChatComposer {
                 self.paste_burst.append_char_to_buffer(ch, now);
                 Some((InputResult::None, true))
             }
-            CharDecision::HoldFirstChar => {
+            CharDecision::RetainFirstChar => {
                 // Do not insert into textarea yet. A tick will flush if no burst follows.
                 Some((InputResult::None, true))
             }

@@ -135,7 +135,7 @@ impl App {
                 TuiEvent::Draw => {
                     if self
                         .chat_widget
-                        .handle_paste_burst_tick(&tui.frame_requester())
+                        .handle_paste_burst_tick(tui.frame_requester())
                     {
                         return Ok(true);
                     }

@@ -860,22 +860,20 @@ impl ChatWidget {
         self.bottom_pane.handle_paste(text);
     }
 
-    // Returns true if caller should skip rendering this frame (a future tick is scheduled).
-    pub(crate) fn handle_paste_burst_tick(
-        &mut self,
-        frame_requester: &crate::tui::FrameRequester,
-    ) -> bool {
-        let flushed = self.bottom_pane.flush_paste_burst_if_due();
-        if flushed {
+    // Returns true if caller should skip rendering this frame (a future frame is scheduled).
+    pub(crate) fn handle_paste_burst_tick(&mut self, frame_requester: FrameRequester) -> bool {
+        if self.bottom_pane.flush_paste_burst_if_due() {
+            // A paste just flushed; request an immediate redraw and skip this frame.
             self.request_redraw();
-            return false;
+            return true;
         }
         if self.bottom_pane.is_in_paste_burst() {
+            // While capturing a burst, schedule a follow-up tick and skip this frame
+            // to avoid redundant renders between ticks.
             frame_requester.schedule_frame_in(
                 crate::bottom_pane::ChatComposer::recommended_paste_flush_delay(),
             );
-            // Do not skip rendering; draw the textarea without the retro-captured prefix
-            return false;
+            return true;
         }
         false
     }

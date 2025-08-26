@@ -25,7 +25,7 @@ pub(crate) enum CharDecision {
     BufferAppend,
     /// Do not insert/render this char yet; temporarily save the first fast
     /// char while we wait to see if a paste-like burst follows.
-    HoldFirstChar,
+    RetainFirstChar,
     /// Begin buffering using the previously saved first char (no retro grab needed).
     BeginBufferFromPending,
 }
@@ -82,7 +82,7 @@ impl PasteBurst {
 
         // Save the first fast char very briefly to see if a burst follows.
         self.pending_first_char = Some((ch, now));
-        CharDecision::HoldFirstChar
+        CharDecision::RetainFirstChar
     }
 
     /// Flush the buffered burst if the inter-key timeout has elapsed.
