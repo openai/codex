@@ -51,23 +51,16 @@ struct PagerView {
     is_done: bool,
     title: String,
     highlight_range: Option<(usize, usize)>,
-    show_enter_edit_hint: bool,
 }
 
 impl PagerView {
-    fn new(
-        lines: Vec<Line<'static>>,
-        title: String,
-        scroll_offset: usize,
-        show_enter_edit_hint: bool,
-    ) -> Self {
+    fn new(lines: Vec<Line<'static>>, title: String, scroll_offset: usize) -> Self {
         Self {
             lines,
             scroll_offset,
             is_done: false,
             title,
             highlight_range: None,
-            show_enter_edit_hint,
         }
     }
 
@@ -90,7 +83,7 @@ impl PagerView {
         self.apply_highlight_to_lines(&mut lines);
         let wrapped = insert_history::word_wrap_lines(&lines, content_area.width);
         self.render_content_page(content_area, buf, &wrapped);
-        self.render_bottom_section(area, content_area, buf, &wrapped);
+        self.render_bottom_bar(area, content_area, buf, &wrapped);
     }
 
     fn render_header(&self, area: Rect, buf: &mut Buffer) {
@@ -146,7 +139,7 @@ impl PagerView {
         }
     }
 
-    fn render_bottom_section(
+    fn render_bottom_bar(
         &self,
         full_area: Rect,
         content_area: Rect,
@@ -155,7 +148,6 @@ impl PagerView {
     ) {
         let sep_y = content_area.bottom();
         let sep_rect = Rect::new(full_area.x, sep_y, full_area.width, 1);
-        let hints_rect = Rect::new(full_area.x, sep_y + 1, full_area.width, 2);
 
         Span::from("─".repeat(sep_rect.width as usize))
             .dim()
@@ -177,46 +169,6 @@ impl PagerView {
         Span::from(pct_text)
             .dim()
             .render_ref(Rect::new(pct_x, sep_rect.y, pct_w, 1), buf);
-
-        let key_hint_style = Style::default().fg(Color::Cyan);
-        let hints1 = vec![
-            " ".into(),
-            "↑".set_style(key_hint_style),
-            "/".into(),
-            "↓".set_style(key_hint_style),
-            " scroll   ".into(),
-            "PgUp".set_style(key_hint_style),
-            "/".into(),
-            "PgDn".set_style(key_hint_style),
-            " page   ".into(),
-            "Home".set_style(key_hint_style),
-            "/".into(),
-            "End".set_style(key_hint_style),
-            " jump".into(),
-        ];
-        let mut hints2 = vec![" ".into(), "q".set_style(key_hint_style), " quit".into()];
-        if self.show_enter_edit_hint {
-            hints2.extend([
-                "   ".into(),
-                "Esc".set_style(key_hint_style),
-                " edit prev".into(),
-            ]);
-            self.maybe_append_enter_edit_hint(&mut hints2, key_hint_style);
-        }
-        Paragraph::new(vec![Line::from(hints1).dim(), Line::from(hints2).dim()])
-            .render_ref(hints_rect, buf);
-    }
-
-    fn maybe_append_enter_edit_hint(&self, hints: &mut Vec<Span<'static>>, key_hint_style: Style) {
-        if let Some((start, end)) = self.highlight_range
-            && end > start
-        {
-            hints.extend([
-                "   ".into(),
-                "⏎".set_style(key_hint_style),
-                " edit message".into(),
-            ]);
-        }
     }
 
     fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) -> Result<()> {
@@ -295,7 +247,7 @@ impl PagerView {
     fn scroll_area(&self, area: Rect) -> Rect {
         let mut area = area;
         area.y = area.y.saturating_add(1);
-        area.height = area.height.saturating_sub(5);
+        area.height = area.height.saturating_sub(2);
         area
     }
 }
@@ -307,12 +259,7 @@ pub(crate) struct TranscriptOverlay {
 impl TranscriptOverlay {
     pub(crate) fn new(transcript_lines: Vec<Line<'static>>) -> Self {
         Self {
-            view: PagerView::new(
-                transcript_lines,
-                "T R A N S C R I P T".to_string(),
-                usize::MAX,
-                true,
-            ),
+            view: PagerView::new(transcript_lines, "T R A N S C R I P T".to_string(), usize::MAX),
         }
     }
 
@@ -324,16 +271,55 @@ impl TranscriptOverlay {
         self.view.highlight_range = range;
     }
 
-    // Test helper parity with previous module
-    #[cfg(test)]
+    fn render_hints(&self, area: Rect, buf: &mut Buffer) {
+        let key_hint_style = Style::default().fg(Color::Cyan);
+        let hints1 = vec![
+            " ".into(),
+            "↑".set_style(key_hint_style),
+            "/".into(),
+            "↓".set_style(key_hint_style),
+            " scroll   ".into(),
+            "PgUp".set_style(key_hint_style),
+            "/".into(),
+            "PgDn".set_style(key_hint_style),
+            " page   ".into(),
+            "Home".set_style(key_hint_style),
+            "/".into(),
+            "End".set_style(key_hint_style),
+            " jump".into(),
+        ];
+        let mut hints2 = vec![" ".into(), "q".set_style(key_hint_style), " quit".into()];
+        // Always include Esc edit prev for transcript overlays
+        hints2.extend(["   ".into(), "Esc".set_style(key_hint_style), " edit prev".into()]);
+        if let Some((start, end)) = self.view.highlight_range
+            && end > start
+        {
+            hints2.extend(["   ".into(), "⏎".set_style(key_hint_style), " edit message".into()]);
+        }
+        Paragraph::new(vec![Line::from(hints1).dim(), Line::from(hints2).dim()])
+            .render_ref(area, buf);
+    }
+
     pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer) {
-        self.view.render(area, buf);
+        let top_h = area.height.saturating_sub(3);
+        let top = Rect::new(area.x, area.y, area.width, top_h);
+        let bottom = Rect::new(area.x, area.y + top_h, area.width, 3);
+        self.view.render(top, buf);
+        self.render_hints(bottom, buf);
     }
 }
 
 impl TranscriptOverlay {
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
-        self.view.handle_event(tui, event)
+        match event {
+            TuiEvent::Key(key_event) => self.view.handle_key_event(tui, key_event),
+            TuiEvent::Draw => Ok({
+                tui.draw(u16::MAX, |frame| {
+                    self.render(frame.area(), frame.buffer);
+                })?;
+            }),
+            _ => Ok(()),
+        }
     }
     pub(crate) fn is_done(&self) -> bool {
         self.view.is_done
@@ -350,14 +336,52 @@ pub(crate) struct StaticOverlay {
 impl StaticOverlay {
     pub(crate) fn with_title(lines: Vec<Line<'static>>, title: String) -> Self {
         Self {
-            view: PagerView::new(lines, title, 0, false),
+            view: PagerView::new(lines, title, 0),
         }
+    }
+
+    fn render_hints(&self, area: Rect, buf: &mut Buffer) {
+        let key_hint_style = Style::default().fg(Color::Cyan);
+        let hints1 = vec![
+            " ".into(),
+            "↑".set_style(key_hint_style),
+            "/".into(),
+            "↓".set_style(key_hint_style),
+            " scroll   ".into(),
+            "PgUp".set_style(key_hint_style),
+            "/".into(),
+            "PgDn".set_style(key_hint_style),
+            " page   ".into(),
+            "Home".set_style(key_hint_style),
+            "/".into(),
+            "End".set_style(key_hint_style),
+            " jump".into(),
+        ];
+        let hints2 = vec![" ".into(), "q".set_style(key_hint_style), " quit".into()];
+        Paragraph::new(vec![Line::from(hints1).dim(), Line::from(hints2).dim()])
+            .render_ref(area, buf);
+    }
+
+    pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer) {
+        let top_h = area.height.saturating_sub(3);
+        let top = Rect::new(area.x, area.y, area.width, top_h);
+        let bottom = Rect::new(area.x, area.y + top_h, area.width, 3);
+        self.view.render(top, buf);
+        self.render_hints(bottom, buf);
     }
 }
 
 impl StaticOverlay {
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
-        self.view.handle_event(tui, event)
+        match event {
+            TuiEvent::Key(key_event) => self.view.handle_key_event(tui, key_event),
+            TuiEvent::Draw => Ok({
+                tui.draw(u16::MAX, |frame| {
+                    self.render(frame.area(), frame.buffer);
+                })?;
+            }),
+            _ => Ok(()),
+        }
     }
     pub(crate) fn is_done(&self) -> bool {
         self.view.is_done
@@ -367,6 +391,9 @@ impl StaticOverlay {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use insta::assert_snapshot;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
 
     #[test]
     fn edit_prev_hint_is_visible() {
@@ -389,5 +416,32 @@ mod tests {
             s.contains("edit prev"),
             "expected 'edit prev' hint in overlay footer, got: {s:?}"
         );
+    }
+
+    #[test]
+    fn transcript_overlay_snapshot_basic() {
+        // Prepare a transcript overlay with a few lines
+        let mut overlay = TranscriptOverlay::new(vec![
+            Line::from("alpha"),
+            Line::from("beta"),
+            Line::from("gamma"),
+        ]);
+        let mut term = Terminal::new(TestBackend::new(40, 10)).expect("term");
+        term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
+            .expect("draw");
+        assert_snapshot!(term.backend());
+    }
+
+    #[test]
+    fn static_overlay_snapshot_basic() {
+        // Prepare a static overlay with a few lines and a title
+        let mut overlay = StaticOverlay::with_title(
+            vec![Line::from("one"), Line::from("two"), Line::from("three")],
+            "S T A T I C".to_string(),
+        );
+        let mut term = Terminal::new(TestBackend::new(40, 10)).expect("term");
+        term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
+            .expect("draw");
+        assert_snapshot!(term.backend());
     }
 }
