@@ -58,18 +58,92 @@ pub(crate) enum PatchEventType {
 /// `Vec<Line<'static>>` representation to make it easier to display in a
 /// scrollable list.
 pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync {
-    fn display_lines(&self) -> Vec<Line<'static>>;
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>>;
 
     fn transcript_lines(&self) -> Vec<Line<'static>> {
-        self.display_lines()
+        self.display_lines(u16::MAX)
     }
 
     fn desired_height(&self, width: u16) -> u16 {
-        Paragraph::new(Text::from(self.display_lines()))
+        Paragraph::new(Text::from(self.display_lines(width)))
             .wrap(Wrap { trim: false })
             .line_count(width)
             .try_into()
             .unwrap_or(0)
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct UserHistoryCell {
+    message: String,
+}
+
+impl HistoryCell for UserHistoryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(Line::from(""));
+
+        // Wrap the content first, then prefix each wrapped line with the marker.
+        let wrap_width = width.saturating_sub(1); // account for the ▌ prefix
+        let content_lines: Vec<Line> = self
+            .message
+            .lines()
+            .map(|l| Line::from(l.to_string().dim()))
+            .collect();
+        let wrapped = crate::insert_history::word_wrap_lines(&content_lines, wrap_width);
+
+        for mut line in wrapped {
+            let mut spans = Vec::with_capacity(line.spans.len() + 1);
+            spans.push("▌".cyan().dim());
+            spans.extend(line.spans.into_iter());
+            line.spans = spans;
+            lines.push(line);
+        }
+        lines
+    }
+
+    fn transcript_lines(&self) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(Line::from(""));
+        lines.push(Line::from("user".cyan().bold()));
+        lines.extend(self.message.lines().map(|l| Line::from(l.to_string())));
+        lines
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct AgentMessageCell {
+    lines: Vec<Line<'static>>,
+    include_header_in_transcript: bool,
+}
+
+impl AgentMessageCell {
+    pub(crate) fn new(lines: Vec<Line<'static>>, include_header_in_transcript: bool) -> Self {
+        Self {
+            lines,
+            include_header_in_transcript,
+        }
+    }
+}
+
+impl HistoryCell for AgentMessageCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        let mut out: Vec<Line<'static>> = Vec::new();
+        if self.include_header_in_transcript {
+            out.push(Line::from(""));
+        }
+        out.extend(self.lines.clone());
+        out
+    }
+
+    fn transcript_lines(&self) -> Vec<Line<'static>> {
+        let mut out: Vec<Line<'static>> = Vec::new();
+        if self.include_header_in_transcript {
+            out.push(Line::from(""));
+            out.push(Line::from("codex".magenta().bold()));
+        }
+        out.extend(self.lines.clone());
+        out
     }
 }
 
@@ -79,7 +153,7 @@ pub(crate) struct PlainHistoryCell {
 }
 
 impl HistoryCell for PlainHistoryCell {
-    fn display_lines(&self) -> Vec<Line<'static>> {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
         self.lines.clone()
     }
 }
@@ -90,7 +164,7 @@ pub(crate) struct TranscriptOnlyHistoryCell {
 }
 
 impl HistoryCell for TranscriptOnlyHistoryCell {
-    fn display_lines(&self) -> Vec<Line<'static>> {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
         Vec::new()
     }
 
@@ -109,7 +183,7 @@ pub(crate) struct ExecCell {
     include_header: bool,
 }
 impl HistoryCell for ExecCell {
-    fn display_lines(&self) -> Vec<Line<'static>> {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
         exec_command_lines(
             &self.command,
             &self.parsed,
@@ -169,7 +243,7 @@ impl WidgetRef for &ExecCell {
             width: area.width,
             height: area.height,
         };
-        Paragraph::new(Text::from(self.display_lines()))
+        Paragraph::new(Text::from(self.display_lines(area.width)))
             .wrap(Wrap { trim: false })
             .render(content_area, buf);
     }
@@ -200,7 +274,7 @@ struct CompletedMcpToolCallWithImageOutput {
     _image: DynamicImage,
 }
 impl HistoryCell for CompletedMcpToolCallWithImageOutput {
-    fn display_lines(&self) -> Vec<Line<'static>> {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
         vec![
             Line::from(""),
             Line::from("tool result (image output omitted)"),
@@ -298,13 +372,8 @@ pub(crate) fn new_session_info(
     }
 }
 
-pub(crate) fn new_user_prompt(message: String) -> PlainHistoryCell {
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(Line::from(""));
-    lines.push(Line::from("user".cyan().bold()));
-    lines.extend(message.lines().map(|l| Line::from(l.to_string())));
-
-    PlainHistoryCell { lines }
+pub(crate) fn new_user_prompt(message: String) -> UserHistoryCell {
+    UserHistoryCell { message }
 }
 
 pub(crate) fn new_active_exec_command(
@@ -1227,5 +1296,30 @@ mod tests {
         assert_eq!(lines[2].spans[0].content, "  ");
         // Continuation lines align under the text block.
         assert_eq!(lines[3].spans[0].content, "    ");
+    }
+
+    #[test]
+    fn user_history_cell_wraps_and_prefixes_each_line_snapshot() {
+        let msg = "one two three four five six seven";
+        let cell = UserHistoryCell {
+            message: msg.to_string(),
+        };
+
+        // Small width to force wrapping. Effective wrap width is width-1 due to the ▌ prefix.
+        let width: u16 = 8;
+        let lines = cell.display_lines(width);
+
+        let rendered = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        insta::assert_snapshot!(rendered);
     }
 }

@@ -196,7 +196,7 @@ fn drain_insert_history(
     while let Ok(ev) = rx.try_recv() {
         match ev {
             AppEvent::InsertHistoryLines(lines) => out.push(lines),
-            AppEvent::InsertHistoryCell(cell) => out.push(cell.display_lines()),
+            AppEvent::InsertHistoryCell(cell) => out.push(cell.display_lines(80)),
             _ => {}
         }
     }
@@ -536,7 +536,7 @@ async fn binary_size_transcript_matches_ideal_fixture() {
                                 );
                             }
                             AppEvent::InsertHistoryCell(cell) => {
-                                let lines = cell.display_lines();
+                                let lines = cell.display_lines(80);
                                 transcript.push_str(&lines_to_single_string(&lines));
                                 crate::insert_history::insert_history_lines_to_writer(
                                     &mut terminal,
@@ -565,7 +565,7 @@ async fn binary_size_transcript_matches_ideal_fixture() {
                                 );
                             }
                             AppEvent::InsertHistoryCell(cell) => {
-                                let lines = cell.display_lines();
+                                let lines = cell.display_lines(80);
                                 transcript.push_str(&lines_to_single_string(&lines));
                                 crate::insert_history::insert_history_lines_to_writer(
                                     &mut terminal,

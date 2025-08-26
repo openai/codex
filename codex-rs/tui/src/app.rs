@@ -189,7 +189,7 @@ impl App {
                     tui.frame_requester().schedule_frame();
                 }
                 self.transcript_lines.extend(cell.transcript_lines());
-                let display = cell.display_lines();
+                let display = cell.display_lines(tui.terminal.last_known_screen_size.width);
                 if !display.is_empty() {
                     if self.transcript_overlay.is_some() {
                         self.deferred_history_lines.extend(display);

@@ -7,6 +7,7 @@ use super::StreamState;
 /// Sink for history insertions and animation control.
 pub(crate) trait HistorySink {
     fn insert_history(&self, lines: Vec<Line<'static>>);
+    fn insert_history_cell(&self, cell: Box<dyn crate::history_cell::HistoryCell>);
     fn start_commit_animation(&self);
     fn stop_commit_animation(&self);
 }
@@ -18,6 +19,10 @@ impl HistorySink for AppEventHistorySink {
     fn insert_history(&self, lines: Vec<Line<'static>>) {
         self.0
             .send(crate::app_event::AppEvent::InsertHistoryLines(lines))
+    }
+    fn insert_history_cell(&self, cell: Box<dyn crate::history_cell::HistoryCell>) {
+        self.0
+            .send(crate::app_event::AppEvent::InsertHistoryCell(cell))
     }
     fn start_commit_animation(&self) {
         self.0
@@ -124,10 +129,15 @@ impl StreamController {
                 out_lines.extend(step.history);
             }
             if !out_lines.is_empty() {
-                let mut lines_with_header: Lines = Vec::new();
-                self.emit_header_if_needed(&mut lines_with_header);
-                lines_with_header.extend(out_lines);
-                sink.insert_history(lines_with_header);
+                // Determine whether we would have emitted a header for this block.
+                let mut header_probe: Lines = Vec::new();
+                let header_emitted = self.emit_header_if_needed(&mut header_probe);
+                // Insert as a HistoryCell so display drops the header while transcript keeps it.
+                let cell = crate::history_cell::AgentMessageCell::new(
+                    out_lines,
+                    header_emitted,
+                );
+                sink.insert_history_cell(Box::new(cell));
             }
 
             // Cleanup
@@ -159,11 +169,18 @@ impl StreamController {
         }
         let step = { self.state.step() };
         if !step.history.is_empty() {
-            let mut lines: Lines = Vec::new();
-            self.emit_header_if_needed(&mut lines);
-            let mut out = lines;
-            out.extend(step.history);
-            sink.insert_history(out);
+            // Decide if a header would be emitted; if so, wrap in a cell that hides it in display.
+            let mut probe: Lines = Vec::new();
+            let header_emitted = self.emit_header_if_needed(&mut probe);
+            if header_emitted {
+                let cell = crate::history_cell::AgentMessageCell::new(
+                    step.history,
+                    true,
+                );
+                sink.insert_history_cell(Box::new(cell));
+            } else {
+                sink.insert_history(step.history);
+            }
         }
 
         let is_idle = self.state.is_idle();
