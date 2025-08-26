@@ -28,29 +28,48 @@ impl ConversationHistory {
                 continue;
             }
 
-            // Merge adjacent assistant messages into a single history entry.
-            // This prevents duplicates when a partial assistant message was
-            // streamed into history earlier in the turn and the final full
-            // message is recorded at turn end.
-            match (&*item, self.items.last_mut()) {
-                (
-                    ResponseItem::Message {
-                        role: new_role,
-                        content: new_content,
-                        ..
-                    },
-                    Some(ResponseItem::Message {
-                        role: last_role,
-                        content: last_content,
-                        ..
-                    }),
-                ) if new_role == "assistant" && last_role == "assistant" => {
-                    append_text_content(last_content, new_content);
-                }
-                _ => {
-                    self.items.push(item.clone());
+            // Merge with the most recent prior assistant message, skipping
+            // interleaved non-message items.
+            if let ResponseItem::Message {
+                role,
+                content: new_content,
+                id: new_id,
+            } = &*item
+            {
+                if role == "assistant" {
+                    if let Some(last_assistant_idx) = self
+                        .items
+                        .iter()
+                        .rposition(|it| matches!(it, ResponseItem::Message { role, .. } if role == "assistant"))
+                    {
+                        if let ResponseItem::Message { id: ref mut last_id, content: ref mut last_content, .. } =
+                            self.items[last_assistant_idx]
+                        {
+                            let old_text = concat_output_text(last_content);
+                            let new_text = concat_output_text(new_content);
+
+                            if new_text == old_text {
+                                // Same text; upgrade id if present.
+                                if last_id.is_none() && new_id.is_some() {
+                                    *last_id = new_id.clone();
+                                    *last_content = new_content.clone();
+                                }
+                            } else if new_text.starts_with(&old_text) {
+                                // Final is a superset: replace in place.
+                                *last_id = new_id.clone();
+                                *last_content = new_content.clone();
+                            } else {
+                                // Treat as delta/suffix: append textual pieces.
+                                append_text_content(last_content, new_content);
+                            }
+                            continue;
+                        }
+                    }
                 }
             }
+
+            // Default: push as a new item.
+            self.items.push(item.clone());
         }
     }
 
@@ -105,6 +124,10 @@ impl ConversationHistory {
 
 /// Anything that is not a system message or "reasoning" message is considered
 /// an API message.
+///
+/// NOTE: Despite the wording above, we do currently persist `Reasoning`
+/// items because they may need to be forwarded (e.g., encrypted content).
+/// The function below reflects that reality.
 fn is_api_message(message: &ResponseItem) -> bool {
     match message {
         ResponseItem::Message { role, .. } => role.as_str() != "system",
@@ -112,8 +135,8 @@ fn is_api_message(message: &ResponseItem) -> bool {
         | ResponseItem::FunctionCall { .. }
         | ResponseItem::CustomToolCall { .. }
         | ResponseItem::CustomToolCallOutput { .. }
-        | ResponseItem::LocalShellCall { .. } => true,
-        ResponseItem::Reasoning { .. } => false,
+        | ResponseItem::LocalShellCall { .. }
+        | ResponseItem::Reasoning { .. } => true,
         ResponseItem::Other => false,
     }
 }
@@ -146,10 +169,22 @@ fn append_text_delta(content: &mut Vec<codex_protocol::models::ContentItem>, del
     }
 }
 
+/// Concatenate all OutputText fragments into a single string.
+fn concat_output_text(content: &Vec<codex_protocol::models::ContentItem>) -> String {
+    let mut s = String::new();
+    for c in content {
+        if let codex_protocol::models::ContentItem::OutputText { text } = c {
+            s.push_str(text);
+        }
+    }
+    s
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use codex_protocol::models::ContentItem;
+    use codex_protocol::models::ReasoningItemReasoningSummary;
 
     fn assistant_msg(text: &str) -> ResponseItem {
         ResponseItem::Message {
@@ -168,6 +203,25 @@ mod tests {
             content: vec![ContentItem::OutputText {
                 text: text.to_string(),
             }],
+        }
+    }
+    fn assistant_msg_with_id(text: &str, id: &str) -> ResponseItem {
+        ResponseItem::Message {
+            id: Some(id.to_string()),
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: text.to_string(),
+            }],
+        }
+    }
+    fn reasoning(id: &str) -> ResponseItem {
+        ResponseItem::Reasoning {
+            id: id.to_string(),
+            summary: vec![ReasoningItemReasoningSummary::SummaryText {
+                text: "s".to_string(),
+            }],
+            content: None,
+            encrypted_content: None,
         }
     }
 
@@ -252,5 +306,62 @@ mod tests {
                 }
             ]
         );
+    }
+
+    #[test]
+    fn merges_across_reasoning_and_upgrades_id_when_identical() {
+        let mut h = ConversationHistory::default();
+        // Streamed partial/complete assistant text first.
+        h.append_assistant_text("Hello");
+        // A reasoning item arrives in between.
+        let r = reasoning("r1");
+        h.record_items([&r]);
+        // Final assistant message has identical text but with an id.
+        let final_full = assistant_msg_with_id("Hello", "m1");
+        h.record_items([&final_full]);
+
+        let items = h.contents();
+        assert_eq!(items.len(), 2);
+        match &items[0] {
+            ResponseItem::Message { id, role, content } => {
+                assert_eq!(role, "assistant");
+                assert_eq!(id.as_deref(), Some("m1"));
+                assert_eq!(
+                    content,
+                    &vec![ContentItem::OutputText {
+                        text: "Hello".to_string()
+                    }]
+                );
+            }
+            _ => panic!("first item should be assistant message"),
+        }
+        match &items[1] {
+            ResponseItem::Reasoning { .. } => {}
+            _ => panic!("second item should be reasoning"),
+        }
+    }
+
+    #[test]
+    fn replaces_when_final_is_superset() {
+        let mut h = ConversationHistory::default();
+        h.append_assistant_text("Hello");
+        let final_full = assistant_msg_with_id("Hello, world!", "m2");
+        h.record_items([&final_full]);
+
+        let items = h.contents();
+        assert_eq!(items.len(), 1);
+        match &items[0] {
+            ResponseItem::Message { id, role, content } => {
+                assert_eq!(role, "assistant");
+                assert_eq!(id.as_deref(), Some("m2"));
+                assert_eq!(
+                    content,
+                    &vec![ContentItem::OutputText {
+                        text: "Hello, world!".to_string()
+                    }]
+                );
+            }
+            _ => panic!("item should be assistant message"),
+        }
     }
 }
