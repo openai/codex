@@ -2069,17 +2069,30 @@ mod tests {
 
         let count = 32usize;
         for _ in 0..count {
-            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
-            assert!(composer.is_in_paste_burst(), "expected active paste burst during fast typing");
-            assert!(composer.textarea.text().is_empty(), "text should not appear during burst");
+            let _ =
+                composer.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+            assert!(
+                composer.is_in_paste_burst(),
+                "expected active paste burst during fast typing"
+            );
+            assert!(
+                composer.textarea.text().is_empty(),
+                "text should not appear during burst"
+            );
         }
 
-        assert!(composer.textarea.text().is_empty(), "text should remain empty until flush");
+        assert!(
+            composer.textarea.text().is_empty(),
+            "text should remain empty until flush"
+        );
         std::thread::sleep(ChatComposer::recommended_paste_flush_delay());
         let flushed = composer.flush_paste_burst_if_due();
         assert!(flushed, "expected buffered text to flush after stop");
         assert_eq!(composer.textarea.text(), "a".repeat(count));
-        assert!(composer.pending_pastes.is_empty(), "no placeholder for small burst");
+        assert!(
+            composer.pending_pastes.is_empty(),
+            "no placeholder for small burst"
+        );
     }
 
     #[test]
@@ -2095,7 +2108,8 @@ mod tests {
 
         let count = LARGE_PASTE_CHAR_THRESHOLD + 1; // > threshold to trigger placeholder
         for _ in 0..count {
-            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+            let _ =
+                composer.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
         }
 
         // Nothing should appear until we stop and flush
