@@ -175,6 +175,7 @@ fn make_chatwidget_manual() -> (
         last_token_usage: TokenUsage::default(),
         stream: StreamController::new(cfg),
         running_commands: HashMap::new(),
+        running_mcp: HashMap::new(),
         pending_exec_completions: Vec::new(),
         task_complete_pending: false,
         interrupts: InterruptManager::new(),
@@ -212,6 +213,106 @@ fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {
         s.push('\n');
     }
     s
+}
+
+#[test]
+fn active_exec_segments_render_for_parallel_begins_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    // Begin first command
+    chat.handle_codex_event(Event {
+        id: "call-1".into(),
+        msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+            call_id: "call-1".into(),
+            command: vec!["bash".into(), "-lc".into(), "echo one".into()],
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            parsed_cmd: vec![
+                codex_core::parse_command::ParsedCommand::Unknown {
+                    cmd: "echo one".into(),
+                }
+                .into(),
+            ],
+        }),
+    });
+
+    // Begin a second command (parallel segment)
+    chat.handle_codex_event(Event {
+        id: "call-2".into(),
+        msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+            call_id: "call-2".into(),
+            command: vec!["bash".into(), "-lc".into(), "echo two".into()],
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            parsed_cmd: vec![
+                codex_core::parse_command::ParsedCommand::Unknown {
+                    cmd: "echo two".into(),
+                }
+                .into(),
+            ],
+        }),
+    });
+
+    // Snapshot the active exec cell (shows spinners for both segments)
+    let cell = chat.active_exec_cell.as_ref().expect("active exec cell");
+    let s = lines_to_single_string(&cell.display_lines());
+    assert_snapshot!(s);
+}
+
+#[test]
+fn active_exec_segments_mark_completion_in_place_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    // Begin two commands
+    chat.handle_codex_event(Event {
+        id: "call-a".into(),
+        msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+            call_id: "call-a".into(),
+            command: vec!["bash".into(), "-lc".into(), "echo A".into()],
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            parsed_cmd: vec![
+                codex_core::parse_command::ParsedCommand::Unknown {
+                    cmd: "echo A".into(),
+                }
+                .into(),
+            ],
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "call-b".into(),
+        msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+            call_id: "call-b".into(),
+            command: vec!["bash".into(), "-lc".into(), "echo B".into()],
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            parsed_cmd: vec![
+                codex_core::parse_command::ParsedCommand::Unknown {
+                    cmd: "echo B".into(),
+                }
+                .into(),
+            ],
+        }),
+    });
+
+    // Complete first command successfully; second still running
+    chat.handle_codex_event(Event {
+        id: "call-a".into(),
+        msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+            call_id: "call-a".into(),
+            stdout: "A".into(),
+            stderr: String::new(),
+            aggregated_output: "A".into(),
+            exit_code: 0,
+            duration: std::time::Duration::from_millis(5),
+            formatted_output: "A".into(),
+        }),
+    });
+
+    // Drain any history insertions (none expected yet) and snapshot active cell
+    let _ = drain_insert_history(&mut rx);
+    let cell = chat
+        .active_exec_cell
+        .as_ref()
+        .expect("active exec cell after first end");
+    let s = lines_to_single_string(&cell.display_lines());
+    assert_snapshot!(s);
 }
 
 fn open_fixture(name: &str) -> std::fs::File {

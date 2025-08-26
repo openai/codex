@@ -1,0 +1,7 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: s
+---
+>_
+  ⠋ ⌨️ echo one
+  ⠋ ⌨️ echo two
