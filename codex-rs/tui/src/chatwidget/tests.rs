@@ -763,6 +763,45 @@ fn approval_modal_patch_snapshot() {
     assert_snapshot!("approval_modal_patch", terminal.backend());
 }
 
+#[test]
+fn interrupt_restores_queued_messages_into_composer() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual();
+
+    // Simulate a running task to enable queuing of user inputs.
+    chat.bottom_pane.set_task_running(true);
+
+    // Queue two user messages while the task is running.
+    chat.queued_user_messages
+        .push_back(UserMessage::from("first queued".to_string()));
+    chat.queued_user_messages
+        .push_back(UserMessage::from("second queued".to_string()));
+    chat.refresh_queued_user_messages();
+
+    // Deliver a TurnAborted event with Interrupted reason (as if Esc was pressed).
+    chat.handle_codex_event(Event {
+        id: "turn-1".into(),
+        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+            reason: codex_core::protocol::TurnAbortReason::Interrupted,
+        }),
+    });
+
+    // Composer should now contain the queued messages joined by newlines, in order.
+    assert_eq!(
+        chat.bottom_pane.composer_text(),
+        "first queued\nsecond queued"
+    );
+
+    // Queue should be cleared and no new user input should have been auto-submitted.
+    assert!(chat.queued_user_messages.is_empty());
+    assert!(
+        op_rx.try_recv().is_err(),
+        "unexpected outbound op after interrupt"
+    );
+
+    // Drain rx to avoid unused warnings.
+    let _ = drain_insert_history(&mut rx);
+}
+
 // Snapshot test: ChatWidget at very small heights (idle)
 // Ensures overall layout behaves when terminal height is extremely constrained.
 #[test]

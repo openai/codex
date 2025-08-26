@@ -259,7 +259,7 @@ impl ChatComposer {
     /// Replace the entire composer content with `text` and reset cursor.
     pub(crate) fn set_text_content(&mut self, text: String) {
         self.textarea.set_text(&text);
-        self.textarea.set_cursor(0);
+        self.textarea.set_cursor(usize::MAX);
         self.sync_command_popup();
         self.sync_file_search_popup();
     }
