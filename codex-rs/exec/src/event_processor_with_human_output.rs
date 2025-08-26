@@ -20,8 +20,11 @@ use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::SessionConfiguredEvent;
+use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
+use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnDiffEvent;
+use codex_core::protocol::WebSearchBeginEvent;
 use owo_colors::OwoColorize;
 use owo_colors::Style;
 use shlex::try_join;
@@ -173,6 +176,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
                 ts_println!(self, "{}", message.style(self.dimmed));
             }
+            EventMsg::StreamError(StreamErrorEvent { message }) => {
+                ts_println!(self, "{}", message.style(self.dimmed));
+            }
             EventMsg::TaskStarted => {
                 // Ignore.
             }
@@ -191,7 +197,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     self.answer_started = true;
                 }
                 print!("{delta}");
-                #[allow(clippy::expect_used)]
+                #[expect(clippy::expect_used)]
                 std::io::stdout().flush().expect("could not flush stdout");
             }
             EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta }) => {
@@ -207,7 +213,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     self.reasoning_started = true;
                 }
                 print!("{delta}");
-                #[allow(clippy::expect_used)]
+                #[expect(clippy::expect_used)]
                 std::io::stdout().flush().expect("could not flush stdout");
             }
             EventMsg::AgentReasoningSectionBreak(_) => {
@@ -215,7 +221,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     return CodexStatus::Running;
                 }
                 println!();
-                #[allow(clippy::expect_used)]
+                #[expect(clippy::expect_used)]
                 std::io::stdout().flush().expect("could not flush stdout");
             }
             EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text }) => {
@@ -224,7 +230,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 }
                 if !self.raw_reasoning_started {
                     print!("{text}");
-                    #[allow(clippy::expect_used)]
+                    #[expect(clippy::expect_used)]
                     std::io::stdout().flush().expect("could not flush stdout");
                 } else {
                     println!();
@@ -241,7 +247,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     self.raw_reasoning_started = true;
                 }
                 print!("{delta}");
-                #[allow(clippy::expect_used)]
+                #[expect(clippy::expect_used)]
                 std::io::stdout().flush().expect("could not flush stdout");
             }
             EventMsg::AgentMessage(AgentMessageEvent { message }) => {
@@ -282,10 +288,10 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             EventMsg::ExecCommandOutputDelta(_) => {}
             EventMsg::ExecCommandEnd(ExecCommandEndEvent {
                 call_id,
-                stdout,
-                stderr,
+                aggregated_output,
                 duration,
                 exit_code,
+                ..
             }) => {
                 let exec_command = self.call_id_to_command.remove(&call_id);
                 let (duration, call) = if let Some(ExecCommandBegin { command, .. }) = exec_command
@@ -298,8 +304,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     ("".to_string(), format!("exec('{call_id}')"))
                 };
 
-                let output = if exit_code == 0 { stdout } else { stderr };
-                let truncated_output = output
+                let truncated_output = aggregated_output
                     .lines()
                     .take(MAX_OUTPUT_LINES_FOR_EXEC_TOOL_CALL)
                     .collect::<Vec<_>>()
@@ -356,6 +361,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                         println!("{}", line.style(self.dimmed));
                     }
                 }
+            }
+            EventMsg::WebSearchBegin(WebSearchBeginEvent { call_id: _, query }) => {
+                ts_println!(self, "🌐 {query}");
             }
             EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
                 call_id,
@@ -522,7 +530,19 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             EventMsg::GetHistoryEntryResponse(_) => {
                 // Currently ignored in exec output.
             }
+            EventMsg::McpListToolsResponse(_) => {
+                // Currently ignored in exec output.
+            }
+            EventMsg::TurnAborted(abort_reason) => match abort_reason.reason {
+                TurnAbortReason::Interrupted => {
+                    ts_println!(self, "task interrupted");
+                }
+                TurnAbortReason::Replaced => {
+                    ts_println!(self, "task aborted: replaced by a new task");
+                }
+            },
             EventMsg::ShutdownComplete => return CodexStatus::Shutdown,
+            EventMsg::ConversationHistory(_) => {}
         }
         CodexStatus::Running
     }

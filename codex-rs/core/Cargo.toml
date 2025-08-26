@@ -6,6 +6,7 @@ version = { workspace = true }
 [lib]
 name = "codex_core"
 path = "src/lib.rs"
+doctest = false
 
 [lints]
 workspace = true
@@ -19,16 +20,18 @@ chrono = { version = "0.4", features = ["serde"] }
 codex-apply-patch = { path = "../apply-patch" }
 codex-login = { path = "../login" }
 codex-mcp-client = { path = "../mcp-client" }
+codex-protocol = { path = "../protocol" }
 dirs = "6"
 env-flags = "0.1.1"
 eventsource-stream = "0.2.3"
-fs2 = "0.4.3"
 futures = "0.3"
-libc = "0.2.174"
+libc = "0.2.175"
 mcp-types = { path = "../mcp-types" }
 mime_guess = "2.0"
 os_info = "3.12.0"
+portable-pty = "0.9.0"
 rand = "0.9"
+regex-lite = "0.1.6"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
@@ -49,12 +52,12 @@ tokio = { version = "1", features = [
 ] }
 tokio-util = "0.7.16"
 toml = "0.9.5"
-toml_edit = "0.23.3"
+toml_edit = "0.23.4"
 tracing = { version = "0.1.41", features = ["log"] }
 tree-sitter = "0.25.8"
 tree-sitter-bash = "0.25.0"
 uuid = { version = "1", features = ["serde", "v4"] }
-whoami = "1.6.0"
+whoami = "1.6.1"
 wildmatch = "2.4.0"
 
 
@@ -70,13 +73,15 @@ openssl-sys = { version = "*", features = ["vendored"] }
 [target.aarch64-unknown-linux-musl.dependencies]
 openssl-sys = { version = "*", features = ["vendored"] }
 
+[target.'cfg(target_os = "windows")'.dependencies]
+which = "6"
+
 [dev-dependencies]
 assert_cmd = "2"
 core_test_support = { path = "tests/common" }
 maplit = "1.0.2"
 predicates = "3"
 pretty_assertions = "1.4.1"
-regex-lite = "0.1.6"
 tempfile = "3"
 tokio-test = "0.4"
 walkdir = "2.5.0"

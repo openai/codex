@@ -1,7 +1,7 @@
 //! Configuration object accepted by the `codex` MCP tool-call.
 
-use codex_core::config_types::SandboxMode;
 use codex_core::protocol::AskForApproval;
+use codex_protocol::config_types::SandboxMode;
 use mcp_types::Tool;
 use mcp_types::ToolInputSchema;
 use schemars::JsonSchema;
@@ -58,7 +58,7 @@ pub struct CodexToolCallParam {
 
 /// Custom enum mirroring [`AskForApproval`], but has an extra dependency on
 /// [`JsonSchema`].
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum CodexToolCallApprovalPolicy {
     Untrusted,
@@ -80,7 +80,7 @@ impl From<CodexToolCallApprovalPolicy> for AskForApproval {
 
 /// Custom enum mirroring [`SandboxMode`] from config_types.rs, but with
 /// `JsonSchema` support.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 #[serde(rename_all = "kebab-case")]
 pub enum CodexToolCallSandboxMode {
     ReadOnly,
@@ -160,8 +160,10 @@ impl CodexToolCallParam {
             codex_linux_sandbox_exe,
             base_instructions,
             include_plan_tool,
+            include_apply_patch_tool: None,
             disable_response_storage: None,
             show_raw_agent_reasoning: None,
+            tools_web_search_request: None,
         };
 
         let cli_overrides = cli_overrides
@@ -236,7 +238,6 @@ mod tests {
     #[test]
     fn verify_codex_tool_json_schema() {
         let tool = create_tool_for_codex_tool_call_param();
-        #[expect(clippy::expect_used)]
         let tool_json = serde_json::to_value(&tool).expect("tool serializes");
         let expected_tool_json = serde_json::json!({
           "name": "codex",
@@ -305,7 +306,6 @@ mod tests {
     #[test]
     fn verify_codex_tool_reply_json_schema() {
         let tool = create_tool_for_codex_tool_call_reply_param();
-        #[expect(clippy::expect_used)]
         let tool_json = serde_json::to_value(&tool).expect("tool serializes");
         let expected_tool_json = serde_json::json!({
           "description": "Continue a Codex session by providing the session id and prompt.",

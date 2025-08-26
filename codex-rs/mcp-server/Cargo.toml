@@ -17,7 +17,10 @@ workspace = true
 [dependencies]
 anyhow = "1"
 codex-arg0 = { path = "../arg0" }
+codex-common = { path = "../common", features = ["cli"] }
 codex-core = { path = "../core" }
+codex-login = { path = "../login" }
+codex-protocol = { path = "../protocol" }
 mcp-types = { path = "../mcp-types" }
 schemars = "0.8.22"
 serde = { version = "1", features = ["derive"] }

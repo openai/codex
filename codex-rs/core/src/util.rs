@@ -1,31 +1,10 @@
 use std::path::Path;
-use std::sync::Arc;
 use std::time::Duration;
 
 use rand::Rng;
-use tokio::sync::Notify;
-use tracing::debug;
 
 const INITIAL_DELAY_MS: u64 = 200;
 const BACKOFF_FACTOR: f64 = 2.0;
-
-/// Make a CancellationToken that is fulfilled when SIGINT occurs.
-pub fn notify_on_sigint() -> Arc<Notify> {
-    let notify = Arc::new(Notify::new());
-
-    tokio::spawn({
-        let notify = Arc::clone(&notify);
-        async move {
-            loop {
-                tokio::signal::ctrl_c().await.ok();
-                debug!("Keyboard interrupt");
-                notify.notify_waiters();
-            }
-        }
-    });
-
-    notify
-}
 
 pub(crate) fn backoff(attempt: u64) -> Duration {
     let exp = BACKOFF_FACTOR.powi(attempt.saturating_sub(1) as i32);

@@ -34,6 +34,7 @@ pub(crate) fn render_rows(
     rows_all: &[GenericDisplayRow],
     state: &ScrollState,
     max_results: usize,
+    _dim_non_selected: bool,
 ) {
     let mut rows: Vec<Row> = Vec::new();
     if rows_all.is_empty() {
@@ -69,7 +70,7 @@ pub(crate) fn render_rows(
             let GenericDisplayRow {
                 name,
                 match_indices,
-                is_current,
+                is_current: _is_current,
                 description,
             } = row;
 
@@ -93,9 +94,7 @@ pub(crate) fn render_rows(
                 spans.push(Span::raw("  "));
                 spans.push(Span::styled(
                     desc.clone(),
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::DIM),
+                    Style::default().add_modifier(Modifier::DIM),
                 ));
             }
 
@@ -103,11 +102,9 @@ pub(crate) fn render_rows(
             if Some(i) == state.selected_idx {
                 cell = cell.style(
                     Style::default()
-                        .fg(Color::Yellow)
+                        .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
                 );
-            } else if *is_current {
-                cell = cell.style(Style::default().fg(Color::Cyan));
             }
             rows.push(Row::new(vec![cell]));
         }
@@ -118,7 +115,7 @@ pub(crate) fn render_rows(
             Block::default()
                 .borders(Borders::LEFT)
                 .border_type(BorderType::QuadrantOutside)
-                .border_style(Style::default().fg(Color::DarkGray)),
+                .border_style(Style::default().add_modifier(Modifier::DIM)),
         )
         .widths([Constraint::Percentage(100)]);
 

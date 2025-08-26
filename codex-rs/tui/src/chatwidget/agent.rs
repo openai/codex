@@ -1,7 +1,8 @@
 use std::sync::Arc;
 
-use codex_core::codex_wrapper::CodexConversation;
-use codex_core::codex_wrapper::init_codex;
+use codex_core::CodexConversation;
+use codex_core::ConversationManager;
+use codex_core::NewConversation;
 use codex_core::config::Config;
 use codex_core::protocol::Op;
 use tokio::sync::mpsc::UnboundedSender;
@@ -12,17 +13,21 @@ use crate::app_event_sender::AppEventSender;
 
 /// Spawn the agent bootstrapper and op forwarding loop, returning the
 /// `UnboundedSender<Op>` used by the UI to submit operations.
-pub(crate) fn spawn_agent(config: Config, app_event_tx: AppEventSender) -> UnboundedSender<Op> {
+pub(crate) fn spawn_agent(
+    config: Config,
+    app_event_tx: AppEventSender,
+    server: Arc<ConversationManager>,
+) -> UnboundedSender<Op> {
     let (codex_op_tx, mut codex_op_rx) = unbounded_channel::<Op>();
 
     let app_event_tx_clone = app_event_tx.clone();
     tokio::spawn(async move {
-        let CodexConversation {
-            codex,
+        let NewConversation {
+            conversation_id: _,
+            conversation,
             session_configured,
-            ..
-        } = match init_codex(config).await {
-            Ok(vals) => vals,
+        } = match server.new_conversation(config).await {
+            Ok(v) => v,
             Err(e) => {
                 // TODO: surface this error to the user.
                 tracing::error!("failed to initialize codex: {e}");
@@ -30,21 +35,62 @@ pub(crate) fn spawn_agent(config: Config, app_event_tx: AppEventSender) -> Unbou
             }
         };
 
-        // Forward the captured `SessionInitialized` event that was consumed
-        // inside `init_codex()` so it can be rendered in the UI.
-        app_event_tx_clone.send(AppEvent::CodexEvent(session_configured.clone()));
-        let codex = Arc::new(codex);
-        let codex_clone = codex.clone();
+        // Forward the captured `SessionConfigured` event so it can be rendered in the UI.
+        let ev = codex_core::protocol::Event {
+            // The `id` does not matter for rendering, so we can use a fake value.
+            id: "".to_string(),
+            msg: codex_core::protocol::EventMsg::SessionConfigured(session_configured),
+        };
+        app_event_tx_clone.send(AppEvent::CodexEvent(ev));
+
+        let conversation_clone = conversation.clone();
         tokio::spawn(async move {
             while let Some(op) = codex_op_rx.recv().await {
-                let id = codex_clone.submit(op).await;
+                let id = conversation_clone.submit(op).await;
                 if let Err(e) = id {
                     tracing::error!("failed to submit op: {e}");
                 }
             }
         });
 
-        while let Ok(event) = codex.next_event().await {
+        while let Ok(event) = conversation.next_event().await {
+            app_event_tx_clone.send(AppEvent::CodexEvent(event));
+        }
+    });
+
+    codex_op_tx
+}
+
+/// Spawn agent loops for an existing conversation (e.g., a forked conversation).
+/// Sends the provided `SessionConfiguredEvent` immediately, then forwards subsequent
+/// events and accepts Ops for submission.
+pub(crate) fn spawn_agent_from_existing(
+    conversation: std::sync::Arc<CodexConversation>,
+    session_configured: codex_core::protocol::SessionConfiguredEvent,
+    app_event_tx: AppEventSender,
+) -> UnboundedSender<Op> {
+    let (codex_op_tx, mut codex_op_rx) = unbounded_channel::<Op>();
+
+    let app_event_tx_clone = app_event_tx.clone();
+    tokio::spawn(async move {
+        // Forward the captured `SessionConfigured` event so it can be rendered in the UI.
+        let ev = codex_core::protocol::Event {
+            id: "".to_string(),
+            msg: codex_core::protocol::EventMsg::SessionConfigured(session_configured),
+        };
+        app_event_tx_clone.send(AppEvent::CodexEvent(ev));
+
+        let conversation_clone = conversation.clone();
+        tokio::spawn(async move {
+            while let Some(op) = codex_op_rx.recv().await {
+                let id = conversation_clone.submit(op).await;
+                if let Err(e) = id {
+                    tracing::error!("failed to submit op: {e}");
+                }
+            }
+        });
+
+        while let Ok(event) = conversation.next_event().await {
             app_event_tx_clone.send(AppEvent::CodexEvent(event));
         }
     });

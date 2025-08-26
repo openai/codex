@@ -22,11 +22,11 @@ use crate::client_common::ResponseStream;
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::model_family::ModelFamily;
-use crate::models::ContentItem;
-use crate::models::ReasoningItemContent;
-use crate::models::ResponseItem;
 use crate::openai_tools::create_tools_json_for_chat_completions_api;
 use crate::util::backoff;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ReasoningItemContent;
+use codex_protocol::models::ResponseItem;
 
 /// Implementation for the classic Chat Completions API.
 pub(crate) async fn stream_chat_completions(
@@ -100,6 +100,33 @@ pub(crate) async fn stream_chat_completions(
                     "role": "tool",
                     "tool_call_id": call_id,
                     "content": output.content,
+                }));
+            }
+            ResponseItem::CustomToolCall {
+                id,
+                call_id: _,
+                name,
+                input,
+                status: _,
+            } => {
+                messages.push(json!({
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": id,
+                        "type": "custom",
+                        "custom": {
+                            "name": name,
+                            "input": input,
+                        }
+                    }]
+                }));
+            }
+            ResponseItem::CustomToolCallOutput { call_id, output } => {
+                messages.push(json!({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": output,
                 }));
             }
             ResponseItem::Reasoning { .. } | ResponseItem::Other => {
@@ -213,7 +240,9 @@ async fn process_chat_sse<S>(
         let sse = match timeout(idle_timeout, stream.next()).await {
             Ok(Some(Ok(ev))) => ev,
             Ok(Some(Err(e))) => {
-                let _ = tx_event.send(Err(CodexErr::Stream(e.to_string()))).await;
+                let _ = tx_event
+                    .send(Err(CodexErr::Stream(e.to_string(), None)))
+                    .await;
                 return;
             }
             Ok(None) => {
@@ -228,7 +257,10 @@ async fn process_chat_sse<S>(
             }
             Err(_) => {
                 let _ = tx_event
-                    .send(Err(CodexErr::Stream("idle timeout waiting for SSE".into())))
+                    .send(Err(CodexErr::Stream(
+                        "idle timeout waiting for SSE".into(),
+                        None,
+                    )))
                     .await;
                 return;
             }
@@ -285,13 +317,12 @@ async fn process_chat_sse<S>(
                 .get("delta")
                 .and_then(|d| d.get("content"))
                 .and_then(|c| c.as_str())
+                && !content.is_empty()
             {
-                if !content.is_empty() {
-                    assistant_text.push_str(content);
-                    let _ = tx_event
-                        .send(Ok(ResponseEvent::OutputTextDelta(content.to_string())))
-                        .await;
-                }
+                assistant_text.push_str(content);
+                let _ = tx_event
+                    .send(Ok(ResponseEvent::OutputTextDelta(content.to_string())))
+                    .await;
             }
 
             // Forward any reasoning/thinking deltas if present.
@@ -328,27 +359,25 @@ async fn process_chat_sse<S>(
                 .get("delta")
                 .and_then(|d| d.get("tool_calls"))
                 .and_then(|tc| tc.as_array())
+                && let Some(tool_call) = tool_calls.first()
             {
-                if let Some(tool_call) = tool_calls.first() {
-                    // Mark that we have an active function call in progress.
-                    fn_call_state.active = true;
+                // Mark that we have an active function call in progress.
+                fn_call_state.active = true;
 
-                    // Extract call_id if present.
-                    if let Some(id) = tool_call.get("id").and_then(|v| v.as_str()) {
-                        fn_call_state.call_id.get_or_insert_with(|| id.to_string());
+                // Extract call_id if present.
+                if let Some(id) = tool_call.get("id").and_then(|v| v.as_str()) {
+                    fn_call_state.call_id.get_or_insert_with(|| id.to_string());
+                }
+
+                // Extract function details if present.
+                if let Some(function) = tool_call.get("function") {
+                    if let Some(name) = function.get("name").and_then(|n| n.as_str()) {
+                        fn_call_state.name.get_or_insert_with(|| name.to_string());
                     }
 
-                    // Extract function details if present.
-                    if let Some(function) = tool_call.get("function") {
-                        if let Some(name) = function.get("name").and_then(|n| n.as_str()) {
-                            fn_call_state.name.get_or_insert_with(|| name.to_string());
-                        }
-
-                        if let Some(args_fragment) =
-                            function.get("arguments").and_then(|a| a.as_str())
-                        {
-                            fn_call_state.arguments.push_str(args_fragment);
-                        }
+                    if let Some(args_fragment) = function.get("arguments").and_then(|a| a.as_str())
+                    {
+                        fn_call_state.arguments.push_str(args_fragment);
                     }
                 }
             }
@@ -480,21 +509,23 @@ where
                     // do NOT emit yet. Forward any other item (e.g. FunctionCall) right
                     // away so downstream consumers see it.
 
-                    let is_assistant_delta = matches!(&item, crate::models::ResponseItem::Message { role, .. } if role == "assistant");
+                    let is_assistant_delta = matches!(&item, codex_protocol::models::ResponseItem::Message { role, .. } if role == "assistant");
 
                     if is_assistant_delta {
                         // Only use the final assistant message if we have not
                         // seen any deltas; otherwise, deltas already built the
                         // cumulative text and this would duplicate it.
-                        if this.cumulative.is_empty() {
-                            if let crate::models::ResponseItem::Message { content, .. } = &item {
-                                if let Some(text) = content.iter().find_map(|c| match c {
-                                    crate::models::ContentItem::OutputText { text } => Some(text),
-                                    _ => None,
-                                }) {
-                                    this.cumulative.push_str(text);
+                        if this.cumulative.is_empty()
+                            && let codex_protocol::models::ResponseItem::Message { content, .. } =
+                                &item
+                            && let Some(text) = content.iter().find_map(|c| match c {
+                                codex_protocol::models::ContentItem::OutputText { text } => {
+                                    Some(text)
                                 }
-                            }
+                                _ => None,
+                            })
+                        {
+                            this.cumulative.push_str(text);
                         }
 
                         // Swallow assistant message here; emit on Completed.
@@ -514,26 +545,27 @@ where
                     if !this.cumulative_reasoning.is_empty()
                         && matches!(this.mode, AggregateMode::AggregatedOnly)
                     {
-                        let aggregated_reasoning = crate::models::ResponseItem::Reasoning {
-                            id: String::new(),
-                            summary: Vec::new(),
-                            content: Some(vec![
-                                crate::models::ReasoningItemContent::ReasoningText {
-                                    text: std::mem::take(&mut this.cumulative_reasoning),
-                                },
-                            ]),
-                            encrypted_content: None,
-                        };
+                        let aggregated_reasoning =
+                            codex_protocol::models::ResponseItem::Reasoning {
+                                id: String::new(),
+                                summary: Vec::new(),
+                                content: Some(vec![
+                                    codex_protocol::models::ReasoningItemContent::ReasoningText {
+                                        text: std::mem::take(&mut this.cumulative_reasoning),
+                                    },
+                                ]),
+                                encrypted_content: None,
+                            };
                         this.pending
                             .push_back(ResponseEvent::OutputItemDone(aggregated_reasoning));
                         emitted_any = true;
                     }
 
                     if !this.cumulative.is_empty() {
-                        let aggregated_message = crate::models::ResponseItem::Message {
+                        let aggregated_message = codex_protocol::models::ResponseItem::Message {
                             id: None,
                             role: "assistant".to_string(),
-                            content: vec![crate::models::ContentItem::OutputText {
+                            content: vec![codex_protocol::models::ContentItem::OutputText {
                                 text: std::mem::take(&mut this.cumulative),
                             }],
                         };
@@ -590,6 +622,12 @@ where
                 }
                 Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryPartAdded))) => {
                     continue;
+                }
+                Poll::Ready(Some(Ok(ResponseEvent::WebSearchCallBegin { .. }))) => {
+                    return Poll::Ready(Some(Ok(ResponseEvent::WebSearchCallBegin {
+                        call_id: String::new(),
+                        query: None,
+                    })));
                 }
             }
         }

@@ -37,9 +37,9 @@ jobs:
       #    Codex is not going to run.
 
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
-      - uses: dtolnay/rust-toolchain@1.88
+      - uses: dtolnay/rust-toolchain@1.89
         with:
           targets: x86_64-unknown-linux-gnu
           components: clippy
@@ -52,7 +52,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ${{ github.workspace }}/codex-rs/target/
-          key: cargo-ubuntu-24.04-x86_64-unknown-linux-gnu-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-ubuntu-24.04-x86_64-unknown-linux-gnu-dev-${{ hashFiles('**/Cargo.lock') }}
 
       # Note it is possible that the `verify` step internal to Run Codex will
       # fail, in which case the work to setup the repo was worthless :(

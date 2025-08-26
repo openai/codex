@@ -22,6 +22,7 @@
     - [Authenticate locally and copy your credentials to the "headless" machine](#authenticate-locally-and-copy-your-credentials-to-the-headless-machine)
     - [Connecting through VPS or remote](#connecting-through-vps-or-remote)
   - [Usage-based billing alternative: Use an OpenAI API key](#usage-based-billing-alternative-use-an-openai-api-key)
+    - [Forcing a specific auth method (advanced)](#forcing-a-specific-auth-method-advanced)
   - [Choosing Codex's level of autonomy](#choosing-codexs-level-of-autonomy)
     - [**1. Read/write**](#1-readwrite)
     - [**2. Read-only**](#2-read-only)
@@ -164,6 +165,35 @@ Notes:
 
 - This command only sets the key for your current terminal session, which we recommend. To set it for all future sessions, you can also add the `export` line to your shell's configuration file (e.g., `~/.zshrc`).
 - If you have signed in with ChatGPT, Codex will default to using your ChatGPT credits. If you wish to use your API key, use the `/logout` command to clear your ChatGPT authentication.
+
+#### Forcing a specific auth method (advanced)
+
+You can explicitly choose which authentication Codex should prefer when both are available.
+
+- To always use your API key (even when ChatGPT auth exists), set:
+
+```toml
+# ~/.codex/config.toml
+preferred_auth_method = "apikey"
+```
+
+Or override ad-hoc via CLI:
+
+```bash
+codex --config preferred_auth_method="apikey"
+```
+
+- To prefer ChatGPT auth (default), set:
+
+```toml
+# ~/.codex/config.toml
+preferred_auth_method = "chatgpt"
+```
+
+Notes:
+
+- When `preferred_auth_method = "apikey"` and an API key is available, the login screen is skipped.
+- When `preferred_auth_method = "chatgpt"` (default), Codex prefers ChatGPT auth if present; if only an API key is present, it will use the API key. Certain account types may also require API-key mode.
 
 ### Choosing Codex's level of autonomy
 
@@ -352,6 +382,13 @@ base_url = "http://my-ollama.example.com:11434/v1"
 ---
 
 ### Platform sandboxing details
+
+By default, Codex CLI runs code and shell commands inside a restricted sandbox to protect your system.  
+
+> [!IMPORTANT]
+> Not all tool calls are sandboxed. Specifically, **trusted Model Context Protocol (MCP) tool calls** are executed outside of the sandbox.  
+> This is intentional: MCP tools are explicitly configured and trusted by you, and they often need to connect to **external applications or services** (e.g. issue trackers, databases, messaging systems).  
+> Running them outside the sandbox allows Codex to integrate with these external systems without being blocked by sandbox restrictions.
 
 The mechanism Codex uses to implement the sandbox policy depends on your OS:
 
@@ -566,9 +603,13 @@ We're excited to launch a **$1 million initiative** supporting open source proje
 
 ## Contributing
 
-This project is under active development and the code will likely change pretty significantly. We'll update this message once that's complete!
+This project is under active development and the code will likely change pretty significantly.
 
-More broadly we welcome contributions - whether you are opening your very first pull request or you're a seasoned maintainer. At the same time we care about reliability and long-term maintainability, so the bar for merging code is intentionally **high**. The guidelines below spell out what "high-quality" means in practice and should make the whole process transparent and friendly.
+**At the moment, we only plan to prioritize reviewing external contributions for bugs or security fixes.**
+
+If you want to add a new feature or change the behavior of an existing one, please open an issue proposing the feature and get approval from an OpenAI team member before spending time building it.
+
+**New contributions that don't go through this process may be closed** if they aren't aligned with our current roadmap or conflict with other priorities/upcoming features.
 
 ### Development workflow
 
@@ -593,8 +634,9 @@ More broadly we welcome contributions - whether you are opening your very first 
 ### Review process
 
 1. One maintainer will be assigned as a primary reviewer.
-2. We may ask for changes - please do not take this personally. We value the work, we just also value consistency and long-term maintainability.
-3. When there is consensus that the PR meets the bar, a maintainer will squash-and-merge.
+2. If your PR adds a new feature that was not previously discussed and approved, we may choose to close your PR (see [Contributing](#contributing)).
+3. We may ask for changes - please do not take this personally. We value the work, but we also value consistency and long-term maintainability.
+5. When there is consensus that the PR meets the bar, a maintainer will squash-and-merge.
 
 ### Community values
 

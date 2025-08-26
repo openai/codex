@@ -130,20 +130,23 @@ pub(crate) fn create_diff_summary(
     for (idx, f) in files.iter().enumerate() {
         let mut spans: Vec<RtSpan<'static>> = Vec::new();
         spans.push(RtSpan::raw(f.display_path.clone()));
-        spans.push(RtSpan::raw(" ("));
-        spans.push(RtSpan::styled(
-            format!("+{}", f.added),
-            Style::default().fg(Color::Green),
-        ));
-        spans.push(RtSpan::raw(" "));
-        spans.push(RtSpan::styled(
-            format!("-{}", f.removed),
-            Style::default().fg(Color::Red),
-        ));
-        spans.push(RtSpan::raw(")"));
+        // Show per-file +/- counts only when there are multiple files
+        if file_count > 1 {
+            spans.push(RtSpan::raw(" ("));
+            spans.push(RtSpan::styled(
+                format!("+{}", f.added),
+                Style::default().fg(Color::Green),
+            ));
+            spans.push(RtSpan::raw(" "));
+            spans.push(RtSpan::styled(
+                format!("-{}", f.removed),
+                Style::default().fg(Color::Red),
+            ));
+            spans.push(RtSpan::raw(")"));
+        }
 
         let mut line = RtLine::from(spans);
-        let prefix = if idx == 0 { "  ⎿ " } else { "    " };
+        let prefix = if idx == 0 { "  └ " } else { "    " };
         line.spans.insert(0, prefix.into());
         line.spans
             .iter_mut()
@@ -209,7 +212,18 @@ fn render_patch_details(changes: &HashMap<PathBuf, FileChange>) -> Vec<RtLine<'s
                 move_path: _,
             } => {
                 if let Ok(patch) = diffy::Patch::from_str(unified_diff) {
+                    let mut is_first_hunk = true;
                     for h in patch.hunks() {
+                        // Render a simple separator between non-contiguous hunks
+                        // instead of diff-style @@ headers.
+                        if !is_first_hunk {
+                            out.push(RtLine::from(vec![
+                                RtSpan::raw("    "),
+                                RtSpan::styled("⋮", style_dim()),
+                            ]));
+                        }
+                        is_first_hunk = false;
+
                         let mut old_ln = h.old_range().start();
                         let mut new_ln = h.new_range().start();
                         for l in h.lines() {
@@ -269,29 +283,27 @@ fn push_wrapped_diff_line(
     let mut remaining_text: &str = text;
 
     // Reserve a fixed number of spaces after the line number so that content starts
-    // at a consistent column. The sign ("+"/"-") is rendered as part of the content
-    // with the same background as the edit, not as a separate dimmed column.
+    // at a consistent column. Content includes a 1-character diff sign prefix
+    // ("+"/"-" for inserts/deletes, or a space for context lines) so alignment
+    // stays consistent across all diff lines.
     let gap_after_ln = SPACES_AFTER_LINE_NUMBER.saturating_sub(ln_str.len());
-    let first_prefix_cols = indent.len() + ln_str.len() + gap_after_ln;
-    let cont_prefix_cols = indent.len() + ln_str.len() + gap_after_ln;
+    let prefix_cols = indent.len() + ln_str.len() + gap_after_ln;
 
     let mut first = true;
-    let (sign_opt, bg_style) = match kind {
+    let (sign_opt, line_style) = match kind {
         DiffLineType::Insert => (Some('+'), Some(style_add())),
         DiffLineType::Delete => (Some('-'), Some(style_del())),
         DiffLineType::Context => (None, None),
     };
     let mut lines: Vec<RtLine<'static>> = Vec::new();
-    while !remaining_text.is_empty() {
-        let prefix_cols = if first {
-            first_prefix_cols
-        } else {
-            cont_prefix_cols
-        };
+
+    loop {
         // Fit the content for the current terminal row:
         // compute how many columns are available after the prefix, then split
         // at a UTF-8 character boundary so this row's chunk fits exactly.
-        let available_content_cols = term_cols.saturating_sub(prefix_cols).max(1);
+        let available_content_cols = term_cols
+            .saturating_sub(if first { prefix_cols + 1 } else { prefix_cols })
+            .max(1);
         let split_at_byte_index = remaining_text
             .char_indices()
             .nth(available_content_cols)
@@ -305,32 +317,40 @@ fn push_wrapped_diff_line(
             spans.push(RtSpan::raw(indent));
             spans.push(RtSpan::styled(ln_str.clone(), style_dim()));
             spans.push(RtSpan::raw(" ".repeat(gap_after_ln)));
-
-            // Prefix the content with the sign if it is an insertion or deletion, and color
-            // the sign with the same background as the edited text.
-            let display_chunk = match sign_opt {
-                Some(sign_char) => format!("{sign_char}{chunk}"),
-                None => chunk.to_string(),
-            };
-
-            let content_span = match bg_style {
+            // Always include a sign character at the start of the displayed chunk
+            // ('+' for insert, '-' for delete, ' ' for context) so gutters align.
+            let sign_char = sign_opt.unwrap_or(' ');
+            let display_chunk = format!("{sign_char}{chunk}");
+            let content_span = match line_style {
                 Some(style) => RtSpan::styled(display_chunk, style),
                 None => RtSpan::raw(display_chunk),
             };
             spans.push(content_span);
-            lines.push(RtLine::from(spans));
+            let mut line = RtLine::from(spans);
+            if let Some(style) = line_style {
+                line.style = line.style.patch(style);
+            }
+            lines.push(line);
             first = false;
         } else {
+            // Continuation lines keep a space for the sign column so content aligns
             let hang_prefix = format!(
-                "{indent}{}{}",
+                "{indent}{}{} ",
                 " ".repeat(ln_str.len()),
                 " ".repeat(gap_after_ln)
             );
-            let content_span = match bg_style {
+            let content_span = match line_style {
                 Some(style) => RtSpan::styled(chunk.to_string(), style),
                 None => RtSpan::raw(chunk.to_string()),
             };
-            lines.push(RtLine::from(vec![RtSpan::raw(hang_prefix), content_span]));
+            let mut line = RtLine::from(vec![RtSpan::raw(hang_prefix), content_span]);
+            if let Some(style) = line_style {
+                line.style = line.style.patch(style);
+            }
+            lines.push(line);
+        }
+        if remaining_text.is_empty() {
+            break;
         }
     }
     lines
@@ -341,30 +361,32 @@ fn style_dim() -> Style {
 }
 
 fn style_add() -> Style {
-    Style::default().bg(Color::Green)
+    Style::default().fg(Color::Green)
 }
 
 fn style_del() -> Style {
-    Style::default().bg(Color::Red)
+    Style::default().fg(Color::Red)
 }
 
-#[allow(clippy::expect_used)]
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::history_cell::HistoryCell;
-    use crate::text_block::TextBlock;
     use insta::assert_snapshot;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use ratatui::text::Text;
+    use ratatui::widgets::Paragraph;
+    use ratatui::widgets::WidgetRef;
+    use ratatui::widgets::Wrap;
 
     fn snapshot_lines(name: &str, lines: Vec<RtLine<'static>>, width: u16, height: u16) {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
-        let cell = HistoryCell::PendingPatch {
-            view: TextBlock::new(lines),
-        };
         terminal
-            .draw(|f| f.render_widget_ref(&cell, f.area()))
+            .draw(|f| {
+                Paragraph::new(Text::from(lines))
+                    .wrap(Wrap { trim: false })
+                    .render_ref(f.area(), f.buffer_mut())
+            })
             .expect("draw");
         assert_snapshot!(name, terminal.backend());
     }
@@ -418,5 +440,73 @@ mod tests {
 
         // Render into a small terminal to capture the visual layout
         snapshot_lines("wrap_behavior_insert", lines, DEFAULT_WRAP_COLS + 10, 8);
+    }
+
+    #[test]
+    fn ui_snapshot_single_line_replacement_counts() {
+        // Reproduce: one deleted line replaced by one inserted line, no extra context
+        let original = "# Codex CLI (Rust Implementation)\n";
+        let modified = "# Codex CLI (Rust Implementation) banana\n";
+        let patch = diffy::create_patch(original, modified).to_string();
+
+        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+        changes.insert(
+            PathBuf::from("README.md"),
+            FileChange::Update {
+                unified_diff: patch,
+                move_path: None,
+            },
+        );
+
+        let lines =
+            create_diff_summary("proposed patch", &changes, PatchEventType::ApprovalRequest);
+
+        snapshot_lines("single_line_replacement_counts", lines, 80, 8);
+    }
+
+    #[test]
+    fn ui_snapshot_blank_context_line() {
+        // Ensure a hunk that includes a blank context line at the beginning is rendered visibly
+        let original = "\nY\n";
+        let modified = "\nY changed\n";
+        let patch = diffy::create_patch(original, modified).to_string();
+
+        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+        changes.insert(
+            PathBuf::from("example.txt"),
+            FileChange::Update {
+                unified_diff: patch,
+                move_path: None,
+            },
+        );
+
+        let lines =
+            create_diff_summary("proposed patch", &changes, PatchEventType::ApprovalRequest);
+
+        snapshot_lines("blank_context_line", lines, 80, 10);
+    }
+
+    #[test]
+    fn ui_snapshot_vertical_ellipsis_between_hunks() {
+        // Create a patch with two separate hunks to ensure we render the vertical ellipsis (⋮)
+        let original =
+            "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10\n";
+        let modified = "line 1\nline two changed\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline nine changed\nline 10\n";
+        let patch = diffy::create_patch(original, modified).to_string();
+
+        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+        changes.insert(
+            PathBuf::from("example.txt"),
+            FileChange::Update {
+                unified_diff: patch,
+                move_path: None,
+            },
+        );
+
+        let lines =
+            create_diff_summary("proposed patch", &changes, PatchEventType::ApprovalRequest);
+
+        // Height is large enough to show both hunks and the separator
+        snapshot_lines("vertical_ellipsis_between_hunks", lines, 80, 16);
     }
 }
