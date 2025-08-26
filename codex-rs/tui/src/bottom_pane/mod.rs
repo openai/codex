@@ -72,7 +72,7 @@ pub(crate) struct BottomPaneParams {
 }
 
 impl BottomPane {
-    const BOTTOM_PAD_LINES: u16 = 2;
+    const BOTTOM_PAD_LINES: u16 = 1;
     pub fn new(params: BottomPaneParams) -> Self {
         let enhanced_keys_supported = params.enhanced_keys_supported;
         Self {
@@ -530,7 +530,7 @@ mod tests {
         // Push an approval modal (e.g., command approval) which should hide the status view.
         pane.push_approval_request(exec_request());
 
-        // Simulate pressing 'n' (deny) on the modal.
+        // Simulate pressing 'n' (No) on the modal.
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
@@ -648,27 +648,14 @@ mod tests {
             "expected Working header on top row: {top:?}"
         );
 
-        // Next row (spacer) is blank, and bottom two rows are blank padding
-        let mut spacer = String::new();
+        // Last row should be blank padding; the row above should generally contain composer content.
         let mut r_last = String::new();
-        let mut r_last2 = String::new();
         for x in 0..area.width {
-            // Spacer row immediately below the status header lives at y=2.
-            spacer.push(buf[(x, 2)].symbol().chars().next().unwrap_or(' '));
             r_last.push(buf[(x, height - 1)].symbol().chars().next().unwrap_or(' '));
-            r_last2.push(buf[(x, height - 2)].symbol().chars().next().unwrap_or(' '));
         }
-        assert!(
-            spacer.trim().is_empty(),
-            "expected spacer line blank: {spacer:?}"
-        );
         assert!(
             r_last.trim().is_empty(),
             "expected last row blank: {r_last:?}"
-        );
-        assert!(
-            r_last2.trim().is_empty(),
-            "expected second-to-last row blank: {r_last2:?}"
         );
     }
 

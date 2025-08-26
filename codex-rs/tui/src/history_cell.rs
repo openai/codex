@@ -175,6 +175,26 @@ impl WidgetRef for &ExecCell {
     }
 }
 
+impl ExecCell {
+    /// Convert an active exec cell into a failed, completed exec cell.
+    /// Replaces the spinner with a red ✗ and sets a zero/elapsed duration.
+    pub(crate) fn into_failed(mut self) -> ExecCell {
+        let elapsed = self
+            .start_time
+            .map(|st| st.elapsed())
+            .unwrap_or_else(|| Duration::from_millis(0));
+        self.start_time = None;
+        self.duration = Some(elapsed);
+        self.output = Some(CommandOutput {
+            exit_code: 1,
+            stdout: String::new(),
+            stderr: String::new(),
+            formatted_output: String::new(),
+        });
+        self
+    }
+}
+
 #[derive(Debug)]
 struct CompletedMcpToolCallWithImageOutput {
     _image: DynamicImage,
@@ -209,6 +229,20 @@ fn pretty_provider_name(id: &str) -> String {
     } else {
         title_case(id)
     }
+}
+/// Return the emoji followed by a hair space (U+200A) and a normal space.
+/// This creates a reasonable gap across different terminals,
+/// in particular Terminal.app and iTerm, which render too tightly with just a single normal space.
+///
+/// Improvements here could be to condition this behavior on terminal,
+/// or possibly on emoji.
+fn padded_emoji(emoji: &str) -> String {
+    format!("{emoji}\u{200A} ")
+}
+
+/// Convenience function over `padded_emoji()`.
+fn padded_emoji_with(emoji: &str, text: impl AsRef<str>) -> String {
+    format!("{}{}", padded_emoji(emoji), text.as_ref())
 }
 
 pub(crate) fn new_session_info(
@@ -348,22 +382,22 @@ fn new_parsed_command(
 
     for parsed in parsed_commands.iter() {
         let text = match parsed {
-            ParsedCommand::Read { name, .. } => format!("📖 {name}"),
+            ParsedCommand::Read { name, .. } => padded_emoji_with("📖", name),
             ParsedCommand::ListFiles { cmd, path } => match path {
-                Some(p) => format!("📂 {p}"),
-                None => format!("📂 {cmd}"),
+                Some(p) => padded_emoji_with("📂", p),
+                None => padded_emoji_with("📂", cmd),
             },
             ParsedCommand::Search { query, path, cmd } => match (query, path) {
-                (Some(q), Some(p)) => format!("🔎 {q} in {p}"),
-                (Some(q), None) => format!("🔎 {q}"),
-                (None, Some(p)) => format!("🔎 {p}"),
-                (None, None) => format!("🔎 {cmd}"),
+                (Some(q), Some(p)) => padded_emoji_with("🔎", format!("{q} in {p}")),
+                (Some(q), None) => padded_emoji_with("🔎", q),
+                (None, Some(p)) => padded_emoji_with("🔎", p),
+                (None, None) => padded_emoji_with("🔎", cmd),
             },
-            ParsedCommand::Format { .. } => "✨ Formatting".to_string(),
-            ParsedCommand::Test { cmd } => format!("🧪 {cmd}"),
-            ParsedCommand::Lint { cmd, .. } => format!("🧹 {cmd}"),
-            ParsedCommand::Unknown { cmd } => format!("⌨️ {cmd}"),
-            ParsedCommand::Noop { cmd } => format!("🔄 {cmd}"),
+            ParsedCommand::Format { .. } => padded_emoji_with("✨", "Formatting"),
+            ParsedCommand::Test { cmd } => padded_emoji_with("🧪", cmd),
+            ParsedCommand::Lint { cmd, .. } => padded_emoji_with("🧹", cmd),
+            ParsedCommand::Unknown { cmd } => padded_emoji_with("⌨", cmd),
+            ParsedCommand::Noop { cmd } => padded_emoji_with("🔄", cmd),
         };
         // Prefix: two spaces, marker, space. Continuations align under the text block.
         for (j, line_text) in text.lines().enumerate() {
@@ -449,8 +483,10 @@ pub(crate) fn new_active_mcp_tool_call(invocation: McpInvocation) -> PlainHistor
 }
 
 pub(crate) fn new_web_search_call(query: String) -> PlainHistoryCell {
-    let lines: Vec<Line<'static>> =
-        vec![Line::from(""), Line::from(vec!["🌐 ".into(), query.into()])];
+    let lines: Vec<Line<'static>> = vec![
+        Line::from(""),
+        Line::from(vec![padded_emoji("🌐").into(), query.into()]),
+    ];
     PlainHistoryCell { lines }
 }
 
@@ -594,7 +630,10 @@ pub(crate) fn new_status_output(
     };
 
     // 📂 Workspace
-    lines.push(Line::from(vec!["📂 ".into(), "Workspace".bold()]));
+    lines.push(Line::from(vec![
+        padded_emoji("📂").into(),
+        "Workspace".bold(),
+    ]));
     // Path (home-relative, e.g., ~/code/project)
     let cwd_str = match relativize_to_home(&config.cwd) {
         Some(rel) if !rel.as_os_str().is_empty() => {
@@ -675,7 +714,10 @@ pub(crate) fn new_status_output(
     if let Ok(auth) = try_read_auth_json(&auth_file)
         && let Some(tokens) = auth.tokens.clone()
     {
-        lines.push(Line::from(vec!["👤 ".into(), "Account".bold()]));
+        lines.push(Line::from(vec![
+            padded_emoji("👤").into(),
+            "Account".bold(),
+        ]));
         lines.push(Line::from("  • Signed in with ChatGPT"));
 
         let info = tokens.id_token;
@@ -702,7 +744,7 @@ pub(crate) fn new_status_output(
     }
 
     // 🧠 Model
-    lines.push(Line::from(vec!["🧠 ".into(), "Model".bold()]));
+    lines.push(Line::from(vec![padded_emoji("🧠").into(), "Model".bold()]));
     lines.push(Line::from(vec![
         "  • Name: ".into(),
         config.model.clone().into(),
@@ -853,13 +895,21 @@ pub(crate) fn new_mcp_tools_output(
 }
 
 pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
-    let lines: Vec<Line<'static>> = vec!["".into(), vec!["🖐 ".red().bold(), message.into()].into()];
+    // Use a hair space (U+200A) to create a subtle, near-invisible separation
+    // before the text. VS16 is intentionally omitted to keep spacing tighter
+    // in terminals like Ghostty.
+    let lines: Vec<Line<'static>> = vec![
+        "".into(),
+        vec![padded_emoji("🖐").red().bold(), message.into()].into(),
+    ];
     PlainHistoryCell { lines }
 }
 
 pub(crate) fn new_stream_error_event(message: String) -> PlainHistoryCell {
-    let lines: Vec<Line<'static>> =
-        vec![vec!["⚠ ".magenta().bold(), message.dim()].into(), "".into()];
+    let lines: Vec<Line<'static>> = vec![
+        vec![padded_emoji("⚠").magenta().bold(), message.dim()].into(),
+        "".into(),
+    ];
     PlainHistoryCell { lines }
 }
 
