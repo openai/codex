@@ -8,6 +8,6 @@ expression: terminal.backend()
 "This will grant write access to /tmp for the remainder of this session.         "
 "                                                                                "
 "▌Apply changes?                                                                 "
-"▌ Yes   No   No, provide feedback                                               "
+"▌ Yes   No, provide feedback                                                    "
 "▌ Approve and apply the changes                                                 "
 "                                                                                "
