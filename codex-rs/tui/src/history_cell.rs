@@ -396,7 +396,7 @@ fn new_parsed_command(
             ParsedCommand::Format { .. } => padded_emoji_with("✨", "Formatting"),
             ParsedCommand::Test { cmd } => padded_emoji_with("🧪", cmd),
             ParsedCommand::Lint { cmd, .. } => padded_emoji_with("🧹", cmd),
-            ParsedCommand::Unknown { cmd } => padded_emoji_with("⌨", cmd),
+            ParsedCommand::Unknown { cmd } => padded_emoji_with("⌨️", cmd),
             ParsedCommand::Noop { cmd } => padded_emoji_with("🔄", cmd),
         };
         // Prefix: two spaces, marker, space. Continuations align under the text block.
