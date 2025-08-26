@@ -112,8 +112,8 @@ fn is_api_message(message: &ResponseItem) -> bool {
         | ResponseItem::FunctionCall { .. }
         | ResponseItem::CustomToolCall { .. }
         | ResponseItem::CustomToolCallOutput { .. }
-        | ResponseItem::LocalShellCall { .. }
-        | ResponseItem::Reasoning { .. } => true,
+        | ResponseItem::LocalShellCall { .. } => true,
+        ResponseItem::Reasoning { .. } => false,
         ResponseItem::Other => false,
     }
 }
