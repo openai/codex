@@ -1,6 +1,6 @@
 ---
 source: tui/src/chatwidget/tests.rs
-assertion_line: 690
+assertion_line: 763
 expression: terminal.backend()
 ---
 "The model wants to apply changes                                                "
@@ -10,5 +10,4 @@ expression: terminal.backend()
 "▌Apply changes?                                                                 "
 "▌ Yes   No   No, provide feedback                                               "
 "▌ Approve and apply the changes                                                 "
-"                                                                                "
 "                                                                                "
