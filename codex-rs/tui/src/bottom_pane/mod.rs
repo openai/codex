@@ -77,13 +77,12 @@ impl BottomPane {
     const BOTTOM_PAD_LINES: u16 = 1;
     pub fn new(params: BottomPaneParams) -> Self {
         let enhanced_keys_supported = params.enhanced_keys_supported;
-        Self {
+        let mut this = Self {
             composer: ChatComposer::new(
                 params.has_input_focus,
                 params.app_event_tx.clone(),
                 enhanced_keys_supported,
                 params.placeholder_text,
-                params.disable_paste_burst,
             ),
             active_view: None,
             app_event_tx: params.app_event_tx,
@@ -94,7 +93,10 @@ impl BottomPane {
             status: None,
             queued_user_messages: Vec::new(),
             esc_backtrack_hint: false,
-        }
+        };
+        this.composer
+            .set_disable_paste_burst(params.disable_paste_burst);
+        this
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
