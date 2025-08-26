@@ -11,6 +11,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use std::time::Instant;
 
+use crossterm::Command;
 use crossterm::SynchronizedUpdate;
 use crossterm::cursor;
 use crossterm::cursor::MoveTo;
@@ -63,6 +64,48 @@ pub fn set_modes() -> Result<()> {
         )
     );
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct EnableAlternateScroll;
+
+impl Command for EnableAlternateScroll {
+    fn write_ansi(&self, f: &mut impl std::fmt::Write) -> std::fmt::Result {
+        write!(f, "\x1b[?1007h")
+    }
+
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> std::io::Result<()> {
+        Err(std::io::Error::other(
+            "tried to execute EnableAlternateScroll using WinAPI; use ANSI instead",
+        ))
+    }
+
+    #[cfg(windows)]
+    fn is_ansi_code_supported(&self) -> bool {
+        true
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DisableAlternateScroll;
+
+impl Command for DisableAlternateScroll {
+    fn write_ansi(&self, f: &mut impl std::fmt::Write) -> std::fmt::Result {
+        write!(f, "\x1b[?1007l")
+    }
+
+    #[cfg(windows)]
+    fn execute_winapi(&self) -> std::io::Result<()> {
+        Err(std::io::Error::other(
+            "tried to execute DisableAlternateScroll using WinAPI; use ANSI instead",
+        ))
+    }
+
+    #[cfg(windows)]
+    fn is_ansi_code_supported(&self) -> bool {
+        true
+    }
 }
 
 /// Restore the terminal to its original state.
@@ -290,6 +333,8 @@ impl Tui {
                                 )
                                 {
                                     if alt_screen_active.load(Ordering::Relaxed) {
+                                        // Disable alternate scroll when suspending from alt-screen
+                                        let _ = execute!(stdout(), DisableAlternateScroll);
                                         let _ = execute!(stdout(), LeaveAlternateScreen);
                                         resume_pending.store(ResumeAction::RestoreAlt as u8, Ordering::Relaxed);
                                     } else {
@@ -370,6 +415,8 @@ impl Tui {
             }
             PreparedResumeAction::RestoreAltScreen => {
                 execute!(self.terminal.backend_mut(), EnterAlternateScreen)?;
+                // Enable "alternate scroll" so terminals may translate wheel to arrows
+                execute!(self.terminal.backend_mut(), EnableAlternateScroll)?;
                 if let Ok(size) = self.terminal.size() {
                     self.terminal.set_viewport_area(ratatui::layout::Rect::new(
                         0,
@@ -388,6 +435,8 @@ impl Tui {
     /// inline viewport for restoration when leaving.
     pub fn enter_alt_screen(&mut self) -> Result<()> {
         let _ = execute!(self.terminal.backend_mut(), EnterAlternateScreen);
+        // Enable "alternate scroll" so terminals may translate wheel to arrows
+        let _ = execute!(self.terminal.backend_mut(), EnableAlternateScroll);
         if let Ok(size) = self.terminal.size() {
             self.alt_saved_viewport = Some(self.terminal.viewport_area);
             self.terminal.set_viewport_area(ratatui::layout::Rect::new(
@@ -404,6 +453,8 @@ impl Tui {
 
     /// Leave alternate screen and restore the previously saved inline viewport, if any.
     pub fn leave_alt_screen(&mut self) -> Result<()> {
+        // Disable alternate scroll when leaving alt-screen
+        let _ = execute!(self.terminal.backend_mut(), DisableAlternateScroll);
         let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
         if let Some(saved) = self.alt_saved_viewport.take() {
             self.terminal.set_viewport_area(saved);

@@ -1,4 +1,5 @@
 use std::io::Result;
+use std::time::Duration;
 
 use crate::insert_history;
 use crate::tui;
@@ -227,6 +228,7 @@ impl TranscriptApp {
     }
 
     fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
+        let mut defer_draw_ms: Option<u64> = None;
         match key_event {
             // Ctrl+Z is handled at the App level when transcript overlay is active
             KeyEvent {
@@ -254,6 +256,7 @@ impl TranscriptApp {
                 ..
             } => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(1);
+                defer_draw_ms = Some(16);
             }
             KeyEvent {
                 code: KeyCode::Down,
@@ -261,6 +264,7 @@ impl TranscriptApp {
                 ..
             } => {
                 self.scroll_offset = self.scroll_offset.saturating_add(1);
+                defer_draw_ms = Some(16);
             }
             KeyEvent {
                 code: KeyCode::PageUp,
@@ -269,6 +273,7 @@ impl TranscriptApp {
             } => {
                 let area = self.scroll_area(tui.terminal.viewport_area);
                 self.scroll_offset = self.scroll_offset.saturating_sub(area.height as usize);
+                defer_draw_ms = Some(16);
             }
             KeyEvent {
                 code: KeyCode::PageDown | KeyCode::Char(' '),
@@ -277,6 +282,7 @@ impl TranscriptApp {
             } => {
                 let area = self.scroll_area(tui.terminal.viewport_area);
                 self.scroll_offset = self.scroll_offset.saturating_add(area.height as usize);
+                defer_draw_ms = Some(16);
             }
             KeyEvent {
                 code: KeyCode::Home,
@@ -284,6 +290,7 @@ impl TranscriptApp {
                 ..
             } => {
                 self.scroll_offset = 0;
+                defer_draw_ms = Some(16);
             }
             KeyEvent {
                 code: KeyCode::End,
@@ -291,12 +298,18 @@ impl TranscriptApp {
                 ..
             } => {
                 self.scroll_offset = usize::MAX;
+                defer_draw_ms = Some(16);
             }
             _ => {
                 return;
             }
         }
-        tui.frame_requester().schedule_frame();
+        if let Some(ms) = defer_draw_ms {
+            tui.frame_requester()
+                .schedule_frame_in(Duration::from_millis(ms));
+        } else {
+            tui.frame_requester().schedule_frame();
+        }
     }
 
     fn scroll_area(&self, area: Rect) -> Rect {
