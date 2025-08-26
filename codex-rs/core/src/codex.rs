@@ -65,8 +65,8 @@ use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::model_family::find_family_for_model;
 use crate::openai_model_info::get_model_info;
 use crate::openai_tools::ApplyPatchToolArgs;
-use crate::openai_tools::ToolsConfig;
 use crate::openai_tools::OpenAiTool;
+use crate::openai_tools::ToolsConfig;
 use crate::openai_tools::ToolsConfigParams;
 use crate::openai_tools::get_openai_tools;
 use crate::parse_command::parse_command;
@@ -1605,7 +1605,6 @@ async fn run_turn(
     if sess.consume_enable_web_search_next_turn() {
         tools.push(OpenAiTool::WebSearch {});
     } else if matches!(turn_context.approval_policy, AskForApproval::Never) {
-        // YOLO: allow native web_search and hide request tool for direct use.
         let has_web = tools.iter().any(|t| matches!(t, OpenAiTool::WebSearch {}));
         if !has_web {
             tools.push(OpenAiTool::WebSearch {});
@@ -2133,13 +2132,15 @@ async fn handle_function_call(
                         },
                     }
                 }
-                ReviewDecision::Denied | ReviewDecision::Abort => ResponseInputItem::FunctionCallOutput {
-                    call_id,
-                    output: FunctionCallOutputPayload {
-                        content: "denied".to_string(),
-                        success: Some(false),
-                    },
-                },
+                ReviewDecision::Denied | ReviewDecision::Abort => {
+                    ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: FunctionCallOutputPayload {
+                            content: "denied".to_string(),
+                            success: Some(false),
+                        },
+                    }
+                }
             }
         }
         "container.exec" | "shell" => {

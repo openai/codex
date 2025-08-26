@@ -662,7 +662,10 @@ mod tests {
         });
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
-        assert_eq_tool_names(&tools, &["local_shell", "update_plan", "web_search"]);
+        assert_eq_tool_names(
+            &tools,
+            &["local_shell", "update_plan", "web_search_request"],
+        );
     }
 
     #[test]
@@ -736,7 +739,11 @@ mod tests {
 
         assert_eq_tool_names(
             &tools,
-            &["shell", "web_search", "test_server/do_something_cool"],
+            &[
+                "shell",
+                "web_search_request",
+                "test_server/do_something_cool",
+            ],
         );
 
         assert_eq!(
@@ -847,7 +854,7 @@ mod tests {
         ]);
 
         let tools = get_openai_tools(&config, Some(tools_map));
-        // Expect shell first, then approval tool, then MCP tools sorted by name.
+        // Expect shell first, then search approval tool, then MCP tools sorted by name.
         assert_eq_tool_names(
             &tools,
             &[

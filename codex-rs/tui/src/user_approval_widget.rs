@@ -151,13 +151,11 @@ impl UserApprovalWidget {
                 );
 
                 contents.push(Line::from(""));
-                // Suppress the generic reason line for web_search approvals to
-                // keep the UI concise.
                 let is_web_search = command.first().map(|s| s == "web_search").unwrap_or(false);
                 if !is_web_search {
                     if let Some(reason) = reason {
-                    contents.push(Line::from(reason.clone().italic()));
-                    contents.push(Line::from(""));
+                        contents.push(Line::from(reason.clone().italic()));
+                        contents.push(Line::from(""));
                     }
                 }
                 Paragraph::new(contents).wrap(Wrap { trim: false })
