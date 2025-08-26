@@ -19,11 +19,14 @@ pub(crate) struct PasteBurst {
 }
 
 pub(crate) enum CharDecision {
+    /// Start buffering and retroactively capture some already-inserted chars.
     BeginBuffer { retro_chars: u16 },
+    /// We are currently buffering; append the current char into the buffer.
     BufferAppend,
-    // Do not insert/render this char yet; we are holding briefly.
+    /// Do not insert/render this char yet; temporarily save the first fast
+    /// char while we wait to see if a paste-like burst follows.
     HoldFirstChar,
-    // Begin buffering using the previously held first char (no retro grab needed).
+    /// Begin buffering using the previously saved first char (no retro grab needed).
     BeginBufferFromPending,
 }
 
@@ -33,10 +36,16 @@ pub(crate) struct RetroGrab {
 }
 
 impl PasteBurst {
+    /// Recommended delay to wait between simulated keypresses (or before
+    /// scheduling a UI tick) so that a pending fast keystroke is flushed
+    /// out of the burst detector as normal typed input.
+    ///
+    /// Primarily used by tests and by the TUI to reliably cross the
+    /// paste-burst timing threshold.
     pub fn recommended_flush_delay() -> Duration {
         PASTE_BURST_CHAR_INTERVAL + Duration::from_millis(1)
     }
-    // Entry point: decide how to treat a plain char with current timing.
+    /// Entry point: decide how to treat a plain char with current timing.
     pub fn on_plain_char(&mut self, ch: char, now: Instant) -> CharDecision {
         match self.last_plain_char_time {
             Some(prev) if now.duration_since(prev) <= PASTE_BURST_CHAR_INTERVAL => {
@@ -71,12 +80,20 @@ impl PasteBurst {
             };
         }
 
-        // Hold the first fast char very briefly to see if a burst follows.
+        // Save the first fast char very briefly to see if a burst follows.
         self.pending_first_char = Some((ch, now));
         CharDecision::HoldFirstChar
     }
 
-    // Timer: flush buffered burst if timeout elapsed.
+    /// Flush the buffered burst if the inter-key timeout has elapsed.
+    ///
+    /// Returns Some(String) when either:
+    /// - We were actively buffering paste-like input and the buffer is now
+    ///   emitted as a single pasted string; or
+    /// - We had saved a single fast first-char with no subsequent burst and we
+    ///   now emit that char as normal typed input.
+    ///
+    /// Returns None if the timeout has not elapsed or there is nothing to flush.
     pub fn flush_if_due(&mut self, now: Instant) -> Option<String> {
         let timed_out = self
             .last_plain_char_time
@@ -86,18 +103,23 @@ impl PasteBurst {
             let out = std::mem::take(&mut self.buffer);
             Some(out)
         } else if timed_out {
-            // If we were holding a single fast char and no burst followed,
+            // If we were saving a single fast char and no burst followed,
             // flush it as normal typed input.
             if let Some((ch, _at)) = self.pending_first_char.take() {
-                return Some(ch.to_string());
+                Some(ch.to_string())
+            } else {
+                None
             }
-            None
         } else {
             None
         }
     }
 
-    // While bursting: accumulate newline instead of submitting.
+    /// While bursting: accumulate a newline into the buffer instead of
+    /// submitting the textarea.
+    ///
+    /// Returns true if a newline was appended (we are in a burst context),
+    /// false otherwise.
     pub fn append_newline_if_active(&mut self, now: Instant) -> bool {
         if self.is_active() {
             self.buffer.push('\n');
@@ -108,18 +130,18 @@ impl PasteBurst {
         }
     }
 
-    // Decide if Enter should insert a newline (burst context) vs submit.
+    /// Decide if Enter should insert a newline (burst context) vs submit.
     pub fn newline_should_insert_instead_of_submit(&self, now: Instant) -> bool {
         let in_burst_window = self.burst_window_until.is_some_and(|until| now <= until);
         self.is_active() || in_burst_window
     }
 
-    // Keep the burst window alive.
+    /// Keep the burst window alive.
     pub fn extend_window(&mut self, now: Instant) {
         self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
     }
 
-    // Begin buffering with retroactively grabbed text.
+    /// Begin buffering with retroactively grabbed text.
     pub fn begin_with_retro_grabbed(&mut self, grabbed: String, now: Instant) {
         if !grabbed.is_empty() {
             self.buffer.push_str(&grabbed);
@@ -128,15 +150,23 @@ impl PasteBurst {
         self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
     }
 
-    // Append a char into the burst buffer.
+    /// Append a char into the burst buffer.
     pub fn append_char_to_buffer(&mut self, ch: char, now: Instant) {
         self.buffer.push(ch);
         self.burst_window_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
     }
 
-    // Decide whether to begin buffering by retroactively capturing recent chars
-    // from the slice before the cursor. Returns start byte and grabbed text
-    // if it looks like a paste (whitespace present or long segment).
+    /// Decide whether to begin buffering by retroactively capturing recent
+    /// chars from the slice before the cursor.
+    ///
+    /// Heuristic: if the retro-grabbed slice contains any whitespace or is
+    /// sufficiently long (>= 16 bytes), treat it as paste-like to avoid
+    /// rendering the typed prefix momentarily before the paste is recognized.
+    /// This favors responsiveness and prevents flicker for typical pastes
+    /// (URLs, file paths, multiline text) while not triggering on short words.
+    ///
+    /// Returns Some(RetroGrab) with the start byte and grabbed text when we
+    /// decide to buffer retroactively; otherwise None.
     pub fn decide_begin_buffer(
         &mut self,
         now: Instant,
@@ -158,7 +188,7 @@ impl PasteBurst {
         }
     }
 
-    // Before applying modified/non-char input: flush buffered burst immediately.
+    /// Before applying modified/non-char input: flush buffered burst immediately.
     pub fn flush_before_modified_input(&mut self) -> Option<String> {
         if self.is_active() {
             self.active = false;
@@ -168,7 +198,10 @@ impl PasteBurst {
         }
     }
 
-    // Clear only the timing window (keep buffer state untouched if already flushed).
+    /// Clear only the timing window and any pending first-char.
+    ///
+    /// Does not emit or clear the buffered text itself; callers should have
+    /// already flushed (if needed) via one of the flush methods above.
     pub fn clear_window_after_non_char(&mut self) {
         self.consecutive_plain_char_burst = 0;
         self.last_plain_char_time = None;
@@ -177,17 +210,15 @@ impl PasteBurst {
         self.pending_first_char = None;
     }
 
-    // Utility
+    /// Returns true if we are in any paste-burst related transient state
+    /// (actively buffering, have a non-empty buffer, or have saved the first
+    /// fast char while waiting for a potential burst).
     pub fn is_active(&self) -> bool {
         self.is_active_internal() || self.pending_first_char.is_some()
     }
 
     fn is_active_internal(&self) -> bool {
         self.active || !self.buffer.is_empty()
-    }
-
-    pub fn new() -> Self {
-        Self::default()
     }
 
     pub fn clear_after_explicit_paste(&mut self) {

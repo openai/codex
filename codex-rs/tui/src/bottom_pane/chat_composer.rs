@@ -1620,6 +1620,19 @@ mod tests {
         }
     }
 
+    // Test helper: simulate human typing with a brief delay and flush the paste-burst buffer
+    #[cfg(test)]
+    fn type_chars_humanlike(composer: &mut ChatComposer, chars: &[char]) {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+        for &ch in chars {
+            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+            std::thread::sleep(ChatComposer::recommended_paste_flush_delay());
+            let _ = composer.flush_paste_burst_if_due();
+        }
+    }
+
     #[test]
     fn slash_init_dispatches_command_and_does_not_submit_literal_text() {
         use crossterm::event::KeyCode;
@@ -1632,11 +1645,7 @@ mod tests {
             ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
 
         // Type the slash command.
-        for ch in [
-            '/', 'i', 'n', 'i', 't', // "/init"
-        ] {
-            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
-        }
+        type_chars_humanlike(&mut composer, &['/', 'i', 'n', 'i', 't']);
 
         // Press Enter to dispatch the selected command.
         let (result, _needs_redraw) =
@@ -1667,9 +1676,7 @@ mod tests {
         let mut composer =
             ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
 
-        for ch in ['/', 'c'] {
-            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
-        }
+        type_chars_humanlike(&mut composer, &['/', 'c']);
 
         let (_result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
@@ -1689,9 +1696,7 @@ mod tests {
         let mut composer =
             ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
 
-        for ch in ['/', 'm', 'e', 'n', 't', 'i', 'o', 'n'] {
-            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
-        }
+        type_chars_humanlike(&mut composer, &['/', 'm', 'e', 'n', 't', 'i', 'o', 'n']);
 
         let (result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));

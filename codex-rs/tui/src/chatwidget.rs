@@ -858,7 +858,12 @@ impl ChatWidget {
         self.bottom_pane.handle_paste(text);
     }
 
-    // Returns true if caller should skip rendering this frame (a future tick is scheduled).
+    /// Handle timing for non-bracketed paste bursts.
+    ///
+    /// Schedules a follow-up frame when a burst is in progress, and requests
+    /// a redraw if the buffer was flushed this tick.
+    ///
+    /// Always returns false; callers should render this frame as usual.
     pub(crate) fn handle_paste_burst_tick(
         &mut self,
         frame_requester: &crate::tui::FrameRequester,
