@@ -1,4 +1,5 @@
 use std::io::Result;
+use std::time::Duration;
 
 use crate::insert_history;
 use crate::tui;
@@ -156,6 +157,7 @@ impl PagerView {
     }
 
     fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) -> Result<()> {
+        let mut defer_draw_ms: Option<u64> = None;
         match key_event {
             KeyEvent {
                 code: KeyCode::Up,
@@ -163,6 +165,7 @@ impl PagerView {
                 ..
             } => {
                 self.scroll_offset = self.scroll_offset.saturating_sub(1);
+                defer_draw_ms = Some(16);
             }
             KeyEvent {
                 code: KeyCode::Down,
@@ -170,6 +173,7 @@ impl PagerView {
                 ..
             } => {
                 self.scroll_offset = self.scroll_offset.saturating_add(1);
+                defer_draw_ms = Some(16);
             }
             KeyEvent {
                 code: KeyCode::PageUp,
@@ -178,6 +182,7 @@ impl PagerView {
             } => {
                 let area = self.scroll_area(tui.terminal.viewport_area);
                 self.scroll_offset = self.scroll_offset.saturating_sub(area.height as usize);
+                defer_draw_ms = Some(16);
             }
             KeyEvent {
                 code: KeyCode::PageDown | KeyCode::Char(' '),
@@ -186,6 +191,7 @@ impl PagerView {
             } => {
                 let area = self.scroll_area(tui.terminal.viewport_area);
                 self.scroll_offset = self.scroll_offset.saturating_add(area.height as usize);
+                defer_draw_ms = Some(16);
             }
             KeyEvent {
                 code: KeyCode::Home,
@@ -193,6 +199,7 @@ impl PagerView {
                 ..
             } => {
                 self.scroll_offset = 0;
+                defer_draw_ms = Some(16);
             }
             KeyEvent {
                 code: KeyCode::End,
@@ -200,12 +207,18 @@ impl PagerView {
                 ..
             } => {
                 self.scroll_offset = usize::MAX;
+                defer_draw_ms = Some(16);
             }
             _ => {
                 return Ok(());
             }
         }
-        tui.frame_requester().schedule_frame();
+        if let Some(ms) = defer_draw_ms {
+            tui.frame_requester()
+                .schedule_frame_in(Duration::from_millis(ms));
+        } else {
+            tui.frame_requester().schedule_frame();
+        }
         Ok(())
     }
 
