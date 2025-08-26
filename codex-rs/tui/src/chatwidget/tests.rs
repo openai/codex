@@ -370,6 +370,48 @@ fn exec_history_cell_shows_working_then_failed() {
     );
 }
 
+// Snapshot test: interrupting a running exec finalizes the active cell with a red ✗
+// marker (replacing the spinner) and flushes it into history.
+#[test]
+fn interrupt_exec_marks_failed_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    // Begin a long-running command so we have an active exec cell with a spinner.
+    chat.handle_codex_event(Event {
+        id: "call-int".into(),
+        msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+            call_id: "call-int".into(),
+            command: vec!["bash".into(), "-lc".into(), "sleep 1".into()],
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            parsed_cmd: vec![
+                codex_core::parse_command::ParsedCommand::Unknown {
+                    cmd: "sleep 1".into(),
+                }
+                .into(),
+            ],
+        }),
+    });
+
+    // Simulate the task being aborted (as if ESC was pressed), which should
+    // cause the active exec cell to be finalized as failed and flushed.
+    chat.handle_codex_event(Event {
+        id: "call-int".into(),
+        msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
+            reason: TurnAbortReason::Interrupted,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        !cells.is_empty(),
+        "expected finalized exec cell to be inserted into history"
+    );
+
+    // The first inserted cell should be the finalized exec; snapshot its text.
+    let exec_blob = lines_to_single_string(&cells[0]);
+    assert_snapshot!("interrupt_exec_marks_failed", exec_blob);
+}
+
 #[test]
 fn exec_history_extends_previous_when_consecutive() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
