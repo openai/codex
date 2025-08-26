@@ -14,6 +14,7 @@ use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
+use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::FileChange;
@@ -177,13 +178,13 @@ fn make_chatwidget_manual() -> (
         pending_exec_completions: Vec::new(),
         task_complete_pending: false,
         interrupts: InterruptManager::new(),
-        needs_redraw: false,
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
         session_id: None,
         frame_requester: crate::tui::FrameRequester::test_dummy(),
         show_welcome_banner: true,
         last_history_was_exec: false,
+        queued_user_messages: std::collections::VecDeque::new(),
     };
     (widget, rx, op_rx)
 }
@@ -235,6 +236,36 @@ fn open_fixture(name: &str) -> std::fs::File {
     }
     // 3) Last resort: CWD
     File::open(name).expect("open fixture file")
+}
+
+#[test]
+fn alt_up_edits_most_recent_queued_message() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    // Simulate a running task so messages would normally be queued.
+    chat.bottom_pane.set_task_running(true);
+
+    // Seed two queued messages.
+    chat.queued_user_messages
+        .push_back(UserMessage::from("first queued".to_string()));
+    chat.queued_user_messages
+        .push_back(UserMessage::from("second queued".to_string()));
+    chat.refresh_queued_user_messages();
+
+    // Press Alt+Up to edit the most recent (last) queued message.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT));
+
+    // Composer should now contain the last queued message.
+    assert_eq!(
+        chat.bottom_pane.composer_text(),
+        "second queued".to_string()
+    );
+    // And the queue should now contain only the remaining (older) item.
+    assert_eq!(chat.queued_user_messages.len(), 1);
+    assert_eq!(
+        chat.queued_user_messages.front().unwrap().text,
+        "first queued"
+    );
 }
 
 #[test]
@@ -620,6 +651,189 @@ async fn binary_size_transcript_matches_ideal_fixture() {
 
     // Exact equality with pretty diff on failure
     assert_eq!(visible_after, ideal);
+}
+
+//
+// Snapshot test: command approval modal
+//
+// Synthesizes a Codex ExecApprovalRequest event to trigger the approval modal
+// and snapshots the visual output using the ratatui TestBackend.
+#[test]
+fn approval_modal_exec_snapshot() {
+    // Build a chat widget with manual channels to avoid spawning the agent.
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+    // Ensure policy allows surfacing approvals explicitly (not strictly required for direct event).
+    chat.config.approval_policy = codex_core::protocol::AskForApproval::OnRequest;
+    // Inject an exec approval request to display the approval modal.
+    let ev = ExecApprovalRequestEvent {
+        call_id: "call-approve-cmd".into(),
+        command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
+        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        reason: Some("Model wants to run a command".into()),
+    };
+    chat.handle_codex_event(Event {
+        id: "sub-approve".into(),
+        msg: EventMsg::ExecApprovalRequest(ev),
+    });
+    // Render to a fixed-size test terminal and snapshot.
+    // Call desired_height first and use that exact height for rendering.
+    let height = chat.desired_height(80);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
+        .expect("create terminal");
+    terminal
+        .draw(|f| f.render_widget_ref(&chat, f.area()))
+        .expect("draw approval modal");
+    assert_snapshot!("approval_modal_exec", terminal.backend());
+}
+
+// Snapshot test: patch approval modal
+#[test]
+fn approval_modal_patch_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+    chat.config.approval_policy = codex_core::protocol::AskForApproval::OnRequest;
+
+    // Build a small changeset and a reason/grant_root to exercise the prompt text.
+    let mut changes = std::collections::HashMap::new();
+    changes.insert(
+        PathBuf::from("README.md"),
+        FileChange::Add {
+            content: "hello\nworld\n".into(),
+        },
+    );
+    let ev = ApplyPatchApprovalRequestEvent {
+        call_id: "call-approve-patch".into(),
+        changes,
+        reason: Some("The model wants to apply changes".into()),
+        grant_root: Some(PathBuf::from("/tmp")),
+    };
+    chat.handle_codex_event(Event {
+        id: "sub-approve-patch".into(),
+        msg: EventMsg::ApplyPatchApprovalRequest(ev),
+    });
+
+    // Render at the widget's desired height and snapshot.
+    let height = chat.desired_height(80);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
+        .expect("create terminal");
+    terminal
+        .draw(|f| f.render_widget_ref(&chat, f.area()))
+        .expect("draw patch approval modal");
+    assert_snapshot!("approval_modal_patch", terminal.backend());
+}
+
+// Snapshot test: ChatWidget at very small heights (idle)
+// Ensures overall layout behaves when terminal height is extremely constrained.
+#[test]
+fn ui_snapshots_small_heights_idle() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    let (chat, _rx, _op_rx) = make_chatwidget_manual();
+    for h in [1u16, 2, 3] {
+        let name = format!("chat_small_idle_h{h}");
+        let mut terminal = Terminal::new(TestBackend::new(40, h)).expect("create terminal");
+        terminal
+            .draw(|f| f.render_widget_ref(&chat, f.area()))
+            .expect("draw chat idle");
+        assert_snapshot!(name, terminal.backend());
+    }
+}
+
+// Snapshot test: ChatWidget at very small heights (task running)
+// Validates how status + composer are presented within tight space.
+#[test]
+fn ui_snapshots_small_heights_task_running() {
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+    // Activate status line
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TaskStarted,
+    });
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Thinking**".into(),
+        }),
+    });
+    for h in [1u16, 2, 3] {
+        let name = format!("chat_small_running_h{h}");
+        let mut terminal = Terminal::new(TestBackend::new(40, h)).expect("create terminal");
+        terminal
+            .draw(|f| f.render_widget_ref(&chat, f.area()))
+            .expect("draw chat running");
+        assert_snapshot!(name, terminal.backend());
+    }
+}
+
+// Snapshot test: status widget + approval modal active together
+// The modal takes precedence visually; this captures the layout with a running
+// task (status indicator active) while an approval request is shown.
+#[test]
+fn status_widget_and_approval_modal_snapshot() {
+    use codex_core::protocol::ExecApprovalRequestEvent;
+
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+    // Begin a running task so the status indicator would be active.
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TaskStarted,
+    });
+    // Provide a deterministic header for the status line.
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Analyzing**".into(),
+        }),
+    });
+
+    // Now show an approval modal (e.g. exec approval).
+    let ev = ExecApprovalRequestEvent {
+        call_id: "call-approve-exec".into(),
+        command: vec!["echo".into(), "hello world".into()],
+        cwd: std::path::PathBuf::from("/tmp"),
+        reason: Some("Codex wants to run a command".into()),
+    };
+    chat.handle_codex_event(Event {
+        id: "sub-approve-exec".into(),
+        msg: EventMsg::ExecApprovalRequest(ev),
+    });
+
+    // Render at the widget's desired height and snapshot.
+    let height = chat.desired_height(80);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
+        .expect("create terminal");
+    terminal
+        .draw(|f| f.render_widget_ref(&chat, f.area()))
+        .expect("draw status + approval modal");
+    assert_snapshot!("status_widget_and_approval_modal", terminal.backend());
+}
+
+// Snapshot test: status widget active (StatusIndicatorView)
+// Ensures the VT100 rendering of the status indicator is stable when active.
+#[test]
+fn status_widget_active_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+    // Activate the status indicator by simulating a task start.
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::TaskStarted,
+    });
+    // Provide a deterministic header via a bold reasoning chunk.
+    chat.handle_codex_event(Event {
+        id: "task-1".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Analyzing**".into(),
+        }),
+    });
+    // Render and snapshot.
+    let height = chat.desired_height(80);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
+        .expect("create terminal");
+    terminal
+        .draw(|f| f.render_widget_ref(&chat, f.area()))
+        .expect("draw status widget");
+    assert_snapshot!("status_widget_active", terminal.backend());
 }
 
 #[test]

@@ -29,6 +29,8 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
+use crate::clipboard_paste::normalize_pasted_path;
+use crate::clipboard_paste::pasted_image_format;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -155,7 +157,7 @@ impl ChatComposer {
             ActivePopup::None => 1,
         };
         let [textarea_rect, _] =
-            Layout::vertical([Constraint::Min(0), Constraint::Max(popup_height)]).areas(area);
+            Layout::vertical([Constraint::Min(1), Constraint::Max(popup_height)]).areas(area);
         let mut textarea_rect = textarea_rect;
         textarea_rect.width = textarea_rect.width.saturating_sub(1);
         textarea_rect.x += 1;
@@ -220,6 +222,8 @@ impl ChatComposer {
             let placeholder = format!("[Pasted Content {char_count} chars]");
             self.textarea.insert_element(&placeholder);
             self.pending_pastes.push((placeholder, pasted));
+        } else if self.handle_paste_image_path(pasted.clone()) {
+            self.textarea.insert_str(" ");
         } else {
             self.textarea.insert_str(&pasted);
         }
@@ -230,6 +234,39 @@ impl ChatComposer {
         self.sync_command_popup();
         self.sync_file_search_popup();
         true
+    }
+
+    pub fn handle_paste_image_path(&mut self, pasted: String) -> bool {
+        let Some(path_buf) = normalize_pasted_path(&pasted) else {
+            return false;
+        };
+
+        match image::image_dimensions(&path_buf) {
+            Ok((w, h)) => {
+                tracing::info!("OK: {pasted}");
+                let format_label = pasted_image_format(&path_buf).label();
+                self.attach_image(path_buf, w, h, format_label);
+                true
+            }
+            Err(err) => {
+                tracing::info!("ERR: {err}");
+                false
+            }
+        }
+    }
+
+    /// Replace the entire composer content with `text` and reset cursor.
+    pub(crate) fn set_text_content(&mut self, text: String) {
+        self.textarea.set_text(&text);
+        self.textarea.set_cursor(0);
+        self.sync_command_popup();
+        self.sync_file_search_popup();
+    }
+
+    /// Get the current composer text.
+    #[cfg(test)]
+    pub(crate) fn current_text(&self) -> String {
+        self.textarea.text().to_string()
     }
 
     pub fn attach_image(&mut self, path: PathBuf, width: u32, height: u32, format_label: &str) {
@@ -293,6 +330,11 @@ impl ChatComposer {
         result
     }
 
+    /// Return true if either the slash-command popup or the file-search popup is active.
+    pub(crate) fn popup_active(&self) -> bool {
+        !matches!(self.active_popup, ActivePopup::None)
+    }
+
     /// Handle key event when the slash-command popup is visible.
     fn handle_key_event_with_slash_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
         let ActivePopup::Command(popup) = &mut self.active_popup else {
@@ -311,6 +353,13 @@ impl ChatComposer {
                 ..
             } => {
                 popup.move_down();
+                (InputResult::None, true)
+            }
+            KeyEvent {
+                code: KeyCode::Esc, ..
+            } => {
+                // Dismiss the slash popup; keep the current input untouched.
+                self.active_popup = ActivePopup::None;
                 (InputResult::None, true)
             }
             KeyEvent {
@@ -704,13 +753,6 @@ impl ChatComposer {
                 }
                 self.pending_pastes.clear();
 
-                // Strip image placeholders from the submitted text; images are retrieved via take_recent_submission_images()
-                for img in &self.attached_images {
-                    if text.contains(&img.placeholder) {
-                        text = text.replace(&img.placeholder, "");
-                    }
-                }
-
                 text = text.trim().to_string();
                 if !text.is_empty() {
                     self.history.record_local_submission(&text);
@@ -1099,7 +1141,7 @@ impl ChatComposer {
     }
 }
 
-impl WidgetRef for &ChatComposer {
+impl WidgetRef for ChatComposer {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let popup_height = match &self.active_popup {
             ActivePopup::Command(popup) => popup.calculate_required_height(),
@@ -1107,7 +1149,7 @@ impl WidgetRef for &ChatComposer {
             ActivePopup::None => 1,
         };
         let [textarea_rect, popup_rect] =
-            Layout::vertical([Constraint::Min(0), Constraint::Max(popup_height)]).areas(area);
+            Layout::vertical([Constraint::Min(1), Constraint::Max(popup_height)]).areas(area);
         match &self.active_popup {
             ActivePopup::Command(popup) => {
                 popup.render_ref(popup_rect, buf);
@@ -1210,7 +1252,10 @@ impl WidgetRef for &ChatComposer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::ImageBuffer;
+    use image::Rgba;
     use std::path::PathBuf;
+    use tempfile::tempdir;
 
     use crate::app_event::AppEvent;
     use crate::bottom_pane::AppEventSender;
@@ -1496,7 +1541,7 @@ mod tests {
             }
 
             terminal
-                .draw(|f| f.render_widget_ref(&composer, f.area()))
+                .draw(|f| f.render_widget_ref(composer, f.area()))
                 .unwrap_or_else(|e| panic!("Failed to draw {name} composer: {e}"));
 
             assert_snapshot!(name, terminal.backend());
@@ -1793,7 +1838,7 @@ mod tests {
         let (result, _) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         match result {
-            InputResult::Submitted(text) => assert_eq!(text, "hi"),
+            InputResult::Submitted(text) => assert_eq!(text, "[image 32x16 PNG] hi"),
             _ => panic!("expected Submitted"),
         }
         let imgs = composer.take_recent_submission_images();
@@ -1811,7 +1856,7 @@ mod tests {
         let (result, _) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
         match result {
-            InputResult::Submitted(text) => assert!(text.is_empty()),
+            InputResult::Submitted(text) => assert_eq!(text, "[image 10x5 PNG]"),
             _ => panic!("expected Submitted"),
         }
         let imgs = composer.take_recent_submission_images();
@@ -1886,5 +1931,26 @@ mod tests {
             composer.attached_images,
             "one image mapping remains"
         );
+    }
+
+    #[test]
+    fn pasting_filepath_attaches_image() {
+        let tmp = tempdir().expect("create TempDir");
+        let tmp_path: PathBuf = tmp.path().join("codex_tui_test_paste_image.png");
+        let img: ImageBuffer<Rgba<u8>, Vec<u8>> =
+            ImageBuffer::from_fn(3, 2, |_x, _y| Rgba([1, 2, 3, 255]));
+        img.save(&tmp_path).expect("failed to write temp png");
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer =
+            ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
+
+        let needs_redraw = composer.handle_paste(tmp_path.to_string_lossy().to_string());
+        assert!(needs_redraw);
+        assert!(composer.textarea.text().starts_with("[image 3x2 PNG] "));
+
+        let imgs = composer.take_recent_submission_images();
+        assert_eq!(imgs, vec![tmp_path.clone()]);
     }
 }
