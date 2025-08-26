@@ -452,6 +452,12 @@ async fn process_sse<S>(
     let mut response_completed: Option<ResponseCompleted> = None;
     let mut response_error: Option<CodexErr> = None;
 
+    // Track web_search_call input so we can emit the actual query when known.
+    use std::collections::HashMap;
+    use std::collections::HashSet;
+    let mut web_search_input_buffers: HashMap<String, String> = HashMap::new();
+    let mut web_search_query_emitted: HashSet<String> = HashSet::new();
+
     loop {
         let sse = match timeout(idle_timeout, stream.next()).await {
             Ok(Some(Ok(sse))) => sse,
@@ -527,6 +533,34 @@ async fn process_sse<S>(
             // drop the duplicated list inside `response.completed`.
             "response.output_item.done" => {
                 let Some(item_val) = event.item else { continue };
+                // Attempt to capture web_search_call query from the raw item before converting.
+                if let Some(map) = item_val.as_object() {
+                    if map.get("type").and_then(|v| v.as_str()) == Some("web_search_call") {
+                        let call_id = map
+                            .get("id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let query_opt = map
+                            .get("input")
+                            .and_then(|i| i.get("query"))
+                            .and_then(|q| q.as_str())
+                            .map(|s| s.to_string());
+                        if let Some(query) = query_opt {
+                            if !web_search_query_emitted.contains(&call_id) {
+                                let ev = ResponseEvent::WebSearchCallBegin {
+                                    call_id: call_id.clone(),
+                                    query: Some(query),
+                                };
+                                if tx_event.send(Ok(ev)).await.is_err() {
+                                    return;
+                                }
+                                web_search_query_emitted.insert(call_id);
+                            }
+                        }
+                    }
+                }
+
                 let Ok(item) = serde_json::from_value::<ResponseItem>(item_val) else {
                     debug!("failed to parse ResponseItem from output_item.done");
                     continue;
@@ -609,21 +643,67 @@ async fn process_sse<S>(
             | "response.in_progress"
             | "response.output_item.added"
             | "response.output_text.done" => {
-                if event.kind == "response.output_item.added"
-                    && let Some(item) = event.item.as_ref()
-                {
-                    // Detect web_search_call begin and forward a synthetic event upstream.
-                    if let Some(ty) = item.get("type").and_then(|v| v.as_str())
-                        && ty == "web_search_call"
-                    {
-                        let call_id = item
-                            .get("id")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let ev = ResponseEvent::WebSearchCallBegin { call_id, query: None };
-                        if tx_event.send(Ok(ev)).await.is_err() {
-                            return;
+                if let Some(item) = event.item.as_ref() {
+                    if event.kind == "response.output_item.added" {
+                        // Detect web_search_call begin and forward a synthetic event upstream.
+                        if let Some(ty) = item.get("type").and_then(|v| v.as_str())
+                            && ty == "web_search_call"
+                        {
+                            let call_id = item
+                                .get("id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let query_opt = item
+                                .get("input")
+                                .and_then(|i| i.get("query"))
+                                .and_then(|q| q.as_str())
+                                .map(|s| s.to_string());
+                            let ev = ResponseEvent::WebSearchCallBegin {
+                                call_id: call_id.clone(),
+                                query: query_opt.clone(),
+                            };
+                            if tx_event.send(Ok(ev)).await.is_err() {
+                                return;
+                            }
+                            if query_opt.is_some() {
+                                web_search_query_emitted.insert(call_id.clone());
+                                // Clear any buffer if we already have the final query.
+                                web_search_input_buffers.remove(&call_id);
+                            }
+                        }
+                    } else if event.kind == "response.custom_tool_call_input.delta" {
+                        // Accumulate deltas for the tool input – used by web_search_call to deliver query JSON.
+                        if let Some(call_id) = item.get("id").and_then(|v| v.as_str()) {
+                            let delta = event.delta.unwrap_or_default();
+                            web_search_input_buffers
+                                .entry(call_id.to_string())
+                                .and_modify(|buf| buf.push_str(&delta))
+                                .or_insert(delta);
+                        }
+                    } else if event.kind == "response.custom_tool_call_input.done" {
+                        if let Some(call_id) = item.get("id").and_then(|v| v.as_str()) {
+                            if let Some(buf) = web_search_input_buffers.remove(call_id) {
+                                // Try to parse accumulated input JSON and extract query.
+                                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&buf) {
+                                    if let Some(query) = val
+                                        .get("query")
+                                        .and_then(|q| q.as_str())
+                                        .map(|s| s.to_string())
+                                    {
+                                        if !web_search_query_emitted.contains(call_id) {
+                                            let ev = ResponseEvent::WebSearchCallBegin {
+                                                call_id: call_id.to_string(),
+                                                query: Some(query),
+                                            };
+                                            if tx_event.send(Ok(ev)).await.is_err() {
+                                                return;
+                                            }
+                                            web_search_query_emitted.insert(call_id.to_string());
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -990,5 +1070,99 @@ mod tests {
                 case.name
             );
         }
+    }
+
+    // ────────────────────────────
+    // Web search query logging tests
+    // ────────────────────────────
+
+    #[tokio::test]
+    async fn emits_web_search_begin_with_query_from_added_item() {
+        let added = json!({
+            "type": "response.output_item.added",
+            "item": {
+                "type": "web_search_call",
+                "id": "call_1",
+                "input": { "query": "rust ownership guide" }
+            }
+        });
+        let completed = json!({
+            "type": "response.completed",
+            "response": { "id": "r1", "usage": null, "output": [] }
+        });
+
+        let provider = ModelProviderInfo {
+            name: "test".to_string(),
+            base_url: Some("https://test.com".to_string()),
+            env_key: Some("TEST_API_KEY".to_string()),
+            env_key_instructions: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: Some(0),
+            stream_max_retries: Some(0),
+            stream_idle_timeout_ms: Some(1000),
+            requires_openai_auth: false,
+        };
+
+        let out = run_sse(vec![added, completed], provider).await;
+
+        // Expect one of the events to be WebSearchCallBegin with the concrete query.
+        assert!(out.iter().any(|ev| matches!(
+            ev,
+            ResponseEvent::WebSearchCallBegin { call_id, query: Some(q) }
+                if call_id == "call_1" && q == "rust ownership guide"
+        )));
+    }
+
+    #[tokio::test]
+    async fn emits_web_search_begin_with_query_from_input_deltas() {
+        let added = json!({
+            "type": "response.output_item.added",
+            "item": {
+                "type": "web_search_call",
+                "id": "call_2"
+            }
+        });
+        let delta = json!({
+            "type": "response.custom_tool_call_input.delta",
+            "item": { "id": "call_2" },
+            "delta": "{\"query\":\"unix signals\"}"
+        });
+        let done = json!({
+            "type": "response.custom_tool_call_input.done",
+            "item": { "id": "call_2" }
+        });
+        let item_done = json!({
+            "type": "response.output_item.done",
+            "item": { "type": "web_search_call", "id": "call_2" }
+        });
+        let completed = json!({
+            "type": "response.completed",
+            "response": { "id": "r2", "usage": null, "output": [] }
+        });
+
+        let provider = ModelProviderInfo {
+            name: "test".to_string(),
+            base_url: Some("https://test.com".to_string()),
+            env_key: Some("TEST_API_KEY".to_string()),
+            env_key_instructions: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: Some(0),
+            stream_max_retries: Some(0),
+            stream_idle_timeout_ms: Some(1000),
+            requires_openai_auth: false,
+        };
+
+        let out = run_sse(vec![added, delta, done, item_done, completed], provider).await;
+        assert!(out.iter().any(|ev| matches!(
+            ev,
+            ResponseEvent::WebSearchCallBegin { call_id, query: Some(q) }
+                if call_id == "call_2" && q == "unix signals"
+        )));
     }
 }

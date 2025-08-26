@@ -356,8 +356,14 @@ impl ChatWidget {
     }
 
     fn on_web_search_begin(&mut self, ev: WebSearchBeginEvent) {
+        // If we don't have the actual query, show a generic label instead of nothing.
+        let label = if ev.query.trim() == "Searching Web..." {
+            "Searched the web".to_string()
+        } else {
+            ev.query
+        };
         self.flush_answer_stream_with_separator();
-        self.add_to_history(history_cell::new_web_search_call(ev.query));
+        self.add_to_history(history_cell::new_web_search_call(label));
     }
 
     fn on_get_history_entry_response(
