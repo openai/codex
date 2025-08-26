@@ -1,5 +1,6 @@
 ---
 source: tui/src/chatwidget/tests.rs
+assertion_line: 728
 expression: terminal.backend()
 ---
 "? Codex wants to run echo hello world                                           "
@@ -9,5 +10,4 @@ expression: terminal.backend()
 "▌Allow command?                                                                 "
 "▌ Yes   Always   No   No, provide feedback                                      "
 "▌ Approve and run the command                                                   "
-"                                                                                "
 "                                                                                "
