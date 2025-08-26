@@ -69,20 +69,9 @@ static COMMAND_SELECT_OPTIONS: LazyLock<Vec<SelectOption>> = LazyLock::new(|| {
             decision: ReviewDecision::ApprovedForSession,
         },
         SelectOption {
-            label: Line::from(vec!["N".underlined(), "o".into()]),
-            description: "Do not run the command",
-            key: KeyCode::Char('n'),
-            decision: ReviewDecision::Denied,
-        },
-        SelectOption {
-            label: Line::from(vec![
-                "No, ".into(),
-                "provide ".into(),
-                "f".underlined(),
-                "eedback".into(),
-            ]),
+            label: Line::from(vec!["N".underlined(), "o, provide feedback".into()]),
             description: "Do not run the command; provide feedback",
-            key: KeyCode::Char('f'),
+            key: KeyCode::Char('n'),
             decision: ReviewDecision::Abort,
         },
     ]
@@ -97,20 +86,9 @@ static PATCH_SELECT_OPTIONS: LazyLock<Vec<SelectOption>> = LazyLock::new(|| {
             decision: ReviewDecision::Approved,
         },
         SelectOption {
-            label: Line::from(vec!["N".underlined(), "o".into()]),
-            description: "Do not apply the changes",
-            key: KeyCode::Char('n'),
-            decision: ReviewDecision::Denied,
-        },
-        SelectOption {
-            label: Line::from(vec![
-                "No, ".into(),
-                "provide ".into(),
-                "f".underlined(),
-                "eedback".into(),
-            ]),
+            label: Line::from(vec!["N".underlined(), "o, provide feedback".into()]),
             description: "Do not apply the changes; provide feedback",
-            key: KeyCode::Char('f'),
+            key: KeyCode::Char('n'),
             decision: ReviewDecision::Abort,
         },
     ]
@@ -373,7 +351,11 @@ impl UserApprovalWidget {
     }
 
     pub(crate) fn desired_height(&self, width: u16) -> u16 {
-        self.get_confirmation_prompt_height(width) + self.select_options.len() as u16
+        // Reserve space for:
+        // - 1 title line ("Allow command?" or "Apply changes?")
+        // - 1 buttons line (options rendered horizontally on a single row)
+        // - 1 description line (context for the currently selected option)
+        self.get_confirmation_prompt_height(width) + 3
     }
 }
 
