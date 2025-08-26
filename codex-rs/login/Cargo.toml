@@ -2,6 +2,7 @@
 edition = "2024"
 name = "codex-login"
 version = { workspace = true }
+build = "build.rs"
 
 [lints]
 workspace = true

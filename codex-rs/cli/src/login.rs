@@ -7,6 +7,8 @@ use codex_login::CodexAuth;
 use codex_login::OPENAI_API_KEY_ENV_VAR;
 use codex_login::ServerOptions;
 use codex_login::login_with_api_key;
+use codex_login::login_with_native_browser;
+use codex_login::LoginError;
 use codex_login::logout;
 use codex_login::run_login_server;
 use std::env;
@@ -27,6 +29,11 @@ pub async fn login_with_chatgpt(codex_home: PathBuf) -> std::io::Result<()> {
 pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides);
 
+    if !maybe_confirm_relogin(&config).await {
+        eprintln!("Keeping existing login; aborted starting a new login.");
+        std::process::exit(0);
+    }
+
     match login_with_chatgpt(config.codex_home).await {
         Ok(_) => {
             eprintln!("Successfully logged in");
@@ -39,11 +46,63 @@ pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) ->
     }
 }
 
+pub async fn run_login_with_browser(cli_config_overrides: CliConfigOverrides) -> ! {
+    let config = load_config_or_exit(cli_config_overrides);
+
+    if !maybe_confirm_relogin(&config).await {
+        eprintln!("Keeping existing login; aborted starting a new login.");
+        std::process::exit(0);
+    }
+
+    match login_with_native_browser(&config.codex_home).await {
+        Ok(_) => {
+            // Load details to show a friendly summary
+            match CodexAuth::from_codex_home(&config.codex_home, config.preferred_auth_method) {
+                Ok(Some(auth)) => {
+                    let mut summary = String::from("✅ Successfully logged in using native browser");
+                    if let Ok(tokens) = auth.get_token_data().await {
+                        if let Some(email) = tokens.id_token.email.as_deref() {
+                            summary.push_str(&format!(" – {}", email));
+                        }
+                        if let Some(plan) = tokens.id_token.get_chatgpt_plan_type() {
+                            summary.push_str(&format!(" (plan: {})", plan));
+                        }
+                    }
+                    eprintln!("{}", summary);
+                }
+                _ => {
+                    eprintln!("✅ Successfully logged in using native browser");
+                }
+            }
+            std::process::exit(0);
+        }
+        Err(e) => match e {
+            LoginError::Aborted => {
+                eprintln!("Login aborted (native browser window closed)");
+                std::process::exit(2);
+            }
+            LoginError::UnsupportedOs => {
+                eprintln!("Native browser login is only supported on macOS at this time");
+                std::process::exit(1);
+            }
+            other => {
+                eprintln!("Error logging in with native browser: {other}");
+                std::process::exit(1);
+            }
+        }
+    }
+}
+
 pub async fn run_login_with_api_key(
     cli_config_overrides: CliConfigOverrides,
     api_key: String,
 ) -> ! {
     let config = load_config_or_exit(cli_config_overrides);
+
+    if !maybe_confirm_relogin(&config).await {
+        eprintln!("Keeping existing login; aborted starting a new login.");
+        std::process::exit(0);
+    }
 
     match login_with_api_key(&config.codex_home, &api_key) {
         Ok(_) => {
@@ -142,6 +201,45 @@ fn safe_format_key(key: &str) -> String {
     let suffix = &key[key.len() - 5..];
     format!("{prefix}***{suffix}")
 }
+
+async fn maybe_confirm_relogin(config: &Config) -> bool {
+    // If not logged in, no need to confirm.
+    let Some(existing) = CodexAuth::from_codex_home(&config.codex_home, config.preferred_auth_method)
+        .ok()
+        .flatten()
+    else {
+        return true;
+    };
+
+    let mode_label = match existing.mode {
+        AuthMode::ApiKey => "API key",
+        AuthMode::ChatGPT => "ChatGPT",
+    };
+    // Compose a prompt for the TUI confirm modal (or fallback to stdin when not a TTY).
+    let mut prompt = format!("You are already logged in using: {mode_label}\n");
+    if matches!(existing.mode, AuthMode::ChatGPT) {
+        if let Ok(tokens) = existing.get_token_data().await {
+            if let Some(email) = tokens.id_token.email.as_deref() {
+                prompt.push_str(&format!("  • Account: {}\n", email));
+            }
+            if let Some(plan) = tokens.id_token.get_chatgpt_plan_type() {
+                prompt.push_str(&format!("  • Plan: {}\n", plan));
+            }
+        }
+    } else if existing.mode == AuthMode::ApiKey {
+        if let Ok(token) = existing.get_token().await {
+            prompt.push_str(&format!("  • API key: {}\n", safe_format_key(&token)));
+        }
+    }
+    eprintln!("{}", prompt);
+    eprint!("Proceed to start a new login? [y/N]: ");
+    use std::io;
+    let mut buf = String::new();
+    let _ = io::stdin().read_line(&mut buf);
+    let answer = buf.trim().to_ascii_lowercase();
+    matches!(answer.as_str(), "y" | "yes")
+}
+
 
 #[cfg(test)]
 mod tests {

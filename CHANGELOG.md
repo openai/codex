@@ -2,6 +2,22 @@
 
 You can install any of these versions: `npm install -g codex@version`
 
+## Unreleased
+
+### 🚀 Features
+
+- feat(login): macOS native browser login via `codex login --browser` using a tiny WKWebView helper; intercepts localhost callback without a local server; macOS-only with build-time embedded helper and runtime on-demand fallback. Docs in `docs/macos-native-browser-login.md`.
+
+### 🪄 UX
+
+- macOS helper window has proper menus (About/Quit, Cut/Copy/Paste/Select All), copy/paste enabled, clear title.
+- Closing the helper window cleanly aborts login (no reopen); CLI prints a neutral “Login aborted…” message.
+- Success message shows a ✅ and includes email/plan when available.
+
+### 🧰 Dev
+
+- Introduced typed `LoginError` for native browser flow (no string matching), enabling clear CLI behavior on abort vs error.
+
 ## `0.1.2505172129`
 
 ### 🪲 Bug Fixes

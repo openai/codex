@@ -104,6 +104,16 @@ Each archive contains a single entry with the platform baked into the name (e.g.
 
 Run `codex` and select **Sign in with ChatGPT**. You'll need a Plus, Pro, or Team ChatGPT account, and will get access to our latest models, including `gpt-5`, at no extra cost to your plan. (Enterprise is coming soon.)
 
+On macOS, you can alternatively complete the login using a native browser helper (no localhost server) with:
+
+```bash
+codex login --browser
+```
+
+This opens a small WKWebView window to complete authentication and intercepts the final redirect locally, avoiding browser blocks on `http://localhost` callbacks. Requires macOS and Xcode Command Line Tools (`swiftc`).
+
+See docs/macos-native-browser-login.md for details, requirements, and troubleshooting.
+
 > Important: If you've used the Codex CLI before, follow these steps to migrate from usage-based billing with your API key:
 >
 > 1. Update the CLI and ensure `codex --version` is `0.20.0` or later
@@ -424,11 +434,12 @@ Help us improve by filing issues or submitting PRs (see the section below for ho
 
 ## CLI reference
 
-| Command            | Purpose                            | Example                         |
-| ------------------ | ---------------------------------- | ------------------------------- |
-| `codex`            | Interactive TUI                    | `codex`                         |
-| `codex "..."`      | Initial prompt for interactive TUI | `codex "fix lint errors"`       |
-| `codex exec "..."` | Non-interactive "automation mode"  | `codex exec "explain utils.ts"` |
+| Command                 | Purpose                             | Example                         |
+| ----------------------- | ----------------------------------- | ------------------------------- |
+| `codex`                 | Interactive TUI                     | `codex`                         |
+| `codex "..."`           | Initial prompt for interactive TUI  | `codex "fix lint errors"`       |
+| `codex exec "..."`      | Non-interactive "automation mode"   | `codex exec "explain utils.ts"` |
+| `codex login --browser` | macOS native browser login (WKWebView) | `codex login --browser`         |
 
 Key flags: `--model/-m`, `--ask-for-approval/-a`.
 

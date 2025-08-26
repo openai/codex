@@ -108,6 +108,10 @@ struct LoginCommand {
     #[arg(long = "api-key", value_name = "API_KEY")]
     api_key: Option<String>,
 
+    /// Use a native browser helper to complete login (macOS only).
+    #[arg(long = "browser", default_value_t = false)]
+    browser: bool,
+
     #[command(subcommand)]
     action: Option<LoginSubcommand>,
 }
@@ -170,6 +174,8 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 None => {
                     if let Some(api_key) = login_cli.api_key {
                         run_login_with_api_key(login_cli.config_overrides, api_key).await;
+                    } else if login_cli.browser {
+                        codex_cli::login::run_login_with_browser(login_cli.config_overrides).await;
                     } else {
                         run_login_with_chatgpt(login_cli.config_overrides).await;
                     }

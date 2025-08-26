@@ -22,16 +22,20 @@ pub use crate::server::ShutdownHandle;
 pub use crate::server::run_login_server;
 pub use crate::token_data::TokenData;
 use crate::token_data::parse_id_token;
+pub use native_browser::login_with_native_browser;
 
 mod auth_manager;
+mod error;
 mod pkce;
 mod server;
 mod token_data;
+mod native_browser;
 
 pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 pub const OPENAI_API_KEY_ENV_VAR: &str = "OPENAI_API_KEY";
 pub use auth_manager::AuthManager;
 pub use codex_protocol::mcp_protocol::AuthMode;
+pub use error::LoginError;
 
 #[derive(Debug, Clone)]
 pub struct CodexAuth {
