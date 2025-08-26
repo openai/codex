@@ -2055,4 +2055,75 @@ mod tests {
         let imgs = composer.take_recent_submission_images();
         assert_eq!(imgs, vec![tmp_path.clone()]);
     }
+
+    #[test]
+    fn burst_paste_fast_small_buffers_and_flushes_on_stop() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer =
+            ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
+
+        let count = 32usize;
+        for _ in 0..count {
+            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
+            assert!(composer.is_in_paste_burst(), "expected active paste burst during fast typing");
+            assert!(composer.textarea.text().is_empty(), "text should not appear during burst");
+        }
+
+        assert!(composer.textarea.text().is_empty(), "text should remain empty until flush");
+        std::thread::sleep(ChatComposer::recommended_paste_flush_delay());
+        let flushed = composer.flush_paste_burst_if_due();
+        assert!(flushed, "expected buffered text to flush after stop");
+        assert_eq!(composer.textarea.text(), "a".repeat(count));
+        assert!(composer.pending_pastes.is_empty(), "no placeholder for small burst");
+    }
+
+    #[test]
+    fn burst_paste_fast_large_inserts_placeholder_on_flush() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer =
+            ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
+
+        let count = LARGE_PASTE_CHAR_THRESHOLD + 1; // > threshold to trigger placeholder
+        for _ in 0..count {
+            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        }
+
+        // Nothing should appear until we stop and flush
+        assert!(composer.textarea.text().is_empty());
+        std::thread::sleep(ChatComposer::recommended_paste_flush_delay());
+        let flushed = composer.flush_paste_burst_if_due();
+        assert!(flushed, "expected flush after stopping fast input");
+
+        let expected_placeholder = format!("[Pasted Content {} chars]", count);
+        assert_eq!(composer.textarea.text(), expected_placeholder);
+        assert_eq!(composer.pending_pastes.len(), 1);
+        assert_eq!(composer.pending_pastes[0].0, expected_placeholder);
+        assert_eq!(composer.pending_pastes[0].1.len(), count);
+        assert!(composer.pending_pastes[0].1.chars().all(|c| c == 'x'));
+    }
+
+    #[test]
+    fn humanlike_typing_1000_chars_appears_live_no_placeholder() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer =
+            ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
+
+        let count = LARGE_PASTE_CHAR_THRESHOLD; // 1000 in current config
+        let chars: Vec<char> = vec!['z'; count];
+        type_chars_humanlike(&mut composer, &chars);
+
+        assert_eq!(composer.textarea.text(), "z".repeat(count));
+        assert!(composer.pending_pastes.is_empty());
+    }
 }
