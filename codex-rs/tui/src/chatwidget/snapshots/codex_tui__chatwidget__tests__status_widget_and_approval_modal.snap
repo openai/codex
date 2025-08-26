@@ -8,6 +8,6 @@ expression: terminal.backend()
 "Codex wants to run a command                                                    "
 "                                                                                "
 "▌Allow command?                                                                 "
-"▌ Yes   Always   No   No, provide feedback                                      "
+"▌ Yes   Always   No, provide feedback                                           "
 "▌ Approve and run the command                                                   "
 "                                                                                "

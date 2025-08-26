@@ -530,7 +530,7 @@ mod tests {
         // Push an approval modal (e.g., command approval) which should hide the status view.
         pane.push_approval_request(exec_request());
 
-        // Simulate pressing 'n' (deny) on the modal.
+        // Simulate pressing 'n' (No) on the modal.
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
