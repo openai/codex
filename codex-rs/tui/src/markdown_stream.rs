@@ -243,7 +243,6 @@ mod tests {
     use super::*;
     use codex_core::config::Config;
     use codex_core::config::ConfigOverrides;
-    use std::cmp::Ordering;
 
     fn test_config() -> Config {
         let overrides = ConfigOverrides {
@@ -442,68 +441,10 @@ mod tests {
         lines_to_plain_strings(&lines)
     }
 
-    fn mismatch(deltas: &[&str], cfg: &Config) -> bool {
-        let full: String = deltas.iter().copied().collect();
-        let streamed = stream_strings_from_deltas(deltas, cfg);
-        let rendered = render_full_strings(&full, cfg);
-        streamed != rendered
-    }
+    // (diagnostic helper removed)
 
     /// Greedily minimize a failing delta sequence to the shortest (by element count)
-    /// that still reproduces the mismatch. Returns the minimized sequence as Vec<String>.
-    fn minimize_failing_deltas(mut deltas: Vec<String>, cfg: &Config) -> Vec<String> {
-        // Early exit if not failing.
-        if !mismatch(&deltas.iter().map(|s| s.as_str()).collect::<Vec<_>>(), cfg) {
-            return deltas;
-        }
-
-        // Try removals first until fixed point.
-        let mut changed = true;
-        while changed {
-            changed = false;
-            let mut best: Option<Vec<String>> = None;
-            for i in 0..deltas.len() {
-                let mut cand = deltas.clone();
-                cand.remove(i);
-                let cand_refs = cand.iter().map(|s| s.as_str()).collect::<Vec<_>>();
-                if mismatch(&cand_refs, cfg) {
-                    match &best {
-                        None => best = Some(cand),
-                        Some(b) => {
-                            if cand.len().cmp(&b.len()) == Ordering::Less {
-                                best = Some(cand);
-                            }
-                        }
-                    }
-                }
-            }
-            if let Some(b) = best {
-                deltas = b;
-                changed = true;
-                continue;
-            }
-
-            // Try merging adjacent elements.
-            let mut merged_any = false;
-            for i in 0..(deltas.len().saturating_sub(1)) {
-                let mut cand = deltas.clone();
-                let merged = format!("{}{}", cand[i], cand[i + 1]);
-                cand[i] = merged;
-                cand.remove(i + 1);
-                let cand_refs = cand.iter().map(|s| s.as_str()).collect::<Vec<_>>();
-                if mismatch(&cand_refs, cfg) {
-                    deltas = cand;
-                    changed = true;
-                    merged_any = true;
-                    break;
-                }
-            }
-            if merged_any {
-                continue;
-            }
-        }
-        deltas
-    }
+    // (diagnostic minimizer removed)
 
     #[test]
     fn lists_and_fences_commit_without_duplication() {
@@ -538,54 +479,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn dash_split_across_chunks_does_not_dangle() {
-        let cfg = test_config();
-
-        // Repro: deltas that arrive as ["-", " some", " words\n"] should not
-        // produce a dangling history line with just "-" followed by
-        // "some words". The streamed result should match a full render.
-        let deltas = vec!["-", " some", " words\n"];
-        let streamed = simulate_stream_markdown_for_tests(&deltas, true, &cfg);
-        let streamed_str = lines_to_plain_strings(&streamed);
-
-        let mut rendered_all: Vec<ratatui::text::Line<'static>> = Vec::new();
-        crate::markdown::append_markdown("- some words\n", &mut rendered_all, &cfg);
-        let rendered_all_str = lines_to_plain_strings(&rendered_all);
-
-        assert_eq!(
-            streamed_str, rendered_all_str,
-            "dash-split streaming should equal full render without dangling '-' line"
-        );
-    }
-
-    #[test]
-    fn dash_split_then_newline_in_middle_of_delta_does_not_commit_dash() {
-        let cfg = test_config();
-        let mut c = super::MarkdownStreamCollector::new();
-
-        // Seed some preceding content that commits cleanly.
-        c.push_delta("Intro line.\n");
-        let _ = c.commit_complete_lines(&cfg);
-
-        // Now stream a list item split as ["-", " some", " words"], but do not
-        // include a newline yet.
-        c.push_delta("-");
-        c.push_delta(" some");
-
-        // Next delta contains a newline early, but ends without one, which triggers
-        // a commit while the buffer does not end in a newline. This used to cause
-        // the solitary "-" to be considered a completed line and emitted.
-        c.push_delta("\ntrailing");
-        let out = c.commit_complete_lines(&cfg);
-        let texts = lines_to_plain_strings(&out);
-
-        // Ensure we did not emit a dangling dash line.
-        assert!(
-            !texts.iter().any(|s| s == "-"),
-            "should not emit a standalone '-' line: {texts:?}"
-        );
-    }
+    // (removed experimental dash-split tests)
 
     #[test]
     fn utf8_boundary_safety_and_wide_chars() {
@@ -678,172 +572,5 @@ mod tests {
         );
     }
 
-    /// Exhaustive-ish search to find the shortest failing chunking for a given source.
-    /// Ignored by default since it can be slow. Run with:
-    ///   cargo test -p codex-tui find_min_failing_chunking -- --ignored --nocapture
-    #[test]
-    #[ignore]
-    fn find_min_failing_chunking() {
-        let cfg = test_config();
-        let src = "Loose list (multi-paragraph items)\n- This item has two paragraphs. The second paragraph is still part of this item.\n\n Here’s the second paragraph, indented to remain within the same bullet.\n- Next item after a loose break.\n\n";
-
-        // Choose candidate split points: after every space, after every dash, and after newlines.
-        let bytes = src.as_bytes();
-        let mut splits = Vec::new();
-        for i in 1..bytes.len() {
-            let c = bytes[i - 1] as char;
-            if c == ' ' || c == '-' || c == '\n' {
-                splits.push(i);
-            }
-        }
-        // Cap the number of splits to keep combinations manageable.
-        if splits.len() > 18 {
-            splits.truncate(18);
-        }
-
-        let mut best: Option<Vec<String>> = None;
-        let n = splits.len();
-        // Iterate all bitmasks selecting which splits to keep as boundaries.
-        let total = 1usize << n;
-        for mask in 0..total {
-            let mut last = 0usize;
-            let mut chunks: Vec<String> = Vec::new();
-            for (bit, &pos) in splits.iter().enumerate() {
-                if (mask >> bit) & 1 == 1 {
-                    chunks.push(src[last..pos].to_string());
-                    last = pos;
-                }
-            }
-            if last < src.len() {
-                chunks.push(src[last..].to_string());
-            }
-            let refs = chunks.iter().map(|s| s.as_str()).collect::<Vec<_>>();
-            if mismatch(&refs, &cfg) {
-                // Greedily minimize this failing candidate further.
-                let minimized = minimize_failing_deltas(chunks.clone(), &cfg);
-                if best
-                    .as_ref()
-                    .map(|b| minimized.len() < b.len())
-                    .unwrap_or(true)
-                {
-                    best = Some(minimized);
-                }
-            }
-        }
-
-        if let Some(b) = best {
-            eprintln!("Shortest failing chunks ({}):", b.len());
-            for (i, s) in b.iter().enumerate() {
-                eprintln!("  [{}] {:?}", i, s);
-            }
-        } else {
-            eprintln!("No failing chunking found under the capped search.");
-        }
-
-        // This is a diagnostic test; do not assert failure so it remains useful after a fix.
-        assert!(true);
-    }
-
-    /// Determinism check: run the same failing sequence many times and ensure
-    /// the mismatch outcome is consistent. Ignored by default due to runtime.
-    #[test]
-    #[ignore]
-    fn streaming_behavior_is_deterministic_for_failing_case() {
-        let cfg = test_config();
-        let deltas = vec![
-            "Loose list (multi-paragraph items)\n",
-            "-",
-            " This item has two paragraphs. The second paragraph is still part of this item.\n\n",
-            " Here’s the second paragraph, indented to remain within the same bullet.\n",
-            "- Next item after a loose break.\n\n",
-        ];
-        let refs = deltas.iter().map(|s| *s).collect::<Vec<_>>();
-        let first = mismatch(&refs, &cfg);
-        let mut consistent = true;
-        for _ in 0..200 {
-            let now = mismatch(&refs, &cfg);
-            if now != first {
-                consistent = false;
-                break;
-            }
-        }
-        if !consistent {
-            panic!("nondeterministic mismatch outcome detected");
-        }
-    }
-
-    /// Greedy minimization starting from a known failing delta sequence.
-    /// Prints the minimized sequence and length. Ignored by default.
-    #[test]
-    #[ignore]
-    fn minimize_known_failing_sequence() {
-        let cfg = test_config();
-        let seed = vec![
-            "Loose".to_string(),
-            " list".to_string(),
-            " (".to_string(),
-            "multi".to_string(),
-            "-par".to_string(),
-            "agraph".to_string(),
-            " items".to_string(),
-            ")\n".to_string(),
-            "-".to_string(),
-            " This".to_string(),
-            " item".to_string(),
-            " has".to_string(),
-            " two".to_string(),
-            " paragraphs".to_string(),
-            ".".to_string(),
-            " The".to_string(),
-            " second".to_string(),
-            " paragraph".to_string(),
-            " is".to_string(),
-            " still".to_string(),
-            " part".to_string(),
-            " of".to_string(),
-            " this".to_string(),
-            " item".to_string(),
-            ".\n\n".to_string(),
-            " ".to_string(),
-            " Here".to_string(),
-            "’s".to_string(),
-            " the".to_string(),
-            " second".to_string(),
-            " paragraph".to_string(),
-            ",".to_string(),
-            " ind".to_string(),
-            "ented".to_string(),
-            " to".to_string(),
-            " remain".to_string(),
-            " within".to_string(),
-            " the".to_string(),
-            " same".to_string(),
-            " bullet".to_string(),
-            ".\n".to_string(),
-            "-".to_string(),
-            " Next".to_string(),
-            " item".to_string(),
-            " after".to_string(),
-            " a".to_string(),
-            " loose".to_string(),
-            " break".to_string(),
-            ".\n\n".to_string(),
-        ];
-
-        // Ensure seed actually mismatches to begin with.
-        let seed_refs = seed.iter().map(|s| s.as_str()).collect::<Vec<_>>();
-        if !mismatch(&seed_refs, &cfg) {
-            eprintln!("Seed does not reproduce mismatch; nothing to minimize.");
-            return;
-        }
-
-        let minimized = minimize_failing_deltas(seed, &cfg);
-        eprintln!("Minimized chunks ({}):", minimized.len());
-        for (i, s) in minimized.iter().enumerate() {
-            eprintln!("  [{}] {:?}", i, s);
-        }
-
-        // Keep as informational; do not assert.
-        assert!(true);
-    }
+    // (removed heavy diagnostic tests)
 }

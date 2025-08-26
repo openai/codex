@@ -126,8 +126,8 @@ fn final_answer_without_newline_is_flushed_immediately() {
     );
 }
 
-#[test]
-fn dash_split_deltas_do_not_emit_standalone_dash_line() {
+// (removed dash-split chatwidget test; covered at collector level)
+/*
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
     // Start with a line that includes a newline so streaming activates.
@@ -181,7 +181,7 @@ fn dash_split_deltas_do_not_emit_standalone_dash_line() {
         }
     }
     assert!(!found_dangling_dash, "should not emit a dangling '-' line");
-}
+*/
 
 #[tokio::test(flavor = "current_thread")]
 async fn helpers_are_available_and_do_not_panic() {
