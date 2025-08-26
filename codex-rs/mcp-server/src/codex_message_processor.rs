@@ -15,6 +15,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ReviewDecision;
 use codex_login::AuthManager;
+use codex_login::CodexAuth;
 use codex_protocol::mcp_protocol::AuthMode;
 use codex_protocol::mcp_protocol::GitDiffToRemoteResponse;
 use mcp_types::JSONRPCErrorError;
@@ -301,9 +302,15 @@ impl CodexMessageProcessor {
             )
             .await;
 
-        // Send auth status change notification reflecting the current auth mode
-        // after logout (which may fall back to API key via env var).
-        let current_auth_method = self.auth_manager.auth().map(|auth| auth.mode);
+        // Send auth status change notification reflecting persisted auth only
+        // (ignore ambient env keys unless explicitly saved).
+        let current_auth_method = CodexAuth::from_codex_home_persisted_only(
+            &self.config.codex_home,
+            self.auth_manager.preferred_auth_method(),
+        )
+        .ok()
+        .flatten()
+        .map(|auth| auth.mode);
         let payload = AuthStatusChangeNotification {
             auth_method: current_auth_method,
         };
@@ -325,30 +332,37 @@ impl CodexMessageProcessor {
             tracing::warn!("failed to refresh token while getting auth status: {err}");
         }
 
-        let response = match self.auth_manager.auth() {
-            Some(auth) => {
-                let (reported_auth_method, token_opt) = match auth.get_token().await {
-                    Ok(token) if !token.is_empty() => {
-                        let tok = if include_token { Some(token) } else { None };
-                        (Some(auth.mode), tok)
-                    }
-                    Ok(_) => (None, None),
-                    Err(err) => {
-                        tracing::warn!("failed to get token for auth status: {err}");
-                        (None, None)
-                    }
-                };
-                codex_protocol::mcp_protocol::GetAuthStatusResponse {
-                    auth_method: reported_auth_method,
-                    preferred_auth_method,
-                    auth_token: token_opt,
+        // Report persisted-only auth method; only include a token when it is persisted.
+        let persisted_auth = CodexAuth::from_codex_home_persisted_only(
+            &self.config.codex_home,
+            preferred_auth_method,
+        )
+        .ok()
+        .flatten();
+        let (reported_auth_method, token_opt) = if let Some(persisted) = persisted_auth {
+            if include_token {
+                match self.auth_manager.auth() {
+                    Some(manager_auth) => match manager_auth.get_token().await {
+                        Ok(token) if !token.is_empty() => (Some(persisted.mode), Some(token)),
+                        Ok(_) => (Some(persisted.mode), None),
+                        Err(err) => {
+                            tracing::warn!("failed to get token for auth status: {err}");
+                            (Some(persisted.mode), None)
+                        }
+                    },
+                    None => (Some(persisted.mode), None),
                 }
+            } else {
+                (Some(persisted.mode), None)
             }
-            None => codex_protocol::mcp_protocol::GetAuthStatusResponse {
-                auth_method: None,
-                preferred_auth_method,
-                auth_token: None,
-            },
+        } else {
+            (None, None)
+        };
+
+        let response = codex_protocol::mcp_protocol::GetAuthStatusResponse {
+            auth_method: reported_auth_method,
+            preferred_auth_method,
+            auth_token: token_opt,
         };
 
         self.outgoing.send_response(request_id, response).await;

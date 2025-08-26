@@ -26,10 +26,10 @@ pub use native_browser::login_with_native_browser;
 
 mod auth_manager;
 mod error;
+mod native_browser;
 mod pkce;
 mod server;
 mod token_data;
-mod native_browser;
 
 pub const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 pub const OPENAI_API_KEY_ENV_VAR: &str = "OPENAI_API_KEY";
@@ -102,6 +102,15 @@ impl CodexAuth {
         preferred_auth_method: AuthMode,
     ) -> std::io::Result<Option<CodexAuth>> {
         load_auth(codex_home, true, preferred_auth_method)
+    }
+
+    /// Loads auth from persisted auth.json only, ignoring OPENAI_API_KEY.
+    /// Useful for components that must reflect explicit user opt-in only.
+    pub fn from_codex_home_persisted_only(
+        codex_home: &Path,
+        preferred_auth_method: AuthMode,
+    ) -> std::io::Result<Option<CodexAuth>> {
+        load_auth(codex_home, false, preferred_auth_method)
     }
 
     pub async fn get_token_data(&self) -> Result<TokenData, std::io::Error> {

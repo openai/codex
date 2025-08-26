@@ -203,11 +203,17 @@ fn safe_format_key(key: &str) -> String {
 }
 
 async fn maybe_confirm_relogin(config: &Config) -> bool {
-    // If not logged in, no need to confirm.
+    // Only treat persisted credentials (auth.json) as an "existing login" for confirmation.
+    // If users only have OPENAI_API_KEY in their environment, do not block with a confirm.
+    let auth_file = codex_login::get_auth_file(&config.codex_home);
+    if !auth_file.exists() {
+        return true;
+    }
+
+    // If auth.json exists, load and present details for confirmation.
     let Some(existing) = CodexAuth::from_codex_home(&config.codex_home, config.preferred_auth_method)
         .ok()
-        .flatten()
-    else {
+        .flatten() else {
         return true;
     };
 
