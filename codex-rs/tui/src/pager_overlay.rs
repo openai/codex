@@ -284,7 +284,9 @@ impl TranscriptOverlay {
                 line.spans = spans;
             }
         }
-        PagerView::new(lines, self.view.title.clone(), self.view.scroll_offset).render(top, buf);
+        let mut pv = PagerView::new(lines, self.view.title.clone(), self.view.scroll_offset);
+        pv.render(top, buf);
+        self.view.scroll_offset = pv.scroll_offset;
         self.render_hints(bottom, buf);
     }
 }
