@@ -80,18 +80,12 @@ fn render_key_hints(area: Rect, buf: &mut Buffer, extra_pairs: &[(&str, &str)]) 
 struct PagerView {
     lines: Vec<Line<'static>>,
     scroll_offset: usize,
-    is_done: bool,
     title: String,
 }
 
 impl PagerView {
     fn new(lines: Vec<Line<'static>>, title: String, scroll_offset: usize) -> Self {
-        Self {
-            lines,
-            scroll_offset,
-            is_done: false,
-            title,
-        }
+        Self { lines, scroll_offset, title }
     }
 
     fn render(&mut self, area: Rect, buf: &mut Buffer) {
@@ -228,6 +222,7 @@ impl PagerView {
 pub(crate) struct TranscriptOverlay {
     view: PagerView,
     highlight_range: Option<(usize, usize)>,
+    is_done: bool,
 }
 
 impl TranscriptOverlay {
@@ -239,6 +234,7 @@ impl TranscriptOverlay {
                 usize::MAX,
             ),
             highlight_range: None,
+            is_done: false,
         }
     }
 
@@ -309,7 +305,7 @@ impl TranscriptOverlay {
                     kind: KeyEventKind::Press,
                     ..
                 } => {
-                    self.view.is_done = true;
+                    self.is_done = true;
                     Ok(())
                 }
                 other => self.view.handle_key_event(tui, other),
@@ -323,9 +319,7 @@ impl TranscriptOverlay {
             _ => Ok(()),
         }
     }
-    pub(crate) fn is_done(&self) -> bool {
-        self.view.is_done
-    }
+    pub(crate) fn is_done(&self) -> bool { self.is_done }
     pub(crate) fn set_scroll_offset(&mut self, offset: usize) {
         self.view.scroll_offset = offset;
     }
@@ -333,13 +327,12 @@ impl TranscriptOverlay {
 
 pub(crate) struct StaticOverlay {
     view: PagerView,
+    is_done: bool,
 }
 
 impl StaticOverlay {
     pub(crate) fn with_title(lines: Vec<Line<'static>>, title: String) -> Self {
-        Self {
-            view: PagerView::new(lines, title, 0),
-        }
+        Self { view: PagerView::new(lines, title, 0), is_done: false }
     }
 
     fn render_hints(&self, area: Rect, buf: &mut Buffer) {
@@ -367,7 +360,7 @@ impl StaticOverlay {
                     kind: KeyEventKind::Press,
                     ..
                 } => {
-                    self.view.is_done = true;
+                    self.is_done = true;
                     Ok(())
                 }
                 other => self.view.handle_key_event(tui, other),
@@ -381,9 +374,7 @@ impl StaticOverlay {
             _ => Ok(()),
         }
     }
-    pub(crate) fn is_done(&self) -> bool {
-        self.view.is_done
-    }
+    pub(crate) fn is_done(&self) -> bool { self.is_done }
 }
 
 #[cfg(test)]
