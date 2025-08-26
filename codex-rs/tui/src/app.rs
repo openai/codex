@@ -3,7 +3,7 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::chatwidget::ChatWidget;
 use crate::file_search::FileSearchManager;
-use crate::pager_overlay::PagerOverlay;
+use crate::pager_overlay::Overlay;
 use crate::tui;
 use crate::tui::TuiEvent;
 use codex_ansi_escape::ansi_escape_line;
@@ -41,7 +41,7 @@ pub(crate) struct App {
     pub(crate) transcript_lines: Vec<Line<'static>>,
 
     // Pager overlay state (Transcript or Static like Diff)
-    pub(crate) pager_overlay: Option<PagerOverlay>,
+    pub(crate) overlay: Option<Overlay>,
     pub(crate) deferred_history_lines: Vec<Line<'static>>,
 
     pub(crate) enhanced_keys_supported: bool,
@@ -89,7 +89,7 @@ impl App {
             file_search,
             enhanced_keys_supported,
             transcript_lines: Vec::new(),
-            pager_overlay: None,
+            overlay: None,
             deferred_history_lines: Vec::new(),
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
@@ -117,7 +117,7 @@ impl App {
         tui: &mut tui::Tui,
         event: TuiEvent,
     ) -> Result<bool> {
-        if self.pager_overlay.is_some() {
+        if self.overlay.is_some() {
             let _ = self.handle_backtrack_overlay_event(tui, event).await?;
         } else {
             match event {
@@ -172,12 +172,12 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::InsertHistoryLines(lines) => {
-                if let Some(PagerOverlay::Transcript(t)) = &mut self.pager_overlay {
+                if let Some(Overlay::Transcript(t)) = &mut self.overlay {
                     t.insert_lines(lines.clone());
                     tui.frame_requester().schedule_frame();
                 }
                 self.transcript_lines.extend(lines.clone());
-                if self.pager_overlay.is_some() {
+                if self.overlay.is_some() {
                     self.deferred_history_lines.extend(lines);
                 } else {
                     tui.insert_history_lines(lines);
@@ -185,14 +185,14 @@ impl App {
             }
             AppEvent::InsertHistoryCell(cell) => {
                 let cell_transcript = cell.transcript_lines();
-                if let Some(PagerOverlay::Transcript(t)) = &mut self.pager_overlay {
+                if let Some(Overlay::Transcript(t)) = &mut self.overlay {
                     t.insert_lines(cell_transcript.clone());
                     tui.frame_requester().schedule_frame();
                 }
                 self.transcript_lines.extend(cell_transcript.clone());
                 let display = cell.display_lines();
                 if !display.is_empty() {
-                    if self.pager_overlay.is_some() {
+                    if self.overlay.is_some() {
                         self.deferred_history_lines.extend(display);
                     } else {
                         tui.insert_history_lines(display);
@@ -241,7 +241,7 @@ impl App {
                 } else {
                     text.lines().map(ansi_escape_line).collect()
                 };
-                self.pager_overlay = Some(PagerOverlay::new_static_with_title(
+                self.overlay = Some(Overlay::new_static_with_title(
                     pager_lines,
                     "D I F F".to_string(),
                 ));
@@ -301,8 +301,7 @@ impl App {
             } => {
                 // Enter alternate screen and set viewport to full size.
                 let _ = tui.enter_alt_screen();
-                self.pager_overlay =
-                    Some(PagerOverlay::new_transcript(self.transcript_lines.clone()));
+                self.overlay = Some(Overlay::new_transcript(self.transcript_lines.clone()));
                 tui.frame_requester().schedule_frame();
             }
             // Esc primes/advances backtracking when composer is empty.

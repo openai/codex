@@ -17,12 +17,12 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 
-pub(crate) enum PagerOverlay {
+pub(crate) enum Overlay {
     Transcript(TranscriptOverlay),
     Static(StaticOverlay),
 }
 
-impl PagerOverlay {
+impl Overlay {
     pub(crate) fn new_transcript(lines: Vec<Line<'static>>) -> Self {
         Self::Transcript(TranscriptOverlay::new(lines))
     }
@@ -33,21 +33,25 @@ impl PagerOverlay {
 
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         match self {
-            PagerOverlay::Transcript(o) => o.handle_event(tui, event),
-            PagerOverlay::Static(o) => o.handle_event(tui, event),
+            Overlay::Transcript(o) => o.handle_event(tui, event),
+            Overlay::Static(o) => o.handle_event(tui, event),
         }
     }
 
     pub(crate) fn is_done(&self) -> bool {
         match self {
-            PagerOverlay::Transcript(o) => o.is_done(),
-            PagerOverlay::Static(o) => o.is_done(),
+            Overlay::Transcript(o) => o.is_done(),
+            Overlay::Static(o) => o.is_done(),
         }
     }
 }
 
 // Common pager navigation hints rendered on the first line
-const PAGER_KEY_HINTS: &[(&str, &str)] = &[("↑/↓", "scroll"), ("PgUp/PgDn", "page"), ("Home/End", "jump")];
+const PAGER_KEY_HINTS: &[(&str, &str)] = &[
+    ("↑/↓", "scroll"),
+    ("PgUp/PgDn", "page"),
+    ("Home/End", "jump"),
+];
 
 // Render a single line of key hints from (key, description) pairs.
 fn render_key_hints(area: Rect, buf: &mut Buffer, pairs: &[(&str, &str)]) {
@@ -65,6 +69,8 @@ fn render_key_hints(area: Rect, buf: &mut Buffer, pairs: &[(&str, &str)]) {
     }
     Paragraph::new(vec![Line::from(spans).dim()]).render_ref(area, buf);
 }
+
+/// Generic widget for rendering a pager view.
 struct PagerView {
     lines: Vec<Line<'static>>,
     scroll_offset: usize,
@@ -73,7 +79,11 @@ struct PagerView {
 
 impl PagerView {
     fn new(lines: Vec<Line<'static>>, title: String, scroll_offset: usize) -> Self {
-        Self { lines, scroll_offset, title }
+        Self {
+            lines,
+            scroll_offset,
+            title,
+        }
     }
 
     fn render(&mut self, area: Rect, buf: &mut Buffer) {
@@ -283,7 +293,11 @@ impl TranscriptOverlay {
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         match event {
             TuiEvent::Key(key_event) => match key_event {
-                KeyEvent { code: KeyCode::Char('q'), kind: KeyEventKind::Press, .. }
+                KeyEvent {
+                    code: KeyCode::Char('q'),
+                    kind: KeyEventKind::Press,
+                    ..
+                }
                 | KeyEvent {
                     code: KeyCode::Char('t'),
                     modifiers: crossterm::event::KeyModifiers::CONTROL,
@@ -310,7 +324,9 @@ impl TranscriptOverlay {
             _ => Ok(()),
         }
     }
-    pub(crate) fn is_done(&self) -> bool { self.is_done }
+    pub(crate) fn is_done(&self) -> bool {
+        self.is_done
+    }
     pub(crate) fn set_scroll_offset(&mut self, offset: usize) {
         self.view.scroll_offset = offset;
     }
@@ -323,7 +339,10 @@ pub(crate) struct StaticOverlay {
 
 impl StaticOverlay {
     pub(crate) fn with_title(lines: Vec<Line<'static>>, title: String) -> Self {
-        Self { view: PagerView::new(lines, title, 0), is_done: false }
+        Self {
+            view: PagerView::new(lines, title, 0),
+            is_done: false,
+        }
     }
 
     fn render_hints(&self, area: Rect, buf: &mut Buffer) {
@@ -347,7 +366,11 @@ impl StaticOverlay {
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         match event {
             TuiEvent::Key(key_event) => match key_event {
-                KeyEvent { code: KeyCode::Char('q'), kind: KeyEventKind::Press, .. }
+                KeyEvent {
+                    code: KeyCode::Char('q'),
+                    kind: KeyEventKind::Press,
+                    ..
+                }
                 | KeyEvent {
                     code: KeyCode::Char('c'),
                     modifiers: crossterm::event::KeyModifiers::CONTROL,
@@ -368,7 +391,9 @@ impl StaticOverlay {
             _ => Ok(()),
         }
     }
-    pub(crate) fn is_done(&self) -> bool { self.is_done }
+    pub(crate) fn is_done(&self) -> bool {
+        self.is_done
+    }
 }
 
 #[cfg(test)]
