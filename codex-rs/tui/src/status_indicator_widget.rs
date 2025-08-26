@@ -123,10 +123,10 @@ impl WidgetRef for StatusIndicatorWidget {
             for (i, piece) in wrapped.iter().take(3).enumerate() {
                 let prefix = if i == 0 { " ↳ " } else { "   " };
                 let content = format!("{prefix}{piece}");
-                lines.push(Line::from(content.dim()));
+                lines.push(Line::from(content.dim().italic()));
             }
             if wrapped.len() > 3 {
-                lines.push(Line::from("   …".dim()));
+                lines.push(Line::from("   …".dim().italic()));
             }
         }
         if !self.queued_messages.is_empty() {
