@@ -50,38 +50,19 @@ struct PagerView {
     scroll_offset: usize,
     is_done: bool,
     title: String,
-    highlight_range: Option<(usize, usize)>,
 }
 
 impl PagerView {
     fn new(lines: Vec<Line<'static>>, title: String, scroll_offset: usize) -> Self {
-        Self {
-            lines,
-            scroll_offset,
-            is_done: false,
-            title,
-            highlight_range: None,
-        }
+        Self { lines, scroll_offset, is_done: false, title }
     }
 
-    fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
-        match event {
-            TuiEvent::Key(key_event) => self.handle_key_event(tui, key_event),
-            TuiEvent::Draw => Ok({
-                tui.draw(u16::MAX, |frame| {
-                    self.render(frame.area(), frame.buffer);
-                })?;
-            }),
-            _ => Ok(()),
-        }
-    }
+    // no public event handling; overlays drive rendering
 
     fn render(&mut self, area: Rect, buf: &mut Buffer) {
         self.render_header(area, buf);
         let content_area = self.scroll_area(area);
-        let mut lines = self.lines.clone();
-        self.apply_highlight_to_lines(&mut lines);
-        let wrapped = insert_history::word_wrap_lines(&lines, content_area.width);
+        let wrapped = insert_history::word_wrap_lines(&self.lines, content_area.width);
         self.render_content_page(content_area, buf, &wrapped);
         self.render_bottom_bar(area, content_area, buf, &wrapped);
     }
@@ -94,29 +75,7 @@ impl PagerView {
         Span::from(header).dim().render_ref(area, buf);
     }
 
-    fn apply_highlight_to_lines(&self, lines: &mut [Line<'static>]) {
-        if let Some((start, end)) = self.highlight_range {
-            use ratatui::style::Modifier;
-            let len = lines.len();
-            let start = start.min(len);
-            let end = end.min(len);
-            for (idx, line) in lines.iter_mut().enumerate().take(end).skip(start) {
-                let mut spans = Vec::with_capacity(line.spans.len());
-                for (i, s) in line.spans.iter().enumerate() {
-                    let mut style = s.style;
-                    style.add_modifier |= Modifier::REVERSED;
-                    if idx == start && i == 0 {
-                        style.add_modifier |= Modifier::BOLD;
-                    }
-                    spans.push(Span {
-                        style,
-                        content: s.content.clone(),
-                    });
-                }
-                line.spans = spans;
-            }
-        }
-    }
+    // No highlight application: overlays pre-process content if needed
 
     fn render_content_page(&mut self, area: Rect, buf: &mut Buffer, wrapped: &[Line<'static>]) {
         self.scroll_offset = self
@@ -254,12 +213,14 @@ impl PagerView {
 
 pub(crate) struct TranscriptOverlay {
     view: PagerView,
+    highlight_range: Option<(usize, usize)>,
 }
 
 impl TranscriptOverlay {
     pub(crate) fn new(transcript_lines: Vec<Line<'static>>) -> Self {
         Self {
             view: PagerView::new(transcript_lines, "T R A N S C R I P T".to_string(), usize::MAX),
+            highlight_range: None,
         }
     }
 
@@ -268,7 +229,7 @@ impl TranscriptOverlay {
     }
 
     pub(crate) fn set_highlight_range(&mut self, range: Option<(usize, usize)>) {
-        self.view.highlight_range = range;
+        self.highlight_range = range;
     }
 
     fn render_hints(&self, area: Rect, buf: &mut Buffer) {
@@ -291,7 +252,7 @@ impl TranscriptOverlay {
         let mut hints2 = vec![" ".into(), "q".set_style(key_hint_style), " quit".into()];
         // Always include Esc edit prev for transcript overlays
         hints2.extend(["   ".into(), "Esc".set_style(key_hint_style), " edit prev".into()]);
-        if let Some((start, end)) = self.view.highlight_range
+        if let Some((start, end)) = self.highlight_range
             && end > start
         {
             hints2.extend(["   ".into(), "⏎".set_style(key_hint_style), " edit message".into()]);
@@ -304,7 +265,27 @@ impl TranscriptOverlay {
         let top_h = area.height.saturating_sub(3);
         let top = Rect::new(area.x, area.y, area.width, top_h);
         let bottom = Rect::new(area.x, area.y + top_h, area.width, 3);
-        self.view.render(top, buf);
+        // Build highlighted lines into a temporary view for this render only
+        let mut lines = self.view.lines.clone();
+        if let Some((start, end)) = self.highlight_range {
+            use ratatui::style::Modifier;
+            let len = lines.len();
+            let start = start.min(len);
+            let end = end.min(len);
+            for (idx, line) in lines.iter_mut().enumerate().take(end).skip(start) {
+                let mut spans = Vec::with_capacity(line.spans.len());
+                for (i, s) in line.spans.iter().enumerate() {
+                    let mut style = s.style;
+                    style.add_modifier |= Modifier::REVERSED;
+                    if idx == start && i == 0 {
+                        style.add_modifier |= Modifier::BOLD;
+                    }
+                    spans.push(Span { style, content: s.content.clone() });
+                }
+                line.spans = spans;
+            }
+        }
+        PagerView::new(lines, self.view.title.clone(), self.view.scroll_offset).render(top, buf);
         self.render_hints(bottom, buf);
     }
 }
@@ -313,11 +294,12 @@ impl TranscriptOverlay {
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         match event {
             TuiEvent::Key(key_event) => self.view.handle_key_event(tui, key_event),
-            TuiEvent::Draw => Ok({
+            TuiEvent::Draw => {
                 tui.draw(u16::MAX, |frame| {
                     self.render(frame.area(), frame.buffer);
                 })?;
-            }),
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -375,11 +357,12 @@ impl StaticOverlay {
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         match event {
             TuiEvent::Key(key_event) => self.view.handle_key_event(tui, key_event),
-            TuiEvent::Draw => Ok({
+            TuiEvent::Draw => {
                 tui.draw(u16::MAX, |frame| {
                     self.render(frame.area(), frame.buffer);
                 })?;
-            }),
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
