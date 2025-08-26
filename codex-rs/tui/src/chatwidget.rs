@@ -668,14 +668,6 @@ impl ChatWidget {
 
         match key_event {
             KeyEvent {
-                code: KeyCode::Char('d'),
-                modifiers: crossterm::event::KeyModifiers::CONTROL,
-                kind: KeyEventKind::Press,
-                ..
-            } if self.bottom_pane.composer_is_empty() => {
-                self.app_event_tx.send(AppEvent::ExitRequest);
-            }
-            KeyEvent {
                 code: KeyCode::Up,
                 modifiers: KeyModifiers::ALT,
                 kind: KeyEventKind::Press,
