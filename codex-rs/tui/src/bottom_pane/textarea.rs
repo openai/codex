@@ -1145,10 +1145,6 @@ mod tests {
 
     #[test]
     fn control_b_and_f_move_cursor() {
-        use crossterm::event::KeyCode;
-        use crossterm::event::KeyEvent;
-        use crossterm::event::KeyModifiers;
-
         let mut t = ta_with("abcd");
         t.set_cursor(1);
 
@@ -1161,10 +1157,6 @@ mod tests {
 
     #[test]
     fn control_b_f_fallback_control_chars_move_cursor() {
-        use crossterm::event::KeyCode;
-        use crossterm::event::KeyEvent;
-        use crossterm::event::KeyModifiers;
-
         let mut t = ta_with("abcd");
         t.set_cursor(2);
 
@@ -1180,10 +1172,6 @@ mod tests {
 
     #[test]
     fn delete_backward_word_alt_keys() {
-        use crossterm::event::KeyCode;
-        use crossterm::event::KeyEvent;
-        use crossterm::event::KeyModifiers;
-
         // Test the custom Alt+Ctrl+h binding
         let mut t = ta_with("hello world");
         t.set_cursor(t.text().len()); // cursor at the end
@@ -1203,28 +1191,24 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_h_backspace() {
-        use crossterm::event::KeyCode;
-        use crossterm::event::KeyEvent;
-        use crossterm::event::KeyModifiers;
-
+    fn control_h_backspace() {
         // Test Ctrl+H as backspace
-        let mut t = ta_with("hello");
-        t.set_cursor(3); // cursor after 'l'
+        let mut t = ta_with("12345");
+        t.set_cursor(3); // cursor after '3'
         t.input(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
-        assert_eq!(t.text(), "helo");
+        assert_eq!(t.text(), "1245");
         assert_eq!(t.cursor(), 2);
 
         // Test Ctrl+H at beginning (should be no-op)
         t.set_cursor(0);
         t.input(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
-        assert_eq!(t.text(), "helo");
+        assert_eq!(t.text(), "1245");
         assert_eq!(t.cursor(), 0);
 
         // Test Ctrl+H at end
         t.set_cursor(t.text().len());
         t.input(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
-        assert_eq!(t.text(), "hel");
+        assert_eq!(t.text(), "124");
         assert_eq!(t.cursor(), 3);
     }
 
