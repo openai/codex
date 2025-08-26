@@ -3,9 +3,7 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::chatwidget::ChatWidget;
 use crate::file_search::FileSearchManager;
-use crate::pager_overlay::PagerOverlay as PagerOverlayTrait;
-use crate::pager_overlay::StaticOverlay;
-use crate::pager_overlay::TranscriptOverlay;
+use crate::pager_overlay::PagerOverlay;
 use crate::tui;
 use crate::tui::TuiEvent;
 use codex_ansi_escape::ansi_escape_line;
@@ -43,7 +41,7 @@ pub(crate) struct App {
     pub(crate) transcript_lines: Vec<Line<'static>>,
 
     // Pager overlay state (Transcript or Static like Diff)
-    pub(crate) pager_overlay: Option<Box<dyn PagerOverlayTrait>>,
+    pub(crate) pager_overlay: Option<PagerOverlay>,
     pub(crate) deferred_history_lines: Vec<Line<'static>>,
 
     pub(crate) enhanced_keys_supported: bool,
@@ -174,8 +172,8 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::InsertHistoryLines(lines) => {
-                if let Some(overlay) = &mut self.pager_overlay {
-                    overlay.insert_lines(lines.clone());
+                if let Some(PagerOverlay::Transcript(t)) = &mut self.pager_overlay {
+                    t.insert_lines(lines.clone());
                     tui.frame_requester().schedule_frame();
                 }
                 self.transcript_lines.extend(lines.clone());
@@ -187,8 +185,8 @@ impl App {
             }
             AppEvent::InsertHistoryCell(cell) => {
                 let cell_transcript = cell.transcript_lines();
-                if let Some(overlay) = &mut self.pager_overlay {
-                    overlay.insert_lines(cell_transcript.clone());
+                if let Some(PagerOverlay::Transcript(t)) = &mut self.pager_overlay {
+                    t.insert_lines(cell_transcript.clone());
                     tui.frame_requester().schedule_frame();
                 }
                 self.transcript_lines.extend(cell_transcript.clone());
@@ -243,10 +241,10 @@ impl App {
                 } else {
                     text.lines().map(ansi_escape_line).collect()
                 };
-                self.pager_overlay = Some(Box::new(StaticOverlay::with_title(
+                self.pager_overlay = Some(PagerOverlay::new_static_with_title(
                     pager_lines,
                     "D I F F".to_string(),
-                )));
+                ));
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::StartFileSearch(query) => {
@@ -303,9 +301,8 @@ impl App {
             } => {
                 // Enter alternate screen and set viewport to full size.
                 let _ = tui.enter_alt_screen();
-                self.pager_overlay = Some(Box::new(TranscriptOverlay::new(
-                    self.transcript_lines.clone(),
-                )));
+                self.pager_overlay =
+                    Some(PagerOverlay::new_transcript(self.transcript_lines.clone()));
                 tui.frame_requester().schedule_frame();
             }
             // Esc primes/advances backtracking when composer is empty.

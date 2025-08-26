@@ -1,6 +1,6 @@
 use crate::app::App;
 use crate::backtrack_helpers;
-use crate::pager_overlay::PagerOverlay as PagerOverlayTrait;
+use crate::pager_overlay::PagerOverlay;
 use crate::tui;
 use crate::tui::TuiEvent;
 use codex_core::protocol::ConversationHistoryResponseEvent;
@@ -103,9 +103,7 @@ impl App {
     /// Open transcript overlay (enters alternate screen and shows full transcript).
     pub(crate) fn open_transcript_overlay(&mut self, tui: &mut tui::Tui) {
         let _ = tui.enter_alt_screen();
-        self.pager_overlay = Some(Box::new(crate::pager_overlay::TranscriptOverlay::new(
-            self.transcript_lines.clone(),
-        )));
+        self.pager_overlay = Some(PagerOverlay::new_transcript(self.transcript_lines.clone()));
         tui.frame_requester().schedule_frame();
     }
 
@@ -199,7 +197,9 @@ impl App {
             if let Some(off) = offset {
                 overlay.set_scroll_offset(off);
             }
-            overlay.set_highlight_range(hl);
+            if let PagerOverlay::Transcript(t) = overlay {
+                t.set_highlight_range(hl);
+            }
         }
     }
 

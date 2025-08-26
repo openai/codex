@@ -17,16 +17,40 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 
-pub(crate) trait PagerOverlay {
-    fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()>;
-    fn insert_lines(&mut self, _lines: Vec<Line<'static>>) {
-        // Default: ignore history inserts (e.g., Static overlays)
+pub(crate) enum PagerOverlay {
+    Transcript(TranscriptOverlay),
+    Static(StaticOverlay),
+}
+
+impl PagerOverlay {
+    pub(crate) fn new_transcript(lines: Vec<Line<'static>>) -> Self {
+        Self::Transcript(TranscriptOverlay::new(lines))
     }
-    fn is_done(&self) -> bool;
-    fn set_highlight_range(&mut self, _range: Option<(usize, usize)>) {
-        // Default: no-op (only Transcript uses this)
+
+    pub(crate) fn new_static_with_title(lines: Vec<Line<'static>>, title: String) -> Self {
+        Self::Static(StaticOverlay::with_title(lines, title))
     }
-    fn set_scroll_offset(&mut self, offset: usize);
+
+    pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
+        match self {
+            PagerOverlay::Transcript(o) => o.handle_event(tui, event),
+            PagerOverlay::Static(o) => o.handle_event(tui, event),
+        }
+    }
+
+    pub(crate) fn is_done(&self) -> bool {
+        match self {
+            PagerOverlay::Transcript(o) => o.is_done(),
+            PagerOverlay::Static(o) => o.is_done(),
+        }
+    }
+
+    pub(crate) fn set_scroll_offset(&mut self, offset: usize) {
+        match self {
+            PagerOverlay::Transcript(o) => o.set_scroll_offset(offset),
+            PagerOverlay::Static(o) => o.set_scroll_offset(offset),
+        }
+    }
 }
 struct PagerView {
     lines: Vec<Line<'static>>,
@@ -299,6 +323,14 @@ impl TranscriptOverlay {
         }
     }
 
+    pub(crate) fn insert_lines(&mut self, lines: Vec<Line<'static>>) {
+        self.view.lines.extend(lines);
+    }
+
+    pub(crate) fn set_highlight_range(&mut self, range: Option<(usize, usize)>) {
+        self.view.highlight_range = range;
+    }
+
     // Test helper parity with previous module
     #[cfg(test)]
     pub(crate) fn render(&mut self, area: Rect, buf: &mut Buffer) {
@@ -306,20 +338,14 @@ impl TranscriptOverlay {
     }
 }
 
-impl PagerOverlay for TranscriptOverlay {
-    fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
+impl TranscriptOverlay {
+    pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         self.view.handle_event(tui, event)
     }
-    fn insert_lines(&mut self, lines: Vec<Line<'static>>) {
-        self.view.lines.extend(lines);
-    }
-    fn is_done(&self) -> bool {
+    pub(crate) fn is_done(&self) -> bool {
         self.view.is_done
     }
-    fn set_highlight_range(&mut self, range: Option<(usize, usize)>) {
-        self.view.highlight_range = range;
-    }
-    fn set_scroll_offset(&mut self, offset: usize) {
+    pub(crate) fn set_scroll_offset(&mut self, offset: usize) {
         self.view.scroll_offset = offset;
     }
 }
@@ -334,49 +360,16 @@ impl StaticOverlay {
             view: PagerView::new(lines, title, 0, false),
         }
     }
-
-    fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
-        self.view.handle_event(tui, event)
-    }
-
-    fn render(&mut self, area: Rect, buf: &mut Buffer) {
-        self.view.render(area, buf);
-    }
-
-    fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) -> Result<()> {
-        self.view.handle_key_event(tui, key_event)
-    }
-
-    fn render_content_page(&mut self, area: Rect, buf: &mut Buffer, wrapped: &[Line<'static>]) {
-        self.view.render_content_page(area, buf, wrapped);
-    }
-
-    fn render_bottom_section(
-        &self,
-        full_area: Rect,
-        content_area: Rect,
-        buf: &mut Buffer,
-        wrapped: &[Line<'static>],
-    ) {
-        self.view
-            .render_bottom_section(full_area, content_area, buf, wrapped);
-    }
-
-    fn scroll_area(&self, area: Rect) -> Rect {
-        self.view.scroll_area(area)
-    }
 }
 
-impl PagerOverlay for StaticOverlay {
-    fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
+impl StaticOverlay {
+    pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         self.view.handle_event(tui, event)
     }
-    // insert_lines: use default no-op
-    fn is_done(&self) -> bool {
+    pub(crate) fn is_done(&self) -> bool {
         self.view.is_done
     }
-    // set_highlight_range: default no-op
-    fn set_scroll_offset(&mut self, offset: usize) {
+    pub(crate) fn set_scroll_offset(&mut self, offset: usize) {
         self.view.scroll_offset = offset;
     }
 }
