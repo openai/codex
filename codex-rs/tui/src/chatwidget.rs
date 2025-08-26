@@ -243,14 +243,21 @@ impl ChatWidget {
         );
     }
 
-    fn on_error(&mut self, message: String) {
-        // Before emitting the error message, finalize the active exec as failed
-        // so spinners are replaced with a red ✗ marker.
+    /// Finalize any active exec as failed, push an error message into history,
+    /// and stop/clear running UI state.
+    fn finalize_turn_with_error_message(&mut self, message: String) {
+        // Ensure any spinner is replaced by a red ✗ and flushed into history.
         self.finalize_active_exec_cell_as_failed();
+        // Emit the provided error message/history cell.
         self.add_to_history(history_cell::new_error_event(message));
+        // Reset running state and clear streaming buffers.
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
         self.stream.clear_all();
+    }
+
+    fn on_error(&mut self, message: String) {
+        self.finalize_turn_with_error_message(message);
         self.request_redraw();
 
         // After an error ends the turn, try sending the next queued input.
@@ -261,14 +268,8 @@ impl ChatWidget {
     /// When there are queued user messages, restore them into the composer
     /// separated by newlines rather than auto‑submitting the next one.
     fn on_interrupted_turn(&mut self) {
-        // Show a gentle prompt in history encouraging the user to refine.
-        self.add_to_history(history_cell::new_error_event(
-            "Tell the model what to do differently".to_owned(),
-        ));
-        // Stop the running task and clear streaming state.
-        self.bottom_pane.set_task_running(false);
-        self.running_commands.clear();
-        self.stream.clear_all();
+        // Finalize, log a gentle prompt, and clear running state.
+        self.finalize_turn_with_error_message("Tell the model what to do differently".to_owned());
 
         // If any messages were queued during the task, restore them into the composer.
         if !self.queued_user_messages.is_empty() {
