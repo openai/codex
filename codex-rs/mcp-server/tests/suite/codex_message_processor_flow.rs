@@ -41,7 +41,7 @@ async fn test_codex_jsonrpc_conversation_flow() {
     }
 
     let tmp = TempDir::new().expect("tmp dir");
-    // Temporary Codex home with config pointing at the mock server.
+    // Temporary Codex home with config pointing at the mock server
     let codex_home = tmp.path().join("codex_home");
     std::fs::create_dir(&codex_home).expect("create codex home dir");
     let working_directory = tmp.path().join("workdir");
