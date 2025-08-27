@@ -418,6 +418,7 @@ async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
                     "--no-ext-diff",
                     "--binary",
                     "--no-index",
+                    // -- ensures that filenames that start with - are not treated as options.
                     "--",
                     null_device,
                     &file_owned,
