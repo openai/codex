@@ -1,7 +1,0 @@
----
-source: tui/src/chatwidget/tests.rs
-assertion_line: 414
-expression: exec_blob
----
-• Working
-  ✗ Run sleep 1

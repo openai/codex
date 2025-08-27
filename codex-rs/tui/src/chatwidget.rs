@@ -530,11 +530,21 @@ impl ChatWidget {
         // Accumulate each exec begin as a new call within the active Exec cell.
         match self.active_exec_cell.as_mut() {
             Some(exec) => {
-                exec.add_call(
+                if let Some(new_exec) = exec.with_added_call(
                     ev.call_id.clone(),
                     ev.command.clone(),
                     ev.parsed_cmd.clone(),
-                );
+                ) {
+                    self.active_exec_cell = Some(new_exec);
+                } else {
+                    // Make a new cell.
+                    self.flush_active_exec_cell();
+                    self.active_exec_cell = Some(history_cell::new_active_exec_command(
+                        ev.call_id.clone(),
+                        ev.command.clone(),
+                        ev.parsed_cmd.clone(),
+                    ));
+                }
             }
             _ => {
                 self.active_exec_cell = Some(history_cell::new_active_exec_command(
