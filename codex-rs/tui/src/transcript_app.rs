@@ -18,12 +18,21 @@ use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 
+#[derive(Debug, Clone)]
+struct WrapCache {
+    width: u16,
+    wrapped: Vec<Line<'static>>,
+    src_idx: Vec<usize>,
+    base_len: usize,
+}
+
 pub(crate) struct TranscriptApp {
     pub(crate) transcript_lines: Vec<Line<'static>>,
     pub(crate) scroll_offset: usize,
     pub(crate) is_done: bool,
     title: String,
     highlight_range: Option<(usize, usize)>,
+    wrap_cache: Option<WrapCache>,
 }
 
 impl TranscriptApp {
@@ -34,6 +43,7 @@ impl TranscriptApp {
             is_done: false,
             title: "T R A N S C R I P T".to_string(),
             highlight_range: None,
+            wrap_cache: None,
         }
     }
 
@@ -44,9 +54,11 @@ impl TranscriptApp {
             is_done: false,
             title,
             highlight_range: None,
+            wrap_cache: None,
         }
     }
     pub(crate) fn insert_lines(&mut self, lines: Vec<Line<'static>>) {
+        self.wrap_cache = None;
         self.transcript_lines.extend(lines);
     }
 
@@ -75,12 +87,23 @@ impl TranscriptApp {
 
         // Main content area (excludes header and bottom status section)
         let content_area = self.scroll_area(area);
-        let mut lines = self.transcript_lines.clone();
-        self.apply_highlight_to_lines(&mut lines);
-        let wrapped = insert_history::word_wrap_lines(&lines, content_area.width);
+        self.ensure_wrapped(content_area.width);
+        // Clamp scroll based on cached wrapped length (avoid holding borrow while mutating self)
+        let wrapped_len = self
+            .wrap_cache
+            .as_ref()
+            .map(|c| c.wrapped.len())
+            .unwrap_or(0);
+        self.scroll_offset = self
+            .scroll_offset
+            .min(wrapped_len.saturating_sub(content_area.height as usize));
+        let start = self.scroll_offset;
+        let end = (start + content_area.height as usize).min(wrapped_len);
 
-        self.render_content_page(content_area, buf, &wrapped);
-        self.render_bottom_section(area, content_area, buf, &wrapped);
+        let (wrapped, src_idx) = self.cached();
+        let page = self.page_with_optional_highlight(wrapped, src_idx, start, end);
+        self.render_content_page(content_area, buf, &page);
+        self.render_bottom_section(area, content_area, buf, wrapped);
     }
 
     // Private helpers
@@ -92,42 +115,11 @@ impl TranscriptApp {
         Span::from(header).dim().render_ref(area, buf);
     }
 
-    fn apply_highlight_to_lines(&self, lines: &mut [Line<'static>]) {
-        if let Some((start, end)) = self.highlight_range {
-            use ratatui::style::Modifier;
-            let len = lines.len();
-            let start = start.min(len);
-            let end = end.min(len);
-            for (idx, line) in lines.iter_mut().enumerate().take(end).skip(start) {
-                let mut spans = Vec::with_capacity(line.spans.len());
-                for (i, s) in line.spans.iter().enumerate() {
-                    let mut style = s.style;
-                    style.add_modifier |= Modifier::REVERSED;
-                    if idx == start && i == 0 {
-                        style.add_modifier |= Modifier::BOLD;
-                    }
-                    spans.push(Span {
-                        style,
-                        content: s.content.clone(),
-                    });
-                }
-                line.spans = spans;
-            }
-        }
-    }
-
-    fn render_content_page(&mut self, area: Rect, buf: &mut Buffer, wrapped: &[Line<'static>]) {
-        // Clamp scroll offset to valid range
-        self.scroll_offset = self
-            .scroll_offset
-            .min(wrapped.len().saturating_sub(area.height as usize));
-        let start = self.scroll_offset;
-        let end = (start + area.height as usize).min(wrapped.len());
-        let page = &wrapped[start..end];
+    fn render_content_page(&self, area: Rect, buf: &mut Buffer, page: &[Line<'static>]) {
         Paragraph::new(page.to_vec()).render_ref(area, buf);
 
         // Fill remaining visible lines (if any) with a leading '~' in the first column.
-        let visible = (end - start) as u16;
+        let visible = page.len() as u16;
         if area.height > visible {
             let extra = area.height - visible;
             for i in 0..extra {
@@ -318,6 +310,78 @@ impl TranscriptApp {
         area.y = area.y.saturating_add(1);
         area.height = area.height.saturating_sub(5);
         area
+    }
+}
+
+impl TranscriptApp {
+    fn ensure_wrapped(&mut self, width: u16) {
+        let width = width.max(1);
+        let needs = match self.wrap_cache {
+            Some(ref c) => c.width != width || c.base_len != self.transcript_lines.len(),
+            None => true,
+        };
+        if !needs {
+            return;
+        }
+        let mut wrapped: Vec<Line<'static>> = Vec::new();
+        let mut src_idx: Vec<usize> = Vec::new();
+        for (i, line) in self.transcript_lines.iter().enumerate() {
+            let ws = insert_history::word_wrap_lines(std::slice::from_ref(line), width);
+            src_idx.extend(std::iter::repeat_n(i, ws.len()));
+            wrapped.extend(ws);
+        }
+        self.wrap_cache = Some(WrapCache {
+            width,
+            wrapped,
+            src_idx,
+            base_len: self.transcript_lines.len(),
+        });
+    }
+
+    fn cached(&self) -> (&[Line<'static>], &[usize]) {
+        if let Some(cache) = self.wrap_cache.as_ref() {
+            (&cache.wrapped, &cache.src_idx)
+        } else {
+            (&[], &[])
+        }
+    }
+
+    fn page_with_optional_highlight<'a>(
+        &self,
+        wrapped: &'a [Line<'static>],
+        src_idx: &[usize],
+        start: usize,
+        end: usize,
+    ) -> std::borrow::Cow<'a, [Line<'static>]> {
+        use ratatui::style::Modifier;
+        let (hi_start, hi_end) = match self.highlight_range {
+            Some(r) => r,
+            None => return std::borrow::Cow::Borrowed(&wrapped[start..end]),
+        };
+        let mut out: Vec<Line<'static>> = Vec::with_capacity(end - start);
+        let mut bold_done = false;
+        for (row, src_line) in wrapped
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(end.saturating_sub(start))
+        {
+            let mut line = src_line.clone();
+            if let Some(src) = src_idx.get(row).copied()
+                && src >= hi_start
+                && src < hi_end
+            {
+                for (i, s) in line.spans.iter_mut().enumerate() {
+                    s.style.add_modifier |= Modifier::REVERSED;
+                    if !bold_done && i == 0 {
+                        s.style.add_modifier |= Modifier::BOLD;
+                        bold_done = true;
+                    }
+                }
+            }
+            out.push(line);
+        }
+        std::borrow::Cow::Owned(out)
     }
 }
 
