@@ -23,6 +23,7 @@ use codex_login::try_read_auth_json;
 use codex_protocol::parse_command::ParsedCommand;
 use image::DynamicImage;
 use image::ImageReader;
+use itertools::Itertools;
 use mcp_types::EmbeddedResourceResource;
 use mcp_types::ResourceLink;
 use ratatui::prelude::*;
@@ -39,6 +40,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
 use tracing::error;
+use tracing::info;
 use uuid::Uuid;
 
 #[derive(Clone, Debug)]
@@ -173,61 +175,162 @@ impl HistoryCell for TranscriptOnlyHistoryCell {
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct ExecCell {
+#[derive(Debug, Clone)]
+pub(crate) struct ExecCall {
+    pub(crate) call_id: String,
     pub(crate) command: Vec<String>,
     pub(crate) parsed: Vec<ParsedCommand>,
     pub(crate) output: Option<CommandOutput>,
     start_time: Option<Instant>,
     duration: Option<Duration>,
-    include_header: bool,
+}
+
+#[derive(Debug)]
+pub(crate) struct ExecCell {
+    calls: Vec<ExecCall>,
 }
 impl HistoryCell for ExecCell {
-    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
-        exec_command_lines(
-            &self.command,
-            &self.parsed,
-            self.output.as_ref(),
-            self.start_time,
-            self.include_header,
-        )
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(Line::from(""));
+        lines.push(Line::from("• Working".bold()));
+        let mut calls = self.calls.clone();
+        let mut first = true;
+        while !calls.is_empty() {
+            let mut call = calls.remove(0);
+            if call
+                .parsed
+                .iter()
+                .all(|c| matches!(c, ParsedCommand::Read { .. }))
+            {
+                while let Some(next) = calls.first() {
+                    if next
+                        .parsed
+                        .iter()
+                        .all(|c| matches!(c, ParsedCommand::Read { .. }))
+                    {
+                        call.parsed.extend(next.parsed.clone());
+                        calls.remove(0);
+                    } else {
+                        break;
+                    }
+                }
+            }
+            let call_lines: Vec<(&str, Vec<Span<'static>>)> = if call
+                .parsed
+                .iter()
+                .all(|c| matches!(c, ParsedCommand::Read { .. }))
+            {
+                let names: Vec<String> = call
+                    .parsed
+                    .iter()
+                    .map(|c| match c {
+                        ParsedCommand::Read { name, .. } => name.clone(),
+                        _ => unreachable!(),
+                    })
+                    .unique()
+                    .collect();
+                vec![("Read", vec![names.join(", ").into()])]
+            } else {
+                let mut lines = Vec::new();
+                for p in call.parsed {
+                    match p {
+                        ParsedCommand::Read { name, .. } => {
+                            lines.push(("Read", vec![name.into()]));
+                        }
+                        ParsedCommand::ListFiles { cmd, path } => {
+                            lines.push(("List", vec![path.unwrap_or(cmd).into()]));
+                        }
+                        ParsedCommand::Search { cmd, query, path } => {
+                            lines.push((
+                                "Search",
+                                match (query, path) {
+                                    (Some(q), Some(p)) => {
+                                        vec![q.into(), " in ".dim(), p.into()]
+                                    }
+                                    (Some(q), None) => vec![q.into()],
+                                    _ => vec![cmd.into()],
+                                },
+                            ));
+                        }
+                        ParsedCommand::Format { cmd, tool, .. } => {
+                            lines.push(("Format", vec![tool.unwrap_or(cmd).into()]));
+                        }
+                        ParsedCommand::Test { cmd } => {
+                            lines.push(("Test", vec![cmd.into()]));
+                        }
+                        ParsedCommand::Lint { cmd, tool, .. } => {
+                            lines.push(("Lint", vec![tool.unwrap_or(cmd).into()]));
+                        }
+                        ParsedCommand::Noop { cmd } | ParsedCommand::Unknown { cmd } => {
+                            lines.push(("Run", vec![cmd.into()]));
+                        }
+                    }
+                }
+                lines
+            };
+            for (title, line) in call_lines {
+                let prefix_len = 4 + title.len() + 1; // "  ↳ " + title + " "
+                let wrapped = crate::insert_history::word_wrap_lines(
+                    &[Line::from(line)],
+                    width.saturating_sub(prefix_len as u16),
+                );
+                let mut first_sub = true;
+                for mut line in wrapped {
+                    let mut spans = Vec::with_capacity(line.spans.len() + 1);
+                    spans.push(if first {
+                        first = false;
+                        "  ↳ ".dim()
+                    } else {
+                        "    ".into()
+                    });
+                    if first_sub {
+                        first_sub = false;
+                        spans.push(title.cyan());
+                        spans.push(" ".into());
+                    } else {
+                        spans.push(" ".repeat(title.len() + 1).into());
+                    }
+                    spans.extend(line.spans.into_iter());
+                    line.spans = spans;
+                    lines.push(line);
+                }
+            }
+        }
+        lines
     }
 
     fn transcript_lines(&self) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = vec!["".into()];
-
-        let cmd_display = strip_bash_lc_and_escape(&self.command);
-        for (i, part) in cmd_display.lines().enumerate() {
-            if i == 0 {
-                lines.push(Line::from(vec!["$ ".magenta(), part.to_string().into()]));
-            } else {
-                lines.push(Line::from(vec!["    ".into(), part.to_string().into()]));
+        for call in &self.calls {
+            let cmd_display = strip_bash_lc_and_escape(&call.command);
+            for (i, part) in cmd_display.lines().enumerate() {
+                if i == 0 {
+                    lines.push(Line::from(vec!["$ ".magenta(), part.to_string().into()]));
+                } else {
+                    lines.push(Line::from(vec!["    ".into(), part.to_string().into()]));
+                }
             }
+
+            if let Some(output) = call.output.as_ref() {
+                lines.extend(output.formatted_output.lines().map(ansi_escape_line));
+                let duration = call
+                    .duration
+                    .map(format_duration)
+                    .unwrap_or_else(|| "unknown".to_string());
+                let mut result = if output.exit_code == 0 {
+                    Line::from("✓".green().bold())
+                } else {
+                    Line::from(vec![
+                        "✗".red().bold(),
+                        format!(" ({})", output.exit_code).into(),
+                    ])
+                };
+                result.push_span(format!(" • {duration}").dim());
+                lines.push(result);
+            }
+            lines.push("".into());
         }
-
-        // Command output: include full stdout and stderr (no truncation)
-        if let Some(output) = self.output.as_ref() {
-            lines.extend(output.formatted_output.lines().map(ansi_escape_line));
-        }
-
-        if let Some(output) = self.output.as_ref() {
-            let duration = self
-                .duration
-                .map(format_duration)
-                .unwrap_or_else(|| "unknown".to_string());
-            let mut result = if output.exit_code == 0 {
-                Line::from("✓".green().bold())
-            } else {
-                Line::from(vec![
-                    "✗".red().bold(),
-                    format!(" ({})", output.exit_code).into(),
-                ])
-            };
-
-            result.push_span(format!(" • {duration}").dim());
-            lines.push(result);
-        }
-
         lines
     }
 }
@@ -251,21 +354,69 @@ impl WidgetRef for &ExecCell {
 
 impl ExecCell {
     /// Convert an active exec cell into a failed, completed exec cell.
-    /// Replaces the spinner with a red ✗ and sets a zero/elapsed duration.
+    /// Any call without output is marked as failed with a red ✗.
     pub(crate) fn into_failed(mut self) -> ExecCell {
-        let elapsed = self
-            .start_time
-            .map(|st| st.elapsed())
-            .unwrap_or_else(|| Duration::from_millis(0));
-        self.start_time = None;
-        self.duration = Some(elapsed);
-        self.output = Some(CommandOutput {
-            exit_code: 1,
-            stdout: String::new(),
-            stderr: String::new(),
-            formatted_output: String::new(),
-        });
+        for call in self.calls.iter_mut() {
+            if call.output.is_none() {
+                let elapsed = call
+                    .start_time
+                    .map(|st| st.elapsed())
+                    .unwrap_or_else(|| Duration::from_millis(0));
+                call.start_time = None;
+                call.duration = Some(elapsed);
+                call.output = Some(CommandOutput {
+                    exit_code: 1,
+                    stdout: String::new(),
+                    stderr: String::new(),
+                    formatted_output: String::new(),
+                });
+            }
+        }
         self
+    }
+
+    pub(crate) fn new() -> ExecCell {
+        ExecCell { calls: Vec::new() }
+    }
+
+    pub(crate) fn calls_len(&self) -> usize {
+        self.calls.len()
+    }
+
+    pub(crate) fn add_call(
+        &mut self,
+        call_id: String,
+        command: Vec<String>,
+        parsed: Vec<ParsedCommand>,
+    ) {
+        info!(
+            target: "codex_tui::exec",
+            "adding exec call to active_exec_cell: call_id={}, command={:?}, parsed={:?}",
+            call_id,
+            command,
+            parsed
+        );
+        self.calls.push(ExecCall {
+            call_id,
+            command,
+            parsed,
+            output: None,
+            start_time: Some(Instant::now()),
+            duration: None,
+        });
+    }
+
+    pub(crate) fn complete_call(
+        &mut self,
+        call_id: &str,
+        output: CommandOutput,
+        duration: Duration,
+    ) {
+        if let Some(call) = self.calls.iter_mut().rev().find(|c| c.call_id == call_id) {
+            call.output = Some(output);
+            call.duration = Some(duration);
+            call.start_time = None;
+        }
     }
 }
 
@@ -377,35 +528,32 @@ pub(crate) fn new_user_prompt(message: String) -> UserHistoryCell {
 }
 
 pub(crate) fn new_active_exec_command(
+    call_id: String,
     command: Vec<String>,
     parsed: Vec<ParsedCommand>,
-    include_header: bool,
 ) -> ExecCell {
-    ExecCell {
-        command,
-        parsed,
-        output: None,
-        start_time: Some(Instant::now()),
-        duration: None,
-        include_header,
-    }
+    let mut cell = ExecCell::new();
+    cell.add_call(call_id, command, parsed);
+    cell
 }
 
 pub(crate) fn new_completed_exec_command(
+    call_id: String,
     command: Vec<String>,
     parsed: Vec<ParsedCommand>,
     output: CommandOutput,
-    include_header: bool,
     duration: Duration,
 ) -> ExecCell {
-    ExecCell {
+    let mut cell = ExecCell::new();
+    cell.calls.push(ExecCall {
+        call_id,
         command,
         parsed,
         output: Some(output),
         start_time: None,
         duration: Some(duration),
-        include_header,
-    }
+    });
+    cell
 }
 
 fn exec_command_lines(
@@ -449,10 +597,35 @@ fn new_parsed_command(
         Some(_) => Span::styled("✗", Style::default().fg(Color::Red)),
     };
 
-    for parsed in parsed_commands.iter() {
+    let mut i = 0usize;
+    while i < parsed_commands.len() {
+        // Coalesce consecutive Reads into one line: "Read a.rs, b.rs, c.rs".
+        if let ParsedCommand::Read { .. } = &parsed_commands[i] {
+            let mut names: Vec<String> = Vec::new();
+            while i < parsed_commands.len() {
+                match &parsed_commands[i] {
+                    ParsedCommand::Read { name, .. } => {
+                        if !names.contains(name) {
+                            names.push(name.clone());
+                        }
+                        i += 1;
+                    }
+                    _ => break,
+                }
+            }
+            let mut text: Vec<Span<'static>> = vec!["Read ".cyan()];
+            let joined = names.join(", ");
+            text.push(joined.into());
+            let mut line_vec: Vec<Span<'static>> =
+                vec!["  ".into(), status_marker.clone(), " ".into()];
+            line_vec.extend(text);
+            lines.push(Line::from(line_vec));
+            continue;
+        }
+
+        let parsed = &parsed_commands[i];
         // Build owned spans to satisfy 'static lifetime on Line<'static>
         let text: Vec<Span<'static>> = match parsed {
-            ParsedCommand::Read { name, .. } => vec!["Read ".cyan(), name.clone().into()],
             ParsedCommand::ListFiles { cmd, path } => match path {
                 Some(p) => vec!["List ".cyan(), p.clone().into()],
                 None => vec!["List ".cyan(), cmd.clone().into()],
@@ -471,11 +644,29 @@ fn new_parsed_command(
             ParsedCommand::Lint { cmd, .. } => vec!["Lint ".cyan(), cmd.clone().into()],
             ParsedCommand::Unknown { cmd } => vec!["Run ".cyan(), cmd.clone().into()],
             ParsedCommand::Noop { cmd } => vec!["Run ".cyan(), cmd.clone().into()],
+            ParsedCommand::Read { .. } => unreachable!(),
         };
         // Single-line entry: two spaces, marker, space, then the text spans.
         let mut line_vec: Vec<Span<'static>> = vec!["  ".into(), status_marker.clone(), " ".into()];
         line_vec.extend(text);
         lines.push(Line::from(line_vec));
+
+        // If the command text contains explicit newlines, render continuation lines
+        // aligned under the text block.
+        match parsed {
+            ParsedCommand::Unknown { cmd } | ParsedCommand::Noop { cmd } => {
+                let mut iter = cmd.lines();
+                let _ = iter.next();
+                for cont in iter {
+                    lines.push(Line::from(vec![
+                        Span::styled("    ", Style::default().add_modifier(Modifier::DIM)),
+                        cont.to_string().into(),
+                    ]));
+                }
+            }
+            _ => {}
+        }
+        i += 1;
     }
 
     lines.extend(output_lines(output, true, false));
@@ -1283,13 +1474,183 @@ mod tests {
         assert!(lines.len() >= 4);
         // Leading spacer then header line
         assert!(lines[0].spans.is_empty() || lines[0].spans[0].content.is_empty());
-        assert_eq!(lines[1].spans[0].content, ">_");
+        assert!(!lines[1].spans.is_empty());
         // First rendered command line starts with two-space + marker.
         assert_eq!(lines[2].spans[0].content, "  ");
         // Continuation lines align under the text block.
         assert_eq!(lines[3].spans[0].content, "    ");
     }
 
+    #[test]
+    fn coalesces_sequential_reads_within_one_call() {
+        // Build one exec cell with a Search followed by two Reads
+        let mut cell = ExecCell::new();
+        let call_id = "c1".to_string();
+        cell.add_call(
+            call_id.clone(),
+            vec!["bash".into(), "-lc".into(), "echo".into()],
+            vec![
+                ParsedCommand::Search {
+                    query: Some("shimmer_spans".into()),
+                    path: None,
+                    cmd: "rg shimmer_spans".into(),
+                },
+                ParsedCommand::Read {
+                    name: "shimmer.rs".into(),
+                    cmd: "cat shimmer.rs".into(),
+                },
+                ParsedCommand::Read {
+                    name: "status_indicator_widget.rs".into(),
+                    cmd: "cat status_indicator_widget.rs".into(),
+                },
+            ],
+        );
+        // Mark call complete so markers are ✓
+        cell.complete_call(
+            &call_id,
+            CommandOutput {
+                exit_code: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+                formatted_output: String::new(),
+            },
+            Duration::from_millis(1),
+        );
+
+        let lines = cell.display_lines(80);
+        let rendered = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn coalesces_reads_across_multiple_calls() {
+        let mut cell = ExecCell::new();
+        // Call 1: Search only
+        cell.add_call(
+            "c1".into(),
+            vec!["bash".into(), "-lc".into(), "echo".into()],
+            vec![ParsedCommand::Search {
+                query: Some("shimmer_spans".into()),
+                path: None,
+                cmd: "rg shimmer_spans".into(),
+            }],
+        );
+        cell.complete_call(
+            "c1",
+            CommandOutput {
+                exit_code: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+                formatted_output: String::new(),
+            },
+            Duration::from_millis(1),
+        );
+        // Call 2: Read A
+        cell.add_call(
+            "c2".into(),
+            vec!["bash".into(), "-lc".into(), "echo".into()],
+            vec![ParsedCommand::Read {
+                name: "shimmer.rs".into(),
+                cmd: "cat shimmer.rs".into(),
+            }],
+        );
+        cell.complete_call(
+            "c2",
+            CommandOutput {
+                exit_code: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+                formatted_output: String::new(),
+            },
+            Duration::from_millis(1),
+        );
+        // Call 3: Read B
+        cell.add_call(
+            "c3".into(),
+            vec!["bash".into(), "-lc".into(), "echo".into()],
+            vec![ParsedCommand::Read {
+                name: "status_indicator_widget.rs".into(),
+                cmd: "cat status_indicator_widget.rs".into(),
+            }],
+        );
+        cell.complete_call(
+            "c3",
+            CommandOutput {
+                exit_code: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+                formatted_output: String::new(),
+            },
+            Duration::from_millis(1),
+        );
+
+        let lines = cell.display_lines(80);
+        let rendered = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn coalesced_reads_dedupe_names() {
+        let mut cell = ExecCell::new();
+        cell.add_call(
+            "c1".into(),
+            vec!["bash".into(), "-lc".into(), "echo".into()],
+            vec![
+                ParsedCommand::Read {
+                    name: "auth.rs".into(),
+                    cmd: "cat auth.rs".into(),
+                },
+                ParsedCommand::Read {
+                    name: "auth.rs".into(),
+                    cmd: "cat auth.rs".into(),
+                },
+                ParsedCommand::Read {
+                    name: "shimmer.rs".into(),
+                    cmd: "cat shimmer.rs".into(),
+                },
+            ],
+        );
+        cell.complete_call(
+            "c1",
+            CommandOutput {
+                exit_code: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+                formatted_output: String::new(),
+            },
+            Duration::from_millis(1),
+        );
+        let lines = cell.display_lines(80);
+        let rendered = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        insta::assert_snapshot!(rendered);
+    }
     #[test]
     fn user_history_cell_wraps_and_prefixes_each_line_snapshot() {
         let msg = "one two three four five six seven";

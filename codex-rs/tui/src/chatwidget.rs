@@ -99,7 +99,7 @@ pub(crate) struct ChatWidget {
     // Stream lifecycle controller
     stream: StreamController,
     running_commands: HashMap<String, RunningCommand>,
-    pending_exec_completions: Vec<(Vec<String>, Vec<ParsedCommand>, CommandOutput)>,
+    // No longer needed; completions are stored within the active ExecCell
     task_complete_pending: bool,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
@@ -111,7 +111,6 @@ pub(crate) struct ChatWidget {
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
-    last_history_was_exec: bool,
     // User messages queued while a turn is in progress
     queued_user_messages: VecDeque<UserMessage>,
 }
@@ -431,14 +430,16 @@ impl ChatWidget {
                 self.task_complete_pending = false;
             }
             // A completed stream indicates non-exec content was just inserted.
-            // Reset the exec header grouping so the next exec shows its header.
-            self.last_history_was_exec = false;
+            // Exec grouping relies on active_exec_cell now; nothing to toggle.
             self.flush_interrupt_queue();
         }
     }
 
     #[inline]
     fn handle_streaming_delta(&mut self, delta: String) {
+        // Before streaming agent content, flush any active exec cell group.
+        tracing::info!(target: "codex_tui::exec", "flushing active_exec_cell: reason=agent_stream_delta");
+        self.flush_active_exec_cell();
         let sink = AppEventHistorySink(self.app_event_tx.clone());
         self.stream.begin(&sink);
         self.stream.push_and_maybe_commit(&delta, &sink);
@@ -451,32 +452,26 @@ impl ChatWidget {
             Some(rc) => (rc.command, rc.parsed_cmd),
             None => (vec![ev.call_id.clone()], Vec::new()),
         };
-        self.pending_exec_completions.push((
-            command,
-            parsed,
-            CommandOutput {
-                exit_code: ev.exit_code,
-                stdout: ev.stdout.clone(),
-                stderr: ev.stderr.clone(),
-                formatted_output: ev.formatted_output.clone(),
-            },
-        ));
 
-        if self.running_commands.is_empty() {
-            self.active_exec_cell = None;
-            let pending = std::mem::take(&mut self.pending_exec_completions);
-            for (command, parsed, output) in pending {
-                let include_header = !self.last_history_was_exec;
-                let cell = history_cell::new_completed_exec_command(
-                    command,
-                    parsed,
-                    output,
-                    include_header,
-                    ev.duration,
-                );
-                self.add_to_history(cell);
-                self.last_history_was_exec = true;
-            }
+        // Ensure we have an active cell, then record completion into it.
+        if self.active_exec_cell.is_none() {
+            self.active_exec_cell = Some(history_cell::new_active_exec_command(
+                ev.call_id.clone(),
+                command,
+                parsed,
+            ));
+        }
+        if let Some(cell) = self.active_exec_cell.as_mut() {
+            cell.complete_call(
+                &ev.call_id,
+                CommandOutput {
+                    exit_code: ev.exit_code,
+                    stdout: ev.stdout.clone(),
+                    stderr: ev.stderr.clone(),
+                    formatted_output: ev.formatted_output.clone(),
+                },
+                ev.duration,
+            );
         }
     }
 
@@ -532,17 +527,20 @@ impl ChatWidget {
                 parsed_cmd: ev.parsed_cmd.clone(),
             },
         );
-        // Accumulate parsed commands into a single active Exec cell so they stack
+        // Accumulate each exec begin as a new call within the active Exec cell.
         match self.active_exec_cell.as_mut() {
             Some(exec) => {
-                exec.parsed.extend(ev.parsed_cmd);
+                exec.add_call(
+                    ev.call_id.clone(),
+                    ev.command.clone(),
+                    ev.parsed_cmd.clone(),
+                );
             }
             _ => {
-                let include_header = !self.last_history_was_exec;
                 self.active_exec_cell = Some(history_cell::new_active_exec_command(
-                    ev.command,
-                    ev.parsed_cmd,
-                    include_header,
+                    ev.call_id.clone(),
+                    ev.command.clone(),
+                    ev.parsed_cmd.clone(),
                 ));
             }
         }
@@ -615,13 +613,12 @@ impl ChatWidget {
             last_token_usage: TokenUsage::default(),
             stream: StreamController::new(config),
             running_commands: HashMap::new(),
-            pending_exec_completions: Vec::new(),
+
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             session_id: None,
-            last_history_was_exec: false,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: true,
         }
@@ -660,13 +657,12 @@ impl ChatWidget {
             last_token_usage: TokenUsage::default(),
             stream: StreamController::new(config),
             running_commands: HashMap::new(),
-            pending_exec_completions: Vec::new(),
+
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             session_id: None,
-            last_history_was_exec: false,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: false,
         }
@@ -852,7 +848,11 @@ impl ChatWidget {
 
     fn flush_active_exec_cell(&mut self) {
         if let Some(active) = self.active_exec_cell.take() {
-            self.last_history_was_exec = true;
+            tracing::info!(
+                target = "codex_tui::exec",
+                "flush_active_exec_cell: calls={}",
+                active.calls_len(),
+            );
             self.app_event_tx
                 .send(AppEvent::InsertHistoryCell(Box::new(active)));
         }
@@ -861,10 +861,11 @@ impl ChatWidget {
     fn add_to_history(&mut self, cell: impl HistoryCell + 'static) {
         // Only break exec grouping if the cell renders visible lines.
         let has_display_lines = !cell.display_lines(u16::MAX).is_empty();
-        self.flush_active_exec_cell();
         if has_display_lines {
-            self.last_history_was_exec = false;
+            tracing::info!(target: "codex_tui::exec", "flushing active_exec_cell: reason=insert_other_history_cell");
+            self.flush_active_exec_cell();
         }
+        // Exec grouping relies on active_exec_cell now; nothing to toggle.
         self.app_event_tx
             .send(AppEvent::InsertHistoryCell(Box::new(cell)));
     }
@@ -987,7 +988,6 @@ impl ChatWidget {
             let cell = cell.into_failed();
             // Insert finalized exec into history and keep grouping consistent.
             self.add_to_history(cell);
-            self.last_history_was_exec = true;
         }
     }
 

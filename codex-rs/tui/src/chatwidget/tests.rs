@@ -175,7 +175,6 @@ fn make_chatwidget_manual() -> (
         last_token_usage: TokenUsage::default(),
         stream: StreamController::new(cfg),
         running_commands: HashMap::new(),
-        pending_exec_completions: Vec::new(),
         task_complete_pending: false,
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
@@ -183,7 +182,6 @@ fn make_chatwidget_manual() -> (
         session_id: None,
         frame_requester: crate::tui::FrameRequester::test_dummy(),
         show_welcome_banner: true,
-        last_history_was_exec: false,
         queued_user_messages: std::collections::VecDeque::new(),
     };
     (widget, rx, op_rx)
@@ -303,12 +301,14 @@ fn exec_history_cell_shows_working_then_completed() {
     });
 
     let cells = drain_insert_history(&mut rx);
-    assert_eq!(
-        cells.len(),
-        1,
-        "expected only the completed exec cell to be inserted into history"
-    );
-    let blob = lines_to_single_string(&cells[0]);
+    assert_eq!(cells.len(), 0, "no history cells should be flushed yet");
+    // Inspect the active exec cell rendering directly.
+    let lines = chat
+        .active_exec_cell
+        .as_ref()
+        .expect("active exec cell present")
+        .display_lines(80);
+    let blob = lines_to_single_string(&lines);
     assert!(
         blob.contains('✓'),
         "expected completed exec cell to show success marker: {blob:?}"
@@ -354,12 +354,13 @@ fn exec_history_cell_shows_working_then_failed() {
     });
 
     let cells = drain_insert_history(&mut rx);
-    assert_eq!(
-        cells.len(),
-        1,
-        "expected only the completed exec cell to be inserted into history"
-    );
-    let blob = lines_to_single_string(&cells[0]);
+    assert_eq!(cells.len(), 0, "no history cells should be flushed yet");
+    let lines = chat
+        .active_exec_cell
+        .as_ref()
+        .expect("active exec cell present")
+        .display_lines(80);
+    let blob = lines_to_single_string(&lines);
     assert!(
         blob.contains('✗'),
         "expected failure marker present: {blob:?}"
@@ -444,7 +445,7 @@ fn exec_history_extends_previous_when_consecutive() {
         }),
     });
     let first_cells = drain_insert_history(&mut rx);
-    assert_eq!(first_cells.len(), 1, "first exec should insert history");
+    assert_eq!(first_cells.len(), 0, "first exec should not flush yet");
 
     // Second command
     chat.handle_codex_event(Event {
@@ -474,11 +475,19 @@ fn exec_history_extends_previous_when_consecutive() {
         }),
     });
     let second_cells = drain_insert_history(&mut rx);
-    assert_eq!(second_cells.len(), 1, "second exec should extend history");
-    let first_blob = lines_to_single_string(&first_cells[0]);
-    let second_blob = lines_to_single_string(&second_cells[0]);
-    assert!(first_blob.contains('✓'));
-    assert!(second_blob.contains("echo two"));
+    assert_eq!(second_cells.len(), 0, "second exec should still be active");
+
+    // Trigger a flush by emitting agent content which cannot be merged
+    chat.handle_codex_event(Event {
+        id: "sub-a".into(),
+        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta: "hi".into() }),
+    });
+    let flushed = drain_insert_history(&mut rx);
+    // Expect exactly one flushed exec cell followed by streamed lines; check first is exec.
+    assert!(!flushed.is_empty());
+    let exec_blob = lines_to_single_string(&flushed[0]);
+    assert!(exec_blob.contains("echo one"));
+    assert!(exec_blob.contains("echo two"));
 }
 
 #[tokio::test(flavor = "current_thread")]
