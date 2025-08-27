@@ -110,6 +110,33 @@ enum ActivePopup {
 }
 
 impl ChatComposer {
+    #[inline]
+    fn clamp_to_char_boundary(text: &str, pos: usize) -> usize {
+        let mut p = pos.min(text.len());
+        if p < text.len() && !text.is_char_boundary(p) {
+            p = text
+                .char_indices()
+                .map(|(i, _)| i)
+                .take_while(|&i| i <= p)
+                .last()
+                .unwrap_or(0);
+        }
+        p
+    }
+
+    #[inline]
+    fn handle_non_ascii_char(&mut self, input: KeyEvent) -> (InputResult, bool) {
+        if !self.paste_burst_buffer.is_empty() || self.in_paste_burst_mode {
+            let pasted = std::mem::take(&mut self.paste_burst_buffer);
+            self.in_paste_burst_mode = false;
+            self.handle_paste(pasted);
+        }
+        self.textarea.input(input);
+        let text_after = self.textarea.text();
+        self.pending_pastes
+            .retain(|(placeholder, _)| text_after.contains(placeholder));
+        (InputResult::None, true)
+    }
     pub fn new(
         has_input_focus: bool,
         app_event_tx: AppEventSender,
@@ -259,7 +286,7 @@ impl ChatComposer {
     /// Replace the entire composer content with `text` and reset cursor.
     pub(crate) fn set_text_content(&mut self, text: String) {
         self.textarea.set_text(&text);
-        self.textarea.set_cursor(usize::MAX);
+        self.textarea.set_cursor(0);
         self.sync_command_popup();
         self.sync_file_search_popup();
     }
@@ -462,8 +489,10 @@ impl ChatComposer {
                         // using the flat text and byte-offset cursor API.
                         let cursor_offset = self.textarea.cursor();
                         let text = self.textarea.text();
-                        let before_cursor = &text[..cursor_offset];
-                        let after_cursor = &text[cursor_offset..];
+                        // Clamp to a valid char boundary to avoid panics when slicing.
+                        let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
+                        let before_cursor = &text[..safe_cursor];
+                        let after_cursor = &text[safe_cursor..];
 
                         // Determine token boundaries in the full text.
                         let start_idx = before_cursor
@@ -476,7 +505,7 @@ impl ChatComposer {
                             .find(|(_, c)| c.is_whitespace())
                             .map(|(idx, _)| idx)
                             .unwrap_or(after_cursor.len());
-                        let end_idx = cursor_offset + end_rel_idx;
+                        let end_idx = safe_cursor + end_rel_idx;
 
                         self.textarea.replace_range(start_idx..end_idx, "");
                         self.textarea.set_cursor(start_idx);
@@ -624,9 +653,11 @@ impl ChatComposer {
     fn insert_selected_path(&mut self, path: &str) {
         let cursor_offset = self.textarea.cursor();
         let text = self.textarea.text();
+        // Clamp to a valid char boundary to avoid panics when slicing.
+        let safe_cursor = Self::clamp_to_char_boundary(text, cursor_offset);
 
-        let before_cursor = &text[..cursor_offset];
-        let after_cursor = &text[cursor_offset..];
+        let before_cursor = &text[..safe_cursor];
+        let after_cursor = &text[safe_cursor..];
 
         // Determine token boundaries.
         let start_idx = before_cursor
@@ -640,7 +671,7 @@ impl ChatComposer {
             .find(|(_, c)| c.is_whitespace())
             .map(|(idx, _)| idx)
             .unwrap_or(after_cursor.len());
-        let end_idx = cursor_offset + end_rel_idx;
+        let end_idx = safe_cursor + end_rel_idx;
 
         // Replace the slice `[start_idx, end_idx)` with the chosen path and a trailing space.
         let mut new_text =
@@ -808,24 +839,12 @@ impl ChatComposer {
             let has_ctrl_or_alt =
                 modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::ALT);
             if !has_ctrl_or_alt {
-                // Non-ASCII characters such as Japanese characters are easily sent 
-                // continuously at high speed with IME confirmation, and if they are 
-                // mistakenly detected by “non-bracketed paste” burst detection, 
-                // the last character remains in the buffer and is not displayed.
-                //  To prevent this, burst detection is disabled for non-ASCII 
-                // characters, and they are inserted sequentially.
+                // Non-ASCII characters (e.g., from IMEs) can arrive in quick bursts and be
+                // misclassified by our non-bracketed paste heuristic. To avoid leaving
+                // residual buffered content or misdetecting a paste, flush any burst buffer
+                // and insert non-ASCII characters directly.
                 if !ch.is_ascii() {
-                    //  If there is already a buffer accumulated by repeated ASCII keystrokes, flash it first.
-                    if !self.paste_burst_buffer.is_empty() || self.in_paste_burst_mode {
-                        let pasted = std::mem::take(&mut self.paste_burst_buffer);
-                        self.in_paste_burst_mode = false;
-                        self.handle_paste(pasted);
-                    }
-                    self.textarea.input(input);
-                    let text_after = self.textarea.text();
-                    self.pending_pastes
-                        .retain(|(placeholder, _)| text_after.contains(placeholder));
-                    return (InputResult::None, true);
+                    return self.handle_non_ascii_char(input);
                 }
                 // Update burst heuristics.
                 match self.last_plain_char_time {
@@ -961,20 +980,9 @@ impl ChatComposer {
     /// Attempts to remove an image or paste placeholder if the cursor is at the end of one.
     /// Returns true if a placeholder was removed.
     fn try_remove_any_placeholder_at_cursor(&mut self) -> bool {
-        // The cursor may occasionally end up inside a multi-byte character
-        // (e.g. when the composer contains non-ASCII text and we compute
-        // offsets using byte lengths). Clamp it to the nearest previous
-        // character boundary to avoid panicking when slicing.
-        let mut p = self.textarea.cursor().min(self.textarea.text().len());
+        // Clamp the cursor to a valid char boundary to avoid panics when slicing.
         let text = self.textarea.text();
-        if p < text.len() && !text.is_char_boundary(p) {
-            p = text
-                .char_indices()
-                .map(|(i, _)| i)
-                .take_while(|&i| i <= p)
-                .last()
-                .unwrap_or(0);
-        }
+        let p = Self::clamp_to_char_boundary(text, self.textarea.cursor());
 
         // Try image placeholders first
         let mut out: Option<(usize, String)> = None;
