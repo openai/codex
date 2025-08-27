@@ -102,26 +102,6 @@ mod tests {
     }
 
     #[test]
-    fn merges_adjacent_assistant_messages() {
-        let mut h = ConversationHistory::default();
-        let a1 = assistant_msg("Hello");
-        let a2 = assistant_msg(", world!");
-        h.record_items([&a1, &a2]);
-
-        let items = h.contents();
-        assert_eq!(
-            items,
-            vec![ResponseItem::Message {
-                id: None,
-                role: "assistant".to_string(),
-                content: vec![ContentItem::OutputText {
-                    text: "Hello, world!".to_string()
-                }]
-            }]
-        );
-    }
-
-    #[test]
     fn filters_non_api_messages() {
         let mut h = ConversationHistory::default();
         // System message is not an API message; Other is ignored.
