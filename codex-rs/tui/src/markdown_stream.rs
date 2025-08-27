@@ -558,13 +558,6 @@ mod tests {
             .collect()
     }
 
-    // --- Minimization and fuzz helpers (debug/analysis) ---
-
-    // cleaned up: removed unused fuzzing helpers
-
-    /// Greedily minimize a failing delta sequence to the shortest (by element count)
-    // (diagnostic minimizer removed)
-
     #[test]
     fn lists_and_fences_commit_without_duplication() {
         let cfg = test_config();
@@ -681,9 +674,7 @@ mod tests {
         let full: String = deltas.iter().copied().collect();
         let mut rendered_all: Vec<ratatui::text::Line<'static>> = Vec::new();
         crate::markdown::append_markdown(&full, &mut rendered_all, &cfg);
-        coalesce_ordered_markers_for_tests(&mut rendered_all);
-        let mut rendered_all_strs = lines_to_plain_strings(&rendered_all);
-        coalesce_ordered_marker_strings(&mut rendered_all_strs);
+        let rendered_all_strs = lines_to_plain_strings(&rendered_all);
 
         assert_eq!(
             streamed_strs, rendered_all_strs,
@@ -855,61 +846,5 @@ mod tests {
         crate::markdown::append_markdown(&full, &mut rendered, &cfg);
         let rendered_strs = lines_to_plain_strings(&rendered);
         assert_eq!(streamed_strs, rendered_strs);
-    }
-
-    fn coalesce_ordered_markers_for_tests(lines: &mut Vec<ratatui::text::Line<'static>>) {
-        let mut i = 0usize;
-        while i + 1 < lines.len() {
-            let a = lines[i]
-                .spans
-                .iter()
-                .map(|s| s.content.clone())
-                .collect::<String>();
-            let b = lines[i + 1]
-                .spans
-                .iter()
-                .map(|s| s.content.clone())
-                .collect::<String>();
-            if is_ordered_marker_only_for_tests(&a) {
-                lines[i] = ratatui::text::Line::from(format!("{}{}", a, b));
-                lines.remove(i + 1);
-            } else {
-                i += 1;
-            }
-        }
-    }
-
-    fn is_ordered_marker_only_for_tests(s: &str) -> bool {
-        let t = s.trim_end();
-        let mut it = t.chars().peekable();
-        let mut saw_digit = false;
-        while let Some(&ch) = it.peek() {
-            if ch.is_ascii_digit() {
-                saw_digit = true;
-                it.next();
-            } else {
-                break;
-            }
-        }
-        if !saw_digit || it.next() != Some('.') {
-            return false;
-        }
-        match it.next() {
-            Some(' ') | None => it.next().is_none(),
-            _ => false,
-        }
-    }
-
-    fn coalesce_ordered_marker_strings(lines: &mut Vec<String>) {
-        let mut i = 0usize;
-        while i + 1 < lines.len() {
-            if is_ordered_marker_only_for_tests(&lines[i]) {
-                let merged = format!("{}{}", lines[i], lines[i + 1]);
-                lines[i] = merged;
-                lines.remove(i + 1);
-            } else {
-                i += 1;
-            }
-        }
     }
 }
