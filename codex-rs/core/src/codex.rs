@@ -1913,6 +1913,13 @@ async fn run_compact_task(
         }
     }
 
+    // Prune history to keep only the summarized assistant message before
+    // signaling completion so the next request sees the compacted context.
+    {
+        let mut state = sess.state.lock_unchecked();
+        state.history.keep_last_messages(1);
+    }
+
     sess.remove_task(&sub_id);
     let event = Event {
         id: sub_id.clone(),
@@ -1928,9 +1935,6 @@ async fn run_compact_task(
         }),
     };
     sess.send_event(event).await;
-
-    let mut state = sess.state.lock_unchecked();
-    state.history.keep_last_messages(1);
 }
 
 async fn handle_response_item(
