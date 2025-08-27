@@ -152,11 +152,9 @@ impl UserApprovalWidget {
 
                 contents.push(Line::from(""));
                 let is_web_search = command.first().map(|s| s == "web_search").unwrap_or(false);
-                if !is_web_search {
-                    if let Some(reason) = reason {
-                        contents.push(Line::from(reason.clone().italic()));
-                        contents.push(Line::from(""));
-                    }
+                if !is_web_search && let Some(reason) = reason {
+                    contents.push(Line::from(reason.clone().italic()));
+                    contents.push(Line::from(""));
                 }
                 Paragraph::new(contents).wrap(Wrap { trim: false })
             }
