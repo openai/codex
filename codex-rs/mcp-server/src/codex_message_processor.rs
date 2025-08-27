@@ -662,10 +662,8 @@ async fn apply_bespoke_event_handling(
             let rx = outgoing
                 .send_request(APPLY_PATCH_APPROVAL_METHOD, Some(value))
                 .await;
-            // TODO(mbolin): Enforce a timeout so this task does not live indefinitely?
-            tokio::spawn(async move {
-                on_patch_approval_response(event_id, rx, conversation).await;
-            });
+            // Await inline to avoid scheduling delays that could stall progress.
+            on_patch_approval_response(event_id, rx, conversation).await;
         }
         EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
             call_id,
@@ -684,11 +682,8 @@ async fn apply_bespoke_event_handling(
             let rx = outgoing
                 .send_request(EXEC_COMMAND_APPROVAL_METHOD, Some(value))
                 .await;
-
-            // TODO(mbolin): Enforce a timeout so this task does not live indefinitely?
-            tokio::spawn(async move {
-                on_exec_approval_response(event_id, rx, conversation).await;
-            });
+            // Await inline to avoid scheduling delays that could stall progress.
+            on_exec_approval_response(event_id, rx, conversation).await;
         }
         // If this is a TurnAborted, reply to any pending interrupt requests.
         EventMsg::TurnAborted(turn_aborted_event) => {
