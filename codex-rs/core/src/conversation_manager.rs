@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_login::AuthManager;
@@ -16,10 +17,16 @@ use crate::error::Result as CodexResult;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::SessionConfiguredEvent;
+use crate::rollout::RolloutRecorder;
 use codex_protocol::models::ResponseItem;
 
 /// Represents a newly created Codex conversation, including the first event
 /// (which is [`EventMsg::SessionConfigured`]).
+#[derive(Debug, Clone)]
+pub enum InitialHistory {
+    New,
+    Resumed(Vec<ResponseItem>),
+}
 pub struct NewConversation {
     pub conversation_id: Uuid,
     pub conversation: Arc<CodexConversation>,
@@ -57,14 +64,21 @@ impl ConversationManager {
         config: Config,
         auth_manager: Arc<AuthManager>,
     ) -> CodexResult<NewConversation> {
-        let CodexSpawnOk {
-            codex,
-            session_id: conversation_id,
-        } = {
-            let initial_history = None;
-            Codex::spawn(config, auth_manager, initial_history).await?
-        };
-        self.finalize_spawn(codex, conversation_id).await
+        // TO BE REFACTORED: use the config experimental_resume field until we have a mainstream way.
+        if let Some(resume_path) = config.experimental_resume.as_ref() {
+            let initial_history = RolloutRecorder::get_rollout_history(resume_path).await?;
+            let CodexSpawnOk {
+                codex,
+                session_id: conversation_id,
+            } = Codex::spawn(config, auth_manager, initial_history).await?;
+            self.finalize_spawn(codex, conversation_id).await
+        } else {
+            let CodexSpawnOk {
+                codex,
+                session_id: conversation_id,
+            } = { Codex::spawn(config, auth_manager, InitialHistory::New).await? };
+            self.finalize_spawn(codex, conversation_id).await
+        }
     }
 
     async fn finalize_spawn(
@@ -110,6 +124,20 @@ impl ConversationManager {
             .ok_or_else(|| CodexErr::ConversationNotFound(conversation_id))
     }
 
+    pub async fn resume_conversation_from_rollout(
+        &self,
+        config: Config,
+        rollout_path: PathBuf,
+        auth_manager: Arc<AuthManager>,
+    ) -> CodexResult<NewConversation> {
+        let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
+        let CodexSpawnOk {
+            codex,
+            session_id: conversation_id,
+        } = Codex::spawn(config, auth_manager, initial_history).await?;
+        self.finalize_spawn(codex, conversation_id).await
+    }
+
     /// Fork an existing conversation by dropping the last `drop_last_messages`
     /// user/assistant messages from its transcript and starting a new
     /// conversation with identical configuration (unless overridden by the
@@ -121,7 +149,7 @@ impl ConversationManager {
         config: Config,
     ) -> CodexResult<NewConversation> {
         // Compute the prefix up to the cut point.
-        let truncated_history =
+        let history =
             truncate_after_dropping_last_messages(conversation_history, num_messages_to_drop);
 
         // Spawn a new conversation with the computed initial history.
@@ -129,7 +157,7 @@ impl ConversationManager {
         let CodexSpawnOk {
             codex,
             session_id: conversation_id,
-        } = Codex::spawn(config, auth_manager, Some(truncated_history)).await?;
+        } = Codex::spawn(config, auth_manager, history).await?;
 
         self.finalize_spawn(codex, conversation_id).await
     }
@@ -137,9 +165,9 @@ impl ConversationManager {
 
 /// Return a prefix of `items` obtained by dropping the last `n` user messages
 /// and all items that follow them.
-fn truncate_after_dropping_last_messages(items: Vec<ResponseItem>, n: usize) -> Vec<ResponseItem> {
-    if n == 0 || items.is_empty() {
-        return items;
+fn truncate_after_dropping_last_messages(items: Vec<ResponseItem>, n: usize) -> InitialHistory {
+    if n == 0 {
+        return InitialHistory::Resumed(items);
     }
 
     // Walk backwards counting only `user` Message items, find cut index.
@@ -157,11 +185,11 @@ fn truncate_after_dropping_last_messages(items: Vec<ResponseItem>, n: usize) -> 
             }
         }
     }
-    if count < n {
+    if cut_index == 0 {
         // If fewer than n messages exist, drop everything.
-        Vec::new()
+        InitialHistory::New
     } else {
-        items.into_iter().take(cut_index).collect()
+        InitialHistory::Resumed(items.into_iter().take(cut_index).collect())
     }
 }
 
@@ -217,12 +245,13 @@ mod tests {
         ];
 
         let truncated = truncate_after_dropping_last_messages(items.clone(), 1);
-        assert_eq!(
+        assert!(matches!(
             truncated,
-            vec![items[0].clone(), items[1].clone(), items[2].clone()]
-        );
+            InitialHistory::Resumed(items)
+                if items == vec![items[0].clone(), items[1].clone(), items[2].clone()]
+        ));
 
         let truncated2 = truncate_after_dropping_last_messages(items, 2);
-        assert!(truncated2.is_empty());
+        assert!(matches!(truncated2, InitialHistory::New));
     }
 }
