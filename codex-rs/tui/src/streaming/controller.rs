@@ -66,6 +66,21 @@ impl StreamController {
         // leave header state unchanged; caller decides when to reset
     }
 
+    /// Extract any partial streaming content as a plain text string.
+    /// This is used during interruption to preserve partial messages
+    /// before clearing the stream. Uses the same logic as chat history
+    /// to only extract committable content.
+    pub(crate) fn extract_partial_content(&self) -> Option<String> {
+        if !self.active || !self.state.has_seen_delta {
+            return None;
+        }
+
+        // Use the same logic as chat history to only extract committable content
+        self.state
+            .collector
+            .extract_committable_content(&self.config)
+    }
+
     fn emit_header_if_needed(&mut self, out_lines: &mut Lines) -> bool {
         self.header.maybe_emit(out_lines)
     }

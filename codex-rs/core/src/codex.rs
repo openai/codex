@@ -1247,6 +1247,11 @@ async fn submission_loop(
                 });
             }
 
+            Op::AddPartialMessageToConversation { message } => {
+                debug!("Adding partial message to conversation history: {message:?}");
+                sess.record_conversation_items(&[message]).await;
+            }
+
             Op::GetHistoryEntryRequest { offset, log_id } => {
                 let config = config.clone();
                 let tx_event = sess.tx_event.clone();

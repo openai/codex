@@ -136,6 +136,13 @@ pub enum Op {
         text: String,
     },
 
+    /// Add a partial assistant message to the conversation history during interruption.
+    /// This ensures interrupted streaming content is preserved for the AI agent context.
+    AddPartialMessageToConversation {
+        /// The partial assistant message to be added to conversation history.
+        message: ResponseItem,
+    },
+
     /// Request a single history entry identified by `log_id` + `offset`.
     GetHistoryEntryRequest { offset: usize, log_id: u64 },
 
