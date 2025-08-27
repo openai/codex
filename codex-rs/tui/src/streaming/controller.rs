@@ -166,15 +166,11 @@ impl StreamController {
         }
         let step = { self.state.step() };
         if !step.history.is_empty() {
-            // Decide if a header would be emitted; if so, wrap in a cell that hides it in display.
+            // Decide if a header would be emitted; always wrap in a cell so display can width-wrap and indent.
             let mut probe: Lines = Vec::new();
             let header_emitted = self.emit_header_if_needed(&mut probe);
-            if header_emitted {
-                let cell = crate::history_cell::AgentMessageCell::new(step.history, true);
-                sink.insert_history_cell(Box::new(cell));
-            } else {
-                sink.insert_history(step.history);
-            }
+            let cell = crate::history_cell::AgentMessageCell::new(step.history, header_emitted);
+            sink.insert_history_cell(Box::new(cell));
         }
 
         let is_idle = self.state.is_idle();

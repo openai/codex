@@ -310,7 +310,10 @@ fn exec_history_cell_shows_working_then_completed() {
         .display_lines(80);
     let blob = lines_to_single_string(&lines);
     // New behavior: no glyph markers; ensure command is shown and no panic.
-    assert!(blob.contains("• Ran"), "expected summary header present: {blob:?}");
+    assert!(
+        blob.contains("• Ran"),
+        "expected summary header present: {blob:?}"
+    );
     assert!(
         blob.contains("echo done"),
         "expected command text to be present: {blob:?}"
@@ -360,7 +363,10 @@ fn exec_history_cell_shows_working_then_failed() {
         .display_lines(80);
     let blob = lines_to_single_string(&lines);
     // New behavior: no glyph markers; assert error text and command are present.
-    assert!(blob.contains("false"), "expected command text present: {blob:?}");
+    assert!(
+        blob.contains("false"),
+        "expected command text present: {blob:?}"
+    );
     assert!(blob.to_lowercase().contains("error"), "expected error text");
 }
 
@@ -469,7 +475,10 @@ fn exec_history_extends_previous_when_consecutive() {
     });
     let second_cells = drain_insert_history(&mut rx);
     // New behavior may flush immediately or on next content; accept either.
-    assert!(second_cells.len() <= 1, "second exec should have at most one flush");
+    assert!(
+        second_cells.len() <= 1,
+        "second exec should have at most one flush"
+    );
 
     // If not flushed yet, trigger a flush by emitting agent content which cannot be merged
     let mut flushed = second_cells;
@@ -486,7 +495,10 @@ fn exec_history_extends_previous_when_consecutive() {
         .iter()
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
-    assert!(combined.contains("echo one"), "missing 'echo one' in: {combined}");
+    assert!(
+        combined.contains("echo one"),
+        "missing 'echo one' in: {combined}"
+    );
     // New behavior: the second command may remain active; verify active cell contains it.
     let active_lines = chat
         .active_exec_cell
@@ -494,7 +506,10 @@ fn exec_history_extends_previous_when_consecutive() {
         .expect("active exec cell present")
         .display_lines(80);
     let active_blob = lines_to_single_string(&active_lines);
-    assert!(active_blob.contains("echo two"), "missing 'echo two' in active: {active_blob}");
+    assert!(
+        active_blob.contains("echo two"),
+        "missing 'echo two' in active: {active_blob}"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

@@ -129,12 +129,38 @@ impl AgentMessageCell {
 }
 
 impl HistoryCell for AgentMessageCell {
-    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut out: Vec<Line<'static>> = Vec::new();
         if self.include_header_in_transcript {
             out.push(Line::from(""));
         }
-        out.extend(self.lines.clone());
+        // We want:
+        // - First visual line: "> " prefix (collapse with header logic)
+        // - All subsequent visual lines: two-space prefix
+        let mut is_first_visual = true;
+        let wrap_width = width.saturating_sub(2); // account for prefix
+        for line in &self.lines {
+            let wrapped =
+                crate::insert_history::word_wrap_lines(std::slice::from_ref(line), wrap_width);
+            for (i, mut piece) in wrapped.into_iter().enumerate() {
+                let mut spans = Vec::with_capacity(piece.spans.len() + 1);
+                if is_first_visual && i == 0 {
+                    if self.include_header_in_transcript {
+                        spans.push("> ".into());
+                    } else {
+                        spans.push("  ".into());
+                    }
+                } else {
+                    spans.push("  ".into());
+                }
+                spans.extend(piece.spans.into_iter());
+                piece.spans = spans;
+                out.push(piece);
+            }
+            if is_first_visual {
+                is_first_visual = false;
+            }
+        }
         out
     }
 
