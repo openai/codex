@@ -1,5 +1,21 @@
 # Authentication
 
+## Usage-based billing alternative: Use an OpenAI API key
+
+If you prefer to pay-as-you-go, you can still authenticate with your OpenAI API key by setting it as an environment variable:
+
+```shell
+export OPENAI_API_KEY="your-api-key-here"
+```
+
+## Migrating to ChatGPT login from API key
+
+If you've used the Codex CLI before with usage-based billing via an API key and want to switch to using your ChatGPT plan, follow these steps:
+
+1. Update the CLI and ensure `codex --version` is `0.20.0` or later
+2. Delete `~/.codex/auth.json` (on Windows: `C:\\Users\\USERNAME\\.codex\\auth.json`)
+3. Run `codex login` again
+
 ## Forcing a specific auth method (advanced)
 
 You can explicitly choose which authentication Codex should prefer when both are available.

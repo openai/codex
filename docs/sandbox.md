@@ -1,29 +1,23 @@
 ## Sandbox & approvals
 
-### Choosing Codex's level of autonomy
+### Approval modes
 
-We always recommend running Codex in its default sandbox that gives you strong guardrails around what the agent can do. The default sandbox prevents it from editing files outside its workspace, or from accessing the network.
+We've chosen a powerful default for how Codex works on your computer: `Auto`. In this approval mode, Codex can read files, make edits, and run commands in the working directory automatically. However, Codex will need your approval to work outside the working directory or access network.
 
-When you launch Codex in a new folder, it detects whether the folder is version controlled and recommends one of two levels of autonomy:
+When you just want to chat, or if you want to plan before diving in, you can switch to `Read Only` mode with the `/approvals` command.
 
-#### **1. Read/write**
+If you need Codex to read files, make edits, and run commands with network access, without approval, you can use `Full Access`. Exercise caution before doing so.
 
-- Codex can run commands and write files in the workspace without approval.
-- To write files in other folders, access network, update git or perform other actions protected by the sandbox, Codex will need your permission.
-- By default, the workspace includes the current directory, as well as temporary directories like `/tmp`. You can see what directories are in the workspace with the `/status` command. See the docs for how to customize this behavior.
-- Advanced: You can manually specify this configuration by running `codex --sandbox workspace-write --ask-for-approval on-request`
-- This is the recommended default for version-controlled folders.
+#### Defaults and recommendations
 
-#### **2. Read-only**
-
-- Codex can run read-only commands without approval.
-- To edit files, access network, or perform other actions protected by the sandbox, Codex will need your permission.
-- Advanced: You can manually specify this configuration by running `codex --sandbox read-only --ask-for-approval on-request`
-- This is the recommended default non-version-controlled folders.
-
-#### **3. Advanced configuration**
-
-Codex gives you fine-grained control over the sandbox with the `--sandbox` option, and over when it requests approval with the `--ask-for-approval` option. Run `codex help` for more on these options.
+- Codex runs in a sandbox by default with strong guardrails: it prevents editing files outside the workspace and blocks network access unless enabled.
+- On launch, Codex detects whether the folder is version-controlled and recommends:
+  - Version-controlled folders: `Auto` (workspace write + on-request approvals)
+  - Non-version-controlled folders: `Read Only`
+- The workspace includes the current directory and temporary directories like `/tmp`. Use the `/status` command to see which directories are in the workspace.
+- You can set these explicitly:
+  - `codex --sandbox workspace-write --ask-for-approval on-request`
+  - `codex --sandbox read-only --ask-for-approval on-request`
 
 ### Can I run without ANY approvals?
 

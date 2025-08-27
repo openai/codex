@@ -6,7 +6,9 @@ In 2021, OpenAI released Codex, an AI system designed to generate code from natu
 
 ### Which models are supported?
 
-We recommend using gpt-5. However, any model available with the [Responses API](https://platform.openai.com/docs/api-reference/responses) is supported. Use the `--model` flag to specify the model you want to use.
+We recommend using Codex with GPT-5, our best coding model. The default reasoning level is medium, and you can upgrade to high for complex tasks with the `/model` command.
+
+You can also use older models by using API-based auth and launching codex with the `--model` flag.
 
 ### Why does `o3` or `o4-mini` not work for me?
 
