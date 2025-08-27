@@ -11,6 +11,7 @@ use crate::common::DEFAULT_WRAP_COLS;
 use codex_core::protocol::FileChange;
 
 use crate::history_cell::PatchEventType;
+use crate::live_wrap::take_prefix_by_width;
 
 const SPACES_AFTER_LINE_NUMBER: usize = 6;
 
@@ -298,19 +299,17 @@ fn push_wrapped_diff_line(
     let mut lines: Vec<RtLine<'static>> = Vec::new();
 
     loop {
-        // Fit the content for the current terminal row:
-        // compute how many columns are available after the prefix, then split
-        // at a UTF-8 character boundary so this row's chunk fits exactly.
+        // Fit the content for the current terminal row (in terminal cells):
+        // Safely split by column count, taking into account variable-width 
+        // glyphs such as symbols, CJK characters, and emoji.
         let available_content_cols = term_cols
             .saturating_sub(if first { prefix_cols + 1 } else { prefix_cols })
             .max(1);
-        let split_at_byte_index = remaining_text
-            .char_indices()
-            .nth(available_content_cols)
-            .map(|(i, _)| i)
-            .unwrap_or_else(|| remaining_text.len());
-        let (chunk, rest) = remaining_text.split_at(split_at_byte_index);
-        remaining_text = rest;
+
+        let (prefix, suffix, _taken_cols) =
+            take_prefix_by_width(remaining_text, available_content_cols);
+        let chunk = prefix;
+        remaining_text = suffix;
 
         if first {
             let mut spans: Vec<RtSpan<'static>> = Vec::new();
