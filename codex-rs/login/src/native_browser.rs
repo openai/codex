@@ -289,14 +289,13 @@ fn jwt_auth_claims(jwt: &str) -> serde_json::Map<String, serde_json::Value> {
             return serde_json::Map::new();
         }
     };
-    if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload_b64) {
-        if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&bytes)
-            && let Some(obj) = v
-                .get_mut("https://api.openai.com/auth")
-                .and_then(|x| x.as_object_mut())
-        {
-            return obj.clone();
-        }
+    if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload_b64)
+        && let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&bytes)
+        && let Some(obj) = v
+            .get_mut("https://api.openai.com/auth")
+            .and_then(|x| x.as_object_mut())
+    {
+        return obj.clone();
     }
     serde_json::Map::new()
 }

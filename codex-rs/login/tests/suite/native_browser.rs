@@ -7,7 +7,8 @@ use std::thread;
 use base64::Engine;
 use codex_login::LoginError;
 use codex_login::login_with_native_browser;
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
+use std::sync::OnceLock;
 use tempfile::tempdir;
 
 // Skip tests when running in a sandbox with network disabled.
@@ -118,7 +119,6 @@ fn start_mock_issuer() -> (SocketAddr, thread::JoinHandle<()>) {
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn persists_auth_json_on_success() {
-    let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!("Skipping native browser test due to network-disabled sandbox");
         return;
@@ -128,12 +128,15 @@ async fn persists_auth_json_on_success() {
     let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
 
     // Force deterministic helper output (bypass UI) and state.
-    set_env("CODEX_LOGIN_ISSUER_BASE", &issuer);
-    set_env("CODEX_LOGIN_FORCE_STATE", "state-ok");
-    set_env(
-        "CODEX_LOGIN_TEST_HELPER_JSON",
-        r#"{"code":"abc","state":"state-ok"}"#,
-    );
+    {
+        let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        set_env("CODEX_LOGIN_ISSUER_BASE", &issuer);
+        set_env("CODEX_LOGIN_FORCE_STATE", "state-ok");
+        set_env(
+            "CODEX_LOGIN_TEST_HELPER_JSON",
+            r#"{"code":"abc","state":"state-ok"}"#,
+        );
+    }
 
     let tmp = tempdir().unwrap();
     let codex_home = tmp.path().to_path_buf();
@@ -151,74 +154,87 @@ async fn persists_auth_json_on_success() {
     assert_eq!(json["tokens"]["refresh_token"], "refresh-abc");
     assert_eq!(json["tokens"]["account_id"], "acc-123");
     // cleanup env for other tests
-    unset_env("CODEX_LOGIN_ISSUER_BASE");
-    unset_env("CODEX_LOGIN_FORCE_STATE");
-    unset_env("CODEX_LOGIN_TEST_HELPER_JSON");
+    {
+        let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        unset_env("CODEX_LOGIN_ISSUER_BASE");
+        unset_env("CODEX_LOGIN_FORCE_STATE");
+        unset_env("CODEX_LOGIN_TEST_HELPER_JSON");
+    }
 }
 
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn abort_propagates_from_helper() {
-    let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!("Skipping native browser test due to network-disabled sandbox");
         return;
     }
 
     // Helper aborts before any network requests.
-    set_env("CODEX_LOGIN_TEST_HELPER_JSON", "ABORT");
+    {
+        let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        set_env("CODEX_LOGIN_TEST_HELPER_JSON", "ABORT");
+    }
     let tmp = tempdir().unwrap();
     let err = login_with_native_browser(tmp.path()).await.unwrap_err();
     assert!(matches!(err, LoginError::Aborted));
-    unset_env("CODEX_LOGIN_TEST_HELPER_JSON");
+    {
+        let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        unset_env("CODEX_LOGIN_TEST_HELPER_JSON");
+    }
 }
 
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn state_mismatch_is_rejected() {
-    let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!("Skipping native browser test due to network-disabled sandbox");
         return;
     }
 
-    set_env("CODEX_LOGIN_FORCE_STATE", "expected");
-    set_env(
-        "CODEX_LOGIN_TEST_HELPER_JSON",
-        r#"{"code":"abc","state":"wrong"}"#,
-    );
+    {
+        let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        set_env("CODEX_LOGIN_FORCE_STATE", "expected");
+        set_env(
+            "CODEX_LOGIN_TEST_HELPER_JSON",
+            r#"{"code":"abc","state":"wrong"}"#,
+        );
+    }
     let tmp = tempdir().unwrap();
     let err = login_with_native_browser(tmp.path()).await.unwrap_err();
     assert!(matches!(err, LoginError::StateMismatch));
-    unset_env("CODEX_LOGIN_FORCE_STATE");
-    unset_env("CODEX_LOGIN_TEST_HELPER_JSON");
+    {
+        let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        unset_env("CODEX_LOGIN_FORCE_STATE");
+        unset_env("CODEX_LOGIN_TEST_HELPER_JSON");
+    }
 }
 
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn invalid_helper_json_is_rejected() {
-    let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        return;
+    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() { return; }
+    {
+        let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        set_env("CODEX_LOGIN_TEST_HELPER_JSON", "not-json");
     }
-    set_env("CODEX_LOGIN_TEST_HELPER_JSON", "not-json");
     let tmp = tempdir().unwrap();
     let err = login_with_native_browser(tmp.path()).await.unwrap_err();
     match err {
         LoginError::InvalidHelperResponse => {}
         other => panic!("unexpected error: {other:?}"),
     }
-    unset_env("CODEX_LOGIN_TEST_HELPER_JSON");
+    {
+        let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        unset_env("CODEX_LOGIN_TEST_HELPER_JSON");
+    }
 }
 
 #[cfg(target_os = "macos")]
 #[tokio::test]
 async fn token_exchange_failure_is_bubbled() {
     use tiny_http::Server;
-    let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        return;
-    }
+    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() { return; }
 
     // Issuer always responds 500 to /oauth/token for the first exchange
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
@@ -235,40 +251,48 @@ async fn token_exchange_failure_is_bubbled() {
         }
     });
     let issuer = format!("http://{}:{}", addr.ip(), addr.port());
-    set_env("CODEX_LOGIN_ISSUER_BASE", &issuer);
-    set_env("CODEX_LOGIN_FORCE_STATE", "s");
-    set_env(
-        "CODEX_LOGIN_TEST_HELPER_JSON",
-        r#"{"code":"abc","state":"s"}"#,
-    );
+    {
+        let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        set_env("CODEX_LOGIN_ISSUER_BASE", &issuer);
+        set_env("CODEX_LOGIN_FORCE_STATE", "s");
+        set_env(
+            "CODEX_LOGIN_TEST_HELPER_JSON",
+            r#"{"code":"abc","state":"s"}"#,
+        );
+    }
     let tmp = tempdir().unwrap();
     let err = login_with_native_browser(tmp.path()).await.unwrap_err();
     match err {
         LoginError::TokenExchangeFailed(_) => {}
         other => panic!("unexpected error: {other:?}"),
     }
-    unset_env("CODEX_LOGIN_ISSUER_BASE");
-    unset_env("CODEX_LOGIN_FORCE_STATE");
-    unset_env("CODEX_LOGIN_TEST_HELPER_JSON");
+    {
+        let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        unset_env("CODEX_LOGIN_ISSUER_BASE");
+        unset_env("CODEX_LOGIN_FORCE_STATE");
+        unset_env("CODEX_LOGIN_TEST_HELPER_JSON");
+    }
 }
 
 #[cfg(all(target_os = "macos", unix))]
 #[tokio::test]
 async fn auth_json_permissions_are_restrictive() {
     use std::os::unix::fs::PermissionsExt;
-    let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         return;
     }
 
     let (issuer_addr, _h) = start_mock_issuer();
     let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
-    set_env("CODEX_LOGIN_ISSUER_BASE", &issuer);
-    set_env("CODEX_LOGIN_FORCE_STATE", "state-ok");
-    set_env(
-        "CODEX_LOGIN_TEST_HELPER_JSON",
-        r#"{"code":"abc","state":"state-ok"}"#,
-    );
+    {
+        let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        set_env("CODEX_LOGIN_ISSUER_BASE", &issuer);
+        set_env("CODEX_LOGIN_FORCE_STATE", "state-ok");
+        set_env(
+            "CODEX_LOGIN_TEST_HELPER_JSON",
+            r#"{"code":"abc","state":"state-ok"}"#,
+        );
+    }
 
     let tmp = tempdir().unwrap();
     login_with_native_browser(tmp.path()).await.unwrap();
@@ -276,7 +300,10 @@ async fn auth_json_permissions_are_restrictive() {
     let mode = std::fs::metadata(&p).unwrap().permissions().mode();
     // Only user perms should be set (rw------- => 0o600)
     assert_eq!(mode & 0o077, 0, "group/other permissions should be zero");
-    unset_env("CODEX_LOGIN_ISSUER_BASE");
-    unset_env("CODEX_LOGIN_FORCE_STATE");
-    unset_env("CODEX_LOGIN_TEST_HELPER_JSON");
+    {
+        let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        unset_env("CODEX_LOGIN_ISSUER_BASE");
+        unset_env("CODEX_LOGIN_FORCE_STATE");
+        unset_env("CODEX_LOGIN_TEST_HELPER_JSON");
+    }
 }

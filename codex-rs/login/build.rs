@@ -12,7 +12,13 @@ fn main() {
         return;
     }
 
-    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR not set"));
+    let out_dir = match env::var("OUT_DIR") {
+        Ok(v) => PathBuf::from(v),
+        Err(_) => {
+            println!("cargo:warning=OUT_DIR not set; skipping Swift helper embed");
+            return;
+        }
+    };
     let helper_out = out_dir.join("codex-auth-helper");
     let swift_src = PathBuf::from("src/native_browser_helper.swift");
 
@@ -48,10 +54,8 @@ fn main() {
                 .arg(&swift_src)
                 .arg("-o")
                 .arg(out);
-            if let Ok(status) = cmd.status() {
-                if status.success() {
-                    return true;
-                }
+            if let Ok(status) = cmd.status() && status.success() {
+                return true;
             }
         }
         false
