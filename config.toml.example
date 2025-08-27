@@ -1,0 +1,325 @@
+# =========================
+# Example for config.toml
+# =========================
+# How to use this file:
+# 1) Copy this file to ~/.codex/config.toml: cp config.toml.example ~/.codex/config.toml (backup the existing file if needed)
+# 2) In each "CHOOSE ONE" block, uncomment EXACTLY ONE line.
+
+# Note on TOML table placement:
+# Recall that in TOML, "The top-level table, also called the root table, starts at the beginning of the document and ends just before the first table header (or EOF). Unlike other tables, it is nameless and cannot be relocated."
+# Keep the order: all plain key = value entries first, then the table sections.
+# Refer: https://toml.io/en/v1.0.0#table-and-table-arrays
+
+# Table placement example:
+# Discouraged:
+# [mcp_servers.playwright]
+# command = "npx"
+# args = ["@playwright/mcp@latest"]
+# notify = ["python3", "/Users/usrname/some_script.py"] # It will be ignored.
+# preferred_auth_method = "apikey" # It will be ignored.
+
+# Recommended:
+# notify = ["python3", "/Users/usrname/some_script.py"] # It will be included.
+# preferred_auth_method = "apikey" # It will be included.
+# [mcp_servers.playwright]
+# command = "npx"
+# args = ["@playwright/mcp@latest"]
+
+# --- Root keys (alphabetical) ----------------------------------------------
+# CHANGE BELOW THIS LINE ONLY
+
+# -------------------------
+# approval_policy (string)
+# Docs: https://github.com/openai/codex/blob/main/docs/config.md#approval_policy
+# -------------------------
+# CHOOSE ONE:
+# approval_policy = "on-request"
+# approval_policy = "untrusted"
+# approval_policy = "on-failure"
+# approval_policy = "never" # Note the `exec` subcommand always uses this mode.
+
+# -------------------------
+# disable_response_storage (bool)
+# Docs: https://github.com/openai/codex/blob/main/docs/config.md#disable_response_storage
+# -------------------------
+# CHOOSE ONE:
+# disable_response_storage = false
+# disable_response_storage = true   # choose this if your account is set to use Zero Data Retention (ZDR)
+
+# -------------------------
+# file_opener (string)
+# Docs: https://github.com/openai/codex/blob/main/docs/config.md#file_opener
+# -------------------------
+# CHOOSE ONE:
+# file_opener = "vscode"               # default behavior
+# file_opener = "vscode-insiders"
+# file_opener = "windsurf"
+# file_opener = "cursor"
+# file_opener = "none"                # explicitly disables file linking
+
+# -------------------------
+# hide_agent_reasoning (bool)
+# Docs: https://github.com/openai/codex/blob/main/docs/config.md#hide_agent_reasoning
+# -------------------------
+# CHOOSE ONE:
+# hide_agent_reasoning = false  # default
+# hide_agent_reasoning = true
+
+# -------------------------
+# model (string)
+# Docs: https://github.com/openai/codex/blob/main/docs/config.md#model
+# -------------------------
+# CHOOSE ONE:
+# model = "gpt-5" # default model
+# model = "o4-mini"
+# model = "o3"
+# model = "gpt-4.1"
+# model = "gpt-4o"
+# model = "gpt-3.5"
+# model = "gpt-oss"
+# model = "codex-mini-latest"
+
+# -------------------------
+# model_context_window (integer)
+# Docs: https://github.com/openai/codex/blob/main/docs/config.md#model_context_window
+# -------------------------
+# model_context_window = 200000 # replace with the actual context window of the model you are using
+
+# -------------------------
+# model_max_output_tokens (integer)
+# Docs: https://github.com/openai/codex/blob/main/docs/config.md#model_max_output_tokens
+# -------------------------
+# model_max_output_tokens = 4096 # replace with the actual max output tokens of the model you are using
+
+# -------------------------
+# model_provider (string)
+# Note: if you override model_provider, then you likely want to override model, as well.
+# Docs: https://github.com/openai/codex/blob/main/docs/config.md#model_provider
+# -------------------------
+# CHOOSE ONE:
+# model_provider = "openai" # default provider
+# model_provider = "openai-chat-completions"
+# model_provider = "ollama"                     # local
+# model_provider = "azure"                      # Azure OpenAI
+
+# -------------------------
+# model_reasoning_effort (string)
+# Docs: https://github.com/openai/codex/blob/main/docs/config.md#model_reasoning_effort
+# Note: Only applies to reasoning-capable models (o3, o4-mini, codex-*, gpt-5)
+# -------------------------
+# CHOOSE ONE:
+# model_reasoning_effort = "medium"    # default
+# model_reasoning_effort = "high"
+# model_reasoning_effort = "low"
+# model_reasoning_effort = "minimal"   # minimze reasoning
+
+# -------------------------
+# model_reasoning_summary (string)
+# Docs: https://github.com/openai/codex/blob/main/docs/config.md#model_reasoning_summary
+# Note: Only applies to reasoning-capable models when using Responses API
+# -------------------------
+# CHOOSE ONE:
+# model_reasoning_summary = "auto"     # default
+# model_reasoning_summary = "concise"
+# model_reasoning_summary = "detailed"
+# model_reasoning_summary = "none"     # disable reasoning summaries
+
+# -------------------------
+# model_supports_reasoning_summaries (bool)
+# Docs: https://github.com/openai/codex/blob/main/docs/config.md#model_supports_reasoning_summaries
+# Note: By default, reasoning is only set on requests to OpenAI models that are known to support them.
+# -------------------------
+# model_supports_reasoning_summaries = true # forces reasoning to set on requests to the current model
+
+# -------------------------
+# model_verbosity (string; GPT‑5 Responses API only)
+# Docs: https://github.com/openai/codex/blob/main/docs/config.md#model_verbosity
+# Note: Controls output length/detail on GPT‑5 family models when using the Responses API. Chat Completions providers are unaffected.
+# -------------------------
+# CHOOSE ONE:
+# model_verbosity = "medium" # default when omitted
+# model_verbosity = "low"
+# model_verbosity = "high"
+
+# -------------------------
+# notify (array of strings)
+# Docs: https://github.com/openai/codex/blob/main/docs/config.md#notify
+# -------------------------
+# notify = ["python3", "/path/to/script.py"] # replace with the actual path to your script
+
+# -------------------------
+# preferred_auth_method (string)
+# Docs: https://github.com/openai/codex/blob/main/docs/authentication.md#forcing-a-specific-auth-method-advanced
+# -------------------------
+# CHOOSE ONE:
+# preferred_auth_method = "chatgpt" # default
+# preferred_auth_method = "apikey"  # use api even if chatgpt auth exists
+
+# -------------------------
+# profile (string)
+# Docs: https://github.com/openai/codex/blob/main/docs/config.md#profiles
+# Note: Uncomment the [profiles.x] table later to define the profile. Please refer the doc for order of precedence.
+# -------------------------
+# profile = "gpt-5" # default
+
+# -------------------------
+# project_doc_max_bytes (integer)
+# Docs: https://github.com/openai/codex/blob/main/docs/config.md#project_doc_max_bytes
+# -------------------------
+# project_doc_max_bytes = 32768
+
+# -------------------------
+# sandbox_mode (string)
+# Docs: https://github.com/openai/codex/blob/main/docs/config.md#sandbox_mode
+# -------------------------
+# CHOOSE ONE:
+# sandbox_mode = "read-only"           # default in docs: no writes, no network
+# sandbox_mode = "workspace-write"     # writes allowed in cwd/tmp only
+# sandbox_mode = "danger-full-access"  # no sandbox, ideal for already sandboxed environments like a Docker container
+
+# -------------------------
+# show_raw_agent_reasoning (bool)
+# Docs: https://github.com/openai/codex/blob/main/docs/config.md#show_raw_agent_reasoning
+# -------------------------
+# CHOOSE ONE:
+# show_raw_agent_reasoning = false
+# show_raw_agent_reasoning = true
+
+# --- Tables (sections) ------------------------------------------------------
+
+# Model providers: override defaults, add custom providers, or point to proxies
+# Docs: https://github.com/openai/codex/blob/main/docs/config.md#model_providers
+# [model_providers.openai]
+# name = "OpenAI"
+# base_url = "https://api.openai.com/v1"
+# env_key = "OPENAI_API_KEY"
+# Per-provider network tuning (optional)
+# request_max_retries = 4
+# stream_max_retries = 10
+# stream_idle_timeout_ms = 300000
+
+# Example: using the Chat Completions API explicitly
+# [model_providers.openai-chat-completions]
+# name = "OpenAI using Chat Completions"
+# base_url = "https://api.openai.com/v1"
+# env_key = "OPENAI_API_KEY"
+# wire_api = "chat"     # Chat Completions API (default)
+# wire_api = "responses" # Responses API (enables reasoning for compatible models)
+
+# Example: an Azure endpoint requires api-version in query params
+# [model_providers.azure]
+# name = "Azure"
+# base_url = "https://YOUR_PROJECT_NAME.openai.azure.com/openai"
+# env_key = "AZURE_OPENAI_API_KEY"
+# query_params = { api-version = "2025-04-01-preview" }
+
+# Example: a local Ollama endpoint compatible with OpenAI APIs
+# [model_providers.ollama]
+# name = "Ollama"
+# base_url = "http://localhost:11434/v1"
+
+# Example: OpenRouter provider (requires OPENROUTER_API_KEY)
+# [model_providers.openrouter]
+# name = "OpenRouter"
+# base_url = "https://openrouter.ai/api/v1"
+# env_key = "OPENROUTER_API_KEY"
+
+# Example: Persist OSS host settings (OpenAI‑compatible)
+# [model_providers.oss]
+# name = "Open Source"
+# base_url = "http://my-ollama.example.com:11434/v1"
+
+# -------------------------
+# Shell environment policy
+# Docs: https://github.com/openai/codex/blob/main/docs/config.md#shell_environment_policy
+# -------------------------
+# [shell_environment_policy]
+# inherit — CHOOSE ONE:
+# inherit = "all"
+# inherit = "core"
+# inherit = "none"
+
+# Keep default secret filtering? — CHOOSE ONE:
+# ignore_default_excludes = false
+# ignore_default_excludes = true
+
+# Drop patterns (array of globs); leave [] if not needed
+# exclude = []
+# exclude = ["AWS_*", "AZURE_*"]
+
+# Force-set environment vars (table); leave {} if not needed
+# set = {}
+# set = { CI = "1" }
+
+# Whitelist patterns (array of globs); empty means no whitelist
+# include_only = []
+# include_only = ["PATH", "HOME"]
+
+# Additional controls when using sandbox_mode = "workspace-write"
+# Docs: https://github.com/openai/codex/blob/main/docs/config.md#sandbox_mode
+# [sandbox_workspace_write]
+# Writable roots (array); optional
+# writable_roots = []
+
+# Network inside sandbox — CHOOSE ONE:
+# network_access = false
+# network_access = true
+
+# tmp inclusion — CHOOSE ONE for each:
+# exclude_tmpdir_env_var = false
+# exclude_tmpdir_env_var = true
+# exclude_slash_tmp = false
+# exclude_slash_tmp = true
+
+# MCP servers that Codex can consult for tools (stdio transport)
+# Docs: https://github.com/openai/codex/blob/main/docs/config.md#mcp_servers
+# Example server using `npx`:
+# [mcp_servers.example]
+# command = "npx"
+# args = ["-y", "mcp-server"]
+# env = { "API_KEY" = "value" }
+
+# -------------------------
+# History persistence
+# Docs: https://github.com/openai/codex/blob/main/docs/config.md#history
+# -------------------------
+# [history]
+# CHOOSE ONE:
+# persistence = "save-all" # default
+# persistence = "none"
+
+# Optional profiles: quick switches for common setups
+# Docs: https://github.com/openai/codex/blob/main/docs/config.md#profiles
+# [profiles.o3]
+# model = "o3"
+# model_provider = "openai"
+# approval_policy = "never"
+# model_reasoning_effort = "high"
+# model_reasoning_summary = "detailed"
+# sandbox_mode = "workspace-write"
+
+# [profiles.fast]
+# model = "o4-mini"
+# model_provider = "openai"
+# approval_policy = "on-request"
+# model_reasoning_effort = "low"
+# model_reasoning_summary = "auto"
+# sandbox_mode = "read-only"
+
+# [profiles.local]
+# model = "llama3.2"
+# model_provider = "ollama"
+# approval_policy = "on-request"
+# sandbox_mode = "read-only"
+
+# [profiles.secure]
+# model = "gpt-5"
+# model_provider = "openai"
+# approval_policy = "untrusted"
+# sandbox_mode = "read-only"
+# disable_response_storage = true
+
+# TUI-specific options (reserved for future use)
+# Docs: https://github.com/openai/codex/blob/main/docs/config.md#tui
+# [tui]
+# (no options currently)
