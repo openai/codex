@@ -285,7 +285,14 @@ impl ExecCell {
                     })
                     .unique()
                     .collect();
-                vec![("Read", vec![names.join(", ").into()])]
+                vec![(
+                    "Read",
+                    itertools::Itertools::intersperse(
+                        names.into_iter().map(|n| n.into()),
+                        ", ".dim(),
+                    )
+                    .collect(),
+                )]
             } else {
                 let mut lines = Vec::new();
                 for p in call.parsed {
@@ -308,16 +315,7 @@ impl ExecCell {
                                 },
                             ));
                         }
-                        ParsedCommand::Format { cmd, tool, .. } => {
-                            lines.push(("Format", vec![tool.unwrap_or(cmd).into()]));
-                        }
-                        ParsedCommand::Test { cmd } => {
-                            lines.push(("Test", vec![cmd.into()]));
-                        }
-                        ParsedCommand::Lint { cmd, tool, .. } => {
-                            lines.push(("Lint", vec![tool.unwrap_or(cmd).into()]));
-                        }
-                        ParsedCommand::Noop { cmd } | ParsedCommand::Unknown { cmd } => {
+                        ParsedCommand::Unknown { cmd } => {
                             lines.push(("Run", vec![cmd.into()]));
                         }
                     }
@@ -325,7 +323,7 @@ impl ExecCell {
                 lines
             };
             for (title, line) in call_lines {
-                let prefix_len = 4 + title.len() + 1; // "  ↳ " + title + " "
+                let prefix_len = 4 + title.len() + 1; // "  └ " + title + " "
                 let wrapped = crate::insert_history::word_wrap_lines(
                     &[Line::from(line)],
                     width.saturating_sub(prefix_len as u16),
@@ -335,7 +333,7 @@ impl ExecCell {
                     let mut spans = Vec::with_capacity(line.spans.len() + 1);
                     spans.push(if first {
                         first = false;
-                        "  ↳ ".dim()
+                        "  └ ".dim()
                     } else {
                         "    ".into()
                     });
@@ -370,7 +368,7 @@ impl ExecCell {
         let title = if self.is_active() { "Running" } else { "Ran" };
         lines.push(Line::from(vec![bullet, " ".into(), title.bold()]));
         let cmd_display = strip_bash_lc_and_escape(&call.command);
-        let prefix = "  ↳ ".dim();
+        let prefix = "  └ ".dim();
         let wrapped = textwrap::wrap(
             &cmd_display,
             (width as usize).saturating_sub(prefix.width()),
@@ -871,6 +869,7 @@ pub(crate) fn new_status_output(
             agents_list.join(", ").into(),
         ]));
     }
+    lines.push(Line::from(""));
 
     // 👤 Account (only if ChatGPT tokens exist), shown under the first block
     let auth_file = get_auth_file(&config.codex_home);

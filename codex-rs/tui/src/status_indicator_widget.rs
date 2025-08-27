@@ -47,7 +47,7 @@ impl StatusIndicatorWidget {
         // + optional ellipsis line per truncated message + 1 spacer line
         let inner_width = width.max(1) as usize;
         let mut total: u16 = 1; // status line
-        let text_width = inner_width.saturating_sub(3); // account for " ↳ " prefix
+        let text_width = inner_width.saturating_sub(3); // account for " └ " prefix
         if text_width > 0 {
             let opts = TwOptions::new(text_width)
                 .break_words(false)
@@ -114,14 +114,14 @@ impl WidgetRef for StatusIndicatorWidget {
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from(spans));
         // Wrap queued messages using textwrap and show up to the first 3 lines per message.
-        let text_width = area.width.saturating_sub(3); // " ↳ " prefix
+        let text_width = area.width.saturating_sub(3); // " └ " prefix
         let opts = TwOptions::new(text_width as usize)
             .break_words(false)
             .word_splitter(WordSplitter::NoHyphenation);
         for q in &self.queued_messages {
             let wrapped = textwrap::wrap(q, &opts);
             for (i, piece) in wrapped.iter().take(3).enumerate() {
-                let prefix = if i == 0 { " ↳ " } else { "   " };
+                let prefix = if i == 0 { " └ " } else { "   " };
                 let content = format!("{prefix}{piece}");
                 lines.push(Line::from(content.dim().italic()));
             }

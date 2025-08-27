@@ -3,4 +3,4 @@ source: tui/src/history_cell.rs
 expression: rendered
 ---
 • Explored
-  ↳ Read auth.rs, shimmer.rs
+  └ Read auth.rs, shimmer.rs
