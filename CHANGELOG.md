@@ -17,6 +17,10 @@ You can install any of these versions: `npm install -g codex@version`
 ### 🧰 Dev
 
 - Introduced typed `LoginError` for native browser flow (no string matching), enabling clear CLI behavior on abort vs error.
+- Added macOS-only native browser login tests (success, abort, state mismatch, token-exchange failure) and Unix file-permissions check for `auth.json`.
+- Added a macOS-only CI job to run the login crate tests.
+- Refactored Swift helper embedding to be single-sourced and built as a universal binary (arm64 + x86_64) during macOS builds; non-macOS builds do not include the helper.
+- CLI confirm now only prompts when a persisted `auth.json` exists (env-only API key does not trigger an "already logged in" prompt).
 
 ## `0.1.2505172129`
 

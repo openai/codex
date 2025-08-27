@@ -26,7 +26,11 @@ Notes:
 - macOS 12+
 - Xcode Command Line Tools (for `swiftc`) — run: `xcode-select --install`
 
-The Swift helper is compiled automatically during `cargo build` for macOS and embedded into the binary. At runtime, Codex prefers the embedded helper. If the embedded helper is missing (e.g., build environment lacked `swiftc`), Codex will attempt to compile the helper on-demand when you run `codex login --browser`.
+Build details:
+- During `cargo build` on macOS, the tiny Swift helper (`WKWebView`) is compiled and embedded into the Rust binary. Codex prefers this embedded helper at runtime.
+- The embedded helper is built as a universal binary (arm64 + x86_64), so a single build runs on both Apple Silicon and Intel Macs.
+- On non‑macOS targets, the helper is not compiled/embedded.
+- If `swiftc` was not available at build time, the build script will emit a warning and embed an empty placeholder. At runtime, Codex will attempt to compile the helper on‑demand the first time you run `codex login --browser` (requires `swiftc` on that machine).
 
 ## How it works (high level)
 
@@ -59,5 +63,5 @@ Exit codes and messages:
 ## Implementation overview
 
 - CLI flag: `codex login --browser` (in `codex-rs/cli`).
-- Helper build: `codex-rs/login/build.rs` compiles `src/native_browser_helper.swift` to `OUT_DIR/codex-auth-helper` on macOS and embeds it into the Rust crate.
-- Runtime: `codex-rs/login/src/native_browser.rs` prefers the embedded helper; otherwise falls back to compiling an embedded Swift source string on-demand.
+- Helper build: `codex-rs/login/build.rs` compiles `src/native_browser_helper.swift` on macOS and embeds a universal (arm64 + x86_64) helper at `OUT_DIR/codex-auth-helper`.
+- Runtime: `codex-rs/login/src/native_browser.rs` prefers the embedded helper; otherwise falls back to compiling the same Swift source on-demand.

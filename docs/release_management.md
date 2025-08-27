@@ -45,3 +45,9 @@ Once everything builds, a Homebrew admin has to approve the PR. Again, the whole
 For reference, our Homebrew formula lives at:
 
 https://github.com/Homebrew/homebrew-core/blob/main/Formula/c/codex.rb
+
+## Platform-specific notes (macOS helper)
+
+- The macOS login flow uses a tiny Swift helper (WKWebView). Our macOS builds embed this helper as a universal binary (arm64 + x86_64) so a single release artifact works on both Apple Silicon and Intel Macs.
+- The helper is only compiled/embedded on macOS targets. Linux and Windows builds do not include it.
+- If the build machine lacks Xcode Command Line Tools (`swiftc`), the build script will warn and embed an empty placeholder; users can still run `codex login --browser` if their runtime machine has `swiftc` installed (the CLI will compile the helper on-demand the first time it is needed).
