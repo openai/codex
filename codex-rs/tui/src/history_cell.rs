@@ -431,7 +431,7 @@ fn new_parsed_command(
     // Leading spacer and header line above command list
     if include_header {
         lines.push(Line::from(""));
-        lines.push(Line::from(">_".magenta()));
+        lines.push(Line::from("• Working".bold()));
     }
 
     // Determine the leading status marker: spinner while running, ✓ on success, ✗ on failure.
@@ -450,40 +450,32 @@ fn new_parsed_command(
     };
 
     for parsed in parsed_commands.iter() {
-        let text = match parsed {
-            ParsedCommand::Read { name, .. } => padded_emoji_with("📖", name),
+        // Build owned spans to satisfy 'static lifetime on Line<'static>
+        let text: Vec<Span<'static>> = match parsed {
+            ParsedCommand::Read { name, .. } => vec!["Read ".cyan(), name.clone().into()],
             ParsedCommand::ListFiles { cmd, path } => match path {
-                Some(p) => padded_emoji_with("📂", p),
-                None => padded_emoji_with("📂", cmd),
+                Some(p) => vec!["List ".cyan(), p.clone().into()],
+                None => vec!["List ".cyan(), cmd.clone().into()],
             },
-            ParsedCommand::Search { query, path, cmd } => match (query, path) {
-                (Some(q), Some(p)) => padded_emoji_with("🔎", format!("{q} in {p}")),
-                (Some(q), None) => padded_emoji_with("🔎", q),
-                (None, Some(p)) => padded_emoji_with("🔎", p),
-                (None, None) => padded_emoji_with("🔎", cmd),
-            },
-            ParsedCommand::Format { .. } => padded_emoji_with("✨", "Formatting"),
-            ParsedCommand::Test { cmd } => padded_emoji_with("🧪", cmd),
-            ParsedCommand::Lint { cmd, .. } => padded_emoji_with("🧹", cmd),
-            ParsedCommand::Unknown { cmd } => padded_emoji_with("⌨️", cmd),
-            ParsedCommand::Noop { cmd } => padded_emoji_with("🔄", cmd),
+            ParsedCommand::Search { query, path, cmd } => vec![
+                "Search ".cyan(),
+                match (query, path) {
+                    (Some(q), Some(p)) => format!("{q} in {p}").into(),
+                    (Some(q), None) => q.clone().into(),
+                    (None, Some(p)) => p.clone().into(),
+                    (None, None) => cmd.clone().into(),
+                },
+            ],
+            ParsedCommand::Format { .. } => vec!["Formatting ".cyan()],
+            ParsedCommand::Test { cmd } => vec!["Test ".cyan(), cmd.clone().into()],
+            ParsedCommand::Lint { cmd, .. } => vec!["Lint ".cyan(), cmd.clone().into()],
+            ParsedCommand::Unknown { cmd } => vec!["Run ".cyan(), cmd.clone().into()],
+            ParsedCommand::Noop { cmd } => vec!["Run ".cyan(), cmd.clone().into()],
         };
-        // Prefix: two spaces, marker, space. Continuations align under the text block.
-        for (j, line_text) in text.lines().enumerate() {
-            if j == 0 {
-                lines.push(Line::from(vec![
-                    "  ".into(),
-                    status_marker.clone(),
-                    " ".into(),
-                    line_text.to_string().light_blue(),
-                ]));
-            } else {
-                lines.push(Line::from(vec![
-                    "    ".into(),
-                    line_text.to_string().light_blue(),
-                ]));
-            }
-        }
+        // Single-line entry: two spaces, marker, space, then the text spans.
+        let mut line_vec: Vec<Span<'static>> = vec!["  ".into(), status_marker.clone(), " ".into()];
+        line_vec.extend(text);
+        lines.push(Line::from(line_vec));
     }
 
     lines.extend(output_lines(output, true, false));
@@ -501,7 +493,7 @@ fn new_exec_command_generic(
     // Leading spacer and header line above command list
     if include_header {
         lines.push(Line::from(""));
-        lines.push(Line::from(">_".magenta()));
+        lines.push(Line::from("• Working".bold()));
     }
     let command_escaped = strip_bash_lc_and_escape(command);
 

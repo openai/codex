@@ -133,10 +133,7 @@ impl StreamController {
                 let mut header_probe: Lines = Vec::new();
                 let header_emitted = self.emit_header_if_needed(&mut header_probe);
                 // Insert as a HistoryCell so display drops the header while transcript keeps it.
-                let cell = crate::history_cell::AgentMessageCell::new(
-                    out_lines,
-                    header_emitted,
-                );
+                let cell = crate::history_cell::AgentMessageCell::new(out_lines, header_emitted);
                 sink.insert_history_cell(Box::new(cell));
             }
 
@@ -173,10 +170,7 @@ impl StreamController {
             let mut probe: Lines = Vec::new();
             let header_emitted = self.emit_header_if_needed(&mut probe);
             if header_emitted {
-                let cell = crate::history_cell::AgentMessageCell::new(
-                    step.history,
-                    true,
-                );
+                let cell = crate::history_cell::AgentMessageCell::new(step.history, true);
                 sink.insert_history_cell(Box::new(cell));
             } else {
                 sink.insert_history(step.history);
