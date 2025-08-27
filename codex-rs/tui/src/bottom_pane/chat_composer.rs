@@ -110,33 +110,6 @@ enum ActivePopup {
 }
 
 impl ChatComposer {
-    #[inline]
-    fn clamp_to_char_boundary(text: &str, pos: usize) -> usize {
-        let mut p = pos.min(text.len());
-        if p < text.len() && !text.is_char_boundary(p) {
-            p = text
-                .char_indices()
-                .map(|(i, _)| i)
-                .take_while(|&i| i <= p)
-                .last()
-                .unwrap_or(0);
-        }
-        p
-    }
-
-    #[inline]
-    fn handle_non_ascii_char(&mut self, input: KeyEvent) -> (InputResult, bool) {
-        if !self.paste_burst_buffer.is_empty() || self.in_paste_burst_mode {
-            let pasted = std::mem::take(&mut self.paste_burst_buffer);
-            self.in_paste_burst_mode = false;
-            self.handle_paste(pasted);
-        }
-        self.textarea.input(input);
-        let text_after = self.textarea.text();
-        self.pending_pastes
-            .retain(|(placeholder, _)| text_after.contains(placeholder));
-        (InputResult::None, true)
-    }
     pub fn new(
         has_input_focus: bool,
         app_event_tx: AppEventSender,
@@ -433,6 +406,33 @@ impl ChatComposer {
             }
             input => self.handle_input_basic(input),
         }
+    }
+    #[inline]
+    fn clamp_to_char_boundary(text: &str, pos: usize) -> usize {
+        let mut p = pos.min(text.len());
+        if p < text.len() && !text.is_char_boundary(p) {
+            p = text
+                .char_indices()
+                .map(|(i, _)| i)
+                .take_while(|&i| i <= p)
+                .last()
+                .unwrap_or(0);
+        }
+        p
+    }
+
+    #[inline]
+    fn handle_non_ascii_char(&mut self, input: KeyEvent) -> (InputResult, bool) {
+        if !self.paste_burst_buffer.is_empty() || self.in_paste_burst_mode {
+            let pasted = std::mem::take(&mut self.paste_burst_buffer);
+            self.in_paste_burst_mode = false;
+            self.handle_paste(pasted);
+        }
+        self.textarea.input(input);
+        let text_after = self.textarea.text();
+        self.pending_pastes
+            .retain(|(placeholder, _)| text_after.contains(placeholder));
+        (InputResult::None, true)
     }
 
     /// Handle key events when file search popup is visible.
