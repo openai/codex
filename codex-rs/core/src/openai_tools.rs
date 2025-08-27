@@ -664,7 +664,7 @@ mod tests {
 
         assert_eq_tool_names(
             &tools,
-            &["local_shell", "update_plan", "web_search_request"],
+            &["local_shell", "update_plan", "web_search_request", "view_image"],
         );
     }
 
@@ -683,7 +683,10 @@ mod tests {
         });
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
-        assert_eq_tool_names(&tools, &["shell", "update_plan", "web_search"]);
+        assert_eq_tool_names(
+            &tools,
+            &["shell", "update_plan", "web_search_request", "view_image"],
+        );
     }
 
     #[test]
@@ -742,6 +745,7 @@ mod tests {
             &[
                 "shell",
                 "web_search_request",
+                "view_image",
                 "test_server/do_something_cool",
             ],
         );
@@ -859,6 +863,8 @@ mod tests {
             &tools,
             &[
                 "shell",
+                "web_search_request",
+                "view_image",
                 "test_server/cool",
                 "test_server/do",
                 "test_server/something",
@@ -903,7 +909,10 @@ mod tests {
             )])),
         );
 
-        assert_eq_tool_names(&tools, &["shell", "web_search", "dash/search"]);
+        assert_eq_tool_names(
+            &tools,
+            &["shell", "web_search_request", "view_image", "dash/search"],
+        );
 
         assert_eq!(
             tools[3],
@@ -962,7 +971,7 @@ mod tests {
 
         assert_eq_tool_names(
             &tools,
-            &["shell", "web_search", "view_image", "dash/paginate"],
+            &["shell", "web_search_request", "view_image", "dash/paginate"],
         );
         assert_eq!(
             tools[3],
@@ -1017,7 +1026,10 @@ mod tests {
             )])),
         );
 
-        assert_eq_tool_names(&tools, &["shell", "web_search", "view_image", "dash/tags"]);
+        assert_eq_tool_names(
+            &tools,
+            &["shell", "web_search_request", "view_image", "dash/tags"],
+        );
         assert_eq!(
             tools[3],
             OpenAiTool::Function(ResponsesApiTool {
@@ -1074,7 +1086,10 @@ mod tests {
             )])),
         );
 
-        assert_eq_tool_names(&tools, &["shell", "web_search", "view_image", "dash/value"]);
+        assert_eq_tool_names(
+            &tools,
+            &["shell", "web_search_request", "view_image", "dash/value"],
+        );
         assert_eq!(
             tools[3],
             OpenAiTool::Function(ResponsesApiTool {
