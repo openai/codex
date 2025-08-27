@@ -150,7 +150,11 @@ impl PagerView {
         };
         let pct_text = format!(" {percent}% ");
         let pct_w = pct_text.chars().count() as u16;
-        let pct_x = sep_rect.x + sep_rect.width - pct_w - 1;
+        // Right-align percentage safely: avoid u16 underflow on narrow widths.
+        // Compute available space within the separator rect using saturating math,
+        // then offset from the rect's left edge.
+        let right_offset = sep_rect.width.saturating_sub(pct_w.saturating_add(1));
+        let pct_x = sep_rect.x.saturating_add(right_offset);
         Span::from(pct_text)
             .dim()
             .render_ref(Rect::new(pct_x, sep_rect.y, pct_w, 1), buf);
