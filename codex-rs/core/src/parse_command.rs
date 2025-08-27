@@ -567,6 +567,51 @@ mod tests {
     }
 
     #[test]
+    fn parses_mixed_sequence_with_pipes_semicolons_and_or() {
+        // Provided long command sequence combining sequencing, pipelines, and ORs.
+        let inner = "pwd; ls -la; rg --files -g '!target' | wc -l; rg -n '^\\[workspace\\]' -n Cargo.toml || true; rg -n '^\\[package\\]' -n */Cargo.toml || true; cargo --version; rustc --version; cargo clippy --workspace --all-targets --all-features -q";
+        let args = vec_str(&["bash", "-lc", inner]);
+
+        let expected = vec![
+            ParsedCommand::Unknown {
+                cmd: "pwd".to_string(),
+            },
+            ParsedCommand::ListFiles {
+                cmd: shlex_join(&shlex_split_safe("ls -la")),
+                path: None,
+            },
+            ParsedCommand::Search {
+                cmd: shlex_join(&shlex_split_safe("rg --files -g '!target'")),
+                query: None,
+                path: Some("!target".to_string()),
+            },
+            ParsedCommand::Search {
+                cmd: shlex_join(&shlex_split_safe("rg -n '^\\[workspace\\]' -n Cargo.toml")),
+                query: Some("^\\[workspace\\]".to_string()),
+                path: Some("Cargo.toml".to_string()),
+            },
+            ParsedCommand::Search {
+                cmd: shlex_join(&shlex_split_safe("rg -n '^\\[package\\]' -n */Cargo.toml")),
+                query: Some("^\\[package\\]".to_string()),
+                path: Some("Cargo.toml".to_string()),
+            },
+            ParsedCommand::Unknown {
+                cmd: shlex_join(&shlex_split_safe("cargo --version")),
+            },
+            ParsedCommand::Unknown {
+                cmd: shlex_join(&shlex_split_safe("rustc --version")),
+            },
+            ParsedCommand::Unknown {
+                cmd: shlex_join(&shlex_split_safe(
+                    "cargo clippy --workspace --all-targets --all-features -q",
+                )),
+            },
+        ];
+
+        assert_parsed(&args, expected);
+    }
+
+    #[test]
     fn strips_true_in_sequence() {
         // `true` should be dropped from parsed sequences
         assert_parsed(
