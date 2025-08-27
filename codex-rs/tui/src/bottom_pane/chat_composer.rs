@@ -1235,6 +1235,8 @@ impl WidgetRef for ChatComposer {
                         Span::from(" send   "),
                         newline_hint_key.set_style(key_hint_style),
                         Span::from(" newline   "),
+                        "Ctrl+V".set_style(key_hint_style),
+                        Span::from(" paste image   "),
                         "Ctrl+T".set_style(key_hint_style),
                         Span::from(" transcript   "),
                         "Ctrl+C".set_style(key_hint_style),
