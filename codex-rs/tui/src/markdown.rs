@@ -524,7 +524,10 @@ Tight item
 Another tight item
 3. 
 Loose item"#;
-        assert_eq!(joined, expected, "unexpected tui_markdown shape: {joined:?}");
+        assert_eq!(
+            joined, expected,
+            "unexpected tui_markdown shape: {joined:?}"
+        );
     }
 
     #[test]
@@ -555,11 +558,12 @@ Loose item"#;
 
         let lines: Vec<String> = out
             .iter()
-            .map(|l| l
-                .spans
-                .iter()
-                .map(|s| s.content.clone())
-                .collect::<String>())
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.clone())
+                    .collect::<String>()
+            })
             .collect();
 
         // Expect to find the ordered list line rendered as a single line,
@@ -569,7 +573,9 @@ Loose item"#;
             "expected '1. Tight item' rendered as a single line; got: {lines:?}"
         );
         assert!(
-            !lines.windows(2).any(|w| w[0].trim_end() == "1." && w[1] == "Tight item"),
+            !lines
+                .windows(2)
+                .any(|w| w[0].trim_end() == "1." && w[1] == "Tight item"),
             "did not expect a split into ['1.', 'Tight item']; got: {lines:?}"
         );
     }

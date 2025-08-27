@@ -358,10 +358,9 @@ mod tests {
             }
         }
         // Drop leading blank and header line if present.
-        if !flat.is_empty()
-            && lines_to_plain_strings(&[flat[0].clone()])[0].is_empty() {
-                flat.remove(0);
-            }
+        if !flat.is_empty() && lines_to_plain_strings(&[flat[0].clone()])[0].is_empty() {
+            flat.remove(0);
+        }
         if !flat.is_empty() {
             let s0 = lines_to_plain_strings(&[flat[0].clone()])[0].clone();
             if s0 == "codex" {
