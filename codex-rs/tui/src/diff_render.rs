@@ -300,7 +300,7 @@ fn push_wrapped_diff_line(
 
     loop {
         // Fit the content for the current terminal row (in terminal cells):
-        // Safely split by column count, taking into account variable-width 
+        // Safely split by column count, taking into account variable-width
         // glyphs such as symbols, CJK characters, and emoji.
         let available_content_cols = term_cols
             .saturating_sub(if first { prefix_cols + 1 } else { prefix_cols })
