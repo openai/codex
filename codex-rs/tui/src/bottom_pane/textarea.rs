@@ -232,6 +232,13 @@ impl TextArea {
                 ..
             } => self.insert_str("\n"),
             KeyEvent {
+                code: KeyCode::Char('h'),
+                modifiers,
+                ..
+            } if modifiers == (KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+                self.delete_backward_word()
+            },
+            KeyEvent {
                 code: KeyCode::Backspace,
                 modifiers: KeyModifiers::ALT,
                 ..
@@ -1138,10 +1145,6 @@ mod tests {
 
     #[test]
     fn control_b_and_f_move_cursor() {
-        use crossterm::event::KeyCode;
-        use crossterm::event::KeyEvent;
-        use crossterm::event::KeyModifiers;
-
         let mut t = ta_with("abcd");
         t.set_cursor(1);
 
@@ -1154,10 +1157,6 @@ mod tests {
 
     #[test]
     fn control_b_f_fallback_control_chars_move_cursor() {
-        use crossterm::event::KeyCode;
-        use crossterm::event::KeyEvent;
-        use crossterm::event::KeyModifiers;
-
         let mut t = ta_with("abcd");
         t.set_cursor(2);
 
@@ -1169,6 +1168,48 @@ mod tests {
         // ^F (U+0006) should move right
         t.input(KeyEvent::new(KeyCode::Char('\u{0006}'), KeyModifiers::NONE));
         assert_eq!(t.cursor(), 2);
+    }
+
+    #[test]
+    fn delete_backward_word_alt_keys() {
+        // Test the custom Alt+Ctrl+h binding
+        let mut t = ta_with("hello world");
+        t.set_cursor(t.text().len()); // cursor at the end
+        t.input(KeyEvent::new(
+            KeyCode::Char('h'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        ));
+        assert_eq!(t.text(), "hello ");
+        assert_eq!(t.cursor(), 6);
+
+        // Test the standard Alt+Backspace binding
+        let mut t = ta_with("hello world");
+        t.set_cursor(t.text().len()); // cursor at the end
+        t.input(KeyEvent::new(KeyCode::Backspace, KeyModifiers::ALT));
+        assert_eq!(t.text(), "hello ");
+        assert_eq!(t.cursor(), 6);
+    }
+
+    #[test]
+    fn control_h_backspace() {
+        // Test Ctrl+H as backspace
+        let mut t = ta_with("12345");
+        t.set_cursor(3); // cursor after '3'
+        t.input(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
+        assert_eq!(t.text(), "1245");
+        assert_eq!(t.cursor(), 2);
+
+        // Test Ctrl+H at beginning (should be no-op)
+        t.set_cursor(0);
+        t.input(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
+        assert_eq!(t.text(), "1245");
+        assert_eq!(t.cursor(), 0);
+
+        // Test Ctrl+H at end
+        t.set_cursor(t.text().len());
+        t.input(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
+        assert_eq!(t.text(), "124");
+        assert_eq!(t.cursor(), 3);
     }
 
     #[test]

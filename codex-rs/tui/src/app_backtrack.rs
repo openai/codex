@@ -1,6 +1,6 @@
 use crate::app::App;
 use crate::backtrack_helpers;
-use crate::transcript_app::TranscriptApp;
+use crate::pager_overlay::Overlay;
 use crate::tui;
 use crate::tui::TuiEvent;
 use codex_core::protocol::ConversationHistoryResponseEvent;
@@ -79,7 +79,7 @@ impl App {
         if self.chat_widget.composer_is_empty() {
             if !self.backtrack.primed {
                 self.prime_backtrack();
-            } else if self.transcript_overlay.is_none() {
+            } else if self.overlay.is_none() {
                 self.open_backtrack_preview(tui);
             } else if self.backtrack.overlay_preview_active {
                 self.step_backtrack_and_highlight(tui);
@@ -103,7 +103,7 @@ impl App {
     /// Open transcript overlay (enters alternate screen and shows full transcript).
     pub(crate) fn open_transcript_overlay(&mut self, tui: &mut tui::Tui) {
         let _ = tui.enter_alt_screen();
-        self.transcript_overlay = Some(TranscriptApp::new(self.transcript_lines.clone()));
+        self.overlay = Some(Overlay::new_transcript(self.transcript_lines.clone()));
         tui.frame_requester().schedule_frame();
     }
 
@@ -115,7 +115,7 @@ impl App {
             let lines = std::mem::take(&mut self.deferred_history_lines);
             tui.insert_history_lines(lines);
         }
-        self.transcript_overlay = None;
+        self.overlay = None;
         self.backtrack.overlay_preview_active = false;
         if was_backtrack {
             // Ensure backtrack state is fully reset when overlay closes (e.g. via 'q').
@@ -193,19 +193,19 @@ impl App {
     ) {
         let (nth, offset, hl) = selection;
         self.backtrack.count = nth;
-        if let Some(overlay) = &mut self.transcript_overlay {
+        if let Some(Overlay::Transcript(t)) = &mut self.overlay {
             if let Some(off) = offset {
-                overlay.scroll_offset = off;
+                t.set_scroll_offset(off);
             }
-            overlay.set_highlight_range(hl);
+            t.set_highlight_range(hl);
         }
     }
 
     /// Forward any event to the overlay and close it if done.
     fn overlay_forward_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
-        if let Some(overlay) = &mut self.transcript_overlay {
+        if let Some(overlay) = &mut self.overlay {
             overlay.handle_event(tui, event)?;
-            if overlay.is_done {
+            if overlay.is_done() {
                 self.close_transcript_overlay(tui);
                 tui.frame_requester().schedule_frame();
             }

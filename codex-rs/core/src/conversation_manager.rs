@@ -136,6 +136,10 @@ impl ConversationManager {
             session_id: conversation_id,
         } = Codex::spawn(config, auth_manager, initial_history).await?;
         self.finalize_spawn(codex, conversation_id).await
+  }
+  
+    pub async fn remove_conversation(&self, conversation_id: Uuid) {
+        self.conversations.write().await.remove(&conversation_id);
     }
 
     /// Fork an existing conversation by dropping the last `drop_last_messages`
