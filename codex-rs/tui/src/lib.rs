@@ -46,6 +46,7 @@ pub mod live_wrap;
 mod markdown;
 mod markdown_stream;
 pub mod onboarding;
+mod pager_overlay;
 mod render;
 mod session_log;
 mod shimmer;
@@ -53,7 +54,6 @@ mod slash_command;
 mod status_indicator_widget;
 mod streaming;
 mod text_formatting;
-mod transcript_app;
 mod tui;
 mod user_approval_widget;
 
