@@ -598,8 +598,6 @@ mod tests {
         );
     }
 
-    // (removed experimental dash-split tests)
-
     #[test]
     fn utf8_boundary_safety_and_wide_chars() {
         let cfg = test_config();
@@ -859,10 +857,6 @@ mod tests {
         assert_eq!(streamed_strs, rendered_strs);
     }
 
-    // cleaned up: removed heavy fuzzing helpers and ignored test
-
-    // (removed heavy diagnostic tests)
-
     fn coalesce_ordered_markers_for_tests(lines: &mut Vec<ratatui::text::Line<'static>>) {
         let mut i = 0usize;
         while i + 1 < lines.len() {
@@ -906,7 +900,6 @@ mod tests {
         }
     }
 
-
     fn coalesce_ordered_marker_strings(lines: &mut Vec<String>) {
         let mut i = 0usize;
         while i + 1 < lines.len() {
@@ -919,5 +912,4 @@ mod tests {
             }
         }
     }
-
 }
