@@ -1873,6 +1873,10 @@ async fn run_compact_task(
     }
 
     sess.remove_task(&sub_id);
+
+    let mut state = sess.state.lock_unchecked();
+    state.history.keep_last_messages(1);
+
     let event = Event {
         id: sub_id.clone(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
@@ -1887,9 +1891,6 @@ async fn run_compact_task(
         }),
     };
     sess.send_event(event).await;
-
-    let mut state = sess.state.lock_unchecked();
-    state.history.keep_last_messages(1);
 }
 
 async fn handle_response_item(
