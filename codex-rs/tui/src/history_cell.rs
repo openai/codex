@@ -230,14 +230,11 @@ fn pretty_provider_name(id: &str) -> String {
         title_case(id)
     }
 }
-/// Return the emoji followed by a hair space (U+200A) and a normal space.
-/// This creates a reasonable gap across different terminals,
-/// in particular Terminal.app and iTerm, which render too tightly with just a single normal space.
-///
-/// Improvements here could be to condition this behavior on terminal,
-/// or possibly on emoji.
+/// Return the emoji followed by a hair space (U+200A).
+/// Using only the hair space avoids excessive padding after the emoji while
+/// still providing a small visual gap across terminals.
 fn padded_emoji(emoji: &str) -> String {
-    format!("{emoji}\u{200A} ")
+    format!("{emoji}\u{200A}")
 }
 
 /// Convenience function over `padded_emoji()`.
@@ -396,7 +393,7 @@ fn new_parsed_command(
             ParsedCommand::Format { .. } => padded_emoji_with("✨", "Formatting"),
             ParsedCommand::Test { cmd } => padded_emoji_with("🧪", cmd),
             ParsedCommand::Lint { cmd, .. } => padded_emoji_with("🧹", cmd),
-            ParsedCommand::Unknown { cmd } => padded_emoji_with("⌨", cmd),
+            ParsedCommand::Unknown { cmd } => padded_emoji_with("⌨️", cmd),
             ParsedCommand::Noop { cmd } => padded_emoji_with("🔄", cmd),
         };
         // Prefix: two spaces, marker, space. Continuations align under the text block.
@@ -900,14 +897,19 @@ pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
     // in terminals like Ghostty.
     let lines: Vec<Line<'static>> = vec![
         "".into(),
-        vec![padded_emoji("🖐").red().bold(), message.into()].into(),
+        vec![padded_emoji("🖐").red().bold(), " ".into(), message.into()].into(),
     ];
     PlainHistoryCell { lines }
 }
 
 pub(crate) fn new_stream_error_event(message: String) -> PlainHistoryCell {
     let lines: Vec<Line<'static>> = vec![
-        vec![padded_emoji("⚠").magenta().bold(), message.dim()].into(),
+        vec![
+            padded_emoji("⚠").magenta().bold(),
+            " ".into(),
+            message.dim(),
+        ]
+        .into(),
         "".into(),
     ];
     PlainHistoryCell { lines }
