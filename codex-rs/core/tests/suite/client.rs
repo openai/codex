@@ -67,7 +67,6 @@ fn write_auth_json(
     account_id: Option<&str>,
 ) -> String {
     use base64::Engine as _;
-    // hard-coded JSON tail only; no dynamic construction from previous requests
 
     let header = json!({ "alg": "none", "typ": "JWT" });
     let payload = json!({
