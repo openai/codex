@@ -1080,6 +1080,16 @@ async fn submission_loop(
 
                 // Install the new persistent context for subsequent tasks/turns.
                 turn_context = Arc::new(new_turn_context);
+                if cwd.is_some() || approval_policy.is_some() || sandbox_policy.is_some() {
+                    sess.record_conversation_items(&[ResponseItem::from(EnvironmentContext::new(
+                        cwd,
+                        approval_policy,
+                        sandbox_policy,
+                        // Shell is not configurable from turn to turn
+                        None,
+                    ))])
+                    .await;
+                }
             }
             Op::UserInput { items } => {
                 // attempt to inject input into current task
