@@ -963,7 +963,6 @@ impl Session {
             false
         }
     }
-
 }
 
 impl Drop for Session {
