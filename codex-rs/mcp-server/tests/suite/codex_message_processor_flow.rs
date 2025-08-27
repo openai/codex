@@ -183,14 +183,9 @@ async fn test_send_user_turn_changes_approval_policy_behavior() {
     let working_directory = tmp.path().join("workdir");
     std::fs::create_dir(&working_directory).expect("create working directory");
 
-    // Mock server will request a python shell call for the first and second turn, then finish.
     let responses = vec![
         create_shell_sse_response(
-            vec![
-                "python3".to_string(),
-                "-c".to_string(),
-                "print(42)".to_string(),
-            ],
+            vec!["uname".to_string(), "-s".to_string()],
             Some(&working_directory),
             Some(5000),
             "call1",
@@ -199,11 +194,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() {
         create_final_assistant_message_sse_response("done 1")
             .expect("create final assistant message 1"),
         create_shell_sse_response(
-            vec![
-                "python3".to_string(),
-                "-c".to_string(),
-                "print(42)".to_string(),
-            ],
+            vec!["uname".to_string(), "-s".to_string()],
             Some(&working_directory),
             Some(5000),
             "call2",
