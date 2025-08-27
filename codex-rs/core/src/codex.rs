@@ -905,7 +905,7 @@ impl Session {
             .await
     }
 
-    /// Trim conversation history to the last `n` messages
+    /// Trim conversation history to the last `n` messages.
     pub(crate) fn trim_history_to_last_messages(&self, n: usize) {
         let mut state = self.state.lock_unchecked();
         state.history.keep_last_messages(n);
