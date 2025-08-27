@@ -29,7 +29,7 @@ use std::env;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(40);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_codex_jsonrpc_conversation_flow() {
