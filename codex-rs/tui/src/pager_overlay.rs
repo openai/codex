@@ -394,6 +394,11 @@ impl TranscriptOverlay {
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         match event {
             TuiEvent::Key(key_event) => match key_event {
+                // Close transcript overlay with F1 as a fallback
+                KeyEvent { code: KeyCode::F(1), kind: KeyEventKind::Press, .. } => {
+                    self.is_done = true;
+                    Ok(())
+                }
                 KeyEvent {
                     code: KeyCode::Char('q'),
                     kind: KeyEventKind::Press,
@@ -467,17 +472,33 @@ impl StaticOverlay {
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         match event {
             TuiEvent::Key(key_event) => match key_event {
-                KeyEvent {
-                    code: KeyCode::Char('q'),
-                    kind: KeyEventKind::Press,
-                    ..
+                // Close static overlay with F1 as a fallback
+                KeyEvent { code: KeyCode::F(1), kind: KeyEventKind::Press, .. } => {
+                    self.is_done = true;
+                    Ok(())
                 }
-                | KeyEvent {
+                KeyEvent { code: KeyCode::Char('q'), kind: KeyEventKind::Press, .. } => {
+                    self.is_done = true;
+                    Ok(())
+                }
+                KeyEvent {
                     code: KeyCode::Char('c'),
                     modifiers: crossterm::event::KeyModifiers::CONTROL,
                     kind: KeyEventKind::Press,
                     ..
                 } => {
+                    self.is_done = true;
+                    Ok(())
+                }
+                KeyEvent { code: KeyCode::Esc, kind: KeyEventKind::Press, .. } => {
+                    self.is_done = true;
+                    Ok(())
+                }
+                KeyEvent { code: KeyCode::Char(ch), modifiers, kind: KeyEventKind::Press, .. }
+                    if (modifiers.contains(crossterm::event::KeyModifiers::CONTROL)
+                        && (ch == '/' || ch == '?'))
+                        || ch == '\u{001F}' =>
+                {
                     self.is_done = true;
                     Ok(())
                 }

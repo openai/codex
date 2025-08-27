@@ -85,7 +85,6 @@ pub(crate) struct ChatComposer {
     history: ChatComposerHistory,
     ctrl_c_quit_hint: bool,
     esc_backtrack_hint: bool,
-    use_shift_enter_hint: bool,
     dismissed_file_popup_token: Option<String>,
     current_file_query: Option<String>,
     pending_pastes: Vec<(String, String)>,
@@ -113,11 +112,9 @@ impl ChatComposer {
     pub fn new(
         has_input_focus: bool,
         app_event_tx: AppEventSender,
-        enhanced_keys_supported: bool,
+        _enhanced_keys_supported: bool,
         placeholder_text: String,
     ) -> Self {
-        let use_shift_enter_hint = enhanced_keys_supported;
-
         Self {
             textarea: TextArea::new(),
             textarea_state: RefCell::new(TextAreaState::default()),
@@ -126,7 +123,6 @@ impl ChatComposer {
             history: ChatComposerHistory::new(),
             ctrl_c_quit_hint: false,
             esc_backtrack_hint: false,
-            use_shift_enter_hint,
             dismissed_file_popup_token: None,
             current_file_query: None,
             pending_pastes: Vec::new(),
@@ -1224,19 +1220,12 @@ impl WidgetRef for ChatComposer {
                         Span::from(" to quit"),
                     ]
                 } else {
-                    let newline_hint_key = if self.use_shift_enter_hint {
-                        "Shift+⏎"
-                    } else {
-                        "Ctrl+J"
-                    };
                     vec![
                         Span::from(" "),
                         "⏎".set_style(key_hint_style),
                         Span::from(" send   "),
-                        newline_hint_key.set_style(key_hint_style),
-                        Span::from(" newline   "),
-                        "Ctrl+T".set_style(key_hint_style),
-                        Span::from(" transcript   "),
+                        "Ctrl+/".set_style(key_hint_style),
+                        Span::from(" shortcuts   "),
                         "Ctrl+C".set_style(key_hint_style),
                         Span::from(" quit"),
                     ]
