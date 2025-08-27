@@ -392,22 +392,40 @@ impl ExecCell {
             None => spinner(call.start_time),
         };
         let title = if self.is_active() { "Running" } else { "Ran" };
-        lines.push(Line::from(vec![bullet, " ".into(), title.bold()]));
         let cmd_display = strip_bash_lc_and_escape(&call.command);
-        let prefix = "  └ ".dim();
-        let wrapped = textwrap::wrap(
-            &cmd_display,
-            (width as usize).saturating_sub(prefix.width()),
-        );
-        for (i, line) in wrapped.iter().enumerate() {
+
+        // If the command fits on the same line as the header at the current width,
+        // show a single compact line: "• Ran <command>". Use the width of
+        // "• Running " (including trailing space) as the reserved prefix width.
+        // If the command contains newlines, always use the multi-line variant.
+        let reserved = "• Running ".width();
+        if !cmd_display.contains('\n')
+            && cmd_display.width() < (width as usize).saturating_sub(reserved)
+        {
             lines.push(Line::from(vec![
-                if i == 0 {
-                    prefix.clone()
-                } else {
-                    "    ".into()
-                },
-                line.to_string().into(),
+                bullet,
+                " ".into(),
+                title.bold(),
+                " ".into(),
+                cmd_display.clone().into(),
             ]));
+        } else {
+            lines.push(Line::from(vec![bullet, " ".into(), title.bold()]));
+            let prefix = "  └ ".dim();
+            let wrapped = textwrap::wrap(
+                &cmd_display,
+                (width as usize).saturating_sub(prefix.width()),
+            );
+            for (i, line) in wrapped.iter().enumerate() {
+                lines.push(Line::from(vec![
+                    if i == 0 {
+                        prefix.clone()
+                    } else {
+                        "    ".into()
+                    },
+                    line.to_string().into(),
+                ]));
+            }
         }
         if let Some(output) = call.output.as_ref() {
             if output.exit_code != 0 {
@@ -415,8 +433,11 @@ impl ExecCell {
                     .into_iter()
                     .join("\n");
                 if !out.trim().is_empty() {
-                    let wrapped =
-                        textwrap::wrap(&out, (width as usize).saturating_sub(prefix.width()));
+                    let out_indent_width = "    ".width();
+                    let wrapped = textwrap::wrap(
+                        &out,
+                        (width as usize).saturating_sub(out_indent_width),
+                    );
                     for line in wrapped {
                         lines.push(Line::from(vec!["    ".into(), line.to_string().dim()]));
                     }
