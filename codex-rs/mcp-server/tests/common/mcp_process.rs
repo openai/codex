@@ -247,6 +247,19 @@ impl McpProcess {
         self.send_request("logoutChatGpt", None).await
     }
 
+    /// Send a `fuzzyFileSearch` JSON-RPC request.
+    pub async fn send_fuzzy_file_search_request(
+        &mut self,
+        query: &str,
+        roots: Vec<String>,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::json!({
+            "query": query,
+            "roots": roots,
+        }));
+        self.send_request("fuzzyFileSearch", params).await
+    }
+
     async fn send_request(
         &mut self,
         method: &str,
