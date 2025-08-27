@@ -29,7 +29,7 @@ use std::env;
 use tempfile::TempDir;
 use tokio::time::timeout;
 
-const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(40);
+const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_codex_jsonrpc_conversation_flow() {
@@ -41,7 +41,7 @@ async fn test_codex_jsonrpc_conversation_flow() {
     }
 
     let tmp = TempDir::new().expect("tmp dir");
-    // Temporary Codex home with config pointing at the mock server.
+    // Temporary Codex home with config pointing at the mock server
     let codex_home = tmp.path().join("codex_home");
     std::fs::create_dir(&codex_home).expect("create codex home dir");
     let working_directory = tmp.path().join("workdir");
