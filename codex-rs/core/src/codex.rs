@@ -2455,11 +2455,15 @@ async fn handle_container_exec_with_params(
                 sandbox_type,
                 sandbox_policy: &turn_context.sandbox_policy,
                 codex_linux_sandbox_exe: &sess.codex_linux_sandbox_exe,
-                stdout_stream: Some(StdoutStream {
-                    sub_id: sub_id.clone(),
-                    call_id: call_id.clone(),
-                    tx_event: sess.tx_event.clone(),
-                }),
+                stdout_stream: if exec_command_context.apply_patch.is_some() {
+                    None
+                } else {
+                    Some(StdoutStream {
+                        sub_id: sub_id.clone(),
+                        call_id: call_id.clone(),
+                        tx_event: sess.tx_event.clone(),
+                    })
+                },
             },
         )
         .await;
@@ -2588,11 +2592,15 @@ async fn handle_sandbox_error(
                         sandbox_type: SandboxType::None,
                         sandbox_policy: &turn_context.sandbox_policy,
                         codex_linux_sandbox_exe: &sess.codex_linux_sandbox_exe,
-                        stdout_stream: Some(StdoutStream {
-                            sub_id: sub_id.clone(),
-                            call_id: call_id.clone(),
-                            tx_event: sess.tx_event.clone(),
-                        }),
+                        stdout_stream: if exec_command_context.apply_patch.is_some() {
+                            None
+                        } else {
+                            Some(StdoutStream {
+                                sub_id: sub_id.clone(),
+                                call_id: call_id.clone(),
+                                tx_event: sess.tx_event.clone(),
+                            })
+                        },
                     },
                 )
                 .await;
