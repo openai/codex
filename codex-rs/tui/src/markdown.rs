@@ -435,4 +435,136 @@ mod tests {
             "Hi! How can I help with codex-rs today? Want me to explore the repo, run tests, or work on a specific change?"
         );
     }
+
+    #[test]
+    fn tui_markdown_splits_ordered_marker_and_text() {
+        // Validate behavior originates from tui_markdown, not our helpers.
+        let rendered = tui_markdown::from_str("1. Tight item\n");
+        let lines: Vec<String> = rendered
+            .lines
+            .iter()
+            .map(|l| l
+                .spans
+                .iter()
+                .map(|s| s.content.clone())
+                .collect::<String>())
+            .collect();
+        assert_eq!(
+            lines,
+            vec!["1. ".to_string(), "Tight item".to_string()],
+            "expected tui_markdown to emit marker and content as separate lines"
+        );
+    }
+
+    #[test]
+    fn append_markdown_matches_tui_markdown_for_ordered_item() {
+        use codex_core::config_types::UriBasedFileOpener;
+        use std::path::Path;
+        let cwd = Path::new("/");
+        let mut out = Vec::new();
+        append_markdown_with_opener_and_cwd("1. Tight item\n", &mut out, UriBasedFileOpener::None, cwd);
+        let lines: Vec<String> = out
+            .iter()
+            .map(|l| l
+                .spans
+                .iter()
+                .map(|s| s.content.clone())
+                .collect::<String>())
+            .collect();
+        assert_eq!(
+            lines,
+            vec!["1. ".to_string(), "Tight item".to_string()],
+            "our helper preserves tui_markdown's split for ordered list items"
+        );
+    }
+
+    #[test]
+    fn tui_markdown_shape_for_loose_tight_section() {
+        // Use the exact concatenated source from the session deltas used in tests.
+        let source = [
+            "\n\n",
+            "Loose",
+            " vs",
+            ".",
+            " tight",
+            " list",
+            " items",
+            ":\n",
+            "1",
+            ".",
+            " Tight",
+            " item",
+            "\n",
+            "2",
+            ".",
+            " Another",
+            " tight",
+            " item",
+            "\n\n",
+            "1",
+            ".",
+            " Loose",
+            " item",
+            " with",
+            " its",
+            " own",
+            " paragraph",
+            ".\n\n",
+            "  ",
+            " This",
+            " paragraph",
+            " belongs",
+            " to",
+            " the",
+            " same",
+            " list",
+            " item",
+            ".\n\n",
+            "2",
+            ".",
+            " Second",
+            " loose",
+            " item",
+            " with",
+            " a",
+            " nested",
+            " list",
+            " after",
+            " a",
+            " blank",
+            " line",
+            ".\n\n",
+            "  ",
+            " -",
+            " Nested",
+            " bullet",
+            " under",
+            " a",
+            " loose",
+            " item",
+            "\n",
+            "  ",
+            " -",
+            " Another",
+            " nested",
+            " bullet",
+            "\n\n",
+        ]
+        .join("");
+
+        let rendered = tui_markdown::from_str(&source);
+        let lines: Vec<String> = rendered
+            .lines
+            .iter()
+            .map(|l| l
+                .spans
+                .iter()
+                .map(|s| s.content.clone())
+                .collect::<String>())
+            .collect();
+        assert!(
+            lines.contains(&"1. ".to_string()) && lines.contains(&"Tight item".to_string()),
+            "expected tui_markdown to emit separate marker and content lines in-section"
+        );
+    }
 }
