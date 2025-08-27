@@ -13,20 +13,14 @@ use crate::token_data::parse_id_token;
 pub async fn login_with_native_browser(codex_home: &Path) -> Result<(), LoginError> {
     // Build PKCE + state
     let pkce = generate_pkce();
-    // Allow tests to force the OAuth state for deterministic helper JSON (debug builds only).
-    #[cfg(debug_assertions)]
+    // Allow forcing the OAuth state via env (used in tests). Defaults to random.
     let state = std::env::var("CODEX_LOGIN_FORCE_STATE").unwrap_or_else(|_| generate_state());
-    #[cfg(not(debug_assertions))]
-    let state = generate_state();
 
     // Use the existing localhost callback URI, but we won't actually run a server.
     let redirect_uri = format!("http://localhost:{}/auth/callback", 1455u16);
-    // Allow tests to override the issuer base via env var (debug builds only).
-    #[cfg(debug_assertions)]
+    // Allow overriding the issuer base via env (used in tests). Defaults to prod issuer.
     let issuer =
         std::env::var("CODEX_LOGIN_ISSUER_BASE").unwrap_or_else(|_| DEFAULT_ISSUER.to_string());
-    #[cfg(not(debug_assertions))]
-    let issuer = DEFAULT_ISSUER.to_string();
     let auth_url = build_authorize_url(
         &issuer,
         CLIENT_ID,
@@ -36,8 +30,7 @@ pub async fn login_with_native_browser(codex_home: &Path) -> Result<(), LoginErr
     );
 
     // Compile Swift helper and run it to open a WKWebView and intercept the callback.
-    // In debug builds, allow bypassing the helper UI via an injected capture.
-    #[cfg(debug_assertions)]
+    // Allow bypassing the helper UI via an injected capture (used in tests).
     let capture = match std::env::var("CODEX_LOGIN_TEST_HELPER_JSON") {
         Ok(val) => {
             if val == "ABORT" {
@@ -48,8 +41,6 @@ pub async fn login_with_native_browser(codex_home: &Path) -> Result<(), LoginErr
         }
         Err(_) => compile_and_run_swift_helper(&auth_url, &state).await?,
     };
-    #[cfg(not(debug_assertions))]
-    let capture = compile_and_run_swift_helper(&auth_url, &state).await?;
     if capture.state != state {
         return Err(LoginError::StateMismatch);
     }
