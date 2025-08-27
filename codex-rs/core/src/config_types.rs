@@ -74,9 +74,30 @@ pub enum HistoryPersistence {
     None,
 }
 
+pub const LOCAL_SHELL_MAX_LINES_DEFAULT: usize = 150;
+
+fn local_shell_max_lines_default() -> usize {
+    LOCAL_SHELL_MAX_LINES_DEFAULT
+}
+
 /// Collection of settings that are specific to the TUI.
-#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
-pub struct Tui {}
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+pub struct Tui {
+    /// Maximum number of lines to display for the output of a locally executed
+    /// shell command entered via a leading `!` in the composer. Output beyond
+    /// this limit is summarized with an ellipsis in the UI. The full output is
+    /// still retained in the transcript.
+    #[serde(default = "local_shell_max_lines_default")]
+    pub local_shell_max_lines: usize,
+}
+
+impl Default for Tui {
+    fn default() -> Self {
+        Self {
+            local_shell_max_lines: LOCAL_SHELL_MAX_LINES_DEFAULT,
+        }
+    }
+}
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct SandboxWorkspaceWrite {

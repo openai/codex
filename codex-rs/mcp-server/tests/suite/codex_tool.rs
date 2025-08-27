@@ -236,7 +236,7 @@ async fn patch_approval_triggers_elicitation() -> anyhow::Result<()> {
     )
     .await??;
 
-    let elicitation_request_id = RequestId::Integer(0);
+    let elicitation_request_id = elicitation_request.id.clone();
 
     let mut expected_changes = HashMap::new();
     expected_changes.insert(

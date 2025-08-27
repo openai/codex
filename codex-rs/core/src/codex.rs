@@ -89,6 +89,9 @@ use crate::protocol::ExecCommandBeginEvent;
 use crate::protocol::ExecCommandEndEvent;
 use crate::protocol::FileChange;
 use crate::protocol::InputItem;
+#[cfg(unix)]
+use crate::protocol::LocalCommandBeginEvent;
+use crate::protocol::LocalCommandEndEvent;
 use crate::protocol::Op;
 use crate::protocol::PatchApplyBeginEvent;
 use crate::protocol::PatchApplyEndEvent;
@@ -284,6 +287,8 @@ pub(crate) struct Session {
     codex_linux_sandbox_exe: Option<PathBuf>,
     user_shell: shell::Shell,
     show_raw_agent_reasoning: bool,
+    /// Local exec runtime (platform-specific implementation).
+    local_exec: std::sync::Arc<dyn crate::local_exec_runtime::LocalExecRuntime>,
 }
 
 /// The context needed for a single turn of the conversation.
@@ -538,6 +543,16 @@ impl Session {
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             user_shell: default_shell,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+            local_exec: {
+                #[cfg(unix)]
+                {
+                    std::sync::Arc::new(crate::local_exec_runtime::UnixLocalExecRuntime::new())
+                }
+                #[cfg(not(unix))]
+                {
+                    std::sync::Arc::new(crate::local_exec_runtime::WindowsLocalExecRuntime::new())
+                }
+            },
         });
 
         // record the initial user instructions and environment context,
@@ -1049,6 +1064,112 @@ async fn submission_loop(
         match sub.op {
             Op::Interrupt => {
                 sess.interrupt_task();
+                // Any local command in progress should also be interrupted. This is to handle cases
+                // like `!sleep 100000` and the user wants to cancel it.
+                sess.local_exec.interrupt();
+            }
+            Op::LocalExec { raw_cmd } => {
+                #[cfg(unix)]
+                {
+                    // Choose a default shell invocation (bash -lc) just in case we don't have one set.
+                    let mut argv = vec!["bash".to_string(), "-lc".to_string(), raw_cmd];
+                    if let Some(cmd) = sess
+                        .user_shell
+                        .format_default_shell_invocation(argv.clone())
+                    {
+                        argv = cmd;
+                    }
+
+                    // We need to let the tui know that we're about to run a local command.
+                    let begin_event = Event {
+                        id: sub.id.clone(),
+                        msg: EventMsg::LocalCommandBegin(LocalCommandBeginEvent {
+                            command: argv.clone(),
+                        }),
+                    };
+                    let _ = sess.tx_event.send(begin_event).await;
+
+                    // Spawn child process in background to keep submission loop responsive.
+                    let cwd_to_use = turn_context.cwd.clone();
+                    let env = create_env(&turn_context.shell_environment_policy);
+                    let program = argv.first().cloned().unwrap_or_default();
+                    let args = argv.iter().skip(1).cloned().collect::<Vec<_>>();
+                    let sess_for_local = sess.clone();
+                    let tx_event = sess.tx_event.clone();
+                    let sub_id = sub.id.clone();
+                    tokio::spawn(async move {
+                        let mut cmd = tokio::process::Command::new(&program);
+                        cmd.args(&args)
+                            .current_dir(&cwd_to_use)
+                            .stdout(std::process::Stdio::piped())
+                            .stderr(std::process::Stdio::piped());
+
+                        sess_for_local.local_exec.configure_child(&mut cmd);
+
+                        // Start from a clean environment to avoid inheriting unpredictable or
+                        // sensitive variables from the parent process (PATH tweaks, proxies,
+                        // credentials, locale, toolchain settings, etc.). We then repopulate
+                        // only the approved set via `create_env(...)` for deterministic, safe
+                        // command execution aligned with the session's policy.
+                        cmd.env_clear();
+                        for (k, v) in env.into_iter() {
+                            cmd.env(k, v);
+                        }
+
+                        match cmd.spawn() {
+                            Ok(child) => {
+                                sess_for_local.local_exec.record_child(child.id());
+                                let out_res = child.wait_with_output().await;
+                                sess_for_local.local_exec.clear();
+
+                                let (exit_code, stdout, stderr) = match out_res {
+                                    Ok(output) => (
+                                        output.status.code().unwrap_or(-1),
+                                        String::from_utf8_lossy(&output.stdout).to_string(),
+                                        String::from_utf8_lossy(&output.stderr).to_string(),
+                                    ),
+                                    Err(e) => (1, String::new(), format!("failed to wait: {e}")),
+                                };
+                                let end_event = Event {
+                                    id: sub_id.clone(),
+                                    msg: EventMsg::LocalCommandEnd(LocalCommandEndEvent {
+                                        stdout,
+                                        stderr,
+                                        exit_code,
+                                    }),
+                                };
+                                let _ = tx_event.send(end_event).await;
+                            }
+                            Err(e) => {
+                                sess_for_local.local_exec.clear();
+                                let end_event = Event {
+                                    id: sub_id.clone(),
+                                    msg: EventMsg::LocalCommandEnd(LocalCommandEndEvent {
+                                        stdout: String::new(),
+                                        stderr: format!("failed to spawn: {e}"),
+                                        exit_code: 1,
+                                    }),
+                                };
+                                let _ = tx_event.send(end_event).await;
+                            }
+                        }
+                    });
+                }
+                #[cfg(not(unix))]
+                {
+                    // Local exec is only supported on Unix (includes macOS).
+                    // Immediately reply with an error.
+                    let _ = &raw_cmd;
+                    let end_event = Event {
+                        id: sub.id.clone(),
+                        msg: EventMsg::LocalCommandEnd(LocalCommandEndEvent {
+                            stdout: String::new(),
+                            stderr: "local exec is not supported on this platform".to_string(),
+                            exit_code: 1,
+                        }),
+                    };
+                    let _ = sess.tx_event.send(end_event).await;
+                }
             }
             Op::OverrideTurnContext {
                 cwd,
@@ -1880,6 +2001,13 @@ async fn run_compact_task(
         }
     }
 
+    // Ensure history is compacted before notifying completion so that the
+    // subsequent turn observes the truncated transcript.
+    {
+        let mut state = sess.state.lock_unchecked();
+        state.history.keep_last_messages(1);
+    }
+
     sess.remove_task(&sub_id);
     let event = Event {
         id: sub_id.clone(),
@@ -1895,9 +2023,6 @@ async fn run_compact_task(
         }),
     };
     sess.send_event(event).await;
-
-    let mut state = sess.state.lock_unchecked();
-    state.history.keep_last_messages(1);
 }
 
 async fn handle_response_item(

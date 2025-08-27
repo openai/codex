@@ -560,5 +560,7 @@ Options that are specific to the TUI.
 
 ```toml
 [tui]
-# More to come here
+# Maximum number of lines to show for locally executed `!` commands
+# in the TUI before summarizing with an ellipsis. Defaults to 100.
+local_shell_max_lines = 150
 ```

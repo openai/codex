@@ -340,6 +340,27 @@ impl ChatWidget {
         );
     }
 
+    fn on_local_command_begin(&mut self, ev: codex_core::protocol::LocalCommandBeginEvent) {
+        // Mark a running task so Ctrl+C submits Op::Interrupt to core.
+        self.bottom_pane.set_task_running(true);
+        self.add_to_history(history_cell::new_running_local_command(ev.command));
+        self.request_redraw();
+    }
+
+    fn on_local_command_end(&mut self, ev: codex_core::protocol::LocalCommandEndEvent) {
+        self.bottom_pane.set_task_running(false);
+        const LOCAL_SHELL_MAX_LINES_HARD_CAP: usize = 1000;
+        let max_lines = self
+            .config
+            .tui
+            .local_shell_max_lines
+            .min(LOCAL_SHELL_MAX_LINES_HARD_CAP);
+        let cell =
+            history_cell::new_local_command_output(ev.stdout, ev.stderr, ev.exit_code, max_lines);
+        self.add_to_history(cell);
+        self.request_redraw();
+    }
+
     fn on_exec_command_end(&mut self, ev: ExecCommandEndEvent) {
         let ev2 = ev.clone();
         self.defer_or_handle(|q| q.push_exec_end(ev), |s| s.handle_exec_end_now(ev2));
@@ -876,6 +897,21 @@ impl ChatWidget {
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
         let UserMessage { text, image_paths } = user_message;
+        #[cfg(unix)]
+        {
+            if let Some(prefix_stripped_text) = text.trim_start().strip_prefix('!') {
+                // We decide to be a bit lenient and treat "!  ls a" as "ls a" for processing.
+                let raw_cmd = prefix_stripped_text.trim().to_string();
+                if !raw_cmd.is_empty() {
+                    self.codex_op_tx
+                        .send(Op::LocalExec { raw_cmd })
+                        .unwrap_or_else(|e| {
+                            tracing::error!("failed to send local exec: {e}");
+                        });
+                    return;
+                }
+            }
+        }
         let mut items: Vec<InputItem> = Vec::new();
 
         if !text.is_empty() {
@@ -958,6 +994,8 @@ impl ChatWidget {
             EventMsg::PatchApplyBegin(ev) => self.on_patch_apply_begin(ev),
             EventMsg::PatchApplyEnd(ev) => self.on_patch_apply_end(ev),
             EventMsg::ExecCommandEnd(ev) => self.on_exec_command_end(ev),
+            EventMsg::LocalCommandBegin(ev) => self.on_local_command_begin(ev),
+            EventMsg::LocalCommandEnd(ev) => self.on_local_command_end(ev),
             EventMsg::McpToolCallBegin(ev) => self.on_mcp_tool_call_begin(ev),
             EventMsg::McpToolCallEnd(ev) => self.on_mcp_tool_call_end(ev),
             EventMsg::WebSearchBegin(ev) => self.on_web_search_begin(ev),

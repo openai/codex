@@ -1503,3 +1503,178 @@ fn deltas_then_same_final_message_are_rendered_snapshot() {
         .collect::<String>();
     assert_snapshot!(combined);
 }
+
+#[cfg(unix)]
+#[test]
+fn local_bang_exec_lists_files() {
+    use std::fs;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let f1 = tmp.path().join("alpha.txt");
+    let f2 = tmp.path().join("beta.txt");
+    fs::write(&f1, b"one").unwrap();
+    fs::write(&f2, b"two").unwrap();
+
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual();
+    chat.config.cwd = tmp.path().to_path_buf();
+
+    let typed = "!ls".to_string();
+    // Use paste to avoid triggering burst heuristics that suppress Enter submission
+    chat.bottom_pane.handle_paste(typed);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let op = op_rx.try_recv().expect("expected LocalExec op emitted");
+    let raw_cmd = match op {
+        Op::LocalExec { raw_cmd } => raw_cmd,
+        other => panic!("unexpected op: {other:?}"),
+    };
+    assert_eq!(raw_cmd, "ls");
+
+    // Feed the corresponding LocalCommand events back into the widget as if from core
+    let begin_cmd = vec!["bash".to_string(), "-lc".to_string(), raw_cmd.clone()];
+    chat.handle_codex_event(Event {
+        id: "sub-1".into(),
+        msg: EventMsg::LocalCommandBegin(codex_core::protocol::LocalCommandBeginEvent {
+            command: begin_cmd,
+        }),
+    });
+
+    let mut stdout = String::new();
+    stdout.push_str("alpha.txt\n");
+    stdout.push_str("beta.txt\n");
+    chat.handle_codex_event(Event {
+        id: "sub-1".into(),
+        msg: EventMsg::LocalCommandEnd(codex_core::protocol::LocalCommandEndEvent {
+            stdout,
+            stderr: String::new(),
+            exit_code: 0,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let combined = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(
+        combined.contains("alpha.txt"),
+        "missing alpha.txt in output: {combined}"
+    );
+    assert!(
+        combined.contains("beta.txt"),
+        "missing beta.txt in output: {combined}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn local_bang_exec_respects_max_lines() {
+    use std::fs::File;
+    use std::io::Write;
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let big = tmp.path().join("big.txt");
+    let mut f = File::create(&big).unwrap();
+    let total_lines: usize = 200;
+    for i in 0..total_lines {
+        writeln!(f, "L{i}").unwrap();
+    }
+
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual();
+    chat.config.cwd = tmp.path().to_path_buf();
+    chat.config.tui.local_shell_max_lines = 10;
+    let typed = format!("!cat {}", big.display());
+
+    chat.bottom_pane.handle_paste(typed);
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let _ = op_rx.try_recv().expect("expected LocalExec op emitted");
+
+    let stdout = {
+        let mut s = String::new();
+        for i in 0..total_lines {
+            s.push_str(&format!("L{i}\n"));
+        }
+        s
+    };
+    chat.handle_codex_event(Event {
+        id: "sub-2".into(),
+        msg: EventMsg::LocalCommandBegin(codex_core::protocol::LocalCommandBeginEvent {
+            command: vec!["bash".into(), "-lc".into(), "cat".into()],
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "sub-2".into(),
+        msg: EventMsg::LocalCommandEnd(codex_core::protocol::LocalCommandEndEvent {
+            stdout,
+            stderr: String::new(),
+            exit_code: 0,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let combined = cells
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+
+    let rendered_content_lines = combined
+        .lines()
+        .filter(|l| l.trim_start().starts_with('L'))
+        .count();
+    assert_eq!(rendered_content_lines, 10, "content lines should be capped");
+    assert!(
+        combined.contains("… +"),
+        "expected ellipsis summary present"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn local_bang_exec_can_be_interrupted_with_ctrl_c() {
+    use codex_core::protocol::Event;
+    use codex_core::protocol::EventMsg;
+    use codex_core::protocol::LocalCommandBeginEvent;
+    use codex_core::protocol::LocalCommandEndEvent;
+
+    let (mut chat, _, mut op_rx) = make_chatwidget_manual();
+
+    chat.handle_codex_event(Event {
+        id: "sub-ctrlc".into(),
+        msg: EventMsg::LocalCommandBegin(LocalCommandBeginEvent {
+            command: vec!["bash".into(), "-lc".into(), "sleep 10000".into()],
+        }),
+    });
+
+    assert!(chat.bottom_pane.is_task_running(), "task should be running");
+
+    // Press Ctrl-C; widget should send Op::Interrupt and running state should remain until LocalCommandEnd is received
+    chat.on_ctrl_c();
+    let op = op_rx.try_recv().expect("expected Interrupt op emitted");
+    match op {
+        Op::Interrupt => {}
+        other => panic!("unexpected op: {other:?}"),
+    }
+    // At this point, the task is still running until LocalCommandEnd is received
+    assert!(
+        chat.bottom_pane.is_task_running(),
+        "task running flag should remain set after Ctrl-C until LocalCommandEnd"
+    );
+
+    // Core would reply with LocalCommandEnd after termination; simulate it
+    chat.handle_codex_event(Event {
+        id: "sub-ctrlc".into(),
+        msg: EventMsg::LocalCommandEnd(LocalCommandEndEvent {
+            stdout: String::new(),
+            stderr: String::new(),
+            // Anything non-zero to signal interruption but we don't care about the value here.
+            exit_code: 1,
+        }),
+    });
+
+    // Now the running state should be cleared
+    assert!(
+        !chat.bottom_pane.is_task_running(),
+        "task running flag should be cleared after LocalCommandEnd"
+    );
+}

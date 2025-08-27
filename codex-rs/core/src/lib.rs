@@ -26,11 +26,13 @@ mod flags;
 pub mod git_info;
 mod is_safe_command;
 pub mod landlock;
+mod local_exec_runtime;
 mod mcp_connection_manager;
 mod mcp_tool_call;
 mod message_history;
 mod model_provider_info;
 pub mod parse_command;
+// platform impls are defined inside local_exec_runtime.rs now
 pub use model_provider_info::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 pub use model_provider_info::ModelProviderInfo;
 pub use model_provider_info::WireApi;
