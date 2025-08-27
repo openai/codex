@@ -148,12 +148,7 @@ impl PagerView {
 
     // Removed unused render_content_page (replaced by render_content_page_prepared)
 
-    fn render_content_page_prepared(
-        &self,
-        area: Rect,
-        buf: &mut Buffer,
-        page: &[Line<'static>],
-    ) {
+    fn render_content_page_prepared(&self, area: Rect, buf: &mut Buffer, page: &[Line<'static>]) {
         Paragraph::new(page.to_vec()).render_ref(area, buf);
 
         let visible = page.len();
@@ -581,7 +576,11 @@ mod tests {
         let prev_len = w2.len();
         pv.ensure_wrapped(36);
         let (w3, _) = pv.cached();
-        assert_ne!(prev_len, w3.len(), "wrapped length should change on width change");
+        assert_ne!(
+            prev_len,
+            w3.len(),
+            "wrapped length should change on width change"
+        );
     }
 
     #[test]
@@ -596,6 +595,9 @@ mod tests {
         pv.lines.extend([Line::from(long), Line::from(long)]);
         pv.ensure_wrapped(28);
         let (w2, _) = pv.cached();
-        assert!(w2.len() >= len1, "wrapped length should grow or stay same after append");
+        assert!(
+            w2.len() >= len1,
+            "wrapped length should grow or stay same after append"
+        );
     }
 }
