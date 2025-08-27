@@ -12,6 +12,7 @@ use codex_login::CodexAuth;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::wait_for_event;
+use serde_json::json;
 use tempfile::TempDir;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -844,7 +845,6 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     let requests = server.received_requests().await.unwrap();
     assert_eq!(requests.len(), 3, "expected 3 requests (one per turn)");
 
-    use serde_json::json;
     // Replace full-array compare with tail-only raw JSON compare using a single hard-coded value.
     let r3_tail_expected = serde_json::json!([
         {
