@@ -6,7 +6,6 @@ use super::StreamState;
 
 /// Sink for history insertions and animation control.
 pub(crate) trait HistorySink {
-    fn insert_history(&self, lines: Vec<Line<'static>>);
     fn insert_history_cell(&self, cell: Box<dyn crate::history_cell::HistoryCell>);
     fn start_commit_animation(&self);
     fn stop_commit_animation(&self);
@@ -16,10 +15,6 @@ pub(crate) trait HistorySink {
 pub(crate) struct AppEventHistorySink(pub(crate) crate::app_event_sender::AppEventSender);
 
 impl HistorySink for AppEventHistorySink {
-    fn insert_history(&self, lines: Vec<Line<'static>>) {
-        self.0
-            .send(crate::app_event::AppEvent::InsertHistoryLines(lines))
-    }
     fn insert_history_cell(&self, cell: Box<dyn crate::history_cell::HistoryCell>) {
         self.0
             .send(crate::app_event::AppEvent::InsertHistoryCell(cell))

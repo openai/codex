@@ -411,20 +411,64 @@ impl ExecCell {
             ]));
         } else {
             lines.push(Line::from(vec![bullet, " ".into(), title.bold()]));
-            let prefix = "  └ ".dim();
-            let wrapped = textwrap::wrap(
-                &cmd_display,
-                (width as usize).saturating_sub(prefix.width()),
-            );
-            for (i, line) in wrapped.iter().enumerate() {
-                lines.push(Line::from(vec![
-                    if i == 0 {
-                        prefix.clone()
+            let first_prefix = "  └ ".dim();
+            let first_prefix_w = first_prefix.width();
+            let cont_prefix: Span<'static> = "    ".into();
+            let cont_prefix_w = cont_prefix.width();
+            let extra_cont_prefix: Span<'static> = "        ".into(); // 8 spaces
+            let extra_cont_prefix_w = extra_cont_prefix.width();
+
+            if cmd_display.contains('\n') {
+                for (li, raw_line) in cmd_display.split('\n').enumerate() {
+                    // Choose indent widths for this original line
+                    let (line_first_prefix, line_first_w, line_cont_prefix, line_cont_w) =
+                        if li == 0 {
+                            // First original line: branch, then 8-space continuations
+                            (
+                                first_prefix.clone(),
+                                first_prefix_w,
+                                extra_cont_prefix.clone(),
+                                extra_cont_prefix_w,
+                            )
+                        } else {
+                            // Subsequent original lines: start with 4 spaces, wrap with 8 spaces
+                            (
+                                cont_prefix.clone(),
+                                cont_prefix_w,
+                                extra_cont_prefix.clone(),
+                                extra_cont_prefix_w,
+                            )
+                        };
+                    let first_avail = (width as usize).saturating_sub(line_first_w);
+                    let cont_avail = (width as usize).saturating_sub(line_cont_w);
+                    let pieces =
+                        ExecCell::wrap_command_line_by_widths(raw_line, first_avail, cont_avail);
+                    for (wi, piece) in pieces.iter().enumerate() {
+                        let prefix_span = if wi == 0 {
+                            line_first_prefix.clone()
+                        } else {
+                            line_cont_prefix.clone()
+                        };
+                        lines.push(Line::from(vec![prefix_span, piece.clone().into()]));
+                    }
+                }
+            } else {
+                // Single original line: first piece with "  └ ", subsequent pieces with 4 spaces
+                let first_avail = (width as usize).saturating_sub(first_prefix_w);
+                let cont_avail = (width as usize).saturating_sub(cont_prefix_w);
+                let pieces = ExecCell::wrap_command_line_by_widths(
+                    cmd_display.as_str(),
+                    first_avail,
+                    cont_avail,
+                );
+                for (i, piece) in pieces.iter().enumerate() {
+                    let prefix_span = if i == 0 {
+                        first_prefix.clone()
                     } else {
-                        "    ".into()
-                    },
-                    line.to_string().into(),
-                ]));
+                        cont_prefix.clone()
+                    };
+                    lines.push(Line::from(vec![prefix_span, piece.clone().into()]));
+                }
             }
         }
         if let Some(output) = call.output.as_ref() {
@@ -434,10 +478,8 @@ impl ExecCell {
                     .join("\n");
                 if !out.trim().is_empty() {
                     let out_indent_width = "    ".width();
-                    let wrapped = textwrap::wrap(
-                        &out,
-                        (width as usize).saturating_sub(out_indent_width),
-                    );
+                    let wrapped =
+                        textwrap::wrap(&out, (width as usize).saturating_sub(out_indent_width));
                     for line in wrapped {
                         lines.push(Line::from(vec!["    ".into(), line.to_string().dim()]));
                     }
@@ -514,6 +556,54 @@ impl ExecCell {
 
     fn is_exploring_cell(&self) -> bool {
         self.calls.iter().all(Self::is_exploring_call)
+    }
+
+    /// Wrap a single raw command line to the given first/continuation widths using textwrap.
+    /// Prefer wrapping at whitespace boundaries; if a single token exceeds the
+    /// available width, allow breaking inside the word.
+    fn wrap_command_line_by_widths(
+        raw: &str,
+        first_avail: usize,
+        cont_avail: usize,
+    ) -> Vec<String> {
+        use textwrap::Options as TwOptions;
+        use textwrap::WordSplitter;
+        use unicode_width::UnicodeWidthStr;
+
+        // First, wrap the entire line using the continuation width. This gives
+        // us word-boundary splits that we can then re-pack into a first line
+        // using the larger first_avail, if applicable.
+        let opts = TwOptions::new(cont_avail)
+            .break_words(true)
+            .word_splitter(WordSplitter::NoHyphenation);
+        let pieces = textwrap::wrap(raw, &opts);
+
+        let mut out: Vec<String> = Vec::new();
+        let mut cur_line = String::new();
+        let mut cur_limit = first_avail;
+        let mut cur_width = 0usize;
+
+        for p in pieces.iter() {
+            let s = p.as_ref();
+            let s_w = UnicodeWidthStr::width(s);
+            if cur_line.is_empty() {
+                cur_line.push_str(s);
+                cur_width = s_w;
+            } else if cur_width + 1 + s_w <= cur_limit {
+                cur_line.push(' ');
+                cur_line.push_str(s);
+                cur_width += 1 + s_w;
+            } else {
+                out.push(std::mem::take(&mut cur_line));
+                cur_limit = cont_avail;
+                cur_line.push_str(s);
+                cur_width = s_w;
+            }
+        }
+        if !cur_line.is_empty() {
+            out.push(cur_line);
+        }
+        out
     }
 
     pub(crate) fn with_added_call(
@@ -1594,6 +1684,192 @@ mod tests {
             Duration::from_millis(1),
         );
         let lines = cell.display_lines(80);
+        let rendered = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn multiline_command_wraps_with_extra_indent_on_subsequent_lines() {
+        // Create a completed exec cell with a multiline command
+        let cmd = "set -o pipefail\ncargo test --all-features --quiet".to_string();
+        let call_id = "c1".to_string();
+        let mut cell = ExecCell::new(ExecCall {
+            call_id: call_id.clone(),
+            command: vec!["bash".into(), "-lc".into(), cmd],
+            parsed: Vec::new(),
+            output: None,
+            start_time: Some(Instant::now()),
+            duration: None,
+        });
+        // Mark call complete so it renders as "Ran"
+        cell.complete_call(
+            &call_id,
+            CommandOutput {
+                exit_code: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+                formatted_output: String::new(),
+            },
+            Duration::from_millis(1),
+        );
+
+        // Small width to force wrapping on both lines
+        let width: u16 = 28;
+        let lines = cell.display_lines(width);
+        let rendered = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn single_line_command_compact_when_fits() {
+        let call_id = "c1".to_string();
+        let mut cell = ExecCell::new(ExecCall {
+            call_id: call_id.clone(),
+            command: vec!["echo".into(), "ok".into()],
+            parsed: Vec::new(),
+            output: None,
+            start_time: Some(Instant::now()),
+            duration: None,
+        });
+        cell.complete_call(
+            &call_id,
+            CommandOutput {
+                exit_code: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+                formatted_output: String::new(),
+            },
+            Duration::from_millis(1),
+        );
+        // Wide enough that it fits inline
+        let lines = cell.display_lines(80);
+        let rendered = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn single_line_command_wraps_with_four_space_continuation() {
+        let call_id = "c1".to_string();
+        let long = "a_very_long_token_without_spaces_to_force_wrapping".to_string();
+        let mut cell = ExecCell::new(ExecCall {
+            call_id: call_id.clone(),
+            command: vec!["bash".into(), "-lc".into(), long],
+            parsed: Vec::new(),
+            output: None,
+            start_time: Some(Instant::now()),
+            duration: None,
+        });
+        cell.complete_call(
+            &call_id,
+            CommandOutput {
+                exit_code: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+                formatted_output: String::new(),
+            },
+            Duration::from_millis(1),
+        );
+        let lines = cell.display_lines(24);
+        let rendered = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn multiline_command_without_wrap_uses_branch_then_eight_spaces() {
+        let call_id = "c1".to_string();
+        let cmd = "echo one\necho two".to_string();
+        let mut cell = ExecCell::new(ExecCall {
+            call_id: call_id.clone(),
+            command: vec!["bash".into(), "-lc".into(), cmd],
+            parsed: Vec::new(),
+            output: None,
+            start_time: Some(Instant::now()),
+            duration: None,
+        });
+        cell.complete_call(
+            &call_id,
+            CommandOutput {
+                exit_code: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+                formatted_output: String::new(),
+            },
+            Duration::from_millis(1),
+        );
+        let lines = cell.display_lines(80);
+        let rendered = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn multiline_command_both_lines_wrap_with_correct_prefixes() {
+        let call_id = "c1".to_string();
+        let cmd = "first_token_is_long_enough_to_wrap\nsecond_token_is_also_long_enough_to_wrap"
+            .to_string();
+        let mut cell = ExecCell::new(ExecCall {
+            call_id: call_id.clone(),
+            command: vec!["bash".into(), "-lc".into(), cmd],
+            parsed: Vec::new(),
+            output: None,
+            start_time: Some(Instant::now()),
+            duration: None,
+        });
+        cell.complete_call(
+            &call_id,
+            CommandOutput {
+                exit_code: 0,
+                stdout: String::new(),
+                stderr: String::new(),
+                formatted_output: String::new(),
+            },
+            Duration::from_millis(1),
+        );
+        let lines = cell.display_lines(28);
         let rendered = lines
             .iter()
             .map(|l| {
