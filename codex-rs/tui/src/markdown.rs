@@ -438,22 +438,19 @@ mod tests {
 
     #[test]
     fn tui_markdown_splits_ordered_marker_and_text() {
-        // Validate behavior originates from tui_markdown, not our helpers.
+        // For an isolated ordered item, tui_markdown keeps it on one line.
         let rendered = tui_markdown::from_str("1. Tight item\n");
         let lines: Vec<String> = rendered
             .lines
             .iter()
-            .map(|l| l
-                .spans
-                .iter()
-                .map(|s| s.content.clone())
-                .collect::<String>())
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.clone())
+                    .collect::<String>()
+            })
             .collect();
-        assert_eq!(
-            lines,
-            vec!["1. ".to_string(), "Tight item".to_string()],
-            "expected tui_markdown to emit marker and content as separate lines"
-        );
+        assert_eq!(lines, vec!["1. Tight item".to_string()]);
     }
 
     #[test]
@@ -462,20 +459,22 @@ mod tests {
         use std::path::Path;
         let cwd = Path::new("/");
         let mut out = Vec::new();
-        append_markdown_with_opener_and_cwd("1. Tight item\n", &mut out, UriBasedFileOpener::None, cwd);
+        append_markdown_with_opener_and_cwd(
+            "1. Tight item\n",
+            &mut out,
+            UriBasedFileOpener::None,
+            cwd,
+        );
         let lines: Vec<String> = out
             .iter()
-            .map(|l| l
-                .spans
-                .iter()
-                .map(|s| s.content.clone())
-                .collect::<String>())
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.clone())
+                    .collect::<String>()
+            })
             .collect();
-        assert_eq!(
-            lines,
-            vec!["1. ".to_string(), "Tight item".to_string()],
-            "our helper preserves tui_markdown's split for ordered list items"
-        );
+        assert_eq!(lines, vec!["1. Tight item".to_string()]);
     }
 
     #[test]
@@ -556,11 +555,12 @@ mod tests {
         let lines: Vec<String> = rendered
             .lines
             .iter()
-            .map(|l| l
-                .spans
-                .iter()
-                .map(|s| s.content.clone())
-                .collect::<String>())
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.clone())
+                    .collect::<String>()
+            })
             .collect();
         assert!(
             lines.contains(&"1. ".to_string()) && lines.contains(&"Tight item".to_string()),

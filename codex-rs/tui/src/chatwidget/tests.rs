@@ -126,7 +126,6 @@ fn final_answer_without_newline_is_flushed_immediately() {
     );
 }
 
-// (removed dash-split chatwidget test; covered at collector level)
 /*
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 

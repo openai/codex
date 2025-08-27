@@ -238,7 +238,9 @@ mod tests {
     }
     impl TestSink {
         fn new() -> Self {
-            Self { lines: RefCell::new(Vec::new()) }
+            Self {
+                lines: RefCell::new(Vec::new()),
+            }
         }
     }
     impl HistorySink for TestSink {
@@ -356,11 +358,10 @@ mod tests {
             }
         }
         // Drop leading blank and header line if present.
-        if !flat.is_empty() {
-            if lines_to_plain_strings(&[flat[0].clone()])[0].is_empty() {
+        if !flat.is_empty()
+            && lines_to_plain_strings(&[flat[0].clone()])[0].is_empty() {
                 flat.remove(0);
             }
-        }
         if !flat.is_empty() {
             let s0 = lines_to_plain_strings(&[flat[0].clone()])[0].clone();
             if s0 == "codex" {
@@ -394,6 +395,9 @@ mod tests {
             "    - Nested bullet under a loose item".to_string(),
             "    - Another nested bullet".to_string(),
         ];
-        assert_eq!(streamed, expected, "expected exact rendered lines for loose/tight section");
+        assert_eq!(
+            streamed, expected,
+            "expected exact rendered lines for loose/tight section"
+        );
     }
 }

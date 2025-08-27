@@ -560,23 +560,7 @@ mod tests {
 
     // --- Minimization and fuzz helpers (debug/analysis) ---
 
-    fn render_full_strings(src: &str, cfg: &Config) -> Vec<String> {
-        let mut out: Vec<ratatui::text::Line<'static>> = Vec::new();
-        crate::markdown::append_markdown(src, &mut out, cfg);
-        lines_to_plain_strings(&out)
-    }
-
-    fn stream_strings_from_deltas(deltas: &[&str], cfg: &Config) -> Vec<String> {
-        let lines = simulate_stream_markdown_for_tests(deltas, true, cfg);
-        lines_to_plain_strings(&lines)
-    }
-
-    fn mismatch(deltas: &[&str], cfg: &Config) -> bool {
-        let full: String = deltas.iter().copied().collect();
-        let streamed = stream_strings_from_deltas(deltas, cfg);
-        let rendered = render_full_strings(&full, cfg);
-        streamed != rendered
-    }
+    // cleaned up: removed unused fuzzing helpers
 
     /// Greedily minimize a failing delta sequence to the shortest (by element count)
     // (diagnostic minimizer removed)
@@ -811,7 +795,10 @@ mod tests {
             "    - Nested bullet under a loose item".to_string(),
             "    - Another nested bullet".to_string(),
         ];
-        assert_eq!(streamed_strs, expected, "expected exact rendered lines for loose/tight section");
+        assert_eq!(
+            streamed_strs, expected,
+            "expected exact rendered lines for loose/tight section"
+        );
     }
 
     // Targeted tests derived from fuzz findings. Each asserts streamed == full render.
@@ -834,10 +821,7 @@ mod tests {
     fn fuzz_class_bullet_duplication_variant_1() {
         let cfg = test_config();
         // Case similar to: ["aph.\n- let one\n- bull", "et two\n\n  second paragraph "]
-        let deltas = vec![
-            "aph.\n- let one\n- bull",
-            "et two\n\n  second paragraph \n",
-        ];
+        let deltas = vec!["aph.\n- let one\n- bull", "et two\n\n  second paragraph \n"];
         let streamed = simulate_stream_markdown_for_tests(&deltas, true, &cfg);
         let streamed_strs = lines_to_plain_strings(&streamed);
         let full: String = deltas.iter().copied().collect();
@@ -878,152 +862,7 @@ mod tests {
         assert_eq!(streamed_strs, rendered_strs);
     }
 
-    // --- Fuzzing helpers and tests ---
-
-    fn minimize_failing_deltas(mut deltas: Vec<String>, cfg: &Config) -> Vec<String> {
-        // Only attempt to shrink if it mismatches.
-        if !mismatch(&deltas.iter().map(|s| s.as_str()).collect::<Vec<_>>(), cfg) {
-            return deltas;
-        }
-        let mut changed = true;
-        while changed {
-            changed = false;
-            // Try single removals.
-            let mut best: Option<Vec<String>> = None;
-            for i in 0..deltas.len() {
-                let mut cand = deltas.clone();
-                cand.remove(i);
-                let cand_refs = cand.iter().map(|s| s.as_str()).collect::<Vec<_>>();
-                if mismatch(&cand_refs, cfg) {
-                    if best.as_ref().map(|b| cand.len() < b.len()).unwrap_or(true) {
-                        best = Some(cand);
-                    }
-                }
-            }
-            if let Some(b) = best {
-                deltas = b;
-                changed = true;
-                continue;
-            }
-            // Try merges of adjacent chunks.
-            for i in 0..(deltas.len().saturating_sub(1)) {
-                let mut cand = deltas.clone();
-                let merged = format!("{}{}", cand[i], cand[i + 1]);
-                cand[i] = merged;
-                cand.remove(i + 1);
-                let cand_refs = cand.iter().map(|s| s.as_str()).collect::<Vec<_>>();
-                if mismatch(&cand_refs, cfg) {
-                    deltas = cand;
-                    changed = true;
-                    break;
-                }
-            }
-        }
-        deltas
-    }
-
-    fn sample_markdown_input() -> String {
-        // Roughly 10 lines with varied list styles and edge cases.
-        // - Loose list with a blank line, nested/continued content
-        // - Ordered list
-        // - Bare dash line edge case
-        // - Task list style
-        let lines = vec![
-            "Intro paragraph.",
-            "- bullet one",
-            "  continuation under bullet one",
-            "- bullet two",
-            "",
-            "  second paragraph in bullet two",
-            "1. number one",
-            "2. number two",
-            "- ",
-            "* [x] done task",
-        ];
-        let mut s = String::new();
-        for (i, l) in lines.iter().enumerate() {
-            s.push_str(l);
-            // End every line with a newline to normalize
-            if i + 1 < lines.len() || !l.ends_with('\n') {
-                s.push('\n');
-            }
-        }
-        s
-    }
-
-    fn random_chunking(src: &str, rng: &mut impl rand::Rng) -> Vec<String> {
-        // Split at character boundaries to keep UTF-8 valid
-        let mut cut_positions: Vec<usize> = src.char_indices().map(|(i, _)| i).collect();
-        cut_positions.push(src.len());
-        // Choose a random number of cuts, biased to produce small and medium chunks
-        let max_cuts = (cut_positions.len() / 4).max(4);
-        let cuts = rng.gen_range(1..=max_cuts);
-        // Sample unique positions (excluding 0)
-        use rand::seq::SliceRandom;
-        let mut choices = cut_positions.clone();
-        choices.retain(|&p| p != 0);
-        choices.shuffle(rng);
-        let mut picks = choices.into_iter().take(cuts).collect::<Vec<_>>();
-        picks.push(src.len());
-        picks.sort_unstable();
-        picks.dedup();
-        let mut out = Vec::new();
-        let mut last = 0usize;
-        for p in picks {
-            if p > last {
-                out.push(src[last..p].to_string());
-                last = p;
-            }
-        }
-        if last < src.len() {
-            out.push(src[last..].to_string());
-        }
-        out
-    }
-
-    /// Fuzz the way markdown gets split into deltas and compare streamed vs full render.
-    /// Ignored by default; prints minimized failing cases it discovers.
-    #[test]
-    #[ignore]
-    fn fuzz_markdown_chunking_variants() {
-        use rand::{Rng, SeedableRng};
-        let cfg = test_config();
-        let src = sample_markdown_input();
-        let mut rng = rand::rngs::StdRng::seed_from_u64(0xC0D3C0DE_u64);
-        let mut found: Vec<Vec<String>> = Vec::new();
-
-        let iters = 2000usize;
-        for _ in 0..iters {
-            let chunks = random_chunking(&src, &mut rng);
-            let refs = chunks.iter().map(|s| s.as_str()).collect::<Vec<_>>();
-            if mismatch(&refs, &cfg) {
-                let minimized = minimize_failing_deltas(chunks.clone(), &cfg);
-                // Avoid storing duplicates
-                if !found.iter().any(|c| c == &minimized) {
-                    found.push(minimized);
-                }
-            }
-        }
-
-        // Sort by chunk count ascending for readability
-        found.sort_by_key(|v| v.len());
-        eprintln!("Discovered {} distinct failing chunkings", found.len());
-        for (i, case) in found.iter().take(10).enumerate() {
-            eprintln!("Case #{i} ({} chunks):", case.len());
-            for (j, s) in case.iter().enumerate() {
-                eprintln!("  [{j}] {:?}", s);
-            }
-            // Also show the streamed vs. full for the minimized case
-            let refs = case.iter().map(|s| s.as_str()).collect::<Vec<_>>();
-            let streamed = stream_strings_from_deltas(&refs, &cfg);
-            let rendered = render_full_strings(&refs.join(""), &cfg);
-            eprintln!("  streamed: {:?}", streamed);
-            eprintln!("  rendered: {:?}", rendered);
-        }
-
-        // Do not assert; this is for discovery. Keep as informational.
-        assert!(true);
-    }
+    // cleaned up: removed heavy fuzzing helpers and ignored test
 
     // (removed heavy diagnostic tests)
 }
