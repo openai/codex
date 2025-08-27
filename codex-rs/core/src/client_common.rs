@@ -257,5 +257,3 @@ mod tests {
         assert!(v.get("text").is_none());
     }
 }
-
-// (No ToolChoice support; tool selection remains "auto".)
