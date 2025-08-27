@@ -534,37 +534,37 @@ async fn process_sse<S>(
             "response.output_item.done" => {
                 let Some(item_val) = event.item else { continue };
                 // Attempt to capture web_search_call query from the raw item before converting.
-                if let Some(map) = item_val.as_object() {
-                    if map.get("type").and_then(|v| v.as_str()) == Some("web_search_call") {
-                        let call_id = map
-                            .get("id")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        // Prefer explicit input.query; fall back to action.query if present.
-                        let query_opt = map
-                            .get("input")
-                            .and_then(|i| i.get("query"))
-                            .and_then(|q| q.as_str())
-                            .map(|s| s.to_string())
-                            .or_else(|| {
-                                map.get("action")
-                                    .and_then(|a| a.get("query"))
-                                    .and_then(|q| q.as_str())
-                                    .map(|s| s.to_string())
-                            });
-                        if let Some(query) = query_opt {
-                            if !web_search_query_emitted.contains(&call_id) {
-                                let ev = ResponseEvent::WebSearchCallBegin {
-                                    call_id: call_id.clone(),
-                                    query: Some(query),
-                                };
-                                if tx_event.send(Ok(ev)).await.is_err() {
-                                    return;
-                                }
-                                web_search_query_emitted.insert(call_id);
-                            }
+                if let Some(map) = item_val.as_object()
+                    && map.get("type").and_then(|v| v.as_str()) == Some("web_search_call")
+                {
+                    let call_id = map
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    // Prefer explicit input.query; fall back to action.query if present.
+                    let query_opt = map
+                        .get("input")
+                        .and_then(|i| i.get("query"))
+                        .and_then(|q| q.as_str())
+                        .map(|s| s.to_string())
+                        .or_else(|| {
+                            map.get("action")
+                                .and_then(|a| a.get("query"))
+                                .and_then(|q| q.as_str())
+                                .map(|s| s.to_string())
+                        });
+                    if let Some(query) = query_opt
+                        && !web_search_query_emitted.contains(&call_id)
+                    {
+                        let ev = ResponseEvent::WebSearchCallBegin {
+                            call_id: call_id.clone(),
+                            query: Some(query),
+                        };
+                        if tx_event.send(Ok(ev)).await.is_err() {
+                            return;
                         }
+                        web_search_query_emitted.insert(call_id);
                     }
                 }
 
@@ -648,17 +648,17 @@ async fn process_sse<S>(
                                     .and_then(|a| a.get("query"))
                                     .and_then(|q| q.as_str())
                                     .map(|s| s.to_string());
-                                if let Some(query) = query_opt {
-                                    if !web_search_query_emitted.contains(&call_id) {
-                                        let ev = ResponseEvent::WebSearchCallBegin {
-                                            call_id: call_id.clone(),
-                                            query: Some(query),
-                                        };
-                                        if tx_event.send(Ok(ev)).await.is_err() {
-                                            return;
-                                        }
-                                        web_search_query_emitted.insert(call_id);
+                                if let Some(query) = query_opt
+                                    && !web_search_query_emitted.contains(&call_id)
+                                {
+                                    let ev = ResponseEvent::WebSearchCallBegin {
+                                        call_id: call_id.clone(),
+                                        query: Some(query),
+                                    };
+                                    if tx_event.send(Ok(ev)).await.is_err() {
+                                        return;
                                     }
+                                    web_search_query_emitted.insert(call_id);
                                 }
                             }
                         }
@@ -719,29 +719,26 @@ async fn process_sse<S>(
                                 .and_modify(|buf| buf.push_str(&delta))
                                 .or_insert(delta);
                         }
-                    } else if event.kind == "response.custom_tool_call_input.done" {
-                        if let Some(call_id) = item.get("id").and_then(|v| v.as_str()) {
-                            if let Some(buf) = web_search_input_buffers.remove(call_id) {
-                                // Try to parse accumulated input JSON and extract query.
-                                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&buf) {
-                                    if let Some(query) = val
-                                        .get("query")
-                                        .and_then(|q| q.as_str())
-                                        .map(|s| s.to_string())
-                                    {
-                                        if !web_search_query_emitted.contains(call_id) {
-                                            let ev = ResponseEvent::WebSearchCallBegin {
-                                                call_id: call_id.to_string(),
-                                                query: Some(query),
-                                            };
-                                            if tx_event.send(Ok(ev)).await.is_err() {
-                                                return;
-                                            }
-                                            web_search_query_emitted.insert(call_id.to_string());
-                                        }
-                                    }
-                                }
+                    } else if event.kind == "response.custom_tool_call_input.done"
+                        && let Some(call_id) = item.get("id").and_then(|v| v.as_str())
+                        && let Some(buf) = web_search_input_buffers.remove(call_id)
+                    {
+                        // Try to parse accumulated input JSON and extract query.
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&buf)
+                            && let Some(query) = val
+                                .get("query")
+                                .and_then(|q| q.as_str())
+                                .map(|s| s.to_string())
+                            && !web_search_query_emitted.contains(call_id)
+                        {
+                            let ev = ResponseEvent::WebSearchCallBegin {
+                                call_id: call_id.to_string(),
+                                query: Some(query),
+                            };
+                            if tx_event.send(Ok(ev)).await.is_err() {
+                                return;
                             }
+                            web_search_query_emitted.insert(call_id.to_string());
                         }
                     }
                 }
