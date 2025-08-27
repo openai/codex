@@ -337,7 +337,7 @@ fn create_web_search_request_tool() -> OpenAiTool {
     );
     OpenAiTool::Function(ResponsesApiTool {
         name: "web_search_request".to_string(),
-        description: "Request user approval to perform a web search with the given query"
+        description: "Request user approval to perform a web search with the given query. If approved, you must call the native web_search (or web.run) tool on your next turn using the approved query before answering."
             .to_string(),
         strict: false,
         parameters: JsonSchema::Object {

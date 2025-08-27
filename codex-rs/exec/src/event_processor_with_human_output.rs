@@ -363,7 +363,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 }
             }
             EventMsg::WebSearchBegin(WebSearchBeginEvent { call_id: _, query }) => {
-                ts_println!(self, "🌐 {query}");
+                if query.trim() != "Searching Web..." {
+                    ts_println!(self, "🌐 {query}");
+                }
             }
             EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
                 call_id,

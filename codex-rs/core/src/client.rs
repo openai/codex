@@ -541,11 +541,18 @@ async fn process_sse<S>(
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
+                        // Prefer explicit input.query; fall back to action.query if present.
                         let query_opt = map
                             .get("input")
                             .and_then(|i| i.get("query"))
                             .and_then(|q| q.as_str())
-                            .map(|s| s.to_string());
+                            .map(|s| s.to_string())
+                            .or_else(|| {
+                                map.get("action")
+                                    .and_then(|a| a.get("query"))
+                                    .and_then(|q| q.as_str())
+                                    .map(|s| s.to_string())
+                            });
                         if let Some(query) = query_opt {
                             if !web_search_query_emitted.contains(&call_id) {
                                 let ev = ResponseEvent::WebSearchCallBegin {
@@ -625,6 +632,37 @@ async fn process_sse<S>(
             // Final response completed – includes array of output items & id
             "response.completed" => {
                 if let Some(resp_val) = event.response {
+                    // Backfill web_search_call query if only provided in the final completed output.
+                    if let Some(output) = resp_val.get("output").and_then(|v| v.as_array()) {
+                        for item in output {
+                            if item.get("type").and_then(|v| v.as_str())
+                                == Some("web_search_call")
+                            {
+                                let call_id = item
+                                    .get("id")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string();
+                                let query_opt = item
+                                    .get("action")
+                                    .and_then(|a| a.get("query"))
+                                    .and_then(|q| q.as_str())
+                                    .map(|s| s.to_string());
+                                if let Some(query) = query_opt {
+                                    if !web_search_query_emitted.contains(&call_id) {
+                                        let ev = ResponseEvent::WebSearchCallBegin {
+                                            call_id: call_id.clone(),
+                                            query: Some(query),
+                                        };
+                                        if tx_event.send(Ok(ev)).await.is_err() {
+                                            return;
+                                        }
+                                        web_search_query_emitted.insert(call_id);
+                                    }
+                                }
+                            }
+                        }
+                    }
                     match serde_json::from_value::<ResponseCompleted>(resp_val) {
                         Ok(r) => {
                             response_completed = Some(r);
@@ -1163,6 +1201,47 @@ mod tests {
             ev,
             ResponseEvent::WebSearchCallBegin { call_id, query: Some(q) }
                 if call_id == "call_2" && q == "unix signals"
+        )));
+    }
+
+    #[tokio::test]
+    async fn emits_web_search_begin_with_query_from_completed_output() {
+        let completed = json!({
+            "type": "response.completed",
+            "response": {
+                "id": "r3",
+                "usage": null,
+                "output": [
+                    {
+                        "id": "call_3",
+                        "type": "web_search_call",
+                        "status": "completed",
+                        "action": { "type": "search", "query": "seahawks next game" }
+                    }
+                ]
+            }
+        });
+
+        let provider = ModelProviderInfo {
+            name: "test".to_string(),
+            base_url: Some("https://test.com".to_string()),
+            env_key: Some("TEST_API_KEY".to_string()),
+            env_key_instructions: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: Some(0),
+            stream_max_retries: Some(0),
+            stream_idle_timeout_ms: Some(1000),
+            requires_openai_auth: false,
+        };
+
+        let out = run_sse(vec![completed], provider).await;
+        assert!(out.iter().any(|ev| matches!(
+            ev,
+            ResponseEvent::WebSearchCallBegin { call_id, query: Some(q) }
+                if call_id == "call_3" && q == "seahawks next game"
         )));
     }
 }
