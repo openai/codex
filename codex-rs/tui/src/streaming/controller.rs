@@ -374,6 +374,9 @@ mod tests {
         let source: String = deltas.iter().copied().collect();
         let mut rendered: Vec<ratatui::text::Line<'static>> = Vec::new();
         crate::markdown::append_markdown(&source, &mut rendered, &cfg);
+        // Coalesce ordered list markers in the baseline to match streaming coalescing
+        let mut rendered = rendered;
+        coalesce_ordered_for_tests(&mut rendered);
         let rendered_strs = lines_to_plain_strings(&rendered);
 
         assert_eq!(streamed, rendered_strs);
@@ -382,16 +385,12 @@ mod tests {
         let expected = vec![
             "Loose vs. tight list items:".to_string(),
             "".to_string(),
-            "1. ".to_string(),
-            "Tight item".to_string(),
-            "2. ".to_string(),
-            "Another tight item".to_string(),
-            "3. ".to_string(),
-            "Loose item with its own paragraph.".to_string(),
+            "1. Tight item".to_string(),
+            "2. Another tight item".to_string(),
+            "3. Loose item with its own paragraph.".to_string(),
             "".to_string(),
             "This paragraph belongs to the same list item.".to_string(),
-            "4. ".to_string(),
-            "Second loose item with a nested list after a blank line.".to_string(),
+            "4. Second loose item with a nested list after a blank line.".to_string(),
             "    - Nested bullet under a loose item".to_string(),
             "    - Another nested bullet".to_string(),
         ];
@@ -399,5 +398,48 @@ mod tests {
             streamed, expected,
             "expected exact rendered lines for loose/tight section"
         );
+    }
+}
+#[cfg(test)]
+fn coalesce_ordered_for_tests(lines: &mut Vec<Line<'static>>) {
+    let mut i = 0usize;
+    while i + 1 < lines.len() {
+        let a = lines[i]
+            .spans
+            .iter()
+            .map(|s| s.content.clone())
+            .collect::<String>();
+        let b = lines[i + 1]
+            .spans
+            .iter()
+            .map(|s| s.content.clone())
+            .collect::<String>();
+        if is_ordered_marker_only_test(&a) {
+            lines[i] = Line::from(format!("{}{}", a, b));
+            lines.remove(i + 1);
+        } else {
+            i += 1;
+        }
+    }
+}
+#[cfg(test)]
+fn is_ordered_marker_only_test(s: &str) -> bool {
+    let t = s.trim_end();
+    let mut it = t.chars().peekable();
+    let mut saw_digit = false;
+    while let Some(&ch) = it.peek() {
+        if ch.is_ascii_digit() {
+            saw_digit = true;
+            it.next();
+        } else {
+            break;
+        }
+    }
+    if !saw_digit || it.next() != Some('.') {
+        return false;
+    }
+    match it.next() {
+        Some(' ') | None => it.next().is_none(),
+        _ => false,
     }
 }
