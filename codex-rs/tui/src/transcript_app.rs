@@ -411,4 +411,51 @@ mod tests {
             "expected 'edit prev' hint in overlay footer, got: {s:?}"
         );
     }
+
+    #[test]
+    fn wrap_cache_reuses_for_same_width_and_rebuilds_on_change() {
+        let long = "This is a long line that should wrap multiple times to ensure non-empty wrapped output.";
+        let mut app = TranscriptApp::new(vec![Line::from(long), Line::from(long)]);
+
+        // Build cache at width 24
+        app.ensure_wrapped(24);
+        let (wrapped1, _) = app.cached();
+        assert!(!wrapped1.is_empty(), "expected wrapped output to be non-empty");
+        let ptr1 = wrapped1.as_ptr();
+
+        // Re-run with same width: cache should be reused (pointer stability heuristic)
+        app.ensure_wrapped(24);
+        let (wrapped2, _) = app.cached();
+        let ptr2 = wrapped2.as_ptr();
+        assert_eq!(ptr1, ptr2, "cache should not rebuild for unchanged width");
+
+        // Change width: cache should rebuild
+        app.ensure_wrapped(36);
+        let (wrapped3, _) = app.cached();
+        let ptr3 = wrapped3.as_ptr();
+        assert_ne!(ptr2, ptr3, "cache should rebuild on width change");
+        // And width field updated
+        assert_eq!(app.wrap_cache.as_ref().expect("cache").width, 36);
+    }
+
+    #[test]
+    fn wrap_cache_invalidates_on_insert_lines() {
+        let long = "Another long line for wrapping behavior verification.";
+        let mut app = TranscriptApp::new(vec![Line::from(long)]);
+        app.ensure_wrapped(28);
+        let (wrapped1, _) = app.cached();
+        let ptr1 = wrapped1.as_ptr();
+        let len1 = wrapped1.len();
+
+        // Insert new lines should drop the cache
+        app.insert_lines(vec![Line::from(long), Line::from(long)]);
+        assert!(app.wrap_cache.is_none(), "wrap cache should be None after insert_lines");
+
+        // Rebuild and confirm content grew
+        app.ensure_wrapped(28);
+        let (wrapped2, _) = app.cached();
+        let ptr2 = wrapped2.as_ptr();
+        assert!(wrapped2.len() >= len1, "wrapped length should grow or stay same");
+        assert_ne!(ptr1, ptr2, "cache should rebuild after insert_lines");
+    }
 }
