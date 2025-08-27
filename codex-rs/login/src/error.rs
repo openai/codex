@@ -26,4 +26,3 @@ pub enum LoginError {
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
-

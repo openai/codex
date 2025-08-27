@@ -23,7 +23,8 @@ pub async fn login_with_native_browser(codex_home: &Path) -> Result<(), LoginErr
     let redirect_uri = format!("http://localhost:{}/auth/callback", 1455u16);
     // Allow tests to override the issuer base via env var (debug builds only).
     #[cfg(debug_assertions)]
-    let issuer = std::env::var("CODEX_LOGIN_ISSUER_BASE").unwrap_or_else(|_| DEFAULT_ISSUER.to_string());
+    let issuer =
+        std::env::var("CODEX_LOGIN_ISSUER_BASE").unwrap_or_else(|_| DEFAULT_ISSUER.to_string());
     #[cfg(not(debug_assertions))]
     let issuer = DEFAULT_ISSUER.to_string();
     let auth_url = build_authorize_url(
@@ -39,7 +40,9 @@ pub async fn login_with_native_browser(codex_home: &Path) -> Result<(), LoginErr
     #[cfg(debug_assertions)]
     let capture = match std::env::var("CODEX_LOGIN_TEST_HELPER_JSON") {
         Ok(val) => {
-            if val == "ABORT" { return Err(LoginError::Aborted); }
+            if val == "ABORT" {
+                return Err(LoginError::Aborted);
+            }
             serde_json::from_str::<AuthCodeCapture>(&val)
                 .map_err(|_| LoginError::InvalidHelperResponse)?
         }
@@ -228,9 +231,10 @@ async fn persist_tokens(
         use std::fs;
         let auth_file = get_auth_file(&codex_home);
         if let Some(parent) = auth_file.parent()
-            && !parent.exists() {
-                fs::create_dir_all(parent)?;
-            }
+            && !parent.exists()
+        {
+            fs::create_dir_all(parent)?;
+        }
         let mut auth = match crate::try_read_auth_json(&auth_file) {
             Ok(a) => a,
             Err(_) => AuthDotJson {
@@ -285,13 +289,15 @@ fn jwt_auth_claims(jwt: &str) -> serde_json::Map<String, serde_json::Value> {
             return serde_json::Map::new();
         }
     };
-    if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload_b64) { if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&bytes)
-    && let Some(obj) = v
-        .get_mut("https://api.openai.com/auth")
-        .and_then(|x| x.as_object_mut())
-    {
-        return obj.clone();
-    } }
+    if let Ok(bytes) = base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(payload_b64) {
+        if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&bytes)
+            && let Some(obj) = v
+                .get_mut("https://api.openai.com/auth")
+                .and_then(|x| x.as_object_mut())
+        {
+            return obj.clone();
+        }
+    }
     serde_json::Map::new()
 }
 
@@ -499,8 +505,14 @@ mod tests_macos {
     #[test]
     fn jwt_auth_claims_extracts_nested_fields() {
         #[derive(serde::Serialize)]
-        struct Header { alg: &'static str, typ: &'static str }
-        let header = Header { alg: "none", typ: "JWT" };
+        struct Header {
+            alg: &'static str,
+            typ: &'static str,
+        }
+        let header = Header {
+            alg: "none",
+            typ: "JWT",
+        };
         let payload = serde_json::json!({
             "https://api.openai.com/auth": {
                 "chatgpt_plan_type": "pro",
@@ -515,8 +527,14 @@ mod tests_macos {
             b64(b"sig")
         );
         let claims = jwt_auth_claims(&jwt);
-        assert_eq!(claims.get("chatgpt_plan_type").and_then(|v| v.as_str()), Some("pro"));
-        assert_eq!(claims.get("chatgpt_account_id").and_then(|v| v.as_str()), Some("acc-42"));
+        assert_eq!(
+            claims.get("chatgpt_plan_type").and_then(|v| v.as_str()),
+            Some("pro")
+        );
+        assert_eq!(
+            claims.get("chatgpt_account_id").and_then(|v| v.as_str()),
+            Some("acc-42")
+        );
     }
 }
 

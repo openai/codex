@@ -21,28 +21,37 @@ fn main() {
         .args(["--sdk", "macosx", "--show-sdk-path"])
         .output()
         .ok()
-        .and_then(|o| if o.status.success() { Some(String::from_utf8_lossy(&o.stdout).trim().to_string()) } else { None });
+        .and_then(|o| {
+            if o.status.success() {
+                Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+            } else {
+                None
+            }
+        });
 
     // Helper to compile an arch-specific binary
     let compile_arch = |arch: &str, out: &PathBuf| -> bool {
         // Prefer `xcrun swiftc`, then `swiftc`, then explicit path
-        let candidates: &[&[&str]] = &[
-            &["xcrun", "swiftc"],
-            &["swiftc"],
-            &["/usr/bin/swiftc"],
-        ];
+        let candidates: &[&[&str]] = &[&["xcrun", "swiftc"], &["swiftc"], &["/usr/bin/swiftc"]];
         for base in candidates {
             let mut cmd = Command::new(base[0]);
             cmd.args(&base[1..]);
             cmd.arg("-target").arg(format!("{}-apple-macos12.0", arch));
-            if let Some(ref sdk) = sdk_path { cmd.arg("-sdk").arg(sdk); }
+            if let Some(ref sdk) = sdk_path {
+                cmd.arg("-sdk").arg(sdk);
+            }
             cmd.arg("-O")
-               .arg("-framework").arg("Cocoa")
-               .arg("-framework").arg("WebKit")
-               .arg(&swift_src)
-               .arg("-o").arg(out);
+                .arg("-framework")
+                .arg("Cocoa")
+                .arg("-framework")
+                .arg("WebKit")
+                .arg(&swift_src)
+                .arg("-o")
+                .arg(out);
             if let Ok(status) = cmd.status() {
-                if status.success() { return true; }
+                if status.success() {
+                    return true;
+                }
             }
         }
         false
@@ -58,7 +67,7 @@ fn main() {
     if arm_ok && x86_ok {
         // lipo into a universal binary
         let status = Command::new("xcrun")
-            .args(["lipo", "-create", "-output"]) 
+            .args(["lipo", "-create", "-output"])
             .arg(&helper_out)
             .arg(&arm_out)
             .arg(&x86_out)
@@ -81,6 +90,8 @@ fn main() {
     if !embedded_ok {
         // Ensure an empty placeholder exists so include_bytes! compiles; runtime will fallback.
         let _ = fs::write(&helper_out, &[] as &[u8]);
-        println!("cargo:warning=Failed to compile Swift helper; runtime will attempt on-demand compile.");
+        println!(
+            "cargo:warning=Failed to compile Swift helper; runtime will attempt on-demand compile."
+        );
     }
 }

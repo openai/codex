@@ -4,11 +4,11 @@ use codex_core::config::ConfigOverrides;
 use codex_login::AuthMode;
 use codex_login::CLIENT_ID;
 use codex_login::CodexAuth;
+use codex_login::LoginError;
 use codex_login::OPENAI_API_KEY_ENV_VAR;
 use codex_login::ServerOptions;
 use codex_login::login_with_api_key;
 use codex_login::login_with_native_browser;
-use codex_login::LoginError;
 use codex_login::logout;
 use codex_login::run_login_server;
 use std::env;
@@ -59,7 +59,8 @@ pub async fn run_login_with_browser(cli_config_overrides: CliConfigOverrides) ->
             // Load details to show a friendly summary
             match CodexAuth::from_codex_home(&config.codex_home, config.preferred_auth_method) {
                 Ok(Some(auth)) => {
-                    let mut summary = String::from("✅ Successfully logged in using native browser");
+                    let mut summary =
+                        String::from("✅ Successfully logged in using native browser");
                     if let Ok(tokens) = auth.get_token_data().await {
                         if let Some(email) = tokens.id_token.email.as_deref() {
                             summary.push_str(&format!(" – {}", email));
@@ -89,7 +90,7 @@ pub async fn run_login_with_browser(cli_config_overrides: CliConfigOverrides) ->
                 eprintln!("Error logging in with native browser: {other}");
                 std::process::exit(1);
             }
-        }
+        },
     }
 }
 
@@ -211,9 +212,11 @@ async fn maybe_confirm_relogin(config: &Config) -> bool {
     }
 
     // If auth.json exists, load and present details for confirmation.
-    let Some(existing) = CodexAuth::from_codex_home(&config.codex_home, config.preferred_auth_method)
-        .ok()
-        .flatten() else {
+    let Some(existing) =
+        CodexAuth::from_codex_home(&config.codex_home, config.preferred_auth_method)
+            .ok()
+            .flatten()
+    else {
         return true;
     };
 
@@ -245,7 +248,6 @@ async fn maybe_confirm_relogin(config: &Config) -> bool {
     let answer = buf.trim().to_ascii_lowercase();
     matches!(answer.as_str(), "y" | "yes")
 }
-
 
 #[cfg(test)]
 mod tests {

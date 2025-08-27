@@ -5,10 +5,10 @@ use std::net::TcpListener;
 use std::thread;
 
 use base64::Engine;
-use codex_login::login_with_native_browser;
 use codex_login::LoginError;
-use tempfile::tempdir;
+use codex_login::login_with_native_browser;
 use std::sync::{Mutex, OnceLock};
+use tempfile::tempdir;
 
 // Skip tests when running in a sandbox with network disabled.
 const CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR: &str = "CODEX_SANDBOX_NETWORK_DISABLED";
@@ -45,8 +45,14 @@ fn start_mock_issuer() -> (SocketAddr, thread::JoinHandle<()>) {
                 if body.contains("grant_type=authorization_code") {
                     // Build minimal JWT with plan=pro and email
                     #[derive(serde::Serialize)]
-                    struct Header { alg: &'static str, typ: &'static str }
-                    let header = Header { alg: "none", typ: "JWT" };
+                    struct Header {
+                        alg: &'static str,
+                        typ: &'static str,
+                    }
+                    let header = Header {
+                        alg: "none",
+                        typ: "JWT",
+                    };
                     let payload = serde_json::json!({
                         "email": "user@example.com",
                         "https://api.openai.com/auth": {
@@ -57,7 +63,12 @@ fn start_mock_issuer() -> (SocketAddr, thread::JoinHandle<()>) {
                     let b64 = |b: &[u8]| base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b);
                     let header_bytes = serde_json::to_vec(&header).unwrap();
                     let payload_bytes = serde_json::to_vec(&payload).unwrap();
-                    let id_token = format!("{}.{}.{}", b64(&header_bytes), b64(&payload_bytes), b64(b"sig"));
+                    let id_token = format!(
+                        "{}.{}.{}",
+                        b64(&header_bytes),
+                        b64(&payload_bytes),
+                        b64(b"sig")
+                    );
 
                     let tokens = serde_json::json!({
                         "id_token": id_token,
@@ -67,24 +78,36 @@ fn start_mock_issuer() -> (SocketAddr, thread::JoinHandle<()>) {
                     let data = serde_json::to_vec(&tokens).unwrap();
                     let mut resp = tiny_http::Response::from_data(data);
                     resp.add_header(
-                        tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap(),
+                        tiny_http::Header::from_bytes(
+                            &b"Content-Type"[..],
+                            &b"application/json"[..],
+                        )
+                        .unwrap(),
                     );
                     let _ = req.respond(resp);
-                } else if body.contains("grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange")
-                    && body.contains("requested_token=openai-api-key")
+                } else if body.contains(
+                    "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Atoken-exchange",
+                ) && body.contains("requested_token=openai-api-key")
                 {
                     let exchange = serde_json::json!({ "access_token": "sk-test-api-key" });
                     let data = serde_json::to_vec(&exchange).unwrap();
                     let mut resp = tiny_http::Response::from_data(data);
                     resp.add_header(
-                        tiny_http::Header::from_bytes(&b"Content-Type"[..], &b"application/json"[..]).unwrap(),
+                        tiny_http::Header::from_bytes(
+                            &b"Content-Type"[..],
+                            &b"application/json"[..],
+                        )
+                        .unwrap(),
                     );
                     let _ = req.respond(resp);
                 } else {
-                    let _ = req.respond(tiny_http::Response::from_string("bad request").with_status_code(400));
+                    let _ = req.respond(
+                        tiny_http::Response::from_string("bad request").with_status_code(400),
+                    );
                 }
             } else {
-                let _ = req.respond(tiny_http::Response::from_string("not found").with_status_code(404));
+                let _ = req
+                    .respond(tiny_http::Response::from_string("not found").with_status_code(404));
             }
         }
     });
@@ -107,7 +130,10 @@ async fn persists_auth_json_on_success() {
     // Force deterministic helper output (bypass UI) and state.
     set_env("CODEX_LOGIN_ISSUER_BASE", &issuer);
     set_env("CODEX_LOGIN_FORCE_STATE", "state-ok");
-    set_env("CODEX_LOGIN_TEST_HELPER_JSON", r#"{"code":"abc","state":"state-ok"}"#);
+    set_env(
+        "CODEX_LOGIN_TEST_HELPER_JSON",
+        r#"{"code":"abc","state":"state-ok"}"#,
+    );
 
     let tmp = tempdir().unwrap();
     let codex_home = tmp.path().to_path_buf();
@@ -157,7 +183,10 @@ async fn state_mismatch_is_rejected() {
     }
 
     set_env("CODEX_LOGIN_FORCE_STATE", "expected");
-    set_env("CODEX_LOGIN_TEST_HELPER_JSON", r#"{"code":"abc","state":"wrong"}"#);
+    set_env(
+        "CODEX_LOGIN_TEST_HELPER_JSON",
+        r#"{"code":"abc","state":"wrong"}"#,
+    );
     let tmp = tempdir().unwrap();
     let err = login_with_native_browser(tmp.path()).await.unwrap_err();
     assert!(matches!(err, LoginError::StateMismatch));
@@ -169,7 +198,9 @@ async fn state_mismatch_is_rejected() {
 #[tokio::test]
 async fn invalid_helper_json_is_rejected() {
     let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() { return; }
+    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        return;
+    }
     set_env("CODEX_LOGIN_TEST_HELPER_JSON", "not-json");
     let tmp = tempdir().unwrap();
     let err = login_with_native_browser(tmp.path()).await.unwrap_err();
@@ -185,7 +216,9 @@ async fn invalid_helper_json_is_rejected() {
 async fn token_exchange_failure_is_bubbled() {
     use tiny_http::Server;
     let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() { return; }
+    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        return;
+    }
 
     // Issuer always responds 500 to /oauth/token for the first exchange
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
@@ -196,14 +229,18 @@ async fn token_exchange_failure_is_bubbled() {
             if req.url().starts_with("/oauth/token") {
                 let _ = req.respond(tiny_http::Response::from_string("oops").with_status_code(500));
             } else {
-                let _ = req.respond(tiny_http::Response::from_string("not found").with_status_code(404));
+                let _ = req
+                    .respond(tiny_http::Response::from_string("not found").with_status_code(404));
             }
         }
     });
     let issuer = format!("http://{}:{}", addr.ip(), addr.port());
     set_env("CODEX_LOGIN_ISSUER_BASE", &issuer);
     set_env("CODEX_LOGIN_FORCE_STATE", "s");
-    set_env("CODEX_LOGIN_TEST_HELPER_JSON", r#"{"code":"abc","state":"s"}"#);
+    set_env(
+        "CODEX_LOGIN_TEST_HELPER_JSON",
+        r#"{"code":"abc","state":"s"}"#,
+    );
     let tmp = tempdir().unwrap();
     let err = login_with_native_browser(tmp.path()).await.unwrap_err();
     match err {
@@ -220,13 +257,18 @@ async fn token_exchange_failure_is_bubbled() {
 async fn auth_json_permissions_are_restrictive() {
     use std::os::unix::fs::PermissionsExt;
     let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() { return; }
+    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        return;
+    }
 
     let (issuer_addr, _h) = start_mock_issuer();
     let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
     set_env("CODEX_LOGIN_ISSUER_BASE", &issuer);
     set_env("CODEX_LOGIN_FORCE_STATE", "state-ok");
-    set_env("CODEX_LOGIN_TEST_HELPER_JSON", r#"{"code":"abc","state":"state-ok"}"#);
+    set_env(
+        "CODEX_LOGIN_TEST_HELPER_JSON",
+        r#"{"code":"abc","state":"state-ok"}"#,
+    );
 
     let tmp = tempdir().unwrap();
     login_with_native_browser(tmp.path()).await.unwrap();
