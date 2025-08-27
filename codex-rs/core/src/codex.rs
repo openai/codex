@@ -532,6 +532,7 @@ impl Session {
     async fn record_initial_history_new(&self, turn_context: &TurnContext) {
         // record the initial user instructions and environment context,
         // regardless of whether we restored items.
+        // TODO: Those items shouldn't be "user messages" IMO
         let mut conversation_items = Vec::<ResponseItem>::with_capacity(2);
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
             conversation_items.push(Prompt::format_user_instructions_message(user_instructions));
