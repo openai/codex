@@ -15,6 +15,7 @@ use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
 use codex_login::AuthManager;
 use codex_protocol::protocol::ConversationHistoryResponseEvent;
+use codex_protocol::protocol::TaskStartedEvent;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use futures::prelude::*;
@@ -62,6 +63,7 @@ use crate::exec_env::create_env;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::model_family::find_family_for_model;
+use crate::openai_model_info::get_model_info;
 use crate::openai_tools::ApplyPatchToolArgs;
 use crate::openai_tools::ToolsConfig;
 use crate::openai_tools::ToolsConfigParams;
@@ -1079,6 +1081,9 @@ async fn submission_loop(
                 let mut updated_config = (*config).clone();
                 updated_config.model = effective_model.clone();
                 updated_config.model_family = effective_family.clone();
+                if let Some(model_info) = get_model_info(&effective_family) {
+                    updated_config.model_context_window = Some(model_info.context_window);
+                }
 
                 let client = ModelClient::new(
                     Arc::new(updated_config),
@@ -1162,6 +1167,9 @@ async fn submission_loop(
                     let mut per_turn_config = (*config).clone();
                     per_turn_config.model = model.clone();
                     per_turn_config.model_family = model_family.clone();
+                    if let Some(model_info) = get_model_info(&model_family) {
+                        per_turn_config.model_context_window = Some(model_info.context_window);
+                    }
 
                     // Build a new client with per‑turn reasoning settings.
                     // Reuse the same provider and session id; auth defaults to env/API key.
@@ -1370,7 +1378,9 @@ async fn run_task(
     }
     let event = Event {
         id: sub_id.clone(),
-        msg: EventMsg::TaskStarted,
+        msg: EventMsg::TaskStarted(TaskStartedEvent {
+            model_context_window: turn_context.client.get_model_context_window(),
+        }),
     };
     if sess.tx_event.send(event).await.is_err() {
         return;
@@ -1817,9 +1827,12 @@ async fn run_compact_task(
     input: Vec<InputItem>,
     compact_instructions: String,
 ) {
+    let model_context_window = turn_context.client.get_model_context_window();
     let start_event = Event {
         id: sub_id.clone(),
-        msg: EventMsg::TaskStarted,
+        msg: EventMsg::TaskStarted(TaskStartedEvent {
+            model_context_window,
+        }),
     };
     if sess.tx_event.send(start_event).await.is_err() {
         return;
