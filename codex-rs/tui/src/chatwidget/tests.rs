@@ -1246,7 +1246,7 @@ fn stream_error_is_rendered_to_history() {
     let cells = drain_insert_history(&mut rx);
     assert!(!cells.is_empty(), "expected a history cell for StreamError");
     let blob = lines_to_single_string(cells.last().unwrap());
-    assert!(blob.contains("⚠  "));
+    assert!(blob.contains("⚠\u{200A} "));
     assert!(blob.contains("stream error:"));
     assert!(blob.contains("idle timeout waiting for SSE"));
 }
