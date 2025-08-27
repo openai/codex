@@ -730,7 +730,7 @@ mod tests {
         );
 
         assert_eq!(
-            tools[2],
+            tools[3],
             OpenAiTool::Function(ResponsesApiTool {
                 name: "test_server/do_something_cool".to_string(),
                 parameters: JsonSchema::Object {
@@ -893,7 +893,7 @@ mod tests {
         );
 
         assert_eq!(
-            tools[2],
+            tools[3],
             OpenAiTool::Function(ResponsesApiTool {
                 name: "dash/search".to_string(),
                 parameters: JsonSchema::Object {
@@ -952,7 +952,7 @@ mod tests {
             &["shell", "web_search", "view_image", "dash/paginate"],
         );
         assert_eq!(
-            tools[2],
+            tools[3],
             OpenAiTool::Function(ResponsesApiTool {
                 name: "dash/paginate".to_string(),
                 parameters: JsonSchema::Object {
@@ -1006,7 +1006,7 @@ mod tests {
 
         assert_eq_tool_names(&tools, &["shell", "web_search", "view_image", "dash/tags"]);
         assert_eq!(
-            tools[2],
+            tools[3],
             OpenAiTool::Function(ResponsesApiTool {
                 name: "dash/tags".to_string(),
                 parameters: JsonSchema::Object {
@@ -1063,7 +1063,7 @@ mod tests {
 
         assert_eq_tool_names(&tools, &["shell", "web_search", "view_image", "dash/value"]);
         assert_eq!(
-            tools[2],
+            tools[3],
             OpenAiTool::Function(ResponsesApiTool {
                 name: "dash/value".to_string(),
                 parameters: JsonSchema::Object {
