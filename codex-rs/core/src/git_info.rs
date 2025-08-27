@@ -385,7 +385,9 @@ async fn find_closest_sha(cwd: &Path, branches: &[String], remotes: &[String]) -
 }
 
 async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
-    let output = run_git_command_with_timeout(&["diff", &sha.0], cwd).await?;
+    let output =
+        run_git_command_with_timeout(&["diff", "--no-textconv", "--no-ext-diff", &sha.0], cwd)
+            .await?;
     // 0 is success and no diff.
     // 1 is success but there is a diff.
     let exit_ok = output.status.code().is_some_and(|c| c == 0 || c == 1);
@@ -406,10 +408,21 @@ async fn diff_against_sha(cwd: &Path, sha: &GitSha) -> Option<String> {
             .collect();
 
         if !untracked.is_empty() {
+            // Use platform-appropriate null device and guard paths with `--`.
+            let null_device: &str = if cfg!(windows) { "NUL" } else { "/dev/null" };
             let futures_iter = untracked.into_iter().map(|file| async move {
                 let file_owned = file;
-                let args_vec: Vec<&str> =
-                    vec!["diff", "--binary", "--no-index", "/dev/null", &file_owned];
+                let args_vec: Vec<&str> = vec![
+                    "diff",
+                    "--no-textconv",
+                    "--no-ext-diff",
+                    "--binary",
+                    "--no-index",
+                    // -- ensures that filenames that start with - are not treated as options.
+                    "--",
+                    null_device,
+                    &file_owned,
+                ];
                 run_git_command_with_timeout(&args_vec, cwd).await
             });
             let results = join_all(futures_iter).await;
