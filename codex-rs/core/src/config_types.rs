@@ -76,7 +76,16 @@ pub enum HistoryPersistence {
 
 /// Collection of settings that are specific to the TUI.
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
-pub struct Tui {}
+pub struct Tui {
+    /// If true, show the model's thinking (reasoning) live in the TUI chat.
+    /// Defaults to `false` to match current behavior; opt-in via config.toml.
+    /// Example:
+    ///
+    /// [tui]
+    /// show_agent_reasoning = true
+    #[serde(default)]
+    pub show_agent_reasoning: Option<bool>,
+}
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct SandboxWorkspaceWrite {

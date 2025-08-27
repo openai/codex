@@ -127,6 +127,124 @@ fn final_answer_without_newline_is_flushed_immediately() {
     );
 }
 
+#[test]
+fn reasoning_is_hidden_by_default_and_visible_when_enabled() {
+    // Hidden by default
+    let (mut chat_hidden, mut rx_hidden, _op_rx) = make_chatwidget_manual();
+
+    // Stream a reasoning delta and finalize; use a newline to trigger commit
+    chat_hidden.handle_codex_event(Event {
+        id: "r1".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Thinking header**\nstep".into(),
+        }),
+    });
+    chat_hidden.handle_codex_event(Event {
+        id: "r1".into(),
+        msg: EventMsg::AgentReasoning(AgentReasoningEvent {
+            text: String::new(),
+        }),
+    });
+    let hidden_cells = drain_insert_history(&mut rx_hidden);
+    let any_thinking = hidden_cells.iter().flat_map(|ls| ls.iter()).any(|l| {
+        l.spans
+            .iter()
+            .map(|s| s.content.clone())
+            .collect::<String>()
+            .contains("thinking")
+    });
+    assert!(
+        !any_thinking,
+        "default should not render thinking in visible history"
+    );
+
+    // Visible when enabled via internal flag (stands in for [tui].show_agent_reasoning=true)
+    let (mut chat_show, mut rx_show, _op_rx2) = make_chatwidget_manual();
+    chat_show.show_reasoning_in_ui = true;
+    chat_show.handle_codex_event(Event {
+        id: "r2".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Plan**\nLine one\n".into(),
+        }),
+    });
+    chat_show.handle_codex_event(Event {
+        id: "r2".into(),
+        msg: EventMsg::AgentReasoning(AgentReasoningEvent {
+            text: String::new(),
+        }),
+    });
+
+    let show_cells = drain_insert_history(&mut rx_show);
+    let mut found_header = false;
+    let mut found_body = false;
+    for lines in show_cells {
+        let s = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|sp| sp.content.clone())
+            .collect::<String>();
+        if s.contains("thinking") {
+            found_header = true;
+        }
+        if s.contains("Line one") || s.contains("Plan") {
+            found_body = true;
+        }
+    }
+    assert!(found_header, "expected 'thinking' header to be emitted");
+    assert!(found_body, "expected streamed reasoning body to be emitted");
+}
+
+#[test]
+fn reasoning_section_break_inserts_paragraph_break() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+    chat.show_reasoning_in_ui = true;
+
+    // First section without trailing newline at the end of the paragraph.
+    chat.handle_codex_event(Event {
+        id: "r3".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta:
+                "**Explaining my capabilities**\n\nI need to respond … Keeping it concise is key!"
+                    .into(),
+        }),
+    });
+
+    // Section break should force a visible paragraph separator when streaming.
+    chat.handle_codex_event(Event {
+        id: "r3".into(),
+        msg: EventMsg::AgentReasoningSectionBreak(
+            codex_core::protocol::AgentReasoningSectionBreakEvent {},
+        ),
+    });
+
+    // Next section begins; ensure it doesn't get glued to previous text.
+    chat.handle_codex_event(Event {
+        id: "r3".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Clarifying my constraints and capabilities**\n\nMore …\n".into(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "r3".into(),
+        msg: EventMsg::AgentReasoning(AgentReasoningEvent {
+            text: String::new(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let joined = cells
+        .iter()
+        .flat_map(|lines| lines.iter())
+        .flat_map(|l| l.spans.iter())
+        .map(|sp| sp.content.clone())
+        .collect::<String>();
+
+    assert!(
+        !joined.contains("key!**Clarifying"),
+        "section break should separate sections: {joined:?}"
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn helpers_are_available_and_do_not_panic() {
     let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
@@ -174,13 +292,18 @@ fn make_chatwidget_manual() -> (
         initial_user_message: None,
         total_token_usage: TokenUsage::default(),
         last_token_usage: TokenUsage::default(),
-        stream: StreamController::new(cfg),
+        stream: StreamController::new(cfg.clone()),
+        reasoning_stream: StreamController::with_label(
+            cfg.clone(),
+            crate::streaming::HeaderLabel::Thinking,
+        ),
         running_commands: HashMap::new(),
         pending_exec_completions: Vec::new(),
         task_complete_pending: false,
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
+        show_reasoning_in_ui: false,
         session_id: None,
         frame_requester: crate::tui::FrameRequester::test_dummy(),
         show_welcome_banner: true,
