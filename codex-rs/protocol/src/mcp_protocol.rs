@@ -101,8 +101,67 @@ pub enum ClientRequest {
         request_id: RequestId,
         params: GetAuthStatusParams,
     },
+    RunSubagent {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: RunSubagentParams,
+    },
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RunSubagentParams {
+    pub conversation_id: ConversationId,
+    pub subagant: Subagent,
+    pub input: Option<Vec<InputItem>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub enum Subagent {
+    Review,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(tag = "type", content = "data", rename_all = "camelCase")]
+pub enum SubagentOutput {
+    Review(ReviewOutput),
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct RunSubagentResponse {
+    pub output: SubagentOutput,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "snake_case")]
+pub struct ReviewOutput {
+    pub findings: Vec<Finding>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "snake_case")]
+pub struct Finding {
+    pub title: String,
+    pub body: String,
+    pub confidence_score: f32,
+    pub code_location: CodeLocation,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "snake_case")]
+pub struct CodeLocation {
+    pub absolute_file_path: String,
+    pub line_range: LineRange,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "snake_case")]
+pub struct LineRange {
+    pub start: u32,
+    pub end: u32,
+}
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct NewConversationParams {
