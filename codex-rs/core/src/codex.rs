@@ -1780,11 +1780,6 @@ async fn try_run_turn(
                 return Ok(output);
             }
             ResponseEvent::OutputTextDelta(delta) => {
-                {
-                    let mut st = sess.state.lock_unchecked();
-                    st.history.append_assistant_text(&delta);
-                }
-
                 let event = Event {
                     id: sub_id.to_string(),
                     msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
