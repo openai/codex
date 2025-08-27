@@ -47,7 +47,7 @@ async fn test_codex_jsonrpc_conversation_flow() {
     let working_directory = tmp.path().join("workdir");
     std::fs::create_dir(&working_directory).expect("create working directory");
 
-    // Create a mock model server that immediately ends each turn
+    // Create a mock model server that immediately ends each turn.
     // Two turns are expected: initial session configure + one user message.
     let responses = vec![
         create_shell_sse_response(
