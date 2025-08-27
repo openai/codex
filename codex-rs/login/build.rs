@@ -54,7 +54,9 @@ fn main() {
                 .arg(&swift_src)
                 .arg("-o")
                 .arg(out);
-            if let Ok(status) = cmd.status() && status.success() {
+            if let Ok(status) = cmd.status()
+                && status.success()
+            {
                 return true;
             }
         }

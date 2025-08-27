@@ -235,10 +235,10 @@ async fn maybe_confirm_relogin(config: &Config) -> bool {
                 prompt.push_str(&format!("  • Plan: {}\n", plan));
             }
         }
-    } else if existing.mode == AuthMode::ApiKey {
-        if let Ok(token) = existing.get_token().await {
-            prompt.push_str(&format!("  • API key: {}\n", safe_format_key(&token)));
-        }
+    } else if existing.mode == AuthMode::ApiKey
+        && let Ok(token) = existing.get_token().await
+    {
+        prompt.push_str(&format!("  • API key: {}\n", safe_format_key(&token)));
     }
     eprintln!("{}", prompt);
     eprint!("Proceed to start a new login? [y/N]: ");

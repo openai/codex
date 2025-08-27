@@ -1862,7 +1862,7 @@ mod tests {
                 composer.handle_paste(paste.clone());
                 composer
                     .textarea
-                    .set_cursor((placeholder.len() - pos_from_end) as usize);
+                    .set_cursor(placeholder.len() - pos_from_end);
                 composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
                 let result = (
                     composer.textarea.text().contains(&placeholder),

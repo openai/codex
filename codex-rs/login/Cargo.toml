@@ -33,3 +33,4 @@ webbrowser = "1.0"
 [dev-dependencies]
 pretty_assertions = "1.4.1"
 tempfile = "3"
+serial_test = "2"

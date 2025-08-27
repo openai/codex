@@ -118,6 +118,7 @@ fn start_mock_issuer() -> (SocketAddr, thread::JoinHandle<()>) {
 
 #[cfg(target_os = "macos")]
 #[tokio::test]
+#[serial_test::serial]
 async fn persists_auth_json_on_success() {
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!("Skipping native browser test due to network-disabled sandbox");
@@ -164,6 +165,7 @@ async fn persists_auth_json_on_success() {
 
 #[cfg(target_os = "macos")]
 #[tokio::test]
+#[serial_test::serial]
 async fn abort_propagates_from_helper() {
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!("Skipping native browser test due to network-disabled sandbox");
@@ -186,6 +188,7 @@ async fn abort_propagates_from_helper() {
 
 #[cfg(target_os = "macos")]
 #[tokio::test]
+#[serial_test::serial]
 async fn state_mismatch_is_rejected() {
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!("Skipping native browser test due to network-disabled sandbox");
@@ -212,8 +215,11 @@ async fn state_mismatch_is_rejected() {
 
 #[cfg(target_os = "macos")]
 #[tokio::test]
+#[serial_test::serial]
 async fn invalid_helper_json_is_rejected() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() { return; }
+    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        return;
+    }
     {
         let _lock = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
         set_env("CODEX_LOGIN_TEST_HELPER_JSON", "not-json");
@@ -232,9 +238,12 @@ async fn invalid_helper_json_is_rejected() {
 
 #[cfg(target_os = "macos")]
 #[tokio::test]
+#[serial_test::serial]
 async fn token_exchange_failure_is_bubbled() {
     use tiny_http::Server;
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() { return; }
+    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        return;
+    }
 
     // Issuer always responds 500 to /oauth/token for the first exchange
     let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
@@ -276,6 +285,7 @@ async fn token_exchange_failure_is_bubbled() {
 
 #[cfg(all(target_os = "macos", unix))]
 #[tokio::test]
+#[serial_test::serial]
 async fn auth_json_permissions_are_restrictive() {
     use std::os::unix::fs::PermissionsExt;
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
