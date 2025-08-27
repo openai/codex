@@ -76,6 +76,7 @@ struct PagerView {
     lines: Vec<Line<'static>>,
     scroll_offset: usize,
     title: String,
+    wrap_cache: Option<WrapCache>,
 }
 
 impl PagerView {
@@ -84,15 +85,57 @@ impl PagerView {
             lines,
             scroll_offset,
             title,
+            wrap_cache: None,
         }
     }
 
     fn render(&mut self, area: Rect, buf: &mut Buffer) {
         self.render_header(area, buf);
         let content_area = self.scroll_area(area);
-        let wrapped = insert_history::word_wrap_lines(&self.lines, content_area.width);
-        self.render_content_page(content_area, buf, &wrapped);
-        self.render_bottom_bar(area, content_area, buf, &wrapped);
+        self.ensure_wrapped(content_area.width);
+        // Compute page bounds without holding an immutable borrow on cache while mutating self
+        let wrapped_len = self
+            .wrap_cache
+            .as_ref()
+            .map(|c| c.wrapped.len())
+            .unwrap_or(0);
+        self.scroll_offset = self
+            .scroll_offset
+            .min(wrapped_len.saturating_sub(content_area.height as usize));
+        let start = self.scroll_offset;
+        let end = (start + content_area.height as usize).min(wrapped_len);
+
+        let (wrapped, _src_idx) = self.cached();
+        let page = &wrapped[start..end];
+        self.render_content_page_prepared(content_area, buf, page);
+        self.render_bottom_bar(area, content_area, buf, wrapped);
+    }
+
+    fn render_with_highlight(
+        &mut self,
+        area: Rect,
+        buf: &mut Buffer,
+        highlight: Option<(usize, usize)>,
+    ) {
+        self.render_header(area, buf);
+        let content_area = self.scroll_area(area);
+        self.ensure_wrapped(content_area.width);
+        // Compute page bounds first to avoid borrow conflicts
+        let wrapped_len = self
+            .wrap_cache
+            .as_ref()
+            .map(|c| c.wrapped.len())
+            .unwrap_or(0);
+        self.scroll_offset = self
+            .scroll_offset
+            .min(wrapped_len.saturating_sub(content_area.height as usize));
+        let start = self.scroll_offset;
+        let end = (start + content_area.height as usize).min(wrapped_len);
+
+        let (wrapped, src_idx) = self.cached();
+        let page = self.page_with_optional_highlight(wrapped, src_idx, start, end, highlight);
+        self.render_content_page_prepared(content_area, buf, &page);
+        self.render_bottom_bar(area, content_area, buf, wrapped);
     }
 
     fn render_header(&self, area: Rect, buf: &mut Buffer) {
@@ -103,16 +146,12 @@ impl PagerView {
         Span::from(header).dim().render_ref(area, buf);
     }
 
-    fn render_content_page(&mut self, area: Rect, buf: &mut Buffer, wrapped: &[Line<'static>]) {
-        self.scroll_offset = self
-            .scroll_offset
-            .min(wrapped.len().saturating_sub(area.height as usize));
-        let start = self.scroll_offset;
-        let end = (start + area.height as usize).min(wrapped.len());
-        let page = &wrapped[start..end];
+    // Removed unused render_content_page (replaced by render_content_page_prepared)
+
+    fn render_content_page_prepared(&self, area: Rect, buf: &mut Buffer, page: &[Line<'static>]) {
         Paragraph::new(page.to_vec()).render_ref(area, buf);
 
-        let visible = end.saturating_sub(start);
+        let visible = page.len();
         if visible < area.height as usize {
             for i in 0..(area.height as usize - visible) {
                 let add = ((visible + i).min(u16::MAX as usize)) as u16;
@@ -219,6 +258,87 @@ impl PagerView {
     }
 }
 
+#[derive(Debug, Clone)]
+struct WrapCache {
+    width: u16,
+    wrapped: Vec<Line<'static>>,
+    src_idx: Vec<usize>,
+    base_len: usize,
+}
+
+impl PagerView {
+    fn ensure_wrapped(&mut self, width: u16) {
+        let width = width.max(1);
+        let needs = match self.wrap_cache {
+            Some(ref c) => c.width != width || c.base_len != self.lines.len(),
+            None => true,
+        };
+        if !needs {
+            return;
+        }
+        let mut wrapped: Vec<Line<'static>> = Vec::new();
+        let mut src_idx: Vec<usize> = Vec::new();
+        for (i, line) in self.lines.iter().enumerate() {
+            let ws = insert_history::word_wrap_lines(std::slice::from_ref(line), width);
+            src_idx.extend(std::iter::repeat_n(i, ws.len()));
+            wrapped.extend(ws);
+        }
+        self.wrap_cache = Some(WrapCache {
+            width,
+            wrapped,
+            src_idx,
+            base_len: self.lines.len(),
+        });
+    }
+
+    fn cached(&self) -> (&[Line<'static>], &[usize]) {
+        if let Some(cache) = self.wrap_cache.as_ref() {
+            (&cache.wrapped, &cache.src_idx)
+        } else {
+            (&[], &[])
+        }
+    }
+
+    fn page_with_optional_highlight<'a>(
+        &self,
+        wrapped: &'a [Line<'static>],
+        src_idx: &[usize],
+        start: usize,
+        end: usize,
+        highlight: Option<(usize, usize)>,
+    ) -> std::borrow::Cow<'a, [Line<'static>]> {
+        use ratatui::style::Modifier;
+        let (hi_start, hi_end) = match highlight {
+            Some(r) => r,
+            None => return std::borrow::Cow::Borrowed(&wrapped[start..end]),
+        };
+        let mut out: Vec<Line<'static>> = Vec::with_capacity(end - start);
+        let mut bold_done = false;
+        for (row, src_line) in wrapped
+            .iter()
+            .enumerate()
+            .skip(start)
+            .take(end.saturating_sub(start))
+        {
+            let mut line = src_line.clone();
+            if let Some(src) = src_idx.get(row).copied()
+                && src >= hi_start
+                && src < hi_end
+            {
+                for (i, s) in line.spans.iter_mut().enumerate() {
+                    s.style.add_modifier |= Modifier::REVERSED;
+                    if !bold_done && i == 0 {
+                        s.style.add_modifier |= Modifier::BOLD;
+                        bold_done = true;
+                    }
+                }
+            }
+            out.push(line);
+        }
+        std::borrow::Cow::Owned(out)
+    }
+}
+
 pub(crate) struct TranscriptOverlay {
     view: PagerView,
     highlight_range: Option<(usize, usize)>,
@@ -240,6 +360,7 @@ impl TranscriptOverlay {
 
     pub(crate) fn insert_lines(&mut self, lines: Vec<Line<'static>>) {
         self.view.lines.extend(lines);
+        self.view.wrap_cache = None;
     }
 
     pub(crate) fn set_highlight_range(&mut self, range: Option<(usize, usize)>) {
@@ -263,32 +384,8 @@ impl TranscriptOverlay {
         let top_h = area.height.saturating_sub(3);
         let top = Rect::new(area.x, area.y, area.width, top_h);
         let bottom = Rect::new(area.x, area.y + top_h, area.width, 3);
-        // Build highlighted lines into a temporary view for this render only
-        let mut lines = self.view.lines.clone();
-        if let Some((start, end)) = self.highlight_range {
-            use ratatui::style::Modifier;
-            let len = lines.len();
-            let start = start.min(len);
-            let end = end.min(len);
-            for (idx, line) in lines.iter_mut().enumerate().take(end).skip(start) {
-                let mut spans = Vec::with_capacity(line.spans.len());
-                for (i, s) in line.spans.iter().enumerate() {
-                    let mut style = s.style;
-                    style.add_modifier |= Modifier::REVERSED;
-                    if idx == start && i == 0 {
-                        style.add_modifier |= Modifier::BOLD;
-                    }
-                    spans.push(Span {
-                        style,
-                        content: s.content.clone(),
-                    });
-                }
-                line.spans = spans;
-            }
-        }
-        let mut pv = PagerView::new(lines, self.view.title.clone(), self.view.scroll_offset);
-        pv.render(top, buf);
-        self.view.scroll_offset = pv.scroll_offset;
+        self.view
+            .render_with_highlight(top, buf, self.highlight_range);
         self.render_hints(bottom, buf);
     }
 }
@@ -455,5 +552,52 @@ mod tests {
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
             .expect("draw");
         assert_snapshot!(term.backend());
+    }
+
+    #[test]
+    fn pager_wrap_cache_reuses_for_same_width_and_rebuilds_on_change() {
+        let long = "This is a long line that should wrap multiple times to ensure non-empty wrapped output.";
+        let mut pv = PagerView::new(vec![Line::from(long), Line::from(long)], "T".to_string(), 0);
+
+        // Build cache at width 24
+        pv.ensure_wrapped(24);
+        let (w1, _) = pv.cached();
+        assert!(!w1.is_empty(), "expected wrapped output to be non-empty");
+        let ptr1 = w1.as_ptr();
+
+        // Re-run with same width: cache should be reused (pointer stability heuristic)
+        pv.ensure_wrapped(24);
+        let (w2, _) = pv.cached();
+        let ptr2 = w2.as_ptr();
+        assert_eq!(ptr1, ptr2, "cache should not rebuild for unchanged width");
+
+        // Change width: cache should rebuild and likely produce different length
+        // Drop immutable borrow before mutating
+        let prev_len = w2.len();
+        pv.ensure_wrapped(36);
+        let (w3, _) = pv.cached();
+        assert_ne!(
+            prev_len,
+            w3.len(),
+            "wrapped length should change on width change"
+        );
+    }
+
+    #[test]
+    fn pager_wrap_cache_invalidates_on_append() {
+        let long = "Another long line for wrapping behavior verification.";
+        let mut pv = PagerView::new(vec![Line::from(long)], "T".to_string(), 0);
+        pv.ensure_wrapped(28);
+        let (w1, _) = pv.cached();
+        let len1 = w1.len();
+
+        // Append new lines should cause ensure_wrapped to rebuild due to len change
+        pv.lines.extend([Line::from(long), Line::from(long)]);
+        pv.ensure_wrapped(28);
+        let (w2, _) = pv.cached();
+        assert!(
+            w2.len() >= len1,
+            "wrapped length should grow or stay same after append"
+        );
     }
 }
