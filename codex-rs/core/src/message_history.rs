@@ -135,10 +135,6 @@ pub(crate) async fn append_entry(text: &str, session_id: &Uuid, config: &Config)
     Ok(())
 }
 
-/// Attempt to acquire an exclusive advisory lock on `file`, retrying up to 10
-/// times if the lock is currently held by another process. This prevents a
-/// potential indefinite wait while still giving other writers some time to
-/// finish their operation.
 // Exclusive lock handled inline in append_entry using fd-lock.
 
 /// Asynchronously fetch the history file's *identifier* (inode on Unix) and
