@@ -35,6 +35,7 @@ use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::model_family::ModelFamily;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
+use crate::openai_model_info::get_model_info;
 use crate::openai_tools::create_tools_json_for_responses_api;
 use crate::protocol::TokenUsage;
 use crate::user_agent::get_codex_user_agent;
@@ -88,6 +89,12 @@ impl ModelClient {
             effort,
             summary,
         }
+    }
+
+    pub fn get_model_context_window(&self) -> Option<u64> {
+        self.config
+            .model_context_window
+            .or_else(|| get_model_info(&self.config.model_family).map(|info| info.context_window))
     }
 
     /// Dispatches to either the Responses or Chat implementation depending on
