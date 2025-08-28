@@ -272,7 +272,7 @@ impl ChatComposer {
         self.textarea.text().to_string()
     }
 
-
+    /// Attempt to start a burst by retro-capturing recent chars before the cursor.
     pub fn attach_image(&mut self, path: PathBuf, width: u32, height: u32, format_label: &str) {
         let placeholder = format!("[image {width}x{height} {format_label}]");
         // Insert as an element to match large paste placeholder behavior:
@@ -858,9 +858,9 @@ impl ChatComposer {
                         let txt = self.textarea.text();
                         let safe_cur = Self::clamp_to_char_boundary(txt, cur);
                         let before = &txt[..safe_cur];
-                        if let Some(grab) = self
-                            .paste_burst
-                            .decide_begin_buffer(now, before, retro_chars as usize)
+                        if let Some(grab) =
+                            self.paste_burst
+                                .decide_begin_buffer(now, before, retro_chars as usize)
                         {
                             if !grab.grabbed.is_empty() {
                                 self.textarea.replace_range(grab.start_byte..safe_cur, "");
@@ -1583,7 +1583,6 @@ mod tests {
     }
 
     // Test helper: simulate human typing with a brief delay and flush the paste-burst buffer
-    #[cfg(test)]
     fn type_chars_humanlike(composer: &mut ChatComposer, chars: &[char]) {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
