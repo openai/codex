@@ -1,3 +1,4 @@
+use codex_login::AuthMode;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -331,14 +332,14 @@ pub(crate) struct ApplyPatchToolArgs {
 /// https://platform.openai.com/docs/guides/function-calling?api-mode=responses
 pub fn create_tools_json_for_responses_api(
     tools: &Vec<OpenAiTool>,
-    use_preview_web_search: bool,
+    auth_mode: Option<AuthMode>,
 ) -> crate::error::Result<Vec<serde_json::Value>> {
     let mut tools_json = Vec::new();
 
     for tool in tools {
         let mut json = serde_json::to_value(tool)?;
         if let Some(map) = json.as_object_mut()
-            && use_preview_web_search
+            && auth_mode == Some(AuthMode::ChatGPT)
             && map.get("type").and_then(|v| v.as_str()) == Some("web_search")
         {
             map.insert(

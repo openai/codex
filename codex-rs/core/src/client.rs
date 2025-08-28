@@ -160,10 +160,7 @@ impl ModelClient {
         let store = prompt.store && auth_mode != Some(AuthMode::ChatGPT);
 
         let full_instructions = prompt.get_full_instructions(&self.config.model_family);
-        let use_preview_web_search = auth_mode == Some(AuthMode::ChatGPT);
-        let tools_json =
-            create_tools_json_for_responses_api(&prompt.tools, use_preview_web_search)?;
-
+        let tools_json = create_tools_json_for_responses_api(&prompt.tools, auth_mode)?;
         let reasoning = create_reasoning_param_for_request(
             &self.config.model_family,
             self.effort,
