@@ -605,7 +605,7 @@ async fn process_sse<S>(
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
-                        let ev = ResponseEvent::WebSearchCallBegin { call_id, query: None };
+                        let ev = ResponseEvent::WebSearchCallBegin { call_id };
                         if tx_event.send(Ok(ev)).await.is_err() {
                             return;
                         }

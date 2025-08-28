@@ -47,7 +47,7 @@ pub(crate) enum OpenAiTool {
     Function(ResponsesApiTool),
     #[serde(rename = "local_shell")]
     LocalShell {},
-    #[serde(rename = "web_search")]
+    #[serde(rename = "web_search_preview")]
     WebSearch {},
     #[serde(rename = "custom")]
     Freeform(FreeformTool),
