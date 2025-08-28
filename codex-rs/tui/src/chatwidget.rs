@@ -865,17 +865,17 @@ impl ChatWidget {
         if self.bottom_pane.flush_paste_burst_if_due() {
             // A paste just flushed; request an immediate redraw and skip this frame.
             self.request_redraw();
-            return true;
-        }
-        if self.bottom_pane.is_in_paste_burst() {
+            true
+        } else if self.bottom_pane.is_in_paste_burst() {
             // While capturing a burst, schedule a follow-up tick and skip this frame
             // to avoid redundant renders between ticks.
             frame_requester.schedule_frame_in(
                 crate::bottom_pane::ChatComposer::recommended_paste_flush_delay(),
             );
-            return true;
+            true
+        } else {
+            false
         }
-        false
     }
 
     fn flush_active_exec_cell(&mut self) {

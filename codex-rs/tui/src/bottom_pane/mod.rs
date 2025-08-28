@@ -13,6 +13,7 @@ use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::widgets::WidgetRef;
+use std::time::Duration;
 
 mod approval_modal_view;
 mod bottom_pane_view;
@@ -77,12 +78,13 @@ impl BottomPane {
     const BOTTOM_PAD_LINES: u16 = 1;
     pub fn new(params: BottomPaneParams) -> Self {
         let enhanced_keys_supported = params.enhanced_keys_supported;
-        let mut this = Self {
+        Self {
             composer: ChatComposer::new(
                 params.has_input_focus,
                 params.app_event_tx.clone(),
                 enhanced_keys_supported,
                 params.placeholder_text,
+                params.disable_paste_burst,
             ),
             active_view: None,
             app_event_tx: params.app_event_tx,
@@ -93,10 +95,7 @@ impl BottomPane {
             status: None,
             queued_user_messages: Vec::new(),
             esc_backtrack_hint: false,
-        };
-        this.composer
-            .set_disable_paste_burst(params.disable_paste_burst);
-        this
+        }
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
@@ -188,10 +187,7 @@ impl BottomPane {
                 self.request_redraw();
             }
             if self.composer.is_in_paste_burst() {
-                self.request_redraw_in(
-                    crate::bottom_pane::chat_composer::ChatComposer::recommended_paste_flush_delay(
-                    ),
-                );
+                self.request_redraw_in(ChatComposer::recommended_paste_flush_delay());
             }
             input_result
         }
@@ -393,7 +389,7 @@ impl BottomPane {
         self.frame_requester.schedule_frame();
     }
 
-    pub(crate) fn request_redraw_in(&self, dur: std::time::Duration) {
+    pub(crate) fn request_redraw_in(&self, dur: Duration) {
         self.frame_requester.schedule_frame_in(dur);
     }
 

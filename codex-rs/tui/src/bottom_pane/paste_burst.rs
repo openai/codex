@@ -45,6 +45,7 @@ impl PasteBurst {
     pub fn recommended_flush_delay() -> Duration {
         PASTE_BURST_CHAR_INTERVAL + Duration::from_millis(1)
     }
+
     /// Entry point: decide how to treat a plain char with current timing.
     pub fn on_plain_char(&mut self, ch: char, now: Instant) -> CharDecision {
         match self.last_plain_char_time {
@@ -160,7 +161,7 @@ impl PasteBurst {
     /// chars from the slice before the cursor.
     ///
     /// Heuristic: if the retro-grabbed slice contains any whitespace or is
-    /// sufficiently long (>= 16 bytes), treat it as paste-like to avoid
+    /// sufficiently long (>= 16 characters), treat it as paste-like to avoid
     /// rendering the typed prefix momentarily before the paste is recognized.
     /// This favors responsiveness and prevents flicker for typical pastes
     /// (URLs, file paths, multiline text) while not triggering on short words.
@@ -175,7 +176,8 @@ impl PasteBurst {
     ) -> Option<RetroGrab> {
         let start_byte = retro_start_index(before, retro_chars);
         let grabbed = before[start_byte..].to_string();
-        let looks_pastey = grabbed.chars().any(|c| c.is_whitespace()) || grabbed.len() >= 16;
+        let looks_pastey =
+            grabbed.chars().any(|c| c.is_whitespace()) || grabbed.chars().count() >= 16;
         if looks_pastey {
             // Note: caller is responsible for removing this slice from UI text.
             self.begin_with_retro_grabbed(grabbed.clone(), now);
