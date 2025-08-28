@@ -39,12 +39,12 @@ delete_hunk: "*** Delete File: " filename LF
 update_hunk: "*** Update File: " filename LF change_move? change?
 
 filename: /(.+)/
-add_line: "+" /(.+)/ LF -> line
+add_line: "+" /(.*)/ LF -> line
 
 change_move: "*** Move to: " filename LF
 change: (change_context | change_line)+ eof_line?
 change_context: ("@@" | "@@ " /(.+)/) LF
-change_line: ("+" | "-" | " ") /(.+)/ LF
+change_line: ("+" | "-" | " ") /(.*)/ LF
 eof_line: "*** End of File" LF
 
 %import common.LF
