@@ -31,7 +31,8 @@ use tracing_subscriber::EnvFilter;
 
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
-use codex_common::path_utils::{is_image_extension, normalize_pasted_path};
+use codex_common::path_utils::is_image_extension;
+use codex_common::path_utils::normalize_pasted_path;
 
 /// Extract image paths from the prompt text and return cleaned text + image paths
 /// This mimics the TUI's intelligent image detection logic
