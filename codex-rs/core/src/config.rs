@@ -181,6 +181,10 @@ pub struct Config {
 
     /// Include the `view_image` tool that lets the agent attach a local image path to context.
     pub include_view_image_tool: bool,
+    /// When true, disables burst-paste detection for typed input entirely.
+    /// All characters are inserted as they are received, and no buffering
+    /// or placeholder replacement will occur for fast keypress bursts.
+    pub disable_paste_burst: bool,
 }
 
 impl Config {
@@ -488,6 +492,11 @@ pub struct ConfigToml {
 
     /// Nested tools section for feature toggles
     pub tools: Option<ToolsToml>,
+
+    /// When true, disables burst-paste detection for typed input entirely.
+    /// All characters are inserted as they are received, and no buffering
+    /// or placeholder replacement will occur for fast keypress bursts.
+    pub disable_paste_burst: Option<bool>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -798,6 +807,7 @@ impl Config {
                 .experimental_use_exec_command_tool
                 .unwrap_or(false),
             include_view_image_tool,
+            disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
         };
         Ok(config)
     }
@@ -1167,6 +1177,7 @@ disable_response_storage = true
                 preferred_auth_method: AuthMode::ChatGPT,
                 use_experimental_streamable_shell_tool: false,
                 include_view_image_tool: true,
+                disable_paste_burst: false,
             },
             o3_profile_config
         );
@@ -1224,6 +1235,7 @@ disable_response_storage = true
             preferred_auth_method: AuthMode::ChatGPT,
             use_experimental_streamable_shell_tool: false,
             include_view_image_tool: true,
+            disable_paste_burst: false,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -1296,6 +1308,7 @@ disable_response_storage = true
             preferred_auth_method: AuthMode::ChatGPT,
             use_experimental_streamable_shell_tool: false,
             include_view_image_tool: true,
+            disable_paste_burst: false,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);

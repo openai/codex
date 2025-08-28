@@ -604,6 +604,7 @@ impl ChatWidget {
                 has_input_focus: true,
                 enhanced_keys_supported,
                 placeholder_text: placeholder,
+                disable_paste_burst: config.disable_paste_burst,
             }),
             active_exec_cell: None,
             config: config.clone(),
@@ -652,6 +653,7 @@ impl ChatWidget {
                 has_input_focus: true,
                 enhanced_keys_supported,
                 placeholder_text: placeholder,
+                disable_paste_burst: config.disable_paste_burst,
             }),
             active_exec_cell: None,
             config: config.clone(),
@@ -856,6 +858,24 @@ impl ChatWidget {
 
     pub(crate) fn handle_paste(&mut self, text: String) {
         self.bottom_pane.handle_paste(text);
+    }
+
+    // Returns true if caller should skip rendering this frame (a future frame is scheduled).
+    pub(crate) fn handle_paste_burst_tick(&mut self, frame_requester: FrameRequester) -> bool {
+        if self.bottom_pane.flush_paste_burst_if_due() {
+            // A paste just flushed; request an immediate redraw and skip this frame.
+            self.request_redraw();
+            true
+        } else if self.bottom_pane.is_in_paste_burst() {
+            // While capturing a burst, schedule a follow-up tick and skip this frame
+            // to avoid redundant renders between ticks.
+            frame_requester.schedule_frame_in(
+                crate::bottom_pane::ChatComposer::recommended_paste_flush_delay(),
+            );
+            true
+        } else {
+            false
+        }
     }
 
     fn flush_active_exec_cell(&mut self) {
