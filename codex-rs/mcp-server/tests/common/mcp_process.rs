@@ -61,6 +61,7 @@ impl McpProcess {
 
         cmd.stdin(Stdio::piped());
         cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
         cmd.env("CODEX_HOME", codex_home);
         cmd.env("RUST_LOG", "debug");
 
@@ -77,6 +78,17 @@ impl McpProcess {
             .take()
             .ok_or_else(|| anyhow::format_err!("mcp should have stdout fd"))?;
         let stdout = BufReader::new(stdout);
+
+        // Forward child's stderr to our stderr so failures are visible even
+        // when stdout/stderr are captured by the test harness.
+        if let Some(stderr) = process.stderr.take() {
+            let mut stderr_reader = BufReader::new(stderr).lines();
+            tokio::spawn(async move {
+                while let Ok(Some(line)) = stderr_reader.next_line().await {
+                    eprintln!("[mcp stderr] {line}");
+                }
+            });
+        }
         Ok(Self {
             next_request_id: AtomicI64::new(0),
             process,
