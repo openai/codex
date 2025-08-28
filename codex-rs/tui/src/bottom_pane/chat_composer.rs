@@ -252,8 +252,9 @@ impl ChatComposer {
     }
 
     pub(crate) fn set_disable_paste_burst(&mut self, disabled: bool) {
+        let was_disabled = self.disable_paste_burst;
         self.disable_paste_burst = disabled;
-        if disabled {
+        if disabled && !was_disabled {
             self.paste_burst.clear_window_after_non_char();
         }
     }
@@ -2028,7 +2029,7 @@ mod tests {
         let mut composer =
             ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
 
-        let count = 32usize;
+        let count = 32;
         for _ in 0..count {
             let _ =
                 composer.handle_key_event(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE));
