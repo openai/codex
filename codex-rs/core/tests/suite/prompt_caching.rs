@@ -280,7 +280,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
 {}</environment_context>"#,
         cwd.path().to_string_lossy(),
         match shell.name() {
-            Some(name) => format!("  <shell>{}</shell>\n", name),
+            Some(name) => format!("  <shell>{name}</shell>\n"),
             None => String::new(),
         }
     );
