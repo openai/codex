@@ -518,6 +518,7 @@ impl Session {
                 include_apply_patch_tool: config.include_apply_patch_tool,
                 include_web_search_request: config.tools_web_search_request,
                 use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
+                include_view_image_tool: config.include_view_image_tool,
             }),
             user_instructions,
             base_instructions,
@@ -1108,6 +1109,7 @@ async fn submission_loop(
                     include_apply_patch_tool: config.include_apply_patch_tool,
                     include_web_search_request: config.tools_web_search_request,
                     use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
+                    include_view_image_tool: config.include_view_image_tool,
                 });
 
                 let new_turn_context = TurnContext {
@@ -1193,6 +1195,7 @@ async fn submission_loop(
                             include_web_search_request: config.tools_web_search_request,
                             use_streamable_shell_tool: config
                                 .use_experimental_streamable_shell_tool,
+                            include_view_image_tool: config.include_view_image_tool,
                         }),
                         user_instructions: turn_context.user_instructions.clone(),
                         base_instructions: turn_context.base_instructions.clone(),
@@ -2076,6 +2079,36 @@ async fn handle_function_call(
                 call_id,
             )
             .await
+        }
+        "view_image" => {
+            #[derive(serde::Deserialize)]
+            struct SeeImageArgs {
+                path: String,
+            }
+            let args = match serde_json::from_str::<SeeImageArgs>(&arguments) {
+                Ok(a) => a,
+                Err(e) => {
+                    return ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: FunctionCallOutputPayload {
+                            content: format!("failed to parse function arguments: {e}"),
+                            success: Some(false),
+                        },
+                    };
+                }
+            };
+            let abs = turn_context.resolve_path(Some(args.path));
+            let output = match sess.inject_input(vec![InputItem::LocalImage { path: abs }]) {
+                Ok(()) => FunctionCallOutputPayload {
+                    content: "attached local image path".to_string(),
+                    success: Some(true),
+                },
+                Err(_) => FunctionCallOutputPayload {
+                    content: "unable to attach image (no active task)".to_string(),
+                    success: Some(false),
+                },
+            };
+            ResponseInputItem::FunctionCallOutput { call_id, output }
         }
         "apply_patch" => {
             let args = match serde_json::from_str::<ApplyPatchToolArgs>(&arguments) {
