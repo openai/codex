@@ -32,108 +32,13 @@ pub(crate) fn create_diff_summary_with_wrap_cols(
     event_type: PatchEventType,
     wrap_cols: usize,
 ) -> Vec<RtLine<'static>> {
-    if let PatchEventType::ApplyBegin {
-        auto_approved: true,
-    } = event_type
-    {
-        return render_apply_blocks_custom(changes, wrap_cols);
+    if let PatchEventType::ApplyBegin { .. } = event_type {
+        return render_applied_changes_block(changes, wrap_cols);
     }
-
-    struct FileSummary {
-        display_path: String,
-        added: usize,
-        removed: usize,
+    if let PatchEventType::ApprovalRequest = event_type {
+        return render_proposed_blocks(changes, wrap_cols);
     }
-    let count_from_unified =
-        |diff: &str| -> (usize, usize) { calculate_add_remove_from_diff(diff) };
-
-    let mut files: Vec<FileSummary> = Vec::new();
-    for (path, change) in changes.iter() {
-        match change {
-            FileChange::Add { content } => files.push(FileSummary {
-                display_path: path.display().to_string(),
-                added: content.lines().count(),
-                removed: 0,
-            }),
-            FileChange::Delete => files.push(FileSummary {
-                display_path: path.display().to_string(),
-                added: 0,
-                removed: std::fs::read_to_string(path)
-                    .ok()
-                    .map(|s| s.lines().count())
-                    .unwrap_or(0),
-            }),
-            FileChange::Update {
-                unified_diff,
-                move_path,
-            } => {
-                let (added, removed) = count_from_unified(unified_diff);
-                let display_path = if let Some(new_path) = move_path {
-                    format!("{} → {}", path.display(), new_path.display())
-                } else {
-                    path.display().to_string()
-                };
-                files.push(FileSummary {
-                    display_path,
-                    added,
-                    removed,
-                });
-            }
-        }
-    }
-    let file_count = files.len();
-    let total_added: usize = files.iter().map(|f| f.added).sum();
-    let total_removed: usize = files.iter().map(|f| f.removed).sum();
-    let noun = if file_count == 1 { "file" } else { "files" };
-
-    let mut out: Vec<RtLine<'static>> = Vec::new();
-    let mut header_spans: Vec<RtSpan<'static>> = Vec::new();
-    header_spans.push(RtSpan::styled(
-        title.to_owned(),
-        Style::default()
-            .fg(Color::Magenta)
-            .add_modifier(Modifier::BOLD),
-    ));
-    header_spans.push(RtSpan::raw(" to "));
-    header_spans.push(RtSpan::raw(format!("{file_count} {noun} ")));
-    header_spans.push(RtSpan::raw("("));
-    header_spans.push(RtSpan::styled(
-        format!("+{total_added}"),
-        Style::default().fg(Color::Green),
-    ));
-    header_spans.push(RtSpan::raw(" "));
-    header_spans.push(RtSpan::styled(
-        format!("-{total_removed}"),
-        Style::default().fg(Color::Red),
-    ));
-    header_spans.push(RtSpan::raw(")"));
-    out.push(RtLine::from(header_spans));
-    for (idx, f) in files.iter().enumerate() {
-        let mut spans: Vec<RtSpan<'static>> = Vec::new();
-        spans.push(RtSpan::raw(f.display_path.clone()));
-        if file_count > 1 {
-            spans.push(RtSpan::raw(" ("));
-            spans.push(RtSpan::styled(
-                format!("+{}", f.added),
-                Style::default().fg(Color::Green),
-            ));
-            spans.push(RtSpan::raw(" "));
-            spans.push(RtSpan::styled(
-                format!("-{}", f.removed),
-                Style::default().fg(Color::Red),
-            ));
-            spans.push(RtSpan::raw(")"));
-        }
-        let mut line = RtLine::from(spans);
-        let prefix = if idx == 0 { "  └ " } else { "    " };
-        line.spans.insert(0, prefix.into());
-        line.spans
-            .iter_mut()
-            .for_each(|span| span.style = span.style.add_modifier(Modifier::DIM));
-        out.push(line);
-    }
-    out.extend(render_patch_details(changes, wrap_cols));
-    out
+    Vec::new()
 }
 
 fn render_patch_details(
@@ -374,6 +279,283 @@ fn render_apply_blocks_custom(
     }
 
     out
+}
+
+// Shared row for per-file presentation
+#[derive(Clone)]
+struct Row {
+    path: PathBuf,
+    display: String,
+    added: usize,
+    removed: usize,
+    change: FileChange,
+}
+
+fn collect_rows(
+    changes: &HashMap<PathBuf, FileChange>,
+    cwd: &Path,
+) -> Vec<Row> {
+    let mut rows: Vec<Row> = Vec::new();
+    for (path, change) in changes.iter() {
+        let (a, d) = match change {
+            FileChange::Add { content } => (content.lines().count(), 0),
+            FileChange::Delete => (
+                0,
+                std::fs::read_to_string(path)
+                    .ok()
+                    .map(|s| s.lines().count())
+                    .unwrap_or(0),
+            ),
+            FileChange::Update { unified_diff, .. } => calculate_add_remove_from_diff(unified_diff),
+        };
+        let display = match change {
+            FileChange::Update {
+                move_path: Some(new),
+                ..
+            } => display_path_for(path, Some(new), cwd),
+            _ => display_path_for(path, None, cwd),
+        };
+        rows.push(Row {
+            path: path.clone(),
+            display,
+            added: a,
+            removed: d,
+            change: change.clone(),
+        });
+    }
+    rows.sort_by_key(|r| r.display.clone());
+    rows
+}
+
+enum HeaderKind {
+    ProposedChange,
+    Edited,
+}
+
+fn render_changes_block(
+    rows: Vec<Row>,
+    wrap_cols: usize,
+    header_kind: HeaderKind,
+) -> Vec<RtLine<'static>> {
+    let mut out: Vec<RtLine<'static>> = Vec::new();
+    let term_cols = wrap_cols;
+
+    // Header
+    let total_added: usize = rows.iter().map(|r| r.added).sum();
+    let total_removed: usize = rows.iter().map(|r| r.removed).sum();
+    let file_count = rows.len();
+    let noun = if file_count == 1 { "file" } else { "files" };
+    let mut header_spans: Vec<RtSpan<'static>> = vec!["• ".into()];
+    let single_file_inline = file_count == 1;
+    let first_row_opt = rows.first().cloned();
+    match header_kind {
+        HeaderKind::ProposedChange => {
+            header_spans.push("Proposed Change".bold());
+            if single_file_inline {
+                if let Some(fr) = &first_row_opt {
+                    header_spans.push(format!(" {} ", fr.display).into());
+                    header_spans.push("(".into());
+                    header_spans.push(RtSpan::styled(
+                        format!("+{}", fr.added),
+                        Style::default().fg(Color::Green),
+                    ));
+                    header_spans.push(" ".into());
+                    header_spans.push(RtSpan::styled(
+                        format!("-{}", fr.removed),
+                        Style::default().fg(Color::Red),
+                    ));
+                    header_spans.push(")".into());
+                }
+            } else {
+                header_spans.push(format!(" to {file_count} {noun} ").into());
+                header_spans.push("(".into());
+                header_spans.push(RtSpan::styled(
+                    format!("+{total_added}"),
+                    Style::default().fg(Color::Green),
+                ));
+                header_spans.push(" ".into());
+                header_spans.push(RtSpan::styled(
+                    format!("-{total_removed}"),
+                    Style::default().fg(Color::Red),
+                ));
+                header_spans.push(")".into());
+            }
+        }
+        HeaderKind::Edited => {
+            header_spans.push("Edited".bold());
+            if single_file_inline {
+                if let Some(fr) = &first_row_opt {
+                    header_spans.push(format!(" {} ", fr.display).into());
+                    header_spans.push("(".into());
+                    header_spans.push(RtSpan::styled(
+                        format!("+{}", fr.added),
+                        Style::default().fg(Color::Green),
+                    ));
+                    header_spans.push(" ".into());
+                    header_spans.push(RtSpan::styled(
+                        format!("-{}", fr.removed),
+                        Style::default().fg(Color::Red),
+                    ));
+                    header_spans.push(")".into());
+                } else {
+                    header_spans.push(format!(" {file_count} {noun} ").into());
+                    header_spans.push("(".into());
+                    header_spans.push(RtSpan::styled(
+                        format!("+{total_added}"),
+                        Style::default().fg(Color::Green),
+                    ));
+                    header_spans.push(" ".into());
+                    header_spans.push(RtSpan::styled(
+                        format!("-{total_removed}"),
+                        Style::default().fg(Color::Red),
+                    ));
+                    header_spans.push(")".into());
+                }
+            } else {
+                header_spans.push(format!(" {file_count} {noun} ").into());
+                header_spans.push("(".into());
+                header_spans.push(RtSpan::styled(
+                    format!("+{total_added}"),
+                    Style::default().fg(Color::Green),
+                ));
+                header_spans.push(" ".into());
+                header_spans.push(RtSpan::styled(
+                    format!("-{total_removed}"),
+                    Style::default().fg(Color::Red),
+                ));
+                header_spans.push(")".into());
+            }
+        }
+    }
+    out.push(RtLine::from(header_spans));
+
+    for (idx, r) in rows.into_iter().enumerate() {
+        // Insert a blank separator between file chunks (except before the first)
+        if idx > 0 {
+            out.push(RtLine::from(RtSpan::raw("")));
+        }
+        // File header line (skip when single-file header already shows the name)
+        let skip_file_header = file_count == 1;
+        if !skip_file_header {
+            let mut header: Vec<RtSpan<'static>> = Vec::new();
+            header.push("  └ ".dim());
+            header.push(r.display.clone().into());
+            let mut parts: Vec<RtSpan<'static>> = Vec::new();
+            if r.added > 0 {
+                parts.push(RtSpan::styled(
+                    format!("+{}", r.added),
+                    Style::default().fg(Color::Green),
+                ));
+            }
+            if r.removed > 0 {
+                if !parts.is_empty() {
+                    parts.push(" ".into());
+                }
+                parts.push(RtSpan::styled(
+                    format!("-{}", r.removed),
+                    Style::default().fg(Color::Red),
+                ));
+            }
+            if !parts.is_empty() {
+                header.push(" (".into());
+                header.extend(parts);
+                header.push(")".into());
+            }
+            out.push(RtLine::from(header));
+        }
+
+        match r.change {
+            FileChange::Add { content } => {
+                for (i, raw) in content.lines().enumerate() {
+                    out.extend(push_wrapped_diff_line(
+                        i + 1,
+                        DiffLineType::Insert,
+                        raw,
+                        term_cols,
+                    ));
+                }
+            }
+            FileChange::Delete => {
+                let original = std::fs::read_to_string(r.path).unwrap_or_default();
+                for (i, raw) in original.lines().enumerate() {
+                    out.extend(push_wrapped_diff_line(
+                        i + 1,
+                        DiffLineType::Delete,
+                        raw,
+                        term_cols,
+                    ));
+                }
+            }
+            FileChange::Update { unified_diff, .. } => {
+                if let Ok(patch) = diffy::Patch::from_str(&unified_diff) {
+                    let mut is_first_hunk = true;
+                    for h in patch.hunks() {
+                        if !is_first_hunk {
+                            out.push(RtLine::from(vec!["    ".into(), "⋮".dim()]));
+                        }
+                        is_first_hunk = false;
+                        let mut old_ln = h.old_range().start();
+                        let mut new_ln = h.new_range().start();
+                        for l in h.lines() {
+                            match l {
+                                diffy::Line::Insert(text) => {
+                                    let s = text.trim_end_matches('\n');
+                                    out.extend(push_wrapped_diff_line(
+                                        new_ln,
+                                        DiffLineType::Insert,
+                                        s,
+                                        term_cols,
+                                    ));
+                                    new_ln += 1;
+                                }
+                                diffy::Line::Delete(text) => {
+                                    let s = text.trim_end_matches('\n');
+                                    out.extend(push_wrapped_diff_line(
+                                        old_ln,
+                                        DiffLineType::Delete,
+                                        s,
+                                        term_cols,
+                                    ));
+                                    old_ln += 1;
+                                }
+                                diffy::Line::Context(text) => {
+                                    let s = text.trim_end_matches('\n');
+                                    out.extend(push_wrapped_diff_line(
+                                        new_ln,
+                                        DiffLineType::Context,
+                                        s,
+                                        term_cols,
+                                    ));
+                                    old_ln += 1;
+                                    new_ln += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    out
+}
+
+fn render_proposed_blocks(
+    changes: &HashMap<PathBuf, FileChange>,
+    wrap_cols: usize,
+) -> Vec<RtLine<'static>> {
+    let cwd: PathBuf = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+    let rows = collect_rows(changes, &cwd);
+    render_changes_block(rows, wrap_cols, HeaderKind::ProposedChange)
+}
+
+fn render_applied_changes_block(
+    changes: &HashMap<PathBuf, FileChange>,
+    wrap_cols: usize,
+) -> Vec<RtLine<'static>> {
+    let cwd: PathBuf = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+    let rows = collect_rows(changes, &cwd);
+    render_changes_block(rows, wrap_cols, HeaderKind::Edited)
 }
 
 fn relative_from(base: &Path, path: &Path) -> Option<PathBuf> {
@@ -797,6 +979,41 @@ mod tests {
     }
 
     #[test]
+    fn ui_snapshot_apply_multiple_files_block() {
+        // Two files: one update and one add, to exercise combined header and per-file rows
+        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+
+        // File a.txt: single-line replacement (one delete, one insert)
+        let patch_a = diffy::create_patch("one\n", "one changed\n").to_string();
+        changes.insert(
+            PathBuf::from("a.txt"),
+            FileChange::Update {
+                unified_diff: patch_a,
+                move_path: None,
+            },
+        );
+
+        // File b.txt: newly added with one line
+        changes.insert(
+            PathBuf::from("b.txt"),
+            FileChange::Add {
+                content: "new\n".to_string(),
+            },
+        );
+
+        let lines = create_diff_summary_with_wrap_cols(
+            "ignored",
+            &changes,
+            PatchEventType::ApplyBegin {
+                auto_approved: true,
+            },
+            80,
+        );
+
+        snapshot_lines("apply_multiple_files_block", lines, 80, 14);
+    }
+
+    #[test]
     fn ui_snapshot_apply_add_block() {
         let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
         changes.insert(
@@ -896,9 +1113,8 @@ mod tests {
             },
             28,
         );
-        if !lines.is_empty() {
-            lines.remove(0);
-        }
+        // Drop the combined header for this text-only snapshot
+        if !lines.is_empty() { lines.remove(0); }
         snapshot_lines_text("apply_update_block_wraps_long_lines_text", &lines);
     }
 

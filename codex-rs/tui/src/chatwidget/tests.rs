@@ -974,8 +974,8 @@ fn apply_patch_events_emit_history_cells() {
     assert!(!cells.is_empty(), "expected pending patch cell to be sent");
     let blob = lines_to_single_string(cells.last().unwrap());
     assert!(
-        blob.contains("proposed patch"),
-        "missing proposed patch header: {blob:?}"
+        blob.contains("Proposed Change"),
+        "missing proposed change header: {blob:?}"
     );
 
     // 2) Begin apply -> per-file apply block cell (no global header)
@@ -999,8 +999,8 @@ fn apply_patch_events_emit_history_cells() {
     assert!(!cells.is_empty(), "expected apply block cell to be sent");
     let blob = lines_to_single_string(cells.last().unwrap());
     assert!(
-        blob.contains("Added foo.txt"),
-        "expected per-file header: {blob:?}"
+        blob.contains("Edited foo.txt"),
+        "expected single-file edited header with filename: {blob:?}"
     );
 
     // 3) End apply success -> success cell
@@ -1214,7 +1214,7 @@ fn apply_patch_request_shows_diff_summary() {
 
     // Header should summarize totals
     assert!(
-        blob.contains("proposed patch to 1 file (+2 -0)"),
+        blob.contains("Proposed Change README.md (+2 -0)"),
         "missing or incorrect diff header: {blob:?}"
     );
 

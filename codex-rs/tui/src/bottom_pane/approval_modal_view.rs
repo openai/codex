@@ -69,6 +69,7 @@ impl BottomPaneView for ApprovalModalView {
         self.enqueue_request(req);
         None
     }
+
 }
 
 #[cfg(test)]

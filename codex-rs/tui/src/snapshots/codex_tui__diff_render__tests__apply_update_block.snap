@@ -1,5 +1,6 @@
 ---
 source: tui/src/diff_render.rs
+assertion_line: 748
 expression: terminal.backend()
 ---
 "• Edited example.txt (+1 -1)                                                    "

@@ -95,7 +95,8 @@ impl BottomPane {
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
-        let top_margin = if self.active_view.is_some() { 0 } else { 1 };
+        // Always reserve one blank row above the pane for visual spacing.
+        let top_margin = 1;
 
         // Base height depends on whether a modal/overlay is active.
         let mut base = if let Some(view) = self.active_view.as_ref() {
@@ -118,7 +119,8 @@ impl BottomPane {
     fn layout(&self, area: Rect) -> [Rect; 2] {
         // Prefer showing the status header when space is extremely tight.
         // Drop the top spacer if there is only one row available.
-        let mut top_margin = if self.active_view.is_some() { 0 } else { 1 };
+        // Always reserve one-rows top margin (unless height is too small).
+        let mut top_margin = 1;
         if area.height <= 1 {
             top_margin = 0;
         }

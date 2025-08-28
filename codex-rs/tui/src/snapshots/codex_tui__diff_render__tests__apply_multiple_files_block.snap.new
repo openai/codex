@@ -1,11 +1,15 @@
 ---
 source: tui/src/diff_render.rs
-assertion_line: 765
+assertion_line: 769
 expression: terminal.backend()
 ---
-"• Proposed Change README.md (+2 -0)                                             "
-"    1     +first line                                                           "
-"    2     +second line                                                          "
+"• Edited 2 files (+2 -1)                                                        "
+"  └ a.txt (+1 -1)                                                               "
+"    1     -one                                                                  "
+"    1     +one changed                                                          "
+"                                                                                "
+"  └ b.txt (+1)                                                                  "
+"    1     +new                                                                  "
 "                                                                                "
 "                                                                                "
 "                                                                                "

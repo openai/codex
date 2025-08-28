@@ -1,5 +1,6 @@
 ---
 source: tui/src/diff_render.rs
+assertion_line: 748
 expression: terminal.backend()
 ---
 "• Edited abs_old.rs → abs_new.rs (+1 -1)                                        "
