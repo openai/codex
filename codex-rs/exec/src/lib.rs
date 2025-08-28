@@ -18,7 +18,6 @@ use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
-use codex_core::protocol::TaskCompleteEvent;
 use codex_core::util::is_inside_git_repo;
 use codex_login::AuthManager;
 use codex_ollama::DEFAULT_OSS_MODEL;
@@ -32,6 +31,43 @@ use tracing_subscriber::EnvFilter;
 
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
+use codex_common::path_utils::{is_image_extension, normalize_pasted_path};
+
+/// Extract image paths from the prompt text and return cleaned text + image paths
+/// This mimics the TUI's intelligent image detection logic
+fn extract_image_paths_from_prompt(prompt: String) -> (String, Vec<PathBuf>) {
+    let mut detected_images = Vec::new();
+    let mut cleaned_words = Vec::new();
+
+    // Split prompt into words and check each for potential image paths
+    for word in prompt.split_whitespace() {
+        if let Some(path_buf) = normalize_pasted_path(word) {
+            // Pre-filter by extension before expensive image_dimensions check
+            if is_image_extension(&path_buf) {
+                // Check if it's actually an image file by trying to read its dimensions
+                match image::image_dimensions(&path_buf) {
+                    Ok(_) => {
+                        tracing::info!("Detected image path: {}", path_buf.display());
+                        detected_images.push(path_buf);
+                        continue; // Skip adding this word to cleaned text
+                    }
+                    Err(err) => {
+                        tracing::debug!(
+                            "Path {} looks like image but isn't: {}",
+                            path_buf.display(),
+                            err
+                        );
+                    }
+                }
+            }
+        }
+        // Not an image path, keep the original word
+        cleaned_words.push(word);
+    }
+
+    let cleaned_text = cleaned_words.join(" ");
+    (cleaned_text, detected_images)
+}
 
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     let Cli {
@@ -238,32 +274,27 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         });
     }
 
-    // Send images first, if any.
-    if !images.is_empty() {
-        let items: Vec<InputItem> = images
-            .into_iter()
-            .map(|path| InputItem::LocalImage { path })
-            .collect();
-        let initial_images_event_id = conversation.submit(Op::UserInput { items }).await?;
-        info!("Sent images with event ID: {initial_images_event_id}");
-        while let Ok(event) = conversation.next_event().await {
-            if event.id == initial_images_event_id
-                && matches!(
-                    event.msg,
-                    EventMsg::TaskComplete(TaskCompleteEvent {
-                        last_agent_message: _,
-                    })
-                )
-            {
-                break;
-            }
-        }
+    // Parse the prompt for image paths and combine with --image flag images
+    let mut all_images = images;
+    let (prompt_text, detected_images) = extract_image_paths_from_prompt(prompt);
+    all_images.extend(detected_images);
+
+    // Build input items: images first, then text
+    let mut items: Vec<InputItem> = Vec::new();
+
+    // Add images as InputItems
+    for path in all_images {
+        items.push(InputItem::LocalImage { path });
     }
 
-    // Send the prompt.
-    let items: Vec<InputItem> = vec![InputItem::Text { text: prompt }];
-    let initial_prompt_task_id = conversation.submit(Op::UserInput { items }).await?;
-    info!("Sent prompt with event ID: {initial_prompt_task_id}");
+    // Add text content
+    if !prompt_text.trim().is_empty() {
+        items.push(InputItem::Text { text: prompt_text });
+    }
+
+    // Send all content together in a single request (no separate image handling to avoid race conditions)
+    let initial_task_id = conversation.submit(Op::UserInput { items }).await?;
+    info!("Sent input with event ID: {initial_task_id}");
 
     // Run the loop until the task is complete.
     while let Some(event) = rx.recv().await {

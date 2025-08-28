@@ -33,6 +33,7 @@ codex-common = { path = "../common", features = [
     "cli",
     "elapsed",
     "sandbox_summary",
+    "path_utils",
 ] }
 codex-core = { path = "../core" }
 codex-file-search = { path = "../file-search" }

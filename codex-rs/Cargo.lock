@@ -704,7 +704,9 @@ dependencies = [
  "codex-core",
  "codex-protocol",
  "serde",
+ "shlex",
  "toml 0.9.5",
+ "url",
 ]
 
 [[package]]
@@ -781,6 +783,7 @@ dependencies = [
  "codex-ollama",
  "codex-protocol",
  "core_test_support",
+ "image",
  "libc",
  "owo-colors",
  "predicates",
@@ -790,6 +793,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "url",
  "wiremock",
 ]
 
