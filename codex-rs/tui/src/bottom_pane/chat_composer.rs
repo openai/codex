@@ -41,7 +41,6 @@ use std::time::Duration;
 use std::time::Instant;
 
 // Heuristic thresholds for detecting paste-like input bursts.
-const PASTE_BURST_MIN_CHARS: u16 = 3;
 const PASTE_BURST_CHAR_INTERVAL: Duration = Duration::from_millis(8);
 const PASTE_ENTER_SUPPRESS_WINDOW: Duration = Duration::from_millis(120);
 
@@ -770,7 +769,6 @@ impl ChatComposer {
                 }
 
                 // During a paste-like burst, treat Enter as a newline instead of submit.
-                let now = Instant::now();
                 // 非ブラケットの貼り付け検出は無効化。明示的なPasteバッファがある場合のみ改行をバッファに積む。
                 if self.in_paste_burst_mode || !self.paste_burst_buffer.is_empty() {
                     self.textarea.insert_str("\n");
