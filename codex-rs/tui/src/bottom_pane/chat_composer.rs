@@ -2079,7 +2079,7 @@ mod tests {
         let flushed = composer.flush_paste_burst_if_due();
         assert!(flushed, "expected flush after stopping fast input");
 
-        let expected_placeholder = format!("[Pasted Content {} chars]", count);
+        let expected_placeholder = format!("[Pasted Content {count} chars]");
         assert_eq!(composer.textarea.text(), expected_placeholder);
         assert_eq!(composer.pending_pastes.len(), 1);
         assert_eq!(composer.pending_pastes[0].0, expected_placeholder);
