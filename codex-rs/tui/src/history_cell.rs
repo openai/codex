@@ -500,18 +500,35 @@ impl ExecCell {
                     .into_iter()
                     .join("\n");
                 if !out.trim().is_empty() {
-                    let out_indent_width = "    ".width();
-                    let wrapped =
-                        textwrap::wrap(&out, (width as usize).saturating_sub(out_indent_width));
-                    for line in wrapped {
-                        lines.push(Line::from(vec!["    ".into(), line.to_string().dim()]));
+                    // Prefix the first output line with a branch ("  └ "), and
+                    // continuation/wrapped lines with four spaces to align under it.
+                    // Prefixes both render to width 4, so use a single width
+                    // for wrapping and only vary the prefix glyph.
+                    let first_prefix = "  └ ".dim();
+                    let cont_prefix: Span<'static> = "    ".into();
+                    let prefix_w = cont_prefix.width(); // same visual width as first_prefix
+
+                    let mut used_first = false;
+                    for raw_line in out.lines() {
+                        let pieces = ExecCell::wrap_command_line_by_widths(
+                            raw_line,
+                            (width as usize).saturating_sub(prefix_w),
+                            (width as usize).saturating_sub(prefix_w),
+                        );
+                        for (i, piece) in pieces.iter().enumerate() {
+                            let prefix_span = if !used_first {
+                                used_first = true;
+                                first_prefix.clone()
+                            } else if i == 0 {
+                                cont_prefix.clone()
+                            } else {
+                                cont_prefix.clone()
+                            };
+                            lines.push(Line::from(vec![prefix_span, piece.to_string().dim()]));
+                        }
                     }
                 }
-            } else {
-                // noop
             }
-        } else {
-            // noop
         }
         lines
     }
@@ -1447,7 +1464,9 @@ fn output_lines(
     };
     for raw in lines[tail_start..].iter() {
         let mut line = ansi_escape_line(raw);
-        line.spans.insert(0, "    ".into());
+        if include_prefix {
+            line.spans.insert(0, "    ".into());
+        }
         line.spans.iter_mut().for_each(|span| {
             span.style = span.style.add_modifier(Modifier::DIM);
         });
@@ -1837,6 +1856,49 @@ mod tests {
         );
         let lines = cell.display_lines(28);
         let rendered = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn stderr_tail_more_than_five_lines_snapshot() {
+        // Build an exec cell with a non-zero exit and 10 lines on stderr to exercise
+        // the head/tail rendering and gutter prefixes.
+        let call_id = "c_err".to_string();
+        let mut cell = ExecCell::new(ExecCall {
+            call_id: call_id.clone(),
+            command: vec![
+                "bash".into(),
+                "-lc".into(),
+                "seq 1 10 1>&2 && false".into(),
+            ],
+            parsed: Vec::new(),
+            output: None,
+            start_time: Some(Instant::now()),
+            duration: None,
+        });
+        let stderr: String = (1..=10).map(|n| n.to_string()).collect::<Vec<_>>().join("\n");
+        cell.complete_call(
+            &call_id,
+            CommandOutput {
+                exit_code: 1,
+                stdout: String::new(),
+                stderr,
+                formatted_output: String::new(),
+            },
+            Duration::from_millis(1),
+        );
+
+        let rendered = cell
+            .display_lines(80)
             .iter()
             .map(|l| {
                 l.spans
