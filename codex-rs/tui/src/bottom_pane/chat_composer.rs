@@ -92,18 +92,11 @@ pub(crate) struct ChatComposer {
     has_focus: bool,
     attached_images: Vec<AttachedImage>,
     placeholder_text: String,
-// Heuristic state to detect non-bracketed paste bursts.
-last_plain_char_time: Option<Instant>,
-consecutive_plain_char_burst: u16,
-paste_burst_until: Option<Instant>,
-// Buffer to accumulate characters during a detected non-bracketed paste burst.
-paste_burst_buffer: String,
-in_paste_burst_mode: bool,
-// Non-bracketed paste burst tracker.
-paste_burst: PasteBurst,
-// When true, disables paste-burst logic and inserts characters immediately.
-disable_paste_burst: bool,
-custom_prompts: Vec<CustomPrompt>,
+    // Non-bracketed paste burst tracker.
+    paste_burst: PasteBurst,
+    // When true, disables paste-burst logic and inserts characters immediately.
+    disable_paste_burst: bool,
+    custom_prompts: Vec<CustomPrompt>,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -139,14 +132,9 @@ impl ChatComposer {
             has_focus: has_input_focus,
             attached_images: Vec::new(),
             placeholder_text,
-            last_plain_char_time: None,
-            consecutive_plain_char_burst: 0,
-            paste_burst_until: None,
-            paste_burst_buffer: String::new(),
-            in_paste_burst_mode: false,
-            custom_prompts: Vec::new(),
-            disable_paste_burst: false,
             paste_burst: PasteBurst::default(),
+            disable_paste_burst: false,
+            custom_prompts: Vec::new(),
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -2152,8 +2140,13 @@ mod tests {
 
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
-        let mut composer =
-            ChatComposer::new(true, sender, false, "Ask Codex to do anything".to_string());
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
 
         // Inject prompts as if received via event.
         composer.set_custom_prompts(vec![CustomPrompt {
@@ -2174,6 +2167,7 @@ mod tests {
         }
     }
 
+    #[test]
     fn burst_paste_fast_small_buffers_and_flushes_on_stop() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
