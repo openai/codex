@@ -401,7 +401,7 @@ pub enum EventMsg {
     Error(ErrorEvent),
 
     /// Agent has started a task
-    TaskStarted,
+    TaskStarted(TaskStartedEvent),
 
     /// Agent has completed all actions
     TaskComplete(TaskCompleteEvent),
@@ -492,6 +492,11 @@ pub struct ErrorEvent {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TaskCompleteEvent {
     pub last_agent_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TaskStartedEvent {
+    pub model_context_window: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
