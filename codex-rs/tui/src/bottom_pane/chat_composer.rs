@@ -428,6 +428,13 @@ impl ChatComposer {
             self.in_paste_burst_mode = false;
             self.handle_paste(pasted);
         }
+        // Reset paste-burst heuristics so IME bursts don't get misclassified.
+        self.last_plain_char_time = None;
+        self.consecutive_plain_char_burst = 0;
+        self.paste_burst_until = None;
+        self.in_paste_burst_mode = false;
+        self.paste_burst_buffer.clear();
+
         self.textarea.input(input);
         let text_after = self.textarea.text();
         self.pending_pastes
