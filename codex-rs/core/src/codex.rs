@@ -1064,10 +1064,10 @@ async fn submission_loop(
                 let provider = prev.client.get_provider();
 
                 // Effective model + family
-                let (effective_model, effective_family) = if let Some(m) = model {
+                let (effective_model, effective_family) = if let Some(ref m) = model {
                     let fam =
-                        find_family_for_model(&m).unwrap_or_else(|| config.model_family.clone());
-                    (m, fam)
+                        find_family_for_model(m).unwrap_or_else(|| config.model_family.clone());
+                    (m.clone(), fam)
                 } else {
                     (prev.client.get_model(), prev.client.get_model_family())
                 };
@@ -1126,6 +1126,17 @@ async fn submission_loop(
 
                 // Install the new persistent context for subsequent tasks/turns.
                 turn_context = Arc::new(new_turn_context);
+
+                // Persist model and reasoning effort across sessions.
+                if model.is_some() || effort.is_some() {
+                    let _ = crate::config::set_default_model_and_effort_for_profile(
+                        &config.codex_home,
+                        config.active_profile.as_deref(),
+                        &effective_model,
+                        effective_effort,
+                    );
+                }
+
                 if cwd.is_some() || approval_policy.is_some() || sandbox_policy.is_some() {
                     sess.record_conversation_items(&[ResponseItem::from(EnvironmentContext::new(
                         cwd,
