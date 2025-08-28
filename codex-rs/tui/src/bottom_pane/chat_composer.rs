@@ -388,6 +388,7 @@ impl ChatComposer {
             KeyEvent {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
                 ..
             } => {
                 if let Some(cmd) = popup.selected_command() {
@@ -471,6 +472,7 @@ impl ChatComposer {
             | KeyEvent {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
                 ..
             } => {
                 let Some(sel) = popup.selected_match() else {
@@ -727,6 +729,7 @@ impl ChatComposer {
             KeyEvent {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
+                kind: KeyEventKind::Press,
                 ..
             } => {
                 // If we're in a paste-like burst capture, treat Enter as part of the burst
@@ -768,19 +771,9 @@ impl ChatComposer {
 
                 // During a paste-like burst, treat Enter as a newline instead of submit.
                 let now = Instant::now();
-                let tight_after_char = self
-                    .last_plain_char_time
-                    .is_some_and(|t| now.duration_since(t) <= PASTE_BURST_CHAR_INTERVAL);
-                let recent_after_char = self
-                    .last_plain_char_time
-                    .is_some_and(|t| now.duration_since(t) <= PASTE_ENTER_SUPPRESS_WINDOW);
-                let burst_by_count =
-                    recent_after_char && self.consecutive_plain_char_burst >= PASTE_BURST_MIN_CHARS;
-                let in_burst_window = self.paste_burst_until.is_some_and(|until| now <= until);
-
-                if tight_after_char || burst_by_count || in_burst_window {
+                // 非ブラケットの貼り付け検出は無効化。明示的なPasteバッファがある場合のみ改行をバッファに積む。
+                if self.in_paste_burst_mode || !self.paste_burst_buffer.is_empty() {
                     self.textarea.insert_str("\n");
-                    self.paste_burst_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
                     return (InputResult::None, true);
                 }
                 let mut text = self.textarea.text().to_string();
@@ -839,53 +832,11 @@ impl ChatComposer {
             let has_ctrl_or_alt =
                 modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::ALT);
             if !has_ctrl_or_alt {
-                // Non-ASCII characters (e.g., from IMEs) can arrive in quick bursts and be
-                // misclassified by our non-bracketed paste heuristic. To avoid leaving
-                // residual buffered content or misdetecting a paste, flush any burst buffer
-                // and insert non-ASCII characters directly.
+                // IME有効時の半角入力でも、高速タイプが「非ブラケット貼り付け」扱いにならないよう、
+                // ここでは常に通常挿入に統一する（ASCII/非ASCIIともに）。
                 if !ch.is_ascii() {
                     return self.handle_non_ascii_char(input);
                 }
-                // Update burst heuristics.
-                match self.last_plain_char_time {
-                    Some(prev) if now.duration_since(prev) <= PASTE_BURST_CHAR_INTERVAL => {
-                        self.consecutive_plain_char_burst =
-                            self.consecutive_plain_char_burst.saturating_add(1);
-                    }
-                    _ => {
-                        self.consecutive_plain_char_burst = 1;
-                    }
-                }
-                self.last_plain_char_time = Some(now);
-
-                // If we're already buffering, capture the char into the buffer.
-                if self.in_paste_burst_mode {
-                    self.paste_burst_buffer.push(ch);
-                    // Keep the window alive while we receive the burst.
-                    self.paste_burst_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
-                    return (InputResult::None, true);
-                } else if self.consecutive_plain_char_burst >= PASTE_BURST_MIN_CHARS {
-                    // Do not start burst buffering while typing a slash command (first line starts with '/').
-                    let first_line = self.textarea.text().lines().next().unwrap_or("");
-                    if first_line.starts_with('/') {
-                        // Keep heuristics but do not buffer.
-                        self.paste_burst_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
-                        // Insert normally.
-                        self.textarea.input(input);
-                        let text_after = self.textarea.text();
-                        self.pending_pastes
-                            .retain(|(placeholder, _)| text_after.contains(placeholder));
-                        return (InputResult::None, true);
-                    }
-                    // Begin buffering from this character onward.
-                    self.paste_burst_buffer.push(ch);
-                    self.in_paste_burst_mode = true;
-                    // Keep the window alive to continue capturing.
-                    self.paste_burst_until = Some(now + PASTE_ENTER_SUPPRESS_WINDOW);
-                    return (InputResult::None, true);
-                }
-
-                // Not buffering: insert normally and continue.
                 self.textarea.input(input);
                 let text_after = self.textarea.text();
                 self.pending_pastes
@@ -935,7 +886,7 @@ impl ChatComposer {
                 // Plain chars handled above.
             }
             KeyCode::Enter => {
-                // Keep burst window alive (supports blank lines in paste).
+                // 非ブラケットの貼り付け検出を無効化したため、特別扱いは不要。
             }
             _ => {
                 // Other keys: clear burst window and any buffer (after flushing earlier).

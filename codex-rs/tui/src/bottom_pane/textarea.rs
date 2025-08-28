@@ -1,5 +1,6 @@
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::KeyEventKind;
 use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -203,6 +204,27 @@ impl TextArea {
     }
 
     pub fn input(&mut self, event: KeyEvent) {
+        // Ignore key releases entirely.
+        if event.kind == KeyEventKind::Release {
+            return;
+        }
+        // On repeated key events, avoid duplicating plain character insertions and newline inserts.
+        // Allow repeats for navigation and deletions so holding keys still works naturally.
+        if event.kind == KeyEventKind::Repeat {
+            match event.code {
+                KeyCode::Char(_) => {
+                    // Only drop repeats for unmodified (or Shift-modified) character insertions.
+                    if event.modifiers.is_empty() || event.modifiers == KeyModifiers::SHIFT {
+                        return;
+                    }
+                }
+                KeyCode::Enter => {
+                    // Avoid inserting duplicate newlines on key repeat.
+                    return;
+                }
+                _ => {}
+            }
+        }
         match event {
             // Some terminals (or configurations) send Control key chords as
             // C0 control characters without reporting the CONTROL modifier.
