@@ -100,28 +100,26 @@ pub(crate) async fn append_entry(text: &str, session_id: &Uuid, config: &Config)
         options.mode(0o600);
     }
 
-    let history_file = options.open(&path)?;
+    let mut history_file = options.open(&path)?;
 
     // Ensure permissions.
     ensure_owner_only_permissions(&history_file).await?;
 
-    // Perform a blocking write under an advisory write lock using fd-lock.
+    // Perform a blocking write under an advisory write lock using std::fs.
     tokio::task::spawn_blocking(move || -> Result<()> {
-        let mut lock = fd_lock::RwLock::new(history_file);
-
         // Retry a few times to avoid indefinite blocking when contended.
         for _ in 0..MAX_RETRIES {
-            match lock.try_write() {
-                Ok(mut guard) => {
+            match history_file.try_lock() {
+                Ok(()) => {
                     // While holding the exclusive lock, write the full line.
-                    guard.write_all(line.as_bytes())?;
-                    guard.flush()?;
+                    history_file.write_all(line.as_bytes())?;
+                    history_file.flush()?;
                     return Ok(());
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                Err(std::fs::TryLockError::WouldBlock) => {
                     std::thread::sleep(RETRY_SLEEP);
                 }
-                Err(e) => return Err(e),
+                Err(e) => return Err(e.into()),
             }
         }
 
@@ -135,7 +133,7 @@ pub(crate) async fn append_entry(text: &str, session_id: &Uuid, config: &Config)
     Ok(())
 }
 
-// Exclusive lock handled inline in append_entry using fd-lock.
+// Exclusive lock handled inline in append_entry using std::fs::File::try_lock.
 
 /// Asynchronously fetch the history file's *identifier* (inode on Unix) and
 /// the current number of entries by counting newline characters.
@@ -212,13 +210,12 @@ pub(crate) fn lookup(log_id: u64, offset: usize, config: &Config) -> Option<Hist
         return None;
     }
 
-    // Open & lock file for reading using a shared lock; keep guard while reading.
-    let lock = fd_lock::RwLock::new(file);
+    // Open & lock file for reading using a shared lock.
     // Retry a few times to avoid indefinite blocking.
     for _ in 0..MAX_RETRIES {
-        match lock.try_read() {
-            Ok(guard) => {
-                let reader = BufReader::new(&*guard);
+        match file.try_lock_shared() {
+            Ok(()) => {
+                let reader = BufReader::new(&file);
                 for (idx, line_res) in reader.lines().enumerate() {
                     let line = match line_res {
                         Ok(l) => l,
@@ -241,7 +238,7 @@ pub(crate) fn lookup(log_id: u64, offset: usize, config: &Config) -> Option<Hist
                 // Not found at requested offset.
                 return None;
             }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+            Err(std::fs::TryLockError::WouldBlock) => {
                 std::thread::sleep(RETRY_SLEEP);
             }
             Err(e) => {
@@ -261,7 +258,7 @@ pub(crate) fn lookup(log_id: u64, offset: usize, config: &Config) -> Option<Hist
     None
 }
 
-// Shared lock handled inline in lookup using fd-lock.
+// Shared lock handled inline in lookup using std::fs::File::try_lock_shared.
 
 /// On Unix systems ensure the file permissions are `0o600` (rw-------). If the
 /// permissions cannot be changed the error is propagated to the caller.
