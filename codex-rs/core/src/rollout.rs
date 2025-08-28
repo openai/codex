@@ -200,7 +200,11 @@ impl RolloutRecorder {
         }
 
         info!("Resumed rollout successfully from {path:?}");
-        Ok(InitialHistory::Resumed(items))
+        if items.is_empty() {
+            Ok(InitialHistory::New)
+        } else {
+            Ok(InitialHistory::Resumed(items))
+        }
     }
 
     pub async fn shutdown(&self) -> std::io::Result<()> {
