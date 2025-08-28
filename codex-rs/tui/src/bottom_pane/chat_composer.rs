@@ -675,14 +675,15 @@ impl ChatComposer {
 
         // Replace the slice `[start_idx, end_idx)` with the chosen path and a trailing space.
         let mut new_text =
-            String::with_capacity(text.len() - (end_idx - start_idx) + path.len() + 1);
+            String::with_capacity(text.len() - (end_idx - start_idx) + path.len() + 2);
         new_text.push_str(&text[..start_idx]);
+        new_text.push('@');
         new_text.push_str(path);
         new_text.push(' ');
         new_text.push_str(&text[end_idx..]);
 
         self.textarea.set_text(&new_text);
-        let new_cursor = start_idx.saturating_add(path.len()).saturating_add(1);
+        let new_cursor = start_idx.saturating_add(path.len()).saturating_add(2);
         self.textarea.set_cursor(new_cursor);
     }
 
