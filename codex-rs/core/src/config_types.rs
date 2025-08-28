@@ -88,6 +88,17 @@ pub struct SandboxWorkspaceWrite {
     pub exclude_slash_tmp: bool,
 }
 
+impl From<SandboxWorkspaceWrite> for codex_protocol::config_types::SandboxWorkspaceWrite {
+    fn from(sandbox_workspace_write: SandboxWorkspaceWrite) -> Self {
+        Self {
+            writable_roots: sandbox_workspace_write.writable_roots,
+            network_access: sandbox_workspace_write.network_access,
+            exclude_tmpdir_env_var: sandbox_workspace_write.exclude_tmpdir_env_var,
+            exclude_slash_tmp: sandbox_workspace_write.exclude_slash_tmp,
+        }
+    }
+}
+
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 #[serde(rename_all = "kebab-case")]
 pub enum ShellEnvironmentPolicyInherit {

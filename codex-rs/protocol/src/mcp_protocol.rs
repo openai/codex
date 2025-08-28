@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::path::PathBuf;
 
-use crate::config_types::ConfigProfile;
 use crate::config_types::ReasoningEffort;
 use crate::config_types::ReasoningSummary;
 use crate::config_types::SandboxMode;
+use crate::config_types::UserSavedConfig;
 use crate::protocol::AskForApproval;
 use crate::protocol::FileChange;
 use crate::protocol::ReviewDecision;
@@ -102,7 +102,7 @@ pub enum ClientRequest {
         request_id: RequestId,
         params: GetAuthStatusParams,
     },
-    GetConfigToml {
+    GetUserSavedConfig {
         #[serde(rename = "id")]
         request_id: RequestId,
     },
@@ -260,22 +260,8 @@ pub struct GetAuthStatusResponse {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct GetConfigTomlResponse {
-    /// Approvals
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub approval_policy: Option<AskForApproval>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sandbox_mode: Option<SandboxMode>,
-
-    /// Relevant model configuration
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model_reasoning_effort: Option<ReasoningEffort>,
-
-    /// Profiles
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub profile: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub profiles: Option<HashMap<String, ConfigProfile>>,
+pub struct GetUserSavedConfigResponse {
+    pub config: UserSavedConfig,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
