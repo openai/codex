@@ -2154,10 +2154,11 @@ mod tests {
             content: prompt_text.to_string(),
         }]);
 
-        // Type the prompt name to focus it in the slash popup and press Enter.
-        for ch in ['/', 'm', 'y', '-', 'p', 'r', 'o', 'm', 'p', 't'] {
-            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
-        }
+        type_chars_humanlike(
+            &mut composer,
+            &['/', 'm', 'y', '-', 'p', 'r', 'o', 'm', 'p', 't'],
+        );
+
         let (result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
