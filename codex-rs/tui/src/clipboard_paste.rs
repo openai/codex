@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::path::PathBuf;
+use tempfile::Builder;
 
 #[derive(Debug)]
 pub enum PasteImageError {
