@@ -359,10 +359,7 @@ fn truncate_middle(s: &str, max_bytes: usize) -> (String, Option<u64>) {
     let est_tokens = (s.len() as u64).div_ceil(4);
     if max_bytes == 0 {
         // Cannot keep any content; still return a full marker (never truncated).
-        return (
-            format!("…{est_tokens} tokens truncated…"),
-            Some(est_tokens),
-        );
+        return (format!("…{est_tokens} tokens truncated…"), Some(est_tokens));
     }
 
     // Helper to truncate a string to a given byte length on a char boundary.
@@ -412,10 +409,7 @@ fn truncate_middle(s: &str, max_bytes: usize) -> (String, Option<u64>) {
         if keep_budget == 0 {
             // No room for any content within the cap; return a full, untruncated marker
             // that reflects the entire truncated content.
-            return (
-                format!("…{est_tokens} tokens truncated…"),
-                Some(est_tokens),
-            );
+            return (format!("…{est_tokens} tokens truncated…"), Some(est_tokens));
         }
 
         let left_budget = keep_budget / 2;
@@ -445,10 +439,7 @@ fn truncate_middle(s: &str, max_bytes: usize) -> (String, Option<u64>) {
     let marker_len = marker.len();
     let keep_budget = max_bytes.saturating_sub(marker_len);
     if keep_budget == 0 {
-        return (
-            format!("…{est_tokens} tokens truncated…"),
-            Some(est_tokens),
-        );
+        return (format!("…{est_tokens} tokens truncated…"), Some(est_tokens));
     }
     let left_budget = keep_budget / 2;
     let right_budget = keep_budget - left_budget;
