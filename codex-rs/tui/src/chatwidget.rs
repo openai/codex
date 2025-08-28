@@ -751,12 +751,20 @@ impl ChatWidget {
     }
 
     fn dispatch_command(&mut self, cmd: SlashCommand) {
+        if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
+            let message = format!(
+                "'/'{}' is disabled while a task is in progress.",
+                cmd.command()
+            );
+            self.add_to_history(history_cell::new_error_event(message));
+            self.request_redraw();
+            return;
+        }
         match cmd {
             SlashCommand::New => {
                 self.app_event_tx.send(AppEvent::NewSession);
             }
             SlashCommand::Init => {
-                // Guard: do not run if a task is active.
                 const INIT_PROMPT: &str = include_str!("../prompt_for_init_command.md");
                 self.submit_text_message(INIT_PROMPT.to_string());
             }
@@ -938,7 +946,7 @@ impl ChatWidget {
                 self.on_agent_reasoning_final()
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
-            EventMsg::TaskStarted => self.on_task_started(),
+            EventMsg::TaskStarted(_) => self.on_task_started(),
             EventMsg::TaskComplete(TaskCompleteEvent { .. }) => self.on_task_complete(),
             EventMsg::TokenCount(token_usage) => self.on_token_count(token_usage),
             EventMsg::Error(ErrorEvent { message }) => self.on_error(message),

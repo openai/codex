@@ -178,6 +178,9 @@ pub struct Config {
     pub preferred_auth_method: AuthMode,
 
     pub use_experimental_streamable_shell_tool: bool,
+
+    /// Include the `view_image` tool that lets the agent attach a local image path to context.
+    pub include_view_image_tool: bool,
 }
 
 impl Config {
@@ -497,6 +500,10 @@ pub struct ToolsToml {
     // Renamed from `web_search_request`; keep alias for backwards compatibility.
     #[serde(default, alias = "web_search_request")]
     pub web_search: Option<bool>,
+
+    /// Enable the `view_image` tool that lets the agent attach local images.
+    #[serde(default)]
+    pub view_image: Option<bool>,
 }
 
 impl ConfigToml {
@@ -586,6 +593,7 @@ pub struct ConfigOverrides {
     pub base_instructions: Option<String>,
     pub include_plan_tool: Option<bool>,
     pub include_apply_patch_tool: Option<bool>,
+    pub include_view_image_tool: Option<bool>,
     pub disable_response_storage: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
@@ -613,6 +621,7 @@ impl Config {
             base_instructions,
             include_plan_tool,
             include_apply_patch_tool,
+            include_view_image_tool,
             disable_response_storage,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
@@ -680,6 +689,10 @@ impl Config {
         let tools_web_search_request = override_tools_web_search_request
             .or(cfg.tools.as_ref().and_then(|t| t.web_search))
             .unwrap_or(false);
+
+        let include_view_image_tool = include_view_image_tool
+            .or(cfg.tools.as_ref().and_then(|t| t.view_image))
+            .unwrap_or(true);
 
         let model = model
             .or(config_profile.model)
@@ -784,6 +797,7 @@ impl Config {
             use_experimental_streamable_shell_tool: cfg
                 .experimental_use_exec_command_tool
                 .unwrap_or(false),
+            include_view_image_tool,
         };
         Ok(config)
     }
@@ -1152,6 +1166,7 @@ disable_response_storage = true
                 responses_originator_header: "codex_cli_rs".to_string(),
                 preferred_auth_method: AuthMode::ChatGPT,
                 use_experimental_streamable_shell_tool: false,
+                include_view_image_tool: true,
             },
             o3_profile_config
         );
@@ -1208,6 +1223,7 @@ disable_response_storage = true
             responses_originator_header: "codex_cli_rs".to_string(),
             preferred_auth_method: AuthMode::ChatGPT,
             use_experimental_streamable_shell_tool: false,
+            include_view_image_tool: true,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -1279,6 +1295,7 @@ disable_response_storage = true
             responses_originator_header: "codex_cli_rs".to_string(),
             preferred_auth_method: AuthMode::ChatGPT,
             use_experimental_streamable_shell_tool: false,
+            include_view_image_tool: true,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
@@ -1300,9 +1317,9 @@ disable_response_storage = true
 
         let raw_path = project_dir.path().to_string_lossy();
         let path_str = if raw_path.contains('\\') {
-            format!("'{}'", raw_path)
+            format!("'{raw_path}'")
         } else {
-            format!("\"{}\"", raw_path)
+            format!("\"{raw_path}\"")
         };
         let expected = format!(
             r#"[projects.{path_str}]
@@ -1323,9 +1340,9 @@ trust_level = "trusted"
         let config_path = codex_home.path().join(CONFIG_TOML_FILE);
         let raw_path = project_dir.path().to_string_lossy();
         let path_str = if raw_path.contains('\\') {
-            format!("'{}'", raw_path)
+            format!("'{raw_path}'")
         } else {
-            format!("\"{}\"", raw_path)
+            format!("\"{raw_path}\"")
         };
         // Use a quoted key so backslashes don't require escaping on Windows
         let initial = format!(
