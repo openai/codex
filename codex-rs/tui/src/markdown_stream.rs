@@ -65,6 +65,21 @@ impl MarkdownStreamCollector {
         {
             complete_line_count -= 1;
         }
+        // Heuristic: if the buffer ends with a double newline and the last non-blank
+        // rendered line looks like a list bullet with inline content (e.g., "- item"),
+        // defer committing that line. Subsequent context (e.g., another list item)
+        // can cause the renderer to split the bullet marker and text into separate
+        // logical lines ("- " then "item"), which would otherwise duplicate content.
+        if self.buffer.ends_with("\n\n") && complete_line_count > 0 {
+            let last = &rendered[complete_line_count - 1];
+            let mut text = String::new();
+            for s in &last.spans {
+                text.push_str(&s.content);
+            }
+            if text.starts_with("- ") && text.trim() != "-" {
+                complete_line_count = complete_line_count.saturating_sub(1);
+            }
+        }
         if !self.buffer.ends_with('\n') {
             complete_line_count = complete_line_count.saturating_sub(1);
             // If we're inside an unclosed fenced code block, also drop the
@@ -72,6 +87,38 @@ impl MarkdownStreamCollector {
             if is_inside_unclosed_fence(&source) {
                 complete_line_count = complete_line_count.saturating_sub(1);
             }
+            // If the next (incomplete) line appears to begin a list item,
+            // also defer the previous completed line because the renderer may
+            // retroactively treat it as part of the list (e.g., ordered list item 1).
+            if let Some(last_nl) = source.rfind('\n') {
+                let tail = &source[last_nl + 1..];
+                if starts_with_list_marker(tail) {
+                    complete_line_count = complete_line_count.saturating_sub(1);
+                }
+            }
+        }
+
+        // Conservatively withhold trailing list-like lines (unordered or ordered)
+        // because streaming mid-item can cause the renderer to later split or
+        // restructure them (e.g., duplicating content or separating the marker).
+        // Only defers lines at the end of the out slice so previously committed
+        // lines remain stable.
+        if complete_line_count > self.committed_line_count {
+            let mut safe_count = complete_line_count;
+            while safe_count > self.committed_line_count {
+                let l = &rendered[safe_count - 1];
+                let mut text = String::new();
+                for s in &l.spans {
+                    text.push_str(&s.content);
+                }
+                let listish = is_potentially_volatile_list_line(&text);
+                if listish {
+                    safe_count -= 1;
+                    continue;
+                }
+                break;
+            }
+            complete_line_count = safe_count;
         }
 
         if self.committed_line_count >= complete_line_count {
@@ -84,6 +131,20 @@ impl MarkdownStreamCollector {
         // the entire block together. This avoids stray backticks and misformatted content.
         if is_inside_unclosed_fence(&source) {
             return Vec::new();
+        }
+
+        // Additional conservative hold-back: if exactly one short, plain word
+        // line would be emitted, defer it. This avoids committing a lone word
+        // that might become the first ordered-list item once the next delta
+        // arrives (e.g., next line starts with "2 " or "2. ").
+        if out_slice.len() == 1 {
+            let mut s = String::new();
+            for sp in &out_slice[0].spans {
+                s.push_str(&sp.content);
+            }
+            if is_short_plain_word(&s) {
+                return Vec::new();
+            }
         }
 
         let out = out_slice.to_vec();
@@ -116,6 +177,75 @@ impl MarkdownStreamCollector {
         self.clear();
         out
     }
+}
+
+#[inline]
+fn is_potentially_volatile_list_line(text: &str) -> bool {
+    let t = text.trim_end();
+    if t == "-" || t == "*" || t == "- " || t == "* " {
+        return true;
+    }
+    if t.starts_with("- ") || t.starts_with("* ") {
+        return true;
+    }
+    // ordered list like "1. " or "23. "
+    let mut it = t.chars().peekable();
+    let mut saw_digit = false;
+    while let Some(&ch) = it.peek() {
+        if ch.is_ascii_digit() {
+            saw_digit = true;
+            it.next();
+            continue;
+        }
+        break;
+    }
+    if saw_digit && it.peek() == Some(&'.') {
+        // consume '.'
+        it.next();
+        if it.peek() == Some(&' ') {
+            return true;
+        }
+    }
+    false
+}
+
+#[inline]
+fn starts_with_list_marker(text: &str) -> bool {
+    let t = text.trim_start();
+    if t.starts_with("- ") || t.starts_with("* ") || t.starts_with("-\t") || t.starts_with("*\t") {
+        return true;
+    }
+    // ordered list marker like "1 ", "1. ", "23 ", "23. "
+    let mut it = t.chars().peekable();
+    let mut saw_digit = false;
+    while let Some(&ch) = it.peek() {
+        if ch.is_ascii_digit() {
+            saw_digit = true;
+            it.next();
+        } else {
+            break;
+        }
+    }
+    if !saw_digit {
+        return false;
+    }
+    match it.peek() {
+        Some('.') => {
+            it.next();
+            matches!(it.peek(), Some(' '))
+        }
+        Some(' ') => true,
+        _ => false,
+    }
+}
+
+#[inline]
+fn is_short_plain_word(s: &str) -> bool {
+    let t = s.trim();
+    if t.is_empty() || t.len() > 5 {
+        return false;
+    }
+    t.chars().all(|c| c.is_alphanumeric())
 }
 
 /// fence helpers are provided by `crate::render::markdown_utils`
@@ -529,5 +659,192 @@ mod tests {
             head_idx > para_idx,
             "heading should not merge with paragraph: {texts:?}"
         );
+    }
+
+    #[test]
+    fn loose_list_with_split_dashes_matches_full_render() {
+        let cfg = test_config();
+        // Minimized failing sequence discovered by the helper: two chunks
+        // that still reproduce the mismatch.
+        let deltas = vec!["- item.\n\n", "-"];
+
+        let streamed = simulate_stream_markdown_for_tests(&deltas, true, &cfg);
+        let streamed_strs = lines_to_plain_strings(&streamed);
+
+        let full: String = deltas.iter().copied().collect();
+        let mut rendered_all: Vec<ratatui::text::Line<'static>> = Vec::new();
+        crate::markdown::append_markdown(&full, &mut rendered_all, &cfg);
+        let rendered_all_strs = lines_to_plain_strings(&rendered_all);
+
+        assert_eq!(
+            streamed_strs, rendered_all_strs,
+            "streamed output should match full render without dangling '-' lines"
+        );
+    }
+
+    #[test]
+    fn loose_vs_tight_list_items_streaming_matches_full() {
+        let cfg = test_config();
+        // Deltas extracted from the session log around 2025-08-27T00:33:18.216Z
+        let deltas = vec![
+            "\n\n",
+            "Loose",
+            " vs",
+            ".",
+            " tight",
+            " list",
+            " items",
+            ":\n",
+            "1",
+            ".",
+            " Tight",
+            " item",
+            "\n",
+            "2",
+            ".",
+            " Another",
+            " tight",
+            " item",
+            "\n\n",
+            "1",
+            ".",
+            " Loose",
+            " item",
+            " with",
+            " its",
+            " own",
+            " paragraph",
+            ".\n\n",
+            "  ",
+            " This",
+            " paragraph",
+            " belongs",
+            " to",
+            " the",
+            " same",
+            " list",
+            " item",
+            ".\n\n",
+            "2",
+            ".",
+            " Second",
+            " loose",
+            " item",
+            " with",
+            " a",
+            " nested",
+            " list",
+            " after",
+            " a",
+            " blank",
+            " line",
+            ".\n\n",
+            "  ",
+            " -",
+            " Nested",
+            " bullet",
+            " under",
+            " a",
+            " loose",
+            " item",
+            "\n",
+            "  ",
+            " -",
+            " Another",
+            " nested",
+            " bullet",
+            "\n\n",
+        ];
+
+        let streamed = simulate_stream_markdown_for_tests(&deltas, true, &cfg);
+        let streamed_strs = lines_to_plain_strings(&streamed);
+
+        // Compute a full render for diagnostics only.
+        let full: String = deltas.iter().copied().collect();
+        let mut rendered_all: Vec<ratatui::text::Line<'static>> = Vec::new();
+        crate::markdown::append_markdown(&full, &mut rendered_all, &cfg);
+
+        // Also assert exact expected plain strings for clarity.
+        let expected = vec![
+            "Loose vs. tight list items:".to_string(),
+            "".to_string(),
+            "1. ".to_string(),
+            "Tight item".to_string(),
+            "2. ".to_string(),
+            "Another tight item".to_string(),
+            "3. ".to_string(),
+            "Loose item with its own paragraph.".to_string(),
+            "".to_string(),
+            "This paragraph belongs to the same list item.".to_string(),
+            "4. ".to_string(),
+            "Second loose item with a nested list after a blank line.".to_string(),
+            "    - Nested bullet under a loose item".to_string(),
+            "    - Another nested bullet".to_string(),
+        ];
+        assert_eq!(
+            streamed_strs, expected,
+            "expected exact rendered lines for loose/tight section"
+        );
+    }
+
+    // Targeted tests derived from fuzz findings. Each asserts streamed == full render.
+
+    #[test]
+    fn fuzz_class_bare_dash_then_task_item() {
+        let cfg = test_config();
+        // Case similar to: ["two\n", "- \n* [x] done "]
+        let deltas = vec!["two\n", "- \n* [x] done \n"];
+        let streamed = simulate_stream_markdown_for_tests(&deltas, true, &cfg);
+        let streamed_strs = lines_to_plain_strings(&streamed);
+        let full: String = deltas.iter().copied().collect();
+        let mut rendered: Vec<ratatui::text::Line<'static>> = Vec::new();
+        crate::markdown::append_markdown(&full, &mut rendered, &cfg);
+        let rendered_strs = lines_to_plain_strings(&rendered);
+        assert_eq!(streamed_strs, rendered_strs);
+    }
+
+    #[test]
+    fn fuzz_class_bullet_duplication_variant_1() {
+        let cfg = test_config();
+        // Case similar to: ["aph.\n- let one\n- bull", "et two\n\n  second paragraph "]
+        let deltas = vec!["aph.\n- let one\n- bull", "et two\n\n  second paragraph \n"];
+        let streamed = simulate_stream_markdown_for_tests(&deltas, true, &cfg);
+        let streamed_strs = lines_to_plain_strings(&streamed);
+        let full: String = deltas.iter().copied().collect();
+        let mut rendered: Vec<ratatui::text::Line<'static>> = Vec::new();
+        crate::markdown::append_markdown(&full, &mut rendered, &cfg);
+        let rendered_strs = lines_to_plain_strings(&rendered);
+        assert_eq!(streamed_strs, rendered_strs);
+    }
+
+    #[test]
+    fn fuzz_class_bullet_duplication_variant_2() {
+        let cfg = test_config();
+        // Case similar to: ["- e\n  c", "e\n- bullet two\n\n  second paragraph in bullet two\n"]
+        let deltas = vec![
+            "- e\n  c",
+            "e\n- bullet two\n\n  second paragraph in bullet two\n",
+        ];
+        let streamed = simulate_stream_markdown_for_tests(&deltas, true, &cfg);
+        let streamed_strs = lines_to_plain_strings(&streamed);
+        let full: String = deltas.iter().copied().collect();
+        let mut rendered: Vec<ratatui::text::Line<'static>> = Vec::new();
+        crate::markdown::append_markdown(&full, &mut rendered, &cfg);
+        let rendered_strs = lines_to_plain_strings(&rendered);
+        assert_eq!(streamed_strs, rendered_strs);
+    }
+
+    #[test]
+    fn fuzz_class_ordered_list_split_weirdness() {
+        let cfg = test_config();
+        // Case similar to: ["one\n2", " two\n- \n* [x] d"]
+        let deltas = vec!["one\n2", " two\n- \n* [x] d\n"];
+        let streamed = simulate_stream_markdown_for_tests(&deltas, true, &cfg);
+        let streamed_strs = lines_to_plain_strings(&streamed);
+        let full: String = deltas.iter().copied().collect();
+        let mut rendered: Vec<ratatui::text::Line<'static>> = Vec::new();
+        crate::markdown::append_markdown(&full, &mut rendered, &cfg);
+        let rendered_strs = lines_to_plain_strings(&rendered);
+        assert_eq!(streamed_strs, rendered_strs);
     }
 }
