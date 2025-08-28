@@ -213,7 +213,13 @@ pub(crate) fn lookup(log_id: u64, offset: usize, config: &Config) -> Option<Hist
     // Open & lock file for reading using a shared lock.
     // Retry a few times to avoid indefinite blocking.
     for _ in 0..MAX_RETRIES {
-        match file.try_lock_shared() {
+        // Note: On Windows, try_lock_shared behaves identically to try_lock
+        #[cfg(windows)]
+        let lock_result = file.try_lock();
+        #[cfg(not(windows))]
+        let lock_result = file.try_lock_shared();
+        
+        match lock_result {
             Ok(()) => {
                 let reader = BufReader::new(&file);
                 for (idx, line_res) in reader.lines().enumerate() {
@@ -258,7 +264,7 @@ pub(crate) fn lookup(log_id: u64, offset: usize, config: &Config) -> Option<Hist
     None
 }
 
-// Shared lock handled inline in lookup using std::fs::File::try_lock_shared.
+// Shared lock handled inline in lookup using std::fs::File::try_lock_shared (Unix) or try_lock (Windows).
 
 /// On Unix systems ensure the file permissions are `0o600` (rw-------). If the
 /// permissions cannot be changed the error is propagated to the caller.
