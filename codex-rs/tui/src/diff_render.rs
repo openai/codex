@@ -24,261 +24,17 @@ enum DiffLineType {
     Context,
 }
 
-// Old create_diff_summary removed; callers must use create_diff_summary_with_wrap_cols
+// Old create_diff_summary removed; callers must use create_diff_summary
 
-pub(crate) fn create_diff_summary_with_wrap_cols(
-    title: &str,
+pub(crate) fn create_diff_summary(
     changes: &HashMap<PathBuf, FileChange>,
     event_type: PatchEventType,
     wrap_cols: usize,
 ) -> Vec<RtLine<'static>> {
-    if let PatchEventType::ApplyBegin { .. } = event_type {
-        return render_applied_changes_block(changes, wrap_cols);
+    match event_type {
+        PatchEventType::ApplyBegin => render_applied_changes_block(changes, wrap_cols),
+        PatchEventType::ApprovalRequest => render_proposed_blocks(changes, wrap_cols),
     }
-    if let PatchEventType::ApprovalRequest = event_type {
-        return render_proposed_blocks(changes, wrap_cols);
-    }
-    Vec::new()
-}
-
-fn render_patch_details(
-    changes: &HashMap<PathBuf, FileChange>,
-    wrap_cols: usize,
-) -> Vec<RtLine<'static>> {
-    let mut out: Vec<RtLine<'static>> = Vec::new();
-    let term_cols: usize = wrap_cols;
-
-    for (index, (path, change)) in changes.iter().enumerate() {
-        let is_first_file = index == 0;
-        // Add separator only between files (not at the very start)
-        if !is_first_file {
-            out.push(RtLine::from(vec![
-                RtSpan::raw("    "),
-                RtSpan::styled("...", style_dim()),
-            ]));
-        }
-        match change {
-            FileChange::Add { content } => {
-                for (i, raw) in content.lines().enumerate() {
-                    let ln = i + 1;
-                    out.extend(push_wrapped_diff_line(
-                        ln,
-                        DiffLineType::Insert,
-                        raw,
-                        term_cols,
-                    ));
-                }
-            }
-            FileChange::Delete => {
-                let original = std::fs::read_to_string(path).unwrap_or_default();
-                for (i, raw) in original.lines().enumerate() {
-                    let ln = i + 1;
-                    out.extend(push_wrapped_diff_line(
-                        ln,
-                        DiffLineType::Delete,
-                        raw,
-                        term_cols,
-                    ));
-                }
-            }
-            FileChange::Update {
-                unified_diff,
-                move_path: _,
-            } => {
-                if let Ok(patch) = diffy::Patch::from_str(unified_diff) {
-                    let mut is_first_hunk = true;
-                    for h in patch.hunks() {
-                        // Render a simple separator between non-contiguous hunks
-                        // instead of diff-style @@ headers.
-                        if !is_first_hunk {
-                            out.push(RtLine::from(vec![
-                                RtSpan::raw("    "),
-                                RtSpan::styled("⋮", style_dim()),
-                            ]));
-                        }
-                        is_first_hunk = false;
-
-                        let mut old_ln = h.old_range().start();
-                        let mut new_ln = h.new_range().start();
-                        for l in h.lines() {
-                            match l {
-                                diffy::Line::Insert(text) => {
-                                    let s = text.trim_end_matches('\n');
-                                    out.extend(push_wrapped_diff_line(
-                                        new_ln,
-                                        DiffLineType::Insert,
-                                        s,
-                                        term_cols,
-                                    ));
-                                    new_ln += 1;
-                                }
-                                diffy::Line::Delete(text) => {
-                                    let s = text.trim_end_matches('\n');
-                                    out.extend(push_wrapped_diff_line(
-                                        old_ln,
-                                        DiffLineType::Delete,
-                                        s,
-                                        term_cols,
-                                    ));
-                                    old_ln += 1;
-                                }
-                                diffy::Line::Context(text) => {
-                                    let s = text.trim_end_matches('\n');
-                                    out.extend(push_wrapped_diff_line(
-                                        new_ln,
-                                        DiffLineType::Context,
-                                        s,
-                                        term_cols,
-                                    ));
-                                    old_ln += 1;
-                                    new_ln += 1;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        out.push(RtLine::from(RtSpan::raw("")));
-    }
-
-    out
-}
-
-// (old render_apply_blocks removed; use render_apply_blocks_custom instead)
-
-fn render_apply_blocks_custom(
-    changes: &HashMap<PathBuf, FileChange>,
-    wrap_cols: usize,
-) -> Vec<RtLine<'static>> {
-    let mut out: Vec<RtLine<'static>> = Vec::new();
-    let term_cols: usize = wrap_cols;
-    let cwd: PathBuf = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
-
-    for (index, (path, change)) in changes.iter().enumerate() {
-        if index > 0 {
-            out.push(RtLine::from(RtSpan::raw("")));
-        }
-
-        let (verb, display_path, added, removed) = match change {
-            FileChange::Add { content } => (
-                "Added",
-                display_path_for(path, None, &cwd),
-                content.lines().count(),
-                0usize,
-            ),
-            FileChange::Delete => (
-                "Deleted",
-                display_path_for(path, None, &cwd),
-                0usize,
-                std::fs::read_to_string(path)
-                    .ok()
-                    .map(|s| s.lines().count())
-                    .unwrap_or(0),
-            ),
-            FileChange::Update {
-                unified_diff,
-                move_path,
-            } => {
-                let (a, d) = calculate_add_remove_from_diff(unified_diff);
-                let display_path = display_path_for(path, move_path.as_deref(), &cwd);
-                ("Edited", display_path, a, d)
-            }
-        };
-
-        let mut header_spans: Vec<RtSpan<'static>> = Vec::new();
-        header_spans.push(RtSpan::raw("• "));
-        // Bold the verb for all cases (Edited/Added/Deleted)
-        header_spans.push(verb.bold());
-        header_spans.push(RtSpan::raw(format!(" {display_path} ")));
-        header_spans.push(RtSpan::raw("("));
-        header_spans.push(RtSpan::styled(format!("+{added}"), style_add()));
-        header_spans.push(RtSpan::raw(" "));
-        header_spans.push(RtSpan::styled(format!("-{removed}"), style_del()));
-        header_spans.push(RtSpan::raw(")"));
-        out.push(RtLine::from(header_spans));
-
-        match change {
-            FileChange::Add { content } => {
-                for (i, raw) in content.lines().enumerate() {
-                    out.extend(push_wrapped_diff_line(
-                        i + 1,
-                        DiffLineType::Insert,
-                        raw,
-                        term_cols,
-                    ));
-                }
-            }
-            FileChange::Delete => {
-                let original = std::fs::read_to_string(path).unwrap_or_default();
-                for (i, raw) in original.lines().enumerate() {
-                    out.extend(push_wrapped_diff_line(
-                        i + 1,
-                        DiffLineType::Delete,
-                        raw,
-                        term_cols,
-                    ));
-                }
-            }
-            FileChange::Update {
-                unified_diff,
-                move_path: _,
-            } => {
-                if let Ok(patch) = diffy::Patch::from_str(unified_diff) {
-                    let mut is_first_hunk = true;
-                    for h in patch.hunks() {
-                        if !is_first_hunk {
-                            out.push(RtLine::from(vec![
-                                RtSpan::raw("    "),
-                                RtSpan::styled("⋮", style_dim()),
-                            ]));
-                        }
-                        is_first_hunk = false;
-                        let mut old_ln = h.old_range().start();
-                        let mut new_ln = h.new_range().start();
-                        for l in h.lines() {
-                            match l {
-                                diffy::Line::Insert(text) => {
-                                    let s = text.trim_end_matches('\n');
-                                    out.extend(push_wrapped_diff_line(
-                                        new_ln,
-                                        DiffLineType::Insert,
-                                        s,
-                                        term_cols,
-                                    ));
-                                    new_ln += 1;
-                                }
-                                diffy::Line::Delete(text) => {
-                                    let s = text.trim_end_matches('\n');
-                                    out.extend(push_wrapped_diff_line(
-                                        old_ln,
-                                        DiffLineType::Delete,
-                                        s,
-                                        term_cols,
-                                    ));
-                                    old_ln += 1;
-                                }
-                                diffy::Line::Context(text) => {
-                                    let s = text.trim_end_matches('\n');
-                                    out.extend(push_wrapped_diff_line(
-                                        new_ln,
-                                        DiffLineType::Context,
-                                        s,
-                                        term_cols,
-                                    ));
-                                    old_ln += 1;
-                                    new_ln += 1;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    out
 }
 
 // Shared row for per-file presentation
@@ -291,10 +47,7 @@ struct Row {
     change: FileChange,
 }
 
-fn collect_rows(
-    changes: &HashMap<PathBuf, FileChange>,
-    cwd: &Path,
-) -> Vec<Row> {
+fn collect_rows(changes: &HashMap<PathBuf, FileChange>, cwd: &Path) -> Vec<Row> {
     let mut rows: Vec<Row> = Vec::new();
     for (path, change) in changes.iter() {
         let (a, d) = match change {
@@ -796,12 +549,7 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary_with_wrap_cols(
-            "proposed patch",
-            &changes,
-            PatchEventType::ApprovalRequest,
-            80,
-        );
+        let lines = create_diff_summary(&changes, PatchEventType::ApprovalRequest, 80);
 
         snapshot_lines("add_details", lines, 80, 10);
     }
@@ -822,12 +570,7 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary_with_wrap_cols(
-            "proposed patch",
-            &changes,
-            PatchEventType::ApprovalRequest,
-            80,
-        );
+        let lines = create_diff_summary(&changes, PatchEventType::ApprovalRequest, 80);
 
         snapshot_lines("update_details_with_rename", lines, 80, 12);
     }
@@ -860,12 +603,7 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary_with_wrap_cols(
-            "proposed patch",
-            &changes,
-            PatchEventType::ApprovalRequest,
-            80,
-        );
+        let lines = create_diff_summary(&changes, PatchEventType::ApprovalRequest, 80);
 
         snapshot_lines("single_line_replacement_counts", lines, 80, 8);
     }
@@ -886,12 +624,7 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary_with_wrap_cols(
-            "proposed patch",
-            &changes,
-            PatchEventType::ApprovalRequest,
-            80,
-        );
+        let lines = create_diff_summary(&changes, PatchEventType::ApprovalRequest, 80);
 
         snapshot_lines("blank_context_line", lines, 80, 10);
     }
@@ -913,12 +646,7 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary_with_wrap_cols(
-            "proposed patch",
-            &changes,
-            PatchEventType::ApprovalRequest,
-            80,
-        );
+        let lines = create_diff_summary(&changes, PatchEventType::ApprovalRequest, 80);
 
         // Height is large enough to show both hunks and the separator
         snapshot_lines("vertical_ellipsis_between_hunks", lines, 80, 16);
@@ -939,14 +667,7 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary_with_wrap_cols(
-            "ignored",
-            &changes,
-            PatchEventType::ApplyBegin {
-                auto_approved: true,
-            },
-            80,
-        );
+        let lines = create_diff_summary(&changes, PatchEventType::ApplyBegin, 80);
 
         snapshot_lines("apply_update_block", lines, 80, 12);
     }
@@ -966,14 +687,7 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary_with_wrap_cols(
-            "ignored",
-            &changes,
-            PatchEventType::ApplyBegin {
-                auto_approved: true,
-            },
-            80,
-        );
+        let lines = create_diff_summary(&changes, PatchEventType::ApplyBegin, 80);
 
         snapshot_lines("apply_update_with_rename_block", lines, 80, 12);
     }
@@ -1001,14 +715,7 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary_with_wrap_cols(
-            "ignored",
-            &changes,
-            PatchEventType::ApplyBegin {
-                auto_approved: true,
-            },
-            80,
-        );
+        let lines = create_diff_summary(&changes, PatchEventType::ApplyBegin, 80);
 
         snapshot_lines("apply_multiple_files_block", lines, 80, 14);
     }
@@ -1023,14 +730,7 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary_with_wrap_cols(
-            "ignored",
-            &changes,
-            PatchEventType::ApplyBegin {
-                auto_approved: true,
-            },
-            80,
-        );
+        let lines = create_diff_summary(&changes, PatchEventType::ApplyBegin, 80);
 
         snapshot_lines("apply_add_block", lines, 80, 10);
     }
@@ -1044,14 +744,7 @@ mod tests {
         let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
         changes.insert(tmp_path.clone(), FileChange::Delete);
 
-        let lines = create_diff_summary_with_wrap_cols(
-            "ignored",
-            &changes,
-            PatchEventType::ApplyBegin {
-                auto_approved: true,
-            },
-            80,
-        );
+        let lines = create_diff_summary(&changes, PatchEventType::ApplyBegin, 80);
 
         // Cleanup best-effort; rendering has already read the file
         let _ = std::fs::remove_file(&tmp_path);
@@ -1075,14 +768,7 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary_with_wrap_cols(
-            "ignored",
-            &changes,
-            PatchEventType::ApplyBegin {
-                auto_approved: true,
-            },
-            72,
-        );
+        let lines = create_diff_summary(&changes, PatchEventType::ApplyBegin, 72);
 
         // Render with backend width wider than wrap width to avoid Paragraph auto-wrap.
         snapshot_lines("apply_update_block_wraps_long_lines", lines, 80, 12);
@@ -1105,16 +791,11 @@ mod tests {
             },
         );
 
-        let mut lines = create_diff_summary_with_wrap_cols(
-            "ignored",
-            &changes,
-            PatchEventType::ApplyBegin {
-                auto_approved: true,
-            },
-            28,
-        );
+        let mut lines = create_diff_summary(&changes, PatchEventType::ApplyBegin, 28);
         // Drop the combined header for this text-only snapshot
-        if !lines.is_empty() { lines.remove(0); }
+        if !lines.is_empty() {
+            lines.remove(0);
+        }
         snapshot_lines_text("apply_update_block_wraps_long_lines_text", &lines);
     }
 
@@ -1137,14 +818,7 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary_with_wrap_cols(
-            "ignored",
-            &changes,
-            PatchEventType::ApplyBegin {
-                auto_approved: true,
-            },
-            80,
-        );
+        let lines = create_diff_summary(&changes, PatchEventType::ApplyBegin, 80);
 
         snapshot_lines("apply_update_block_relativizes_path", lines, 80, 10);
     }

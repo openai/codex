@@ -1,5 +1,5 @@
 // use crate::diff_render::create_diff_summary; // no longer used directly
-use crate::diff_render::create_diff_summary_with_wrap_cols;
+use crate::diff_render::create_diff_summary;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::markdown::append_markdown;
@@ -55,7 +55,7 @@ pub(crate) struct CommandOutput {
 #[derive(Clone, Debug)]
 pub(crate) enum PatchEventType {
     ApprovalRequest,
-    ApplyBegin { auto_approved: bool },
+    ApplyBegin,
 }
 
 /// Represents an event to display in the conversation history. Returns its
@@ -205,19 +205,14 @@ impl HistoryCell for TranscriptOnlyHistoryCell {
 
 #[derive(Debug)]
 pub(crate) struct PatchHistoryCell {
-    title: String,
     event_type: PatchEventType,
     changes: HashMap<PathBuf, FileChange>,
 }
 
 impl HistoryCell for PatchHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines: Vec<Line<'static>> = create_diff_summary_with_wrap_cols(
-            &self.title,
-            &self.changes,
-            self.event_type.clone(),
-            width as usize,
-        );
+        let mut lines: Vec<Line<'static>> =
+            create_diff_summary(&self.changes, self.event_type.clone(), width as usize);
         // Leading blank separator for the cell
         lines.insert(0, Line::from(""));
         lines
@@ -494,8 +489,8 @@ impl ExecCell {
                 }
             }
         }
-        if let Some(output) = call.output.as_ref() {
-            if output.exit_code != 0 {
+        if let Some(output) = call.output.as_ref()
+            && output.exit_code != 0 {
                 let out = output_lines(Some(output), false, false, false)
                     .into_iter()
                     .join("\n");
@@ -529,7 +524,6 @@ impl ExecCell {
                     }
                 }
             }
-        }
         lines
     }
 }
@@ -1359,13 +1353,7 @@ pub(crate) fn new_patch_event(
     event_type: PatchEventType,
     changes: HashMap<PathBuf, FileChange>,
 ) -> PatchHistoryCell {
-    let title = match &event_type {
-        PatchEventType::ApprovalRequest => "proposed patch",
-        PatchEventType::ApplyBegin { .. } => "",
-    };
-
     PatchHistoryCell {
-        title: title.to_string(),
         event_type,
         changes,
     }
@@ -1875,17 +1863,16 @@ mod tests {
         let call_id = "c_err".to_string();
         let mut cell = ExecCell::new(ExecCall {
             call_id: call_id.clone(),
-            command: vec![
-                "bash".into(),
-                "-lc".into(),
-                "seq 1 10 1>&2 && false".into(),
-            ],
+            command: vec!["bash".into(), "-lc".into(), "seq 1 10 1>&2 && false".into()],
             parsed: Vec::new(),
             output: None,
             start_time: Some(Instant::now()),
             duration: None,
         });
-        let stderr: String = (1..=10).map(|n| n.to_string()).collect::<Vec<_>>().join("\n");
+        let stderr: String = (1..=10)
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
         cell.complete_call(
             &call_id,
             CommandOutput {

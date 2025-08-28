@@ -358,7 +358,6 @@ impl UserApprovalWidget {
         // - 1 description line (context for the currently selected option)
         self.get_confirmation_prompt_height(width) + 3
     }
-
 }
 
 impl WidgetRef for &UserApprovalWidget {

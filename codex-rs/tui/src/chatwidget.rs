@@ -324,9 +324,7 @@ impl ChatWidget {
 
     fn on_patch_apply_begin(&mut self, event: PatchApplyBeginEvent) {
         self.add_to_history(history_cell::new_patch_event(
-            PatchEventType::ApplyBegin {
-                auto_approved: event.auto_approved,
-            },
+            PatchEventType::ApplyBegin,
             event.changes,
         ));
     }
@@ -481,7 +479,6 @@ impl ChatWidget {
     ) {
         if event.success {
             // Suppress success block per new styling spec (no "✓ Applied patch" block)
-            return;
         } else {
             self.add_to_history(history_cell::new_patch_apply_failure(event.stderr));
         }
