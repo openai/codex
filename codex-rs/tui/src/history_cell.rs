@@ -1,4 +1,5 @@
-use crate::diff_render::create_diff_summary;
+// use crate::diff_render::create_diff_summary; // no longer used directly
+use crate::diff_render::create_diff_summary_with_wrap_cols;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::markdown::append_markdown;
@@ -51,6 +52,7 @@ pub(crate) struct CommandOutput {
     pub(crate) formatted_output: String,
 }
 
+#[derive(Clone, Debug)]
 pub(crate) enum PatchEventType {
     ApprovalRequest,
     ApplyBegin { auto_approved: bool },
@@ -198,6 +200,27 @@ impl HistoryCell for TranscriptOnlyHistoryCell {
 
     fn transcript_lines(&self) -> Vec<Line<'static>> {
         self.lines.clone()
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct PatchHistoryCell {
+    title: String,
+    event_type: PatchEventType,
+    changes: HashMap<PathBuf, FileChange>,
+}
+
+impl HistoryCell for PatchHistoryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = create_diff_summary_with_wrap_cols(
+            &self.title,
+            &self.changes,
+            self.event_type.clone(),
+            width as usize,
+        );
+        // Leading blank separator for the cell
+        lines.insert(0, Line::from(""));
+        lines
     }
 }
 
@@ -1318,28 +1341,17 @@ pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlainHistoryCell {
 pub(crate) fn new_patch_event(
     event_type: PatchEventType,
     changes: HashMap<PathBuf, FileChange>,
-) -> PlainHistoryCell {
+) -> PatchHistoryCell {
     let title = match &event_type {
         PatchEventType::ApprovalRequest => "proposed patch",
-        PatchEventType::ApplyBegin {
-            auto_approved: true,
-        } => "✏️ Applying patch",
-        PatchEventType::ApplyBegin {
-            auto_approved: false,
-        } => {
-            let lines: Vec<Line<'static>> = vec![
-                Line::from(""),
-                Line::from("✏️ Applying patch".magenta().bold()),
-            ];
-            return PlainHistoryCell { lines };
-        }
+        PatchEventType::ApplyBegin { .. } => "",
     };
 
-    let mut lines: Vec<Line<'static>> = create_diff_summary(title, &changes, event_type);
-    // Add leading blank separator for the cell
-    lines.insert(0, Line::from(""));
-
-    PlainHistoryCell { lines }
+    PatchHistoryCell {
+        title: title.to_string(),
+        event_type,
+        changes,
+    }
 }
 
 pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
@@ -1367,53 +1379,7 @@ pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
     PlainHistoryCell { lines }
 }
 
-pub(crate) fn new_patch_apply_success(stdout: String) -> PlainHistoryCell {
-    let mut lines: Vec<Line<'static>> = Vec::new();
-
-    // Success title
-    lines.push(Line::from("✓ Applied patch".magenta().bold()));
-
-    if !stdout.trim().is_empty() {
-        let mut iter = stdout.lines();
-        for (i, raw) in iter.by_ref().take(TOOL_CALL_MAX_LINES).enumerate() {
-            let prefix = if i == 0 { "  └ " } else { "    " };
-
-            // First line is the header; dim it entirely.
-            if i == 0 {
-                let s = format!("{prefix}{raw}");
-                lines.push(ansi_escape_line(&s).dim());
-                continue;
-            }
-
-            // Subsequent lines should look like: "M path/to/file".
-            // Colorize the status letter like `git status` (e.g., M red).
-            let status = raw.chars().next();
-            let rest = raw.get(1..).unwrap_or("");
-
-            let status_span = match status {
-                Some('M') => "M".red(),
-                Some('A') => "A".green(),
-                Some('D') => "D".red(),
-                Some(other) => other.to_string().into(),
-                None => "".into(),
-            };
-
-            lines.push(Line::from(vec![
-                prefix.into(),
-                status_span,
-                ansi_escape_line(rest).to_string().into(),
-            ]));
-        }
-        let remaining = iter.count();
-        if remaining > 0 {
-            lines.push(Line::from(""));
-            lines.push(Line::from(format!("... +{remaining} lines")).dim());
-        }
-    }
-    // Leading blank separator
-    lines.insert(0, Line::from(""));
-    PlainHistoryCell { lines }
-}
+// new_patch_apply_success removed per updated styling (no success block)
 
 pub(crate) fn new_reasoning_block(
     full_reasoning_buffer: String,

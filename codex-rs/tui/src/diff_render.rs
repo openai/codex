@@ -1,14 +1,17 @@
-use crossterm::terminal;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
+use ratatui::style::Stylize;
 use ratatui::text::Line as RtLine;
 use ratatui::text::Span as RtSpan;
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 
-use crate::common::DEFAULT_WRAP_COLS;
+// No DEFAULT_WRAP_COLS in runtime paths; tests pass explicit widths.
+use crate::exec_command::relativize_to_home;
 use codex_core::protocol::FileChange;
+use codex_core::util::is_inside_git_repo;
 
 use crate::history_cell::PatchEventType;
 
@@ -21,45 +24,28 @@ enum DiffLineType {
     Context,
 }
 
-pub(crate) fn create_diff_summary(
+// Old create_diff_summary removed; callers must use create_diff_summary_with_wrap_cols
+
+pub(crate) fn create_diff_summary_with_wrap_cols(
     title: &str,
     changes: &HashMap<PathBuf, FileChange>,
     event_type: PatchEventType,
+    wrap_cols: usize,
 ) -> Vec<RtLine<'static>> {
+    if let PatchEventType::ApplyBegin {
+        auto_approved: true,
+    } = event_type
+    {
+        return render_apply_blocks_custom(changes, wrap_cols);
+    }
+
     struct FileSummary {
         display_path: String,
         added: usize,
         removed: usize,
     }
-
-    let count_from_unified = |diff: &str| -> (usize, usize) {
-        if let Ok(patch) = diffy::Patch::from_str(diff) {
-            patch
-                .hunks()
-                .iter()
-                .flat_map(|h| h.lines())
-                .fold((0, 0), |(a, d), l| match l {
-                    diffy::Line::Insert(_) => (a + 1, d),
-                    diffy::Line::Delete(_) => (a, d + 1),
-                    _ => (a, d),
-                })
-        } else {
-            // Fallback: manual scan to preserve counts even for unparsable diffs
-            let mut adds = 0usize;
-            let mut dels = 0usize;
-            for l in diff.lines() {
-                if l.starts_with("+++") || l.starts_with("---") || l.starts_with("@@") {
-                    continue;
-                }
-                match l.as_bytes().first() {
-                    Some(b'+') => adds += 1,
-                    Some(b'-') => dels += 1,
-                    _ => {}
-                }
-            }
-            (adds, dels)
-        }
-    };
+    let count_from_unified =
+        |diff: &str| -> (usize, usize) { calculate_add_remove_from_diff(diff) };
 
     let mut files: Vec<FileSummary> = Vec::new();
     for (path, change) in changes.iter() {
@@ -95,15 +81,12 @@ pub(crate) fn create_diff_summary(
             }
         }
     }
-
     let file_count = files.len();
     let total_added: usize = files.iter().map(|f| f.added).sum();
     let total_removed: usize = files.iter().map(|f| f.removed).sum();
     let noun = if file_count == 1 { "file" } else { "files" };
 
     let mut out: Vec<RtLine<'static>> = Vec::new();
-
-    // Header
     let mut header_spans: Vec<RtSpan<'static>> = Vec::new();
     header_spans.push(RtSpan::styled(
         title.to_owned(),
@@ -125,12 +108,9 @@ pub(crate) fn create_diff_summary(
     ));
     header_spans.push(RtSpan::raw(")"));
     out.push(RtLine::from(header_spans));
-
-    // Dimmed per-file lines with prefix
     for (idx, f) in files.iter().enumerate() {
         let mut spans: Vec<RtSpan<'static>> = Vec::new();
         spans.push(RtSpan::raw(f.display_path.clone()));
-        // Show per-file +/- counts only when there are multiple files
         if file_count > 1 {
             spans.push(RtSpan::raw(" ("));
             spans.push(RtSpan::styled(
@@ -144,7 +124,6 @@ pub(crate) fn create_diff_summary(
             ));
             spans.push(RtSpan::raw(")"));
         }
-
         let mut line = RtLine::from(spans);
         let prefix = if idx == 0 { "  └ " } else { "    " };
         line.spans.insert(0, prefix.into());
@@ -153,26 +132,16 @@ pub(crate) fn create_diff_summary(
             .for_each(|span| span.style = span.style.add_modifier(Modifier::DIM));
         out.push(line);
     }
-
-    let show_details = matches!(
-        event_type,
-        PatchEventType::ApplyBegin {
-            auto_approved: true
-        } | PatchEventType::ApprovalRequest
-    );
-
-    if show_details {
-        out.extend(render_patch_details(changes));
-    }
-
+    out.extend(render_patch_details(changes, wrap_cols));
     out
 }
 
-fn render_patch_details(changes: &HashMap<PathBuf, FileChange>) -> Vec<RtLine<'static>> {
+fn render_patch_details(
+    changes: &HashMap<PathBuf, FileChange>,
+    wrap_cols: usize,
+) -> Vec<RtLine<'static>> {
     let mut out: Vec<RtLine<'static>> = Vec::new();
-    let term_cols: usize = terminal::size()
-        .map(|(w, _)| w as usize)
-        .unwrap_or(DEFAULT_WRAP_COLS.into());
+    let term_cols: usize = wrap_cols;
 
     for (index, (path, change)) in changes.iter().enumerate() {
         let is_first_file = index == 0;
@@ -272,6 +241,241 @@ fn render_patch_details(changes: &HashMap<PathBuf, FileChange>) -> Vec<RtLine<'s
     out
 }
 
+// (old render_apply_blocks removed; use render_apply_blocks_custom instead)
+
+fn render_apply_blocks_custom(
+    changes: &HashMap<PathBuf, FileChange>,
+    wrap_cols: usize,
+) -> Vec<RtLine<'static>> {
+    let mut out: Vec<RtLine<'static>> = Vec::new();
+    let term_cols: usize = wrap_cols;
+    let cwd: PathBuf = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+
+    for (index, (path, change)) in changes.iter().enumerate() {
+        if index > 0 {
+            out.push(RtLine::from(RtSpan::raw("")));
+        }
+
+        let (verb, display_path, added, removed) = match change {
+            FileChange::Add { content } => (
+                "Added",
+                display_path_for(path, None, &cwd),
+                content.lines().count(),
+                0usize,
+            ),
+            FileChange::Delete => (
+                "Deleted",
+                display_path_for(path, None, &cwd),
+                0usize,
+                std::fs::read_to_string(path)
+                    .ok()
+                    .map(|s| s.lines().count())
+                    .unwrap_or(0),
+            ),
+            FileChange::Update {
+                unified_diff,
+                move_path,
+            } => {
+                let (a, d) = calculate_add_remove_from_diff(unified_diff);
+                let display_path = display_path_for(path, move_path.as_deref(), &cwd);
+                ("Edited", display_path, a, d)
+            }
+        };
+
+        let mut header_spans: Vec<RtSpan<'static>> = Vec::new();
+        header_spans.push(RtSpan::raw("• "));
+        // Bold the verb for all cases (Edited/Added/Deleted)
+        header_spans.push(verb.bold());
+        header_spans.push(RtSpan::raw(format!(" {display_path} ")));
+        header_spans.push(RtSpan::raw("("));
+        header_spans.push(RtSpan::styled(format!("+{added}"), style_add()));
+        header_spans.push(RtSpan::raw(" "));
+        header_spans.push(RtSpan::styled(format!("-{removed}"), style_del()));
+        header_spans.push(RtSpan::raw(")"));
+        out.push(RtLine::from(header_spans));
+
+        match change {
+            FileChange::Add { content } => {
+                for (i, raw) in content.lines().enumerate() {
+                    out.extend(push_wrapped_diff_line(
+                        i + 1,
+                        DiffLineType::Insert,
+                        raw,
+                        term_cols,
+                    ));
+                }
+            }
+            FileChange::Delete => {
+                let original = std::fs::read_to_string(path).unwrap_or_default();
+                for (i, raw) in original.lines().enumerate() {
+                    out.extend(push_wrapped_diff_line(
+                        i + 1,
+                        DiffLineType::Delete,
+                        raw,
+                        term_cols,
+                    ));
+                }
+            }
+            FileChange::Update {
+                unified_diff,
+                move_path: _,
+            } => {
+                if let Ok(patch) = diffy::Patch::from_str(unified_diff) {
+                    let mut is_first_hunk = true;
+                    for h in patch.hunks() {
+                        if !is_first_hunk {
+                            out.push(RtLine::from(vec![
+                                RtSpan::raw("    "),
+                                RtSpan::styled("⋮", style_dim()),
+                            ]));
+                        }
+                        is_first_hunk = false;
+                        let mut old_ln = h.old_range().start();
+                        let mut new_ln = h.new_range().start();
+                        for l in h.lines() {
+                            match l {
+                                diffy::Line::Insert(text) => {
+                                    let s = text.trim_end_matches('\n');
+                                    out.extend(push_wrapped_diff_line(
+                                        new_ln,
+                                        DiffLineType::Insert,
+                                        s,
+                                        term_cols,
+                                    ));
+                                    new_ln += 1;
+                                }
+                                diffy::Line::Delete(text) => {
+                                    let s = text.trim_end_matches('\n');
+                                    out.extend(push_wrapped_diff_line(
+                                        old_ln,
+                                        DiffLineType::Delete,
+                                        s,
+                                        term_cols,
+                                    ));
+                                    old_ln += 1;
+                                }
+                                diffy::Line::Context(text) => {
+                                    let s = text.trim_end_matches('\n');
+                                    out.extend(push_wrapped_diff_line(
+                                        new_ln,
+                                        DiffLineType::Context,
+                                        s,
+                                        term_cols,
+                                    ));
+                                    old_ln += 1;
+                                    new_ln += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    out
+}
+
+fn relative_from(base: &Path, path: &Path) -> Option<PathBuf> {
+    // Only produce a relative path if both are absolute with compatible prefixes
+    #[cfg(windows)]
+    {
+        use std::path::Component;
+        let mut base_iter = base.components();
+        let mut path_iter = path.components();
+        let base_prefix = match base_iter.next() {
+            Some(Component::Prefix(p)) => Some(p),
+            _ => None,
+        };
+        let path_prefix = match path_iter.next() {
+            Some(Component::Prefix(p)) => Some(p),
+            _ => None,
+        };
+        if base_prefix != path_prefix {
+            return None;
+        }
+        // Put back first non-root dir component
+    }
+
+    // Find common ancestor
+    let base_abs = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
+    let path_abs = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mut base_iter = base_abs.components();
+    let mut path_iter = path_abs.components();
+    let mut common: Vec<std::path::Component> = Vec::new();
+    loop {
+        match (base_iter.clone().next(), path_iter.clone().next()) {
+            (Some(bc), Some(pc)) if bc == pc => {
+                common.push(bc);
+                base_iter.next();
+                path_iter.next();
+            }
+            _ => break,
+        }
+    }
+    // Count remaining components in base_iter
+    let mut rel = PathBuf::new();
+    for _ in base_iter {
+        rel.push("..");
+    }
+    for c in path_iter {
+        rel.push(c.as_os_str());
+    }
+    Some(rel)
+}
+
+fn display_path_for(path: &Path, move_path: Option<&Path>, cwd: &Path) -> String {
+    // Determine if cwd is inside a git repo; if so, and path looks like it's inside
+    // a git repo (based on TurnDiffTracker's relative_to_git_root_str), then render
+    // it relative to cwd (may include ".." segments). Otherwise, relativize to home.
+    let in_repo = is_inside_git_repo(cwd);
+
+    let one = |p: &Path| -> String {
+        // Consider the path "in a repo" if its parent is inside a git repo
+        // (lightweight check that doesn't invoke git).
+        let looks_in_repo = is_inside_git_repo(p.parent().unwrap_or(p));
+        let chosen = if in_repo && looks_in_repo {
+            relative_from(cwd, p).unwrap_or_else(|| p.to_path_buf())
+        } else {
+            relativize_to_home(p).unwrap_or_else(|| p.to_path_buf())
+        };
+        chosen.display().to_string()
+    };
+    match move_path {
+        Some(new_path) => format!("{} → {}", one(path), one(new_path)),
+        None => one(path),
+    }
+}
+
+fn calculate_add_remove_from_diff(diff: &str) -> (usize, usize) {
+    if let Ok(patch) = diffy::Patch::from_str(diff) {
+        patch
+            .hunks()
+            .iter()
+            .flat_map(|h| h.lines())
+            .fold((0, 0), |(a, d), l| match l {
+                diffy::Line::Insert(_) => (a + 1, d),
+                diffy::Line::Delete(_) => (a, d + 1),
+                _ => (a, d),
+            })
+    } else {
+        // Fallback: manual scan to preserve counts even for unparsable diffs
+        let mut adds = 0usize;
+        let mut dels = 0usize;
+        for l in diff.lines() {
+            if l.starts_with("+++") || l.starts_with("---") || l.starts_with("@@") {
+                continue;
+            }
+            match l.as_bytes().first() {
+                Some(b'+') => adds += 1,
+                Some(b'-') => dels += 1,
+                _ => {}
+            }
+        }
+        (adds, dels)
+    }
+}
+
 fn push_wrapped_diff_line(
     line_number: usize,
     kind: DiffLineType,
@@ -301,9 +505,7 @@ fn push_wrapped_diff_line(
         // Fit the content for the current terminal row:
         // compute how many columns are available after the prefix, then split
         // at a UTF-8 character boundary so this row's chunk fits exactly.
-        let available_content_cols = term_cols
-            .saturating_sub(if first { prefix_cols + 1 } else { prefix_cols })
-            .max(1);
+        let available_content_cols = term_cols.saturating_sub(prefix_cols + 1).max(1);
         let split_at_byte_index = remaining_text
             .char_indices()
             .nth(available_content_cols)
@@ -313,24 +515,19 @@ fn push_wrapped_diff_line(
         remaining_text = rest;
 
         if first {
+            // Build gutter (indent + line number + spacing) as a dimmed span
+            let gutter = format!("{indent}{ln_str}{}", " ".repeat(gap_after_ln));
             let mut spans: Vec<RtSpan<'static>> = Vec::new();
-            spans.push(RtSpan::raw(indent));
-            spans.push(RtSpan::styled(ln_str.clone(), style_dim()));
-            spans.push(RtSpan::raw(" ".repeat(gap_after_ln)));
-            // Always include a sign character at the start of the displayed chunk
-            // ('+' for insert, '-' for delete, ' ' for context) so gutters align.
+            spans.push(RtSpan::styled(gutter, style_dim()));
+            // Content with a sign ('+'/'-'/' ') styled per diff kind
             let sign_char = sign_opt.unwrap_or(' ');
-            let display_chunk = format!("{sign_char}{chunk}");
+            let content = format!("{sign_char}{chunk}");
             let content_span = match line_style {
-                Some(style) => RtSpan::styled(display_chunk, style),
-                None => RtSpan::raw(display_chunk),
+                Some(style) => RtSpan::styled(content, style),
+                None => RtSpan::raw(content),
             };
             spans.push(content_span);
-            let mut line = RtLine::from(spans);
-            if let Some(style) = line_style {
-                line.style = line.style.patch(style);
-            }
-            lines.push(line);
+            lines.push(RtLine::from(spans));
             first = false;
         } else {
             // Continuation lines keep a space for the sign column so content aligns
@@ -339,15 +536,14 @@ fn push_wrapped_diff_line(
                 " ".repeat(ln_str.len()),
                 " ".repeat(gap_after_ln)
             );
+            let mut spans: Vec<RtSpan<'static>> = Vec::new();
+            spans.push(RtSpan::styled(hang_prefix, style_dim()));
             let content_span = match line_style {
                 Some(style) => RtSpan::styled(chunk.to_string(), style),
                 None => RtSpan::raw(chunk.to_string()),
             };
-            let mut line = RtLine::from(vec![RtSpan::raw(hang_prefix), content_span]);
-            if let Some(style) = line_style {
-                line.style = line.style.patch(style);
-            }
-            lines.push(line);
+            spans.push(content_span);
+            lines.push(RtLine::from(spans));
         }
         if remaining_text.is_empty() {
             break;
@@ -391,6 +587,23 @@ mod tests {
         assert_snapshot!(name, terminal.backend());
     }
 
+    fn snapshot_lines_text(name: &str, lines: &[RtLine<'static>]) {
+        // Convert Lines to plain text rows and trim trailing spaces so it's
+        // easier to validate indentation visually in snapshots.
+        let text = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .map(|s| s.trim_end().to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_snapshot!(name, text);
+    }
+
     #[test]
     fn ui_snapshot_add_details() {
         let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
@@ -401,8 +614,12 @@ mod tests {
             },
         );
 
-        let lines =
-            create_diff_summary("proposed patch", &changes, PatchEventType::ApprovalRequest);
+        let lines = create_diff_summary_with_wrap_cols(
+            "proposed patch",
+            &changes,
+            PatchEventType::ApprovalRequest,
+            80,
+        );
 
         snapshot_lines("add_details", lines, 80, 10);
     }
@@ -423,8 +640,12 @@ mod tests {
             },
         );
 
-        let lines =
-            create_diff_summary("proposed patch", &changes, PatchEventType::ApprovalRequest);
+        let lines = create_diff_summary_with_wrap_cols(
+            "proposed patch",
+            &changes,
+            PatchEventType::ApprovalRequest,
+            80,
+        );
 
         snapshot_lines("update_details_with_rename", lines, 80, 12);
     }
@@ -435,11 +656,10 @@ mod tests {
         let long_line = "this is a very long line that should wrap across multiple terminal columns and continue";
 
         // Call the wrapping function directly so we can precisely control the width
-        let lines =
-            push_wrapped_diff_line(1, DiffLineType::Insert, long_line, DEFAULT_WRAP_COLS.into());
+        let lines = push_wrapped_diff_line(1, DiffLineType::Insert, long_line, 80);
 
         // Render into a small terminal to capture the visual layout
-        snapshot_lines("wrap_behavior_insert", lines, DEFAULT_WRAP_COLS + 10, 8);
+        snapshot_lines("wrap_behavior_insert", lines, 90, 8);
     }
 
     #[test]
@@ -458,8 +678,12 @@ mod tests {
             },
         );
 
-        let lines =
-            create_diff_summary("proposed patch", &changes, PatchEventType::ApprovalRequest);
+        let lines = create_diff_summary_with_wrap_cols(
+            "proposed patch",
+            &changes,
+            PatchEventType::ApprovalRequest,
+            80,
+        );
 
         snapshot_lines("single_line_replacement_counts", lines, 80, 8);
     }
@@ -480,8 +704,12 @@ mod tests {
             },
         );
 
-        let lines =
-            create_diff_summary("proposed patch", &changes, PatchEventType::ApprovalRequest);
+        let lines = create_diff_summary_with_wrap_cols(
+            "proposed patch",
+            &changes,
+            PatchEventType::ApprovalRequest,
+            80,
+        );
 
         snapshot_lines("blank_context_line", lines, 80, 10);
     }
@@ -503,10 +731,205 @@ mod tests {
             },
         );
 
-        let lines =
-            create_diff_summary("proposed patch", &changes, PatchEventType::ApprovalRequest);
+        let lines = create_diff_summary_with_wrap_cols(
+            "proposed patch",
+            &changes,
+            PatchEventType::ApprovalRequest,
+            80,
+        );
 
         // Height is large enough to show both hunks and the separator
         snapshot_lines("vertical_ellipsis_between_hunks", lines, 80, 16);
+    }
+
+    #[test]
+    fn ui_snapshot_apply_update_block() {
+        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+        let original = "line one\nline two\nline three\n";
+        let modified = "line one\nline two changed\nline three\n";
+        let patch = diffy::create_patch(original, modified).to_string();
+
+        changes.insert(
+            PathBuf::from("example.txt"),
+            FileChange::Update {
+                unified_diff: patch,
+                move_path: None,
+            },
+        );
+
+        let lines = create_diff_summary_with_wrap_cols(
+            "ignored",
+            &changes,
+            PatchEventType::ApplyBegin {
+                auto_approved: true,
+            },
+            80,
+        );
+
+        snapshot_lines("apply_update_block", lines, 80, 12);
+    }
+
+    #[test]
+    fn ui_snapshot_apply_update_with_rename_block() {
+        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+        let original = "A\nB\nC\n";
+        let modified = "A\nB changed\nC\n";
+        let patch = diffy::create_patch(original, modified).to_string();
+
+        changes.insert(
+            PathBuf::from("old_name.rs"),
+            FileChange::Update {
+                unified_diff: patch,
+                move_path: Some(PathBuf::from("new_name.rs")),
+            },
+        );
+
+        let lines = create_diff_summary_with_wrap_cols(
+            "ignored",
+            &changes,
+            PatchEventType::ApplyBegin {
+                auto_approved: true,
+            },
+            80,
+        );
+
+        snapshot_lines("apply_update_with_rename_block", lines, 80, 12);
+    }
+
+    #[test]
+    fn ui_snapshot_apply_add_block() {
+        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+        changes.insert(
+            PathBuf::from("new_file.txt"),
+            FileChange::Add {
+                content: "alpha\nbeta\n".to_string(),
+            },
+        );
+
+        let lines = create_diff_summary_with_wrap_cols(
+            "ignored",
+            &changes,
+            PatchEventType::ApplyBegin {
+                auto_approved: true,
+            },
+            80,
+        );
+
+        snapshot_lines("apply_add_block", lines, 80, 10);
+    }
+
+    #[test]
+    fn ui_snapshot_apply_delete_block() {
+        // Write a temporary file so the delete renderer can read original content
+        let tmp_path = PathBuf::from("tmp_delete_example.txt");
+        std::fs::write(&tmp_path, "first\nsecond\nthird\n").expect("write tmp file");
+
+        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+        changes.insert(tmp_path.clone(), FileChange::Delete);
+
+        let lines = create_diff_summary_with_wrap_cols(
+            "ignored",
+            &changes,
+            PatchEventType::ApplyBegin {
+                auto_approved: true,
+            },
+            80,
+        );
+
+        // Cleanup best-effort; rendering has already read the file
+        let _ = std::fs::remove_file(&tmp_path);
+
+        snapshot_lines("apply_delete_block", lines, 80, 12);
+    }
+
+    #[test]
+    fn ui_snapshot_apply_update_block_wraps_long_lines() {
+        // Create a patch with a long modified line to force wrapping
+        let original = "line 1\nshort\nline 3\n";
+        let modified = "line 1\nshort this_is_a_very_long_modified_line_that_should_wrap_across_multiple_terminal_columns_and_continue_even_further_beyond_eighty_columns_to_force_multiple_wraps\nline 3\n";
+        let patch = diffy::create_patch(original, modified).to_string();
+
+        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+        changes.insert(
+            PathBuf::from("long_example.txt"),
+            FileChange::Update {
+                unified_diff: patch,
+                move_path: None,
+            },
+        );
+
+        let lines = create_diff_summary_with_wrap_cols(
+            "ignored",
+            &changes,
+            PatchEventType::ApplyBegin {
+                auto_approved: true,
+            },
+            72,
+        );
+
+        // Render with backend width wider than wrap width to avoid Paragraph auto-wrap.
+        snapshot_lines("apply_update_block_wraps_long_lines", lines, 80, 12);
+    }
+
+    #[test]
+    fn ui_snapshot_apply_update_block_wraps_long_lines_text() {
+        // This mirrors the desired layout example: sign only on first inserted line,
+        // subsequent wrapped pieces start aligned under the line number gutter.
+        let original = "1\n2\n3\n4\n";
+        let modified = "1\nadded line which wraps and_if_there_is_a_long_token_it_will_be_broken\n3\n4 context line which also wraps across\n";
+        let patch = diffy::create_patch(original, modified).to_string();
+
+        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+        changes.insert(
+            PathBuf::from("wrap_demo.txt"),
+            FileChange::Update {
+                unified_diff: patch,
+                move_path: None,
+            },
+        );
+
+        let mut lines = create_diff_summary_with_wrap_cols(
+            "ignored",
+            &changes,
+            PatchEventType::ApplyBegin {
+                auto_approved: true,
+            },
+            28,
+        );
+        if !lines.is_empty() {
+            lines.remove(0);
+        }
+        snapshot_lines_text("apply_update_block_wraps_long_lines_text", &lines);
+    }
+
+    #[test]
+    fn ui_snapshot_apply_update_block_relativizes_path() {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+        let abs_old = cwd.join("abs_old.rs");
+        let abs_new = cwd.join("abs_new.rs");
+
+        let original = "X\nY\n";
+        let modified = "X changed\nY\n";
+        let patch = diffy::create_patch(original, modified).to_string();
+
+        let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
+        changes.insert(
+            abs_old.clone(),
+            FileChange::Update {
+                unified_diff: patch,
+                move_path: Some(abs_new.clone()),
+            },
+        );
+
+        let lines = create_diff_summary_with_wrap_cols(
+            "ignored",
+            &changes,
+            PatchEventType::ApplyBegin {
+                auto_approved: true,
+            },
+            80,
+        );
+
+        snapshot_lines("apply_update_block_relativizes_path", lines, 80, 10);
     }
 }

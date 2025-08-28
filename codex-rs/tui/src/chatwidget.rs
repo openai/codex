@@ -480,7 +480,8 @@ impl ChatWidget {
         event: codex_core::protocol::PatchApplyEndEvent,
     ) {
         if event.success {
-            self.add_to_history(history_cell::new_patch_apply_success(event.stdout));
+            // Suppress success block per new styling spec (no "✓ Applied patch" block)
+            return;
         } else {
             self.add_to_history(history_cell::new_patch_apply_failure(event.stderr));
         }

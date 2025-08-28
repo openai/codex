@@ -978,7 +978,7 @@ fn apply_patch_events_emit_history_cells() {
         "missing proposed patch header: {blob:?}"
     );
 
-    // 2) Begin apply -> applying patch cell
+    // 2) Begin apply -> per-file apply block cell (no global header)
     let mut changes2 = HashMap::new();
     changes2.insert(
         PathBuf::from("foo.txt"),
@@ -996,11 +996,11 @@ fn apply_patch_events_emit_history_cells() {
         msg: EventMsg::PatchApplyBegin(begin),
     });
     let cells = drain_insert_history(&mut rx);
-    assert!(!cells.is_empty(), "expected applying patch cell to be sent");
+    assert!(!cells.is_empty(), "expected apply block cell to be sent");
     let blob = lines_to_single_string(cells.last().unwrap());
     assert!(
-        blob.contains("Applying patch"),
-        "missing applying patch header: {blob:?}"
+        blob.contains("Added foo.txt"),
+        "expected per-file header: {blob:?}"
     );
 
     // 3) End apply success -> success cell
@@ -1015,11 +1015,9 @@ fn apply_patch_events_emit_history_cells() {
         msg: EventMsg::PatchApplyEnd(end),
     });
     let cells = drain_insert_history(&mut rx);
-    assert!(!cells.is_empty(), "expected applied patch cell to be sent");
-    let blob = lines_to_single_string(cells.last().unwrap());
     assert!(
-        blob.contains("Applied patch"),
-        "missing applied patch header: {blob:?}"
+        cells.is_empty(),
+        "no success cell should be emitted anymore"
     );
 }
 

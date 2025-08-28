@@ -1,0 +1,16 @@
+---
+source: tui/src/diff_render.rs
+expression: text
+---
+    1      1
+    2     -2
+    2     +added line which
+           wraps and_if_ther
+           e_is_a_long_token
+           _it_will_be_broke
+           n
+    3      3
+    4     -4
+    4     +4 context line wh
+           ich also wraps ac
+           ross
