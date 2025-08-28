@@ -905,12 +905,6 @@ impl Session {
             .await
     }
 
-    /// Trim conversation history to the last `n` messages.
-    pub(crate) fn trim_history_to_last_messages(&self, n: usize) {
-        let mut state = self.state.lock_unchecked();
-        state.history.keep_last_messages(n);
-    }
-
     fn interrupt_task(&self) {
         info!("interrupt received: abort current task, if any");
         let mut state = self.state.lock_unchecked();
@@ -1880,7 +1874,10 @@ async fn run_compact_task(
 
     sess.remove_task(&sub_id);
 
-    sess.trim_history_to_last_messages(1);
+    {
+        let mut state = sess.state.lock_unchecked();
+        state.history.keep_last_messages(1);
+    }
 
     let event = Event {
         id: sub_id.clone(),
