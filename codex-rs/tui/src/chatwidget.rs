@@ -246,18 +246,49 @@ impl ChatWidget {
         );
     }
 
-    fn on_error(&mut self, message: String) {
-        // Before emitting the error message, finalize the active exec as failed
-        // so spinners are replaced with a red ✗ marker.
+    /// Finalize any active exec as failed, push an error message into history,
+    /// and stop/clear running UI state.
+    fn finalize_turn_with_error_message(&mut self, message: String) {
+        // Ensure any spinner is replaced by a red ✗ and flushed into history.
         self.finalize_active_exec_cell_as_failed();
+        // Emit the provided error message/history cell.
         self.add_to_history(history_cell::new_error_event(message));
+        // Reset running state and clear streaming buffers.
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
         self.stream.clear_all();
+    }
+
+    fn on_error(&mut self, message: String) {
+        self.finalize_turn_with_error_message(message);
         self.request_redraw();
 
         // After an error ends the turn, try sending the next queued input.
         self.maybe_send_next_queued_input();
+    }
+
+    /// Handle a turn aborted due to user interrupt (Esc).
+    /// When there are queued user messages, restore them into the composer
+    /// separated by newlines rather than auto‑submitting the next one.
+    fn on_interrupted_turn(&mut self) {
+        // Finalize, log a gentle prompt, and clear running state.
+        self.finalize_turn_with_error_message("Tell the model what to do differently".to_owned());
+
+        // If any messages were queued during the task, restore them into the composer.
+        if !self.queued_user_messages.is_empty() {
+            let combined = self
+                .queued_user_messages
+                .iter()
+                .map(|m| m.text.clone())
+                .collect::<Vec<_>>()
+                .join("\n");
+            self.bottom_pane.set_composer_text(combined);
+            // Clear the queue and update the status indicator list.
+            self.queued_user_messages.clear();
+            self.refresh_queued_user_messages();
+        }
+
+        self.request_redraw();
     }
 
     fn on_plan_update(&mut self, update: codex_core::plan_tool::UpdatePlanArgs) {
@@ -576,6 +607,7 @@ impl ChatWidget {
                 has_input_focus: true,
                 enhanced_keys_supported,
                 placeholder_text: placeholder,
+                disable_paste_burst: config.disable_paste_burst,
             }),
             active_exec_cell: None,
             config: config.clone(),
@@ -624,6 +656,7 @@ impl ChatWidget {
                 has_input_focus: true,
                 enhanced_keys_supported,
                 placeholder_text: placeholder,
+                disable_paste_burst: config.disable_paste_burst,
             }),
             active_exec_cell: None,
             config: config.clone(),
@@ -723,12 +756,20 @@ impl ChatWidget {
     }
 
     fn dispatch_command(&mut self, cmd: SlashCommand) {
+        if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
+            let message = format!(
+                "'/'{}' is disabled while a task is in progress.",
+                cmd.command()
+            );
+            self.add_to_history(history_cell::new_error_event(message));
+            self.request_redraw();
+            return;
+        }
         match cmd {
             SlashCommand::New => {
                 self.app_event_tx.send(AppEvent::NewSession);
             }
             SlashCommand::Init => {
-                // Guard: do not run if a task is active.
                 const INIT_PROMPT: &str = include_str!("../prompt_for_init_command.md");
                 self.submit_text_message(INIT_PROMPT.to_string());
             }
@@ -822,6 +863,24 @@ impl ChatWidget {
         self.bottom_pane.handle_paste(text);
     }
 
+    // Returns true if caller should skip rendering this frame (a future frame is scheduled).
+    pub(crate) fn handle_paste_burst_tick(&mut self, frame_requester: FrameRequester) -> bool {
+        if self.bottom_pane.flush_paste_burst_if_due() {
+            // A paste just flushed; request an immediate redraw and skip this frame.
+            self.request_redraw();
+            true
+        } else if self.bottom_pane.is_in_paste_burst() {
+            // While capturing a burst, schedule a follow-up tick and skip this frame
+            // to avoid redundant renders between ticks.
+            frame_requester.schedule_frame_in(
+                crate::bottom_pane::ChatComposer::recommended_paste_flush_delay(),
+            );
+            true
+        } else {
+            false
+        }
+    }
+
     fn flush_active_exec_cell(&mut self) {
         if let Some(active) = self.active_exec_cell.take() {
             self.last_history_was_exec = true;
@@ -910,13 +969,13 @@ impl ChatWidget {
                 self.on_agent_reasoning_final()
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
-            EventMsg::TaskStarted => self.on_task_started(),
+            EventMsg::TaskStarted(_) => self.on_task_started(),
             EventMsg::TaskComplete(TaskCompleteEvent { .. }) => self.on_task_complete(),
             EventMsg::TokenCount(token_usage) => self.on_token_count(token_usage),
             EventMsg::Error(ErrorEvent { message }) => self.on_error(message),
             EventMsg::TurnAborted(ev) => match ev.reason {
                 TurnAbortReason::Interrupted => {
-                    self.on_error("Tell the model what to do differently".to_owned())
+                    self.on_interrupted_turn();
                 }
                 TurnAbortReason::Replaced => {
                     self.on_error("Turn aborted: replaced by a new task".to_owned())

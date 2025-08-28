@@ -15,6 +15,7 @@ use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
 use codex_login::AuthManager;
 use codex_protocol::protocol::ConversationHistoryResponseEvent;
+use codex_protocol::protocol::TaskStartedEvent;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use futures::prelude::*;
@@ -62,6 +63,7 @@ use crate::exec_env::create_env;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::model_family::find_family_for_model;
+use crate::openai_model_info::get_model_info;
 use crate::openai_tools::ApplyPatchToolArgs;
 use crate::openai_tools::ToolsConfig;
 use crate::openai_tools::ToolsConfigParams;
@@ -517,6 +519,7 @@ impl Session {
                 include_apply_patch_tool: config.include_apply_patch_tool,
                 include_web_search_request: config.tools_web_search_request,
                 use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
+                include_view_image_tool: config.include_view_image_tool,
             }),
             user_instructions,
             base_instructions,
@@ -1080,6 +1083,9 @@ async fn submission_loop(
                 let mut updated_config = (*config).clone();
                 updated_config.model = effective_model.clone();
                 updated_config.model_family = effective_family.clone();
+                if let Some(model_info) = get_model_info(&effective_family) {
+                    updated_config.model_context_window = Some(model_info.context_window);
+                }
 
                 let client = ModelClient::new(
                     Arc::new(updated_config),
@@ -1104,6 +1110,7 @@ async fn submission_loop(
                     include_apply_patch_tool: config.include_apply_patch_tool,
                     include_web_search_request: config.tools_web_search_request,
                     use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
+                    include_view_image_tool: config.include_view_image_tool,
                 });
 
                 let new_turn_context = TurnContext {
@@ -1163,6 +1170,9 @@ async fn submission_loop(
                     let mut per_turn_config = (*config).clone();
                     per_turn_config.model = model.clone();
                     per_turn_config.model_family = model_family.clone();
+                    if let Some(model_info) = get_model_info(&model_family) {
+                        per_turn_config.model_context_window = Some(model_info.context_window);
+                    }
 
                     // Build a new client with per‑turn reasoning settings.
                     // Reuse the same provider and session id; auth defaults to env/API key.
@@ -1186,6 +1196,7 @@ async fn submission_loop(
                             include_web_search_request: config.tools_web_search_request,
                             use_streamable_shell_tool: config
                                 .use_experimental_streamable_shell_tool,
+                            include_view_image_tool: config.include_view_image_tool,
                         }),
                         user_instructions: turn_context.user_instructions.clone(),
                         base_instructions: turn_context.base_instructions.clone(),
@@ -1396,7 +1407,9 @@ async fn run_task(
     }
     let event = Event {
         id: sub_id.clone(),
-        msg: EventMsg::TaskStarted,
+        msg: EventMsg::TaskStarted(TaskStartedEvent {
+            model_context_window: turn_context.client.get_model_context_window(),
+        }),
     };
     if sess.tx_event.send(event).await.is_err() {
         return;
@@ -1796,11 +1809,6 @@ async fn try_run_turn(
                 return Ok(output);
             }
             ResponseEvent::OutputTextDelta(delta) => {
-                {
-                    let mut st = sess.state.lock_unchecked();
-                    st.history.append_assistant_text(&delta);
-                }
-
                 let event = Event {
                     id: sub_id.to_string(),
                     msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
@@ -1843,9 +1851,12 @@ async fn run_compact_task(
     input: Vec<InputItem>,
     compact_instructions: String,
 ) {
+    let model_context_window = turn_context.client.get_model_context_window();
     let start_event = Event {
         id: sub_id.clone(),
-        msg: EventMsg::TaskStarted,
+        msg: EventMsg::TaskStarted(TaskStartedEvent {
+            model_context_window,
+        }),
     };
     if sess.tx_event.send(start_event).await.is_err() {
         return;
@@ -1899,6 +1910,12 @@ async fn run_compact_task(
     }
 
     sess.remove_task(&sub_id);
+
+    {
+        let mut state = sess.state.lock_unchecked();
+        state.history.keep_last_messages(1);
+    }
+
     let event = Event {
         id: sub_id.clone(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
@@ -1913,9 +1930,6 @@ async fn run_compact_task(
         }),
     };
     sess.send_event(event).await;
-
-    let mut state = sess.state.lock_unchecked();
-    state.history.keep_last_messages(1);
 }
 
 async fn handle_response_item(
@@ -2094,6 +2108,36 @@ async fn handle_function_call(
                 call_id,
             )
             .await
+        }
+        "view_image" => {
+            #[derive(serde::Deserialize)]
+            struct SeeImageArgs {
+                path: String,
+            }
+            let args = match serde_json::from_str::<SeeImageArgs>(&arguments) {
+                Ok(a) => a,
+                Err(e) => {
+                    return ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: FunctionCallOutputPayload {
+                            content: format!("failed to parse function arguments: {e}"),
+                            success: Some(false),
+                        },
+                    };
+                }
+            };
+            let abs = turn_context.resolve_path(Some(args.path));
+            let output = match sess.inject_input(vec![InputItem::LocalImage { path: abs }]) {
+                Ok(()) => FunctionCallOutputPayload {
+                    content: "attached local image path".to_string(),
+                    success: Some(true),
+                },
+                Err(_) => FunctionCallOutputPayload {
+                    content: "unable to attach image (no active task)".to_string(),
+                    success: Some(false),
+                },
+            };
+            ResponseInputItem::FunctionCallOutput { call_id, output }
         }
         "apply_patch" => {
             let args = match serde_json::from_str::<ApplyPatchToolArgs>(&arguments) {
@@ -2481,11 +2525,15 @@ async fn handle_container_exec_with_params(
                 sandbox_type,
                 sandbox_policy: &turn_context.sandbox_policy,
                 codex_linux_sandbox_exe: &sess.codex_linux_sandbox_exe,
-                stdout_stream: Some(StdoutStream {
-                    sub_id: sub_id.clone(),
-                    call_id: call_id.clone(),
-                    tx_event: sess.tx_event.clone(),
-                }),
+                stdout_stream: if exec_command_context.apply_patch.is_some() {
+                    None
+                } else {
+                    Some(StdoutStream {
+                        sub_id: sub_id.clone(),
+                        call_id: call_id.clone(),
+                        tx_event: sess.tx_event.clone(),
+                    })
+                },
             },
         )
         .await;
@@ -2614,11 +2662,15 @@ async fn handle_sandbox_error(
                         sandbox_type: SandboxType::None,
                         sandbox_policy: &turn_context.sandbox_policy,
                         codex_linux_sandbox_exe: &sess.codex_linux_sandbox_exe,
-                        stdout_stream: Some(StdoutStream {
-                            sub_id: sub_id.clone(),
-                            call_id: call_id.clone(),
-                            tx_event: sess.tx_event.clone(),
-                        }),
+                        stdout_stream: if exec_command_context.apply_patch.is_some() {
+                            None
+                        } else {
+                            Some(StdoutStream {
+                                sub_id: sub_id.clone(),
+                                call_id: call_id.clone(),
+                                tx_event: sess.tx_event.clone(),
+                            })
+                        },
                     },
                 )
                 .await;

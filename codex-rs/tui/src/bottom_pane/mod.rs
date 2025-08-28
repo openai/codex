@@ -13,6 +13,7 @@ use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::widgets::WidgetRef;
+use std::time::Duration;
 
 mod approval_modal_view;
 mod bottom_pane_view;
@@ -21,6 +22,7 @@ mod chat_composer_history;
 mod command_popup;
 mod file_search_popup;
 mod list_selection_view;
+mod paste_burst;
 mod popup_consts;
 mod scroll_state;
 mod selection_popup_common;
@@ -70,6 +72,7 @@ pub(crate) struct BottomPaneParams {
     pub(crate) has_input_focus: bool,
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) placeholder_text: String,
+    pub(crate) disable_paste_burst: bool,
 }
 
 impl BottomPane {
@@ -82,6 +85,7 @@ impl BottomPane {
                 params.app_event_tx.clone(),
                 enhanced_keys_supported,
                 params.placeholder_text,
+                params.disable_paste_burst,
             ),
             active_view: None,
             app_event_tx: params.app_event_tx,
@@ -182,6 +186,9 @@ impl BottomPane {
             let (input_result, needs_redraw) = self.composer.handle_key_event(key_event);
             if needs_redraw {
                 self.request_redraw();
+            }
+            if self.composer.is_in_paste_burst() {
+                self.request_redraw_in(ChatComposer::recommended_paste_flush_delay());
             }
             input_result
         }
@@ -389,10 +396,22 @@ impl BottomPane {
         self.frame_requester.schedule_frame();
     }
 
+    pub(crate) fn request_redraw_in(&self, dur: Duration) {
+        self.frame_requester.schedule_frame_in(dur);
+    }
+
     // --- History helpers ---
 
     pub(crate) fn set_history_metadata(&mut self, log_id: u64, entry_count: usize) {
         self.composer.set_history_metadata(log_id, entry_count);
+    }
+
+    pub(crate) fn flush_paste_burst_if_due(&mut self) -> bool {
+        self.composer.flush_paste_burst_if_due()
+    }
+
+    pub(crate) fn is_in_paste_burst(&self) -> bool {
+        self.composer.is_in_paste_burst()
     }
 
     pub(crate) fn on_history_entry_response(
@@ -480,6 +499,7 @@ mod tests {
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
         });
         pane.push_approval_request(exec_request());
         assert_eq!(CancellationEvent::Handled, pane.on_ctrl_c());
@@ -499,6 +519,7 @@ mod tests {
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
         });
 
         // Create an approval modal (active view).
@@ -529,6 +550,7 @@ mod tests {
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
         });
 
         // Start a running task so the status indicator is active above the composer.
@@ -596,6 +618,7 @@ mod tests {
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
         });
 
         // Begin a task: show initial status.
@@ -626,6 +649,7 @@ mod tests {
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
         });
 
         // Activate spinner (status view replaces composer) with no live ring.
@@ -676,6 +700,7 @@ mod tests {
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
         });
 
         pane.set_task_running(true);
