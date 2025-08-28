@@ -363,11 +363,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     }
                 }
             }
-            EventMsg::WebSearchBegin(WebSearchBeginEvent { call_id: _ }) => {
-                ts_println!(self, "🌐 Searching the web…");
-            }
+            EventMsg::WebSearchBegin(WebSearchBeginEvent { call_id: _ }) => {}
             EventMsg::WebSearchEnd(WebSearchEndEvent { call_id: _, query }) => {
-                ts_println!(self, "🌐 {query}");
+                ts_println!(self, "🌐 Searched: {query}");
             }
             EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
                 call_id,
