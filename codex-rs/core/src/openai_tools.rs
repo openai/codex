@@ -331,16 +331,26 @@ pub(crate) struct ApplyPatchToolArgs {
 /// https://platform.openai.com/docs/guides/function-calling?api-mode=responses
 pub fn create_tools_json_for_responses_api(
     tools: &Vec<OpenAiTool>,
+    use_preview_web_search: bool,
 ) -> crate::error::Result<Vec<serde_json::Value>> {
     let mut tools_json = Vec::new();
 
     for tool in tools {
-        tools_json.push(serde_json::to_value(tool)?);
+        let mut json = serde_json::to_value(tool)?;
+        if let Some(map) = json.as_object_mut()
+            && use_preview_web_search
+            && map.get("type").and_then(|v| v.as_str()) == Some("web_search")
+        {
+            map.insert(
+                "type".to_string(),
+                serde_json::Value::String("web_search_preview".to_string()),
+            );
+        }
+        tools_json.push(json);
     }
 
     Ok(tools_json)
 }
-
 /// Returns JSON values that are compatible with Function Calling in the
 /// Chat Completions API:
 /// https://platform.openai.com/docs/guides/function-calling?api-mode=chat
@@ -349,7 +359,7 @@ pub(crate) fn create_tools_json_for_chat_completions_api(
 ) -> crate::error::Result<Vec<serde_json::Value>> {
     // We start with the JSON for the Responses API and than rewrite it to match
     // the chat completions tool call format.
-    let responses_api_tools_json = create_tools_json_for_responses_api(tools)?;
+    let responses_api_tools_json = create_tools_json_for_responses_api(tools, false)?;
     let tools_json = responses_api_tools_json
         .into_iter()
         .filter_map(|mut tool| {
@@ -702,8 +712,8 @@ mod tests {
                                     "number_property": { "type": "number" },
                                 },
                                 "required": [
-                                    "string_property".to_string(),
-                                    "number_property".to_string()
+                                    "string_property",
+                                    "number_property",
                                 ],
                                 "additionalProperties": Some(false),
                             },
