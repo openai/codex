@@ -1330,9 +1330,9 @@ disable_response_storage = true
 
         let raw_path = project_dir.path().to_string_lossy();
         let path_str = if raw_path.contains('\\') {
-            format!("'{}'", raw_path)
+            format!("'{raw_path}'")
         } else {
-            format!("\"{}\"", raw_path)
+            format!("\"{raw_path}\"")
         };
         let expected = format!(
             r#"[projects.{path_str}]
@@ -1353,9 +1353,9 @@ trust_level = "trusted"
         let config_path = codex_home.path().join(CONFIG_TOML_FILE);
         let raw_path = project_dir.path().to_string_lossy();
         let path_str = if raw_path.contains('\\') {
-            format!("'{}'", raw_path)
+            format!("'{raw_path}'")
         } else {
-            format!("\"{}\"", raw_path)
+            format!("\"{raw_path}\"")
         };
         // Use a quoted key so backslashes don't require escaping on Windows
         let initial = format!(
