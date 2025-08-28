@@ -1883,6 +1883,15 @@ async fn run_compact_task(
         }
     }
 
+    // After summarization completes, immediately compact the in‑memory
+    // conversation history so subsequent turns only include the summary.
+    // Do this before emitting TaskComplete to avoid a race where the next
+    // user input is processed using the pre‑compaction history.
+    {
+        let mut state = sess.state.lock_unchecked();
+        state.history.keep_last_messages(1);
+    }
+
     sess.remove_task(&sub_id);
     let event = Event {
         id: sub_id.clone(),
@@ -1898,9 +1907,6 @@ async fn run_compact_task(
         }),
     };
     sess.send_event(event).await;
-
-    let mut state = sess.state.lock_unchecked();
-    state.history.keep_last_messages(1);
 }
 
 async fn handle_response_item(
