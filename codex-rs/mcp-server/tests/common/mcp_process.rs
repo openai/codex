@@ -61,6 +61,7 @@ impl McpProcess {
 
         cmd.stdin(Stdio::piped());
         cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
         cmd.env("CODEX_HOME", codex_home);
         cmd.env("RUST_LOG", "debug");
 
@@ -77,6 +78,17 @@ impl McpProcess {
             .take()
             .ok_or_else(|| anyhow::format_err!("mcp should have stdout fd"))?;
         let stdout = BufReader::new(stdout);
+
+        // Forward child's stderr to our stderr so failures are visible even
+        // when stdout/stderr are captured by the test harness.
+        if let Some(stderr) = process.stderr.take() {
+            let mut stderr_reader = BufReader::new(stderr).lines();
+            tokio::spawn(async move {
+                while let Ok(Some(line)) = stderr_reader.next_line().await {
+                    eprintln!("[mcp stderr] {line}");
+                }
+            });
+        }
         Ok(Self {
             next_request_id: AtomicI64::new(0),
             process,
@@ -283,6 +295,7 @@ impl McpProcess {
     }
 
     async fn send_jsonrpc_message(&mut self, message: JSONRPCMessage) -> anyhow::Result<()> {
+        eprintln!("writing message to stdin: {message:?}");
         let payload = serde_json::to_string(&message)?;
         self.stdin.write_all(payload.as_bytes()).await?;
         self.stdin.write_all(b"\n").await?;
@@ -294,13 +307,15 @@ impl McpProcess {
         let mut line = String::new();
         self.stdout.read_line(&mut line).await?;
         let message = serde_json::from_str::<JSONRPCMessage>(&line)?;
+        eprintln!("read message from stdout: {message:?}");
         Ok(message)
     }
 
     pub async fn read_stream_until_request_message(&mut self) -> anyhow::Result<JSONRPCRequest> {
+        eprintln!("in read_stream_until_request_message()");
+
         loop {
             let message = self.read_jsonrpc_message().await?;
-            eprint!("message: {message:?}");
 
             match message {
                 JSONRPCMessage::Notification(_) => {
@@ -323,10 +338,10 @@ impl McpProcess {
         &mut self,
         request_id: RequestId,
     ) -> anyhow::Result<JSONRPCResponse> {
+        eprintln!("in read_stream_until_response_message({request_id:?})");
+
         loop {
             let message = self.read_jsonrpc_message().await?;
-            eprint!("message: {message:?}");
-
             match message {
                 JSONRPCMessage::Notification(_) => {
                     eprintln!("notification: {message:?}");
@@ -352,8 +367,6 @@ impl McpProcess {
     ) -> anyhow::Result<mcp_types::JSONRPCError> {
         loop {
             let message = self.read_jsonrpc_message().await?;
-            eprint!("message: {message:?}");
-
             match message {
                 JSONRPCMessage::Notification(_) => {
                     eprintln!("notification: {message:?}");
@@ -377,10 +390,10 @@ impl McpProcess {
         &mut self,
         method: &str,
     ) -> anyhow::Result<JSONRPCNotification> {
+        eprintln!("in read_stream_until_notification_message({method})");
+
         loop {
             let message = self.read_jsonrpc_message().await?;
-            eprint!("message: {message:?}");
-
             match message {
                 JSONRPCMessage::Notification(notification) => {
                     if notification.method == method {
@@ -405,10 +418,10 @@ impl McpProcess {
     pub async fn read_stream_until_legacy_task_complete_notification(
         &mut self,
     ) -> anyhow::Result<JSONRPCNotification> {
+        eprintln!("in read_stream_until_legacy_task_complete_notification()");
+
         loop {
             let message = self.read_jsonrpc_message().await?;
-            eprint!("message: {message:?}");
-
             match message {
                 JSONRPCMessage::Notification(notification) => {
                     let is_match = if notification.method == "codex/event" {
@@ -427,6 +440,8 @@ impl McpProcess {
 
                     if is_match {
                         return Ok(notification);
+                    } else {
+                        eprintln!("ignoring notification: {notification:?}");
                     }
                 }
                 JSONRPCMessage::Request(_) => {
