@@ -1234,9 +1234,9 @@ disable_response_storage = true
             responses_originator_header: "codex_cli_rs".to_string(),
             preferred_auth_method: AuthMode::ChatGPT,
             use_experimental_streamable_shell_tool: false,
-                include_view_image_tool: true,
-                disable_paste_burst: false,
-            },
+            include_view_image_tool: true,
+            disable_paste_burst: false,
+        };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
 
@@ -1307,9 +1307,9 @@ disable_response_storage = true
             responses_originator_header: "codex_cli_rs".to_string(),
             preferred_auth_method: AuthMode::ChatGPT,
             use_experimental_streamable_shell_tool: false,
-                include_view_image_tool: true,
-                disable_paste_burst: false,
-            },
+            include_view_image_tool: true,
+            disable_paste_burst: false,
+        };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
 

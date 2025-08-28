@@ -272,57 +272,6 @@ impl ChatComposer {
         self.textarea.text().to_string()
     }
 
-    // Attempt to start a burst by retro-capturing recent chars before the cursor.
-    // Returns true if a burst began and the textarea slice was removed.
-    fn try_begin_burst_from_cursor(&mut self, retro_chars: usize, now: Instant) -> bool {
-        let cur = self.textarea.cursor();
-        let txt = self.textarea.text();
-        let before = &txt[..cur];
-        if let Some(grab) = self
-            .paste_burst
-            .decide_begin_buffer(now, before, retro_chars)
-        {
-            if !grab.grabbed.is_empty() {
-                self.textarea.replace_range(grab.start_byte..cur, "");
-            }
-            return true;
-        }
-        false
-    }
-
-    // Handles plain-char burst logic; returns Some if handled and no further processing is needed.
-    fn process_plain_char_paste_burst(
-        &mut self,
-        ch: char,
-        now: Instant,
-    ) -> Option<(InputResult, bool)> {
-        if self.disable_paste_burst {
-            return None;
-        }
-        match self.paste_burst.on_plain_char(ch, now) {
-            CharDecision::BufferAppend => {
-                self.paste_burst.append_char_to_buffer(ch, now);
-                Some((InputResult::None, true))
-            }
-            CharDecision::BeginBuffer { retro_chars } => {
-                if self.try_begin_burst_from_cursor(retro_chars as usize, now) {
-                    self.paste_burst.append_char_to_buffer(ch, now);
-                    Some((InputResult::None, true))
-                } else {
-                    None
-                }
-            }
-            CharDecision::BeginBufferFromPending => {
-                // First char was held; we just need to append the current one.
-                self.paste_burst.append_char_to_buffer(ch, now);
-                Some((InputResult::None, true))
-            }
-            CharDecision::RetainFirstChar => {
-                // Do not insert into textarea yet. A tick will flush if no burst follows.
-                Some((InputResult::None, true))
-            }
-        }
-    }
 
     pub fn attach_image(&mut self, path: PathBuf, width: u32, height: u32, format_label: &str) {
         let placeholder = format!("[image {width}x{height} {format_label}]");
