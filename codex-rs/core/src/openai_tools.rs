@@ -1,4 +1,3 @@
-use codex_login::AuthMode;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value as JsonValue;
@@ -332,21 +331,11 @@ pub(crate) struct ApplyPatchToolArgs {
 /// https://platform.openai.com/docs/guides/function-calling?api-mode=responses
 pub fn create_tools_json_for_responses_api(
     tools: &Vec<OpenAiTool>,
-    auth_mode: Option<AuthMode>,
 ) -> crate::error::Result<Vec<serde_json::Value>> {
     let mut tools_json = Vec::new();
 
     for tool in tools {
-        let mut json = serde_json::to_value(tool)?;
-        if let Some(map) = json.as_object_mut()
-            && auth_mode == Some(AuthMode::ChatGPT)
-            && map.get("type").and_then(|v| v.as_str()) == Some("web_search")
-        {
-            map.insert(
-                "type".to_string(),
-                serde_json::Value::String("web_search_preview".to_string()),
-            );
-        }
+        let json = serde_json::to_value(tool)?;
         tools_json.push(json);
     }
 
@@ -360,7 +349,7 @@ pub(crate) fn create_tools_json_for_chat_completions_api(
 ) -> crate::error::Result<Vec<serde_json::Value>> {
     // We start with the JSON for the Responses API and than rewrite it to match
     // the chat completions tool call format.
-    let responses_api_tools_json = create_tools_json_for_responses_api(tools, false)?;
+    let responses_api_tools_json = create_tools_json_for_responses_api(tools)?;
     let tools_json = responses_api_tools_json
         .into_iter()
         .filter_map(|mut tool| {
