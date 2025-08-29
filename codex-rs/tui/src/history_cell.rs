@@ -84,8 +84,20 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync {
             .unwrap_or(0)
     }
 
+    // Streaming continuation hook for agent messages.
     fn is_stream_continuation(&self) -> bool {
         false
+    }
+
+    // Optional typed metadata describing this cell's message span in its own
+    // transcript lines. This enables precise backtracking without parsing rendered text.
+    fn message_span(&self) -> Option<MessageSpan> {
+        None
+    }
+
+    // Kind of the history cell for future extensibility.
+    fn kind(&self) -> MessageKind {
+        MessageKind::Other
     }
 }
 
@@ -117,6 +129,19 @@ impl HistoryCell for UserHistoryCell {
         lines.push("user".cyan().bold().into());
         lines.extend(self.message.lines().map(|l| l.to_string().into()));
         lines
+    }
+
+    fn message_span(&self) -> Option<MessageSpan> {
+        let body_len = self.message.lines().count();
+        Some(MessageSpan {
+            kind: MessageKind::User,
+            header_offset: 0,
+            body_len,
+        })
+    }
+
+    fn kind(&self) -> MessageKind {
+        MessageKind::User
     }
 }
 
@@ -172,6 +197,22 @@ impl HistoryCell for PlainHistoryCell {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
         self.lines.clone()
     }
+}
+
+/// Message kind used for typed history entries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MessageKind {
+    User,
+    Other,
+}
+
+/// Describes the [header..end) range of a message within this cell's
+/// `transcript_lines()` output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MessageSpan {
+    pub kind: MessageKind,
+    pub header_offset: usize,
+    pub body_len: usize,
 }
 
 #[derive(Debug)]

@@ -174,9 +174,16 @@ impl App {
         tui: &tui::Tui,
         requested_n: usize,
     ) -> (usize, Option<usize>, Option<(usize, usize)>) {
-        let nth = backtrack_helpers::normalize_backtrack_n(&self.transcript_lines, requested_n);
-        let header_idx =
-            backtrack_helpers::find_nth_last_user_header_index(&self.transcript_lines, nth);
+        let nth = backtrack_helpers::normalize_backtrack_n(
+            &self.transcript_lines,
+            &self.user_spans,
+            requested_n,
+        );
+        let header_idx = backtrack_helpers::find_nth_last_user_header_index(
+            &self.transcript_lines,
+            &self.user_spans,
+            nth,
+        );
         let offset = header_idx.map(|idx| {
             backtrack_helpers::wrapped_offset_before(
                 &self.transcript_lines,
@@ -184,7 +191,11 @@ impl App {
                 tui.terminal.viewport_area.width,
             )
         });
-        let hl = backtrack_helpers::highlight_range_for_nth_last_user(&self.transcript_lines, nth);
+        let hl = backtrack_helpers::highlight_range_for_nth_last_user(
+            &self.transcript_lines,
+            &self.user_spans,
+            nth,
+        );
         (nth, offset, hl)
     }
 
@@ -219,9 +230,12 @@ impl App {
     fn overlay_confirm_backtrack(&mut self, tui: &mut tui::Tui) {
         if let Some(base_id) = self.backtrack.base_id {
             let drop_last_messages = self.backtrack.count;
-            let prefill =
-                backtrack_helpers::nth_last_user_text(&self.transcript_lines, drop_last_messages)
-                    .unwrap_or_default();
+            let prefill = backtrack_helpers::nth_last_user_text(
+                &self.transcript_lines,
+                &self.user_spans,
+                drop_last_messages,
+            )
+            .unwrap_or_default();
             self.close_transcript_overlay(tui);
             self.request_backtrack(prefill, base_id, drop_last_messages);
         }
@@ -243,9 +257,12 @@ impl App {
     pub(crate) fn confirm_backtrack_from_main(&mut self) {
         if let Some(base_id) = self.backtrack.base_id {
             let drop_last_messages = self.backtrack.count;
-            let prefill =
-                backtrack_helpers::nth_last_user_text(&self.transcript_lines, drop_last_messages)
-                    .unwrap_or_default();
+            let prefill = backtrack_helpers::nth_last_user_text(
+                &self.transcript_lines,
+                &self.user_spans,
+                drop_last_messages,
+            )
+            .unwrap_or_default();
             self.request_backtrack(prefill, base_id, drop_last_messages);
         }
         self.reset_backtrack_state();
@@ -342,12 +359,17 @@ impl App {
 
     /// Trim transcript_lines to preserve only content up to the selected user message.
     fn trim_transcript_for_backtrack(&mut self, drop_count: usize) {
-        if let Some(cut_idx) =
-            backtrack_helpers::find_nth_last_user_header_index(&self.transcript_lines, drop_count)
-        {
+        if let Some(cut_idx) = backtrack_helpers::find_nth_last_user_header_index(
+            &self.transcript_lines,
+            &self.user_spans,
+            drop_count,
+        ) {
             self.transcript_lines.truncate(cut_idx);
+            // Drop any user spans whose header lies at or beyond the cut index.
+            self.user_spans.retain(|(header, _)| *header < cut_idx);
         } else {
             self.transcript_lines.clear();
+            self.user_spans.clear();
         }
     }
 }

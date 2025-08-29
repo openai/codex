@@ -41,6 +41,8 @@ pub(crate) struct App {
     pub(crate) file_search: FileSearchManager,
 
     pub(crate) transcript_lines: Vec<Line<'static>>,
+    // Absolute [header..end) ranges for user messages within `transcript_lines`.
+    pub(crate) user_spans: Vec<(usize, usize)>,
 
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
@@ -122,6 +124,7 @@ impl App {
             file_search,
             enhanced_keys_supported,
             transcript_lines: Vec::new(),
+            user_spans: Vec::new(),
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
@@ -210,6 +213,15 @@ impl App {
                 if let Some(Overlay::Transcript(t)) = &mut self.overlay {
                     t.insert_lines(cell_transcript.clone());
                     tui.frame_requester().schedule_frame();
+                }
+                // Compute absolute indices before extending transcript
+                let start = self.transcript_lines.len();
+                if let Some(span) = cell.message_span()
+                    && matches!(cell.kind(), crate::history_cell::MessageKind::User)
+                {
+                    let header_abs = start.saturating_add(span.header_offset);
+                    let end_abs = header_abs.saturating_add(1).saturating_add(span.body_len);
+                    self.user_spans.push((header_abs, end_abs));
                 }
                 self.transcript_lines.extend(cell_transcript.clone());
                 let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
