@@ -101,6 +101,7 @@ use crate::protocol::Submission;
 use crate::protocol::TaskCompleteEvent;
 use crate::protocol::TurnDiffEvent;
 use crate::protocol::WebSearchBeginEvent;
+use crate::protocol::WebSearchEndEvent;
 use crate::rollout::RolloutRecorder;
 use crate::safety::SafetyCheck;
 use crate::safety::assess_command_safety;
@@ -120,6 +121,7 @@ use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::ShellToolCallParams;
+use codex_protocol::models::WebSearchAction;
 
 // A convenience extension trait for acquiring mutex locks where poisoning is
 // unrecoverable and should abort the program. This avoids scattered `.unwrap()`
@@ -1769,13 +1771,12 @@ async fn try_run_turn(
                 .await?;
                 output.push(ProcessedResponseItem { item, response });
             }
-            ResponseEvent::WebSearchCallBegin { call_id, query } => {
-                let q = query.unwrap_or_else(|| "Searching Web...".to_string());
+            ResponseEvent::WebSearchCallBegin { call_id } => {
                 let _ = sess
                     .tx_event
                     .send(Event {
                         id: sub_id.to_string(),
-                        msg: EventMsg::WebSearchBegin(WebSearchBeginEvent { call_id, query: q }),
+                        msg: EventMsg::WebSearchBegin(WebSearchBeginEvent { call_id }),
                     })
                     .await;
             }
@@ -2072,6 +2073,17 @@ async fn handle_response_item(
         }
         ResponseItem::CustomToolCallOutput { .. } => {
             debug!("unexpected CustomToolCallOutput from stream");
+            None
+        }
+        ResponseItem::WebSearchCall { id, action, .. } => {
+            if let WebSearchAction::Search { query } = action {
+                let call_id = id.unwrap_or_else(|| "".to_string());
+                let event = Event {
+                    id: sub_id.to_string(),
+                    msg: EventMsg::WebSearchEnd(WebSearchEndEvent { call_id, query }),
+                };
+                sess.tx_event.send(event).await.ok();
+            }
             None
         }
         ResponseItem::Other => None,

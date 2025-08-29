@@ -443,6 +443,8 @@ pub enum EventMsg {
 
     WebSearchBegin(WebSearchBeginEvent),
 
+    WebSearchEnd(WebSearchEndEvent),
+
     /// Notification that the server is about to execute a command.
     ExecCommandBegin(ExecCommandBeginEvent),
 
@@ -674,6 +676,11 @@ impl McpToolCallEndEvent {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WebSearchBeginEvent {
+    pub call_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct WebSearchEndEvent {
     pub call_id: String,
     pub query: String,
 }
