@@ -59,7 +59,7 @@ pub async fn run_main(
 
     // Set up channels.
     let (incoming_tx, mut incoming_rx) = mpsc::channel::<JSONRPCMessage>(CHANNEL_CAPACITY);
-    let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<OutgoingMessage>(CHANNEL_CAPACITY);
+    let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel::<OutgoingMessage>();
 
     // Task: read from stdin, push to `incoming_tx`.
     let stdin_reader_handle = tokio::spawn({
@@ -132,10 +132,6 @@ pub async fn run_main(
                     }
                     if let Err(e) = stdout.write_all(b"\n").await {
                         error!("Failed to write newline to stdout: {e}");
-                        break;
-                    }
-                    if let Err(e) = stdout.flush().await {
-                        error!("Failed to flush stdout: {e}");
                         break;
                     }
                 }

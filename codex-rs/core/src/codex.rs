@@ -657,9 +657,17 @@ impl Session {
     }
 
     pub fn notify_approval(&self, sub_id: &str, decision: ReviewDecision) {
-        let mut state = self.state.lock_unchecked();
-        if let Some(tx_approve) = state.pending_approvals.remove(sub_id) {
-            tx_approve.send(decision).ok();
+        let entry = {
+            let mut state = self.state.lock_unchecked();
+            state.pending_approvals.remove(sub_id)
+        };
+        match entry {
+            Some(tx_approve) => {
+                tx_approve.send(decision).ok();
+            }
+            None => {
+                warn!("No pending approval found for sub_id: {sub_id}");
+            }
         }
     }
 
