@@ -11,6 +11,8 @@ use codex_cli::login::run_login_status;
 use codex_cli::login::run_login_with_api_key;
 use codex_cli::login::run_login_with_chatgpt;
 use codex_cli::login::run_logout;
+use codex_cli::mcp_cmd;
+use codex_cli::mcp_cmd::McpCli;
 use codex_cli::proto;
 use codex_common::CliConfigOverrides;
 use codex_exec::Cli as ExecCli;
@@ -56,8 +58,8 @@ enum Subcommand {
     /// Remove stored authentication credentials.
     Logout(LogoutCommand),
 
-    /// Experimental: run Codex as an MCP server.
-    Mcp,
+    /// Experimental: run Codex as an MCP server and manage MCP config.
+    Mcp(McpCli),
 
     /// Run the Protocol stream via stdin/stdout
     #[clap(visible_alias = "p")]
@@ -158,8 +160,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             prepend_config_flags(&mut exec_cli.config_overrides, cli.config_overrides);
             codex_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
         }
-        Some(Subcommand::Mcp) => {
-            codex_mcp_server::run_main(codex_linux_sandbox_exe, cli.config_overrides).await?;
+        Some(Subcommand::Mcp(mut mcp_cli)) => {
+            prepend_config_flags(&mut mcp_cli.config_overrides, cli.config_overrides);
+            mcp_cmd::run_main(mcp_cli, codex_linux_sandbox_exe).await?;
         }
         Some(Subcommand::Login(mut login_cli)) => {
             prepend_config_flags(&mut login_cli.config_overrides, cli.config_overrides);

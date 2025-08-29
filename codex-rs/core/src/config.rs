@@ -8,6 +8,8 @@ use crate::config_types::Tui;
 use crate::config_types::UriBasedFileOpener;
 use crate::config_types::Verbosity;
 use crate::git_info::resolve_root_git_project_for_trust;
+use crate::mcp_toml::load_project_overlays;
+use crate::mcp_toml::to_mcp_server_config;
 use crate::model_family::ModelFamily;
 use crate::model_family::find_family_for_model;
 use crate::model_provider_info::ModelProviderInfo;
@@ -615,6 +617,7 @@ impl Config {
         overrides: ConfigOverrides,
         codex_home: PathBuf,
     ) -> std::io::Result<Self> {
+        let mut cfg = cfg;
         let user_instructions = Self::load_instructions(Some(&codex_home));
 
         // Destructure ConfigOverrides fully to ensure all overrides are applied.
@@ -730,6 +733,37 @@ impl Config {
         });
 
         let experimental_resume = cfg.experimental_resume;
+
+        // Merge project overlays (.mcp.toml and .mcp.local.toml) with precedence:
+        // user (config.toml) < project < local. Skip invalid or non-stdio entries.
+        // Determine project root using the same logic as trust checks.
+        let project_root =
+            resolve_root_git_project_for_trust(&resolved_cwd).unwrap_or(resolved_cwd.clone());
+        if let Ok(overlays) = load_project_overlays(&project_root) {
+            // Start from user-defined servers from config.toml
+            let mut merged = std::mem::take(&mut cfg.mcp_servers);
+
+            // Apply in ascending precedence order: project then local.
+            for (scope, overlay) in overlays.iter().rev() {
+                for (name, entry) in overlay.mcp_servers.iter() {
+                    match to_mcp_server_config(entry, |k| std::env::var(k).ok()) {
+                        Ok(server_cfg) => {
+                            merged.insert(name.clone(), server_cfg);
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Skipping MCP server `{}` from {:?} overlay: {:#}",
+                                name,
+                                scope,
+                                e
+                            );
+                        }
+                    }
+                }
+            }
+
+            cfg.mcp_servers = merged;
+        }
 
         // Load base instructions override from a file if specified. If the
         // path is relative, resolve it against the effective cwd so the

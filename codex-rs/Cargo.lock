@@ -678,6 +678,7 @@ name = "codex-cli"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "assert_cmd",
  "clap",
  "clap_complete",
  "codex-arg0",
@@ -691,7 +692,10 @@ dependencies = [
  "codex-protocol-ts",
  "codex-tui",
  "serde_json",
+ "tempfile",
  "tokio",
+ "toml 0.9.5",
+ "toml_edit 0.23.4",
  "tracing",
  "tracing-subscriber",
 ]

@@ -36,8 +36,33 @@ use crate::config_types::McpServerConfig;
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
 const MAX_TOOL_NAME_LENGTH: usize = 64;
 
-/// Timeout for the `tools/list` request.
-const LIST_TOOLS_TIMEOUT: Duration = Duration::from_secs(10);
+/// Read MCP timeout (milliseconds) from the environment.
+///
+/// Falls back to 10_000 ms (10s) if the variable is not set or cannot be
+/// parsed as an integer.
+pub(crate) fn mcp_timeout_from_env() -> Duration {
+    match std::env::var("MCP_TIMEOUT") {
+        Ok(val) => parse_mcp_timeout(Some(val.trim())),
+        Err(_) => parse_mcp_timeout(None),
+    }
+}
+
+pub(crate) fn parse_mcp_timeout(val: Option<&str>) -> Duration {
+    const DEFAULT_MS: u64 = 10_000;
+    match val {
+        Some(s) => match s.parse::<u64>() {
+            Ok(ms) => Duration::from_millis(ms),
+            Err(_) => {
+                tracing::warn!(
+                    "Invalid MCP_TIMEOUT value, using default of {} ms",
+                    DEFAULT_MS
+                );
+                Duration::from_millis(DEFAULT_MS)
+            }
+        },
+        None => Duration::from_millis(DEFAULT_MS),
+    }
+}
 
 /// Map that holds a startup error for every MCP server that could **not** be
 /// spawned successfully.
@@ -154,7 +179,7 @@ impl McpConnectionManager {
                             protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_owned(),
                         };
                         let initialize_notification_params = None;
-                        let timeout = Some(Duration::from_secs(10));
+                        let timeout = Some(mcp_timeout_from_env());
                         match client
                             .initialize(params, initialize_notification_params, timeout)
                             .await
@@ -242,7 +267,7 @@ async fn list_all_tools(
         let client_clone = client.clone();
         join_set.spawn(async move {
             let res = client_clone
-                .list_tools(None, Some(LIST_TOOLS_TIMEOUT))
+                .list_tools(None, Some(mcp_timeout_from_env()))
                 .await;
             (server_name_cloned, res)
         });
@@ -284,6 +309,24 @@ fn is_valid_mcp_server_name(server_name: &str) -> bool {
 mod tests {
     use super::*;
     use mcp_types::ToolInputSchema;
+
+    #[test]
+    fn test_mcp_timeout_default_is_10s() {
+        let d = parse_mcp_timeout(None);
+        assert_eq!(d, Duration::from_millis(10_000));
+    }
+
+    #[test]
+    fn test_mcp_timeout_parses_ms() {
+        let d = parse_mcp_timeout(Some("1234"));
+        assert_eq!(d, Duration::from_millis(1234));
+    }
+
+    #[test]
+    fn test_mcp_timeout_invalid_uses_default() {
+        let d = parse_mcp_timeout(Some("abc"));
+        assert_eq!(d, Duration::from_millis(10_000));
+    }
 
     fn create_test_tool(server_name: &str, tool_name: &str) -> ToolInfo {
         ToolInfo {
