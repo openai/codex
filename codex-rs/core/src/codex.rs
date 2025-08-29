@@ -89,6 +89,7 @@ use crate::protocol::ExecCommandBeginEvent;
 use crate::protocol::ExecCommandEndEvent;
 use crate::protocol::FileChange;
 use crate::protocol::InputItem;
+use crate::protocol::ListCustomPromptsResponseEvent;
 use crate::protocol::Op;
 use crate::protocol::PatchApplyBeginEvent;
 use crate::protocol::PatchApplyEndEvent;
@@ -1291,22 +1292,18 @@ async fn submission_loop(
                 let tx_event = sess.tx_event.clone();
                 let sub_id = sub.id.clone();
 
-                // Discover prompts under the default prompts dir (includes content).
                 let custom_prompts: Vec<CustomPrompt> =
-                    tokio::task::spawn_blocking(
-                        || match crate::custom_prompts::default_prompts_dir() {
-                            Some(dir) => crate::custom_prompts::discover_prompts_in(&dir),
-                            None => Vec::new(),
-                        },
-                    )
-                    .await
-                    .unwrap_or_default();
+                    if let Some(dir) = crate::custom_prompts::default_prompts_dir() {
+                        crate::custom_prompts::discover_prompts_in(&dir).await
+                    } else {
+                        Vec::new()
+                    };
 
                 let event = Event {
                     id: sub_id,
-                    msg: EventMsg::ListCustomPromptsResponse(
-                        crate::protocol::ListCustomPromptsResponseEvent { custom_prompts },
-                    ),
+                    msg: EventMsg::ListCustomPromptsResponse(ListCustomPromptsResponseEvent {
+                        custom_prompts,
+                    }),
                 };
                 if let Err(e) = tx_event.send(event).await {
                     warn!("failed to send ListCustomPromptsResponse event: {e}");

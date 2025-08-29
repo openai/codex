@@ -10,13 +10,14 @@ use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
 use codex_common::fuzzy_match::fuzzy_match;
 use codex_protocol::custom_prompts::CustomPrompt;
+use std::collections::HashSet;
 
 /// A selectable item in the popup: either a built-in command or a user prompt.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CommandItem {
     Builtin(SlashCommand),
     // Index into `prompts`
-    Prompt(usize),
+    UserPrompt(usize),
 }
 
 pub(crate) struct CommandPopup {
@@ -30,8 +31,7 @@ impl CommandPopup {
     pub(crate) fn new(mut prompts: Vec<CustomPrompt>) -> Self {
         let builtins = built_in_slash_commands();
         // Exclude prompts that collide with builtin command names and sort by name.
-        let exclude: std::collections::HashSet<String> =
-            builtins.iter().map(|(n, _)| (*n).to_string()).collect();
+        let exclude: HashSet<String> = builtins.iter().map(|(n, _)| (*n).to_string()).collect();
         prompts.retain(|p| !exclude.contains(&p.name));
         prompts.sort_by(|a, b| a.name.cmp(&b.name));
         Self {
@@ -43,7 +43,7 @@ impl CommandPopup {
     }
 
     pub(crate) fn set_prompts(&mut self, mut prompts: Vec<CustomPrompt>) {
-        let exclude: std::collections::HashSet<String> = self
+        let exclude: HashSet<String> = self
             .builtins
             .iter()
             .map(|(n, _)| (*n).to_string())
@@ -98,8 +98,9 @@ impl CommandPopup {
         self.filtered_items().len().clamp(1, MAX_POPUP_ROWS) as u16
     }
 
-    /// Compute fuzzy-filtered matches paired with optional highlight indices and score.
-    /// Sorted by ascending score, then by command name for stability.
+    /// Compute fuzzy-filtered matches over built-in commands and user prompts,
+    /// paired with optional highlight indices and score. Sorted by ascending
+    /// score, then by name for stability.
     fn filtered(&self) -> Vec<(CommandItem, Option<Vec<usize>>, i32)> {
         let filter = self.command_filter.trim();
         let mut out: Vec<(CommandItem, Option<Vec<usize>>, i32)> = Vec::new();
@@ -110,7 +111,7 @@ impl CommandPopup {
             }
             // Then prompts, already sorted by name.
             for idx in 0..self.prompts.len() {
-                out.push((CommandItem::Prompt(idx), None, 0));
+                out.push((CommandItem::UserPrompt(idx), None, 0));
             }
             return out;
         }
@@ -122,20 +123,22 @@ impl CommandPopup {
         }
         for (idx, p) in self.prompts.iter().enumerate() {
             if let Some((indices, score)) = fuzzy_match(&p.name, filter) {
-                out.push((CommandItem::Prompt(idx), Some(indices), score));
+                out.push((CommandItem::UserPrompt(idx), Some(indices), score));
             }
         }
         // When filtering, sort by ascending score and then by name for stability.
         out.sort_by(|a, b| {
-            let an = match a.0 {
-                CommandItem::Builtin(c) => c.command(),
-                CommandItem::Prompt(i) => &self.prompts[i].name,
-            };
-            let bn = match b.0 {
-                CommandItem::Builtin(c) => c.command(),
-                CommandItem::Prompt(i) => &self.prompts[i].name,
-            };
-            a.2.cmp(&b.2).then_with(|| an.cmp(bn))
+            a.2.cmp(&b.2).then_with(|| {
+                let an = match a.0 {
+                    CommandItem::Builtin(c) => c.command(),
+                    CommandItem::UserPrompt(i) => &self.prompts[i].name,
+                };
+                let bn = match b.0 {
+                    CommandItem::Builtin(c) => c.command(),
+                    CommandItem::UserPrompt(i) => &self.prompts[i].name,
+                };
+                an.cmp(bn)
+            })
         });
         out
     }
@@ -183,7 +186,7 @@ impl WidgetRef for CommandPopup {
                         is_current: false,
                         description: Some(cmd.description().to_string()),
                     },
-                    CommandItem::Prompt(i) => GenericDisplayRow {
+                    CommandItem::UserPrompt(i) => GenericDisplayRow {
                         name: format!("/{}", self.prompts[i].name),
                         match_indices: indices.map(|v| v.into_iter().map(|i| i + 1).collect()),
                         is_current: false,
@@ -212,7 +215,7 @@ mod tests {
         let matches = popup.filtered_items();
         let has_init = matches.iter().any(|item| match item {
             CommandItem::Builtin(cmd) => cmd.command() == "init",
-            CommandItem::Prompt(_) => false,
+            CommandItem::UserPrompt(_) => false,
         });
         assert!(
             has_init,
@@ -230,7 +233,7 @@ mod tests {
         let selected = popup.selected_item();
         match selected {
             Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "init"),
-            Some(CommandItem::Prompt(_)) => panic!("unexpected prompt selected for '/init'"),
+            Some(CommandItem::UserPrompt(_)) => panic!("unexpected prompt selected for '/init'"),
             None => panic!("expected a selected command for exact match"),
         }
     }
@@ -240,10 +243,12 @@ mod tests {
         let prompts = vec![
             CustomPrompt {
                 name: "foo".to_string(),
+                path: "/tmp/foo.md".to_string(),
                 content: "hello from foo".to_string(),
             },
             CustomPrompt {
                 name: "bar".to_string(),
+                path: "/tmp/bar.md".to_string(),
                 content: "hello from bar".to_string(),
             },
         ];
@@ -252,7 +257,7 @@ mod tests {
         let mut prompt_names: Vec<String> = items
             .into_iter()
             .filter_map(|it| match it {
-                CommandItem::Prompt(i) => popup.prompt_name(i).map(|s| s.to_string()),
+                CommandItem::UserPrompt(i) => popup.prompt_name(i).map(|s| s.to_string()),
                 _ => None,
             })
             .collect();
@@ -265,11 +270,12 @@ mod tests {
         // Create a prompt named like a builtin (e.g. "init").
         let popup = CommandPopup::new(vec![CustomPrompt {
             name: "init".to_string(),
+            path: "/tmp/init.md".to_string(),
             content: "should be ignored".to_string(),
         }]);
         let items = popup.filtered_items();
         let has_collision_prompt = items.into_iter().any(|it| match it {
-            CommandItem::Prompt(i) => popup.prompt_name(i) == Some("init"),
+            CommandItem::UserPrompt(i) => popup.prompt_name(i) == Some("init"),
             _ => false,
         });
         assert!(

@@ -49,6 +49,7 @@ use std::time::Instant;
 const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
 
 /// Result returned when the user interacts with the text area.
+#[derive(Debug, PartialEq)]
 pub enum InputResult {
     Submitted(String),
     Command(SlashCommand),
@@ -407,7 +408,7 @@ impl ChatComposer {
                                 self.textarea.set_text(&format!("/{} ", cmd.command()));
                             }
                         }
-                        CommandItem::Prompt(idx) => {
+                        CommandItem::UserPrompt(idx) => {
                             if let Some(name) = popup.prompt_name(idx) {
                                 let starts_with_cmd =
                                     first_line.trim_start().starts_with(&format!("/{name}"));
@@ -435,7 +436,7 @@ impl ChatComposer {
                     self.textarea.set_text("");
                     // Capture any needed data from popup before clearing it.
                     let prompt_content = match sel {
-                        CommandItem::Prompt(idx) => {
+                        CommandItem::UserPrompt(idx) => {
                             popup.prompt_content(idx).map(|s| s.to_string())
                         }
                         _ => None,
@@ -447,7 +448,7 @@ impl ChatComposer {
                         CommandItem::Builtin(cmd) => {
                             return (InputResult::Command(cmd), true);
                         }
-                        CommandItem::Prompt(_) => {
+                        CommandItem::UserPrompt(_) => {
                             if let Some(contents) = prompt_content {
                                 return (InputResult::Submitted(contents), true);
                             }
@@ -2151,6 +2152,7 @@ mod tests {
         // Inject prompts as if received via event.
         composer.set_custom_prompts(vec![CustomPrompt {
             name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string(),
             content: prompt_text.to_string(),
         }]);
 
@@ -2162,10 +2164,7 @@ mod tests {
         let (result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-        match result {
-            InputResult::Submitted(s) => assert_eq!(s, prompt_text),
-            _ => panic!("expected Submitted with prompt contents"),
-        }
+        assert_eq!(InputResult::Submitted(prompt_text.to_string()), result);
     }
 
     #[test]

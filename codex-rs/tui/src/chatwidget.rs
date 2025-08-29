@@ -1226,7 +1226,7 @@ impl ChatWidget {
 
     fn on_list_custom_prompts(&mut self, ev: ListCustomPromptsResponseEvent) {
         let len = ev.custom_prompts.len();
-        debug!("received {} custom prompts", len);
+        debug!("received {len} custom prompts");
         // Forward to bottom pane so the slash popup can show them now.
         self.bottom_pane.set_custom_prompts(ev.custom_prompts);
     }
