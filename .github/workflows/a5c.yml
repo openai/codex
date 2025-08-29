@@ -117,54 +117,6 @@ jobs:
         run: |
           echo "skip=true" >> "$GITHUB_OUTPUT"
 
-      - name: Setup Node.js (cache pnpm)
-        if: steps.filter-self.outputs.skip != 'true'
-        uses: actions/setup-node@v4
-        with:
-          node-version-file: .node-version
-          cache: pnpm
-          cache-dependency-path: pnpm-lock.yaml
-          check-latest: true
-
-      - name: Enable Corepack
-        if: steps.filter-self.outputs.skip != 'true'
-        continue-on-error: true
-        run: corepack enable
-
-      - name: Guard new build-script packages
-        if: steps.filter-self.outputs.skip != 'true'
-        continue-on-error: true
-        run: |
-          if [ -f package.json ]; then
-            node scripts/pnpm-approve-builds-guard.mjs || true
-          fi
-
-      - name: Approve PNPM build scripts
-        if: steps.filter-self.outputs.skip != 'true'
-        continue-on-error: true
-        run: |
-          if [ -f package.json ]; then
-            bash scripts/pnpm-approve-builds.sh || true
-          fi
-
-      - name: Install dependencies (pnpm via scripts/install.sh)
-        if: steps.filter-self.outputs.skip != 'true'
-        continue-on-error: true
-        env:
-          PNPM_APPROVE_BUILDS: 'esbuild sharp @tailwindcss/oxide protobufjs puppeteer'
-        run: |
-          if [ -f package.json ]; then
-            ./scripts/install.sh
-          else
-            echo "No package.json found; skipping install"
-          fi
-
-      - name: Detect validator mode (flags/token)
-        id: detect-validator-mode
-        if: steps.filter-self.outputs.skip != 'true'
-        run: |
-          bash scripts/validator-mode.sh
-
       - name: Run A5C
         id: agents
         if: steps.filter-self.outputs.skip != 'true'
