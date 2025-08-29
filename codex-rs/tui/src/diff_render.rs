@@ -153,8 +153,15 @@ fn render_changes_block(
         }
         HeaderKind::ChangeApproved => {
             header_spans.push("Change Approved".bold());
-            header_spans.push(format!(" {file_count} {noun} ").into());
-            header_spans.extend(render_line_count_summary(total_added, total_removed));
+            if let [row] = &rows[..] {
+                header_spans.push(" ".into());
+                header_spans.extend(render_path(row));
+                header_spans.push(" ".into());
+                header_spans.extend(render_line_count_summary(row.added, row.removed));
+            } else {
+                header_spans.push(format!(" {file_count} {noun} ").into());
+                header_spans.extend(render_line_count_summary(total_added, total_removed));
+            }
         }
     }
     out.push(RtLine::from(header_spans));
