@@ -1,6 +1,5 @@
 ---
 source: tui/src/diff_render.rs
-assertion_line: 769
 expression: terminal.backend()
 ---
 "• Edited 2 files (+2 -1)                                                        "
@@ -8,7 +7,7 @@ expression: terminal.backend()
 "    1     -one                                                                  "
 "    1     +one changed                                                          "
 "                                                                                "
-"  └ b.txt (+1)                                                                  "
+"  └ b.txt (+1 -0)                                                               "
 "    1     +new                                                                  "
 "                                                                                "
 "                                                                                "

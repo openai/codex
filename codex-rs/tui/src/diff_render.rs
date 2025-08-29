@@ -154,7 +154,7 @@ fn render_changes_block(
     for (idx, r) in rows.into_iter().enumerate() {
         // Insert a blank separator between file chunks (except before the first)
         if idx > 0 {
-            out.push(RtLine::from(RtSpan::raw("")));
+            out.push("".into());
         }
         // File header line (skip when single-file header already shows the name)
         let skip_file_header =
@@ -163,22 +163,9 @@ fn render_changes_block(
         if !skip_file_header {
             let mut header: Vec<RtSpan<'static>> = Vec::new();
             header.push("  └ ".dim());
-            header.push(r.display.clone().into());
-            let mut parts: Vec<RtSpan<'static>> = Vec::new();
-            if r.added > 0 {
-                parts.push(format!("+{}", r.added).green());
-            }
-            if r.removed > 0 {
-                if !parts.is_empty() {
-                    parts.push(" ".into());
-                }
-                parts.push(format!("-{}", r.removed).red());
-            }
-            if !parts.is_empty() {
-                header.push(" (".into());
-                header.extend(parts);
-                header.push(")".into());
-            }
+            header.push(r.display.into());
+            header.push(" ".into());
+            header.extend(render_line_count_summary(r.added, r.removed));
             out.push(RtLine::from(header));
         }
 
@@ -211,6 +198,7 @@ fn render_changes_block(
                             out.push(RtLine::from(vec!["    ".into(), "⋮".dim()]));
                         }
                         is_first_hunk = false;
+
                         let mut old_ln = h.old_range().start();
                         let mut new_ln = h.new_range().start();
                         for l in h.lines() {
