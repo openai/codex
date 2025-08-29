@@ -276,10 +276,54 @@ pub(crate) fn new_session_info(
             Line::from("".dim()),
             Line::from(" To get started, describe a task or try one of these commands:".dim()),
             Line::from("".dim()),
-            Line::from(format!(" /init - {}", SlashCommand::Init.description()).dim()),
-            Line::from(format!(" /status - {}", SlashCommand::Status.description()).dim()),
-            Line::from(format!(" /approvals - {}", SlashCommand::Approvals.description()).dim()),
-            Line::from(format!(" /model - {}", SlashCommand::Model.description()).dim()),
+            Line::from(vec![
+                Span::styled(
+                    " /init",
+                    Style::default()
+                        .add_modifier(Modifier::BOLD)
+                        .fg(Color::White),
+                ),
+                Span::styled(
+                    format!(" - {}", SlashCommand::Init.description()),
+                    Style::default().dim(),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled(
+                    " /status",
+                    Style::default()
+                        .add_modifier(Modifier::BOLD)
+                        .fg(Color::White),
+                ),
+                Span::styled(
+                    format!(" - {}", SlashCommand::Status.description()),
+                    Style::default().dim(),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled(
+                    " /approvals",
+                    Style::default()
+                        .add_modifier(Modifier::BOLD)
+                        .fg(Color::White),
+                ),
+                Span::styled(
+                    format!(" - {}", SlashCommand::Approvals.description()),
+                    Style::default().dim(),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled(
+                    " /model",
+                    Style::default()
+                        .add_modifier(Modifier::BOLD)
+                        .fg(Color::White),
+                ),
+                Span::styled(
+                    format!(" - {}", SlashCommand::Model.description()),
+                    Style::default().dim(),
+                ),
+            ]),
         ];
         PlainHistoryCell { lines }
     } else if config.model == model {
