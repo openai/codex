@@ -6,7 +6,7 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 mod apply_patch;
-mod bash;
+pub mod bash;
 mod chat_completions;
 mod client;
 mod client_common;

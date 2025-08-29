@@ -43,6 +43,7 @@ use std::time::Instant;
 use tracing::error;
 use unicode_width::UnicodeWidthStr;
 use uuid::Uuid;
+use codex_core::bash::try_parse_bash;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CommandOutput {
@@ -278,6 +279,56 @@ impl HistoryCell for ExecCell {
 }
 
 impl ExecCell {
+    /// Produce syntax-highlighted spans for bash, dimming operator tokens like
+    /// &&, ||, |, &, (, ) and leaving other text regular. If parsing fails,
+    /// returns the entire string as a single unstyled span.
+    fn bash_syntax_spans(s: &str) -> Vec<Span<'static>> {
+        let Some(tree) = try_parse_bash(s) else {
+            return vec![s.to_string().into()];
+        };
+        let mut ranges: Vec<(usize, usize)> = Vec::new();
+        let root = tree.root_node();
+        let mut cursor = root.walk();
+        let mut stack = vec![root];
+        while let Some(node) = stack.pop() {
+            if !node.is_named() && !node.is_extra() {
+                let kind = node.kind();
+                // Treat anonymous, non-extra punctuation/delimiter tokens as operators to dim,
+                // but leave quotes/backticks unstyled to keep strings readable.
+                let is_quote = matches!(kind, "\"" | "'" | "`");
+                let is_whitespace = kind.trim().is_empty();
+                if !is_quote && !is_whitespace {
+                    ranges.push((node.start_byte(), node.end_byte()));
+                }
+            }
+            for child in node.children(&mut cursor) {
+                stack.push(child);
+            }
+        }
+        if ranges.is_empty() {
+            return vec![s.to_string().into()];
+        }
+        ranges.sort_by_key(|(st, _)| *st);
+
+        let mut out: Vec<Span<'static>> = Vec::new();
+        let mut i = 0usize; // current cursor in source string
+        for (start, end) in ranges.into_iter() {
+            // Defensively handle overlapping or out-of-order ranges by clamping.
+            let dim_start = start.max(i);
+            let dim_end = end;
+            if dim_start < dim_end {
+                if dim_start > i {
+                    out.push(s[i..dim_start].to_string().into());
+                }
+                out.push(s[dim_start..dim_end].to_string().dim());
+                i = dim_end;
+            }
+        }
+        if i < s.len() {
+            out.push(s[i..].to_string().into());
+        }
+        out
+    }
     fn is_active(&self) -> bool {
         self.calls.iter().any(|c| c.output.is_none())
     }
@@ -433,13 +484,9 @@ impl ExecCell {
         if !cmd_display.contains('\n')
             && cmd_display.width() < (width as usize).saturating_sub(reserved)
         {
-            lines.push(Line::from(vec![
-                bullet,
-                " ".into(),
-                title.bold(),
-                " ".into(),
-                cmd_display.clone().into(),
-            ]));
+            let mut spans = vec![bullet, " ".into(), title.bold(), " ".into()];
+            spans.extend(Self::bash_syntax_spans(&cmd_display));
+            lines.push(Line::from(spans));
         } else {
             lines.push(Line::from(vec![bullet, " ".into(), title.bold()]));
             let first_prefix = "  └ ".dim();
@@ -483,7 +530,9 @@ impl ExecCell {
                         } else {
                             line_cont_prefix.clone()
                         };
-                        lines.push(Line::from(vec![prefix_span, piece.clone().into()]));
+                        let mut spans = vec![prefix_span];
+                        spans.extend(Self::bash_syntax_spans(piece));
+                        lines.push(Line::from(spans));
                     }
                 }
             } else {
@@ -502,7 +551,9 @@ impl ExecCell {
                     } else {
                         cont_prefix.clone()
                     };
-                    lines.push(Line::from(vec![prefix_span, piece.clone().into()]));
+                    let mut spans = vec![prefix_span];
+                    spans.extend(Self::bash_syntax_spans(piece));
+                    lines.push(Line::from(spans));
                 }
             }
         }
@@ -541,6 +592,59 @@ impl ExecCell {
             }
         }
         lines
+    }
+}
+
+#[cfg(test)]
+mod syntax_tests {
+    use super::*;
+    use ratatui::style::Modifier;
+
+    #[test]
+    fn dims_expected_bash_operators() {
+        let s = "echo foo && bar || baz | qux & (echo hi)";
+        let spans = ExecCell::bash_syntax_spans(s);
+
+        let reconstructed: String = spans
+            .iter()
+            .map(|sp| sp.content.clone())
+            .collect();
+        assert_eq!(reconstructed, s);
+
+        fn is_dim(span: &Span<'_>) -> bool {
+            span.style.add_modifier.contains(Modifier::DIM)
+        }
+        let dimmed: Vec<String> = spans
+            .iter()
+            .filter(|sp| is_dim(sp))
+            .map(|sp| sp.content.clone().into_owned())
+            .collect();
+        assert_eq!(dimmed, vec!["&&", "||", "|", "&", "(", ")"]);
+    }
+
+    #[test]
+    fn does_not_dim_quotes_but_dims_other_punct() {
+        let s = "echo \"hi\" > out.txt; echo 'ok'";
+        let spans = ExecCell::bash_syntax_spans(s);
+
+        let reconstructed: String = spans
+            .iter()
+            .map(|sp| sp.content.clone())
+            .collect();
+        assert_eq!(reconstructed, s);
+
+        fn is_dim(span: &Span<'_>) -> bool {
+            span.style.add_modifier.contains(Modifier::DIM)
+        }
+        let dimmed: Vec<String> = spans
+            .iter()
+            .filter(|sp| is_dim(sp))
+            .map(|sp| sp.content.clone().into_owned())
+            .collect();
+        assert!(dimmed.contains(&">".to_string()));
+        assert!(dimmed.contains(&";".to_string()));
+        assert!(!dimmed.contains(&"\"".to_string()));
+        assert!(!dimmed.contains(&"'".to_string()));
     }
 }
 
