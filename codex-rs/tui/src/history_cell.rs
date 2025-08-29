@@ -478,9 +478,9 @@ impl ExecCell {
                             if i == 0 && !branch_consumed {
                                 "  └ ".dim()
                             } else {
-                                "    ".into()
+                                "    ".dim()
                             },
-                            l.to_string().into().dim(),
+                            l.to_string().dim(),
                         ])
                     }));
                 }
