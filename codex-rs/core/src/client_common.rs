@@ -1,3 +1,4 @@
+use crate::config_types::ServiceTier;
 use crate::config_types::Verbosity as VerbosityConfig;
 use crate::error::Result;
 use crate::model_family::ModelFamily;
@@ -151,6 +152,9 @@ pub(crate) struct ResponsesApiRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) prompt_cache_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) service_tier: Option<ServiceTier>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) text: Option<TextControls>,
 }
 
@@ -219,6 +223,7 @@ mod tests {
             stream: true,
             include: vec![],
             prompt_cache_key: None,
+            service_tier: None,
             text: Some(TextControls {
                 verbosity: Some(OpenAiVerbosity::Low),
             }),
@@ -249,6 +254,7 @@ mod tests {
             stream: true,
             include: vec![],
             prompt_cache_key: None,
+            service_tier: None,
             text: None,
         };
 

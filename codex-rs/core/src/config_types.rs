@@ -225,3 +225,18 @@ pub enum Verbosity {
     Medium,
     High,
 }
+
+/// Controls the OpenAI API service tier for requests.
+/// Serialized with lowercase values to match the OpenAI API.
+#[derive(Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq, Display)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum ServiceTier {
+    /// Standard processing with automatic tier selection (default).
+    #[default]
+    Auto,
+    /// 50% cheaper processing with increased latency (beta feature).
+    Flex,
+    /// Faster processing for Enterprise users.
+    Priority,
+}

@@ -58,6 +58,10 @@ pub struct Cli {
     #[arg(long = "search", default_value_t = false)]
     pub web_search: bool,
 
+    /// OpenAI service tier for API requests. Options: auto (default), flex (50% cheaper, higher latency), priority (faster, Enterprise only).
+    #[arg(long = "service-tier", value_name = "TIER")]
+    pub service_tier: Option<String>,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 }

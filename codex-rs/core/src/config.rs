@@ -2,6 +2,7 @@ use crate::config_profile::ConfigProfile;
 use crate::config_types::History;
 use crate::config_types::McpServerConfig;
 use crate::config_types::SandboxWorkspaceWrite;
+use crate::config_types::ServiceTier;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::config_types::ShellEnvironmentPolicyToml;
 use crate::config_types::Tui;
@@ -154,6 +155,8 @@ pub struct Config {
 
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
     pub model_verbosity: Option<Verbosity>,
+    /// Controls the OpenAI service tier for API requests (Responses API). Defaults to "auto".
+    pub model_service_tier: ServiceTier,
 
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
@@ -497,6 +500,11 @@ pub struct ConfigToml {
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: Option<bool>,
+
+    /// Controls the OpenAI service tier for API requests.
+    /// Accepts: "auto" (default), "flex", "priority".
+    #[serde(rename = "service_tier", alias = "serviceTier")]
+    pub service_tier: Option<ServiceTier>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -605,6 +613,7 @@ pub struct ConfigOverrides {
     pub disable_response_storage: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
+    pub service_tier: Option<ServiceTier>,
 }
 
 impl Config {
@@ -633,6 +642,7 @@ impl Config {
             disable_response_storage,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
+            service_tier: override_service_tier,
         } = overrides;
 
         let config_profile = match config_profile_key.as_ref().or(cfg.profile.as_ref()) {
@@ -731,6 +741,12 @@ impl Config {
 
         let experimental_resume = cfg.experimental_resume;
 
+        // Resolve the configured service tier from CLI override, profile, or root config; default to Auto.
+        let model_service_tier: ServiceTier = override_service_tier
+            .or(config_profile.service_tier)
+            .or(cfg.service_tier)
+            .unwrap_or_default();
+
         // Load base instructions override from a file if specified. If the
         // path is relative, resolve it against the effective cwd so the
         // behaviour matches other path-like config values.
@@ -807,6 +823,7 @@ impl Config {
                 .unwrap_or(false),
             include_view_image_tool,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
+            model_service_tier,
         };
         Ok(config)
     }
@@ -1177,6 +1194,7 @@ disable_response_storage = true
                 use_experimental_streamable_shell_tool: false,
                 include_view_image_tool: true,
                 disable_paste_burst: false,
+                model_service_tier: ServiceTier::Auto,
             },
             o3_profile_config
         );
@@ -1235,6 +1253,7 @@ disable_response_storage = true
             use_experimental_streamable_shell_tool: false,
             include_view_image_tool: true,
             disable_paste_burst: false,
+            model_service_tier: ServiceTier::Auto,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -1308,6 +1327,7 @@ disable_response_storage = true
             use_experimental_streamable_shell_tool: false,
             include_view_image_tool: true,
             disable_paste_burst: false,
+            model_service_tier: ServiceTier::Auto,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);

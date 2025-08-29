@@ -48,6 +48,10 @@ pub struct Cli {
     #[arg(long = "skip-git-repo-check", default_value_t = false)]
     pub skip_git_repo_check: bool,
 
+    /// OpenAI service tier for API requests. Options: auto (default), flex (50% cheaper, higher latency), priority (faster, Enterprise only).
+    #[arg(long = "service-tier", value_name = "TIER")]
+    pub service_tier: Option<String>,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 
