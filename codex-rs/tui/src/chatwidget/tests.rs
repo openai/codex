@@ -759,6 +759,33 @@ fn approval_modal_exec_snapshot() {
     assert_snapshot!("approval_modal_exec", terminal.backend());
 }
 
+// Snapshot test: command approval modal without a reason
+// Ensures spacing looks correct when no reason text is provided.
+#[test]
+fn approval_modal_exec_without_reason_snapshot() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+    chat.config.approval_policy = codex_core::protocol::AskForApproval::OnRequest;
+
+    let ev = ExecApprovalRequestEvent {
+        call_id: "call-approve-cmd-noreason".into(),
+        command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
+        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        reason: None,
+    };
+    chat.handle_codex_event(Event {
+        id: "sub-approve-noreason".into(),
+        msg: EventMsg::ExecApprovalRequest(ev),
+    });
+
+    let height = chat.desired_height(80);
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, height))
+        .expect("create terminal");
+    terminal
+        .draw(|f| f.render_widget_ref(&chat, f.area()))
+        .expect("draw approval modal (no reason)");
+    assert_snapshot!("approval_modal_exec_no_reason", terminal.backend());
+}
+
 // Snapshot test: patch approval modal
 #[test]
 fn approval_modal_patch_snapshot() {
@@ -1378,7 +1405,7 @@ fn plan_update_renders_history_cell() {
     assert!(!cells.is_empty(), "expected plan update cell to be sent");
     let blob = lines_to_single_string(cells.last().unwrap());
     assert!(
-        blob.contains("Update plan"),
+        blob.contains("Update Plan"),
         "missing plan header: {blob:?}"
     );
     assert!(blob.contains("Explore codebase"));

@@ -1294,11 +1294,8 @@ pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlainHistoryCell {
     let empty = width.saturating_sub(filled);
 
     let mut header: Vec<Span> = Vec::new();
-    header.push(Span::raw("📋"));
-    header.push(Span::styled(
-        " Update plan",
-        Style::default().add_modifier(Modifier::BOLD).magenta(),
-    ));
+    header.push("• ".into());
+    header.push("Update Plan".bold());
     header.push(Span::raw(" ["));
     if filled > 0 {
         header.push(Span::styled(

@@ -150,7 +150,9 @@ impl UserApprovalWidget {
                     vec![],
                 );
 
+                // Always leave a blank line after the question/command line.
                 contents.push(Line::from(""));
+                // If a reason is provided, show it (italic) and add another spacer below.
                 if let Some(reason) = reason {
                     contents.push(Line::from(reason.clone().italic()));
                     contents.push(Line::from(""));
