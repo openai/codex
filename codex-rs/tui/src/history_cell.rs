@@ -480,7 +480,7 @@ impl ExecCell {
                             } else {
                                 "    ".into()
                             },
-                            l.to_string().into(),
+                            l.to_string().into().dim(),
                         ])
                     }));
                 }
