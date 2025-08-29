@@ -71,6 +71,18 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync {
             .try_into()
             .unwrap_or(0)
     }
+
+    /// Optional typed metadata describing this cell's message span in its own
+    /// transcript lines. This enables precise backtracking without parsing
+    /// rendered text. Default is `None` for non-message cells.
+    fn message_span(&self) -> Option<MessageSpan> {
+        None
+    }
+
+    /// Kind of the history cell for future extensibility. Default is Other.
+    fn kind(&self) -> MessageKind {
+        MessageKind::Other
+    }
 }
 
 #[derive(Debug)]
@@ -82,6 +94,22 @@ impl HistoryCell for PlainHistoryCell {
     fn display_lines(&self) -> Vec<Line<'static>> {
         self.lines.clone()
     }
+}
+
+/// Message kind used for typed history entries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MessageKind {
+    User,
+    Other,
+}
+
+/// Describes the [header..end) range of a message within this cell's
+/// `transcript_lines()` output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct MessageSpan {
+    pub kind: MessageKind,
+    pub header_offset: usize,
+    pub body_len: usize,
 }
 
 #[derive(Debug)]
@@ -339,13 +367,47 @@ pub(crate) fn new_session_info(
     }
 }
 
-pub(crate) fn new_user_prompt(message: String) -> PlainHistoryCell {
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(Line::from(""));
-    lines.push(Line::from("user".cyan().bold()));
-    lines.extend(message.lines().map(|l| Line::from(l.to_string())));
+pub(crate) fn new_user_prompt(message: String) -> UserHistoryCell {
+    UserHistoryCell::new(message)
+}
 
-    PlainHistoryCell { lines }
+#[derive(Debug)]
+pub(crate) struct UserHistoryCell {
+    lines: Vec<Line<'static>>,
+    body_len: usize,
+}
+
+impl UserHistoryCell {
+    pub fn new(message: String) -> UserHistoryCell {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        // Leading blank separator for the cell
+        lines.push(Line::from(""));
+        // Header line for the user message
+        lines.push(Line::from("user".cyan().bold()));
+        // Body lines
+        let body: Vec<Line<'static>> = message.lines().map(|l| Line::from(l.to_string())).collect();
+        let body_len = body.len();
+        lines.extend(body);
+        UserHistoryCell { lines, body_len }
+    }
+}
+
+impl HistoryCell for UserHistoryCell {
+    fn display_lines(&self) -> Vec<Line<'static>> {
+        self.lines.clone()
+    }
+
+    fn message_span(&self) -> Option<MessageSpan> {
+        Some(MessageSpan {
+            kind: MessageKind::User,
+            header_offset: 1,
+            body_len: self.body_len,
+        })
+    }
+
+    fn kind(&self) -> MessageKind {
+        MessageKind::User
+    }
 }
 
 pub(crate) fn new_active_exec_command(
