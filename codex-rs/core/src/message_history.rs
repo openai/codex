@@ -218,7 +218,7 @@ pub(crate) fn lookup(log_id: u64, offset: usize, config: &Config) -> Option<Hist
         let lock_result = file.try_lock();
         #[cfg(not(windows))]
         let lock_result = file.try_lock_shared();
-        
+
         match lock_result {
             Ok(()) => {
                 let reader = BufReader::new(&file);
