@@ -243,12 +243,12 @@ mod tests {
         let prompts = vec![
             CustomPrompt {
                 name: "foo".to_string(),
-                path: "/tmp/foo.md".to_string(),
+                path: "/tmp/foo.md".to_string().into(),
                 content: "hello from foo".to_string(),
             },
             CustomPrompt {
                 name: "bar".to_string(),
-                path: "/tmp/bar.md".to_string(),
+                path: "/tmp/bar.md".to_string().into(),
                 content: "hello from bar".to_string(),
             },
         ];
@@ -270,7 +270,7 @@ mod tests {
         // Create a prompt named like a builtin (e.g. "init").
         let popup = CommandPopup::new(vec![CustomPrompt {
             name: "init".to_string(),
-            path: "/tmp/init.md".to_string(),
+            path: "/tmp/init.md".to_string().into(),
             content: "should be ignored".to_string(),
         }]);
         let items = popup.filtered_items();

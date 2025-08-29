@@ -2152,7 +2152,7 @@ mod tests {
         // Inject prompts as if received via event.
         composer.set_custom_prompts(vec![CustomPrompt {
             name: "my-prompt".to_string(),
-            path: "/tmp/my-prompt.md".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
             content: prompt_text.to_string(),
         }]);
 
