@@ -409,6 +409,9 @@ impl ExecCell {
     }
 
     fn command_display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        use textwrap::Options as TwOptions;
+        use textwrap::WordSplitter;
+
         let mut lines: Vec<Line<'static>> = Vec::new();
         let [call] = &self.calls.as_slice() else {
             panic!("Expected exactly one call in a command display cell");
@@ -441,69 +444,25 @@ impl ExecCell {
                 cmd_display.clone().into(),
             ]));
         } else {
+            branch_consumed = true;
             lines.push(Line::from(vec![bullet, " ".into(), title.bold()]));
-            let first_prefix = "  └ ".dim();
-            let first_prefix_w = first_prefix.width();
-            let cont_prefix: Span<'static> = "    ".into();
-            let cont_prefix_w = cont_prefix.width();
-            let extra_cont_prefix: Span<'static> = "        ".into(); // 8 spaces
-            let extra_cont_prefix_w = extra_cont_prefix.width();
 
-            if cmd_display.contains('\n') {
-                for (li, raw_line) in cmd_display.split('\n').enumerate() {
-                    // Choose indent widths for this original line
-                    let (line_first_prefix, line_first_w, line_cont_prefix, line_cont_w) =
-                        if li == 0 {
-                            // First original line: branch, then 8-space continuations
-                            (
-                                first_prefix.clone(),
-                                first_prefix_w,
-                                extra_cont_prefix.clone(),
-                                extra_cont_prefix_w,
-                            )
-                        } else {
-                            // Subsequent original lines: start with 4 spaces, wrap with 8 spaces
-                            (
-                                cont_prefix.clone(),
-                                cont_prefix_w,
-                                extra_cont_prefix.clone(),
-                                extra_cont_prefix_w,
-                            )
-                        };
-                    let first_avail = (width as usize).saturating_sub(line_first_w);
-                    let cont_avail = (width as usize).saturating_sub(line_cont_w);
-                    let pieces =
-                        ExecCell::wrap_command_line_by_widths(raw_line, first_avail, cont_avail);
-                    for (wi, piece) in pieces.iter().enumerate() {
-                        let prefix_span = if wi == 0 {
-                            if li == 0 {
-                                branch_consumed = true;
-                            }
-                            line_first_prefix.clone()
-                        } else {
-                            line_cont_prefix.clone()
-                        };
-                        lines.push(Line::from(vec![prefix_span, piece.clone().into()]));
-                    }
-                }
-            } else {
-                // Single original line: first piece with "  └ ", subsequent pieces with 4 spaces
-                let first_avail = (width as usize).saturating_sub(first_prefix_w);
-                let cont_avail = (width as usize).saturating_sub(cont_prefix_w);
-                let pieces = ExecCell::wrap_command_line_by_widths(
-                    cmd_display.as_str(),
-                    first_avail,
-                    cont_avail,
+            // Wrap the command line.
+            for (i, line) in cmd_display.lines().enumerate() {
+                let wrapped = textwrap::wrap(
+                    line,
+                    TwOptions::new(width as usize)
+                        .initial_indent("    ")
+                        .subsequent_indent("        ")
+                        .word_splitter(WordSplitter::NoHyphenation),
                 );
-                for (i, piece) in pieces.iter().enumerate() {
-                    let prefix_span = if i == 0 {
-                        branch_consumed = true;
-                        first_prefix.clone()
+                lines.extend(wrapped.into_iter().enumerate().map(|(j, l)| {
+                    if i == 0 && j == 0 {
+                        Line::from(vec!["  └ ".dim(), l[4..].to_string().into()])
                     } else {
-                        cont_prefix.clone()
-                    };
-                    lines.push(Line::from(vec![prefix_span, piece.clone().into()]));
-                }
+                        Line::from(l.to_string())
+                    }
+                }));
             }
         }
         if let Some(output) = call.output.as_ref()
@@ -513,30 +472,23 @@ impl ExecCell {
                 .into_iter()
                 .join("\n");
             if !out.trim().is_empty() {
-                // Prefix the first output line with a branch ("  └ "), and
-                // continuation/wrapped lines with four spaces to align under it.
-                // Prefixes both render to width 4, so use a single width
-                // for wrapping and only vary the prefix glyph.
-                let first_prefix = "  └ ".dim();
-                let cont_prefix: Span<'static> = "    ".into();
-                let prefix_w = cont_prefix.width(); // same visual width as first_prefix
-
-                let mut used_first = branch_consumed;
-                for raw_line in out.lines() {
-                    let pieces = ExecCell::wrap_command_line_by_widths(
-                        raw_line,
-                        (width as usize).saturating_sub(prefix_w),
-                        (width as usize).saturating_sub(prefix_w),
+                // Wrap the output.
+                for (i, line) in out.lines().enumerate() {
+                    let wrapped = textwrap::wrap(
+                        line,
+                        TwOptions::new(width as usize - 4)
+                            .word_splitter(WordSplitter::NoHyphenation),
                     );
-                    for piece in pieces.iter() {
-                        let prefix_span = if !used_first {
-                            used_first = true;
-                            first_prefix.clone()
-                        } else {
-                            cont_prefix.clone()
-                        };
-                        lines.push(Line::from(vec![prefix_span, piece.to_string().dim()]));
-                    }
+                    lines.extend(wrapped.into_iter().map(|l| {
+                        Line::from(vec![
+                            if i == 0 && !branch_consumed {
+                                "  └ ".dim()
+                            } else {
+                                "    ".into()
+                            },
+                            l.to_string().into(),
+                        ])
+                    }));
                 }
             }
         }
@@ -597,10 +549,6 @@ impl ExecCell {
         ExecCell { calls: vec![call] }
     }
 
-    pub(crate) fn calls_len(&self) -> usize {
-        self.calls.len()
-    }
-
     fn is_exploring_call(call: &ExecCall) -> bool {
         !call.parsed.is_empty()
             && call.parsed.iter().all(|p| {
@@ -615,54 +563,6 @@ impl ExecCell {
 
     fn is_exploring_cell(&self) -> bool {
         self.calls.iter().all(Self::is_exploring_call)
-    }
-
-    /// Wrap a single raw command line to the given first/continuation widths using textwrap.
-    /// Prefer wrapping at whitespace boundaries; if a single token exceeds the
-    /// available width, allow breaking inside the word.
-    fn wrap_command_line_by_widths(
-        raw: &str,
-        first_avail: usize,
-        cont_avail: usize,
-    ) -> Vec<String> {
-        use textwrap::Options as TwOptions;
-        use textwrap::WordSplitter;
-        use unicode_width::UnicodeWidthStr;
-
-        // First, wrap the entire line using the continuation width. This gives
-        // us word-boundary splits that we can then re-pack into a first line
-        // using the larger first_avail, if applicable.
-        let opts = TwOptions::new(cont_avail)
-            .break_words(true)
-            .word_splitter(WordSplitter::NoHyphenation);
-        let pieces = textwrap::wrap(raw, &opts);
-
-        let mut out: Vec<String> = Vec::new();
-        let mut cur_line = String::new();
-        let mut cur_limit = first_avail;
-        let mut cur_width = 0usize;
-
-        for p in pieces.iter() {
-            let s = p.as_ref();
-            let s_w = UnicodeWidthStr::width(s);
-            if cur_line.is_empty() {
-                cur_line.push_str(s);
-                cur_width = s_w;
-            } else if cur_width + 1 + s_w <= cur_limit {
-                cur_line.push(' ');
-                cur_line.push_str(s);
-                cur_width += 1 + s_w;
-            } else {
-                out.push(std::mem::take(&mut cur_line));
-                cur_limit = cont_avail;
-                cur_line.push_str(s);
-                cur_width = s_w;
-            }
-        }
-        if !cur_line.is_empty() {
-            out.push(cur_line);
-        }
-        out
     }
 
     pub(crate) fn with_added_call(

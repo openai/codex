@@ -4,10 +4,10 @@ expression: rendered
 ---
 • Ran
   └ echo
-    this_is_a_very_long_sing
-    le_token_that_will_wrap_
-    across_the_available_wid
-    th
+        this_is_a_very_long_
+        single_token_that_wi
+        ll_wrap_across_the_a
+        vailable_width
     error: first line on
     stderr
     error: second line on

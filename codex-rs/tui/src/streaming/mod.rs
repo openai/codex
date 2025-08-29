@@ -62,13 +62,13 @@ impl HeaderEmitter {
         self.emitted_this_turn = false;
     }
 
-    pub(crate) fn should_emit_header(&self) -> bool {
-        !self.emitted_in_stream && !self.emitted_this_turn
-    }
-
-    /// Mark that the header has been emitted for the current stream and turn.
-    pub(crate) fn mark_emitted(&mut self) {
-        self.emitted_in_stream = true;
-        self.emitted_this_turn = true;
+    pub(crate) fn maybe_emit_header(&mut self) -> bool {
+        if !self.emitted_in_stream && !self.emitted_this_turn {
+            self.emitted_in_stream = true;
+            self.emitted_this_turn = true;
+            true
+        } else {
+            false
+        }
     }
 }

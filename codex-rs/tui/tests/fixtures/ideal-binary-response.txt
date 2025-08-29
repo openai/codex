@@ -14,8 +14,9 @@ I’m going to scan the workspace and Cargo manifests to see build profiles and
 
 • Ran
   └ for d in ansi-escape apply-patch arg0 cli common core exec execpolicy
-    file-search linux-sandbox login mcp-client mcp-server mcp-types ollama tui;
-    do echo "--- $d/Cargo.toml"; sed -n '1,200p' $d/Cargo.toml; echo; done
+        file-search linux-sandbox login mcp-client mcp-server mcp-types ollama
+        tui; do echo "--- $d/Cargo.toml"; sed -n '1,200p' $d/Cargo.toml; echo;
+        done
 
 • Ran sed -n '1,200p' execpolicy/Cargo.toml
 
