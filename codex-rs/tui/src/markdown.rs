@@ -5,29 +5,91 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use std::borrow::Cow;
 use std::path::Path;
-use syntect::easy::HighlightLines;
-use syntect::highlighting::{ThemeSet, Color as SyntectColor};
-use syntect::parsing::SyntaxSet;
-use lazy_static::lazy_static;
 
-lazy_static! {
-    static ref SYNTAX_SET: SyntaxSet = SyntaxSet::load_defaults_newlines();
-    static ref THEME: ThemeSet = ThemeSet::load_defaults();
+#[cfg(feature = "syntax-highlighting")]
+use once_cell::sync::Lazy;
+
+#[cfg(feature = "syntax-highlighting")]
+mod syntax_highlighting {
+    use super::*;
+    use syntect::easy::HighlightLines;
+    use syntect::highlighting::{ThemeSet, Color as SyntectColor};
+    use syntect::parsing::SyntaxSet;
+
+    pub(super) static SYNTAX_SET: Lazy<SyntaxSet> = Lazy::new(SyntaxSet::load_defaults_newlines);
+    pub(super) static THEME: Lazy<ThemeSet> = Lazy::new(ThemeSet::load_defaults);
+
+    /// Get the appropriate syntax definition for a code block language
+    pub(super) fn get_syntax_definition(language: Option<&str>) -> Option<&'static syntect::parsing::SyntaxReference> {
+        let lang = language.unwrap_or("txt").to_lowercase();
+        SYNTAX_SET.find_syntax_by_extension(&lang)
+            .or_else(|| SYNTAX_SET.find_syntax_by_extension("txt"))
+    }
+
+    /// Convert syntect color to ratatui color
+    pub(super) fn syntect_to_ratatui_color(color: SyntectColor) -> Option<Color> {
+        if color.a == 0 {
+            None
+        } else {
+            Some(Color::Rgb(color.r, color.g, color.b))
+        }
+    }
+
+    pub(super) fn highlight_code(content: &str, language: Option<&str>, lines: &mut Vec<Line>) {
+        use syntax_highlighting::*;
+        
+        if let Some(syntax) = get_syntax_definition(language) {
+            let mut highlighter = HighlightLines::new(syntax, &THEME.themes["base16-ocean.dark"]);
+            
+            for line in content.lines() {
+                let ranges: Vec<(syntect::highlighting::Style, &str)> = 
+                    highlighter.highlight_line(line, &SYNTAX_SET).unwrap_or_else(|_| {
+                        vec![(syntect::highlighting::Style::default(), line)]
+                    });
+                
+                let spans: Vec<Span> = ranges.into_iter().map(|(syn_style, text)| {
+                    let fg = syn_style.foreground;
+                    let mut style = Style::default()
+                        .fg(syntect_to_ratatui_color(fg).unwrap_or(Color::Reset));
+                    
+                    // Set background color if available
+                    if let Some(bg_color) = syntect_to_ratatui_color(syn_style.background) {
+                        style = style.bg(bg_color);
+                    } else {
+                        // Default dark background for code blocks
+                        style = style.bg(Color::Rgb(40, 44, 52));
+                    }
+                    
+                    Span::styled(text.to_string(), style)
+                }).collect();
+                
+                lines.push(Line::from(spans));
+            }
+            return;
+        }
+        
+        // Fall through to plain text rendering if syntax highlighting fails
+        plain_text_fallback(content, lines);
+    }
 }
 
-/// Get the appropriate syntax definition for a code block language
-fn get_syntax_definition(language: Option<&str>) -> Option<&'static syntect::parsing::SyntaxReference> {
-    let lang = language.unwrap_or("txt").to_lowercase();
-    SYNTAX_SET.find_syntax_by_extension(&lang)
-        .or_else(|| SYNTAX_SET.find_syntax_by_extension("txt"))
+#[cfg(not(feature = "syntax-highlighting"))]
+mod syntax_highlighting {
+    use super::*;
+    
+    pub(super) fn highlight_code(content: &str, _language: Option<&str>, lines: &mut Vec<Line>) {
+        plain_text_fallback(content, lines);
+    }
 }
 
-/// Convert syntect color to ratatui color
-fn syntect_to_ratatui_color(color: SyntectColor) -> Option<Color> {
-    if color.a == 0 {
-        None
-    } else {
-        Some(Color::Rgb(color.r, color.g, color.b))
+/// Fallback to simple rendering without syntax highlighting
+fn plain_text_fallback(content: &str, lines: &mut Vec<Line>) {
+    for line in content.lines() {
+        let span = Span::styled(
+            line.to_string(),
+            Style::default().bg(Color::Rgb(40, 44, 52)),
+        );
+        lines.push(Line::from(span));
     }
 }
 
@@ -60,44 +122,7 @@ fn append_markdown_with_opener_and_cwd(
                 crate::render::line_utils::push_owned_lines(&rendered.lines, lines);
             }
             Segment::Code { content, language, .. } => {
-                if let Some(syntax) = get_syntax_definition(language.as_deref()) {
-                    let mut highlighter = HighlightLines::new(syntax, &THEME.themes["base16-ocean.dark"]);
-                    
-                    // Collect lines into a Vec to avoid lifetime issues
-                    let content_lines: Vec<&str> = content.lines().collect();
-                    
-                    for &line in &content_lines {
-                        // Convert &str to String to ensure it lives long enough
-                        let line_string = line.to_string();
-                        let ranges: Vec<(syntect::highlighting::Style, &str)> = 
-                            highlighter.highlight_line(&line_string, &SYNTAX_SET).unwrap_or_else(|_| {
-                                vec![(syntect::highlighting::Style::default(), &line_string)]
-                            });
-                        
-                        let spans: Vec<Span> = ranges.into_iter().map(|(syn_style, text)| {
-                            let fg = syn_style.foreground;
-                            let mut style = Style::default()
-                                .fg(syntect_to_ratatui_color(fg).unwrap_or(Color::Reset));
-                            
-                            // Set background color if available
-                            if let Some(bg_color) = syntect_to_ratatui_color(syn_style.background) {
-                                style = style.bg(bg_color);
-                            } else {
-                                // Default dark background for code blocks
-                                style = style.bg(Color::Rgb(40, 44, 52));
-                            }
-                            
-                            Span::styled(text.to_string(), style)
-                        }).collect();
-                        
-                        lines.push(Line::from(spans));
-                    }
-                } else {
-                    // Fallback to simple rendering if syntax highlighting fails
-                    for line in content.lines() {
-                        lines.push(Line::from(Span::raw(line.to_string())));
-                    }
-                }
+                syntax_highlighting::highlight_code(&content, language.as_deref(), lines);
             }
         }
     }
