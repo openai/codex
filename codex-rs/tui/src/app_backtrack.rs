@@ -174,16 +174,8 @@ impl App {
         tui: &tui::Tui,
         requested_n: usize,
     ) -> (usize, Option<usize>, Option<(usize, usize)>) {
-        let nth = backtrack_helpers::normalize_backtrack_n(
-            &self.transcript_lines,
-            &self.user_spans,
-            requested_n,
-        );
-        let header_idx = backtrack_helpers::find_nth_last_user_header_index(
-            &self.transcript_lines,
-            &self.user_spans,
-            nth,
-        );
+        let nth = backtrack_helpers::normalize_backtrack_n(&self.user_spans, requested_n);
+        let header_idx = backtrack_helpers::find_nth_last_user_header_index(&self.user_spans, nth);
         let offset = header_idx.map(|idx| {
             backtrack_helpers::wrapped_offset_before(
                 &self.transcript_lines,
@@ -191,11 +183,7 @@ impl App {
                 tui.terminal.viewport_area.width,
             )
         });
-        let hl = backtrack_helpers::highlight_range_for_nth_last_user(
-            &self.transcript_lines,
-            &self.user_spans,
-            nth,
-        );
+        let hl = backtrack_helpers::highlight_range_for_nth_last_user(&self.user_spans, nth);
         (nth, offset, hl)
     }
 
@@ -359,11 +347,9 @@ impl App {
 
     /// Trim transcript_lines to preserve only content up to the selected user message.
     fn trim_transcript_for_backtrack(&mut self, drop_count: usize) {
-        if let Some(cut_idx) = backtrack_helpers::find_nth_last_user_header_index(
-            &self.transcript_lines,
-            &self.user_spans,
-            drop_count,
-        ) {
+        if let Some(cut_idx) =
+            backtrack_helpers::find_nth_last_user_header_index(&self.user_spans, drop_count)
+        {
             self.transcript_lines.truncate(cut_idx);
             // Drop any user spans whose header lies at or beyond the cut index.
             self.user_spans.retain(|(header, _)| *header < cut_idx);

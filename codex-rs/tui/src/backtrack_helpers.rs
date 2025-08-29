@@ -2,7 +2,6 @@ use ratatui::text::Line;
 
 /// Convenience: compute the highlight range for the Nth last user message.
 pub(crate) fn highlight_range_for_nth_last_user(
-    _lines: &[Line<'_>],
     user_spans: &[(usize, usize)],
     n: usize,
 ) -> Option<(usize, usize)> {
@@ -22,7 +21,6 @@ pub(crate) fn wrapped_offset_before(lines: &[Line<'_>], header_idx: usize, width
 /// Find the header index for the Nth last user message in the transcript.
 /// Returns `None` if `n == 0` or there are fewer than `n` user messages.
 pub(crate) fn find_nth_last_user_header_index(
-    _lines: &[Line<'_>],
     user_spans: &[(usize, usize)],
     n: usize,
 ) -> Option<usize> {
@@ -37,11 +35,7 @@ pub(crate) fn find_nth_last_user_header_index(
 /// - Returns `0` if there are no user messages.
 /// - Returns `n` if the Nth last user message exists.
 /// - Otherwise wraps to `1` (the most recent user message).
-pub(crate) fn normalize_backtrack_n(
-    _lines: &[Line<'_>],
-    user_spans: &[(usize, usize)],
-    n: usize,
-) -> usize {
+pub(crate) fn normalize_backtrack_n(user_spans: &[(usize, usize)], n: usize) -> usize {
     if n == 0 {
         return 0;
     }
@@ -112,23 +106,23 @@ mod tests {
 
     #[test]
     fn normalize_wraps_to_one_when_past_oldest() {
-        let (lines, spans) = transcript_with_users(2);
-        assert_eq!(normalize_backtrack_n(&lines, &spans, 1), 1);
-        assert_eq!(normalize_backtrack_n(&lines, &spans, 2), 2);
+        let (_, spans) = transcript_with_users(2);
+        assert_eq!(normalize_backtrack_n(&spans, 1), 1);
+        assert_eq!(normalize_backtrack_n(&spans, 2), 2);
         // Requesting 3rd when only 2 exist wraps to 1
-        assert_eq!(normalize_backtrack_n(&lines, &spans, 3), 1);
+        assert_eq!(normalize_backtrack_n(&spans, 3), 1);
     }
 
     #[test]
     fn normalize_returns_zero_when_no_user_messages() {
-        let (lines, spans) = transcript_with_users(0);
-        assert_eq!(normalize_backtrack_n(&lines, &spans, 1), 0);
-        assert_eq!(normalize_backtrack_n(&lines, &spans, 5), 0);
+        let (_, spans) = transcript_with_users(0);
+        assert_eq!(normalize_backtrack_n(&spans, 1), 0);
+        assert_eq!(normalize_backtrack_n(&spans, 5), 0);
     }
 
     #[test]
     fn normalize_keeps_valid_n() {
-        let (lines, spans) = transcript_with_users(3);
-        assert_eq!(normalize_backtrack_n(&lines, &spans, 2), 2);
+        let (_, spans) = transcript_with_users(3);
+        assert_eq!(normalize_backtrack_n(&spans, 2), 2);
     }
 }
