@@ -170,6 +170,11 @@ fn render_changes_block(
     }
     out.push(RtLine::from(header_spans));
 
+    // For Change Approved, we only show the header summary and no per-file/diff details.
+    if matches!(header_kind, HeaderKind::ChangeApproved) {
+        return out;
+    }
+
     for (idx, r) in rows.into_iter().enumerate() {
         // Insert a blank separator between file chunks (except before the first)
         if idx > 0 {

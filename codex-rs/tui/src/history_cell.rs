@@ -545,16 +545,12 @@ impl WidgetRef for &ExecCell {
             height: area.height,
         };
         let lines = self.display_lines(area.width);
-        let max_rows = area.height.saturating_sub(1) as usize;
-        let trimmed = if lines.len() > max_rows {
-            lines.into_iter().rev().take(max_rows).collect::<Vec<_>>()
+        let max_rows = area.height as usize;
+        let rendered = if lines.len() > max_rows {
+            // Keep the last `max_rows` lines in original order
+            lines[lines.len() - max_rows..].to_vec()
         } else {
             lines
-        };
-        let rendered = if trimmed.len() > 1 {
-            trimmed.into_iter().rev().collect::<Vec<_>>()
-        } else {
-            trimmed
         };
 
         Paragraph::new(Text::from(rendered))

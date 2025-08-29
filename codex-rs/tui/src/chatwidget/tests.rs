@@ -1645,3 +1645,270 @@ fn deltas_then_same_final_message_are_rendered_snapshot() {
         .collect::<String>();
     assert_snapshot!(combined);
 }
+
+// Combined visual snapshot using vt100 for history + direct buffer overlay for UI.
+// This renders the final visual as seen in a terminal: history above, then a blank line,
+// then the exec block, another blank line, the status line, a blank line, and the composer.
+#[test]
+fn chatwidget_exec_and_status_layout_vt100_snapshot() {
+    // Setup identical scenario
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+    chat.handle_codex_event(Event {
+        id: "c1".into(),
+        msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+            call_id: "c1".into(),
+            command: vec!["bash".into(), "-lc".into(), "rg \"Change Approved\"".into()],
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            parsed_cmd: vec![
+                codex_core::parse_command::ParsedCommand::Search {
+                    query: Some("Change Approved".into()),
+                    path: None,
+                    cmd: "rg \"Change Approved\"".into(),
+                }
+                .into(),
+                codex_core::parse_command::ParsedCommand::Read {
+                    name: "diff_render.rs".into(),
+                    cmd: "cat diff_render.rs".into(),
+                }
+                .into(),
+            ],
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "c1".into(),
+        msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+            call_id: "c1".into(),
+            stdout: String::new(),
+            stderr: String::new(),
+            aggregated_output: String::new(),
+            exit_code: 0,
+            duration: std::time::Duration::from_millis(16000),
+            formatted_output: String::new(),
+        }),
+    });
+    chat.handle_codex_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::TaskStarted,
+    });
+    chat.handle_codex_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
+            delta: "**Investigating rendering code**".into(),
+        }),
+    });
+    chat.bottom_pane
+        .set_composer_text("Summarize recent commits".to_string());
+    chat.handle_codex_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::AgentMessage(AgentMessageEvent { message: "I’m going to search the repo for where “Change Approved” is rendered to update that view.".into() }),
+    });
+
+    // Dimensions
+    let width: u16 = 80;
+    let ui_height: u16 = chat.desired_height(width);
+    let vt_height: u16 = ui_height.saturating_add(6);
+    let viewport = ratatui::layout::Rect::new(0, vt_height - ui_height, width, ui_height);
+
+    // Render into a real ratatui backend that writes to stdout so vt100 sees
+    // the exact escape stream a terminal would receive.
+    use ratatui::backend::Backend as _;
+    use ratatui::backend::ClearType;
+    use ratatui::backend::CrosstermBackend;
+    use ratatui::buffer::Cell;
+    use ratatui::layout::Position;
+    use ratatui::layout::Size;
+
+    struct FixedSizeBackend<W: std::io::Write> {
+        inner: CrosstermBackend<W>,
+        size: Size,
+        cursor: Position,
+    }
+    impl<W: std::io::Write> FixedSizeBackend<W> {
+        fn new(writer: W, width: u16, height: u16) -> Self {
+            Self {
+                inner: CrosstermBackend::new(writer),
+                size: Size::new(width, height),
+                cursor: Position { x: 0, y: 0 },
+            }
+        }
+    }
+    impl<W: std::io::Write> ratatui::backend::Backend for FixedSizeBackend<W> {
+        fn draw<'a, I>(&mut self, content: I) -> std::io::Result<()>
+        where
+            I: Iterator<Item = (u16, u16, &'a Cell)>,
+        {
+            self.inner.draw(content)
+        }
+        fn hide_cursor(&mut self) -> std::io::Result<()> {
+            self.inner.hide_cursor()
+        }
+        fn show_cursor(&mut self) -> std::io::Result<()> {
+            self.inner.show_cursor()
+        }
+        fn get_cursor_position(&mut self) -> std::io::Result<Position> {
+            Ok(self.cursor)
+        }
+        fn set_cursor_position(&mut self, position: Position) -> std::io::Result<()> {
+            self.cursor = position;
+            self.inner.set_cursor_position(position)
+        }
+        fn clear_region(&mut self, clear_type: ClearType) -> std::io::Result<()> {
+            self.inner.clear_region(clear_type)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.inner.flush()
+        }
+        fn size(&self) -> std::io::Result<Size> {
+            Ok(self.size)
+        }
+    }
+
+    // Capture stdout so both history insertion and ratatui draw go to the same buffer.
+    #[cfg(not(unix))]
+    {
+        // Non-Unix platforms: skip with a stable snapshot message.
+        insta::assert_snapshot!(
+            "chatwidget_exec_and_status_layout_vt100_snapshot_non_unix",
+            "skipped on non-unix"
+        );
+        return;
+    }
+    #[cfg(unix)]
+    {
+        use std::io::Read as _;
+        use std::io::Write as _;
+        use std::os::unix::io::FromRawFd;
+        struct StdoutCapture {
+            saved_fd: libc::c_int,
+            write_fd: libc::c_int,
+            handle: std::thread::JoinHandle<()>,
+            buf: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+        }
+        impl StdoutCapture {
+            fn start() -> Self {
+                unsafe {
+                    let mut fds = [0; 2];
+                    assert_eq!(libc::pipe(fds.as_mut_ptr()), 0, "pipe() failed");
+                    let read_fd = fds[0];
+                    let write_fd = fds[1];
+                    let saved_fd = libc::dup(libc::STDOUT_FILENO);
+                    assert!(saved_fd >= 0, "dup(stdout) failed");
+                    // Redirect stdout to the write end of the pipe
+                    assert!(
+                        libc::dup2(write_fd, libc::STDOUT_FILENO) >= 0,
+                        "dup2 failed"
+                    );
+
+                    let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+                    let buf_clone = buf.clone();
+                    let handle = std::thread::spawn(move || {
+                        // SAFETY: we own read_fd here and move it into File
+                        let mut file = std::fs::File::from_raw_fd(read_fd);
+                        let mut local = [0u8; 8192];
+                        loop {
+                            match file.read(&mut local) {
+                                Ok(0) => break,
+                                Ok(n) => buf_clone.lock().unwrap().extend_from_slice(&local[..n]),
+                                Err(_) => break,
+                            }
+                        }
+                        // file drops here, closing read_fd
+                    });
+                    StdoutCapture {
+                        saved_fd,
+                        write_fd,
+                        handle,
+                        buf,
+                    }
+                }
+            }
+            fn finish(self) -> Vec<u8> {
+                unsafe {
+                    // Flush and restore stdout
+                    let _ = std::io::stdout().flush();
+                    assert!(
+                        libc::dup2(self.saved_fd, libc::STDOUT_FILENO) >= 0,
+                        "restore dup2 failed"
+                    );
+                    libc::close(self.saved_fd);
+                    // Close the pipe writer so reader gets EOF
+                    libc::close(self.write_fd);
+                }
+                let _ = self.handle.join();
+                std::sync::Arc::try_unwrap(self.buf)
+                    .unwrap_or_else(|a| (*a).clone())
+                    .into_inner()
+                    .unwrap()
+            }
+        }
+
+        // Build a backend that writes to stdout (captured) and has a fixed size
+        let backend = FixedSizeBackend::new(std::io::stdout(), width, vt_height);
+        let mut vt_term =
+            crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        vt_term.set_viewport_area(viewport);
+
+        // Minimal TUI harness: queue history via app events, then draw UI, both writing to stdout
+        struct MiniTui<B: ratatui::backend::Backend> {
+            term: crate::custom_terminal::Terminal<B>,
+            pending: Vec<ratatui::text::Line<'static>>,
+        }
+        impl<B: ratatui::backend::Backend> MiniTui<B> {
+            fn insert(&mut self, lines: Vec<ratatui::text::Line<'static>>) {
+                self.pending.extend(lines);
+            }
+            fn draw<F>(&mut self, draw_fn: F)
+            where
+                F: FnOnce(&mut crate::custom_terminal::Frame),
+            {
+                if !self.pending.is_empty() {
+                    crate::insert_history::insert_history_lines(
+                        &mut self.term,
+                        self.pending.clone(),
+                    );
+                    self.pending.clear();
+                }
+                self.term.draw(|f| draw_fn(f)).expect("draw");
+            }
+        }
+
+        let mut tui = MiniTui {
+            term: vt_term,
+            pending: Vec::new(),
+        };
+        let cap = StdoutCapture::start();
+
+        // Trigger inserted lines by handling agent/app events, not by calling insert_history_lines_to_writer.
+        for ev in drain_insert_history(&mut rx) {
+            tui.insert(ev);
+        }
+        // Now render the ChatWidget into the viewport, writing to captured stdout via backend
+        tui.draw(|f| f.render_widget_ref(&chat, viewport));
+
+        // Collect ANSI and parse with vt100
+        let ansi = cap.finish();
+        let mut parser = vt100::Parser::new(vt_height, width, 0);
+        parser.process(&ansi);
+        let visual = (0..vt_height)
+            .map(|row| {
+                let mut s = String::with_capacity(width as usize);
+                for col in 0..width {
+                    if let Some(cell) = parser.screen().cell(row, col) {
+                        if let Some(ch) = cell.contents().chars().next() {
+                            s.push(ch);
+                        } else {
+                            s.push(' ');
+                        }
+                    } else {
+                        s.push(' ');
+                    }
+                }
+                s.trim_end().to_string()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        insta::assert_snapshot!(visual);
+        return;
+    }
+    unreachable!();
+}
