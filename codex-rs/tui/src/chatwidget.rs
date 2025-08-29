@@ -70,6 +70,7 @@ use self::interrupts::InterruptManager;
 mod agent;
 use self::agent::spawn_agent;
 use self::agent::spawn_agent_from_existing;
+use crate::streaming::HeaderLabel;
 use crate::streaming::controller::AppEventHistorySink;
 use crate::streaming::controller::StreamController;
 use codex_common::approval_presets::ApprovalPreset;
@@ -100,6 +101,8 @@ pub(crate) struct ChatWidget {
     last_token_usage: TokenUsage,
     // Stream lifecycle controller
     stream: StreamController,
+    // Stream controller for reasoning text (thinking)
+    reasoning_stream: StreamController,
     running_commands: HashMap<String, RunningCommand>,
     pending_exec_completions: Vec<(Vec<String>, Vec<ParsedCommand>, CommandOutput)>,
     task_complete_pending: bool,
@@ -109,6 +112,8 @@ pub(crate) struct ChatWidget {
     reasoning_buffer: String,
     // Accumulates full reasoning content for transcript-only recording
     full_reasoning_buffer: String,
+    // Whether to show reasoning text live in the chat (config-driven)
+    show_reasoning_in_ui: bool,
     session_id: Option<Uuid>,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
@@ -143,6 +148,7 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
 impl ChatWidget {
     fn flush_answer_stream_with_separator(&mut self) {
         let sink = AppEventHistorySink(self.app_event_tx.clone());
+        let _ = self.reasoning_stream.finalize(true, &sink);
         let _ = self.stream.finalize(true, &sink);
     }
     // --- Small event handlers ---
@@ -186,17 +192,30 @@ impl ChatWidget {
         } else {
             // Fallback while we don't yet have a bold header: leave existing header as-is.
         }
+        // Optionally stream the reasoning content live into history.
+        if self.show_reasoning_in_ui {
+            let sink = AppEventHistorySink(self.app_event_tx.clone());
+            self.reasoning_stream.begin(&sink);
+            self.reasoning_stream.push_and_maybe_commit(&delta, &sink);
+        }
         self.request_redraw();
     }
 
     fn on_agent_reasoning_final(&mut self) {
-        // At the end of a reasoning block, record transcript-only content.
-        self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
-        if !self.full_reasoning_buffer.is_empty() {
-            self.add_to_history(history_cell::new_reasoning_block(
-                self.full_reasoning_buffer.clone(),
-                &self.config,
-            ));
+        if self.show_reasoning_in_ui {
+            // Finalize the live reasoning stream and flush to history.
+            let sink = AppEventHistorySink(self.app_event_tx.clone());
+            let finished = self.reasoning_stream.finalize(true, &sink);
+            self.handle_if_stream_finished(finished);
+        } else {
+            // At the end of a reasoning block, record transcript-only content.
+            self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
+            if !self.full_reasoning_buffer.is_empty() {
+                self.add_to_history(history_cell::new_reasoning_block(
+                    self.full_reasoning_buffer.clone(),
+                    &self.config,
+                ));
+            }
         }
         self.reasoning_buffer.clear();
         self.full_reasoning_buffer.clear();
@@ -208,6 +227,14 @@ impl ChatWidget {
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
         self.full_reasoning_buffer.push_str("\n\n");
         self.reasoning_buffer.clear();
+        // When showing reasoning live, insert a visible paragraph break so the
+        // next section's header starts on a new line instead of being inlined
+        // after the previous text.
+        if self.show_reasoning_in_ui {
+            let sink = AppEventHistorySink(self.app_event_tx.clone());
+            self.reasoning_stream.begin(&sink);
+            self.reasoning_stream.push_and_maybe_commit("\n\n", &sink);
+        }
     }
 
     // Raw reasoning uses the same flow as summarized reasoning
@@ -216,6 +243,7 @@ impl ChatWidget {
         self.bottom_pane.clear_ctrl_c_quit_hint();
         self.bottom_pane.set_task_running(true);
         self.stream.reset_headers_for_new_turn();
+        self.reasoning_stream.reset_headers_for_new_turn();
         self.full_reasoning_buffer.clear();
         self.reasoning_buffer.clear();
         self.request_redraw();
@@ -227,6 +255,10 @@ impl ChatWidget {
         if self.stream.is_write_cycle_active() {
             let sink = AppEventHistorySink(self.app_event_tx.clone());
             let _ = self.stream.finalize(true, &sink);
+        }
+        if self.reasoning_stream.is_write_cycle_active() {
+            let sink = AppEventHistorySink(self.app_event_tx.clone());
+            let _ = self.reasoning_stream.finalize(true, &sink);
         }
         // Mark task stopped and request redraw now that all content is in history.
         self.bottom_pane.set_task_running(false);
@@ -258,6 +290,7 @@ impl ChatWidget {
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
         self.stream.clear_all();
+        self.reasoning_stream.clear_all();
     }
 
     fn on_error(&mut self, message: String) {
@@ -407,9 +440,11 @@ impl ChatWidget {
         let sink = AppEventHistorySink(self.app_event_tx.clone());
         let finished = self.stream.on_commit_tick(&sink);
         self.handle_if_stream_finished(finished);
+        let finished_r = self.reasoning_stream.on_commit_tick(&sink);
+        self.handle_if_stream_finished(finished_r);
     }
     fn is_write_cycle_active(&self) -> bool {
-        self.stream.is_write_cycle_active()
+        self.stream.is_write_cycle_active() || self.reasoning_stream.is_write_cycle_active()
     }
 
     fn flush_interrupt_queue(&mut self) {
@@ -605,6 +640,9 @@ impl ChatWidget {
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
 
+        let show_reasoning_in_ui =
+            config.tui.show_agent_reasoning.unwrap_or(false) && !config.hide_agent_reasoning;
+
         Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
@@ -625,13 +663,15 @@ impl ChatWidget {
             ),
             total_token_usage: TokenUsage::default(),
             last_token_usage: TokenUsage::default(),
-            stream: StreamController::new(config),
+            stream: StreamController::new(config.clone()),
+            reasoning_stream: StreamController::with_label(config.clone(), HeaderLabel::Thinking),
             running_commands: HashMap::new(),
             pending_exec_completions: Vec::new(),
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
+            show_reasoning_in_ui,
             session_id: None,
             last_history_was_exec: false,
             queued_user_messages: VecDeque::new(),
@@ -654,6 +694,9 @@ impl ChatWidget {
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
 
+        let show_reasoning_in_ui =
+            config.tui.show_agent_reasoning.unwrap_or(false) && !config.hide_agent_reasoning;
+
         Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
@@ -671,13 +714,15 @@ impl ChatWidget {
             initial_user_message: None,
             total_token_usage: TokenUsage::default(),
             last_token_usage: TokenUsage::default(),
-            stream: StreamController::new(config),
+            stream: StreamController::new(config.clone()),
+            reasoning_stream: StreamController::with_label(config.clone(), HeaderLabel::Thinking),
             running_commands: HashMap::new(),
             pending_exec_completions: Vec::new(),
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
+            show_reasoning_in_ui,
             session_id: None,
             last_history_was_exec: false,
             queued_user_messages: VecDeque::new(),

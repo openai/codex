@@ -38,13 +38,25 @@ impl StreamState {
 pub(crate) struct HeaderEmitter {
     emitted_this_turn: bool,
     emitted_in_stream: bool,
+    label: HeaderLabel,
+}
+
+#[derive(Copy, Clone)]
+pub(crate) enum HeaderLabel {
+    Codex,
+    Thinking,
 }
 
 impl HeaderEmitter {
     pub(crate) fn new() -> Self {
+        Self::with_label(HeaderLabel::Codex)
+    }
+
+    pub(crate) fn with_label(label: HeaderLabel) -> Self {
         Self {
             emitted_this_turn: false,
             emitted_in_stream: false,
+            label,
         }
     }
 
@@ -66,7 +78,7 @@ impl HeaderEmitter {
         if !self.emitted_in_stream && !self.emitted_this_turn {
             // Add a leading blank line before the header for visual spacing
             out_lines.push(ratatui::text::Line::from(""));
-            out_lines.push(render_header_line());
+            out_lines.push(render_header_line(self.label));
             self.emitted_in_stream = true;
             self.emitted_this_turn = true;
             return true;
@@ -75,7 +87,10 @@ impl HeaderEmitter {
     }
 }
 
-fn render_header_line() -> ratatui::text::Line<'static> {
+fn render_header_line(label: HeaderLabel) -> ratatui::text::Line<'static> {
     use ratatui::style::Stylize;
-    ratatui::text::Line::from("codex".magenta().bold())
+    match label {
+        HeaderLabel::Codex => ratatui::text::Line::from("codex".magenta().bold()),
+        HeaderLabel::Thinking => ratatui::text::Line::from("thinking".magenta().italic()),
+    }
 }
