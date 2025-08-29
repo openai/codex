@@ -1253,9 +1253,16 @@ impl WidgetRef for ChatComposer {
         let mut state = self.textarea_state.borrow_mut();
         StatefulWidgetRef::render_ref(&(&self.textarea), content_rect, buf, &mut state);
         if self.textarea.text().is_empty() {
+            // Shift placeholder one column to the right for better alignment
+            let placeholder_rect = Rect::new(
+                content_rect.x.saturating_add(1),
+                content_rect.y,
+                content_rect.width.saturating_sub(1),
+                content_rect.height,
+            );
             Line::from(self.placeholder_text.as_str())
                 .style(Style::default().dim())
-                .render_ref(content_rect, buf);
+                .render_ref(placeholder_rect, buf);
         }
     }
 }
