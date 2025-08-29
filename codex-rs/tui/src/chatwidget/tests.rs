@@ -323,37 +323,13 @@ fn exec_history_cell_shows_working_then_completed() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
     // Begin command
-    chat.handle_codex_event(Event {
-        id: "call-1".into(),
-        msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
-            call_id: "call-1".into(),
-            command: vec!["bash".into(), "-lc".into(), "echo done".into()],
-            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            parsed_cmd: vec![
-                codex_core::parse_command::ParsedCommand::Unknown {
-                    cmd: "echo done".into(),
-                }
-                .into(),
-            ],
-        }),
-    });
+    begin_exec(&mut chat, "call-1", "echo done");
 
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 0, "no exec cell should have been flushed yet");
 
     // End command successfully
-    chat.handle_codex_event(Event {
-        id: "call-1".into(),
-        msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
-            call_id: "call-1".into(),
-            stdout: "done".into(),
-            stderr: String::new(),
-            aggregated_output: "done".into(),
-            exit_code: 0,
-            duration: std::time::Duration::from_millis(5),
-            formatted_output: "done".into(),
-        }),
-    });
+    end_exec(&mut chat, "call-1", "done", "", 0);
 
     let cells = drain_insert_history(&mut rx);
     // Exec end now finalizes and flushes the exec cell immediately.
@@ -377,36 +353,12 @@ fn exec_history_cell_shows_working_then_failed() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
     // Begin command
-    chat.handle_codex_event(Event {
-        id: "call-2".into(),
-        msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
-            call_id: "call-2".into(),
-            command: vec!["bash".into(), "-lc".into(), "false".into()],
-            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            parsed_cmd: vec![
-                codex_core::parse_command::ParsedCommand::Unknown {
-                    cmd: "false".into(),
-                }
-                .into(),
-            ],
-        }),
-    });
+    begin_exec(&mut chat, "call-2", "false");
     let cells = drain_insert_history(&mut rx);
     assert_eq!(cells.len(), 0, "no exec cell should have been flushed yet");
 
     // End command with failure
-    chat.handle_codex_event(Event {
-        id: "call-2".into(),
-        msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
-            call_id: "call-2".into(),
-            stdout: String::new(),
-            stderr: "Bloop".into(),
-            aggregated_output: "Bloop".into(),
-            exit_code: 2,
-            duration: std::time::Duration::from_millis(7),
-            formatted_output: "".into(),
-        }),
-    });
+    end_exec(&mut chat, "call-2", "", "Bloop", 2);
 
     let cells = drain_insert_history(&mut rx);
     // Exec end with failure should also flush immediately.
@@ -427,20 +379,7 @@ fn interrupt_exec_marks_failed_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
     // Begin a long-running command so we have an active exec cell with a spinner.
-    chat.handle_codex_event(Event {
-        id: "call-int".into(),
-        msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
-            call_id: "call-int".into(),
-            command: vec!["bash".into(), "-lc".into(), "sleep 1".into()],
-            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            parsed_cmd: vec![
-                codex_core::parse_command::ParsedCommand::Unknown {
-                    cmd: "sleep 1".into(),
-                }
-                .into(),
-            ],
-        }),
-    });
+    begin_exec(&mut chat, "call-int", "sleep 1");
 
     // Simulate the task being aborted (as if ESC was pressed), which should
     // cause the active exec cell to be finalized as failed and flushed.
@@ -1523,21 +1462,11 @@ fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
     });
 
     let cells = drain_insert_history(&mut rx);
-    let mut _header_count = 0usize;
-    let mut combined = String::new();
-    for lines in &cells {
-        for l in lines {
-            for sp in &l.spans {
-                let s = &sp.content;
-                if s == "codex" {
-                    _header_count += 1;
-                }
-                combined.push_str(s);
-            }
-            combined.push('\n');
-        }
-    }
-    // New behavior: do not require separate headers for each message; ensure both messages are present.
+    let combined: String = cells
+        .iter()
+        .flat_map(|lines| lines.iter())
+        .map(|l| l.spans.iter().map(|sp| &sp.content).collect::<String>() + "\n")
+        .collect();
     assert!(
         combined.contains("First message"),
         "missing first message: {combined}"
