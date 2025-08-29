@@ -285,8 +285,19 @@ impl ExecCell {
     fn exploring_display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from(""));
+        let active_start_time = self
+            .calls
+            .iter()
+            .find(|c| c.output.is_none())
+            .and_then(|c| c.start_time);
         lines.push(Line::from(vec![
-            "• ".bold(),
+            if self.is_active() {
+                // Show an animated spinner while exploring
+                spinner(active_start_time)
+            } else {
+                "•".bold()
+            },
+            " ".into(),
             if self.is_active() {
                 "Exploring".bold()
             } else {
