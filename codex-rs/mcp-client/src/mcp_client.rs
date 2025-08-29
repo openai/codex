@@ -129,10 +129,7 @@ impl McpClient {
                                 error!("failed to write newline to child stdin");
                                 break;
                             }
-                            if stdin.flush().await.is_err() {
-                                error!("failed to flush child stdin");
-                                break;
-                            }
+                            // No explicit flush needed on a pipe; write_all is sufficient.
                         }
                         Err(e) => error!("failed to serialize JSONRPCMessage: {e}"),
                     }
