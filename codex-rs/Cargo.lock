@@ -973,11 +973,13 @@ dependencies = [
  "diffy",
  "image",
  "insta",
+ "itertools 0.14.0",
  "lazy_static",
  "libc",
  "mcp-types",
  "once_cell",
  "path-clean",
+ "pathdiff",
  "pretty_assertions",
  "rand 0.9.2",
  "ratatui",
@@ -3376,6 +3378,12 @@ checksum = "07ba0ad7e047712414213ff67533e6dd477af0a4e1d14fb52343e53d30ea9397"
 dependencies = [
  "once_cell",
 ]
+
+[[package]]
+name = "pathdiff"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df94ce210e5bc13cb6651479fa48d14f601d9858cfe0467f43ae157023b938d3"
 
 [[package]]
 name = "percent-encoding"

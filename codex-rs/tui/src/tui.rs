@@ -510,6 +510,7 @@ impl Tui {
             }
         }
 
+        // Use synchronized update via backend instead of stdout()
         std::io::stdout().sync_update(|_| {
             #[cfg(unix)]
             {
@@ -560,8 +561,7 @@ impl Tui {
             }
             terminal.draw(|frame| {
                 draw_fn(frame);
-            })?;
-            Ok(())
+            })
         })?
     }
 }

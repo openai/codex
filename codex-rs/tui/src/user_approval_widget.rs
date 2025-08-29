@@ -258,12 +258,10 @@ impl UserApprovalWidget {
     }
 
     fn send_decision_with_feedback(&mut self, decision: ReviewDecision, feedback: String) {
-        let mut lines: Vec<Line<'static>> = vec![Line::from("")];
         match &self.approval_request {
             ApprovalRequest::Exec { command, .. } => {
                 let cmd = strip_bash_lc_and_escape(command);
-                let mut cmd_span: Span = cmd.clone().into();
-                cmd_span.style = cmd_span.style.add_modifier(Modifier::DIM);
+                let mut lines: Vec<Line<'static>> = vec![Line::from("")];
 
                 // Result line based on decision.
                 match decision {
@@ -316,18 +314,20 @@ impl UserApprovalWidget {
                         ));
                     }
                 }
+
+                if !feedback.trim().is_empty() {
+                    lines.push(Line::from("feedback:"));
+                    for l in feedback.lines() {
+                        lines.push(Line::from(l.to_string()));
+                    }
+                }
+
+                self.app_event_tx.send(AppEvent::InsertHistoryLines(lines));
             }
             ApprovalRequest::ApplyPatch { .. } => {
-                lines.push(Line::from(format!("patch approval decision: {decision:?}")));
+                // No history line for patch approval decisions.
             }
         }
-        if !feedback.trim().is_empty() {
-            lines.push(Line::from("feedback:"));
-            for l in feedback.lines() {
-                lines.push(Line::from(l.to_string()));
-            }
-        }
-        self.app_event_tx.send(AppEvent::InsertHistoryLines(lines));
 
         let op = match &self.approval_request {
             ApprovalRequest::Exec { id, .. } => Op::ExecApproval {

@@ -869,7 +869,9 @@ pub enum FileChange {
     Add {
         content: String,
     },
-    Delete,
+    Delete {
+        content: String,
+    },
     Update {
         unified_diff: String,
         move_path: Option<PathBuf>,
