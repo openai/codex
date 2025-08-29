@@ -135,9 +135,11 @@ pub async fn run_main(
     let overrides_cli = codex_common::CliConfigOverrides { raw_overrides };
     let cli_kv_overrides = match overrides_cli.parse_overrides() {
         Ok(v) => v,
-        #[allow(clippy::print_stderr)]
         Err(e) => {
-            eprintln!("Error parsing -c overrides: {e}");
+            #[allow(clippy::print_stderr)]
+            {
+                eprintln!("Error parsing -c overrides: {e}");
+            }
             std::process::exit(1);
         }
     };
@@ -145,23 +147,82 @@ pub async fn run_main(
     let mut config = {
         // Load configuration and support CLI overrides.
 
-        #[allow(clippy::print_stderr)]
         match Config::load_with_cli_overrides(cli_kv_overrides.clone(), overrides) {
             Ok(config) => config,
             Err(err) => {
-                eprintln!("Error loading configuration: {err}");
+                #[allow(clippy::print_stderr)]
+                {
+                    eprintln!("Error loading configuration: {err}");
+                }
                 std::process::exit(1);
             }
         }
     };
 
+    // Handle session management CLI flags before starting the TUI.
+    if cli.list_sessions {
+        let sessions = match codex_core::sessions::list_sessions(&config) {
+            Ok(v) => v,
+            Err(e) => {
+                #[allow(clippy::print_stderr)]
+                {
+                    eprintln!("Failed to list sessions: {e}");
+                }
+                Vec::new()
+            }
+        };
+        #[allow(clippy::print_stdout)]
+        {
+            if sessions.is_empty() {
+                println!("No sessions found.");
+            } else {
+                for s in sessions {
+                    let title = s.title.unwrap_or_else(|| "(no title)".to_string());
+                    let last = s.last_active.unwrap_or_else(|| "unknown".to_string());
+                    println!("{}  {}  {}\n  {}", s.id, s.created, last, s.path.display());
+                    println!("  {title}");
+                }
+            }
+        }
+        return Ok(Default::default());
+    }
+
+    if let Some(resume_arg) = &cli.resume {
+        // Resolve to a path: try explicit path, then UUID, then 'latest'.
+        let resume_path = if std::path::Path::new(resume_arg).exists() {
+            Some(PathBuf::from(resume_arg))
+        } else if resume_arg == "latest" {
+            codex_core::sessions::latest(&config)
+                .ok()
+                .flatten()
+                .map(|e| e.path)
+        } else if let Ok(id) = uuid::Uuid::parse_str(resume_arg) {
+            codex_core::sessions::find_by_id(&config, id)
+                .ok()
+                .flatten()
+                .map(|e| e.path)
+        } else {
+            None
+        };
+        if let Some(path) = resume_path {
+            config.experimental_resume = Some(path);
+        } else {
+            #[allow(clippy::print_stderr)]
+            {
+                eprintln!("Could not resolve session to resume: {resume_arg}");
+            }
+        }
+    }
+
     // we load config.toml here to determine project state.
-    #[allow(clippy::print_stderr)]
     let config_toml = {
         let codex_home = match find_codex_home() {
             Ok(codex_home) => codex_home,
             Err(err) => {
-                eprintln!("Error finding codex home: {err}");
+                #[allow(clippy::print_stderr)]
+                {
+                    eprintln!("Error finding codex home: {err}");
+                }
                 std::process::exit(1);
             }
         };
@@ -169,7 +230,10 @@ pub async fn run_main(
         match load_config_as_toml_with_cli_overrides(&codex_home, cli_kv_overrides) {
             Ok(config_toml) => config_toml,
             Err(err) => {
-                eprintln!("Error loading config.toml: {err}");
+                #[allow(clippy::print_stderr)]
+                {
+                    eprintln!("Error loading config.toml: {err}");
+                }
                 std::process::exit(1);
             }
         }

@@ -63,6 +63,18 @@ codex completion zsh
 codex completion fish
 ```
 
+### Usage and Guardrail Resets
+
+Check your current guardrail usage and next reset times via:
+
+```
+codex usage
+# or
+codex /usage
+```
+
+When usage data is unavailable, the command prints a clear, non-fatal message and exits successfully.
+
 ### Experimenting with the Codex Sandbox
 
 To test to see what happens when a command is run under the sandbox provided by Codex, we provide the following subcommands in Codex CLI:

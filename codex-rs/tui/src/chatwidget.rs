@@ -800,6 +800,9 @@ impl ChatWidget {
                 }
                 self.app_event_tx.send(AppEvent::ExitRequest);
             }
+            SlashCommand::Sessions => {
+                self.open_sessions_popup();
+            }
             SlashCommand::Diff => {
                 self.add_diff_in_progress();
                 let tx = self.app_event_tx.clone();
@@ -822,6 +825,9 @@ impl ChatWidget {
             }
             SlashCommand::Status => {
                 self.add_status_output();
+            }
+            SlashCommand::Usage => {
+                self.add_usage_output();
             }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
@@ -871,6 +877,50 @@ impl ChatWidget {
         self.bottom_pane.handle_paste(text);
     }
 
+    fn open_sessions_popup(&mut self) {
+        let sessions = match codex_core::sessions::list_sessions(&self.config) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("failed to list sessions: {e}");
+                Vec::new()
+            }
+        };
+        let mut items: Vec<crate::bottom_pane::SelectionItem> = Vec::new();
+        for s in sessions {
+            let title = s.title.clone().unwrap_or_else(|| "(no title)".to_string());
+            let desc = Some(format!(
+                "created: {}   last: {}",
+                s.created,
+                s.last_active.unwrap_or_else(|| "unknown".to_string())
+            ));
+            let path = s.path.clone();
+            let id = s.id;
+            let actions: Vec<crate::bottom_pane::SelectionAction> = vec![Box::new(move |tx| {
+                tracing::info!("resume selected session: {id}");
+                tx.send(crate::app_event::AppEvent::ResumeSession(path.clone()));
+            })];
+            items.push(crate::bottom_pane::SelectionItem {
+                name: format!("{title} — {id}"),
+                description: desc,
+                is_current: false,
+                actions,
+            });
+        }
+        if items.is_empty() {
+            items.push(crate::bottom_pane::SelectionItem {
+                name: "No saved sessions".to_string(),
+                description: None,
+                is_current: true,
+                actions: vec![],
+            });
+        }
+        self.bottom_pane.show_selection_view(
+            "Sessions".to_string(),
+            Some("Select a session to resume".to_string()),
+            Some("Up/Down to navigate; Enter to resume; Esc to cancel".to_string()),
+            items,
+        );
+    }
     // Returns true if caller should skip rendering this frame (a future frame is scheduled).
     pub(crate) fn handle_paste_burst_tick(&mut self, frame_requester: FrameRequester) -> bool {
         if self.bottom_pane.flush_paste_burst_if_due() {
@@ -1068,6 +1118,10 @@ impl ChatWidget {
             &self.total_token_usage,
             &self.session_id,
         ));
+    }
+
+    pub(crate) fn add_usage_output(&mut self) {
+        self.add_to_history(history_cell::new_usage_output(&self.config));
     }
 
     /// Open a popup to choose the model preset (model + reasoning effort).
