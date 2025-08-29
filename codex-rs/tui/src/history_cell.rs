@@ -114,14 +114,14 @@ impl HistoryCell for UserHistoryCell {
 #[derive(Debug)]
 pub(crate) struct AgentMessageCell {
     lines: Vec<Line<'static>>,
-    include_header_in_transcript: bool,
+    is_first_line: bool,
 }
 
 impl AgentMessageCell {
-    pub(crate) fn new(lines: Vec<Line<'static>>, include_header_in_transcript: bool) -> Self {
+    pub(crate) fn new(lines: Vec<Line<'static>>, is_first_line: bool) -> Self {
         Self {
             lines,
-            include_header_in_transcript,
+            is_first_line,
         }
     }
 }
@@ -129,7 +129,7 @@ impl AgentMessageCell {
 impl HistoryCell for AgentMessageCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut out: Vec<Line<'static>> = Vec::new();
-        if self.include_header_in_transcript {
+        if self.is_first_line {
             out.push(Line::from(""));
         }
         // We want:
@@ -140,31 +140,24 @@ impl HistoryCell for AgentMessageCell {
         for line in &self.lines {
             let wrapped =
                 crate::insert_history::word_wrap_lines(std::slice::from_ref(line), wrap_width);
-            for (i, mut piece) in wrapped.into_iter().enumerate() {
+            for (i, piece) in wrapped.into_iter().enumerate() {
                 let mut spans = Vec::with_capacity(piece.spans.len() + 1);
-                if is_first_visual && i == 0 {
-                    if self.include_header_in_transcript {
-                        spans.push("> ".into());
-                    } else {
-                        spans.push("  ".into());
-                    }
+                spans.push(if is_first_visual && i == 0 && self.is_first_line {
+                    "> ".into()
                 } else {
-                    spans.push("  ".into());
-                }
+                    "  ".into()
+                });
                 spans.extend(piece.spans.into_iter());
-                piece.spans = spans;
-                out.push(piece);
+                out.push(Line::from(spans));
             }
-            if is_first_visual {
-                is_first_visual = false;
-            }
+            is_first_visual = false;
         }
         out
     }
 
     fn transcript_lines(&self) -> Vec<Line<'static>> {
         let mut out: Vec<Line<'static>> = Vec::new();
-        if self.include_header_in_transcript {
+        if self.is_first_line {
             out.push(Line::from(""));
             out.push(Line::from("codex".magenta().bold()));
         }
@@ -1353,8 +1346,6 @@ pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
     lines.insert(0, Line::from(""));
     PlainHistoryCell { lines }
 }
-
-// new_patch_apply_success removed per updated styling (no success block)
 
 pub(crate) fn new_reasoning_block(
     full_reasoning_buffer: String,
