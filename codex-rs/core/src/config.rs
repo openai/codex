@@ -17,6 +17,7 @@ use crate::model_provider_info::built_in_model_providers;
 use crate::openai_model_info::get_model_info;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
+use crate::user_notification::EventHooks;
 use anyhow::Context;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
@@ -121,6 +122,9 @@ pub struct Config {
     /// TUI notifications preference. When set, the TUI will send OSC 9 notifications on approvals
     /// and turn completions when not focused.
     pub tui_notifications: Notifications,
+
+    /// Event hooks configuration for different events (agent finished, user input, etc.)
+    pub hooks: EventHooks,
 
     /// The directory that should be treated as the current working directory
     /// for the session. All relative paths inside the business-logic layer are
@@ -636,6 +640,10 @@ pub struct ConfigToml {
     #[serde(default)]
     pub notify: Option<Vec<String>>,
 
+    /// Event hooks configuration for different events.
+    #[serde(default)]
+    pub hooks: Option<EventHooks>,
+
     /// System instructions.
     pub instructions: Option<String>,
 
@@ -1009,6 +1017,7 @@ impl Config {
             sandbox_policy,
             shell_environment_policy,
             notify: cfg.notify,
+            hooks: cfg.hooks.unwrap_or_default(),
             user_instructions,
             base_instructions,
             mcp_servers: cfg.mcp_servers,
@@ -1607,6 +1616,7 @@ model_verbosity = "high"
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
                 user_instructions: None,
                 notify: None,
+                hooks: EventHooks::default(),
                 cwd: fixture.cwd(),
                 mcp_servers: HashMap::new(),
                 model_providers: fixture.model_provider_map.clone(),
@@ -1665,6 +1675,7 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
+            hooks: EventHooks::default(),
             cwd: fixture.cwd(),
             mcp_servers: HashMap::new(),
             model_providers: fixture.model_provider_map.clone(),
@@ -1738,6 +1749,7 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
+            hooks: EventHooks::default(),
             cwd: fixture.cwd(),
             mcp_servers: HashMap::new(),
             model_providers: fixture.model_provider_map.clone(),
@@ -1797,6 +1809,7 @@ model_verbosity = "high"
             shell_environment_policy: ShellEnvironmentPolicy::default(),
             user_instructions: None,
             notify: None,
+            hooks: EventHooks::default(),
             cwd: fixture.cwd(),
             mcp_servers: HashMap::new(),
             model_providers: fixture.model_provider_map.clone(),
