@@ -214,6 +214,56 @@ fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {
     s
 }
 
+// --- Small helpers to tersely drive exec begin/end and snapshot active cell ---
+fn begin_exec(chat: &mut ChatWidget, call_id: &str, raw_cmd: &str) {
+    // Build the full command vec and parse it using core's parser,
+    // then convert to protocol variants for the event payload.
+    let command = vec!["bash".to_string(), "-lc".to_string(), raw_cmd.to_string()];
+    let parsed_cmd: Vec<codex_protocol::parse_command::ParsedCommand> =
+        codex_core::parse_command::parse_command(&command)
+            .into_iter()
+            .map(Into::into)
+            .collect();
+    chat.handle_codex_event(Event {
+        id: call_id.to_string(),
+        msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+            call_id: call_id.to_string(),
+            command,
+            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+            parsed_cmd,
+        }),
+    });
+}
+
+fn end_exec(chat: &mut ChatWidget, call_id: &str, stdout: &str, stderr: &str, exit_code: i32) {
+    let aggregated = if stderr.is_empty() {
+        stdout.to_string()
+    } else {
+        format!("{stdout}{stderr}")
+    };
+    chat.handle_codex_event(Event {
+        id: call_id.to_string(),
+        msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
+            call_id: call_id.to_string(),
+            stdout: stdout.to_string(),
+            stderr: stderr.to_string(),
+            aggregated_output: aggregated.clone(),
+            exit_code,
+            duration: std::time::Duration::from_millis(5),
+            formatted_output: aggregated,
+        }),
+    });
+}
+
+fn active_blob(chat: &ChatWidget) -> String {
+    let lines = chat
+        .active_exec_cell
+        .as_ref()
+        .expect("active exec cell present")
+        .display_lines(80);
+    lines_to_single_string(&lines)
+}
+
 fn open_fixture(name: &str) -> std::fs::File {
     // 1) Prefer fixtures within this crate
     {
@@ -414,192 +464,33 @@ fn interrupt_exec_marks_failed_snapshot() {
 
 #[test]
 fn exec_history_extends_previous_when_consecutive() {
-    use codex_core::parse_command::ParsedCommand;
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
     // 1) Start "ls -la" (List)
-    chat.handle_codex_event(Event {
-        id: "call-ls".into(),
-        msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
-            call_id: "call-ls".into(),
-            command: vec!["bash".into(), "-lc".into(), "ls -la".into()],
-            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            parsed_cmd: vec![
-                ParsedCommand::ListFiles {
-                    cmd: "ls -la".into(),
-                    path: None,
-                }
-                .into(),
-            ],
-        }),
-    });
-    let _ = drain_insert_history(&mut rx);
-    let blob1 = {
-        let lines = chat
-            .active_exec_cell
-            .as_ref()
-            .expect("active exec cell present after ls begin")
-            .display_lines(80);
-        lines_to_single_string(&lines)
-    };
-    assert_snapshot!("exploring_step1_start_ls", blob1);
+    begin_exec(&mut chat, "call-ls", "ls -la");
+    assert_snapshot!("exploring_step1_start_ls", active_blob(&chat));
 
     // 2) Finish "ls -la"
-    chat.handle_codex_event(Event {
-        id: "call-ls".into(),
-        msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
-            call_id: "call-ls".into(),
-            stdout: String::new(),
-            stderr: String::new(),
-            aggregated_output: String::new(),
-            exit_code: 0,
-            duration: std::time::Duration::from_millis(5),
-            formatted_output: String::new(),
-        }),
-    });
-    let _ = drain_insert_history(&mut rx);
-    let blob2 = {
-        let lines = chat
-            .active_exec_cell
-            .as_ref()
-            .expect("active exec cell present after ls end")
-            .display_lines(80);
-        lines_to_single_string(&lines)
-    };
-    assert_snapshot!("exploring_step2_finish_ls", blob2);
+    end_exec(&mut chat, "call-ls", "", "", 0);
+    assert_snapshot!("exploring_step2_finish_ls", active_blob(&chat));
 
     // 3) Start "cat foo.txt" (Read)
-    chat.handle_codex_event(Event {
-        id: "call-cat-foo".into(),
-        msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
-            call_id: "call-cat-foo".into(),
-            command: vec!["bash".into(), "-lc".into(), "cat foo.txt".into()],
-            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            parsed_cmd: vec![
-                ParsedCommand::Read {
-                    name: "foo.txt".into(),
-                    cmd: "cat foo.txt".into(),
-                }
-                .into(),
-            ],
-        }),
-    });
-    let _ = drain_insert_history(&mut rx);
-    let blob3 = {
-        let lines = chat
-            .active_exec_cell
-            .as_ref()
-            .expect("active exec cell present after cat foo begin")
-            .display_lines(80);
-        lines_to_single_string(&lines)
-    };
-    assert_snapshot!("exploring_step3_start_cat_foo", blob3);
+    begin_exec(&mut chat, "call-cat-foo", "cat foo.txt");
+    assert_snapshot!("exploring_step3_start_cat_foo", active_blob(&chat));
 
     // 4) Complete "cat foo.txt"
-    chat.handle_codex_event(Event {
-        id: "call-cat-foo".into(),
-        msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
-            call_id: "call-cat-foo".into(),
-            stdout: "hello from foo".into(),
-            stderr: String::new(),
-            aggregated_output: "hello from foo".into(),
-            exit_code: 0,
-            duration: std::time::Duration::from_millis(3),
-            formatted_output: "hello from foo".into(),
-        }),
-    });
-    let _ = drain_insert_history(&mut rx);
-    let blob4 = {
-        let lines = chat
-            .active_exec_cell
-            .as_ref()
-            .expect("active exec cell present after cat foo end")
-            .display_lines(80);
-        lines_to_single_string(&lines)
-    };
-    assert_snapshot!("exploring_step4_finish_cat_foo", blob4);
+    end_exec(&mut chat, "call-cat-foo", "hello from foo", "", 0);
+    assert_snapshot!("exploring_step4_finish_cat_foo", active_blob(&chat));
 
     // 5) Start & complete "sed -n 100,200p foo.txt" (treated as Read of foo.txt)
-    chat.handle_codex_event(Event {
-        id: "call-sed-range".into(),
-        msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
-            call_id: "call-sed-range".into(),
-            command: vec![
-                "bash".into(),
-                "-lc".into(),
-                "sed -n 100,200p foo.txt".into(),
-            ],
-            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            parsed_cmd: vec![
-                ParsedCommand::Read {
-                    name: "foo.txt".into(),
-                    cmd: "sed -n 100,200p foo.txt".into(),
-                }
-                .into(),
-            ],
-        }),
-    });
-    chat.handle_codex_event(Event {
-        id: "call-sed-range".into(),
-        msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
-            call_id: "call-sed-range".into(),
-            stdout: "chunk".into(),
-            stderr: String::new(),
-            aggregated_output: "chunk".into(),
-            exit_code: 0,
-            duration: std::time::Duration::from_millis(2),
-            formatted_output: "chunk".into(),
-        }),
-    });
-    let _ = drain_insert_history(&mut rx);
-    let blob5 = {
-        let lines = chat
-            .active_exec_cell
-            .as_ref()
-            .expect("active exec cell present after sed range")
-            .display_lines(80);
-        lines_to_single_string(&lines)
-    };
-    assert_snapshot!("exploring_step5_finish_sed_range", blob5);
+    begin_exec(&mut chat, "call-sed-range", "sed -n 100,200p foo.txt");
+    end_exec(&mut chat, "call-sed-range", "chunk", "", 0);
+    assert_snapshot!("exploring_step5_finish_sed_range", active_blob(&chat));
 
     // 6) Start & complete "cat bar.txt"
-    chat.handle_codex_event(Event {
-        id: "call-cat-bar".into(),
-        msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
-            call_id: "call-cat-bar".into(),
-            command: vec!["bash".into(), "-lc".into(), "cat bar.txt".into()],
-            cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            parsed_cmd: vec![
-                ParsedCommand::Read {
-                    name: "bar.txt".into(),
-                    cmd: "cat bar.txt".into(),
-                }
-                .into(),
-            ],
-        }),
-    });
-    chat.handle_codex_event(Event {
-        id: "call-cat-bar".into(),
-        msg: EventMsg::ExecCommandEnd(ExecCommandEndEvent {
-            call_id: "call-cat-bar".into(),
-            stdout: "hello from bar".into(),
-            stderr: String::new(),
-            aggregated_output: "hello from bar".into(),
-            exit_code: 0,
-            duration: std::time::Duration::from_millis(4),
-            formatted_output: "hello from bar".into(),
-        }),
-    });
-    let _ = drain_insert_history(&mut rx);
-    let blob6 = {
-        let lines = chat
-            .active_exec_cell
-            .as_ref()
-            .expect("active exec cell present after cat bar")
-            .display_lines(80);
-        lines_to_single_string(&lines)
-    };
-    assert_snapshot!("exploring_step6_finish_cat_bar", blob6);
+    begin_exec(&mut chat, "call-cat-bar", "cat bar.txt");
+    end_exec(&mut chat, "call-cat-bar", "hello from bar", "", 0);
+    assert_snapshot!("exploring_step6_finish_cat_bar", active_blob(&chat));
 }
 
 #[tokio::test(flavor = "current_thread")]
