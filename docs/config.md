@@ -11,6 +11,13 @@ Codex supports several mechanisms for setting config values:
   - If `value` cannot be parsed as a valid TOML value, it is treated as a string value. This means that both `-c model="o3"` and `-c model=o3` are equivalent.
 - The `$CODEX_HOME/config.toml` configuration file where the `CODEX_HOME` environment value defaults to `~/.codex`. (Note `CODEX_HOME` will also be where logs and other Codex-related information are stored.)
 
+Quick links:
+
+- Example config to copy: [config.toml.example](./config.toml.example)
+- Sandbox details: [docs/sandbox.md](./sandbox.md)
+- Authentication options: [docs/authentication.md](./authentication.md)
+- See examples: [Examples](#examples)
+
 Both the `--config` flag and the `config.toml` file support the following options:
 
 ## model
@@ -18,7 +25,7 @@ Both the `--config` flag and the `config.toml` file support the following option
 The model that Codex should use.
 
 ```toml
-model = "o3"  # overrides the default of "gpt-5"
+model = "gpt-5"  # default; set explicitly to be clear
 ```
 
 ## model_providers
@@ -93,6 +100,25 @@ http_headers = { "X-Example-Header" = "example-value" }
 env_http_headers = { "X-Example-Features": "EXAMPLE_FEATURES" }
 ```
 
+### Built-in providers
+
+Codex ships with two built-in providers:
+
+- `openai`:
+  - Uses the Responses API (requests end with `/responses`).
+  - Default endpoint depends on auth mode:
+    - ChatGPT sign‑in: `https://chatgpt.com/backend-api/codex/responses`.
+    - API key: `https://api.openai.com/v1/responses`.
+  - If `OPENAI_BASE_URL` is set, it overrides the base for both modes; Codex still appends `/responses`.
+  - When available, adds headers sourced from env: `OpenAI-Organization` (`OPENAI_ORGANIZATION`) and `OpenAI-Project` (`OPENAI_PROJECT`).
+  - Requires OpenAI auth (ChatGPT login or API key).
+- `oss`:
+  - Uses Chat Completions (`/v1/chat/completions`).
+  - Defaults to `http://localhost:11434/v1` (or `CODEX_OSS_BASE_URL` if set).
+  - Intended for local OSS endpoints (e.g., Ollama-compatible servers).
+
+If you want Chat Completions against OpenAI’s API, define your own provider (e.g., `openai-chat-completions`) as shown above and set `model_provider = "openai-chat-completions"`.
+
 ### Per-provider network tuning
 
 The following optional settings control retry behaviour and streaming idle timeouts **per model provider**. They must be specified inside the corresponding `[model_providers.<id>]` block in `config.toml`. (Older releases accepted top‑level keys; those are now ignored.)
@@ -105,9 +131,9 @@ name = "OpenAI"
 base_url = "https://api.openai.com/v1"
 env_key = "OPENAI_API_KEY"
 # network tuning overrides (all optional; falls back to built‑in defaults)
-request_max_retries = 4            # retry failed HTTP requests
-stream_max_retries = 10            # retry dropped SSE streams
-stream_idle_timeout_ms = 300000    # 5m idle timeout
+request_max_retries = 4            # retry failed HTTP requests (default)
+stream_max_retries = 5             # retry dropped SSE streams (default)
+stream_idle_timeout_ms = 300000    # 5m idle timeout (default)
 ```
 
 #### request_max_retries
@@ -116,7 +142,7 @@ How many times Codex will retry a failed HTTP request to the model provider. Def
 
 #### stream_max_retries
 
-Number of times Codex will attempt to reconnect when a streaming response is interrupted. Defaults to `10`.
+Number of times Codex will attempt to reconnect when a streaming response is interrupted. Defaults to `5`.
 
 #### stream_idle_timeout_ms
 
@@ -135,9 +161,11 @@ model_provider = "ollama"
 model = "mistral"
 ```
 
+Tip: The default model is `"gpt-5"` and the default provider is `"openai"`.
+
 ## approval_policy
 
-Determines when the user should be prompted to approve whether Codex can execute a command:
+Determines when the user should be prompted to approve whether Codex can execute a command (default: `"on-request"`):
 
 ```toml
 # Codex has hardcoded logic that defines a set of "trusted" commands.
@@ -181,7 +209,7 @@ Here is an example of a `config.toml` that defines multiple profiles:
 
 ```toml
 model = "o3"
-approval_policy = "unless-allow-listed"
+approval_policy = "untrusted"
 disable_response_storage = false
 
 # Setting `profile` is equivalent to specifying `--profile o3` on the command
@@ -217,7 +245,7 @@ Users can specify config values at multiple levels. Order of precedence is as fo
 1. custom command-line argument, e.g., `--model o3`
 2. as part of a profile, where the `--profile` is specified via a CLI (or in the config file itself)
 3. as an entry in `config.toml`, e.g., `model = "o3"`
-4. the default value that comes with Codex CLI (i.e., Codex CLI defaults to `gpt-5`)
+4. the default value that comes with Codex CLI (e.g., `model = "gpt-5"`, `approval_policy = "on-request"`)
 
 ## model_reasoning_effort
 
@@ -388,13 +416,13 @@ set = { CI = "1" }
 include_only = ["PATH", "HOME"]
 ```
 
-| Field                     | Type                       | Default | Description                                                                                                                                     |
-| ------------------------- | -------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| `inherit`                 | string                     | `all`   | Starting template for the environment:<br>`all` (clone full parent env), `core` (`HOME`, `PATH`, `USER`, …), or `none` (start empty).           |
-| `ignore_default_excludes` | boolean                    | `false` | When `false`, Codex removes any var whose **name** contains `KEY`, `SECRET`, or `TOKEN` (case-insensitive) before other rules run.              |
-| `exclude`                 | array<string>        | `[]`    | Case-insensitive glob patterns to drop after the default filter.<br>Examples: `"AWS_*"`, `"AZURE_*"`.                                           |
+| Field                     | Type                 | Default | Description                                                                                                                                     |
+| ------------------------- | -------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `inherit`                 | string               | `all`   | Starting template for the environment: `all` (clone full parent env), `core` (`HOME`, `PATH`, `USER`, …), or `none` (start empty).              |
+| `ignore_default_excludes` | boolean              | `false` | When `false`, Codex removes any var whose name contains `KEY` or `TOKEN` (case-insensitive) before other rules run.                             |
+| `exclude`                 | array<string>        | `[]`    | Case-insensitive glob patterns to drop after the default filter. Examples: `"AWS_*"`, `"AZURE_*"`.                                             |
 | `set`                     | table<string,string> | `{}`    | Explicit key/value overrides or additions – always win over inherited values.                                                                   |
-| `include_only`            | array<string>        | `[]`    | If non-empty, a whitelist of patterns; only variables that match _one_ pattern survive the final step. (Generally used with `inherit = "all"`.) |
+| `include_only`            | array<string>        | `[]`    | If non-empty, a whitelist of patterns; only variables that match one pattern survive the final step. (Generally used with `inherit = "all"`.)  |
 
 The patterns are **glob style**, not full regular expressions: `*` matches any
 number of characters, `?` matches exactly one, and character classes like
@@ -568,17 +596,17 @@ Options that are specific to the TUI.
 
 | Key | Type / Values | Notes |
 | --- | --- | --- |
-| `model` | string | Model to use (e.g., `gpt-5`). |
-| `model_provider` | string | Provider id from `model_providers` (default: `openai`). |
-| `model_context_window` | number | Context window tokens. |
-| `model_max_output_tokens` | number | Max output tokens. |
-| `approval_policy` | `untrusted` | `on-failure` | `on-request` | `never` | When to prompt for approval. |
-| `sandbox_mode` | `read-only` | `workspace-write` | `danger-full-access` | OS sandbox policy. |
+| `model` | string | Model name (default: `"gpt-5"`). |
+| `model_provider` | string | Provider id from `model_providers` (default: `"openai"`). |
+| `model_context_window` | number | Context window tokens (optional; inferred for common models). |
+| `model_max_output_tokens` | number | Max output tokens (optional; inferred for common models). |
+| `approval_policy` | one of `"untrusted"`, `"on-failure"`, `"on-request"`, `"never"` | When to prompt for approval (default: `"on-request"`). |
+| `sandbox_mode` | one of `"read-only"`, `"workspace-write"`, `"danger-full-access"` | OS sandbox policy (default: `"read-only"`). See `docs/sandbox.md`. |
 | `sandbox_workspace_write.writable_roots` | array<string> | Extra writable roots in workspace‑write. |
-| `sandbox_workspace_write.network_access` | boolean | Allow network in workspace‑write (default: false). |
-| `sandbox_workspace_write.exclude_tmpdir_env_var` | boolean | Exclude `$TMPDIR` from writable roots (default: false). |
-| `sandbox_workspace_write.exclude_slash_tmp` | boolean | Exclude `/tmp` from writable roots (default: false). |
-| `disable_response_storage` | boolean | Required for ZDR orgs. |
+| `sandbox_workspace_write.network_access` | boolean | Allow network in workspace‑write (default: `false`). |
+| `sandbox_workspace_write.exclude_tmpdir_env_var` | boolean | Exclude `$TMPDIR` from writable roots (default: `false`). |
+| `sandbox_workspace_write.exclude_slash_tmp` | boolean | Exclude `/tmp` from writable roots (default: `false`). |
+| `disable_response_storage` | boolean | Required for ZDR orgs (default: `false`). |
 | `notify` | array<string> | External program for notifications. |
 | `instructions` | string | Currently ignored; use `experimental_instructions_file` or `AGENTS.md`. |
 | `mcp_servers.<id>.command` | string | MCP server launcher command. |
@@ -587,31 +615,133 @@ Options that are specific to the TUI.
 | `model_providers.<id>.name` | string | Display name. |
 | `model_providers.<id>.base_url` | string | API base URL. |
 | `model_providers.<id>.env_key` | string | Env var for API key. |
-| `model_providers.<id>.wire_api` | `chat` | `responses` | Protocol used (default: `chat`). |
+| `model_providers.<id>.wire_api` | `"chat"` or `"responses"` | Protocol used (default: `"chat"`). |
 | `model_providers.<id>.query_params` | map<string,string> | Extra query params (e.g., Azure `api-version`). |
 | `model_providers.<id>.http_headers` | map<string,string> | Additional static headers. |
 | `model_providers.<id>.env_http_headers` | map<string,string> | Headers sourced from env vars. |
-| `model_providers.<id>.request_max_retries` | number | Per‑provider HTTP retry count (default: 4). |
-| `model_providers.<id>.stream_max_retries` | number | SSE stream retry count (default: 5). |
-| `model_providers.<id>.stream_idle_timeout_ms` | number | SSE idle timeout (ms) (default: 300000). |
-| `project_doc_max_bytes` | number | Max bytes to read from `AGENTS.md`. |
+| `model_providers.<id>.request_max_retries` | number | Per‑provider HTTP retry count (default: `4`). |
+| `model_providers.<id>.stream_max_retries` | number | SSE stream retry count (default: `5`). |
+| `model_providers.<id>.stream_idle_timeout_ms` | number | SSE idle timeout (ms) (default: `300000`). |
+| `project_doc_max_bytes` | number | Max bytes to read from `AGENTS.md` (default: `32768`). |
 | `profile` | string | Active profile name. |
 | `profiles.<name>.*` | various | Profile‑scoped overrides of the same keys. |
-| `history.persistence` | `save-all` | `none` | History file persistence (default: `save-all`). |
+| `history.persistence` | `"save-all"` or `"none"` | History file persistence (default: `"save-all"`). |
 | `history.max_bytes` | number | Currently ignored (not enforced). |
-| `file_opener` | `vscode` | `vscode-insiders` | `windsurf` | `cursor` | `none` | URI scheme for clickable citations (default: `vscode`). |
+| `file_opener` | `"vscode"`, `"vscode-insiders"`, `"windsurf"`, `"cursor"`, `"none"` | URI scheme for clickable citations (default: `"vscode"`). |
 | `tui` | table | TUI‑specific options (reserved). |
-| `hide_agent_reasoning` | boolean | Hide model reasoning events. |
-| `show_raw_agent_reasoning` | boolean | Show raw reasoning (when available). |
-| `model_reasoning_effort` | `minimal` | `low` | `medium` | `high` | Responses API reasoning effort. |
-| `model_reasoning_summary` | `auto` | `concise` | `detailed` | `none` | Reasoning summaries. |
-| `model_verbosity` | `low` | `medium` | `high` | GPT‑5 text verbosity (Responses API). |
-| `model_supports_reasoning_summaries` | boolean | Force‑enable reasoning summaries. |
-| `chatgpt_base_url` | string | Base URL for ChatGPT auth flow. |
+| `hide_agent_reasoning` | boolean | Hide model reasoning events (default: `false`). |
+| `show_raw_agent_reasoning` | boolean | Show raw reasoning when available (default: `false`). |
+| `model_reasoning_effort` | `"minimal"`, `"low"`, `"medium"`, `"high"` | Responses API reasoning effort (default: `"medium"`). |
+| `model_reasoning_summary` | `"auto"`, `"concise"`, `"detailed"`, `"none"` | Reasoning summaries (default: `"auto"`). |
+| `model_verbosity` | `"low"`, `"medium"`, `"high"` | GPT‑5 text verbosity (Responses API; optional). |
+| `model_supports_reasoning_summaries` | boolean | Force‑enable reasoning summaries (default: `false`). |
+| `chatgpt_base_url` | string | Base URL for ChatGPT auth flow (default: `"https://chatgpt.com/backend-api/"`). |
 | `experimental_resume` | string (path) | Resume JSONL path (internal/experimental). |
 | `experimental_instructions_file` | string (path) | Replace built‑in instructions (experimental). |
-| `experimental_use_exec_command_tool` | boolean | Use experimental exec command tool. |
+| `experimental_use_exec_command_tool` | boolean | Use experimental exec command tool (default: `false`). |
 | `responses_originator_header_internal_override` | string | Override `originator` header value. |
 | `projects.<path>.trust_level` | string | Mark project/worktree as trusted (only `"trusted"` is recognized). |
-| `preferred_auth_method` | `chatgpt` | `apikey` | Select default auth method (default: `chatgpt`). |
-| `tools.web_search` | boolean | Enable web search tool (alias: `web_search_request`) (default: false). |
+| `preferred_auth_method` | `"chatgpt"` or `"apikey"` | Select default auth method (default: `"chatgpt"`). |
+| `tools.web_search` | boolean | Enable web search tool (alias: `web_search_request`) (default: `false`). |
+| `tools.view_image` | boolean | Enable image attachment tool (default: `true`). |
+
+---
+
+## Examples
+
+Minimal (ChatGPT login; defaults shown explicitly):
+
+```toml
+# ~/.codex/config.toml
+model = "gpt-5"
+approval_policy = "on-request"
+sandbox_mode = "read-only"
+```
+
+OpenAI via Chat Completions (user-defined provider):
+
+```toml
+model = "gpt-4o"
+model_provider = "openai-chat-completions"
+
+[model_providers.openai-chat-completions]
+name = "OpenAI using Chat Completions"
+base_url = "https://api.openai.com/v1"
+env_key = "OPENAI_API_KEY"
+wire_api = "chat"
+# request_max_retries = 4
+# stream_max_retries = 5
+# stream_idle_timeout_ms = 300000
+```
+
+Azure (api-version required):
+
+```toml
+model = "gpt-4o"
+model_provider = "azure"
+
+[model_providers.azure]
+name = "Azure"
+base_url = "https://YOUR_PROJECT_NAME.openai.azure.com/openai"
+env_key = "AZURE_OPENAI_API_KEY"
+query_params = { api-version = "2025-04-01-preview" }
+wire_api = "chat"
+```
+
+Local OSS (e.g., Ollama-compatible on localhost):
+
+```toml
+model = "llama3.1"
+model_provider = "oss"  # built-in, chat completions-compatible
+```
+
+Workspace-write sandbox with optional network:
+
+```toml
+sandbox_mode = "workspace-write"
+
+[sandbox_workspace_write]
+writable_roots = ["/Users/YOU/.pyenv/shims"]
+network_access = false
+exclude_tmpdir_env_var = false
+exclude_slash_tmp = false
+```
+
+MCP server:
+
+```toml
+[mcp_servers.my-server]
+command = "npx"
+args = ["-y", "mcp-server"]
+env = { "API_KEY" = "value" }
+```
+
+Profiles and precedence:
+
+```toml
+model = "o3"
+approval_policy = "untrusted"
+profile = "o3"
+
+[profiles.o3]
+model = "o3"
+model_provider = "openai"
+approval_policy = "never"
+model_reasoning_effort = "high"
+model_reasoning_summary = "detailed"
+
+[profiles.gpt3]
+model = "gpt-3.5-turbo"
+model_provider = "openai-chat-completions"
+```
+
+Shell environment policy:
+
+```toml
+[shell_environment_policy]
+inherit = "core"                 # all|core|none (default: all)
+ignore_default_excludes = false  # filters *KEY*, *TOKEN*
+exclude = ["AWS_*", "AZURE_*"]
+set = { CI = "1" }
+include_only = ["PATH", "HOME"]
+```

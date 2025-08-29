@@ -1,0 +1,128 @@
+# Codex CLI configuration example
+#
+# Copy or rename this file to: ~/.codex/config.toml
+# Then edit values to match your setup.
+
+# --- Core settings ---------------------------------------------------------
+
+# Model to use (default is "gpt-5").
+model = "gpt-5"
+
+# When to ask for permission to run commands: "untrusted", "on-failure",
+# "on-request" (default), or "never".
+approval_policy = "on-request"
+
+# Sandboxing policy for command execution: "read-only" (default),
+# "workspace-write", or "danger-full-access".
+sandbox_mode = "read-only"
+
+# URI scheme for clickable file citations: "vscode" (default), "vscode-insiders",
+# "windsurf", "cursor", or "none" to disable hyperlinks.
+file_opener = "vscode"
+
+# Optional: toggle visibility of agent reasoning messages in output.
+# hide_agent_reasoning = false
+# show_raw_agent_reasoning = false
+
+# Optional: Responses API reasoning controls (when supported by the model).
+# model_reasoning_effort = "medium"     # minimal|low|medium|high
+# model_reasoning_summary = "auto"       # auto|concise|detailed|none
+# model_verbosity = "medium"             # low|medium|high (GPT‑5 family)
+
+# Optional: disable server-side response storage (required for ZDR accounts).
+# disable_response_storage = false
+
+# --- Sandbox: workspace-write options -------------------------------------
+
+# Only used when sandbox_mode = "workspace-write".
+# [sandbox_workspace_write]
+# writable_roots = ["/Users/YOU/.pyenv/shims"]
+# network_access = false
+# exclude_tmpdir_env_var = false
+# exclude_slash_tmp = false
+
+# --- Shell environment policy ---------------------------------------------
+
+# Control which environment variables are passed to spawned processes.
+[shell_environment_policy]
+# inherit can be: "all" (default), "core", or "none"
+inherit = "all"
+# When false (default), filter out names containing KEY or TOKEN (case-insensitive)
+ignore_default_excludes = false
+# Additional excludes (case-insensitive globs), e.g., "AWS_*", "AZURE_*"
+exclude = []
+# Force-set / override values
+set = {}
+# If non-empty, only variables matching one of these patterns are kept
+include_only = []
+
+# --- History ---------------------------------------------------------------
+
+[history]
+# "save-all" (default) or "none"
+persistence = "save-all"
+# max_bytes is currently ignored (not enforced)
+# max_bytes = 1048576
+
+# --- Tools -----------------------------------------------------------------
+
+[tools]
+# Enable web search (alias: web_search_request). Default is false.
+web_search = false
+# Enable the image attachment tool. Default is true when unset.
+# view_image = true
+
+# --- Providers -------------------------------------------------------------
+
+# Built-in providers:
+#   • openai (Responses API) — default provider; base can be overridden with OPENAI_BASE_URL
+#   • oss    (Chat Completions) — defaults to http://localhost:11434/v1 or CODEX_OSS_BASE_URL
+
+# To use OpenAI Chat Completions instead of Responses, define a provider:
+# [model_providers.openai-chat-completions]
+# name = "OpenAI using Chat Completions"
+# base_url = "https://api.openai.com/v1"
+# env_key = "OPENAI_API_KEY"
+# wire_api = "chat"
+# request_max_retries = 4
+# stream_max_retries = 5
+# stream_idle_timeout_ms = 300000
+
+# Azure requires api-version in query params and typically uses Chat Completions:
+# [model_providers.azure]
+# name = "Azure"
+# base_url = "https://YOUR_PROJECT_NAME.openai.azure.com/openai"
+# env_key = "AZURE_OPENAI_API_KEY"
+# query_params = { api-version = "2025-04-01-preview" }
+# wire_api = "chat"
+
+# --- Profiles --------------------------------------------------------------
+
+# Uncomment to select a default profile (can be overridden with --profile)
+# profile = "o3"
+
+[profiles.o3]
+model = "o3"
+model_provider = "openai"
+approval_policy = "never"
+model_reasoning_effort = "high"
+model_reasoning_summary = "detailed"
+
+[profiles.gpt3]
+model = "gpt-3.5-turbo"
+model_provider = "openai-chat-completions"
+
+# --- MCP Servers -----------------------------------------------------------
+
+# Example MCP server (commented out so copy-paste won't try to start it):
+# [mcp_servers.my-server]
+# command = "npx"
+# args = ["-y", "mcp-server"]
+# env = { "API_KEY" = "value" }
+
+# --- Notifications ---------------------------------------------------------
+
+# Program is executed with a single JSON argument when a turn completes.
+# Example on macOS using a custom script:
+# notify = ["python3", "/Users/YOU/.codex/notify.py"]
+
