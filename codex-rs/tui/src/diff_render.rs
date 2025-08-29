@@ -32,7 +32,9 @@ pub(crate) fn create_diff_summary(
     wrap_cols: usize,
 ) -> Vec<RtLine<'static>> {
     match event_type {
-        PatchEventType::ApplyBegin => render_applied_changes_block(changes, wrap_cols),
+        PatchEventType::ApplyBegin { auto_approved } => {
+            render_applied_changes_block(changes, wrap_cols, auto_approved)
+        }
         PatchEventType::ApprovalRequest => render_proposed_blocks(changes, wrap_cols),
     }
 }
@@ -83,6 +85,7 @@ fn collect_rows(changes: &HashMap<PathBuf, FileChange>, cwd: &Path) -> Vec<Row> 
 enum HeaderKind {
     ProposedChange,
     Edited,
+    ChangeApproved,
 }
 
 fn render_changes_block(
@@ -108,29 +111,17 @@ fn render_changes_block(
                 if let Some(fr) = &first_row_opt {
                     header_spans.push(format!(" {} ", fr.display).into());
                     header_spans.push("(".into());
-                    header_spans.push(RtSpan::styled(
-                        format!("+{}", fr.added),
-                        Style::default().fg(Color::Green),
-                    ));
+                    header_spans.push(format!("+{}", fr.added).green());
                     header_spans.push(" ".into());
-                    header_spans.push(RtSpan::styled(
-                        format!("-{}", fr.removed),
-                        Style::default().fg(Color::Red),
-                    ));
+                    header_spans.push(format!("-{}", fr.removed).red());
                     header_spans.push(")".into());
                 }
             } else {
                 header_spans.push(format!(" to {file_count} {noun} ").into());
                 header_spans.push("(".into());
-                header_spans.push(RtSpan::styled(
-                    format!("+{total_added}"),
-                    Style::default().fg(Color::Green),
-                ));
+                header_spans.push(format!("+{total_added}").green());
                 header_spans.push(" ".into());
-                header_spans.push(RtSpan::styled(
-                    format!("-{total_removed}"),
-                    Style::default().fg(Color::Red),
-                ));
+                header_spans.push(format!("-{total_removed}").red());
                 header_spans.push(")".into());
             }
         }
@@ -140,15 +131,9 @@ fn render_changes_block(
                 if let Some(fr) = &first_row_opt {
                     header_spans.push(format!(" {} ", fr.display).into());
                     header_spans.push("(".into());
-                    header_spans.push(RtSpan::styled(
-                        format!("+{}", fr.added),
-                        Style::default().fg(Color::Green),
-                    ));
+                    header_spans.push(format!("+{}", fr.added).green());
                     header_spans.push(" ".into());
-                    header_spans.push(RtSpan::styled(
-                        format!("-{}", fr.removed),
-                        Style::default().fg(Color::Red),
-                    ));
+                    header_spans.push(format!("-{}", fr.removed).red());
                     header_spans.push(")".into());
                 } else {
                     header_spans.push(format!(" {file_count} {noun} ").into());
@@ -167,17 +152,20 @@ fn render_changes_block(
             } else {
                 header_spans.push(format!(" {file_count} {noun} ").into());
                 header_spans.push("(".into());
-                header_spans.push(RtSpan::styled(
-                    format!("+{total_added}"),
-                    Style::default().fg(Color::Green),
-                ));
+                header_spans.push(format!("+{total_added}").green());
                 header_spans.push(" ".into());
-                header_spans.push(RtSpan::styled(
-                    format!("-{total_removed}"),
-                    Style::default().fg(Color::Red),
-                ));
+                header_spans.push(format!("-{total_removed}").red());
                 header_spans.push(")".into());
             }
+        }
+        HeaderKind::ChangeApproved => {
+            header_spans.push("Change Approved".bold());
+            header_spans.push(format!(" {file_count} {noun} ").into());
+            header_spans.push("(".into());
+            header_spans.push(format!("+{total_added}").green());
+            header_spans.push(" ".into());
+            header_spans.push(format!("-{total_removed}").red());
+            header_spans.push(")".into());
         }
     }
     out.push(RtLine::from(header_spans));
@@ -188,26 +176,22 @@ fn render_changes_block(
             out.push(RtLine::from(RtSpan::raw("")));
         }
         // File header line (skip when single-file header already shows the name)
-        let skip_file_header = file_count == 1;
+        let skip_file_header =
+            matches!(header_kind, HeaderKind::ProposedChange | HeaderKind::Edited)
+                && file_count == 1;
         if !skip_file_header {
             let mut header: Vec<RtSpan<'static>> = Vec::new();
             header.push("  └ ".dim());
             header.push(r.display.clone().into());
             let mut parts: Vec<RtSpan<'static>> = Vec::new();
             if r.added > 0 {
-                parts.push(RtSpan::styled(
-                    format!("+{}", r.added),
-                    Style::default().fg(Color::Green),
-                ));
+                parts.push(format!("+{}", r.added).green());
             }
             if r.removed > 0 {
                 if !parts.is_empty() {
                     parts.push(" ".into());
                 }
-                parts.push(RtSpan::styled(
-                    format!("-{}", r.removed),
-                    Style::default().fg(Color::Red),
-                ));
+                parts.push(format!("-{}", r.removed).red());
             }
             if !parts.is_empty() {
                 header.push(" (".into());
@@ -305,10 +289,16 @@ fn render_proposed_blocks(
 fn render_applied_changes_block(
     changes: &HashMap<PathBuf, FileChange>,
     wrap_cols: usize,
+    auto_approved: bool,
 ) -> Vec<RtLine<'static>> {
     let cwd: PathBuf = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
     let rows = collect_rows(changes, &cwd);
-    render_changes_block(rows, wrap_cols, HeaderKind::Edited)
+    let header_kind = if auto_approved {
+        HeaderKind::Edited
+    } else {
+        HeaderKind::ChangeApproved
+    };
+    render_changes_block(rows, wrap_cols, header_kind)
 }
 
 fn relative_from(base: &Path, path: &Path) -> Option<PathBuf> {
@@ -667,9 +657,15 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary(&changes, PatchEventType::ApplyBegin, 80);
+        for (name, auto_approved) in [
+            ("apply_update_block", true),
+            ("apply_update_block_manual", false),
+        ] {
+            let lines =
+                create_diff_summary(&changes, PatchEventType::ApplyBegin { auto_approved }, 80);
 
-        snapshot_lines("apply_update_block", lines, 80, 12);
+            snapshot_lines(name, lines, 80, 12);
+        }
     }
 
     #[test]
@@ -687,7 +683,13 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary(&changes, PatchEventType::ApplyBegin, 80);
+        let lines = create_diff_summary(
+            &changes,
+            PatchEventType::ApplyBegin {
+                auto_approved: true,
+            },
+            80,
+        );
 
         snapshot_lines("apply_update_with_rename_block", lines, 80, 12);
     }
@@ -715,7 +717,13 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary(&changes, PatchEventType::ApplyBegin, 80);
+        let lines = create_diff_summary(
+            &changes,
+            PatchEventType::ApplyBegin {
+                auto_approved: true,
+            },
+            80,
+        );
 
         snapshot_lines("apply_multiple_files_block", lines, 80, 14);
     }
@@ -730,7 +738,13 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary(&changes, PatchEventType::ApplyBegin, 80);
+        let lines = create_diff_summary(
+            &changes,
+            PatchEventType::ApplyBegin {
+                auto_approved: true,
+            },
+            80,
+        );
 
         snapshot_lines("apply_add_block", lines, 80, 10);
     }
@@ -744,7 +758,13 @@ mod tests {
         let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
         changes.insert(tmp_path.clone(), FileChange::Delete);
 
-        let lines = create_diff_summary(&changes, PatchEventType::ApplyBegin, 80);
+        let lines = create_diff_summary(
+            &changes,
+            PatchEventType::ApplyBegin {
+                auto_approved: true,
+            },
+            80,
+        );
 
         // Cleanup best-effort; rendering has already read the file
         let _ = std::fs::remove_file(&tmp_path);
@@ -768,7 +788,13 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary(&changes, PatchEventType::ApplyBegin, 72);
+        let lines = create_diff_summary(
+            &changes,
+            PatchEventType::ApplyBegin {
+                auto_approved: true,
+            },
+            72,
+        );
 
         // Render with backend width wider than wrap width to avoid Paragraph auto-wrap.
         snapshot_lines("apply_update_block_wraps_long_lines", lines, 80, 12);
@@ -791,7 +817,13 @@ mod tests {
             },
         );
 
-        let mut lines = create_diff_summary(&changes, PatchEventType::ApplyBegin, 28);
+        let mut lines = create_diff_summary(
+            &changes,
+            PatchEventType::ApplyBegin {
+                auto_approved: true,
+            },
+            28,
+        );
         // Drop the combined header for this text-only snapshot
         if !lines.is_empty() {
             lines.remove(0);
@@ -818,7 +850,13 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary(&changes, PatchEventType::ApplyBegin, 80);
+        let lines = create_diff_summary(
+            &changes,
+            PatchEventType::ApplyBegin {
+                auto_approved: true,
+            },
+            80,
+        );
 
         snapshot_lines("apply_update_block_relativizes_path", lines, 80, 10);
     }

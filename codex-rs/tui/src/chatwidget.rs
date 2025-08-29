@@ -324,7 +324,9 @@ impl ChatWidget {
 
     fn on_patch_apply_begin(&mut self, event: PatchApplyBeginEvent) {
         self.add_to_history(history_cell::new_patch_event(
-            PatchEventType::ApplyBegin,
+            PatchEventType::ApplyBegin {
+                auto_approved: event.auto_approved,
+            },
             event.changes,
         ));
     }

@@ -55,7 +55,7 @@ pub(crate) struct CommandOutput {
 #[derive(Clone, Debug)]
 pub(crate) enum PatchEventType {
     ApprovalRequest,
-    ApplyBegin,
+    ApplyBegin { auto_approved: bool },
 }
 
 /// Represents an event to display in the conversation history. Returns its
@@ -417,6 +417,8 @@ impl ExecCell {
         // "• Running " (including trailing space) as the reserved prefix width.
         // If the command contains newlines, always use the multi-line variant.
         let reserved = "• Running ".width();
+        let mut branch_consumed = false;
+
         if !cmd_display.contains('\n')
             && cmd_display.width() < (width as usize).saturating_sub(reserved)
         {
@@ -463,6 +465,9 @@ impl ExecCell {
                         ExecCell::wrap_command_line_by_widths(raw_line, first_avail, cont_avail);
                     for (wi, piece) in pieces.iter().enumerate() {
                         let prefix_span = if wi == 0 {
+                            if li == 0 {
+                                branch_consumed = true;
+                            }
                             line_first_prefix.clone()
                         } else {
                             line_cont_prefix.clone()
@@ -481,6 +486,7 @@ impl ExecCell {
                 );
                 for (i, piece) in pieces.iter().enumerate() {
                     let prefix_span = if i == 0 {
+                        branch_consumed = true;
                         first_prefix.clone()
                     } else {
                         cont_prefix.clone()
@@ -490,40 +496,39 @@ impl ExecCell {
             }
         }
         if let Some(output) = call.output.as_ref()
-            && output.exit_code != 0 {
-                let out = output_lines(Some(output), false, false, false)
-                    .into_iter()
-                    .join("\n");
-                if !out.trim().is_empty() {
-                    // Prefix the first output line with a branch ("  └ "), and
-                    // continuation/wrapped lines with four spaces to align under it.
-                    // Prefixes both render to width 4, so use a single width
-                    // for wrapping and only vary the prefix glyph.
-                    let first_prefix = "  └ ".dim();
-                    let cont_prefix: Span<'static> = "    ".into();
-                    let prefix_w = cont_prefix.width(); // same visual width as first_prefix
+            && output.exit_code != 0
+        {
+            let out = output_lines(Some(output), false, false, false)
+                .into_iter()
+                .join("\n");
+            if !out.trim().is_empty() {
+                // Prefix the first output line with a branch ("  └ "), and
+                // continuation/wrapped lines with four spaces to align under it.
+                // Prefixes both render to width 4, so use a single width
+                // for wrapping and only vary the prefix glyph.
+                let first_prefix = "  └ ".dim();
+                let cont_prefix: Span<'static> = "    ".into();
+                let prefix_w = cont_prefix.width(); // same visual width as first_prefix
 
-                    let mut used_first = false;
-                    for raw_line in out.lines() {
-                        let pieces = ExecCell::wrap_command_line_by_widths(
-                            raw_line,
-                            (width as usize).saturating_sub(prefix_w),
-                            (width as usize).saturating_sub(prefix_w),
-                        );
-                        for (i, piece) in pieces.iter().enumerate() {
-                            let prefix_span = if !used_first {
-                                used_first = true;
-                                first_prefix.clone()
-                            } else if i == 0 {
-                                cont_prefix.clone()
-                            } else {
-                                cont_prefix.clone()
-                            };
-                            lines.push(Line::from(vec![prefix_span, piece.to_string().dim()]));
-                        }
+                let mut used_first = branch_consumed;
+                for raw_line in out.lines() {
+                    let pieces = ExecCell::wrap_command_line_by_widths(
+                        raw_line,
+                        (width as usize).saturating_sub(prefix_w),
+                        (width as usize).saturating_sub(prefix_w),
+                    );
+                    for piece in pieces.iter() {
+                        let prefix_span = if !used_first {
+                            used_first = true;
+                            first_prefix.clone()
+                        } else {
+                            cont_prefix.clone()
+                        };
+                        lines.push(Line::from(vec![prefix_span, piece.to_string().dim()]));
                     }
                 }
             }
+        }
         lines
     }
 }
@@ -539,7 +544,20 @@ impl WidgetRef for &ExecCell {
             width: area.width,
             height: area.height,
         };
-        Paragraph::new(Text::from(self.display_lines(area.width)))
+        let lines = self.display_lines(area.width);
+        let max_rows = area.height.saturating_sub(1) as usize;
+        let trimmed = if lines.len() > max_rows {
+            lines.into_iter().rev().take(max_rows).collect::<Vec<_>>()
+        } else {
+            lines
+        };
+        let rendered = if trimmed.len() > 1 {
+            trimmed.into_iter().rev().collect::<Vec<_>>()
+        } else {
+            trimmed
+        };
+
+        Paragraph::new(Text::from(rendered))
             .wrap(Wrap { trim: false })
             .render(content_area, buf);
     }

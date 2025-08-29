@@ -921,6 +921,31 @@ fn status_widget_and_approval_modal_snapshot() {
     assert_snapshot!("status_widget_and_approval_modal", terminal.backend());
 }
 
+#[test]
+fn exec_approval_request_history_snapshot() {
+    use codex_core::protocol::ExecApprovalRequestEvent;
+    use insta::assert_snapshot;
+
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+    let ev = ExecApprovalRequestEvent {
+        call_id: "call-approve-exec".into(),
+        command: vec!["bash".into(), "-lc".into(), "echo hello".into()],
+        cwd: std::env::current_dir().unwrap_or_default(),
+        reason: Some("Codex wants to run a command".into()),
+    };
+    chat.handle_codex_event(Event {
+        id: "sub-approve-exec".into(),
+        msg: EventMsg::ExecApprovalRequest(ev),
+    });
+
+    let combined = drain_insert_history(&mut rx)
+        .into_iter()
+        .map(|lines| lines_to_single_string(&lines))
+        .collect::<Vec<_>>()
+        .join("\n---\n");
+    assert_snapshot!("exec_approval_request_history", combined);
+}
+
 // Snapshot test: status widget active (StatusIndicatorView)
 // Ensures the VT100 rendering of the status indicator is stable when active.
 #[test]
@@ -1019,6 +1044,106 @@ fn apply_patch_events_emit_history_cells() {
         cells.is_empty(),
         "no success cell should be emitted anymore"
     );
+}
+
+#[test]
+fn apply_patch_manual_approval_adjusts_header() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    let mut proposed_changes = HashMap::new();
+    proposed_changes.insert(
+        PathBuf::from("foo.txt"),
+        FileChange::Add {
+            content: "hello\n".to_string(),
+        },
+    );
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
+            call_id: "c1".into(),
+            changes: proposed_changes,
+            reason: None,
+            grant_root: None,
+        }),
+    });
+    drain_insert_history(&mut rx);
+
+    let mut apply_changes = HashMap::new();
+    apply_changes.insert(
+        PathBuf::from("foo.txt"),
+        FileChange::Add {
+            content: "hello\n".to_string(),
+        },
+    );
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
+            call_id: "c1".into(),
+            auto_approved: false,
+            changes: apply_changes,
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(!cells.is_empty(), "expected apply block cell to be sent");
+    let blob = lines_to_single_string(cells.last().unwrap());
+    assert!(
+        blob.contains("Change Approved 1 file"),
+        "expected change approved summary: {blob:?}"
+    );
+}
+
+#[test]
+fn apply_patch_manual_flow_snapshot() {
+    use insta::assert_snapshot;
+
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    let mut proposed_changes = HashMap::new();
+    proposed_changes.insert(
+        PathBuf::from("foo.txt"),
+        FileChange::Add {
+            content: "hello\n".to_string(),
+        },
+    );
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
+            call_id: "c1".into(),
+            changes: proposed_changes,
+            reason: Some("Manual review required".into()),
+            grant_root: None,
+        }),
+    });
+    let proposed_lines = drain_insert_history(&mut rx)
+        .pop()
+        .expect("proposed patch cell");
+
+    let mut apply_changes = HashMap::new();
+    apply_changes.insert(
+        PathBuf::from("foo.txt"),
+        FileChange::Add {
+            content: "hello\n".to_string(),
+        },
+    );
+    chat.handle_codex_event(Event {
+        id: "s1".into(),
+        msg: EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
+            call_id: "c1".into(),
+            auto_approved: false,
+            changes: apply_changes,
+        }),
+    });
+    let approved_lines = drain_insert_history(&mut rx)
+        .pop()
+        .expect("approved patch cell");
+
+    let snapshot_text = format!(
+        "Proposed\n{}\n\nApproved\n{}",
+        lines_to_single_string(&proposed_lines),
+        lines_to_single_string(&approved_lines)
+    );
+    assert_snapshot!("apply_patch_manual_flow_history", snapshot_text);
 }
 
 #[test]
@@ -1275,7 +1400,7 @@ fn stream_error_is_rendered_to_history() {
     let cells = drain_insert_history(&mut rx);
     assert!(!cells.is_empty(), "expected a history cell for StreamError");
     let blob = lines_to_single_string(cells.last().unwrap());
-    assert!(blob.contains("⚠  "));
+    assert!(blob.contains('⚠'));
     assert!(blob.contains("stream error:"));
     assert!(blob.contains("idle timeout waiting for SSE"));
 }
