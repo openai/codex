@@ -475,6 +475,25 @@ async fn binary_size_transcript_matches_ideal_fixture() {
                     let ev: Event =
                         serde_json::from_value(upgrade_event_payload_for_tests(payload.clone()))
                             .expect("parse");
+                    let ev = match ev {
+                        Event {
+                            msg: EventMsg::ExecCommandBegin(e),
+                            ..
+                        } => {
+                            // Re-parse the command
+                            let parsed_cmd = codex_core::parse_command::parse_command(&e.command);
+                            Event {
+                                id: ev.id,
+                                msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
+                                    call_id: e.call_id.clone(),
+                                    command: e.command,
+                                    cwd: e.cwd,
+                                    parsed_cmd: parsed_cmd.into_iter().map(|c| c.into()).collect(),
+                                }),
+                            }
+                        }
+                        _ => ev,
+                    };
                     chat.handle_codex_event(ev);
                     while let Ok(app_ev) = rx.try_recv() {
                         match app_ev {
@@ -1016,7 +1035,7 @@ fn apply_patch_manual_approval_adjusts_header() {
     assert!(!cells.is_empty(), "expected apply block cell to be sent");
     let blob = lines_to_single_string(cells.last().unwrap());
     assert!(
-        blob.contains("Change Approved 1 file"),
+        blob.contains("Change Approved foo.txt"),
         "expected change approved summary: {blob:?}"
     );
 }
