@@ -1,0 +1,38 @@
+# Example configuration for event hooks in Codex
+# This would go in your ~/.codex/config.toml file
+
+[hooks]
+# Hook that runs when agent finishes a turn
+agent_turn_complete = [
+    "notify-send 'Codex' 'Agent finished processing your request'",
+    "/usr/local/bin/my-completion-script"
+]
+
+# Hook that runs when user input is required (e.g., approval requests)
+user_input_required = [
+    "notify-send 'Codex' 'User input required'",
+    "play /System/Library/Sounds/Glass.aiff"
+]
+
+# Hook that runs when a session starts
+session_started = [
+    "echo 'Codex session started' >> ~/.codex/session.log"
+]
+
+# Hook that runs when a session ends
+session_ended = [
+    "echo 'Codex session ended' >> ~/.codex/session.log"
+]
+
+# Hook that runs when tool execution starts
+tool_execution_started = [
+    "echo 'Tool execution started' >> ~/.codex/tools.log"
+]
+
+# Hook that runs when tool execution completes
+tool_execution_completed = [
+    "echo 'Tool execution completed' >> ~/.codex/tools.log"
+]
+
+# Legacy notify command (still supported for backward compatibility)
+notify = ["notify-send", "Codex"]
