@@ -95,6 +95,22 @@ pub enum ResponseItem {
         call_id: String,
         output: String,
     },
+    // Emitted by the Responses API when the agent triggers a web search.
+    // Example payload (from SSE `response.output_item.done`):
+    // {
+    //   "id":"ws_...",
+    //   "type":"web_search_call",
+    //   "status":"completed",
+    //   "action": {"type":"search","query":"weather: San Francisco, CA"}
+    // }
+    WebSearchCall {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
+        action: WebSearchAction,
+    },
+
     #[serde(other)]
     Other,
 }
@@ -160,6 +176,16 @@ pub struct LocalShellExecAction {
     pub working_directory: Option<String>,
     pub env: Option<HashMap<String, String>>,
     pub user: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum WebSearchAction {
+    Search {
+        query: String,
+    },
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
