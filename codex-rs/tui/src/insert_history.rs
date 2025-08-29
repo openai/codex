@@ -13,7 +13,6 @@ use crossterm::style::SetAttribute;
 use crossterm::style::SetBackgroundColor;
 use crossterm::style::SetColors;
 use crossterm::style::SetForegroundColor;
-use ratatui::backend::Backend as _;
 use ratatui::layout::Size;
 use ratatui::style::Color;
 use ratatui::style::Modifier;

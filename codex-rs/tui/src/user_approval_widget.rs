@@ -150,9 +150,7 @@ impl UserApprovalWidget {
                     vec![],
                 );
 
-                // Always leave a blank line after the question/command line.
                 contents.push(Line::from(""));
-                // If a reason is provided, show it (italic) and add another spacer below.
                 if let Some(reason) = reason {
                     contents.push(Line::from(reason.clone().italic()));
                     contents.push(Line::from(""));
@@ -260,7 +258,6 @@ impl UserApprovalWidget {
     }
 
     fn send_decision_with_feedback(&mut self, decision: ReviewDecision, feedback: String) {
-        // Emit a history line for Exec approvals only; patch approvals are silent.
         match &self.approval_request {
             ApprovalRequest::Exec { command, .. } => {
                 let cmd = strip_bash_lc_and_escape(command);

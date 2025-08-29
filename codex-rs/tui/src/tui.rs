@@ -14,6 +14,7 @@ use std::time::Duration;
 use std::time::Instant;
 
 use crossterm::Command;
+use crossterm::SynchronizedUpdate;
 use crossterm::cursor;
 use crossterm::cursor::MoveTo;
 use crossterm::event::DisableBracketedPaste;
@@ -26,8 +27,6 @@ use crossterm::event::KeyModifiers;
 use crossterm::event::KeyboardEnhancementFlags;
 use crossterm::event::PopKeyboardEnhancementFlags;
 use crossterm::event::PushKeyboardEnhancementFlags;
-use crossterm::terminal::BeginSynchronizedUpdate;
-use crossterm::terminal::EndSynchronizedUpdate;
 use crossterm::terminal::EnterAlternateScreen;
 use crossterm::terminal::LeaveAlternateScreen;
 use crossterm::terminal::ScrollUp;
@@ -512,8 +511,7 @@ impl Tui {
         }
 
         // Use synchronized update via backend instead of stdout()
-        execute!(self.terminal.backend_mut(), BeginSynchronizedUpdate)?;
-        let res: Result<()> = (|| {
+        std::io::stdout().sync_update(|_| {
             #[cfg(unix)]
             {
                 if let Some(prepared) = prepared_resume.take() {
@@ -563,10 +561,7 @@ impl Tui {
             }
             terminal.draw(|frame| {
                 draw_fn(frame);
-            })?;
-            Ok(())
-        })();
-        execute!(self.terminal.backend_mut(), EndSynchronizedUpdate)?;
-        res
+            })
+        })?
     }
 }
