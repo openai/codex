@@ -252,10 +252,10 @@ impl Tui {
                                 if next_deadline.is_none_or(|cur| at < cur) {
                                     next_deadline = Some(at);
                                 }
-                                if at <= Instant::now() {
-                                    next_deadline = None;
-                                    let _ = draw_tx_clone.send(());
-                                }
+                                // Do not send a draw immediately here. By continuing the loop,
+                                // we recompute the sleep target so the draw fires once via the
+                                // sleep branch, coalescing multiple requests into a single draw.
+                                continue;
                             }
                             None => break,
                         }
