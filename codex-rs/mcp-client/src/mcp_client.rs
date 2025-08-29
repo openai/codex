@@ -362,7 +362,11 @@ impl McpClient {
             }
         };
 
-        if let Some(tx) = pending.lock().await.remove(&id) {
+        let tx_opt = {
+            let mut guard = pending.lock().await;
+            guard.remove(&id)
+        };
+        if let Some(tx) = tx_opt {
             // Ignore send errors – the receiver might have been dropped.
             let _ = tx.send(JSONRPCMessage::Response(resp));
         } else {
@@ -380,7 +384,11 @@ impl McpClient {
             RequestId::String(_) => return, // see comment above
         };
 
-        if let Some(tx) = pending.lock().await.remove(&id) {
+        let tx_opt = {
+            let mut guard = pending.lock().await;
+            guard.remove(&id)
+        };
+        if let Some(tx) = tx_opt {
             let _ = tx.send(JSONRPCMessage::Error(err));
         }
     }
