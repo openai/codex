@@ -320,6 +320,7 @@ async fn test_send_user_turn_changes_approval_policy_behavior() {
             model: "mock-model".to_string(),
             effort: ReasoningEffort::Medium,
             summary: ReasoningSummary::Auto,
+            enable_web_search: false,
         })
         .await
         .expect("send sendUserTurn");
