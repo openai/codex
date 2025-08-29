@@ -8,12 +8,10 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 
-// No DEFAULT_WRAP_COLS in runtime paths; tests pass explicit widths.
 use crate::exec_command::relativize_to_home;
+use crate::history_cell::PatchEventType;
 use codex_core::protocol::FileChange;
 use codex_core::util::is_inside_git_repo;
-
-use crate::history_cell::PatchEventType;
 
 const SPACES_AFTER_LINE_NUMBER: usize = 6;
 
@@ -24,24 +22,30 @@ enum DiffLineType {
     Context,
 }
 
-// Old create_diff_summary removed; callers must use create_diff_summary
-
 pub(crate) fn create_diff_summary(
     changes: &HashMap<PathBuf, FileChange>,
     event_type: PatchEventType,
     wrap_cols: usize,
 ) -> Vec<RtLine<'static>> {
-    match event_type {
+    let cwd: PathBuf = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
+    let rows = collect_rows(changes, &cwd);
+    let header_kind = match event_type {
         PatchEventType::ApplyBegin { auto_approved } => {
-            render_applied_changes_block(changes, wrap_cols, auto_approved)
+            if auto_approved {
+                HeaderKind::Edited
+            } else {
+                HeaderKind::ChangeApproved
+            }
         }
-        PatchEventType::ApprovalRequest => render_proposed_blocks(changes, wrap_cols),
-    }
+        PatchEventType::ApprovalRequest => HeaderKind::ProposedChange,
+    };
+    render_changes_block(rows, wrap_cols, header_kind)
 }
 
 // Shared row for per-file presentation
 #[derive(Clone)]
 struct Row {
+    #[allow(dead_code)]
     path: PathBuf,
     display: String,
     added: usize,
@@ -52,29 +56,24 @@ struct Row {
 fn collect_rows(changes: &HashMap<PathBuf, FileChange>, cwd: &Path) -> Vec<Row> {
     let mut rows: Vec<Row> = Vec::new();
     for (path, change) in changes.iter() {
-        let (a, d) = match change {
+        let (added, removed) = match change {
             FileChange::Add { content } => (content.lines().count(), 0),
-            FileChange::Delete => (
-                0,
-                std::fs::read_to_string(path)
-                    .ok()
-                    .map(|s| s.lines().count())
-                    .unwrap_or(0),
-            ),
+            FileChange::Delete { content } => (0, content.lines().count()),
             FileChange::Update { unified_diff, .. } => calculate_add_remove_from_diff(unified_diff),
         };
-        let display = match change {
+        let move_path = match change {
             FileChange::Update {
                 move_path: Some(new),
                 ..
-            } => display_path_for(path, Some(new), cwd),
-            _ => display_path_for(path, None, cwd),
+            } => Some(new.as_path()),
+            _ => None,
         };
+        let display = display_path_for(path, move_path, cwd);
         rows.push(Row {
             path: path.clone(),
             display,
-            added: a,
-            removed: d,
+            added,
+            removed,
             change: change.clone(),
         });
     }
@@ -96,87 +95,53 @@ fn render_changes_block(
     let mut out: Vec<RtLine<'static>> = Vec::new();
     let term_cols = wrap_cols;
 
+    fn render_line_count_summary(added: usize, removed: usize) -> Vec<RtSpan<'static>> {
+        let mut spans = Vec::new();
+        spans.push("(".into());
+        spans.push(format!("+{added}").green());
+        spans.push(" ".into());
+        spans.push(format!("-{removed}").red());
+        spans.push(")".into());
+        spans
+    }
+
     // Header
     let total_added: usize = rows.iter().map(|r| r.added).sum();
     let total_removed: usize = rows.iter().map(|r| r.removed).sum();
     let file_count = rows.len();
     let noun = if file_count == 1 { "file" } else { "files" };
     let mut header_spans: Vec<RtSpan<'static>> = vec!["• ".into()];
-    let single_file_inline = file_count == 1;
-    let first_row_opt = rows.first().cloned();
     match header_kind {
         HeaderKind::ProposedChange => {
             header_spans.push("Proposed Change".bold());
-            if single_file_inline {
-                if let Some(fr) = &first_row_opt {
-                    header_spans.push(format!(" {} ", fr.display).into());
-                    header_spans.push("(".into());
-                    header_spans.push(format!("+{}", fr.added).green());
-                    header_spans.push(" ".into());
-                    header_spans.push(format!("-{}", fr.removed).red());
-                    header_spans.push(")".into());
-                }
+            if let [row] = &rows[..] {
+                header_spans.push(format!(" {} ", row.display).into());
+                header_spans.extend(render_line_count_summary(row.added, row.removed));
             } else {
                 header_spans.push(format!(" to {file_count} {noun} ").into());
-                header_spans.push("(".into());
-                header_spans.push(format!("+{total_added}").green());
-                header_spans.push(" ".into());
-                header_spans.push(format!("-{total_removed}").red());
-                header_spans.push(")".into());
+                header_spans.extend(render_line_count_summary(total_added, total_removed));
             }
         }
         HeaderKind::Edited => {
-            // For a single file, specialize the verb based on the change kind.
-            // Otherwise, use the generic "Edited" summary.
-            let verb = if single_file_inline {
-                match first_row_opt.as_ref().map(|r| &r.change) {
-                    Some(FileChange::Add { .. }) => "Added",
-                    Some(FileChange::Delete) => "Deleted",
+            if let [row] = &rows[..] {
+                let verb = match &row.change {
+                    FileChange::Add { .. } => "Added",
+                    FileChange::Delete { .. } => "Deleted",
                     _ => "Edited",
-                }
+                };
+                header_spans.push(verb.bold());
+                header_spans.push(format!(" {} ", row.display).into());
+                header_spans.extend(render_line_count_summary(row.added, row.removed));
             } else {
-                "Edited"
-            };
-            header_spans.push(verb.bold());
-            if single_file_inline {
-                if let Some(fr) = &first_row_opt {
-                    header_spans.push(format!(" {} ", fr.display).into());
-                    header_spans.push("(".into());
-                    header_spans.push(format!("+{}", fr.added).green());
-                    header_spans.push(" ".into());
-                    header_spans.push(format!("-{}", fr.removed).red());
-                    header_spans.push(")".into());
-                } else {
-                    header_spans.push(format!(" {file_count} {noun} ").into());
-                    header_spans.push("(".into());
-                    header_spans.push(RtSpan::styled(
-                        format!("+{total_added}"),
-                        Style::default().fg(Color::Green),
-                    ));
-                    header_spans.push(" ".into());
-                    header_spans.push(RtSpan::styled(
-                        format!("-{total_removed}"),
-                        Style::default().fg(Color::Red),
-                    ));
-                    header_spans.push(")".into());
-                }
-            } else {
+                header_spans.push("Edited".bold());
                 header_spans.push(format!(" {file_count} {noun} ").into());
-                header_spans.push("(".into());
-                header_spans.push(format!("+{total_added}").green());
-                header_spans.push(" ".into());
-                header_spans.push(format!("-{total_removed}").red());
-                header_spans.push(")".into());
+                header_spans.extend(render_line_count_summary(total_added, total_removed));
             }
         }
         HeaderKind::ChangeApproved => {
             header_spans.push("Change Approved".bold());
             header_spans.push(format!(" {file_count} {noun} ").into());
-            header_spans.push("(".into());
-            header_spans.push(format!("+{total_added}").green());
-            header_spans.push(" ".into());
-            header_spans.push(format!("-{total_removed}").red());
-            header_spans.push(")".into());
+            header_spans.extend(render_line_count_summary(total_added, total_removed));
         }
     }
     out.push(RtLine::from(header_spans));
@@ -228,9 +193,8 @@ fn render_changes_block(
                     ));
                 }
             }
-            FileChange::Delete => {
-                let original = std::fs::read_to_string(r.path).unwrap_or_default();
-                for (i, raw) in original.lines().enumerate() {
+            FileChange::Delete { content } => {
+                for (i, raw) in content.lines().enumerate() {
                     out.extend(push_wrapped_diff_line(
                         i + 1,
                         DiffLineType::Delete,
@@ -291,30 +255,6 @@ fn render_changes_block(
     }
 
     out
-}
-
-fn render_proposed_blocks(
-    changes: &HashMap<PathBuf, FileChange>,
-    wrap_cols: usize,
-) -> Vec<RtLine<'static>> {
-    let cwd: PathBuf = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
-    let rows = collect_rows(changes, &cwd);
-    render_changes_block(rows, wrap_cols, HeaderKind::ProposedChange)
-}
-
-fn render_applied_changes_block(
-    changes: &HashMap<PathBuf, FileChange>,
-    wrap_cols: usize,
-    auto_approved: bool,
-) -> Vec<RtLine<'static>> {
-    let cwd: PathBuf = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
-    let rows = collect_rows(changes, &cwd);
-    let header_kind = if auto_approved {
-        HeaderKind::Edited
-    } else {
-        HeaderKind::ChangeApproved
-    };
-    render_changes_block(rows, wrap_cols, header_kind)
 }
 
 fn relative_from(base: &Path, path: &Path) -> Option<PathBuf> {
@@ -772,7 +712,12 @@ mod tests {
         std::fs::write(&tmp_path, "first\nsecond\nthird\n").expect("write tmp file");
 
         let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
-        changes.insert(tmp_path.clone(), FileChange::Delete);
+        changes.insert(
+            tmp_path.clone(),
+            FileChange::Delete {
+                content: "first\nsecond\nthird\n".to_string(),
+            },
+        );
 
         let lines = create_diff_summary(
             &changes,

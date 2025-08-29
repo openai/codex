@@ -1,4 +1,3 @@
-// use crate::diff_render::create_diff_summary; // no longer used directly
 use crate::diff_render::create_diff_summary;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
