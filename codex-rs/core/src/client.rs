@@ -35,6 +35,7 @@ use crate::flags::CODEX_RS_SSE_FIXTURE;
 use crate::model_family::ModelFamily;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
+use crate::openai_model_info::get_model_info;
 use crate::openai_tools::create_tools_json_for_responses_api;
 use crate::protocol::TokenUsage;
 use crate::user_agent::get_codex_user_agent;
@@ -88,6 +89,12 @@ impl ModelClient {
             effort,
             summary,
         }
+    }
+
+    pub fn get_model_context_window(&self) -> Option<u64> {
+        self.config
+            .model_context_window
+            .or_else(|| get_model_info(&self.config.model_family).map(|info| info.context_window))
     }
 
     /// Dispatches to either the Responses or Chat implementation depending on
@@ -153,21 +160,7 @@ impl ModelClient {
         let store = prompt.store && auth_mode != Some(AuthMode::ChatGPT);
 
         let full_instructions = prompt.get_full_instructions(&self.config.model_family);
-        let mut tools_json = create_tools_json_for_responses_api(&prompt.tools)?;
-        // ChatGPT backend expects the preview name for web search.
-        if auth_mode == Some(AuthMode::ChatGPT) {
-            for tool in &mut tools_json {
-                if let Some(map) = tool.as_object_mut()
-                    && map.get("type").and_then(|v| v.as_str()) == Some("web_search")
-                {
-                    map.insert(
-                        "type".to_string(),
-                        serde_json::Value::String("web_search_preview".to_string()),
-                    );
-                }
-            }
-        }
-
+        let tools_json = create_tools_json_for_responses_api(&prompt.tools)?;
         let reasoning = create_reasoning_param_for_request(
             &self.config.model_family,
             self.effort,
@@ -600,11 +593,9 @@ async fn process_sse<S>(
             | "response.custom_tool_call_input.delta"
             | "response.custom_tool_call_input.done" // also emitted as response.output_item.done
             | "response.in_progress"
-            | "response.output_item.added"
-            | "response.output_text.done" => {
-                if event.kind == "response.output_item.added"
-                    && let Some(item) = event.item.as_ref()
-                {
+            | "response.output_text.done" => {}
+            "response.output_item.added" => {
+                if let Some(item) = event.item.as_ref() {
                     // Detect web_search_call begin and forward a synthetic event upstream.
                     if let Some(ty) = item.get("type").and_then(|v| v.as_str())
                         && ty == "web_search_call"
@@ -614,7 +605,7 @@ async fn process_sse<S>(
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
-                        let ev = ResponseEvent::WebSearchCallBegin { call_id, query: None };
+                        let ev = ResponseEvent::WebSearchCallBegin { call_id };
                         if tx_event.send(Ok(ev)).await.is_err() {
                             return;
                         }

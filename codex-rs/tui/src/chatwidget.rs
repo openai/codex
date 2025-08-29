@@ -19,6 +19,7 @@ use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::InputItem;
+use codex_core::protocol::ListCustomPromptsResponseEvent;
 use codex_core::protocol::McpListToolsResponseEvent;
 use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
@@ -30,6 +31,7 @@ use codex_core::protocol::TokenUsage;
 use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnDiffEvent;
 use codex_core::protocol::WebSearchBeginEvent;
+use codex_core::protocol::WebSearchEndEvent;
 use codex_protocol::parse_command::ParsedCommand;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -152,6 +154,8 @@ impl ChatWidget {
             event,
             self.show_welcome_banner,
         ));
+        // Ask codex-core to enumerate custom prompts for this session.
+        self.submit_op(Op::ListCustomPrompts);
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
         }
@@ -354,9 +358,16 @@ impl ChatWidget {
         self.defer_or_handle(|q| q.push_mcp_end(ev), |s| s.handle_mcp_end_now(ev2));
     }
 
-    fn on_web_search_begin(&mut self, ev: WebSearchBeginEvent) {
+    fn on_web_search_begin(&mut self, _ev: WebSearchBeginEvent) {
         self.flush_answer_stream_with_separator();
-        self.add_to_history(history_cell::new_web_search_call(ev.query));
+    }
+
+    fn on_web_search_end(&mut self, ev: WebSearchEndEvent) {
+        self.flush_answer_stream_with_separator();
+        self.add_to_history(history_cell::new_web_search_call(format!(
+            "Searched: {}",
+            ev.query
+        )));
     }
 
     fn on_get_history_entry_response(
@@ -612,6 +623,7 @@ impl ChatWidget {
                 has_input_focus: true,
                 enhanced_keys_supported,
                 placeholder_text: placeholder,
+                disable_paste_burst: config.disable_paste_burst,
             }),
             active_exec_cell: None,
             config: config.clone(),
@@ -659,6 +671,7 @@ impl ChatWidget {
                 has_input_focus: true,
                 enhanced_keys_supported,
                 placeholder_text: placeholder,
+                disable_paste_burst: config.disable_paste_burst,
             }),
             active_exec_cell: None,
             config: config.clone(),
@@ -757,12 +770,20 @@ impl ChatWidget {
     }
 
     fn dispatch_command(&mut self, cmd: SlashCommand) {
+        if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
+            let message = format!(
+                "'/'{}' is disabled while a task is in progress.",
+                cmd.command()
+            );
+            self.add_to_history(history_cell::new_error_event(message));
+            self.request_redraw();
+            return;
+        }
         match cmd {
             SlashCommand::New => {
                 self.app_event_tx.send(AppEvent::NewSession);
             }
             SlashCommand::Init => {
-                // Guard: do not run if a task is active.
                 const INIT_PROMPT: &str = include_str!("../prompt_for_init_command.md");
                 self.submit_text_message(INIT_PROMPT.to_string());
             }
@@ -854,6 +875,24 @@ impl ChatWidget {
 
     pub(crate) fn handle_paste(&mut self, text: String) {
         self.bottom_pane.handle_paste(text);
+    }
+
+    // Returns true if caller should skip rendering this frame (a future frame is scheduled).
+    pub(crate) fn handle_paste_burst_tick(&mut self, frame_requester: FrameRequester) -> bool {
+        if self.bottom_pane.flush_paste_burst_if_due() {
+            // A paste just flushed; request an immediate redraw and skip this frame.
+            self.request_redraw();
+            true
+        } else if self.bottom_pane.is_in_paste_burst() {
+            // While capturing a burst, schedule a follow-up tick and skip this frame
+            // to avoid redundant renders between ticks.
+            frame_requester.schedule_frame_in(
+                crate::bottom_pane::ChatComposer::recommended_paste_flush_delay(),
+            );
+            true
+        } else {
+            false
+        }
     }
 
     fn flush_active_exec_cell(&mut self) {
@@ -949,7 +988,7 @@ impl ChatWidget {
                 self.on_agent_reasoning_final()
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
-            EventMsg::TaskStarted => self.on_task_started(),
+            EventMsg::TaskStarted(_) => self.on_task_started(),
             EventMsg::TaskComplete(TaskCompleteEvent { .. }) => self.on_task_complete(),
             EventMsg::TokenCount(token_usage) => self.on_token_count(token_usage),
             EventMsg::Error(ErrorEvent { message }) => self.on_error(message),
@@ -972,8 +1011,10 @@ impl ChatWidget {
             EventMsg::McpToolCallBegin(ev) => self.on_mcp_tool_call_begin(ev),
             EventMsg::McpToolCallEnd(ev) => self.on_mcp_tool_call_end(ev),
             EventMsg::WebSearchBegin(ev) => self.on_web_search_begin(ev),
+            EventMsg::WebSearchEnd(ev) => self.on_web_search_end(ev),
             EventMsg::GetHistoryEntryResponse(ev) => self.on_get_history_entry_response(ev),
             EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
+            EventMsg::ListCustomPromptsResponse(ev) => self.on_list_custom_prompts(ev),
             EventMsg::ShutdownComplete => self.on_shutdown_complete(),
             EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) => self.on_turn_diff(unified_diff),
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
@@ -1200,6 +1241,13 @@ impl ChatWidget {
 
     fn on_list_mcp_tools(&mut self, ev: McpListToolsResponseEvent) {
         self.add_to_history(history_cell::new_mcp_tools_output(&self.config, ev.tools));
+    }
+
+    fn on_list_custom_prompts(&mut self, ev: ListCustomPromptsResponseEvent) {
+        let len = ev.custom_prompts.len();
+        debug!("received {len} custom prompts");
+        // Forward to bottom pane so the slash popup can show them now.
+        self.bottom_pane.set_custom_prompts(ev.custom_prompts);
     }
 
     /// Programmatically submit a user text message as if typed in the

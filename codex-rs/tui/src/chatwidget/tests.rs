@@ -22,6 +22,7 @@ use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
+use codex_core::protocol::TaskStartedEvent;
 use codex_login::CodexAuth;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -163,6 +164,7 @@ fn make_chatwidget_manual() -> (
         has_input_focus: true,
         enhanced_keys_supported: false,
         placeholder_text: "Ask Codex to do anything".to_string(),
+        disable_paste_burst: false,
     });
     let widget = ChatWidget {
         app_event_tx,
@@ -887,7 +889,9 @@ fn ui_snapshots_small_heights_task_running() {
     // Activate status line
     chat.handle_codex_event(Event {
         id: "task-1".into(),
-        msg: EventMsg::TaskStarted,
+        msg: EventMsg::TaskStarted(TaskStartedEvent {
+            model_context_window: None,
+        }),
     });
     chat.handle_codex_event(Event {
         id: "task-1".into(),
@@ -916,7 +920,9 @@ fn status_widget_and_approval_modal_snapshot() {
     // Begin a running task so the status indicator would be active.
     chat.handle_codex_event(Event {
         id: "task-1".into(),
-        msg: EventMsg::TaskStarted,
+        msg: EventMsg::TaskStarted(TaskStartedEvent {
+            model_context_window: None,
+        }),
     });
     // Provide a deterministic header for the status line.
     chat.handle_codex_event(Event {
@@ -981,7 +987,9 @@ fn status_widget_active_snapshot() {
     // Activate the status indicator by simulating a task start.
     chat.handle_codex_event(Event {
         id: "task-1".into(),
-        msg: EventMsg::TaskStarted,
+        msg: EventMsg::TaskStarted(TaskStartedEvent {
+            model_context_window: None,
+        }),
     });
     // Provide a deterministic header via a bold reasoning chunk.
     chat.handle_codex_event(Event {
@@ -1529,7 +1537,9 @@ fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
     // Begin turn
     chat.handle_codex_event(Event {
         id: "s1".into(),
-        msg: EventMsg::TaskStarted,
+        msg: EventMsg::TaskStarted(TaskStartedEvent {
+            model_context_window: None,
+        }),
     });
 
     // First finalized assistant message

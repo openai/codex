@@ -737,14 +737,11 @@ fn pretty_provider_name(id: &str) -> String {
         title_case(id)
     }
 }
-/// Return the emoji followed by a hair space (U+200A) and a normal space.
-/// This creates a reasonable gap across different terminals,
-/// in particular Terminal.app and iTerm, which render too tightly with just a single normal space.
-///
-/// Improvements here could be to condition this behavior on terminal,
-/// or possibly on emoji.
+/// Return the emoji followed by a hair space (U+200A).
+/// Using only the hair space avoids excessive padding after the emoji while
+/// still providing a small visual gap across terminals.
 fn padded_emoji(emoji: &str) -> String {
-    format!("{emoji}\u{200A} ")
+    format!("{emoji}\u{200A}")
 }
 
 pub(crate) fn new_session_info(
@@ -781,10 +778,54 @@ pub(crate) fn new_session_info(
             Line::from("".dim()),
             Line::from(" To get started, describe a task or try one of these commands:".dim()),
             Line::from("".dim()),
-            Line::from(format!(" /init - {}", SlashCommand::Init.description()).dim()),
-            Line::from(format!(" /status - {}", SlashCommand::Status.description()).dim()),
-            Line::from(format!(" /approvals - {}", SlashCommand::Approvals.description()).dim()),
-            Line::from(format!(" /model - {}", SlashCommand::Model.description()).dim()),
+            Line::from(vec![
+                Span::styled(
+                    " /init",
+                    Style::default()
+                        .add_modifier(Modifier::BOLD)
+                        .fg(Color::White),
+                ),
+                Span::styled(
+                    format!(" - {}", SlashCommand::Init.description()),
+                    Style::default().dim(),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled(
+                    " /status",
+                    Style::default()
+                        .add_modifier(Modifier::BOLD)
+                        .fg(Color::White),
+                ),
+                Span::styled(
+                    format!(" - {}", SlashCommand::Status.description()),
+                    Style::default().dim(),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled(
+                    " /approvals",
+                    Style::default()
+                        .add_modifier(Modifier::BOLD)
+                        .fg(Color::White),
+                ),
+                Span::styled(
+                    format!(" - {}", SlashCommand::Approvals.description()),
+                    Style::default().dim(),
+                ),
+            ]),
+            Line::from(vec![
+                Span::styled(
+                    " /model",
+                    Style::default()
+                        .add_modifier(Modifier::BOLD)
+                        .fg(Color::White),
+                ),
+                Span::styled(
+                    format!(" - {}", SlashCommand::Model.description()),
+                    Style::default().dim(),
+                ),
+            ]),
         ];
         PlainHistoryCell { lines }
     } else if config.model == model {
@@ -1258,7 +1299,7 @@ pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
     // in terminals like Ghostty.
     let lines: Vec<Line<'static>> = vec![
         "".into(),
-        vec![padded_emoji("🖐").red().bold(), message.into()].into(),
+        vec![padded_emoji("🖐").red().bold(), " ".into(), message.into()].into(),
     ];
     PlainHistoryCell { lines }
 }
