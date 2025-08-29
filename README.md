@@ -65,7 +65,7 @@ Codex CLI supports [MCP servers](./docs/advanced.md#model-context-protocol-mcp).
 
 ### Configuration
 
-Codex CLI supports a rich set of configuration options, with preferences stored in `~/.codex/config.toml`. For full configuration options, see [Configuration](./docs/config.md).
+Codex CLI supports a rich set of configuration options, with preferences stored in `~/.codex/config.toml`. For a starter file you can copy, see [config.toml.example](./docs/config.toml.example). For full configuration options, see [Configuration](./docs/config.md).
 
 ---
 
@@ -99,4 +99,3 @@ Codex CLI supports a rich set of configuration options, with preferences stored 
 ## License
 
 This repository is licensed under the [Apache-2.0 License](LICENSE).
-

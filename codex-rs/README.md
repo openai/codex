@@ -19,7 +19,7 @@ While we are [working to close the gap between the TypeScript and Rust implement
 
 ### Config
 
-Codex supports a rich set of configuration options. Note that the Rust CLI uses `config.toml` instead of `config.json`. See [`docs/config.md`](../docs/config.md) for details.
+Codex supports a rich set of configuration options. Note that the Rust CLI uses `config.toml` instead of `config.json`. A copy‑ready starter file is available at [`docs/config.toml.example`](../docs/config.toml.example). For full details, see [`docs/config.md`](../docs/config.md).
 
 ### Model Context Protocol Support
 
