@@ -3,13 +3,21 @@ let
   env = {
     PKG_CONFIG_PATH = "${pkgs.openssl.dev}/lib/pkgconfig:$PKG_CONFIG_PATH";
   };
+  rustTools = pkgs.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml;
+  rustPlatform = pkgs.makeRustPlatform {
+    cargo = rustTools;
+    rustc = rustTools;
+  };
 in
 rec {
-  package = pkgs.rustPlatform.buildRustPackage {
+  package = rustPlatform.buildRustPackage {
     inherit env;
     pname = "codex-rs";
     version = "0.1.0";
-    cargoLock.lockFile = ./Cargo.lock;
+    cargoLock = {
+      lockFile = ./Cargo.lock;
+      allowBuiltinFetchGit = true;
+    };
     doCheck = false;
     src = ./.;
     nativeBuildInputs = with pkgs; [
@@ -26,13 +34,13 @@ rec {
     inherit env;
     name = "codex-rs-dev";
     packages = monorep-deps ++ [
-      pkgs.cargo
+      rustTools
       package
     ];
     shellHook = ''
       echo "Entering development shell for codex-rs"
       alias codex="cd ${package.src}/tui; cargo run; cd -"
-      ${pkgs.rustPlatform.cargoSetupHook}
+      ${rustPlatform.cargoSetupHook}
     '';
   };
   app = {
