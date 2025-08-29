@@ -92,7 +92,7 @@ libc = "0.2"
 
 # Clipboard support via `arboard` is not available on Android/Termux.
 # Only include it for non-Android targets so the crate builds on Android.
-[target.'cfg(all(unix, not(target_os = "android")))'.dependencies]
+[target.'cfg(not(target_os = "android"))'.dependencies]
 arboard = "3"
 
 
