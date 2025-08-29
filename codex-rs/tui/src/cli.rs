@@ -60,4 +60,12 @@ pub struct Cli {
 
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
+
+    /// List previously saved sessions and exit.
+    #[arg(long = "list-sessions", default_value_t = false)]
+    pub list_sessions: bool,
+
+    /// Resume a saved session by id, 'latest', or a path to a rollout file.
+    #[arg(long = "resume", value_name = "ID|latest|PATH")]
+    pub resume: Option<String>,
 }

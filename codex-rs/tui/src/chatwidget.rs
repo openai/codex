@@ -787,6 +787,9 @@ impl ChatWidget {
                 }
                 self.app_event_tx.send(AppEvent::ExitRequest);
             }
+            SlashCommand::Sessions => {
+                self.open_sessions_popup();
+            }
             SlashCommand::Diff => {
                 self.add_diff_in_progress();
                 let tx = self.app_event_tx.clone();
@@ -856,6 +859,51 @@ impl ChatWidget {
 
     pub(crate) fn handle_paste(&mut self, text: String) {
         self.bottom_pane.handle_paste(text);
+    }
+
+    fn open_sessions_popup(&mut self) {
+        let sessions = match codex_core::sessions::list_sessions(&self.config) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("failed to list sessions: {e}");
+                Vec::new()
+            }
+        };
+        let mut items: Vec<crate::bottom_pane::SelectionItem> = Vec::new();
+        for s in sessions {
+            let title = s.title.clone().unwrap_or_else(|| "(no title)".to_string());
+            let desc = Some(format!(
+                "created: {}   last: {}",
+                s.created,
+                s.last_active.unwrap_or_else(|| "unknown".to_string())
+            ));
+            let path = s.path.clone();
+            let id = s.id;
+            let actions: Vec<crate::bottom_pane::SelectionAction> = vec![Box::new(move |tx| {
+                tracing::info!("resume selected session: {id}");
+                tx.send(crate::app_event::AppEvent::ResumeSession(path.clone()));
+            })];
+            items.push(crate::bottom_pane::SelectionItem {
+                name: format!("{title} — {id}"),
+                description: desc,
+                is_current: false,
+                actions,
+            });
+        }
+        if items.is_empty() {
+            items.push(crate::bottom_pane::SelectionItem {
+                name: "No saved sessions".to_string(),
+                description: None,
+                is_current: true,
+                actions: vec![],
+            });
+        }
+        self.bottom_pane.show_selection_view(
+            "Sessions".to_string(),
+            Some("Select a session to resume".to_string()),
+            Some("Up/Down to navigate; Enter to resume; Esc to cancel".to_string()),
+            items,
+        );
     }
 
     fn flush_active_exec_cell(&mut self) {

@@ -157,6 +157,57 @@ pub async fn run_main(
         }
     };
 
+    // Handle session management CLI flags before starting the TUI.
+    if cli.list_sessions {
+        let sessions = match codex_core::sessions::list_sessions(&config) {
+            Ok(v) => v,
+            Err(e) => {
+                #[allow(clippy::print_stderr)]
+                eprintln!("Failed to list sessions: {e}");
+                Vec::new()
+            }
+        };
+        #[allow(clippy::print_stdout)]
+        {
+            if sessions.is_empty() {
+                println!("No sessions found.");
+            } else {
+                for s in sessions {
+                    let title = s.title.unwrap_or_else(|| "(no title)".to_string());
+                    let last = s.last_active.unwrap_or_else(|| "unknown".to_string());
+                    println!("{}  {}  {}\n  {}", s.id, s.created, last, s.path.display());
+                    println!("  {title}");
+                }
+            }
+        }
+        return Ok(Default::default());
+    }
+
+    if let Some(resume_arg) = &cli.resume {
+        // Resolve to a path: try explicit path, then UUID, then 'latest'.
+        let resume_path = if std::path::Path::new(resume_arg).exists() {
+            Some(PathBuf::from(resume_arg))
+        } else if resume_arg == "latest" {
+            codex_core::sessions::latest(&config)
+                .ok()
+                .flatten()
+                .map(|e| e.path)
+        } else if let Ok(id) = uuid::Uuid::parse_str(resume_arg) {
+            codex_core::sessions::find_by_id(&config, id)
+                .ok()
+                .flatten()
+                .map(|e| e.path)
+        } else {
+            None
+        };
+        if let Some(path) = resume_path {
+            config.experimental_resume = Some(path);
+        } else {
+            #[allow(clippy::print_stderr)]
+            eprintln!("Could not resolve session to resume: {resume_arg}");
+        }
+    }
+
     // we load config.toml here to determine project state.
     #[allow(clippy::print_stderr)]
     let config_toml = {
