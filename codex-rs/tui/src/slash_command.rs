@@ -66,8 +66,10 @@ impl SlashCommand {
             | SlashCommand::Mention
             | SlashCommand::Status
             | SlashCommand::Mcp
-            | SlashCommand::Quit
-            | SlashCommand::TestApproval => true,
+            | SlashCommand::Quit => true,
+
+            #[cfg(debug_assertions)]
+            SlashCommand::TestApproval => true,
         }
     }
 }
