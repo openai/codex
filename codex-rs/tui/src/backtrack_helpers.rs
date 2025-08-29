@@ -84,29 +84,20 @@ pub(crate) fn nth_last_user_text(
 mod tests {
     use super::*;
 
-    fn line(s: &str) -> Line<'static> {
-        s.to_string().into()
-    }
-
-    fn transcript_with_users(count: usize) -> (Vec<Line<'static>>, Vec<(usize, usize)>) {
-        // Build transcript lines and user spans as [header..end) where end excludes the last body line.
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        let mut spans: Vec<(usize, usize)> = Vec::new();
-        for i in 0..count {
-            // Simulate the structure produced by UserHistoryCell: blank, header, body
-            lines.push(line(""));
-            let header = lines.len();
-            lines.push(line("user"));
-            lines.push(line(&format!("message {i}")));
-            let end = header + 1 + 1; // header + 1 (body begins) + body_len(1)
-            spans.push((header, end));
-        }
-        (lines, spans)
+    // Build absolute user message spans as [header..end) assuming the
+    // transcript structure repeats: blank, header, 1-line body.
+    fn user_spans_fixture(count: usize) -> Vec<(usize, usize)> {
+        (0..count)
+            .map(|i| {
+                let header = 1 + i * 3; // after a leading blank per message
+                (header, header + 2) // header + body(1)
+            })
+            .collect()
     }
 
     #[test]
     fn normalize_wraps_to_one_when_past_oldest() {
-        let (_, spans) = transcript_with_users(2);
+        let spans = user_spans_fixture(2);
         assert_eq!(normalize_backtrack_n(&spans, 1), 1);
         assert_eq!(normalize_backtrack_n(&spans, 2), 2);
         // Requesting 3rd when only 2 exist wraps to 1
@@ -115,14 +106,14 @@ mod tests {
 
     #[test]
     fn normalize_returns_zero_when_no_user_messages() {
-        let (_, spans) = transcript_with_users(0);
+        let spans = user_spans_fixture(0);
         assert_eq!(normalize_backtrack_n(&spans, 1), 0);
         assert_eq!(normalize_backtrack_n(&spans, 5), 0);
     }
 
     #[test]
     fn normalize_keeps_valid_n() {
-        let (_, spans) = transcript_with_users(3);
+        let spans = user_spans_fixture(3);
         assert_eq!(normalize_backtrack_n(&spans, 2), 2);
     }
 }
