@@ -63,7 +63,6 @@ pub async fn run_main(
 
     // Task: read from stdin, push to `incoming_tx`.
     let stdin_reader_handle = tokio::spawn({
-        let incoming_tx = incoming_tx.clone();
         async move {
             let stdin = io::stdin();
             let reader = BufReader::new(stdin);
