@@ -483,6 +483,9 @@ impl ChatWidget {
                 },
                 ev.duration,
             );
+            if cell.should_flush() {
+                self.flush_active_exec_cell();
+            }
         }
     }
 
