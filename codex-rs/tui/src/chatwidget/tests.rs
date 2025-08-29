@@ -1696,8 +1696,7 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
             delta: "**Investigating rendering code**".into(),
         }),
     });
-    chat
-        .bottom_pane
+    chat.bottom_pane
         .set_composer_text("Summarize recent commits".to_string());
     chat.handle_codex_event(Event {
         id: "t1".into(),
@@ -1752,7 +1751,11 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
         let y = viewport.y + rel_y;
         let mut line = String::with_capacity(width as usize);
         for x in 0..viewport.width {
-            let ch = ui_buf[(x, rel_y)].symbol().chars().next().unwrap_or(' ');
+            let ch = ui_buf[(viewport.x + x, viewport.y + rel_y)]
+                .symbol()
+                .chars()
+                .next()
+                .unwrap_or(' ');
             line.push(ch);
         }
         vt_lines[y as usize] = line.trim_end().to_string();
