@@ -280,23 +280,11 @@ fn calculate_add_remove_from_diff(diff: &str) -> (usize, usize) {
             .fold((0, 0), |(a, d), l| match l {
                 diffy::Line::Insert(_) => (a + 1, d),
                 diffy::Line::Delete(_) => (a, d + 1),
-                _ => (a, d),
+                diffy::Line::Context(_) => (a, d),
             })
     } else {
-        // Fallback: manual scan to preserve counts even for unparsable diffs
-        let mut adds = 0usize;
-        let mut dels = 0usize;
-        for l in diff.lines() {
-            if l.starts_with("+++") || l.starts_with("---") || l.starts_with("@@") {
-                continue;
-            }
-            match l.as_bytes().first() {
-                Some(b'+') => adds += 1,
-                Some(b'-') => dels += 1,
-                _ => {}
-            }
-        }
-        (adds, dels)
+        // For unparsable diffs, return 0 for both counts.
+        (0, 0)
     }
 }
 
@@ -318,10 +306,10 @@ fn push_wrapped_diff_line(
     let prefix_cols = indent.len() + ln_str.len() + gap_after_ln;
 
     let mut first = true;
-    let (sign_opt, line_style) = match kind {
-        DiffLineType::Insert => (Some('+'), Some(style_add())),
-        DiffLineType::Delete => (Some('-'), Some(style_del())),
-        DiffLineType::Context => (None, None),
+    let (sign_char, line_style) = match kind {
+        DiffLineType::Insert => ('+', style_add()),
+        DiffLineType::Delete => ('-', style_del()),
+        DiffLineType::Context => (' ', style_context()),
     };
     let mut lines: Vec<RtLine<'static>> = Vec::new();
 
@@ -341,33 +329,20 @@ fn push_wrapped_diff_line(
         if first {
             // Build gutter (indent + line number + spacing) as a dimmed span
             let gutter = format!("{indent}{ln_str}{}", " ".repeat(gap_after_ln));
-            let mut spans: Vec<RtSpan<'static>> = Vec::new();
-            spans.push(RtSpan::styled(gutter, style_dim()));
             // Content with a sign ('+'/'-'/' ') styled per diff kind
-            let sign_char = sign_opt.unwrap_or(' ');
             let content = format!("{sign_char}{chunk}");
-            let content_span = match line_style {
-                Some(style) => RtSpan::styled(content, style),
-                None => RtSpan::raw(content),
-            };
-            spans.push(content_span);
-            lines.push(RtLine::from(spans));
+            lines.push(RtLine::from(vec![
+                RtSpan::styled(gutter, style_gutter()),
+                RtSpan::styled(content, line_style),
+            ]));
             first = false;
         } else {
             // Continuation lines keep a space for the sign column so content aligns
-            let hang_prefix = format!(
-                "{indent}{}{} ",
-                " ".repeat(ln_str.len()),
-                " ".repeat(gap_after_ln)
-            );
-            let mut spans: Vec<RtSpan<'static>> = Vec::new();
-            spans.push(RtSpan::styled(hang_prefix, style_dim()));
-            let content_span = match line_style {
-                Some(style) => RtSpan::styled(chunk.to_string(), style),
-                None => RtSpan::raw(chunk.to_string()),
-            };
-            spans.push(content_span);
-            lines.push(RtLine::from(spans));
+            let gutter = format!("{indent}{} ", " ".repeat(ln_str.len() + gap_after_ln));
+            lines.push(RtLine::from(vec![
+                RtSpan::styled(gutter, style_gutter()),
+                RtSpan::styled(chunk.to_string(), line_style),
+            ]));
         }
         if remaining_text.is_empty() {
             break;
@@ -376,8 +351,12 @@ fn push_wrapped_diff_line(
     lines
 }
 
-fn style_dim() -> Style {
+fn style_gutter() -> Style {
     Style::default().add_modifier(Modifier::DIM)
+}
+
+fn style_context() -> Style {
+    Style::default()
 }
 
 fn style_add() -> Style {
