@@ -59,7 +59,10 @@ pub async fn discover_prompts_in_excluding(
         if exclude.contains(&name) {
             continue;
         }
-        let content = fs::read_to_string(&path).await.unwrap_or_default();
+        let content = match fs::read_to_string(&path).await {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
         out.push(CustomPrompt {
             name,
             path,
@@ -107,5 +110,18 @@ mod tests {
         let found = discover_prompts_in_excluding(dir, &exclude).await;
         let names: Vec<String> = found.into_iter().map(|e| e.name).collect();
         assert_eq!(names, vec!["foo"]);
+    }
+
+    #[tokio::test]
+    async fn skips_non_utf8_files() {
+        let tmp = tempdir().expect("create TempDir");
+        let dir = tmp.path();
+        // Valid UTF-8 file
+        fs::write(dir.join("good.md"), b"hello").unwrap();
+        // Invalid UTF-8 content in .md file (e.g., lone 0xFF byte)
+        fs::write(dir.join("bad.md"), vec![0xFF, 0xFE, b'\n']).unwrap();
+        let found = discover_prompts_in(dir).await;
+        let names: Vec<String> = found.into_iter().map(|e| e.name).collect();
+        assert_eq!(names, vec!["good"]);
     }
 }
