@@ -1464,8 +1464,7 @@ fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
     let cells = drain_insert_history(&mut rx);
     let combined: String = cells
         .iter()
-        .flat_map(|lines| lines.iter())
-        .map(|l| l.spans.iter().map(|sp| &sp.content).collect::<String>() + "\n")
+        .map(|lines| lines_to_single_string(lines))
         .collect();
     assert!(
         combined.contains("First message"),
