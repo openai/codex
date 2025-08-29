@@ -89,19 +89,15 @@ impl HistoryCell for UserHistoryCell {
 
         // Wrap the content first, then prefix each wrapped line with the marker.
         let wrap_width = width.saturating_sub(1); // account for the ▌ prefix
-        let content_lines: Vec<Line> = self
-            .message
-            .lines()
-            .map(|l| Line::from(l.to_string().dim()))
-            .collect();
-        let wrapped = crate::insert_history::word_wrap_lines(&content_lines, wrap_width);
+        let wrapped = textwrap::wrap(
+            &self.message,
+            textwrap::Options::new(wrap_width as usize)
+                .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit) // Match textarea wrap
+                .word_splitter(textwrap::WordSplitter::NoHyphenation),
+        );
 
-        for mut line in wrapped {
-            let mut spans = Vec::with_capacity(line.spans.len() + 1);
-            spans.push("▌".cyan().dim());
-            spans.extend(line.spans.into_iter());
-            line.spans = spans;
-            lines.push(line);
+        for line in wrapped {
+            lines.push(Line::from(vec!["▌".cyan().dim(), line.to_string().dim()]));
         }
         lines
     }
