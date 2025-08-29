@@ -1,10 +1,35 @@
 use crate::citation_regex::CITATION_REGEX;
 use codex_core::config::Config;
 use codex_core::config_types::UriBasedFileOpener;
-use ratatui::text::Line;
-use ratatui::text::Span;
+use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Span};
 use std::borrow::Cow;
 use std::path::Path;
+use syntect::easy::HighlightLines;
+use syntect::highlighting::{ThemeSet, Color as SyntectColor};
+use syntect::parsing::SyntaxSet;
+use lazy_static::lazy_static;
+
+lazy_static! {
+    static ref SYNTAX_SET: SyntaxSet = SyntaxSet::load_defaults_newlines();
+    static ref THEME: ThemeSet = ThemeSet::load_defaults();
+}
+
+/// Get the appropriate syntax definition for a code block language
+fn get_syntax_definition(language: Option<&str>) -> Option<&'static syntect::parsing::SyntaxReference> {
+    let lang = language.unwrap_or("txt").to_lowercase();
+    SYNTAX_SET.find_syntax_by_extension(&lang)
+        .or_else(|| SYNTAX_SET.find_syntax_by_extension("txt"))
+}
+
+/// Convert syntect color to ratatui color
+fn syntect_to_ratatui_color(color: SyntectColor) -> Option<Color> {
+    if color.a == 0 {
+        None
+    } else {
+        Some(Color::Rgb(color.r, color.g, color.b))
+    }
+}
 
 pub(crate) fn append_markdown(
     markdown_source: &str,
@@ -34,18 +59,44 @@ fn append_markdown_with_opener_and_cwd(
                 let rendered = tui_markdown::from_str(&processed);
                 crate::render::line_utils::push_owned_lines(&rendered.lines, lines);
             }
-            Segment::Code { content, .. } => {
-                // Emit the code content exactly as-is, line by line.
-                // We don't attempt syntax highlighting to avoid whitespace bugs.
-                for line in content.split_inclusive('\n') {
-                    // split_inclusive keeps the trailing \n; we want lines without it.
-                    let line = if let Some(stripped) = line.strip_suffix('\n') {
-                        stripped
-                    } else {
-                        line
-                    };
-                    let owned_line: Line<'static> = Line::from(Span::raw(line.to_string()));
-                    lines.push(owned_line);
+            Segment::Code { content, language, .. } => {
+                if let Some(syntax) = get_syntax_definition(language.as_deref()) {
+                    let mut highlighter = HighlightLines::new(syntax, &THEME.themes["base16-ocean.dark"]);
+                    
+                    // Collect lines into a Vec to avoid lifetime issues
+                    let content_lines: Vec<&str> = content.lines().collect();
+                    
+                    for &line in &content_lines {
+                        // Convert &str to String to ensure it lives long enough
+                        let line_string = line.to_string();
+                        let ranges: Vec<(syntect::highlighting::Style, &str)> = 
+                            highlighter.highlight_line(&line_string, &SYNTAX_SET).unwrap_or_else(|_| {
+                                vec![(syntect::highlighting::Style::default(), &line_string)]
+                            });
+                        
+                        let spans: Vec<Span> = ranges.into_iter().map(|(syn_style, text)| {
+                            let fg = syn_style.foreground;
+                            let mut style = Style::default()
+                                .fg(syntect_to_ratatui_color(fg).unwrap_or(Color::Reset));
+                            
+                            // Set background color if available
+                            if let Some(bg_color) = syntect_to_ratatui_color(syn_style.background) {
+                                style = style.bg(bg_color);
+                            } else {
+                                // Default dark background for code blocks
+                                style = style.bg(Color::Rgb(40, 44, 52));
+                            }
+                            
+                            Span::styled(text.to_string(), style)
+                        }).collect();
+                        
+                        lines.push(Line::from(spans));
+                    }
+                } else {
+                    // Fallback to simple rendering if syntax highlighting fails
+                    for line in content.lines() {
+                        lines.push(Line::from(Span::raw(line.to_string())));
+                    }
                 }
             }
         }
@@ -110,7 +161,7 @@ fn rewrite_file_citations<'a>(
 enum Segment {
     Text(String),
     Code {
-        _lang: Option<String>,
+        language: Option<String>,
         content: String,
     },
 }
@@ -202,7 +253,7 @@ fn split_text_and_fences(src: &str) -> Vec<Segment> {
                     if trimmed == fence_token {
                         // End code block: emit segment without fences
                         segments.push(Segment::Code {
-                            _lang: code_lang.take(),
+                            language: code_lang.take(),
                             content: code_content.clone(),
                         });
                         code_content.clear();
@@ -227,7 +278,7 @@ fn split_text_and_fences(src: &str) -> Vec<Segment> {
                     } else {
                         // Close the indented code block and reprocess this line as normal text.
                         segments.push(Segment::Code {
-                            _lang: None,
+                            language: None,
                             content: code_content.clone(),
                         });
                         code_content.clear();
@@ -244,7 +295,7 @@ fn split_text_and_fences(src: &str) -> Vec<Segment> {
     if code_mode != CodeMode::None {
         // Unterminated code fence: treat accumulated content as a code segment.
         segments.push(Segment::Code {
-            _lang: code_lang.take(),
+            language: code_lang.take(),
             content: code_content.clone(),
         });
     } else if !curr_text.is_empty() {
@@ -258,6 +309,67 @@ fn split_text_and_fences(src: &str) -> Vec<Segment> {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use codex_core::config::Config;
+    use std::path::Path;
+    
+    #[test]
+    fn test_syntax_highlighting() {
+        // Create a test config with default values
+        let config = Config::load_with_cli_overrides(vec![], Default::default())
+            .expect("Failed to create test config");
+        let _cwd = Path::new("/");
+        
+        let markdown = r#"
+```rust
+fn main() {
+    println!("Hello, world!");
+    
+    // A simple function
+    fn add(a: i32, b: i32) -> i32 {
+        a + b
+    }
+    
+    // Using the function
+    let sum = add(5, 3);
+    println!("5 + 3 = {}", sum);
+}
+```
+"#;
+        
+        // Process the markdown
+        let mut lines = Vec::new();
+        let segments = split_text_and_fences(markdown);
+        
+        // Convert segments back to markdown text for the test
+        let mut reconstructed = String::new();
+        for segment in &segments {
+            match segment {
+                Segment::Text(s) => reconstructed.push_str(s),
+                Segment::Code { content, language, .. } => {
+                    if let Some(lang) = language {
+                        reconstructed.push_str(&format!("```{}\n{}\n```\n", lang, content));
+                    } else {
+                        reconstructed.push_str(&format!("```\n{}\n```\n", content));
+                    }
+                }
+            }
+        }
+        
+        // Process the markdown with the public API
+        append_markdown(&reconstructed, &mut lines, &config);
+        
+        // Verify we have some lines of output
+        assert!(!lines.is_empty(), "Should have generated some output lines");
+        
+        // Verify that we have styled spans (indicating syntax highlighting was applied)
+        let has_styled_spans = lines.iter().any(|line| {
+            line.spans.iter().any(|span| {
+                span.style.fg != Some(Color::Reset) || span.style.bg != Some(Color::Reset)
+            })
+        });
+        
+        assert!(has_styled_spans, "Expected some syntax highlighting to be applied");
+    }
 
     #[test]
     fn citation_is_rewritten_with_absolute_path() {
