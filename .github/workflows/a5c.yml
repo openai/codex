@@ -1,0 +1,135 @@
+# Template for a5c agent workflow aligned to pnpm/Corepack.
+# Maintainers: this template is authoritative. Please sync into
+# .github/workflows/a5c.yml so the active workflow uses pnpm caching:
+#   - actions/setup-node@v4 with `cache: pnpm`
+#   - `cache-dependency-path: pnpm-lock.yaml`
+
+name: a5c
+
+env:
+  DISABLE_AUTOUPDATER: 1
+  CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: 1
+  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+  AZURE_OPENAI_PROJECT_NAME: ${{ vars.AZURE_OPENAI_PROJECT_NAME || '' }}
+  AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY || '' }}
+  OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY || '' }}
+  DEBUG: ${{ github.event.inputs.debug || 'false' }}
+  GITHUB_TOKEN: ${{ secrets.A5C_AGENT_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
+  # Optional: supply a GitHub App token for validator checks
+  # A5C_AGENT_GITHUB_TOKEN: ${{ secrets.A5C_AGENT_GITHUB_TOKEN }}
+  # Feature flags for validator checks behavior
+  # A5C_VALIDATOR_ENABLE_CHECKS: "true"   # set false to disable Check Runs
+  # A5C_VALIDATOR_USE_STATUSES: "false"   # if supported, use commit statuses instead of checks
+  DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
+  DISCORD_GUILD_ID: ${{ vars.DISCORD_GUILD_ID }}
+  A5C_CLI_TOOL: ${{ vars.A5C_CLI_TOOL }}
+  SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN || '' }}
+  SLACK_SIGNING_SECRET: ${{ secrets.SLACK_SIGNING_SECRET || '' }}
+  SLACK_APP_TOKEN: ${{ secrets.SLACK_APP_TOKEN || '' }}
+  VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN || '' }}
+  VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID || '' }}
+  VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID || '' }}
+  SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN || '' }}
+  SUPABASE_ORG_ID: ${{ vars.SUPABASE_ORG_ID || '' }}
+  SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF || '' }}
+  SUPABASE_PROJECT_URL: ${{ vars.SUPABASE_PROJECT_URL || '' }}
+  SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD || '' }}
+  STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY || '' }}
+  STRIPE_PUBLISHABLE_KEY: ${{ secrets.STRIPE_PUBLISHABLE_KEY || '' }}
+  STRIPE_WEBHOOK_SECRET: ${{ secrets.STRIPE_WEBHOOK_SECRET || '' }}
+  STRIPE_WEBHOOK_URL: ${{ vars.STRIPE_WEBHOOK_URL || '' }}
+  STRIPE_WEBHOOK_ID: ${{ vars.STRIPE_WEBHOOK_ID || '' }}
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID || '' }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY || '' }}
+  AWS_REGION: ${{ vars.AWS_REGION || '' }}
+  GOOGLE_APPLICATION_CREDENTIALS: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS || '' }}
+  AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID || '' }}
+  AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET || '' }}
+  AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID || '' }}
+  AZURE_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID || '' }}
+  AZURE_ACR_NAME: ${{ vars.AZURE_ACR_NAME || '' }}
+  GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID || '' }}
+  GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET || '' }}
+  AUTH_GITHUB_CLIENT_ID: ${{ secrets.AUTH_GITHUB_CLIENT_ID || '' }}
+  AUTH_GITHUB_CLIENT_SECRET: ${{ secrets.AUTH_GITHUB_CLIENT_SECRET || '' }}
+  AUTH_GITHUB_ORG_ID: ${{ vars.AUTH_GITHUB_ORG_ID || '' }}
+  AUTH_GITHUB_ORG_NAME: ${{ vars.AUTH_GITHUB_ORG_NAME || '' }}
+  AUTH_GITHUB_ORG_DESCRIPTION: ${{ vars.AUTH_GITHUB_ORG_DESCRIPTION || '' }}
+  HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY || '' }}
+  HEROKU_APP_NAME: ${{ vars.HEROKU_APP_NAME || '' }}
+  HEROKU_APP_ID: ${{ vars.HEROKU_APP_ID || '' }}
+  HEROKU_APP_URL: ${{ vars.HEROKU_APP_URL || '' }}
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main, develop, master]
+  push:
+    branches: []
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_run:
+    types: [completed]
+    workflows: [Build,Deploy,Tests,Release,E2E Tests,Infrastructure Deployment,Integration Tests,rust-ci]
+  workflow_dispatch:
+    inputs:
+      agent_uri:
+        description: 'Specific agent to run (optional - leave empty for auto-routing)'
+        required: false
+      debug:
+        description: 'Enable debug mode'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  a5c:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+      security-events: write
+      actions: write
+      attestations: write
+      checks: write
+      deployments: write
+      discussions: write
+      id-token: write
+      models: read
+      packages: write
+      pages: write
+      statuses: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Filter Self Workflow-run
+        id: filter-self
+        if: github.event_name == 'workflow_run' && (github.event.workflow_run.conclusion != 'failure' || github.event.workflow_run.head_branch != 'main')
+        run: |
+          echo "skip=true" >> "$GITHUB_OUTPUT"
+
+      - name: Run A5C
+        id: agents
+        if: steps.filter-self.outputs.skip != 'true'
+        uses: a5c-ai/action@main
+        with:
+          agent_uri: ${{ github.event.inputs.agent_uri || '' }}
+          github_token: ${{ secrets.A5C_AGENT_GITHUB_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifacts
+        id: upload-artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: a5c-artifacts
+          path: |
+            /tmp/agent-output.md
+            /tmp/agent-output-*/**
