@@ -12,12 +12,14 @@ use codex_cli::login::run_login_with_api_key;
 use codex_cli::login::run_login_with_chatgpt;
 use codex_cli::login::run_logout;
 use codex_cli::proto;
+use codex_cli::usage::run_usage_command;
 use codex_common::CliConfigOverrides;
 use codex_exec::Cli as ExecCli;
 use codex_tui::Cli as TuiCli;
 use std::path::PathBuf;
 
 use crate::proto::ProtoCli;
+use codex_cli::usage::UsageCommand;
 
 /// Codex CLI
 ///
@@ -76,6 +78,10 @@ enum Subcommand {
     /// Internal: generate TypeScript protocol bindings.
     #[clap(hide = true)]
     GenerateTs(GenerateTsCommand),
+
+    /// Show current guardrail usage and reset times.
+    #[clap(visible_alias = "/usage")]
+    Usage(UsageCommand),
 }
 
 #[derive(Debug, Parser)]
@@ -211,6 +217,10 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         }
         Some(Subcommand::GenerateTs(gen_cli)) => {
             codex_protocol_ts::generate_ts(&gen_cli.out_dir, gen_cli.prettier.as_deref())?;
+        }
+        Some(Subcommand::Usage(mut usage_cli)) => {
+            prepend_config_flags(&mut usage_cli.config_overrides, cli.config_overrides);
+            run_usage_command(usage_cli.config_overrides).await?;
         }
     }
 

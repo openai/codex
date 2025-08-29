@@ -18,6 +18,8 @@ use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TokenUsage;
+use codex_login::AuthMode;
+use codex_login::CodexAuth;
 use codex_login::get_auth_file;
 use codex_login::try_read_auth_json;
 use codex_protocol::parse_command::ParsedCommand;
@@ -842,6 +844,46 @@ pub(crate) fn new_status_output(
         "  • Total: ".into(),
         usage.blended_total().to_string().into(),
     ]));
+
+    PlainHistoryCell { lines }
+}
+
+/// Render guardrail usage information (placeholder until providers are wired).
+pub(crate) fn new_usage_output(config: &Config) -> PlainHistoryCell {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push(Line::from(""));
+    lines.push(Line::from("/usage".magenta()));
+
+    match CodexAuth::from_codex_home(&config.codex_home, config.preferred_auth_method) {
+        Ok(Some(auth)) => {
+            let plan = auth
+                .get_plan_type()
+                .unwrap_or_else(|| "unknown".to_string());
+            match auth.mode {
+                AuthMode::ApiKey | AuthMode::ChatGPT => {
+                    lines.push(Line::from(""));
+                    lines.push(Line::from("Usage information is currently unavailable."));
+                    lines.push(Line::from(format!("Plan: {plan}")));
+                    lines.push(Line::from(
+                        "Note: Guardrail usage and reset times will appear here when supported.",
+                    ));
+                }
+            }
+        }
+        Ok(None) => {
+            lines.push(Line::from(""));
+            lines.push(Line::from(
+                "Not logged in. Usage information requires authentication.",
+            ));
+            lines.push(Line::from("Run: codex login"));
+        }
+        Err(e) => {
+            lines.push(Line::from(""));
+            lines.push(Line::from("Unable to determine authentication status."));
+            lines.push(Line::from(format!("Reason: {e}")));
+            lines.push(Line::from("Usage information is currently unavailable."));
+        }
+    }
 
     PlainHistoryCell { lines }
 }
