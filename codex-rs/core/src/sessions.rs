@@ -129,10 +129,11 @@ fn derive_first_user_message_title<R: BufRead>(mut reader: R) -> Result<String, 
                     .find_map(|item| item.get("text").and_then(|t| t.as_str()))
             }) {
                 let trimmed = text.trim();
-                let short = if trimmed.len() > 80 {
-                    format!("{}…", &trimmed[..80])
+                let short: String = trimmed.chars().take(80).collect();
+                let short = if trimmed.chars().count() > 80 {
+                    format!("{short}…")
                 } else {
-                    trimmed.to_string()
+                    short
                 };
                 return Ok(short);
             }
