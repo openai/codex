@@ -71,13 +71,13 @@ GitHub Models via the Responses API is supported out of the box under the provid
 ```toml
 # Use GitHub Models
 model_provider = "github"
-model = "gpt-4o-mini"  # or any supported model
+model = "openai/gpt-5"  # or any supported model
 
 [model_providers.github]
 name = "GitHub Models"            # built-in
-base_url = "https://models.inference.ai.azure.com"
+base_url = "https://models.github.ai/inference"
 env_key = "GITHUB_TOKEN"          # Bearer token for GitHub Models
-wire_api = "responses"
+wire_api = "chat"
 ```
 
 Ensure `GITHUB_TOKEN` is set in your environment with access to GitHub Models. See the GitHub documentation for details.
