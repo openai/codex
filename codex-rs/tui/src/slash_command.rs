@@ -62,19 +62,14 @@ impl SlashCommand {
             | SlashCommand::Model
             | SlashCommand::Approvals
             | SlashCommand::Logout => false,
-            #[cfg(debug_assertions)]
-            SlashCommand::Diff
-            | SlashCommand::Mention
-            | SlashCommand::Status
-            | SlashCommand::Mcp
-            | SlashCommand::Quit
-            | SlashCommand::TestApproval => true,
-            #[cfg(not(debug_assertions))]
             SlashCommand::Diff
             | SlashCommand::Mention
             | SlashCommand::Status
             | SlashCommand::Mcp
             | SlashCommand::Quit => true,
+
+            #[cfg(debug_assertions)]
+            SlashCommand::TestApproval => true,
         }
     }
 }
