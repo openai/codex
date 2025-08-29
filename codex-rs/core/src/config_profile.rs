@@ -1,6 +1,8 @@
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::config_types::McpServerConfig;
 use crate::config_types::Verbosity;
 use crate::protocol::AskForApproval;
 use codex_protocol::config_types::ReasoningEffort;
@@ -21,4 +23,14 @@ pub struct ConfigProfile {
     pub model_verbosity: Option<Verbosity>,
     pub chatgpt_base_url: Option<String>,
     pub experimental_instructions_file: Option<PathBuf>,
+
+    /// Per-profile MCP server definitions. When present, these entries are
+    /// merged with the top-level `mcp_servers` map. On key conflicts, the
+    /// profile entries take precedence. To opt out of inheriting global
+    /// servers, set `inherit_global_mcp_servers` to `false`.
+    pub mcp_servers: Option<HashMap<String, McpServerConfig>>,
+
+    /// Whether this profile should inherit the top-level `mcp_servers`.
+    /// Defaults to `true` when not specified.
+    pub inherit_global_mcp_servers: Option<bool>,
 }

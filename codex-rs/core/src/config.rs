@@ -768,7 +768,23 @@ impl Config {
             notify: cfg.notify,
             user_instructions,
             base_instructions,
-            mcp_servers: cfg.mcp_servers,
+            // Merge top-level and per-profile MCP servers.
+            // Defaults: inherit globals unless explicitly disabled; on key
+            // conflicts, profile entries take precedence.
+            mcp_servers: {
+                let inherit = config_profile.inherit_global_mcp_servers.unwrap_or(true);
+                let mut merged = if inherit {
+                    cfg.mcp_servers
+                } else {
+                    Default::default()
+                };
+                if let Some(profile_servers) = config_profile.mcp_servers {
+                    for (k, v) in profile_servers {
+                        merged.insert(k, v);
+                    }
+                }
+                merged
+            },
             model_providers,
             project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(PROJECT_DOC_MAX_BYTES),
             codex_home,
