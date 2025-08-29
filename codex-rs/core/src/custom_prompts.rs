@@ -62,7 +62,7 @@ pub async fn discover_prompts_in_excluding(
         let content = fs::read_to_string(&path).await.unwrap_or_default();
         out.push(CustomPrompt {
             name,
-            path: path.to_string_lossy().to_string(),
+            path,
             content,
         });
     }
