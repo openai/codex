@@ -47,7 +47,7 @@ impl StatusIndicatorWidget {
         // + optional ellipsis line per truncated message + 1 spacer line
         let inner_width = width.max(1) as usize;
         let mut total: u16 = 1; // status line
-        let text_width = inner_width.saturating_sub(3); // account for " └ " prefix
+        let text_width = inner_width.saturating_sub(2); // account for 2-space indent
         if text_width > 0 {
             let opts = TwOptions::new(text_width)
                 .break_words(false)
@@ -101,7 +101,8 @@ impl WidgetRef for StatusIndicatorWidget {
         let elapsed = self.start_time.elapsed().as_secs();
 
         // Plain rendering: no borders or padding so the live cell is visually indistinguishable from terminal scrollback.
-        let mut spans = vec![" ".into()];
+        // Prepend two spaces before the animated header text (no bullet).
+        let mut spans = vec!["  ".into()];
         spans.extend(shimmer_spans(&self.header));
         spans.extend(vec![
             " ".into(),
@@ -114,23 +115,23 @@ impl WidgetRef for StatusIndicatorWidget {
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from(spans));
         // Wrap queued messages using textwrap and show up to the first 3 lines per message.
-        let text_width = area.width.saturating_sub(3); // " └ " prefix
+        let text_width = area.width.saturating_sub(2); // 2-space indent
         let opts = TwOptions::new(text_width as usize)
             .break_words(false)
             .word_splitter(WordSplitter::NoHyphenation);
         for q in &self.queued_messages {
             let wrapped = textwrap::wrap(q, &opts);
             for (i, piece) in wrapped.iter().take(3).enumerate() {
-                let prefix = if i == 0 { " └ " } else { "   " };
+                let prefix = if i == 0 { "  " } else { "  " };
                 let content = format!("{prefix}{piece}");
                 lines.push(Line::from(content.dim().italic()));
             }
             if wrapped.len() > 3 {
-                lines.push(Line::from("   …".dim().italic()));
+                lines.push(Line::from("  …".dim().italic()));
             }
         }
         if !self.queued_messages.is_empty() {
-            lines.push(Line::from(vec!["   ".into(), "Alt+↑".cyan(), " edit".into()]).dim());
+            lines.push(Line::from(vec!["  ".into(), "Alt+↑".cyan(), " edit".into()]).dim());
         }
 
         let paragraph = Paragraph::new(lines);

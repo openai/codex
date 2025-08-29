@@ -1696,7 +1696,8 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
             delta: "**Investigating rendering code**".into(),
         }),
     });
-    chat.bottom_pane
+    chat
+        .bottom_pane
         .set_composer_text("Summarize recent commits".to_string());
     chat.handle_codex_event(Event {
         id: "t1".into(),
@@ -1709,206 +1710,54 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     let vt_height: u16 = ui_height.saturating_add(6);
     let viewport = ratatui::layout::Rect::new(0, vt_height - ui_height, width, ui_height);
 
-    // Render into a real ratatui backend that writes to stdout so vt100 sees
-    // the exact escape stream a terminal would receive.
-    use ratatui::backend::Backend as _;
-    use ratatui::backend::ClearType;
-    use ratatui::backend::CrosstermBackend;
-    use ratatui::buffer::Cell;
-    use ratatui::layout::Position;
-    use ratatui::layout::Size;
+    // Use TestBackend for the terminal (no real ANSI emitted by drawing),
+    // but capture VT100 escape stream for history insertion with a separate writer.
+    let backend = ratatui::backend::TestBackend::new(width, vt_height);
+    let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+    term.set_viewport_area(viewport);
 
-    struct FixedSizeBackend<W: std::io::Write> {
-        inner: CrosstermBackend<W>,
-        size: Size,
-        cursor: Position,
-    }
-    impl<W: std::io::Write> FixedSizeBackend<W> {
-        fn new(writer: W, width: u16, height: u16) -> Self {
-            Self {
-                inner: CrosstermBackend::new(writer),
-                size: Size::new(width, height),
-                cursor: Position { x: 0, y: 0 },
-            }
-        }
-    }
-    impl<W: std::io::Write> ratatui::backend::Backend for FixedSizeBackend<W> {
-        fn draw<'a, I>(&mut self, content: I) -> std::io::Result<()>
-        where
-            I: Iterator<Item = (u16, u16, &'a Cell)>,
-        {
-            self.inner.draw(content)
-        }
-        fn hide_cursor(&mut self) -> std::io::Result<()> {
-            self.inner.hide_cursor()
-        }
-        fn show_cursor(&mut self) -> std::io::Result<()> {
-            self.inner.show_cursor()
-        }
-        fn get_cursor_position(&mut self) -> std::io::Result<Position> {
-            Ok(self.cursor)
-        }
-        fn set_cursor_position(&mut self, position: Position) -> std::io::Result<()> {
-            self.cursor = position;
-            self.inner.set_cursor_position(position)
-        }
-        fn clear_region(&mut self, clear_type: ClearType) -> std::io::Result<()> {
-            self.inner.clear_region(clear_type)
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            self.inner.flush()
-        }
-        fn size(&self) -> std::io::Result<Size> {
-            Ok(self.size)
-        }
+    // 1) Apply any pending history insertions by emitting ANSI to a buffer via insert_history_lines_to_writer
+    let mut ansi: Vec<u8> = Vec::new();
+    for lines in drain_insert_history(&mut rx) {
+        crate::insert_history::insert_history_lines_to_writer(&mut term, &mut ansi, lines);
     }
 
-    // Capture stdout so both history insertion and ratatui draw go to the same buffer.
-    #[cfg(not(unix))]
-    {
-        // Non-Unix platforms: skip with a stable snapshot message.
-        insta::assert_snapshot!(
-            "chatwidget_exec_and_status_layout_vt100_snapshot_non_unix",
-            "skipped on non-unix"
-        );
-        return;
-    }
-    #[cfg(unix)]
-    {
-        use std::io::Read as _;
-        use std::io::Write as _;
-        use std::os::unix::io::FromRawFd;
-        struct StdoutCapture {
-            saved_fd: libc::c_int,
-            write_fd: libc::c_int,
-            handle: std::thread::JoinHandle<()>,
-            buf: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
-        }
-        impl StdoutCapture {
-            fn start() -> Self {
-                unsafe {
-                    let mut fds = [0; 2];
-                    assert_eq!(libc::pipe(fds.as_mut_ptr()), 0, "pipe() failed");
-                    let read_fd = fds[0];
-                    let write_fd = fds[1];
-                    let saved_fd = libc::dup(libc::STDOUT_FILENO);
-                    assert!(saved_fd >= 0, "dup(stdout) failed");
-                    // Redirect stdout to the write end of the pipe
-                    assert!(
-                        libc::dup2(write_fd, libc::STDOUT_FILENO) >= 0,
-                        "dup2 failed"
-                    );
+    // 2) Render the ChatWidget UI into an off-screen buffer using WidgetRef directly
+    let mut ui_buf = ratatui::buffer::Buffer::empty(viewport);
+    (&chat).render_ref(viewport, &mut ui_buf);
 
-                    let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-                    let buf_clone = buf.clone();
-                    let handle = std::thread::spawn(move || {
-                        // SAFETY: we own read_fd here and move it into File
-                        let mut file = std::fs::File::from_raw_fd(read_fd);
-                        let mut local = [0u8; 8192];
-                        loop {
-                            match file.read(&mut local) {
-                                Ok(0) => break,
-                                Ok(n) => buf_clone.lock().unwrap().extend_from_slice(&local[..n]),
-                                Err(_) => break,
-                            }
-                        }
-                        // file drops here, closing read_fd
-                    });
-                    StdoutCapture {
-                        saved_fd,
-                        write_fd,
-                        handle,
-                        buf,
-                    }
-                }
-            }
-            fn finish(self) -> Vec<u8> {
-                unsafe {
-                    // Flush and restore stdout
-                    let _ = std::io::stdout().flush();
-                    assert!(
-                        libc::dup2(self.saved_fd, libc::STDOUT_FILENO) >= 0,
-                        "restore dup2 failed"
-                    );
-                    libc::close(self.saved_fd);
-                    // Close the pipe writer so reader gets EOF
-                    libc::close(self.write_fd);
-                }
-                let _ = self.handle.join();
-                std::sync::Arc::try_unwrap(self.buf)
-                    .unwrap_or_else(|a| (*a).clone())
-                    .into_inner()
-                    .unwrap()
-            }
-        }
-
-        // Build a backend that writes to stdout (captured) and has a fixed size
-        let backend = FixedSizeBackend::new(std::io::stdout(), width, vt_height);
-        let mut vt_term =
-            crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
-        vt_term.set_viewport_area(viewport);
-
-        // Minimal TUI harness: queue history via app events, then draw UI, both writing to stdout
-        struct MiniTui<B: ratatui::backend::Backend> {
-            term: crate::custom_terminal::Terminal<B>,
-            pending: Vec<ratatui::text::Line<'static>>,
-        }
-        impl<B: ratatui::backend::Backend> MiniTui<B> {
-            fn insert(&mut self, lines: Vec<ratatui::text::Line<'static>>) {
-                self.pending.extend(lines);
-            }
-            fn draw<F>(&mut self, draw_fn: F)
-            where
-                F: FnOnce(&mut crate::custom_terminal::Frame),
-            {
-                if !self.pending.is_empty() {
-                    crate::insert_history::insert_history_lines(
-                        &mut self.term,
-                        self.pending.clone(),
-                    );
-                    self.pending.clear();
-                }
-                self.term.draw(|f| draw_fn(f)).expect("draw");
-            }
-        }
-
-        let mut tui = MiniTui {
-            term: vt_term,
-            pending: Vec::new(),
-        };
-        let cap = StdoutCapture::start();
-
-        // Trigger inserted lines by handling agent/app events, not by calling insert_history_lines_to_writer.
-        for ev in drain_insert_history(&mut rx) {
-            tui.insert(ev);
-        }
-        // Now render the ChatWidget into the viewport, writing to captured stdout via backend
-        tui.draw(|f| f.render_widget_ref(&chat, viewport));
-
-        // Collect ANSI and parse with vt100
-        let ansi = cap.finish();
-        let mut parser = vt100::Parser::new(vt_height, width, 0);
-        parser.process(&ansi);
-        let visual = (0..vt_height)
-            .map(|row| {
-                let mut s = String::with_capacity(width as usize);
-                for col in 0..width {
-                    if let Some(cell) = parser.screen().cell(row, col) {
-                        if let Some(ch) = cell.contents().chars().next() {
-                            s.push(ch);
-                        } else {
-                            s.push(' ');
-                        }
+    // 3) Build VT100 visual from the captured ANSI
+    let mut parser = vt100::Parser::new(vt_height, width, 0);
+    parser.process(&ansi);
+    let mut vt_lines: Vec<String> = (0..vt_height)
+        .map(|row| {
+            let mut s = String::with_capacity(width as usize);
+            for col in 0..width {
+                if let Some(cell) = parser.screen().cell(row, col) {
+                    if let Some(ch) = cell.contents().chars().next() {
+                        s.push(ch);
                     } else {
                         s.push(' ');
                     }
+                } else {
+                    s.push(' ');
                 }
-                s.trim_end().to_string()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        insta::assert_snapshot!(visual);
-        return;
+            }
+            s.trim_end().to_string()
+        })
+        .collect();
+
+    // 4) Overlay UI buffer content into the viewport region of the VT output
+    for rel_y in 0..viewport.height {
+        let y = viewport.y + rel_y;
+        let mut line = String::with_capacity(width as usize);
+        for x in 0..viewport.width {
+            let ch = ui_buf[(x, rel_y)].symbol().chars().next().unwrap_or(' ');
+            line.push(ch);
+        }
+        vt_lines[y as usize] = line.trim_end().to_string();
     }
-    unreachable!();
+
+    let visual = vt_lines.join("\n");
+    insta::assert_snapshot!(visual);
 }
