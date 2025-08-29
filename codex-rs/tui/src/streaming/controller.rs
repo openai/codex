@@ -246,8 +246,9 @@ mod tests {
         }
     }
     impl HistorySink for TestSink {
-        fn insert_history(&self, lines: Vec<Line<'static>>) {
-            self.lines.borrow_mut().push(lines);
+        fn insert_history_cell(&self, cell: Box<dyn crate::history_cell::HistoryCell>) {
+            // For tests, store the transcript representation of the cell.
+            self.lines.borrow_mut().push(cell.transcript_lines());
         }
         fn start_commit_animation(&self) {}
         fn stop_commit_animation(&self) {}

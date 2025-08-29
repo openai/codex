@@ -1725,7 +1725,9 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     });
     chat.handle_codex_event(Event {
         id: "t1".into(),
-        msg: EventMsg::TaskStarted,
+        msg: EventMsg::TaskStarted(TaskStartedEvent {
+            model_context_window: None,
+        }),
     });
     chat.handle_codex_event(Event {
         id: "t1".into(),
