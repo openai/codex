@@ -74,7 +74,7 @@ on:
     - cron: '*/30 * * * *'
   workflow_run:
     types: [completed]
-    workflows: [Build,Deploy,Tests,Release,E2E Tests,Infrastructure Deployment,Integration Tests]
+    workflows: [Build,Deploy,Tests,Release,E2E Tests,Infrastructure Deployment,Integration Tests,rust-ci]
   workflow_dispatch:
     inputs:
       agent_uri:
