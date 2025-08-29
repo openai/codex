@@ -10,8 +10,8 @@ use std::path::PathBuf;
 
 use crate::exec_command::relativize_to_home;
 use crate::history_cell::PatchEventType;
+use codex_core::git_info::get_git_repo_root;
 use codex_core::protocol::FileChange;
-use codex_core::util::is_inside_git_repo;
 
 const SPACES_AFTER_LINE_NUMBER: usize = 6;
 
@@ -25,10 +25,10 @@ enum DiffLineType {
 pub(crate) fn create_diff_summary(
     changes: &HashMap<PathBuf, FileChange>,
     event_type: PatchEventType,
+    cwd: &Path,
     wrap_cols: usize,
 ) -> Vec<RtLine<'static>> {
-    let cwd: PathBuf = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
-    let rows = collect_rows(changes, &cwd);
+    let rows = collect_rows(changes);
     let header_kind = match event_type {
         PatchEventType::ApplyBegin { auto_approved } => {
             if auto_approved {
@@ -39,7 +39,7 @@ pub(crate) fn create_diff_summary(
         }
         PatchEventType::ApprovalRequest => HeaderKind::ProposedChange,
     };
-    render_changes_block(rows, wrap_cols, header_kind)
+    render_changes_block(rows, wrap_cols, header_kind, cwd)
 }
 
 // Shared row for per-file presentation
@@ -47,13 +47,13 @@ pub(crate) fn create_diff_summary(
 struct Row {
     #[allow(dead_code)]
     path: PathBuf,
-    display: String,
+    move_path: Option<PathBuf>,
     added: usize,
     removed: usize,
     change: FileChange,
 }
 
-fn collect_rows(changes: &HashMap<PathBuf, FileChange>, cwd: &Path) -> Vec<Row> {
+fn collect_rows(changes: &HashMap<PathBuf, FileChange>) -> Vec<Row> {
     let mut rows: Vec<Row> = Vec::new();
     for (path, change) in changes.iter() {
         let (added, removed) = match change {
@@ -65,19 +65,18 @@ fn collect_rows(changes: &HashMap<PathBuf, FileChange>, cwd: &Path) -> Vec<Row> 
             FileChange::Update {
                 move_path: Some(new),
                 ..
-            } => Some(new.as_path()),
+            } => Some(new.clone()),
             _ => None,
         };
-        let display = display_path_for(path, move_path, cwd);
         rows.push(Row {
             path: path.clone(),
-            display,
+            move_path,
             added,
             removed,
             change: change.clone(),
         });
     }
-    rows.sort_by_key(|r| r.display.clone());
+    rows.sort_by_key(|r| r.path.clone());
     rows
 }
 
@@ -91,6 +90,7 @@ fn render_changes_block(
     rows: Vec<Row>,
     wrap_cols: usize,
     header_kind: HeaderKind,
+    cwd: &Path,
 ) -> Vec<RtLine<'static>> {
     let mut out: Vec<RtLine<'static>> = Vec::new();
     let term_cols = wrap_cols;
@@ -105,6 +105,15 @@ fn render_changes_block(
         spans
     }
 
+    let render_path = |row: &Row| -> Vec<RtSpan<'static>> {
+        let mut spans = Vec::new();
+        spans.push(display_path_for(&row.path, cwd).into());
+        if let Some(move_path) = &row.move_path {
+            spans.push(format!(" → {}", display_path_for(move_path, cwd)).into());
+        }
+        spans
+    };
+
     // Header
     let total_added: usize = rows.iter().map(|r| r.added).sum();
     let total_removed: usize = rows.iter().map(|r| r.removed).sum();
@@ -115,7 +124,9 @@ fn render_changes_block(
         HeaderKind::ProposedChange => {
             header_spans.push("Proposed Change".bold());
             if let [row] = &rows[..] {
-                header_spans.push(format!(" {} ", row.display).into());
+                header_spans.push(" ".into());
+                header_spans.extend(render_path(row));
+                header_spans.push(" ".into());
                 header_spans.extend(render_line_count_summary(row.added, row.removed));
             } else {
                 header_spans.push(format!(" to {file_count} {noun} ").into());
@@ -130,7 +141,9 @@ fn render_changes_block(
                     _ => "Edited",
                 };
                 header_spans.push(verb.bold());
-                header_spans.push(format!(" {} ", row.display).into());
+                header_spans.push(" ".into());
+                header_spans.extend(render_path(row));
+                header_spans.push(" ".into());
                 header_spans.extend(render_line_count_summary(row.added, row.removed));
             } else {
                 header_spans.push("Edited".bold());
@@ -163,7 +176,7 @@ fn render_changes_block(
         if !skip_file_header {
             let mut header: Vec<RtSpan<'static>> = Vec::new();
             header.push("  └ ".dim());
-            header.push(r.display.into());
+            header.extend(render_path(&r));
             header.push(" ".into());
             header.extend(render_line_count_summary(r.added, r.removed));
             out.push(RtLine::from(header));
@@ -245,75 +258,17 @@ fn render_changes_block(
     out
 }
 
-fn relative_from(base: &Path, path: &Path) -> Option<PathBuf> {
-    // Only produce a relative path if both are absolute with compatible prefixes
-    #[cfg(windows)]
-    {
-        use std::path::Component;
-        let mut base_iter = base.components();
-        let mut path_iter = path.components();
-        let base_prefix = match base_iter.next() {
-            Some(Component::Prefix(p)) => Some(p),
-            _ => None,
-        };
-        let path_prefix = match path_iter.next() {
-            Some(Component::Prefix(p)) => Some(p),
-            _ => None,
-        };
-        if base_prefix != path_prefix {
-            return None;
-        }
-        // Put back first non-root dir component
-    }
-
-    // Find common ancestor
-    let base_abs = base.canonicalize().unwrap_or_else(|_| base.to_path_buf());
-    let path_abs = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    let mut base_iter = base_abs.components();
-    let mut path_iter = path_abs.components();
-    let mut common: Vec<std::path::Component> = Vec::new();
-    loop {
-        match (base_iter.clone().next(), path_iter.clone().next()) {
-            (Some(bc), Some(pc)) if bc == pc => {
-                common.push(bc);
-                base_iter.next();
-                path_iter.next();
-            }
-            _ => break,
-        }
-    }
-    // Count remaining components in base_iter
-    let mut rel = PathBuf::new();
-    for _ in base_iter {
-        rel.push("..");
-    }
-    for c in path_iter {
-        rel.push(c.as_os_str());
-    }
-    Some(rel)
-}
-
-fn display_path_for(path: &Path, move_path: Option<&Path>, cwd: &Path) -> String {
-    // Determine if cwd is inside a git repo; if so, and path looks like it's inside
-    // a git repo (based on TurnDiffTracker's relative_to_git_root_str), then render
-    // it relative to cwd (may include ".." segments). Otherwise, relativize to home.
-    let in_repo = is_inside_git_repo(cwd);
-
-    let one = |p: &Path| -> String {
-        // Consider the path "in a repo" if its parent is inside a git repo
-        // (lightweight check that doesn't invoke git).
-        let looks_in_repo = is_inside_git_repo(p.parent().unwrap_or(p));
-        let chosen = if in_repo && looks_in_repo {
-            relative_from(cwd, p).unwrap_or_else(|| p.to_path_buf())
-        } else {
-            relativize_to_home(p).unwrap_or_else(|| p.to_path_buf())
-        };
-        chosen.display().to_string()
+fn display_path_for(path: &Path, cwd: &Path) -> String {
+    let path_in_same_repo = match (get_git_repo_root(cwd), get_git_repo_root(path)) {
+        (Some(cwd_repo), Some(path_repo)) => cwd_repo == path_repo,
+        _ => false,
     };
-    match move_path {
-        Some(new_path) => format!("{} → {}", one(path), one(new_path)),
-        None => one(path),
-    }
+    let chosen = if path_in_same_repo {
+        pathdiff::diff_paths(path, cwd).unwrap_or_else(|| path.to_path_buf())
+    } else {
+        relativize_to_home(path).unwrap_or_else(|| path.to_path_buf())
+    };
+    chosen.display().to_string()
 }
 
 fn calculate_add_remove_from_diff(diff: &str) -> (usize, usize) {
@@ -443,6 +398,12 @@ mod tests {
     use ratatui::widgets::Paragraph;
     use ratatui::widgets::WidgetRef;
     use ratatui::widgets::Wrap;
+    fn diff_summary_for_tests(
+        changes: &HashMap<PathBuf, FileChange>,
+        event_type: PatchEventType,
+    ) -> Vec<RtLine<'static>> {
+        create_diff_summary(changes, event_type, &PathBuf::from("/"), 80)
+    }
 
     fn snapshot_lines(name: &str, lines: Vec<RtLine<'static>>, width: u16, height: u16) {
         let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
@@ -483,7 +444,7 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary(&changes, PatchEventType::ApprovalRequest, 80);
+        let lines = diff_summary_for_tests(&changes, PatchEventType::ApprovalRequest);
 
         snapshot_lines("add_details", lines, 80, 10);
     }
@@ -504,7 +465,7 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary(&changes, PatchEventType::ApprovalRequest, 80);
+        let lines = diff_summary_for_tests(&changes, PatchEventType::ApprovalRequest);
 
         snapshot_lines("update_details_with_rename", lines, 80, 12);
     }
@@ -537,7 +498,7 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary(&changes, PatchEventType::ApprovalRequest, 80);
+        let lines = diff_summary_for_tests(&changes, PatchEventType::ApprovalRequest);
 
         snapshot_lines("single_line_replacement_counts", lines, 80, 8);
     }
@@ -558,7 +519,7 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary(&changes, PatchEventType::ApprovalRequest, 80);
+        let lines = diff_summary_for_tests(&changes, PatchEventType::ApprovalRequest);
 
         snapshot_lines("blank_context_line", lines, 80, 10);
     }
@@ -580,7 +541,7 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary(&changes, PatchEventType::ApprovalRequest, 80);
+        let lines = diff_summary_for_tests(&changes, PatchEventType::ApprovalRequest);
 
         // Height is large enough to show both hunks and the separator
         snapshot_lines("vertical_ellipsis_between_hunks", lines, 80, 16);
@@ -606,7 +567,7 @@ mod tests {
             ("apply_update_block_manual", false),
         ] {
             let lines =
-                create_diff_summary(&changes, PatchEventType::ApplyBegin { auto_approved }, 80);
+                diff_summary_for_tests(&changes, PatchEventType::ApplyBegin { auto_approved });
 
             snapshot_lines(name, lines, 80, 12);
         }
@@ -627,12 +588,11 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary(
+        let lines = diff_summary_for_tests(
             &changes,
             PatchEventType::ApplyBegin {
                 auto_approved: true,
             },
-            80,
         );
 
         snapshot_lines("apply_update_with_rename_block", lines, 80, 12);
@@ -661,12 +621,11 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary(
+        let lines = diff_summary_for_tests(
             &changes,
             PatchEventType::ApplyBegin {
                 auto_approved: true,
             },
-            80,
         );
 
         snapshot_lines("apply_multiple_files_block", lines, 80, 14);
@@ -682,12 +641,11 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary(
+        let lines = diff_summary_for_tests(
             &changes,
             PatchEventType::ApplyBegin {
                 auto_approved: true,
             },
-            80,
         );
 
         snapshot_lines("apply_add_block", lines, 80, 10);
@@ -707,12 +665,11 @@ mod tests {
             },
         );
 
-        let lines = create_diff_summary(
+        let lines = diff_summary_for_tests(
             &changes,
             PatchEventType::ApplyBegin {
                 auto_approved: true,
             },
-            80,
         );
 
         // Cleanup best-effort; rendering has already read the file
@@ -742,6 +699,7 @@ mod tests {
             PatchEventType::ApplyBegin {
                 auto_approved: true,
             },
+            &PathBuf::from("/"),
             72,
         );
 
@@ -771,6 +729,7 @@ mod tests {
             PatchEventType::ApplyBegin {
                 auto_approved: true,
             },
+            &PathBuf::from("/"),
             28,
         );
         // Drop the combined header for this text-only snapshot
@@ -804,6 +763,7 @@ mod tests {
             PatchEventType::ApplyBegin {
                 auto_approved: true,
             },
+            &cwd,
             80,
         );
 

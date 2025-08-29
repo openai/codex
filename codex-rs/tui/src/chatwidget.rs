@@ -331,6 +331,7 @@ impl ChatWidget {
                 auto_approved: event.auto_approved,
             },
             event.changes,
+            &self.config.cwd,
         ));
     }
 
@@ -519,6 +520,7 @@ impl ChatWidget {
         self.add_to_history(history_cell::new_patch_event(
             PatchEventType::ApprovalRequest,
             ev.changes.clone(),
+            &self.config.cwd,
         ));
 
         let request = ApprovalRequest::ApplyPatch {

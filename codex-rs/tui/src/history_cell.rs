@@ -36,6 +36,7 @@ use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 use std::collections::HashMap;
 use std::io::Cursor;
+use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
@@ -206,12 +207,17 @@ impl HistoryCell for TranscriptOnlyHistoryCell {
 pub(crate) struct PatchHistoryCell {
     event_type: PatchEventType,
     changes: HashMap<PathBuf, FileChange>,
+    cwd: PathBuf,
 }
 
 impl HistoryCell for PatchHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines: Vec<Line<'static>> =
-            create_diff_summary(&self.changes, self.event_type.clone(), width as usize);
+        let mut lines: Vec<Line<'static>> = create_diff_summary(
+            &self.changes,
+            self.event_type.clone(),
+            &self.cwd,
+            width as usize,
+        );
         // Leading blank separator for the cell
         lines.insert(0, Line::from(""));
         lines
@@ -1318,10 +1324,12 @@ pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlainHistoryCell {
 pub(crate) fn new_patch_event(
     event_type: PatchEventType,
     changes: HashMap<PathBuf, FileChange>,
+    cwd: &Path,
 ) -> PatchHistoryCell {
     PatchHistoryCell {
         event_type,
         changes,
+        cwd: cwd.to_path_buf(),
     }
 }
 
