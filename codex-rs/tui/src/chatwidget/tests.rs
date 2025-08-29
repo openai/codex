@@ -1173,12 +1173,14 @@ fn apply_patch_manual_flow_snapshot() {
         .pop()
         .expect("approved patch cell");
 
-    let snapshot_text = format!(
-        "Proposed\n{}\n\nApproved\n{}",
-        lines_to_single_string(&proposed_lines),
+    assert_snapshot!(
+        "apply_patch_manual_flow_history_proposed",
+        lines_to_single_string(&proposed_lines)
+    );
+    assert_snapshot!(
+        "apply_patch_manual_flow_history_approved",
         lines_to_single_string(&approved_lines)
     );
-    assert_snapshot!("apply_patch_manual_flow_history", snapshot_text);
 }
 
 #[test]

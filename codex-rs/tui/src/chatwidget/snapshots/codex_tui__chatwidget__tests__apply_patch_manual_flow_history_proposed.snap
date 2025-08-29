@@ -1,13 +1,6 @@
 ---
 source: tui/src/chatwidget/tests.rs
-expression: snapshot_text
+expression: lines_to_single_string(&proposed_lines)
 ---
-Proposed
-
 • Proposed Change foo.txt (+1 -0)
     1     +hello
-
-
-Approved
-
-• Change Approved 1 file (+1 -0)

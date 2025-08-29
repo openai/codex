@@ -6,6 +6,7 @@ use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
+use ratatui::layout::Margin;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
@@ -159,9 +160,8 @@ impl ChatComposer {
         let [textarea_rect, _] =
             Layout::vertical([Constraint::Min(1), Constraint::Max(popup_height)]).areas(area);
         let mut textarea_rect = textarea_rect;
-        // Leave one column for the left border; content starts at x+1
         textarea_rect.width = textarea_rect.width.saturating_sub(1);
-        textarea_rect.x = textarea_rect.x.saturating_add(1);
+        textarea_rect.x += 1;
         let state = self.textarea_state.borrow();
         self.textarea.cursor_pos_with_state(textarea_rect, &state)
     }
@@ -1311,24 +1311,16 @@ impl WidgetRef for ChatComposer {
                 Rect::new(textarea_rect.x, textarea_rect.y, 1, textarea_rect.height),
                 buf,
             );
-        // Content area starts immediately after the left border (x+1)
-        let mut content_rect = textarea_rect;
-        content_rect.width = content_rect.width.saturating_sub(1);
-        content_rect.x = content_rect.x.saturating_add(1);
+        let mut textarea_rect = textarea_rect;
+        textarea_rect.width = textarea_rect.width.saturating_sub(1);
+        textarea_rect.x = textarea_rect.x.saturating_add(1);
 
         let mut state = self.textarea_state.borrow_mut();
-        StatefulWidgetRef::render_ref(&(&self.textarea), content_rect, buf, &mut state);
+        StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
         if self.textarea.text().is_empty() {
-            // Shift placeholder one column to the right for better alignment
-            let placeholder_rect = Rect::new(
-                content_rect.x.saturating_add(1),
-                content_rect.y,
-                content_rect.width.saturating_sub(1),
-                content_rect.height,
-            );
             Line::from(self.placeholder_text.as_str())
                 .style(Style::default().dim())
-                .render_ref(placeholder_rect, buf);
+                .render_ref(textarea_rect.inner(Margin::new(1, 0)), buf);
         }
     }
 }

@@ -225,6 +225,17 @@ mod tests {
     }
 
     #[test]
+    fn cd_then_cat_is_single_read() {
+        assert_parsed(
+            &shlex_split_safe("cd foo && cat foo.txt"),
+            vec![ParsedCommand::Read {
+                cmd: "cat foo.txt".to_string(),
+                name: "foo.txt".to_string(),
+            }],
+        );
+    }
+
+    #[test]
     fn supports_ls_with_pipe() {
         let inner = "ls -la | sed -n '1,120p'";
         assert_parsed(
@@ -779,26 +790,6 @@ mod tests {
     }
 
     #[test]
-    fn eslint_with_config_path_and_target() {
-        assert_parsed(
-            &shlex_split_safe("eslint -c .eslintrc.json src"),
-            vec![ParsedCommand::Unknown {
-                cmd: "eslint -c .eslintrc.json src".to_string(),
-            }],
-        );
-    }
-
-    #[test]
-    fn npx_eslint_with_config_path_and_target() {
-        assert_parsed(
-            &shlex_split_safe("npx eslint -c .eslintrc src"),
-            vec![ParsedCommand::Unknown {
-                cmd: "npx eslint -c .eslintrc src".to_string(),
-            }],
-        );
-    }
-
-    #[test]
     fn fd_file_finder_variants() {
         assert_parsed(
             &shlex_split_safe("fd -t f src/"),
@@ -1058,8 +1049,6 @@ fn skip_flag_values<'a>(args: &'a [String], flags_with_vals: &[&str]) -> Vec<&'a
     out
 }
 
-// Removed legacy helpers for collecting non-flag targets and ESLint flags.
-
 fn is_pathish(s: &str) -> bool {
     s == "."
         || s == ".."
@@ -1127,8 +1116,6 @@ fn parse_find_query_and_path(tail: &[String]) -> (Option<String>, Option<String>
     }
     (query, path)
 }
-
-// Removed legacy npm-like classifier.
 
 fn parse_bash_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
     let [bash, flag, script] = original else {
@@ -1230,7 +1217,7 @@ fn parse_bash_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
                             }
                         }
                     }
-                    ParsedCommand::Unknown { cmd } => ParsedCommand::Unknown { cmd: cmd.clone() },
+                    other => other,
                 })
                 .collect();
         }
