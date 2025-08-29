@@ -106,3 +106,41 @@ async fn test_apply_patch_freeform_tool() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+#[cfg(not(target_os = "windows"))]
+#[tokio::test]
+async fn test_apply_patch_context() -> anyhow::Result<()> {
+    use crate::suite::common::run_e2e_exec_test;
+    use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+
+    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+        );
+        return Ok(());
+    }
+
+    let tmp_cwd = tempdir().expect("failed to create temp dir");
+    run_e2e_exec_test(
+        tmp_cwd.path(),
+        vec![
+            include_str!("../fixtures/sse_apply_patch_freeform_add.json").to_string(),
+            include_str!("../fixtures/sse_apply_patch_context_update.json").to_string(),
+            include_str!("../fixtures/sse_response_completed.json").to_string(),
+        ],
+    )
+    .await;
+
+    // Verify final file contents
+    let final_path = tmp_cwd.path().join("app.py");
+    let contents = std::fs::read_to_string(&final_path)
+        .unwrap_or_else(|e| panic!("failed reading {}: {e}", final_path.display()));
+    assert_eq!(
+        contents,
+        r#"class BaseClass:
+  def method():
+    return True
+"#
+    );
+    Ok(())
+}
