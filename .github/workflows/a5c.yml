@@ -88,7 +88,7 @@ on:
 
 jobs:
   a5c:
-    runs-on: runner8core
+    runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
