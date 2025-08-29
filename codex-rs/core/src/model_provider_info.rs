@@ -287,12 +287,12 @@ pub fn built_in_model_providers() -> HashMap<String, ModelProviderInfo> {
                 name: "GitHub Models".into(),
                 // GitHub Models exposes an OpenAI‑compatible API hosted on Azure AI Inference.
                 // Users authenticate with a GitHub token via Bearer auth.
-                base_url: Some("https://models.inference.ai.azure.com".to_string()),
+                base_url: Some("https://models.github.ai/inference".to_string()),
                 env_key: Some("GITHUB_TOKEN".to_string()),
                 env_key_instructions: Some(
                     "Set GITHUB_TOKEN with access to GitHub Models. See https://docs.github.com/en/github-models".to_string(),
                 ),
-                wire_api: WireApi::Responses,
+                wire_api: WireApi::Chat,
                 query_params: None,
                 http_headers: None,
                 env_http_headers: None,
