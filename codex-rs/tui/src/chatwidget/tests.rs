@@ -32,7 +32,6 @@ use pretty_assertions::assert_eq;
 use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
-use std::io::Read;
 use std::path::PathBuf;
 use tokio::sync::mpsc::unbounded_channel;
 
@@ -433,7 +432,7 @@ fn exec_history_extends_previous_when_consecutive() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn binary_size_transcript_matches_ideal_fixture() {
+async fn binary_size_transcript_snapshot() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
     // Set up a VT100 test terminal to capture ANSI visual output
@@ -552,19 +551,6 @@ async fn binary_size_transcript_matches_ideal_fixture() {
         }
     }
 
-    // Read the ideal fixture as-is
-    let mut f = open_fixture("ideal-binary-response.txt");
-    let mut ideal = String::new();
-    f.read_to_string(&mut ideal)
-        .expect("read ideal-binary-response.txt");
-    // Normalize line endings for Windows vs. Unix checkouts
-    let ideal = ideal.replace("\r\n", "\n");
-    let ideal_first_line = ideal
-        .lines()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("")
-        .to_string();
-
     // Build the final VT100 visual by parsing the ANSI stream. Trim trailing spaces per line
     // and drop trailing empty lines so the shape matches the ideal fixture exactly.
     let mut parser = vt100::Parser::new(height, width, 0);
@@ -589,24 +575,19 @@ async fn binary_size_transcript_matches_ideal_fixture() {
     while lines.last().is_some_and(|l| l.is_empty()) {
         lines.pop();
     }
-    // Compare only after the last session banner marker. Skip the transient
-    // 'thinking' header if present, and start from the first non-empty line
-    // of content that follows.
+    // Consider content only after the last session banner marker. Skip the transient
+    // 'thinking' header if present, and start from the first non-empty content line
+    // that follows. This keeps the snapshot stable across sessions.
     const MARKER_PREFIX: &str = ">_ You are using OpenAI Codex in ";
     let last_marker_line_idx = lines
         .iter()
         .rposition(|l| l.starts_with(MARKER_PREFIX))
         .expect("marker not found in visible output");
-    // Anchor to the first ideal line if present; otherwise use heuristics.
+    // Prefer the first assistant content line (blockquote '>' prefix) after the marker;
+    // fallback to the first non-empty, non-'thinking' line.
     let start_idx = (last_marker_line_idx + 1..lines.len())
-        .find(|&idx| lines[idx].trim_start() == ideal_first_line)
-        .or_else(|| {
-            // Prefer the first assistant content line (blockquote '>' prefix) after the marker.
-            (last_marker_line_idx + 1..lines.len())
-                .find(|&idx| lines[idx].trim_start().starts_with('>'))
-        })
+        .find(|&idx| lines[idx].trim_start().starts_with('>'))
         .unwrap_or_else(|| {
-            // Fallback: first non-empty, non-'thinking' line
             (last_marker_line_idx + 1..lines.len())
                 .find(|&idx| {
                     let t = lines[idx].trim_start();
@@ -621,8 +602,8 @@ async fn binary_size_transcript_matches_ideal_fixture() {
     compare_lines.extend(lines[(start_idx + 1)..].iter().cloned());
     let visible_after = compare_lines.join("\n");
 
-    // Normalize: drop a leading 'thinking' line if present in either side to
-    // avoid coupling to whether the reasoning header is rendered in history.
+    // Normalize: drop a leading 'thinking' line if present to avoid coupling
+    // to whether the reasoning header is rendered in history.
     fn drop_leading_thinking(s: &str) -> String {
         let mut it = s.lines();
         let first = it.next();
@@ -634,35 +615,9 @@ async fn binary_size_transcript_matches_ideal_fixture() {
         }
     }
     let visible_after = drop_leading_thinking(&visible_after);
-    let ideal = drop_leading_thinking(&ideal);
 
-    // Normalize: strip leading Markdown blockquote markers ('>' or '> ') which
-    // may be present in rendered transcript lines but not in the ideal text.
-    fn strip_blockquotes(s: &str) -> String {
-        s.lines()
-            .map(|l| {
-                l.strip_prefix("> ")
-                    .or_else(|| l.strip_prefix('>'))
-                    .unwrap_or(l)
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-    let visible_after = strip_blockquotes(&visible_after);
-    let ideal = strip_blockquotes(&ideal);
-
-    // Optionally update the fixture when env var is set
-    if std::env::var("UPDATE_IDEAL").as_deref() == Ok("1") {
-        let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        p.push("tests");
-        p.push("fixtures");
-        p.push("ideal-binary-response.txt");
-        std::fs::write(&p, &visible_after).expect("write updated ideal fixture");
-        return;
-    }
-
-    // Exact equality with pretty diff on failure
-    assert_eq!(visible_after, ideal);
+    // Snapshot the normalized visible transcript following the banner.
+    assert_snapshot!("binary_size_ideal_response", visible_after);
 }
 
 //

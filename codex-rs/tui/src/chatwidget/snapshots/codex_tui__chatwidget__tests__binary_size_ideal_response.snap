@@ -1,11 +1,8 @@
-To get started, describe a task or try one of these commands:
-
- /init - create an AGENTS.md file with instructions for Codex
- /status - show current session configuration and token usage
- /approvals - choose what Codex can do without approval
- /model - choose what model and reasoning effort to use
-
-I’m going to scan the workspace and Cargo manifests to see build profiles and
+---
+source: tui/src/chatwidget/tests.rs
+expression: visible_after
+---
+> I’m going to scan the workspace and Cargo manifests to see build profiles and
   dependencies that impact binary size. Then I’ll summarize the main causes.
 
 • Explored
@@ -21,7 +18,7 @@ I’m going to scan the workspace and Cargo manifests to see build profiles and
 • Explored
   └ Read Cargo.toml
 
-Here’s what’s driving size in this workspace’s binaries.
+> Here’s what’s driving size in this workspace’s binaries.
 
   Main Causes
 
