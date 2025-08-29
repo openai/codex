@@ -66,6 +66,22 @@ base_url = "https://api.mistral.ai/v1"
 env_key = "MISTRAL_API_KEY"
 ```
 
+GitHub Models via the Responses API is supported out of the box under the provider id `github`:
+
+```toml
+# Use GitHub Models
+model_provider = "github"
+model = "gpt-4o-mini"  # or any supported model
+
+[model_providers.github]
+name = "GitHub Models"            # built-in
+base_url = "https://models.inference.ai.azure.com"
+env_key = "GITHUB_TOKEN"          # Bearer token for GitHub Models
+wire_api = "responses"
+```
+
+Ensure `GITHUB_TOKEN` is set in your environment with access to GitHub Models. See the GitHub documentation for details.
+
 Note that Azure requires `api-version` to be passed as a query parameter, so be sure to specify it as part of `query_params` when defining the Azure provider:
 
 ```toml
