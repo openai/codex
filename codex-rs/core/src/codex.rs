@@ -32,6 +32,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json;
 use serde_json::Value;
+use shlex;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tokio::task::AbortHandle;
@@ -190,6 +191,7 @@ impl Codex {
             approval_policy: config.approval_policy,
             sandbox_policy: config.sandbox_policy.clone(),
             notify: UserNotifier::new(config.notify.clone()),
+            hooks: config.hooks.clone(),
             cwd: config.cwd.clone(),
         };
 
@@ -316,6 +318,8 @@ struct ConfigureSession {
     sandbox_policy: SandboxPolicy,
 
     notify: UserNotifier,
+    /// Event hooks configuration for different events
+    hooks: crate::user_notification::EventHooks,
 
     /// Working directory that should be treated as the *root* of the
     /// session. All relative paths supplied by the model as well as the
@@ -345,6 +349,7 @@ impl Session {
             approval_policy,
             sandbox_policy,
             notify,
+            hooks,
             cwd,
         } = configure_session;
         debug!("Configuring session: model={model}; provider={provider:?}");
@@ -454,6 +459,7 @@ impl Session {
             session_manager: ExecSessionManager::default(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: notify,
+            hooks,
             rollout: Mutex::new(Some(rollout_recorder)),
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             user_shell: default_shell,
@@ -488,6 +494,12 @@ impl Session {
             }),
         })
         .chain(post_session_configured_error_events.into_iter());
+
+        // Trigger session started hook
+        sess.maybe_notify(UserNotification::SessionStarted {
+            session_id: conversation_id.to_string(),
+            cwd: turn_context.cwd.to_string_lossy().to_string(),
+        });
         for event in events {
             sess.send_event(event).await;
         }
@@ -581,7 +593,13 @@ impl Session {
         command: Vec<String>,
         cwd: PathBuf,
         reason: Option<String>,
-    ) -> ReviewDecision {
+    ) -> oneshot::Receiver<ReviewDecision> {
+        // Trigger user input required hook.
+        self.maybe_notify(UserNotification::UserInputRequired {
+            turn_id: sub_id.clone(),
+            reason: "approval".to_string(),
+            message: reason.clone(),
+        });
         // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
         let event_id = sub_id.clone();
@@ -609,7 +627,7 @@ impl Session {
             }),
         };
         self.send_event(event).await;
-        rx_approve.await.unwrap_or_default()
+        rx_approve
     }
 
     pub async fn request_patch_approval(
@@ -834,6 +852,16 @@ impl Session {
             cwd,
             apply_patch,
         } = exec_command_context;
+
+        // Trigger tool execution started hook
+        self.maybe_notify(UserNotification::ToolExecutionStarted {
+            turn_id: sub_id.clone(),
+            tool_name: "bash".to_string(), // Most exec commands are bash
+            tool_args: Some(serde_json::json!({
+                "command": command_for_display.join(" "),
+                "cwd": cwd.to_string_lossy().to_string()
+            })),
+        });
         let msg = match apply_patch {
             Some(ApplyPatchCommandContext {
                 user_explicitly_approved_this_action,
@@ -872,6 +900,23 @@ impl Session {
         output: &ExecToolCallOutput,
         is_apply_patch: bool,
     ) {
+        // Trigger tool execution completed hook
+        let success = output.exit_code == 0;
+        let error_message = if success {
+            None
+        } else {
+            Some(format!(
+                "Command failed with exit code {}",
+                output.exit_code
+            ))
+        };
+
+        self.maybe_notify(UserNotification::ToolExecutionCompleted {
+            turn_id: sub_id.to_string(),
+            tool_name: "bash".to_string(), // Most exec commands are bash
+            success,
+            error_message,
+        });
         let ExecToolCallOutput {
             stdout,
             stderr,
@@ -1081,6 +1126,61 @@ impl Session {
         &self.services.notifier
     }
 
+    /// Spawn the configured notifier (if any) with the given JSON payload as
+    /// the last argument. Failures are logged but otherwise ignored so that
+    /// notification issues do not interfere with the main workflow.
+    fn maybe_notify(&self, notification: UserNotification) {
+        // Execute the UserNotifier for backward compatibility
+        self.services.notifier.notify(&notification);
+
+        // Execute event-specific hooks
+        if let Some(hooks) = self
+            .services
+            .hooks
+            .get_hooks_for_notification(&notification)
+        {
+            for hook_command in hooks {
+                self.execute_hook_command_from_string(hook_command, &notification);
+            }
+        }
+    }
+
+    /// Execute a single hook command with the given notification
+    fn execute_hook_command(&self, command_args: &[String], notification: &UserNotification) {
+        if command_args.is_empty() {
+            return;
+        }
+
+        let Ok(json) = serde_json::to_string(notification) else {
+            error!("failed to serialise notification payload");
+            return;
+        };
+
+        let mut command = std::process::Command::new(&command_args[0]);
+        if command_args.len() > 1 {
+            command.args(&command_args[1..]);
+        }
+        command.arg(json);
+
+        // Fire-and-forget – we do not wait for completion.
+        if let Err(e) = command.spawn() {
+            warn!("failed to spawn hook '{}': {e}", command_args[0]);
+        }
+    }
+
+    /// Execute a hook command from a string (space-separated arguments)
+    fn execute_hook_command_from_string(&self, command_str: &str, notification: &UserNotification) {
+        // Use shell-like parsing that respects quotes
+        match shlex::split(command_str) {
+            Some(command_args) => {
+                self.execute_hook_command(&command_args, notification);
+            }
+            None => {
+                error!("Failed to parse hook command '{}'", command_str);
+            }
+        }
+    }
+
     fn user_shell(&self) -> &shell::Shell {
         &self.services.user_shell
     }
@@ -1092,6 +1192,11 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
+        // Trigger session ended hook
+        self.maybe_notify(UserNotification::SessionEnded {
+            session_id: self.conversation_id.to_string(),
+        });
+
         self.interrupt_task_sync();
     }
 }
@@ -1914,12 +2019,11 @@ async fn run_task(
                     last_agent_message = get_last_assistant_message_from_turn(
                         &items_to_record_in_conversation_history,
                     );
-                    sess.notifier()
-                        .notify(&UserNotification::AgentTurnComplete {
-                            turn_id: sub_id.clone(),
-                            input_messages: turn_input_messages,
-                            last_assistant_message: last_agent_message.clone(),
-                        });
+                    sess.maybe_notify(UserNotification::AgentTurnComplete {
+                        turn_id: sub_id.clone(),
+                        input_messages: turn_input_messages,
+                        last_assistant_message: last_agent_message.clone(),
+                    });
                     break;
                 }
                 continue;
@@ -2810,7 +2914,9 @@ async fn handle_container_exec_with_params(
                     params.cwd.clone(),
                     params.justification.clone(),
                 )
-                .await;
+                .await
+                .await
+                .unwrap_or_default();
             match decision {
                 ReviewDecision::Approved => (),
                 ReviewDecision::ApprovedForSession => {
@@ -2952,7 +3058,9 @@ async fn handle_sandbox_error(
             cwd.clone(),
             Some("command failed; retry without sandbox?".to_string()),
         )
-        .await;
+        .await
+        .await
+        .unwrap_or_default();
 
     match decision {
         ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {
@@ -3561,6 +3669,7 @@ mod tests {
             session_manager: ExecSessionManager::default(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
             notifier: UserNotifier::default(),
+            hooks: crate::user_notification::EventHooks::default(),
             rollout: Mutex::new(None),
             codex_linux_sandbox_exe: None,
             user_shell: shell::Shell::Unknown,
