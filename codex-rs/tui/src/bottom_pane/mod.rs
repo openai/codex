@@ -36,6 +36,7 @@ pub(crate) enum CancellationEvent {
 
 pub(crate) use chat_composer::ChatComposer;
 pub(crate) use chat_composer::InputResult;
+use codex_protocol::custom_prompts::CustomPrompt;
 
 use crate::status_indicator_widget::StatusIndicatorWidget;
 use approval_modal_view::ApprovalModalView;
@@ -333,6 +334,12 @@ impl BottomPane {
         if let Some(status) = self.status.as_mut() {
             status.set_queued_messages(queued);
         }
+        self.request_redraw();
+    }
+
+    /// Update custom prompts available for the slash popup.
+    pub(crate) fn set_custom_prompts(&mut self, prompts: Vec<CustomPrompt>) {
+        self.composer.set_custom_prompts(prompts);
         self.request_redraw();
     }
 

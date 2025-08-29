@@ -533,6 +533,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             EventMsg::McpListToolsResponse(_) => {
                 // Currently ignored in exec output.
             }
+            EventMsg::ListCustomPromptsResponse(_) => {
+                // Currently ignored in exec output.
+            }
             EventMsg::TurnAborted(abort_reason) => match abort_reason.reason {
                 TurnAbortReason::Interrupted => {
                     ts_println!(self, "task interrupted");
