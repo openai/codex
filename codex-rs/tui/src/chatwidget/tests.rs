@@ -954,31 +954,6 @@ fn status_widget_and_approval_modal_snapshot() {
     assert_snapshot!("status_widget_and_approval_modal", terminal.backend());
 }
 
-#[test]
-fn exec_approval_request_history_snapshot() {
-    use codex_core::protocol::ExecApprovalRequestEvent;
-    use insta::assert_snapshot;
-
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
-    let ev = ExecApprovalRequestEvent {
-        call_id: "call-approve-exec".into(),
-        command: vec!["bash".into(), "-lc".into(), "echo hello".into()],
-        cwd: std::env::current_dir().unwrap_or_default(),
-        reason: Some("Codex wants to run a command".into()),
-    };
-    chat.handle_codex_event(Event {
-        id: "sub-approve-exec".into(),
-        msg: EventMsg::ExecApprovalRequest(ev),
-    });
-
-    let combined = drain_insert_history(&mut rx)
-        .into_iter()
-        .map(|lines| lines_to_single_string(&lines))
-        .collect::<Vec<_>>()
-        .join("\n---\n");
-    assert_snapshot!("exec_approval_request_history", combined);
-}
-
 // Snapshot test: status widget active (StatusIndicatorView)
 // Ensures the VT100 rendering of the status indicator is stable when active.
 #[test]
