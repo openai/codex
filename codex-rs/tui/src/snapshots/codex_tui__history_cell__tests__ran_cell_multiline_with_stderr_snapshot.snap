@@ -1,0 +1,14 @@
+---
+source: tui/src/history_cell.rs
+expression: rendered
+---
+• Ran
+  └ echo
+    this_is_a_very_long_sing
+    le_token_that_will_wrap_
+    across_the_available_wid
+    th
+    error: first line on
+    stderr
+    error: second line on
+    stderr

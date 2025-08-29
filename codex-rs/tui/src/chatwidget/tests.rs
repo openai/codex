@@ -952,8 +952,8 @@ fn apply_patch_events_emit_history_cells() {
     assert!(!cells.is_empty(), "expected apply block cell to be sent");
     let blob = lines_to_single_string(cells.last().unwrap());
     assert!(
-        blob.contains("Edited foo.txt"),
-        "expected single-file edited header with filename: {blob:?}"
+        blob.contains("Added foo.txt") || blob.contains("Edited foo.txt"),
+        "expected single-file header with filename (Added/Edited): {blob:?}"
     );
 
     // 3) End apply success -> success cell

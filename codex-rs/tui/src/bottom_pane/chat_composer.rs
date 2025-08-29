@@ -1313,7 +1313,7 @@ impl WidgetRef for ChatComposer {
             );
         let mut textarea_rect = textarea_rect;
         textarea_rect.width = textarea_rect.width.saturating_sub(1);
-        textarea_rect.x = textarea_rect.x.saturating_add(1);
+        textarea_rect.x += 1;
 
         let mut state = self.textarea_state.borrow_mut();
         StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);

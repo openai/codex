@@ -1,9 +1,8 @@
 ---
 source: tui/src/diff_render.rs
-assertion_line: 748
 expression: terminal.backend()
 ---
-"• Edited tmp_delete_example.txt (+0 -3)                                         "
+"• Deleted tmp_delete_example.txt (+0 -3)                                        "
 "    1     -first                                                                "
 "    2     -second                                                               "
 "    3     -third                                                                "

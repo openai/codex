@@ -126,7 +126,18 @@ fn render_changes_block(
             }
         }
         HeaderKind::Edited => {
-            header_spans.push("Edited".bold());
+            // For a single file, specialize the verb based on the change kind.
+            // Otherwise, use the generic "Edited" summary.
+            let verb = if single_file_inline {
+                match first_row_opt.as_ref().map(|r| &r.change) {
+                    Some(FileChange::Add { .. }) => "Added",
+                    Some(FileChange::Delete) => "Deleted",
+                    _ => "Edited",
+                }
+            } else {
+                "Edited"
+            };
+            header_spans.push(verb.bold());
             if single_file_inline {
                 if let Some(fr) = &first_row_opt {
                     header_spans.push(format!(" {} ", fr.display).into());
@@ -810,7 +821,7 @@ mod tests {
         // This mirrors the desired layout example: sign only on first inserted line,
         // subsequent wrapped pieces start aligned under the line number gutter.
         let original = "1\n2\n3\n4\n";
-        let modified = "1\nadded line which wraps and_if_there_is_a_long_token_it_will_be_broken\n3\n4 context line which also wraps across\n";
+        let modified = "1\nadded long line which wraps and_if_there_is_a_long_token_it_will_be_broken\n3\n4 context line which also wraps across\n";
         let patch = diffy::create_patch(original, modified).to_string();
 
         let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();

@@ -1964,6 +1964,52 @@ mod tests {
             .join("\n");
         insta::assert_snapshot!(rendered);
     }
+
+    #[test]
+    fn ran_cell_multiline_with_stderr_snapshot() {
+        // Build an exec cell that completes (so it renders as "Ran") with a
+        // command long enough that it must render on its own line under the
+        // header, and include a couple of stderr lines to verify the output
+        // block prefixes and wrapping.
+        let call_id = "c_wrap_err".to_string();
+        let long_cmd =
+            "echo this_is_a_very_long_single_token_that_will_wrap_across_the_available_width";
+        let mut cell = ExecCell::new(ExecCall {
+            call_id: call_id.clone(),
+            command: vec!["bash".into(), "-lc".into(), long_cmd.to_string()],
+            parsed: Vec::new(),
+            output: None,
+            start_time: Some(Instant::now()),
+            duration: None,
+        });
+
+        let stderr = "error: first line on stderr\nerror: second line on stderr".to_string();
+        cell.complete_call(
+            &call_id,
+            CommandOutput {
+                exit_code: 1,
+                stdout: String::new(),
+                stderr,
+                formatted_output: String::new(),
+            },
+            Duration::from_millis(5),
+        );
+
+        // Narrow width to force the command to render under the header line.
+        let width: u16 = 28;
+        let rendered = cell
+            .display_lines(width)
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        insta::assert_snapshot!(rendered);
+    }
     #[test]
     fn user_history_cell_wraps_and_prefixes_each_line_snapshot() {
         let msg = "one two three four five six seven";
@@ -1971,8 +2017,8 @@ mod tests {
             message: msg.to_string(),
         };
 
-        // Small width to force wrapping. Effective wrap width is width-1 due to the ▌ prefix.
-        let width: u16 = 8;
+        // Small width to force wrapping more clearly. Effective wrap width is width-1 due to the ▌ prefix.
+        let width: u16 = 12;
         let lines = cell.display_lines(width);
 
         let rendered = lines
