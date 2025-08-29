@@ -31,6 +31,7 @@ use codex_core::protocol::TokenUsage;
 use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnDiffEvent;
 use codex_core::protocol::WebSearchBeginEvent;
+use codex_core::protocol::WebSearchEndEvent;
 use codex_protocol::parse_command::ParsedCommand;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -358,9 +359,16 @@ impl ChatWidget {
         self.defer_or_handle(|q| q.push_mcp_end(ev), |s| s.handle_mcp_end_now(ev2));
     }
 
-    fn on_web_search_begin(&mut self, ev: WebSearchBeginEvent) {
+    fn on_web_search_begin(&mut self, _ev: WebSearchBeginEvent) {
         self.flush_answer_stream_with_separator();
-        self.add_to_history(history_cell::new_web_search_call(ev.query));
+    }
+
+    fn on_web_search_end(&mut self, ev: WebSearchEndEvent) {
+        self.flush_answer_stream_with_separator();
+        self.add_to_history(history_cell::new_web_search_call(format!(
+            "Searched: {}",
+            ev.query
+        )));
     }
 
     fn on_get_history_entry_response(
@@ -992,6 +1000,7 @@ impl ChatWidget {
             EventMsg::McpToolCallBegin(ev) => self.on_mcp_tool_call_begin(ev),
             EventMsg::McpToolCallEnd(ev) => self.on_mcp_tool_call_end(ev),
             EventMsg::WebSearchBegin(ev) => self.on_web_search_begin(ev),
+            EventMsg::WebSearchEnd(ev) => self.on_web_search_end(ev),
             EventMsg::GetHistoryEntryResponse(ev) => self.on_get_history_entry_response(ev),
             EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
             EventMsg::ListCustomPromptsResponse(ev) => self.on_list_custom_prompts(ev),

@@ -47,7 +47,9 @@ pub(crate) enum OpenAiTool {
     Function(ResponsesApiTool),
     #[serde(rename = "local_shell")]
     LocalShell {},
-    #[serde(rename = "web_search")]
+    // TODO: Understand why we get an error on web_search although the API docs say it's supported.
+    // https://platform.openai.com/docs/guides/tools-web-search?api-mode=responses#:~:text=%7B%20type%3A%20%22web_search%22%20%7D%2C
+    #[serde(rename = "web_search_preview")]
     WebSearch {},
     #[serde(rename = "custom")]
     Freeform(FreeformTool),
@@ -335,12 +337,12 @@ pub fn create_tools_json_for_responses_api(
     let mut tools_json = Vec::new();
 
     for tool in tools {
-        tools_json.push(serde_json::to_value(tool)?);
+        let json = serde_json::to_value(tool)?;
+        tools_json.push(json);
     }
 
     Ok(tools_json)
 }
-
 /// Returns JSON values that are compatible with Function Calling in the
 /// Chat Completions API:
 /// https://platform.openai.com/docs/guides/function-calling?api-mode=chat
@@ -702,8 +704,8 @@ mod tests {
                                     "number_property": { "type": "number" },
                                 },
                                 "required": [
-                                    "string_property".to_string(),
-                                    "number_property".to_string()
+                                    "string_property",
+                                    "number_property",
                                 ],
                                 "additionalProperties": Some(false),
                             },

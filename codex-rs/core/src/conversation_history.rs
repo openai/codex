@@ -72,7 +72,7 @@ fn is_api_message(message: &ResponseItem) -> bool {
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::LocalShellCall { .. }
         | ResponseItem::Reasoning { .. } => true,
-        ResponseItem::Other => false,
+        ResponseItem::WebSearchCall { .. } | ResponseItem::Other => false,
     }
 }
 
