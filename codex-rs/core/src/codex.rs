@@ -89,6 +89,7 @@ use crate::protocol::ExecCommandBeginEvent;
 use crate::protocol::ExecCommandEndEvent;
 use crate::protocol::FileChange;
 use crate::protocol::InputItem;
+use crate::protocol::ListCustomPromptsResponseEvent;
 use crate::protocol::Op;
 use crate::protocol::PatchApplyBeginEvent;
 use crate::protocol::PatchApplyEndEvent;
@@ -110,6 +111,7 @@ use crate::user_notification::UserNotification;
 use crate::util::backoff;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::LocalShellAction;
@@ -1284,6 +1286,27 @@ async fn submission_loop(
                 };
                 if let Err(e) = tx_event.send(event).await {
                     warn!("failed to send McpListToolsResponse event: {e}");
+                }
+            }
+            Op::ListCustomPrompts => {
+                let tx_event = sess.tx_event.clone();
+                let sub_id = sub.id.clone();
+
+                let custom_prompts: Vec<CustomPrompt> =
+                    if let Some(dir) = crate::custom_prompts::default_prompts_dir() {
+                        crate::custom_prompts::discover_prompts_in(&dir).await
+                    } else {
+                        Vec::new()
+                    };
+
+                let event = Event {
+                    id: sub_id,
+                    msg: EventMsg::ListCustomPromptsResponse(ListCustomPromptsResponseEvent {
+                        custom_prompts,
+                    }),
+                };
+                if let Err(e) = tx_event.send(event).await {
+                    warn!("failed to send ListCustomPromptsResponse event: {e}");
                 }
             }
             Op::Compact => {
