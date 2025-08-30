@@ -212,16 +212,6 @@ impl MarkdownStreamCollector {
         self.clear();
         out
     }
-
-    /// Extract the raw markdown content that has been committed so far.
-    /// This returns exactly what would appear in chat history.
-    pub fn extract_committable_content(&self, _config: &Config) -> Option<String> {
-        if self.committed_raw_content.trim().is_empty() {
-            None
-        } else {
-            Some(self.committed_raw_content.clone())
-        }
-    }
 }
 
 #[inline]
