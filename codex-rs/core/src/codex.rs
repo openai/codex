@@ -1631,7 +1631,14 @@ async fn run_turn(
             Ok(output) => return Ok(output),
             Err(CodexErr::Interrupted) => return Err(CodexErr::Interrupted),
             Err(CodexErr::EnvVar(var)) => return Err(CodexErr::EnvVar(var)),
-            Err(e @ (CodexErr::UsageLimitReached(_) | CodexErr::UsageNotIncluded)) => {
+            Err(
+                e @ (CodexErr::UsageLimitReached(_)
+                | CodexErr::UsageNotIncluded
+                | CodexErr::UnexpectedStatus(_, _)
+                | CodexErr::RetryLimit(_)
+                | CodexErr::UnauthorizedError
+                | CodexErr::InternalServerError),
+            ) => {
                 return Err(e);
             }
             Err(e) => {
