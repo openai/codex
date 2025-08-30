@@ -32,6 +32,7 @@ use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnDiffEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
+use codex_protocol::models::ResponseItem;
 use codex_protocol::parse_command::ParsedCommand;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -272,6 +273,34 @@ impl ChatWidget {
     /// When there are queued user messages, restore them into the composer
     /// separated by newlines rather than auto‑submitting the next one.
     fn on_interrupted_turn(&mut self) {
+        // Extract any partial streaming content before clearing it
+        let partial_content = if self.is_write_cycle_active() {
+            self.stream.extract_partial_content()
+        } else {
+            None
+        };
+
+        // If we had partial content, add it to conversation history so the AI agent can see it
+        if let Some(partial_text) = partial_content {
+            // Create an assistant message with the partial content
+            let assistant_message = ResponseItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![codex_protocol::models::ContentItem::OutputText {
+                    text: partial_text.clone(),
+                }],
+            };
+
+            // Send the partial message to be added to conversation history
+            self.codex_op_tx
+                .send(Op::AddPartialMessageToConversation {
+                    message: assistant_message,
+                })
+                .unwrap_or_else(|e| {
+                    tracing::error!("Failed to send partial message to conversation history: {e}");
+                });
+        }
+
         // Finalize, log a gentle prompt, and clear running state.
         self.finalize_turn_with_error_message("Tell the model what to do differently".to_owned());
 

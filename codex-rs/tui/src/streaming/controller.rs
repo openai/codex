@@ -4,6 +4,21 @@ use ratatui::text::Line;
 use super::HeaderEmitter;
 use super::StreamState;
 
+/// Helper function to extract plain text from ratatui Lines
+fn extract_text_from_lines(lines: &[Line<'static>]) -> String {
+    lines
+        .iter()
+        .map(|line| {
+            let line_text: String = line
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect();
+            format!("{line_text}\n")
+        })
+        .collect()
+}
+
 /// Sink for history insertions and animation control.
 pub(crate) trait HistorySink {
     fn insert_history(&self, lines: Vec<Line<'static>>);
@@ -38,6 +53,8 @@ pub(crate) struct StreamController {
     state: StreamState,
     active: bool,
     finishing_after_drain: bool,
+    /// Track content that has actually been displayed to users for synchronization
+    displayed_content: String,
 }
 
 impl StreamController {
@@ -48,6 +65,7 @@ impl StreamController {
             state: StreamState::new(),
             active: false,
             finishing_after_drain: false,
+            displayed_content: String::new(),
         }
     }
 
@@ -63,7 +81,20 @@ impl StreamController {
         self.state.clear();
         self.active = false;
         self.finishing_after_drain = false;
+        self.displayed_content.clear();
         // leave header state unchanged; caller decides when to reset
+    }
+
+    /// Extract any partial streaming content as a plain text string.
+    /// This is used during interruption to preserve partial messages
+    /// before clearing the stream. Returns exactly what was displayed to users.
+    pub(crate) fn extract_partial_content(&self) -> Option<String> {
+        if !self.active || self.displayed_content.is_empty() {
+            return None;
+        }
+
+        // Return the content that was actually displayed to users
+        Some(self.displayed_content.clone())
     }
 
     fn emit_header_if_needed(&mut self, out_lines: &mut Lines) -> bool {
@@ -124,6 +155,10 @@ impl StreamController {
                 out_lines.extend(step.history);
             }
             if !out_lines.is_empty() {
+                // Track the content that's being displayed when flushing immediately
+                self.displayed_content
+                    .push_str(&extract_text_from_lines(&out_lines));
+
                 let mut lines_with_header: Lines = Vec::new();
                 self.emit_header_if_needed(&mut lines_with_header);
                 lines_with_header.extend(out_lines);
@@ -132,6 +167,7 @@ impl StreamController {
 
             // Cleanup
             self.state.clear();
+            self.displayed_content.clear();
             // Allow a subsequent block in this turn to emit its header.
             self.header.allow_reemit_in_turn();
             // Also clear the per-stream emitted flag so the header can render again.
@@ -159,6 +195,10 @@ impl StreamController {
         }
         let step = { self.state.step() };
         if !step.history.is_empty() {
+            // Track the content that's being displayed to users
+            self.displayed_content
+                .push_str(&extract_text_from_lines(&step.history));
+
             let mut lines: Lines = Vec::new();
             self.emit_header_if_needed(&mut lines);
             let mut out = lines;
@@ -172,6 +212,7 @@ impl StreamController {
             if self.finishing_after_drain {
                 // Reset and notify
                 self.state.clear();
+                self.displayed_content.clear();
                 // Allow a subsequent block in this turn to emit its header.
                 self.header.allow_reemit_in_turn();
                 // Also clear the per-stream emitted flag so the header can render again.
