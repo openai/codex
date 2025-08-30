@@ -22,9 +22,8 @@ mod syntax_highlighting {
     pub(super) static THEME: Lazy<ThemeSet> = Lazy::new(ThemeSet::load_defaults);
 
     /// Get the appropriate syntax definition for a code block language
-    pub(super) fn get_syntax_definition(
-        language: Option<&str>,
-    ) -> Option<&'static syntect::parsing::SyntaxReference> {
+    /// Always returns a syntax definition, falling back to plain text if needed
+    pub(super) fn get_syntax_definition(language: Option<&str>) -> &'static syntect::parsing::SyntaxReference {
         let raw = language.unwrap_or("txt").trim().to_lowercase();
         // first token; strip `{.lang}`, leading '.', trailing '}', and split on ,/;
         let token = raw
@@ -40,7 +39,7 @@ mod syntax_highlighting {
         SYNTAX_SET
             .find_syntax_by_token(token)
             .or_else(|| SYNTAX_SET.find_syntax_by_extension(token))
-            .or_else(|| Some(SYNTAX_SET.find_syntax_plain_text()))
+            .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text())
     }
 
     /// Convert syntect color to ratatui color
@@ -55,43 +54,42 @@ mod syntax_highlighting {
     pub(super) fn highlight_code(content: &str, language: Option<&str>, lines: &mut Vec<Line>) {
         use syntax_highlighting::*;
         
-        if let Some(syntax) = get_syntax_definition(language) {
-            let theme = THEME
-                .themes
-                .get("base16-ocean.dark")
-                .unwrap_or_else(|| THEME.themes.values().next().expect("no syntect themes loaded"));
-            let mut highlighter = HighlightLines::new(syntax, theme);
-            
-            for line in content.lines() {
-                let ranges: Vec<(syntect::highlighting::Style, &str)> = 
-                    highlighter.highlight_line(line, &SYNTAX_SET).unwrap_or_else(|_| {
-                        vec![(syntect::highlighting::Style::default(), line)]
-                    });
-                
-                let spans: Vec<Span> = ranges.into_iter().map(|(syn_style, text)| {
-                    let fg = syn_style.foreground;
-                    let mut style = Style::default()
-                        .fg(syntect_to_ratatui_color(fg).unwrap_or(Color::Reset));
-                    
-                    // Set background color if available
-                    if let Some(bg_color) = syntect_to_ratatui_color(syn_style.background) {
-                        style = style.bg(bg_color);
-                    } else {
-                        // Default dark background for code blocks
-                        style = style.bg(DEFAULT_CODE_BG);
-                    }
-                    
-                    Span::styled(text.to_string(), style)
-                }).collect();
-                
-                lines.push(Line::from(spans));
+        let syntax = get_syntax_definition(language);
+        let theme = match THEME.themes.get("base16-ocean.dark").or_else(|| THEME.themes.values().next()) {
+            Some(t) => t,
+            None => {
+                super::plain_text_fallback(content, lines);
+                return;
             }
-            return;
-        }
+        };
+        let mut highlighter = HighlightLines::new(syntax, theme);
         
-        // Fall through to plain text rendering if syntax highlighting fails
-        plain_text_fallback(content, lines);
+        for line in content.lines() {
+            let ranges: Vec<(syntect::highlighting::Style, &str)> = 
+                highlighter.highlight_line(line, &SYNTAX_SET).unwrap_or_else(|_| {
+                    vec![(syntect::highlighting::Style::default(), line)]
+                });
+            
+            let spans: Vec<Span> = ranges.into_iter().map(|(syn_style, text)| {
+                let fg = syn_style.foreground;
+                let mut style = Style::default()
+                    .fg(syntect_to_ratatui_color(fg).unwrap_or(Color::Reset));
+                
+                // Set background color if available
+                if let Some(bg_color) = syntect_to_ratatui_color(syn_style.background) {
+                    style = style.bg(bg_color);
+                } else {
+                    // Default dark background for code blocks
+                    style = style.bg(DEFAULT_CODE_BG);
+                }
+                
+                Span::styled(text.to_string(), style)
+            }).collect();
+            
+            lines.push(Line::from(spans));
+        }
     }
+        
 }
 
 #[cfg(not(feature = "syntax-highlighting"))]
@@ -245,8 +243,7 @@ fn split_text_and_fences(src: &str) -> Vec<Segment> {
             if let Some(tok) = open {
                 // Flush pending text segment.
                 if !curr_text.is_empty() {
-                    segments.push(Segment::Text(curr_text.clone()));
-                    curr_text.clear();
+                    segments.push(Segment::Text(std::mem::take(&mut curr_text)));
                 }
                 fence_token = tok;
                 // Capture language after the token on this line (before newline).
@@ -277,8 +274,7 @@ fn split_text_and_fences(src: &str) -> Vec<Segment> {
             if starts_indented_code {
                 // Flush pending text and begin an indented code block.
                 if !curr_text.is_empty() {
-                    segments.push(Segment::Text(curr_text.clone()));
-                    curr_text.clear();
+                    segments.push(Segment::Text(std::mem::take(&mut curr_text)));
                 }
                 code_mode = CodeMode::Indented;
                 code_content.clear();
@@ -300,9 +296,8 @@ fn split_text_and_fences(src: &str) -> Vec<Segment> {
                         // End code block: emit segment without fences
                         segments.push(Segment::Code {
                             language: code_lang.take(),
-                            content: code_content.clone(),
+                            content: std::mem::take(&mut code_content),
                         });
-                        code_content.clear();
                         code_mode = CodeMode::None;
                         fence_token = "";
                         continue;
@@ -325,9 +320,8 @@ fn split_text_and_fences(src: &str) -> Vec<Segment> {
                         // Close the indented code block and reprocess this line as normal text.
                         segments.push(Segment::Code {
                             language: None,
-                            content: code_content.clone(),
+                            content: std::mem::take(&mut code_content),
                         });
-                        code_content.clear();
                         code_mode = CodeMode::None;
                         // Now handle current line as text.
                         curr_text.push_str(line);
@@ -342,10 +336,10 @@ fn split_text_and_fences(src: &str) -> Vec<Segment> {
         // Unterminated code fence: treat accumulated content as a code segment.
         segments.push(Segment::Code {
             language: code_lang.take(),
-            content: code_content.clone(),
+            content: std::mem::take(&mut code_content),
         });
     } else if !curr_text.is_empty() {
-        segments.push(Segment::Text(curr_text.clone()));
+        segments.push(Segment::Text(std::mem::take(&mut curr_text)));
     }
 
     segments
