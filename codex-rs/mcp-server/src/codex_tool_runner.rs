@@ -49,7 +49,7 @@ pub async fn run_codex_tool_session(
         conversation_id,
         conversation,
         session_configured,
-    } = match conversation_manager.new_conversation(config).await {
+    } = match conversation_manager.new_conversation(config.clone()).await {
         Ok(res) => res,
         Err(e) => {
             let result = CallToolResult {
@@ -65,6 +65,23 @@ pub async fn run_codex_tool_session(
             return;
         }
     };
+
+    // In compatibility mode, send immediate response with session ID and return early
+    if config.mcp.compatibility_mode {
+        let result = CallToolResult {
+            content: vec![ContentBlock::TextContent(TextContent {
+                r#type: "text".to_string(),
+                text: format!("Session started with ID: {conversation_id}"),
+                annotations: None,
+            })],
+            is_error: None,
+            structured_content: Some(json!({
+                "sessionId": conversation_id.to_string()
+            })),
+        };
+        outgoing.send_response(id, result).await;
+        return;
+    }
 
     let session_configured_event = Event {
         // Use a fake id value for now.
@@ -121,11 +138,28 @@ pub async fn run_codex_tool_session_reply(
     prompt: String,
     running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, Uuid>>>,
     session_id: Uuid,
+    config: CodexConfig,
 ) {
     running_requests_id_to_codex_uuid
         .lock()
         .await
         .insert(request_id.clone(), session_id);
+
+    // In compatibility mode, send immediate response and return early
+    if config.mcp.compatibility_mode {
+        let result = CallToolResult {
+            content: vec![ContentBlock::TextContent(TextContent {
+                r#type: "text".to_string(),
+                text: format!("Continuing session {session_id}"),
+                annotations: None,
+            })],
+            is_error: None,
+            structured_content: None,
+        };
+        outgoing.send_response(request_id, result).await;
+        return;
+    }
+
     if let Err(e) = conversation
         .submit(Op::UserInput {
             items: vec![InputItem::Text { text: prompt }],

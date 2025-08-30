@@ -133,9 +133,13 @@ pub(crate) fn create_tool_for_codex_tool_call_param() -> Tool {
 impl CodexToolCallParam {
     /// Returns the initial user prompt to start the Codex conversation and the
     /// effective Config object generated from the supplied parameters.
+    ///
+    /// The base_config parameter allows preserving settings like MCP configuration
+    /// that should not be overridden by tool-specific parameters.
     pub fn into_config(
         self,
         codex_linux_sandbox_exe: Option<PathBuf>,
+        base_config: Option<&codex_core::config::Config>,
     ) -> std::io::Result<(String, codex_core::config::Config)> {
         let Self {
             prompt,
@@ -173,7 +177,17 @@ impl CodexToolCallParam {
             .map(|(k, v)| (k, json_to_toml(v)))
             .collect();
 
-        let cfg = codex_core::config::Config::load_with_cli_overrides(cli_overrides, overrides)?;
+        let cfg = if let Some(base) = base_config {
+            // When we have a base config, load with overrides but preserve MCP settings
+            let mut cfg =
+                codex_core::config::Config::load_with_cli_overrides(cli_overrides, overrides)?;
+            // Preserve MCP settings from base config
+            cfg.mcp = base.mcp.clone();
+            cfg
+        } else {
+            // No base config, load normally
+            codex_core::config::Config::load_with_cli_overrides(cli_overrides, overrides)?
+        };
 
         Ok((prompt, cfg))
     }
