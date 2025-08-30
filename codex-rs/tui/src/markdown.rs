@@ -14,6 +14,8 @@ use once_cell::sync::Lazy;
 #[cfg(feature = "syntax-highlighting")]
 mod syntax_highlighting {
     use super::DEFAULT_CODE_BG;
+    use ratatui::style::{Color, Style};
+    use ratatui::text::{Line, Span};
     use syntect::easy::HighlightLines;
     use syntect::highlighting::{ThemeSet, Color as SyntectColor};
     use syntect::parsing::SyntaxSet;
@@ -52,8 +54,6 @@ mod syntax_highlighting {
     }
 
     pub(super) fn highlight_code(content: &str, language: Option<&str>, lines: &mut Vec<Line>) {
-        use syntax_highlighting::*;
-        
         let syntax = get_syntax_definition(language);
         let theme = match THEME.themes.get("base16-ocean.dark").or_else(|| THEME.themes.values().next()) {
             Some(t) => t,
