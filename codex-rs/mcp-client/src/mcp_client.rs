@@ -21,6 +21,8 @@ use std::time::Duration;
 use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
+use eventsource_stream::Eventsource;
+use futures::StreamExt;
 use mcp_types::CallToolRequest;
 use mcp_types::CallToolRequestParams;
 use mcp_types::InitializeRequest;
@@ -37,6 +39,7 @@ use mcp_types::ListToolsResult;
 use mcp_types::ModelContextProtocolNotification;
 use mcp_types::ModelContextProtocolRequest;
 use mcp_types::RequestId;
+use reqwest::header;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use tokio::io::AsyncBufReadExt;
@@ -59,23 +62,36 @@ const CHANNEL_CAPACITY: usize = 128;
 /// Internal representation of a pending request sender.
 type PendingSender = oneshot::Sender<JSONRPCMessage>;
 
+enum McpTransport {
+    Stdio {
+        /// Retain this child process until the client is dropped. The Tokio runtime
+        /// will make a "best effort" to reap the process after it exits, but it is
+        /// not a guarantee. See the `kill_on_drop` documentation for details.
+        #[allow(dead_code)]
+        child: tokio::process::Child,
+        /// Channel for sending JSON-RPC messages *to* the background writer task.
+        outgoing_tx: mpsc::Sender<JSONRPCMessage>,
+    },
+    StreamableHttp(HttpClient),
+}
+
 /// A running MCP client instance.
 pub struct McpClient {
-    /// Retain this child process until the client is dropped. The Tokio runtime
-    /// will make a "best effort" to reap the process after it exits, but it is
-    /// not a guarantee. See the `kill_on_drop` documentation for details.
-    #[allow(dead_code)]
-    child: tokio::process::Child,
-
-    /// Channel for sending JSON-RPC messages *to* the background writer task.
-    outgoing_tx: mpsc::Sender<JSONRPCMessage>,
-
     /// Map of `request.id -> oneshot::Sender` used to dispatch responses back
     /// to the originating caller.
     pending: Arc<Mutex<HashMap<i64, PendingSender>>>,
 
     /// Monotonically increasing counter used to generate request IDs.
     id_counter: AtomicI64,
+
+    transport: McpTransport,
+}
+
+struct HttpClient {
+    client: reqwest::Client,
+    url: reqwest::Url,
+    headers: HashMap<String, String>,
+    session_id: tokio::sync::Mutex<Option<String>>,
 }
 
 impl McpClient {
@@ -177,10 +193,156 @@ impl McpClient {
         let _ = (writer_handle, reader_handle);
 
         Ok(Self {
-            child,
-            outgoing_tx,
             pending,
             id_counter: AtomicI64::new(1),
+            transport: McpTransport::Stdio { child, outgoing_tx },
+        })
+    }
+
+    async fn send_request_http<R>(
+        &self,
+        params: R::Params,
+        timeout: Option<Duration>,
+        http: &HttpClient,
+    ) -> Result<R::Result>
+    where
+        R: ModelContextProtocolRequest,
+        R::Params: Serialize,
+        R::Result: DeserializeOwned,
+    {
+        let fut = async {
+            let id = self.id_counter.fetch_add(1, Ordering::SeqCst);
+            let request_id = RequestId::Integer(id);
+
+            let params_json = serde_json::to_value(&params)?;
+            let params_field = if params_json.is_null() {
+                None
+            } else {
+                Some(params_json)
+            };
+
+            let jsonrpc_request = JSONRPCRequest {
+                id: request_id.clone(),
+                jsonrpc: JSONRPC_VERSION.to_string(),
+                method: R::METHOD.to_string(),
+                params: params_field,
+            };
+
+            let message = JSONRPCMessage::Request(jsonrpc_request);
+
+            let mut builder = http
+                .client
+                .post(http.url.clone())
+                .header(header::ACCEPT, "application/json, text/event-stream")
+                .json(&message);
+
+            for (k, v) in &http.headers {
+                builder = builder.header(k, v);
+            }
+
+            if let Some(session) = http.session_id.lock().await.as_ref() {
+                builder = builder.header("Mcp-Session-Id", session);
+            }
+
+            let response = builder.send().await?;
+
+            if let Some(session_id) = response.headers().get("Mcp-Session-Id")
+                && let Ok(val) = session_id.to_str()
+            {
+                *http.session_id.lock().await = Some(val.to_string());
+            }
+
+            let content_type = response
+                .headers()
+                .get(reqwest::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+
+            if content_type.starts_with("application/json") {
+                let msg: JSONRPCMessage = response.json().await?;
+                match msg {
+                    JSONRPCMessage::Response(JSONRPCResponse { result, .. }) => {
+                        let typed: R::Result = serde_json::from_value(result)?;
+                        Ok(typed)
+                    }
+                    JSONRPCMessage::Error(err) => Err(anyhow!(format!(
+                        "server returned JSON-RPC error: code = {}, message = {}",
+                        err.error.code, err.error.message
+                    ))),
+                    other => Err(anyhow!(format!(
+                        "unexpected message variant received in reply path: {:?}",
+                        other
+                    ))),
+                }
+            } else if content_type.starts_with("text/event-stream") {
+                let mut stream = response.bytes_stream().eventsource();
+                while let Some(event_res) = stream.next().await {
+                    let event = event_res?;
+                    let data = event.data.trim();
+                    if data.is_empty() {
+                        continue;
+                    }
+                    match serde_json::from_str::<JSONRPCMessage>(data) {
+                        Ok(JSONRPCMessage::Response(resp)) => {
+                            if resp.id == request_id {
+                                let typed: R::Result = serde_json::from_value(resp.result)?;
+                                return Ok(typed);
+                            }
+                        }
+                        Ok(JSONRPCMessage::Error(err)) => {
+                            if err.id == request_id {
+                                return Err(anyhow!(format!(
+                                    "server returned JSON-RPC error: code = {}, message = {}",
+                                    err.error.code, err.error.message
+                                )));
+                            }
+                        }
+                        Ok(JSONRPCMessage::Notification(n)) => {
+                            info!("<- notification: {:?}", n);
+                        }
+                        Ok(JSONRPCMessage::Request(r)) => {
+                            info!("<- request not handled: {:?}", r);
+                        }
+                        Err(e) => {
+                            warn!(
+                                "failed to deserialize JSONRPCMessage: {e}; event = {}",
+                                data
+                            );
+                        }
+                    }
+                }
+                Err(anyhow!("SSE stream closed without response"))
+            } else {
+                Err(anyhow!(format!(
+                    "unsupported content type: {}",
+                    content_type
+                )))
+            }
+        };
+
+        match timeout {
+            Some(dur) => time::timeout(dur, fut)
+                .await
+                .map_err(|_| anyhow!("request timed out"))?,
+            None => fut.await,
+        }
+    }
+
+    pub async fn new_streamable_http_client(
+        url: String,
+        headers: Option<HashMap<String, String>>,
+    ) -> anyhow::Result<Self> {
+        let client = reqwest::Client::new();
+        let url = reqwest::Url::parse(&url)?;
+        Ok(Self {
+            pending: Arc::new(Mutex::new(HashMap::new())),
+            id_counter: AtomicI64::new(1),
+            transport: McpTransport::StreamableHttp(HttpClient {
+                client,
+                url,
+                headers: headers.unwrap_or_default(),
+                session_id: tokio::sync::Mutex::new(None),
+            }),
         })
     }
 
@@ -199,6 +361,15 @@ impl McpClient {
         R::Params: Serialize,
         R::Result: DeserializeOwned,
     {
+        if let McpTransport::StreamableHttp(http) = &self.transport {
+            return self.send_request_http::<R>(params, timeout, http).await;
+        }
+
+        let outgoing_tx = match &self.transport {
+            McpTransport::Stdio { outgoing_tx, .. } => outgoing_tx,
+            _ => return Err(anyhow!("client not configured for stdio")),
+        };
+
         // Create a new unique ID.
         let id = self.id_counter.fetch_add(1, Ordering::SeqCst);
         let request_id = RequestId::Integer(id);
@@ -232,7 +403,7 @@ impl McpClient {
         }
 
         // Send to writer task.
-        if self.outgoing_tx.send(message).await.is_err() {
+        if outgoing_tx.send(message).await.is_err() {
             return Err(anyhow!(
                 "failed to send message to writer task - channel closed"
             ));
@@ -285,6 +456,46 @@ impl McpClient {
         N: ModelContextProtocolNotification,
         N::Params: Serialize,
     {
+        if let McpTransport::StreamableHttp(http) = &self.transport {
+            let params_json = serde_json::to_value(&params)?;
+            let params_field = if params_json.is_null() {
+                None
+            } else {
+                Some(params_json)
+            };
+
+            let method = N::METHOD.to_string();
+            let jsonrpc_notification = JSONRPCNotification {
+                jsonrpc: JSONRPC_VERSION.to_string(),
+                method: method.clone(),
+                params: params_field,
+            };
+            let notification = JSONRPCMessage::Notification(jsonrpc_notification);
+
+            let mut builder = http
+                .client
+                .post(http.url.clone())
+                .header(header::ACCEPT, "application/json, text/event-stream")
+                .json(&notification);
+
+            for (k, v) in &http.headers {
+                builder = builder.header(k, v);
+            }
+
+            if let Some(session) = http.session_id.lock().await.as_ref() {
+                builder = builder.header("Mcp-Session-Id", session);
+            }
+
+            let resp = builder.send().await?;
+            if resp.status() != reqwest::StatusCode::ACCEPTED && !resp.status().is_success() {
+                return Err(anyhow!(format!(
+                    "server returned unexpected status for notification `{method}`: {}",
+                    resp.status()
+                )));
+            }
+            return Ok(());
+        }
+
         // Serialize params -> JSON. For many request types `Params` is
         // `Option<T>` and `None` should be encoded as *absence* of the field.
         let params_json = serde_json::to_value(&params)?;
@@ -302,10 +513,13 @@ impl McpClient {
         };
 
         let notification = JSONRPCMessage::Notification(jsonrpc_notification);
-        self.outgoing_tx
-            .send(notification)
-            .await
-            .with_context(|| format!("failed to send notification `{method}` to writer task"))
+        match &self.transport {
+            McpTransport::Stdio { outgoing_tx, .. } => outgoing_tx,
+            _ => return Err(anyhow!("client not configured for stdio")),
+        }
+        .send(notification)
+        .await
+        .with_context(|| format!("failed to send notification `{method}` to writer task"))
     }
 
     /// Negotiates the initialization with the MCP server. Sends an `initialize`
@@ -400,7 +614,9 @@ impl Drop for McpClient {
         // `kill_on_drop(true)` above, this extra check has the benefit of
         // forcing the process to be reaped immediately if it has already exited
         // instead of waiting for the Tokio runtime to reap it later.
-        let _ = self.child.try_wait();
+        if let McpTransport::Stdio { child, .. } = &mut self.transport {
+            let _ = child.try_wait();
+        }
     }
 }
 

@@ -868,7 +868,10 @@ name = "codex-mcp-client"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "eventsource-stream",
+ "futures",
  "mcp-types",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",

@@ -9,6 +9,7 @@ use codex_ansi_escape::ansi_escape_line;
 use codex_common::create_config_summary_entries;
 use codex_common::elapsed::format_duration;
 use codex_core::config::Config;
+use codex_core::config_types::McpServerConfig;
 use codex_core::plan_tool::PlanItemArg;
 use codex_core::plan_tool::StepStatus;
 use codex_core::plan_tool::UpdatePlanArgs;
@@ -901,24 +902,41 @@ pub(crate) fn new_mcp_tools_output(
             server.clone().into(),
         ]));
 
-        if !cfg.command.is_empty() {
-            let cmd_display = format!("{} {}", cfg.command, cfg.args.join(" "));
-
-            lines.push(Line::from(vec![
-                "    • Command: ".into(),
-                cmd_display.into(),
-            ]));
-        }
-
-        if let Some(env) = cfg.env.as_ref()
-            && !env.is_empty()
-        {
-            let mut env_pairs: Vec<String> = env.iter().map(|(k, v)| format!("{k}={v}")).collect();
-            env_pairs.sort();
-            lines.push(Line::from(vec![
-                "    • Env: ".into(),
-                env_pairs.join(" ").into(),
-            ]));
+        match cfg {
+            McpServerConfig::Stdio { command, args, env } => {
+                if !command.is_empty() {
+                    let cmd_display = format!("{} {}", command, args.join(" "));
+                    lines.push(Line::from(vec![
+                        "    • Command: ".into(),
+                        cmd_display.into(),
+                    ]));
+                }
+                if let Some(env) = env.as_ref()
+                    && !env.is_empty()
+                {
+                    let mut env_pairs: Vec<String> =
+                        env.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                    env_pairs.sort();
+                    lines.push(Line::from(vec![
+                        "    • Env: ".into(),
+                        env_pairs.join(" ").into(),
+                    ]));
+                }
+            }
+            McpServerConfig::StreamableHttp { url, headers } => {
+                lines.push(Line::from(vec!["    • URL: ".into(), url.clone().into()]));
+                if let Some(headers) = headers.as_ref()
+                    && !headers.is_empty()
+                {
+                    let mut header_pairs: Vec<String> =
+                        headers.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                    header_pairs.sort();
+                    lines.push(Line::from(vec![
+                        "    • Headers: ".into(),
+                        header_pairs.join(" ").into(),
+                    ]));
+                }
+            }
         }
 
         if names.is_empty() {

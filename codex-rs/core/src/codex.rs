@@ -576,6 +576,9 @@ impl Session {
             }
         }
 
+        // Kick off background MCP tool initialization/loading without blocking the UI.
+        sess.mcp_connection_manager.refresh_tools_in_background();
+
         Ok((sess, turn_context))
     }
 
@@ -1286,7 +1289,12 @@ async fn submission_loop(
                 let tx_event = sess.tx_event.clone();
                 let sub_id = sub.id.clone();
 
-                // This is a cheap lookup from the connection manager's cache.
+                // Refresh tools on-demand to give users an up-to-date list.
+                // This runs in the foreground for this operation only.
+                if let Err(e) = sess.mcp_connection_manager.refresh_tools().await {
+                    warn!("failed to refresh MCP tools: {e:#}");
+                }
+
                 let tools = sess.mcp_connection_manager.list_all_tools();
                 let event = Event {
                     id: sub_id,
@@ -1613,6 +1621,12 @@ async fn run_turn(
     sub_id: String,
     input: Vec<ResponseItem>,
 ) -> CodexResult<Vec<ProcessedResponseItem>> {
+    // Give MCP tools a brief moment to arrive if background discovery is still running.
+    // This avoids an empty tool list in the first turn right after startup.
+    sess.mcp_connection_manager
+        .wait_for_tools_with_timeout(std::time::Duration::from_millis(800))
+        .await;
+
     let tools = get_openai_tools(
         &turn_context.tools_config,
         Some(sess.mcp_connection_manager.list_all_tools()),

@@ -12,14 +12,25 @@ use serde::Serialize;
 use strum_macros::Display;
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
-pub struct McpServerConfig {
-    pub command: String,
+#[serde(untagged)]
+pub enum McpServerConfig {
+    /// MCP server launched as a subprocess that communicates over stdio.
+    Stdio {
+        command: String,
 
-    #[serde(default)]
-    pub args: Vec<String>,
+        #[serde(default)]
+        args: Vec<String>,
 
-    #[serde(default)]
-    pub env: Option<HashMap<String, String>>,
+        #[serde(default)]
+        env: Option<HashMap<String, String>>,
+    },
+    /// MCP server reachable via the Streamable HTTP transport.
+    StreamableHttp {
+        url: String,
+
+        #[serde(default)]
+        headers: Option<HashMap<String, String>>,
+    },
 }
 
 #[derive(Deserialize, Debug, Copy, Clone, PartialEq)]

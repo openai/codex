@@ -360,6 +360,11 @@ Should be represented as follows in `~/.codex/config.toml`:
 command = "npx"
 args = ["-y", "mcp-server"]
 env = { "API_KEY" = "value" }
+
+# Streamable HTTP remote servers
+[mcp_servers.my_mcp_sever]
+url = "https://{the-actual-domain-here}/mcp"
+# headers = { Authorization = "Bearer {token}" }
 ```
 
 ## disable_response_storage

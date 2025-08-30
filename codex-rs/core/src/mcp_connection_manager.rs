@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::OsString;
+use std::sync::RwLock;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -22,6 +23,8 @@ use mcp_types::Tool;
 use serde_json::json;
 use sha1::Digest;
 use sha1::Sha1;
+use tokio::sync::OnceCell;
+use tokio::sync::watch;
 use tokio::task::JoinSet;
 use tracing::info;
 use tracing::warn;
@@ -38,6 +41,8 @@ const MAX_TOOL_NAME_LENGTH: usize = 64;
 
 /// Timeout for the `tools/list` request.
 const LIST_TOOLS_TIMEOUT: Duration = Duration::from_secs(10);
+/// Timeout for MCP initialize handshake.
+const INIT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Map that holds a startup error for every MCP server that could **not** be
 /// spawned successfully.
@@ -82,7 +87,6 @@ struct ToolInfo {
 }
 
 /// A thin wrapper around a set of running [`McpClient`] instances.
-#[derive(Default)]
 pub(crate) struct McpConnectionManager {
     /// Server-name -> client instance.
     ///
@@ -90,11 +94,48 @@ pub(crate) struct McpConnectionManager {
     /// the user configuration.
     clients: HashMap<String, std::sync::Arc<McpClient>>,
 
-    /// Fully qualified tool name -> tool instance.
-    tools: HashMap<String, ToolInfo>,
+    /// Fully qualified tool name -> tool instance. Populated asynchronously
+    /// after clients are initialized to avoid blocking shell startup.
+    tools: std::sync::Arc<RwLock<HashMap<String, ToolInfo>>>,
+
+    /// Lazy server initialization status (initialize is sent once per server on first use)
+    init_cells: HashMap<String, std::sync::Arc<OnceCell<()>>>,
+
+    /// Broadcasts current MCP tool count so callers can await initial load.
+    tool_count_tx: watch::Sender<usize>,
+}
+
+impl Default for McpConnectionManager {
+    fn default() -> Self {
+        let (tx, _rx) = watch::channel(0usize);
+        Self {
+            clients: HashMap::new(),
+            tools: std::sync::Arc::new(RwLock::new(HashMap::new())),
+            init_cells: HashMap::new(),
+            tool_count_tx: tx,
+        }
+    }
 }
 
 impl McpConnectionManager {
+    fn build_initialize_params() -> mcp_types::InitializeRequestParams {
+        mcp_types::InitializeRequestParams {
+            capabilities: ClientCapabilities {
+                experimental: None,
+                roots: None,
+                sampling: None,
+                // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
+                // indicates this should be an empty object.
+                elicitation: Some(json!({})),
+            },
+            client_info: Implementation {
+                name: "codex-mcp-client".to_owned(),
+                version: env!("CARGO_PKG_VERSION").to_owned(),
+                title: Some("Codex".into()),
+            },
+            protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_owned(),
+        }
+    }
     /// Spawn a [`McpClient`] for each configured server.
     ///
     /// * `mcp_servers` – Map loaded from the user configuration where *keys*
@@ -127,43 +168,21 @@ impl McpConnectionManager {
             }
 
             join_set.spawn(async move {
-                let McpServerConfig { command, args, env } = cfg;
-                let client_res = McpClient::new_stdio_client(
-                    command.into(),
-                    args.into_iter().map(OsString::from).collect(),
-                    env,
-                )
-                .await;
-                match client_res {
-                    Ok(client) => {
-                        // Initialize the client.
-                        let params = mcp_types::InitializeRequestParams {
-                            capabilities: ClientCapabilities {
-                                experimental: None,
-                                roots: None,
-                                sampling: None,
-                                // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
-                                // indicates this should be an empty object.
-                                elicitation: Some(json!({})),
-                            },
-                            client_info: Implementation {
-                                name: "codex-mcp-client".to_owned(),
-                                version: env!("CARGO_PKG_VERSION").to_owned(),
-                                title: Some("Codex".into()),
-                            },
-                            protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_owned(),
-                        };
-                        let initialize_notification_params = None;
-                        let timeout = Some(Duration::from_secs(10));
-                        match client
-                            .initialize(params, initialize_notification_params, timeout)
-                            .await
-                        {
-                            Ok(_response) => (server_name, Ok(client)),
-                            Err(e) => (server_name, Err(e)),
-                        }
+                let client_res = match cfg {
+                    McpServerConfig::Stdio { command, args, env } => McpClient::new_stdio_client(
+                        command.into(),
+                        args.into_iter().map(OsString::from).collect(),
+                        env,
+                    )
+                    .await
+                    .map_err(anyhow::Error::from),
+                    McpServerConfig::StreamableHttp { url, headers } => {
+                        McpClient::new_streamable_http_client(url, headers).await
                     }
-                    Err(e) => (server_name, Err(e.into())),
+                };
+                match client_res {
+                    Ok(client) => (server_name, Ok(client)),
+                    Err(e) => (server_name, Err(e)),
                 }
             });
         }
@@ -184,20 +203,39 @@ impl McpConnectionManager {
             }
         }
 
-        let all_tools = list_all_tools(&clients).await?;
+        // Initialize with an empty tool registry. No network calls are made here
+        // to keep shell startup and teardown snappy.
+        let tools: std::sync::Arc<RwLock<HashMap<String, ToolInfo>>> =
+            std::sync::Arc::new(RwLock::new(HashMap::new()));
 
-        let tools = qualify_tools(all_tools);
+        // Prepare lazy init cells for each server.
+        let mut init_cells = HashMap::new();
+        for server in clients.keys() {
+            init_cells.insert(server.clone(), std::sync::Arc::new(OnceCell::new()));
+        }
 
-        Ok((Self { clients, tools }, errors))
+        let (tool_count_tx, _rx) = watch::channel(0usize);
+        Ok((
+            Self {
+                clients,
+                tools,
+                init_cells,
+                tool_count_tx,
+            },
+            errors,
+        ))
     }
 
     /// Returns a single map that contains **all** tools. Each key is the
     /// fully-qualified name for the tool.
     pub fn list_all_tools(&self) -> HashMap<String, Tool> {
-        self.tools
-            .iter()
-            .map(|(name, tool)| (name.clone(), tool.tool.clone()))
-            .collect()
+        match self.tools.read() {
+            Ok(guard) => guard
+                .iter()
+                .map(|(name, tool)| (name.clone(), tool.tool.clone()))
+                .collect(),
+            Err(_) => HashMap::new(),
+        }
     }
 
     /// Invoke the tool indicated by the (server, tool) pair.
@@ -213,7 +251,8 @@ impl McpConnectionManager {
             .get(server)
             .ok_or_else(|| anyhow!("unknown MCP server '{server}'"))?
             .clone();
-
+        // Ensure the server is initialized before invoking tools
+        self.ensure_initialized(server, &client).await?;
         client
             .call_tool(tool.to_string(), arguments, timeout)
             .await
@@ -221,9 +260,123 @@ impl McpConnectionManager {
     }
 
     pub fn parse_tool_name(&self, tool_name: &str) -> Option<(String, String)> {
-        self.tools
-            .get(tool_name)
-            .map(|tool| (tool.server_name.clone(), tool.tool_name.clone()))
+        match self.tools.read() {
+            Ok(guard) => guard
+                .get(tool_name)
+                .map(|tool| (tool.server_name.clone(), tool.tool_name.clone())),
+            Err(_) => None,
+        }
+    }
+
+    /// Refresh the internal tool registry synchronously on demand.
+    pub async fn refresh_tools(&self) -> Result<()> {
+        // Initialize each server on demand before listing tools
+        for (server, client) in &self.clients {
+            self.ensure_initialized(server, client).await?;
+        }
+        let clients_snapshot: HashMap<_, _> = self
+            .clients
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let all_tools = list_all_tools(&clients_snapshot).await?;
+        let qualified = qualify_tools(all_tools);
+        if let Ok(mut guard) = self.tools.write() {
+            *guard = qualified;
+        }
+        let _ = self
+            .tool_count_tx
+            .send(self.tools.read().map(|m| m.len()).unwrap_or(0));
+        Ok(())
+    }
+
+    async fn ensure_initialized(
+        &self,
+        server_name: &str,
+        client: &std::sync::Arc<McpClient>,
+    ) -> Result<()> {
+        let cell = self
+            .init_cells
+            .get(server_name)
+            .ok_or_else(|| anyhow!(format!("missing init cell for server {server_name}")))?
+            .clone();
+
+        let initialize = async {
+            let params = Self::build_initialize_params();
+            let initialize_notification_params = None;
+            let timeout = Some(INIT_TIMEOUT);
+            client
+                .initialize(params, initialize_notification_params, timeout)
+                .await
+                .map(|_| ())
+        };
+
+        cell.get_or_try_init(|| initialize).await.map(|_| ())
+    }
+
+    /// Spawn a background refresh that initializes servers and loads tools.
+    /// This does not block the caller and is safe to call multiple times.
+    pub fn refresh_tools_in_background(&self) {
+        let tools_ref = self.tools.clone();
+        let tx = self.tool_count_tx.clone();
+        let clients_snapshot: HashMap<_, _> = self
+            .clients
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let init_cells_snapshot: HashMap<_, _> = self
+            .init_cells
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+
+        tokio::spawn(async move {
+            // Initialize each server once
+            for (server, client) in &clients_snapshot {
+                if let Some(cell) = init_cells_snapshot.get(server) {
+                    let params = Self::build_initialize_params();
+                    let initialize_notification_params = None;
+                    let timeout = Some(INIT_TIMEOUT);
+                    let client_clone = client.clone();
+                    let _ = cell
+                        .get_or_try_init(|| async move {
+                            client_clone
+                                .initialize(params, initialize_notification_params, timeout)
+                                .await
+                                .map(|_| ())
+                        })
+                        .await;
+                }
+            }
+
+            // Load tools after init
+            match list_all_tools(&clients_snapshot).await {
+                Ok(all_tools) => {
+                    let qualified = qualify_tools(all_tools);
+                    if let Ok(mut guard) = tools_ref.write() {
+                        *guard = qualified;
+                    }
+                    let _ = tx.send(tools_ref.read().map(|m| m.len()).unwrap_or(0));
+                }
+                Err(e) => warn!("failed to list MCP tools in background: {e:#}"),
+            }
+        });
+    }
+
+    /// Optionally await until tools are available, bounded by a timeout.
+    pub async fn wait_for_tools_with_timeout(&self, timeout: Duration) {
+        let mut rx = self.tool_count_tx.subscribe();
+        if *rx.borrow() > 0 {
+            return;
+        }
+        let _ = tokio::time::timeout(timeout, async {
+            while rx.changed().await.is_ok() {
+                if *rx.borrow() > 0 {
+                    break;
+                }
+            }
+        })
+        .await;
     }
 }
 
@@ -365,5 +518,62 @@ mod tests {
             keys[1],
             "my_server__yet_another_e1c3987bd9c50b826cbe1687966f79f0c602d19ca"
         );
+    }
+
+    #[test]
+    fn test_is_valid_server_name() {
+        assert!(is_valid_mcp_server_name("valid-Server_01"));
+        assert!(!is_valid_mcp_server_name("invalid server"));
+        assert!(!is_valid_mcp_server_name("invalid/server"));
+        assert!(!is_valid_mcp_server_name(""));
+    }
+
+    #[test]
+    fn test_wait_for_tools_returns_immediately_when_ready() {
+        // Arrange: manager with one tool already present and signal sent
+        let mgr = McpConnectionManager::default();
+
+        {
+            let mut guard = mgr.tools.write().expect("lock tools for write");
+            guard.insert("srv__tool".to_string(), create_test_tool("srv", "tool"));
+        }
+        let _ = mgr
+            .tool_count_tx
+            .send(mgr.tools.read().map(|m| m.len()).unwrap_or(0));
+
+        // Act: should return without waiting
+        let rt = tokio::runtime::Runtime::new().expect("create tokio runtime");
+        rt.block_on(async {
+            mgr.wait_for_tools_with_timeout(Duration::from_millis(1))
+                .await;
+        });
+    }
+
+    #[test]
+    fn test_parse_tool_name_reads_from_cache() {
+        let mgr = McpConnectionManager::default();
+        {
+            let mut guard = mgr.tools.write().expect("lock tools for write");
+            guard.insert(
+                "serverA__alpha".to_string(),
+                create_test_tool("serverA", "alpha"),
+            );
+        }
+        let parsed = mgr.parse_tool_name("serverA__alpha");
+        assert_eq!(parsed, Some(("serverA".to_string(), "alpha".to_string())));
+    }
+
+    #[test]
+    fn test_list_all_tools_snapshot() {
+        let mgr = McpConnectionManager::default();
+        {
+            let mut guard = mgr.tools.write().expect("lock tools for write");
+            guard.insert("s__a".to_string(), create_test_tool("s", "a"));
+            guard.insert("s__b".to_string(), create_test_tool("s", "b"));
+        }
+        let tools = mgr.list_all_tools();
+        assert_eq!(tools.len(), 2);
+        assert!(tools.contains_key("s__a"));
+        assert!(tools.contains_key("s__b"));
     }
 }
