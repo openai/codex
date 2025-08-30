@@ -1,10 +1,126 @@
 use crate::citation_regex::CITATION_REGEX;
 use codex_core::config::Config;
 use codex_core::config_types::UriBasedFileOpener;
-use ratatui::text::Line;
-use ratatui::text::Span;
+use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Span};
+
+const DEFAULT_CODE_BG: Color = Color::Rgb(40, 44, 52);
 use std::borrow::Cow;
 use std::path::Path;
+
+#[cfg(feature = "syntax-highlighting")]
+mod syntax_highlighting {
+    use super::DEFAULT_CODE_BG;
+    use once_cell::sync::Lazy;
+    use ratatui::style::{Color, Style};
+    use ratatui::text::{Line, Span};
+    use syntect::easy::HighlightLines;
+    use syntect::highlighting::{ThemeSet, Color as SyntectColor};
+    use syntect::parsing::SyntaxSet;
+
+    pub(super) static SYNTAX_SET: Lazy<SyntaxSet> = Lazy::new(SyntaxSet::load_defaults_newlines);
+    pub(super) static THEME: Lazy<ThemeSet> = Lazy::new(ThemeSet::load_defaults);
+
+    /// Get the appropriate syntax definition for a code block language
+    /// Always returns a syntax definition, falling back to plain text if needed
+    pub(super) fn get_syntax_definition(language: Option<&str>) -> &'static syntect::parsing::SyntaxReference {
+        let raw = language.unwrap_or("txt").trim().to_lowercase();
+        // first token; strip `{.lang}`, leading '.', trailing '}', and split on ,/;
+        let token = raw
+            .split_whitespace()
+            .next()
+            .unwrap_or("txt")
+            .trim_start_matches("{.")
+            .trim_start_matches('.')
+            .trim_end_matches('}')
+            .split(|c| c == ',' || c == ';')
+            .next()
+            .unwrap_or("txt");
+
+        // Early return for plain-text tokens
+        if token.is_empty() || matches!(token, "nohighlight" | "text" | "plain" | "plaintext" | "txt") {
+            return SYNTAX_SET.find_syntax_plain_text();
+        }
+
+        SYNTAX_SET
+            .find_syntax_by_token(token)
+            .or_else(|| SYNTAX_SET.find_syntax_by_extension(token))
+            .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text())
+    }
+
+    /// Convert syntect color to ratatui color
+    pub(super) fn syntect_to_ratatui_color(color: SyntectColor) -> Option<Color> {
+        if color.a == 0 {
+            None
+        } else {
+            Some(Color::Rgb(color.r, color.g, color.b))
+        }
+    }
+
+    pub(super) fn highlight_code(content: &str, language: Option<&str>, lines: &mut Vec<Line<'static>>) {
+        let syntax = get_syntax_definition(language);
+        // Prefer a stable fallback to avoid nondeterministic iteration
+        let theme = match THEME
+            .themes
+            .get("base16-ocean.dark")
+            .or_else(|| THEME.themes.get("InspiredGitHub"))
+            .or_else(|| THEME.themes.values().next())
+        {
+            Some(t) => t,
+            None => {
+                super::plain_text_fallback(content, lines);
+                return;
+            }
+        };
+        let mut highlighter = HighlightLines::new(syntax, theme);
+        
+        for line in content.lines() {
+            let ranges: Vec<(syntect::highlighting::Style, &str)> = 
+                highlighter.highlight_line(line, &SYNTAX_SET).unwrap_or_else(|_| {
+                    vec![(syntect::highlighting::Style::default(), line)]
+                });
+            
+            let spans: Vec<Span> = ranges.into_iter().map(|(syn_style, text)| {
+                let fg = syn_style.foreground;
+                let mut style = Style::default()
+                    .fg(syntect_to_ratatui_color(fg).unwrap_or(Color::Reset));
+                
+                // Set background color if available
+                if let Some(bg_color) = syntect_to_ratatui_color(syn_style.background) {
+                    style = style.bg(bg_color);
+                } else {
+                    // Default dark background for code blocks
+                    style = style.bg(DEFAULT_CODE_BG);
+                }
+                
+                Span::styled(text.to_string(), style)
+            }).collect();
+            
+            lines.push(Line::from(spans));
+        }
+    }
+        
+}
+
+#[cfg(not(feature = "syntax-highlighting"))]
+mod syntax_highlighting {
+    use super::{plain_text_fallback, Line};
+    
+    pub(super) fn highlight_code(content: &str, _language: Option<&str>, lines: &mut Vec<Line<'static>>) {
+        plain_text_fallback(content, lines);
+    }
+}
+
+/// Fallback to simple rendering without syntax highlighting
+pub(super) fn plain_text_fallback(content: &str, lines: &mut Vec<Line<'static>>) {
+    for line in content.lines() {
+        let span = Span::styled(
+            line.to_string(),
+            Style::default().bg(DEFAULT_CODE_BG),
+        );
+        lines.push(Line::from(span));
+    }
+}
 
 pub(crate) fn append_markdown(
     markdown_source: &str,
@@ -34,19 +150,8 @@ fn append_markdown_with_opener_and_cwd(
                 let rendered = tui_markdown::from_str(&processed);
                 crate::render::line_utils::push_owned_lines(&rendered.lines, lines);
             }
-            Segment::Code { content, .. } => {
-                // Emit the code content exactly as-is, line by line.
-                // We don't attempt syntax highlighting to avoid whitespace bugs.
-                for line in content.split_inclusive('\n') {
-                    // split_inclusive keeps the trailing \n; we want lines without it.
-                    let line = if let Some(stripped) = line.strip_suffix('\n') {
-                        stripped
-                    } else {
-                        line
-                    };
-                    let owned_line: Line<'static> = Line::from(Span::raw(line.to_string()));
-                    lines.push(owned_line);
-                }
+            Segment::Code { content, language, .. } => {
+                syntax_highlighting::highlight_code(&content, language.as_deref(), lines);
             }
         }
     }
@@ -110,7 +215,7 @@ fn rewrite_file_citations<'a>(
 enum Segment {
     Text(String),
     Code {
-        _lang: Option<String>,
+        language: Option<String>,
         content: String,
     },
 }
@@ -125,7 +230,8 @@ fn split_text_and_fences(src: &str) -> Vec<Segment> {
         Indented,
     }
     let mut code_mode = CodeMode::None;
-    let mut fence_token = "";
+    let mut fence_char: char = '\0';
+    let mut fence_len: usize = 0;
     let mut code_lang: Option<String> = None;
     let mut code_content = String::new();
     // We intentionally do not require a preceding blank line for indented code blocks,
@@ -138,22 +244,24 @@ fn split_text_and_fences(src: &str) -> Vec<Segment> {
             None => line.trim_start(),
         };
         if code_mode == CodeMode::None {
-            let open = if trimmed_start.starts_with("```") {
-                Some("```")
-            } else if trimmed_start.starts_with("~~~") {
-                Some("~~~")
-            } else {
-                None
+            let open = {
+                let bt = trimmed_start.chars().take_while(|&c| c == '`').count();
+                if bt >= 3 {
+                    Some(('`', bt))
+                } else {
+                    let td = trimmed_start.chars().take_while(|&c| c == '~').count();
+                    if td >= 3 { Some(('~', td)) } else { None }
+                }
             };
-            if let Some(tok) = open {
+            if let Some((ch, len)) = open {
                 // Flush pending text segment.
                 if !curr_text.is_empty() {
-                    segments.push(Segment::Text(curr_text.clone()));
-                    curr_text.clear();
+                    segments.push(Segment::Text(std::mem::take(&mut curr_text)));
                 }
-                fence_token = tok;
-                // Capture language after the token on this line (before newline).
-                let after = &trimmed_start[tok.len()..];
+                fence_char = ch;
+                fence_len = len;
+                // Capture language after the full fence run on this line (before newline).
+                let after = &trimmed_start[len..];
                 let lang = after.trim();
                 code_lang = if lang.is_empty() {
                     None
@@ -180,8 +288,7 @@ fn split_text_and_fences(src: &str) -> Vec<Segment> {
             if starts_indented_code {
                 // Flush pending text and begin an indented code block.
                 if !curr_text.is_empty() {
-                    segments.push(Segment::Text(curr_text.clone()));
-                    curr_text.clear();
+                    segments.push(Segment::Text(std::mem::take(&mut curr_text)));
                 }
                 code_mode = CodeMode::Indented;
                 code_content.clear();
@@ -199,15 +306,19 @@ fn split_text_and_fences(src: &str) -> Vec<Segment> {
                         Some(l) => l.trim(),
                         None => line.trim(),
                     };
-                    if trimmed == fence_token {
+                    if !trimmed.is_empty()
+                        && fence_len >= 3
+                        && trimmed.chars().all(|c| c == fence_char)
+                        && trimmed.chars().count() >= fence_len
+                    {
                         // End code block: emit segment without fences
                         segments.push(Segment::Code {
-                            _lang: code_lang.take(),
-                            content: code_content.clone(),
+                            language: code_lang.take(),
+                            content: std::mem::take(&mut code_content),
                         });
-                        code_content.clear();
                         code_mode = CodeMode::None;
-                        fence_token = "";
+                        fence_char = '\0';
+                        fence_len = 0;
                         continue;
                     }
                     // Accumulate code content exactly as-is.
@@ -227,10 +338,9 @@ fn split_text_and_fences(src: &str) -> Vec<Segment> {
                     } else {
                         // Close the indented code block and reprocess this line as normal text.
                         segments.push(Segment::Code {
-                            _lang: None,
-                            content: code_content.clone(),
+                            language: None,
+                            content: std::mem::take(&mut code_content),
                         });
-                        code_content.clear();
                         code_mode = CodeMode::None;
                         // Now handle current line as text.
                         curr_text.push_str(line);
@@ -244,11 +354,11 @@ fn split_text_and_fences(src: &str) -> Vec<Segment> {
     if code_mode != CodeMode::None {
         // Unterminated code fence: treat accumulated content as a code segment.
         segments.push(Segment::Code {
-            _lang: code_lang.take(),
-            content: code_content.clone(),
+            language: code_lang.take(),
+            content: std::mem::take(&mut code_content),
         });
     } else if !curr_text.is_empty() {
-        segments.push(Segment::Text(curr_text.clone()));
+        segments.push(Segment::Text(std::mem::take(&mut curr_text)));
     }
 
     segments
@@ -258,6 +368,72 @@ fn split_text_and_fences(src: &str) -> Vec<Segment> {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use codex_core::config_types::UriBasedFileOpener;
+    use std::path::Path;
+    
+    #[test]
+    #[cfg(feature = "syntax-highlighting")]
+    fn test_syntax_highlighting() {
+        let cwd = Path::new("/");
+        
+        let markdown = r#"
+```rust
+fn main() {
+    println!("Hello, world!");
+    
+    // A simple function
+    fn add(a: i32, b: i32) -> i32 {
+        a + b
+    }
+    
+    // Using the function
+    let sum = add(5, 3);
+    println!("5 + 3 = {}", sum);
+}
+```
+"#;
+        
+        // Process the markdown
+        let mut lines = Vec::new();
+        let segments = split_text_and_fences(markdown);
+        
+        // Convert segments back to markdown text for the test
+        let mut reconstructed = String::new();
+        for segment in &segments {
+            match segment {
+                Segment::Text(s) => reconstructed.push_str(s),
+                Segment::Code { content, language, .. } => {
+                    if let Some(lang) = language {
+                        reconstructed.push_str(&format!("```{}\n{}\n```\n", lang, content));
+                    } else {
+                        reconstructed.push_str(&format!("```\n{}\n```\n", content));
+                    }
+                }
+            }
+        }
+        
+        // Process the markdown with the public API
+        append_markdown_with_opener_and_cwd(
+            &reconstructed,
+            &mut lines,
+            UriBasedFileOpener::None,
+            cwd,
+        );
+        
+        // Verify we have some lines of output
+        assert!(!lines.is_empty(), "Should have generated some output lines");
+        
+        // Verify at least one non-reset RGB foreground (real highlighting)
+        let has_colored_fg = lines.iter().any(|line| {
+            line.spans
+                .iter()
+                .any(|span| matches!(span.style.fg, Some(Color::Rgb(_, _, _))))
+        });
+        assert!(
+            has_colored_fg,
+            "Expected at least one non-reset foreground color from syntax highlighting"
+        );
+    }
 
     #[test]
     fn citation_is_rewritten_with_absolute_path() {
@@ -299,7 +475,7 @@ mod tests {
     fn citation_unchanged_without_file_opener() {
         let markdown = "Look at 【F:file.rs†L1】.";
         let cwd = Path::new("/");
-        let unchanged = rewrite_file_citations(markdown, UriBasedFileOpener::VsCode, cwd);
+        let rewritten = rewrite_file_citations(markdown, UriBasedFileOpener::VsCode, cwd);
         // The helper itself always rewrites – this test validates behaviour of
         // append_markdown when `file_opener` is None.
         let mut out = Vec::new();
@@ -313,7 +489,7 @@ mod tests {
             .join("");
         assert_eq!(markdown, rendered);
         // Ensure helper rewrites.
-        assert_ne!(markdown, unchanged);
+        assert_ne!(markdown, rewritten);
     }
 
     #[test]
