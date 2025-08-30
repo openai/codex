@@ -14,6 +14,7 @@ use once_cell::sync::Lazy;
 #[cfg(feature = "syntax-highlighting")]
 mod syntax_highlighting {
     use super::DEFAULT_CODE_BG;
+    use once_cell::sync::Lazy;
     use ratatui::style::{Color, Style};
     use ratatui::text::{Line, Span};
     use syntect::easy::HighlightLines;
@@ -53,7 +54,7 @@ mod syntax_highlighting {
         }
     }
 
-    pub(super) fn highlight_code(content: &str, language: Option<&str>, lines: &mut Vec<Line>) {
+    pub(super) fn highlight_code(content: &str, language: Option<&str>, lines: &mut Vec<Line<'static>>) {
         let syntax = get_syntax_definition(language);
         let theme = match THEME.themes.get("base16-ocean.dark").or_else(|| THEME.themes.values().next()) {
             Some(t) => t,
@@ -96,13 +97,13 @@ mod syntax_highlighting {
 mod syntax_highlighting {
     use super::{plain_text_fallback, Line};
     
-    pub(super) fn highlight_code(content: &str, _language: Option<&str>, lines: &mut Vec<Line>) {
+    pub(super) fn highlight_code(content: &str, _language: Option<&str>, lines: &mut Vec<Line<'static>>) {
         plain_text_fallback(content, lines);
     }
 }
 
 /// Fallback to simple rendering without syntax highlighting
-fn plain_text_fallback(content: &str, lines: &mut Vec<Line>) {
+pub(super) fn plain_text_fallback(content: &str, lines: &mut Vec<Line<'static>>) {
     for line in content.lines() {
         let span = Span::styled(
             line.to_string(),
