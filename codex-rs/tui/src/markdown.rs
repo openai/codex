@@ -3,6 +3,8 @@ use codex_core::config::Config;
 use codex_core::config_types::UriBasedFileOpener;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
+
+const DEFAULT_CODE_BG: Color = Color::Rgb(40, 44, 52);
 use std::borrow::Cow;
 use std::path::Path;
 
@@ -11,7 +13,7 @@ use once_cell::sync::Lazy;
 
 #[cfg(feature = "syntax-highlighting")]
 mod syntax_highlighting {
-    use super::*;
+    use super::DEFAULT_CODE_BG;
     use syntect::easy::HighlightLines;
     use syntect::highlighting::{ThemeSet, Color as SyntectColor};
     use syntect::parsing::SyntaxSet;
@@ -20,10 +22,25 @@ mod syntax_highlighting {
     pub(super) static THEME: Lazy<ThemeSet> = Lazy::new(ThemeSet::load_defaults);
 
     /// Get the appropriate syntax definition for a code block language
-    pub(super) fn get_syntax_definition(language: Option<&str>) -> Option<&'static syntect::parsing::SyntaxReference> {
-        let lang = language.unwrap_or("txt").to_lowercase();
-        SYNTAX_SET.find_syntax_by_extension(&lang)
-            .or_else(|| SYNTAX_SET.find_syntax_by_extension("txt"))
+    pub(super) fn get_syntax_definition(
+        language: Option<&str>,
+    ) -> Option<&'static syntect::parsing::SyntaxReference> {
+        let raw = language.unwrap_or("txt").trim().to_lowercase();
+        // first token; strip `{.lang}`, leading '.', trailing '}', and split on ,/;
+        let token = raw
+            .split_whitespace()
+            .next()
+            .unwrap_or("txt")
+            .trim_start_matches("{.")
+            .trim_start_matches('.')
+            .trim_end_matches('}')
+            .split(|c| c == ',' || c == ';')
+            .next()
+            .unwrap_or("txt");
+        SYNTAX_SET
+            .find_syntax_by_token(token)
+            .or_else(|| SYNTAX_SET.find_syntax_by_extension(token))
+            .or_else(|| Some(SYNTAX_SET.find_syntax_plain_text()))
     }
 
     /// Convert syntect color to ratatui color
@@ -39,7 +56,11 @@ mod syntax_highlighting {
         use syntax_highlighting::*;
         
         if let Some(syntax) = get_syntax_definition(language) {
-            let mut highlighter = HighlightLines::new(syntax, &THEME.themes["base16-ocean.dark"]);
+            let theme = THEME
+                .themes
+                .get("base16-ocean.dark")
+                .unwrap_or_else(|| THEME.themes.values().next().expect("no syntect themes loaded"));
+            let mut highlighter = HighlightLines::new(syntax, theme);
             
             for line in content.lines() {
                 let ranges: Vec<(syntect::highlighting::Style, &str)> = 
@@ -57,7 +78,7 @@ mod syntax_highlighting {
                         style = style.bg(bg_color);
                     } else {
                         // Default dark background for code blocks
-                        style = style.bg(Color::Rgb(40, 44, 52));
+                        style = style.bg(DEFAULT_CODE_BG);
                     }
                     
                     Span::styled(text.to_string(), style)
@@ -75,7 +96,7 @@ mod syntax_highlighting {
 
 #[cfg(not(feature = "syntax-highlighting"))]
 mod syntax_highlighting {
-    use super::*;
+    use super::{plain_text_fallback, Line};
     
     pub(super) fn highlight_code(content: &str, _language: Option<&str>, lines: &mut Vec<Line>) {
         plain_text_fallback(content, lines);
@@ -87,7 +108,7 @@ fn plain_text_fallback(content: &str, lines: &mut Vec<Line>) {
     for line in content.lines() {
         let span = Span::styled(
             line.to_string(),
-            Style::default().bg(Color::Rgb(40, 44, 52)),
+            Style::default().bg(DEFAULT_CODE_BG),
         );
         lines.push(Line::from(span));
     }
@@ -334,15 +355,13 @@ fn split_text_and_fences(src: &str) -> Vec<Segment> {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    use codex_core::config::Config;
+    use codex_core::config_types::UriBasedFileOpener;
     use std::path::Path;
     
     #[test]
+    #[cfg(feature = "syntax-highlighting")]
     fn test_syntax_highlighting() {
-        // Create a test config with default values
-        let config = Config::load_with_cli_overrides(vec![], Default::default())
-            .expect("Failed to create test config");
-        let _cwd = Path::new("/");
+        let cwd = Path::new("/");
         
         let markdown = r#"
 ```rust
@@ -381,19 +400,26 @@ fn main() {
         }
         
         // Process the markdown with the public API
-        append_markdown(&reconstructed, &mut lines, &config);
+        append_markdown_with_opener_and_cwd(
+            &reconstructed,
+            &mut lines,
+            UriBasedFileOpener::None,
+            cwd,
+        );
         
         // Verify we have some lines of output
         assert!(!lines.is_empty(), "Should have generated some output lines");
         
-        // Verify that we have styled spans (indicating syntax highlighting was applied)
-        let has_styled_spans = lines.iter().any(|line| {
-            line.spans.iter().any(|span| {
-                span.style.fg != Some(Color::Reset) || span.style.bg != Some(Color::Reset)
-            })
+        // Verify at least one non-reset RGB foreground (real highlighting)
+        let has_colored_fg = lines.iter().any(|line| {
+            line.spans
+                .iter()
+                .any(|span| matches!(span.style.fg, Some(Color::Rgb(_, _, _))))
         });
-        
-        assert!(has_styled_spans, "Expected some syntax highlighting to be applied");
+        assert!(
+            has_colored_fg,
+            "Expected at least one non-reset foreground color from syntax highlighting"
+        );
     }
 
     #[test]
