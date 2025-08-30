@@ -133,9 +133,13 @@ pub(crate) fn create_tool_for_codex_tool_call_param() -> Tool {
 impl CodexToolCallParam {
     /// Returns the initial user prompt to start the Codex conversation and the
     /// effective Config object generated from the supplied parameters.
+    ///
+    /// The base_config parameter allows preserving settings like MCP configuration
+    /// that should not be overridden by tool-specific parameters.
     pub fn into_config(
         self,
         codex_linux_sandbox_exe: Option<PathBuf>,
+        base_config: Option<&codex_core::config::Config>,
     ) -> std::io::Result<(String, codex_core::config::Config)> {
         let Self {
             prompt,
@@ -150,7 +154,7 @@ impl CodexToolCallParam {
         } = self;
 
         // Build the `ConfigOverrides` recognized by codex-core.
-        let overrides = codex_core::config::ConfigOverrides {
+        let mut overrides = codex_core::config::ConfigOverrides {
             model,
             config_profile: profile,
             cwd: cwd.map(PathBuf::from),
@@ -167,13 +171,51 @@ impl CodexToolCallParam {
             tools_web_search_request: None,
         };
 
-        let cli_overrides = cli_overrides
+        let cli_overrides: Vec<(String, toml::Value)> = cli_overrides
             .unwrap_or_default()
             .into_iter()
             .map(|(k, v)| (k, json_to_toml(v)))
             .collect();
 
-        let cfg = codex_core::config::Config::load_with_cli_overrides(cli_overrides, overrides)?;
+        // Helper to load config with base preservation
+        let load_config = |cli_overrides: Vec<(String, toml::Value)>, 
+                           overrides: codex_core::config::ConfigOverrides| 
+                           -> std::io::Result<codex_core::config::Config> {
+            let mut cfg = codex_core::config::Config::load_with_cli_overrides(cli_overrides, overrides)?;
+            if let Some(base) = base_config {
+                // Preserve MCP settings from base config when available
+                cfg.mcp = base.mcp.clone();
+            }
+            Ok(cfg)
+        };
+
+        // Try to load config with the provided model first
+        let cfg = match load_config(cli_overrides.clone(), overrides.clone()) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                // If we have a model parameter and got an error, try without it
+                if let Some(model_name) = &overrides.model {
+                    let error_str = e.to_string();
+                    // Only retry for specific model-related errors
+                    if error_str.contains("Unsupported model") {
+                        tracing::warn!(
+                            "MCP client provided unsupported model '{}', falling back to profile/config default",
+                            model_name
+                        );
+                        
+                        // Retry without the model parameter
+                        overrides.model = None;
+                        load_config(cli_overrides, overrides)?
+                    } else {
+                        // Not a model error, propagate original error
+                        return Err(e);
+                    }
+                } else {
+                    // No model parameter, propagate error
+                    return Err(e);
+                }
+            }
+        };
 
         Ok((prompt, cfg))
     }
@@ -215,6 +257,52 @@ pub(crate) fn create_tool_for_codex_tool_call_reply_param() -> Tool {
         output_schema: None,
         description: Some(
             "Continue a Codex session by providing the session id and prompt.".to_string(),
+        ),
+        annotations: None,
+    }
+}
+
+/// Parameters for the Codex get-response tool-call.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexToolCallGetResponseParam {
+    /// Session ID to retrieve response from
+    pub session_id: String,
+    
+    /// Optional timeout in seconds to wait for response (defaults to 300)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<u64>,
+}
+
+/// Builds a `Tool` definition (JSON schema etc.) for the Codex get-response tool-call.
+///
+/// This tool allows clients to retrieve the response from a completed or running
+/// Codex session in compatibility mode. It supports polling with configurable timeout.
+pub(crate) fn create_tool_for_codex_tool_call_get_response_param() -> Tool {
+    let schema = SchemaSettings::draft2019_09()
+        .with(|s| {
+            s.inline_subschemas = true;
+            s.option_add_null_type = false;
+        })
+        .into_generator()
+        .into_root_schema_for::<CodexToolCallGetResponseParam>();
+
+    #[expect(clippy::expect_used)]
+    let schema_value =
+        serde_json::to_value(&schema).expect("Codex get-response tool schema should serialise to JSON");
+
+    let tool_input_schema =
+        serde_json::from_value::<ToolInputSchema>(schema_value).unwrap_or_else(|e| {
+            panic!("failed to create Tool from schema: {e}");
+        });
+
+    Tool {
+        name: "codex-get-response".to_string(),
+        title: Some("Codex Get Response".to_string()),
+        input_schema: tool_input_schema,
+        output_schema: None,
+        description: Some(
+            "Retrieve the response from a completed or running Codex session.".to_string(),
         ),
         annotations: None,
     }
