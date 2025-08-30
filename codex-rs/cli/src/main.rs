@@ -1,7 +1,7 @@
 use clap::CommandFactory;
 use clap::Parser;
-use clap_complete::Shell;
 use clap_complete::generate;
+use clap_complete_command::Shell;
 use codex_arg0::arg0_dispatch_or_else;
 use codex_chatgpt::apply_command::ApplyCommand;
 use codex_chatgpt::apply_command::run_apply_command;
