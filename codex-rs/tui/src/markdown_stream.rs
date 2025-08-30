@@ -12,7 +12,6 @@ use crate::render::markdown_utils::strip_empty_fenced_code_blocks;
 pub(crate) struct MarkdownStreamCollector {
     buffer: String,
     committed_line_count: usize,
-    committed_raw_content: String,
 }
 
 impl MarkdownStreamCollector {
@@ -20,7 +19,6 @@ impl MarkdownStreamCollector {
         Self {
             buffer: String::new(),
             committed_line_count: 0,
-            committed_raw_content: String::new(),
         }
     }
 
@@ -33,7 +31,6 @@ impl MarkdownStreamCollector {
     pub fn clear(&mut self) {
         self.buffer.clear();
         self.committed_line_count = 0;
-        self.committed_raw_content.clear();
     }
 
     /// Replace the buffered content and mark that the first `committed_count`
@@ -42,8 +39,6 @@ impl MarkdownStreamCollector {
         self.buffer.clear();
         self.buffer.push_str(s);
         self.committed_line_count = committed_count;
-        // For simplicity, assume all content up to the committed count is committed
-        self.committed_raw_content = s.to_string();
     }
 
     pub fn push_delta(&mut self, delta: &str) {
@@ -153,33 +148,8 @@ impl MarkdownStreamCollector {
         }
 
         let out = out_slice.to_vec();
-
-        // Update committed raw content when we actually commit new content
-        if !out.is_empty() {
-            self.update_committed_raw_content();
-        }
-
         self.committed_line_count = complete_line_count;
         out
-    }
-
-    /// Update the committed raw content to include all complete lines from the buffer.
-    /// This tracks what raw content has been committed so it can be extracted during interruption.
-    fn update_committed_raw_content(&mut self) {
-        // Simple approach: committed content is all complete lines (ending with \n) in the buffer
-        let buffer_lines: Vec<&str> = self.buffer.lines().collect();
-        let complete_line_count = if self.buffer.ends_with('\n') {
-            buffer_lines.len()
-        } else {
-            buffer_lines.len().saturating_sub(1) // Last line is incomplete
-        };
-
-        if complete_line_count > 0 {
-            self.committed_raw_content = buffer_lines[..complete_line_count].join("\n");
-            if complete_line_count < buffer_lines.len() || self.buffer.ends_with('\n') {
-                self.committed_raw_content.push('\n');
-            }
-        }
     }
 
     /// Finalize the stream: emit all remaining lines beyond the last commit.
@@ -202,11 +172,6 @@ impl MarkdownStreamCollector {
         } else {
             rendered[self.committed_line_count..].to_vec()
         };
-
-        // When finalizing, the committed content is the entire buffer
-        if !out.is_empty() {
-            self.committed_raw_content = self.buffer.clone();
-        }
 
         // Reset collector state for next stream.
         self.clear();

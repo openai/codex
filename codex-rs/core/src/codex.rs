@@ -1248,7 +1248,6 @@ async fn submission_loop(
             }
 
             Op::AddPartialMessageToConversation { message } => {
-                debug!("Adding partial message to conversation history: {message:?}");
                 sess.record_conversation_items(&[message]).await;
             }
 
