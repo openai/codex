@@ -1,0 +1,812 @@
+' Main module for Sage Timberline-Style Estimating Template
+Option Explicit
+
+' Global constants for styling
+Const HEADER_COLOR As Long = 366092  ' Dark blue
+Const LIGHT_BLUE As Long = 15773696  ' Light blue fill
+Const ACCENT_COLOR As Long = 16777062 ' Yellow for highlights
+
+Sub CreateSageTimberlineTemplate()
+    Application.ScreenUpdating = False
+    Application.DisplayAlerts = False
+    
+    Dim wb As Workbook
+    Dim ws As Worksheet
+    
+    ' Create a new workbook
+    Set wb = Workbooks.Add
+    
+    ' Remove default sheets
+    While wb.Sheets.Count > 1
+        wb.Sheets(1).Delete
+    Wend
+    
+    ' Rename the default sheet
+    Set ws = wb.Sheets(1)
+    ws.Name = "Instructions"
+    
+    ' Create all sheets
+    CreateInstructionsSheet ws
+    CreateItemsSheet wb
+    CreateTakeoffSheet wb
+    CreateMarkupsSheet wb
+    CreateSummarySheet wb
+    CreateBidSheet wb
+    CreateAssembliesSheet wb
+    CreateDatabaseSheet wb
+    CreateReportsSheet wb
+    
+    ' Set up protection and final formatting
+    FinalizeWorkbook wb
+    
+    Application.ScreenUpdating = True
+    Application.DisplayAlerts = True
+    
+    MsgBox "Sage Timberline-Style Estimating Template created successfully!" & vbCrLf & _
+           "This template includes advanced features similar to Sage Timberline Estimating.", _
+           vbInformation, "Template Created"
+End Sub
+
+Sub CreateInstructionsSheet(ws As Worksheet)
+    With ws
+        .Cells(1, 1).Value = "Sage Timberline-Style Estimating Template"
+        .Cells(1, 1).Font.Bold = True
+        .Cells(1, 1).Font.Size = 16
+        .Cells(1, 1).Font.Color = HEADER_COLOR
+        
+        .Cells(3, 1).Value = "BETTER ESTIMATES BY EVERY MEASURE"
+        .Cells(3, 1).Font.Bold = True
+        .Cells(3, 1).Font.Size = 14
+        
+        .Cells(5, 1).Value = "How to use this template:"
+        .Cells(5, 1).Font.Bold = True
+        
+        Dim instructions As Variant
+        instructions = Array( _
+            "1. Go to the 'Database' sheet to select your industry-specific cost database", _
+            "2. Use the 'Items' sheet to customize your item database with Division/Section following CSI MasterFormat", _
+            "3. Perform takeoffs in the 'Takeoff' sheet with multiple measurement methods", _
+            "4. Create parametric assemblies in the 'Assemblies' sheet for faster estimating", _
+            "5. Define markups in the 'Markups' sheet with multiple tiers and application rules", _
+            "6. View summary reports by Division/Section in the 'Summary' sheet", _
+            "7. Generate professional bid proposals in the 'Bid' sheet", _
+            "8. Use the 'Reports' sheet to access standard and custom report formats" _
+        )
+        
+        Dim i As Integer
+        For i = 0 To UBound(instructions)
+            .Cells(6 + i, 1).Value = instructions(i)
+        Next i
+        
+        .Cells(15, 1).Value = "Key Features:"
+        .Cells(15, 1).Font.Bold = True
+        
+        Dim features As Variant
+        features = Array( _
+            "• Industry-specific cost databases", _
+            "• Multiple takeoff methods (linear, area, count, etc.)", _
+            "• Parametric assemblies for system-based estimating", _
+            "• Advanced markup structures with conditional application", _
+            "• Integration with accounting and job costing (conceptual)", _
+            "• Professional bid proposal generation", _
+            "• Custom and standard reporting formats", _
+            "• Historical cost tracking and analysis" _
+        )
+        
+        For i = 0 To UBound(features)
+            .Cells(16 + i, 1).Value = features(i)
+        Next i
+        
+        .Cells(25, 1).Value = "For support and additional resources:"
+        .Cells(25, 1).Font.Bold = True
+        .Cells(26, 1).Value = "Visit: www.SageTimberlineEstimating.com"
+        .Cells(27, 1).Value = "Call: 800-628-6583"
+        
+        ' Formatting
+        .Columns("A").ColumnWidth = 120
+        .Rows.RowHeight = 15
+        .Rows("1:1").RowHeight = 25
+        .Rows("3:3").RowHeight = 20
+        
+        ' Add a logo placeholder
+        .Cells(1, 3).Value = "Sage"
+        .Cells(1, 3).Font.Size = 24
+        .Cells(1, 3).Font.Bold = True
+        .Cells(1, 3).Font.Color = HEADER_COLOR
+        .Cells(1, 3).HorizontalAlignment = xlRight
+    End With
+End Sub
+
+Sub CreateItemsSheet(wb As Workbook)
+    Dim ws As Worksheet
+    Set ws = wb.Sheets.Add(After:=wb.Sheets("Instructions"))
+    ws.Name = "Items"
+    
+    With ws
+        ' Headers
+        Dim headers As Variant
+        headers = Array("Division", "Section", "ItemCode", "Description", "UOM", "UnitCost", _
+                       "LaborCost", "MaterialCost", "EquipmentCost", "Category", "Subcategory", _
+                       "WasteFactor", "Productivity", "LastUpdated", "Source", "Notes")
+        
+        Dim i As Integer
+        For i = 0 To UBound(headers)
+            .Cells(1, i + 1).Value = headers(i)
+        Next i
+        
+        ' Format headers
+        With .Range("A1:P1")
+            .Font.Bold = True
+            .Font.Color = RGB(255, 255, 255)
+            .Interior.Color = HEADER_COLOR
+            .HorizontalAlignment = xlCenter
+            .Borders.LineStyle = xlContinuous
+        End With
+        
+        ' Column widths
+        Dim colWidths As Variant
+        colWidths = Array(10, 12, 12, 35, 8, 12, 12, 12, 12, 15, 15, 10, 12, 12, 15, 25)
+        
+        For i = 0 To UBound(colWidths)
+            .Columns(i + 1).ColumnWidth = colWidths(i)
+        Next i
+        
+        ' Add sample data
+        .Cells(2, 1).Value = "03"
+        .Cells(2, 2).Value = "03300"
+        .Cells(2, 3).Value = "CONC-3000PSI"
+        .Cells(2, 4).Value = "Concrete 3000 PSI, ready mix"
+        .Cells(2, 5).Value = "CY"
+        .Cells(2, 6).Value = 125
+        .Cells(2, 7).Value = 45
+        .Cells(2, 8).Value = 80
+        .Cells(2, 9).Value = 0
+        .Cells(2, 10).Value = "Concrete"
+        .Cells(2, 11).Value = "Ready Mix"
+        .Cells(2, 12).Value = 0.1
+        .Cells(2, 13).Value = 1
+        .Cells(2, 14).Value = Date
+        .Cells(2, 15).Value = "RS Means 2023"
+        
+        ' Format cost columns
+        .Range("F2:P1000").NumberFormat = "$#,##0.00_);($#,##0.00)"
+        
+        ' Add data validation for Division and Section
+        With .Range("A2:A1000").Validation
+            .Delete
+            .Add Type:=xlValidateList, Formula1:="03,04,05,06,07,08,09,10,11,12,13,14,15,16,22,23,26,27,31,32,33"
+            .IgnoreBlank = True
+        End With
+        
+        ' Freeze panes
+        .Activate
+        .Range("A2").Select
+        ActiveWindow.FreezePanes = True
+    End With
+End Sub
+
+Sub CreateTakeoffSheet(wb As Workbook)
+    Dim ws As Worksheet
+    Set ws = wb.Sheets.Add(After:=wb.Sheets("Items"))
+    ws.Name = "Takeoff"
+    
+    With ws
+        ' Headers
+        Dim headers As Variant
+        headers = Array("Category", "ItemCode", "Description", "UOM", "Qty", "UnitCost", _
+                       "Extended", "Labor", "Material", "Equipment", "TotalCost", "MarkupCategory", _
+                       "Phase", "Location", "Notes")
+        
+        Dim i As Integer
+        For i = 0 To UBound(headers)
+            .Cells(1, i + 1).Value = headers(i)
+        Next i
+        
+        ' Format headers
+        With .Range("A1:O1")
+            .Font.Bold = True
+            .Font.Color = RGB(255, 255, 255)
+            .Interior.Color = HEADER_COLOR
+            .HorizontalAlignment = xlCenter
+            .Borders.LineStyle = xlContinuous
+        End With
+        
+        ' Column widths
+        Dim colWidths As Variant
+        colWidths = Array(15, 12, 40, 8, 10, 12, 15, 12, 12, 12, 15, 15, 12, 15, 25)
+        
+        For i = 0 To UBound(colWidths)
+            .Columns(i + 1).ColumnWidth = colWidths(i)
+        Next i
+        
+        ' Add formulas
+        Dim lastRow As Long
+        lastRow = 1000 ' Number of rows for takeoff items
+        
+        For i = 2 To lastRow
+            ' Description formula
+            .Cells(i, 3).Formula = "=IFERROR(VLOOKUP(B" & i & ",Items!C:D,2,FALSE),"""")"
+            ' UOM formula
+            .Cells(i, 4).Formula = "=IFERROR(VLOOKUP(B" & i & ",Items!C:E,3,FALSE),"""")"
+            ' UnitCost formula
+            .Cells(i, 6).Formula = "=IFERROR(VLOOKUP(B" & i & ",Items!C:F,4,FALSE),"""")"
+            ' Extended cost formula
+            .Cells(i, 7).Formula = "=IFERROR(E" & i & "*F" & i & ",0)"
+            ' Labor formula
+            .Cells(i, 8).Formula = "=IFERROR(VLOOKUP(B" & i & ",Items!C:G,5,FALSE)*E" & i & ",0)"
+            ' Material formula
+            .Cells(i, 9).Formula = "=IFERROR(VLOOKUP(B" & i & ",Items!C:H,6,FALSE)*E" & i & ",0)"
+            ' Equipment formula
+            .Cells(i, 10).Formula = "=IFERROR(VLOOKUP(B" & i & ",Items!C:I,7,FALSE)*E" & i & ",0)"
+            ' TotalCost formula
+            .Cells(i, 11).Formula = "=SUM(G" & i & ":J" & i & ")"
+        Next i
+        
+        ' Formatting
+        .Range("F2:J" & lastRow).NumberFormat = "$#,##0.00_);($#,##0.00)"
+        .Range("G2:G" & lastRow).Font.Bold = True
+        .Range("K2:K" & lastRow).Font.Bold = True
+        .Range("K2:K" & lastRow).Interior.Color = ACCENT_COLOR
+        
+        ' Apply conditional formatting to highlight high-cost items
+        .Range("K2:K" & lastRow).FormatConditions.Add Type:=xlCellValue, Operator:=xlGreater, Formula1:="=10000"
+        .Range("K2:K" & lastRow).FormatConditions(1).Interior.Color = RGB(255, 199, 206) ' Light red
+        
+        ' Add data validation for ItemCode dropdown
+        With .Range("B2:B" & lastRow).Validation
+            .Delete
+            .Add Type:=xlValidateList, Formula1:="=Items!$C$2:$C$1000"
+            .IgnoreBlank = True
+        End With
+        
+        ' Add data validation for MarkupCategory
+        With .Range("L2:L" & lastRow).Validation
+            .Delete
+            .Add Type:=xlValidateList, Formula1:="Labor,Material,Equipment,Subcontract,Other"
+            .IgnoreBlank = True
+        End With
+        
+        ' Freeze panes
+        .Activate
+        .Range("A2").Select
+        ActiveWindow.FreezePanes = True
+    End With
+End Sub
+
+Sub CreateMarkupsSheet(wb As Workbook)
+    Dim ws As Worksheet
+    Set ws = wb.Sheets.Add(After:=wb.Sheets("Takeoff"))
+    ws.Name = "Markups"
+    
+    With ws
+        ' Headers
+        Dim headers As Variant
+        headers = Array("Markup Name", "Type", "Rate", "Base", "Amount", "Apply To", _
+                       "Sort Order", "Description", "Condition", "Category")
+        
+        Dim i As Integer
+        For i = 0 To UBound(headers)
+            .Cells(1, i + 1).Value = headers(i)
+        Next i
+        
+        ' Format headers
+        With .Range("A1:J1")
+            .Font.Bold = True
+            .Font.Color = RGB(255, 255, 255)
+            .Interior.Color = HEADER_COLOR
+            .HorizontalAlignment = xlCenter
+            .Borders.LineStyle = xlContinuous
+        End With
+        
+        ' Sample data
+        .Cells(2, 1).Value = "Overhead"
+        .Cells(2, 2).Value = "Percentage"
+        .Cells(2, 3).Value = 0.1
+        .Cells(2, 4).Formula = "=SUM(Takeoff!K:K)"
+        .Cells(2, 5).Formula = "=C2*D2"
+        .Cells(2, 6).Value = "Subtotal"
+        .Cells(2, 7).Value = 1
+        .Cells(2, 8).Value = "General overhead and operating expenses"
+        
+        .Cells(3, 1).Value = "Profit"
+        .Cells(3, 2).Value = "Percentage"
+        .Cells(3, 3).Value = 0.15
+        .Cells(3, 4).Formula = "=D2+E2"
+        .Cells(3, 5).Formula = "=C3*D3"
+        .Cells(3, 6).Value = "After Overhead"
+        .Cells(3, 7).Value = 2
+        .Cells(3, 8).Value = "Company profit margin"
+        
+        .Cells(4, 1).Value = "Tax"
+        .Cells(4, 2).Value = "Percentage"
+        .Cells(4, 3).Value = 0.075
+        .Cells(4, 4).Formula = "=D3+E3"
+        .Cells(4, 5).Formula = "=C4*D4"
+        .Cells(4, 6).Value = "After Profit"
+        .Cells(4, 7).Value = 3
+        .Cells(4, 8).Value = "Sales tax"
+        
+        .Cells(5, 1).Value = "Labor Burden"
+        .Cells(5, 2).Value = "Percentage"
+        .Cells(5, 3).Value = 0.25
+        .Cells(5, 4).Formula = "=SUM(Takeoff!H:H)"
+        .Cells(5, 5).Formula = "=C5*D5"
+        .Cells(5, 6).Value = "Labor Only"
+        .Cells(5, 7).Value = 4
+        .Cells(5, 8).Value = "Labor burden and benefits"
+        .Cells(5, 10).Value = "Labor"
+        
+        ' Formatting
+        .Range("C2:C10").NumberFormat = "0.00%"
+        .Range("D2:E10").NumberFormat = "$#,##0.00_);($#,##0.00)"
+        
+        ' Column widths
+        Dim colWidths As Variant
+        colWidths = Array(15, 12, 10, 15, 15, 15, 10, 25, 15, 12)
+        
+        For i = 0 To UBound(colWidths)
+            .Columns(i + 1).ColumnWidth = colWidths(i)
+        Next i
+        
+        ' Add data validation for Type
+        With .Range("B2:B100").Validation
+            .Delete
+            .Add Type:=xlValidateList, Formula1:="Percentage,Amount,Multiplier"
+            .IgnoreBlank = True
+        End With
+        
+        ' Add data validation for Apply To
+        With .Range("F2:F100").Validation
+            .Delete
+            .Add Type:=xlValidateList, Formula1:="Subtotal,After Overhead,After Profit,Labor Only,Material Only,Equipment Only,Subcontract Only"
+            .IgnoreBlank = True
+        End With
+    End With
+End Sub
+
+Sub CreateSummarySheet(wb As Workbook)
+    Dim ws As Worksheet
+    Set ws = wb.Sheets.Add(After:=wb.Sheets("Markups"))
+    ws.Name = "Summary"
+    
+    With ws
+        ' Headers
+        .Cells(1, 1).Value = "Division Summary"
+        .Cells(1, 1).Font.Bold = True
+        .Cells(1, 1).Font.Size = 14
+        
+        Dim headers As Variant
+        headers = Array("Division", "Description", "Count", "Total Qty", "Material", "Labor", _
+                       "Equipment", "Subcontract", "Total Cost", "% of Total")
+        
+        Dim i As Integer
+        For i = 0 To UBound(headers)
+            .Cells(3, i + 1).Value = headers(i)
+        Next i
+        
+        ' Format headers
+        With .Range("A3:J3")
+            .Font.Bold = True
+            .Font.Color = RGB(255, 255, 255)
+            .Interior.Color = HEADER_COLOR
+            .HorizontalAlignment = xlCenter
+            .Borders.LineStyle = xlContinuous
+        End With
+        
+        ' Add formulas for division summary
+        .Cells(4, 1).Value = "03"
+        .Cells(4, 2).Value = "Concrete"
+        .Cells(4, 3).Formula = "=COUNTIF(Takeoff!A:A,A4)"
+        .Cells(4, 4).Formula = "=SUMIF(Takeoff!A:A,A4,Takeoff!E:E)"
+        .Cells(4, 5).Formula = "=SUMIF(Takeoff!A:A,A4,Takeoff!I:I)"
+        .Cells(4, 6).Formula = "=SUMIF(Takeoff!A:A,A4,Takeoff!H:H)"
+        .Cells(4, 7).Formula = "=SUMIF(Takeoff!A:A,A4,Takeoff!J:J)"
+        .Cells(4, 8).Formula = "=SUMIF(Takeoff!A:A,A4,Takeoff!K:K)-SUM(C4:F4)"
+        .Cells(4, 9).Formula = "=SUM(E4:H4)"
+        .Cells(4, 10).Formula = "=I4/SUM($I$4:$I$20)"
+        
+        ' Copy formulas down for common divisions
+        Dim divisions As Variant
+        divisions = Array("04", "05", "06", "07", "08", "09", "10", "11", "12", "13", "14", "15", "16")
+        Dim divNames As Variant
+        divNames = Array("Masonry", "Metals", "Wood & Plastics", "Thermal & Moisture", "Doors & Windows", _
+                         "Finishes", "Specialties", "Equipment", "Furnishings", "Special Construction", _
+                         "Conveying Systems", "Mechanical", "Electrical")
+        
+        For i = 0 To UBound(divisions)
+            .Cells(5 + i, 1).Value = divisions(i)
+            .Cells(5 + i, 2).Value = divNames(i)
+            .Cells(5 + i, 3).Formula = "=COUNTIF(Takeoff!A:A,A" & (5 + i) & ")"
+            .Cells(5 + i, 4).Formula = "=SUMIF(Takeoff!A:A,A" & (5 + i) & ",Takeoff!E:E)"
+            .Cells(5 + i, 5).Formula = "=SUMIF(Takeoff!A:A,A" & (5 + i) & ",Takeoff!I:I)"
+            .Cells(5 + i, 6).Formula = "=SUMIF(Takeoff!A:A,A" & (5 + i) & ",Takeoff!H:H)"
+            .Cells(5 + i, 7).Formula = "=SUMIF(Takeoff!A:A,A" & (5 + i) & ",Takeoff!J:J)"
+            .Cells(5 + i, 8).Formula = "=SUMIF(Takeoff!A:A,A" & (5 + i) & ",Takeoff!K:K)-SUM(E" & (5 + i) & ":H" & (5 + i) & ")"
+            .Cells(5 + i, 9).Formula = "=SUM(E" & (5 + i) & ":H" & (5 + i) & ")"
+            .Cells(5 + i, 10).Formula = "=I" & (5 + i) & "/SUM($I$4:$I$20)"
+        Next i
+        
+        ' Add totals row
+        .Cells(18, 2).Value = "TOTAL"
+        .Cells(18, 3).Formula = "=SUM(C4:C17)"
+        .Cells(18, 4).Formula = "=SUM(D4:D17)"
+        .Cells(18, 5).Formula = "=SUM(E4:E17)"
+        .Cells(18, 6).Formula = "=SUM(F4:F17)"
+        .Cells(18, 7).Formula = "=SUM(G4:G17)"
+        .Cells(18, 8).Formula = "=SUM(H4:H17)"
+        .Cells(18, 9).Formula = "=SUM(I4:I17)"
+        .Cells(18, 10).Formula = "=SUM(J4:J17)"
+        
+        ' Formatting
+        .Range("E4:J18").NumberFormat = "$#,##0.00_);($#,##0.00)"
+        .Range("J4:J17").NumberFormat = "0.00%"
+        With .Range("A18:J18")
+            .Font.Bold = True
+            .Interior.Color = LIGHT_BLUE
+        End With
+        
+        ' Column widths
+        Dim colWidths As Variant
+        colWidths = Array(10, 20, 8, 12, 12, 12, 12, 12, 12, 12)
+        
+        For i = 0 To UBound(colWidths)
+            .Columns(i + 1).ColumnWidth = colWidths(i)
+        Next i
+        
+        ' Add a chart
+        Dim chartObj As ChartObject
+        Set chartObj = .ChartObjects.Add(Left:=400, Width:=400, Top:=50, Height:=250)
+        With chartObj.Chart
+            .ChartType = xlColumnStacked
+            .SetSourceData Source:=.Range("E3:H17")
+            .HasTitle = True
+            .ChartTitle.Text = "Cost Breakdown by Division"
+            .Axes(xlCategory).CategoryNames = .Range("B4:B17")
+        End With
+    End With
+End Sub
+
+Sub CreateBidSheet(wb As Workbook)
+    Dim ws As Worksheet
+    Set ws = wb.Sheets.Add(After:=wb.Sheets("Summary"))
+    ws.Name = "Bid"
+    
+    With ws
+        ' Company header
+        .Cells(1, 1).Value = "BID PROPOSAL"
+        .Cells(1, 1).Font.Bold = True
+        .Cells(1, 1).Font.Size = 16
+        .Cells(1, 1).Font.Color = HEADER_COLOR
+        
+        .Cells(2, 1).Value = "Company Name:"
+        .Cells(2, 3).Value = "Project:"
+        .Cells(3, 1).Value = "Address:"
+        .Cells(3, 3).Value = "Location:"
+        .Cells(4, 1).Value = "Phone:"
+        .Cells(4, 3).Value = "Bid Date:"
+        .Cells(5, 1).Value = "License:"
+        .Cells(5, 3).Value = "Bid ID:"
+        
+        ' Bid breakdown
+        .Cells(7, 1).Value = "BID COMPONENT"
+        .Cells(7, 2).Value = "AMOUNT"
+        
+        .Cells(8, 1).Value = "Direct Costs"
+        .Cells(8, 2).Formula = "=SUM(Takeoff!K:K)"
+        
+        .Cells(9, 1).Value = "Labor Burden"
+        .Cells(9, 2).Formula = "=Markups!E5"
+        
+        .Cells(10, 1).Value = "Subtotal (Direct Costs + Burden)"
+        .Cells(10, 2).Formula = "=B8+B9"
+        
+        .Cells(11, 1).Value = "Overhead"
+        .Cells(11, 2).Formula = "=Markups!E2"
+        
+        .Cells(12, 1).Value = "Subtotal (Costs + Overhead)"
+        .Cells(12, 2).Formula = "=B10+B11"
+        
+        .Cells(13, 1).Value = "Profit"
+        .Cells(13, 2).Formula = "=Markups!E3"
+        
+        .Cells(14, 1).Value = "Subtotal (Before Tax)"
+        .Cells(14, 2).Formula = "=B12+B13"
+        
+        .Cells(15, 1).Value = "Tax"
+        .Cells(15, 2).Formula = "=Markups!E4"
+        
+        .Cells(16, 1).Value = "TOTAL BID AMOUNT"
+        .Cells(16, 2).Formula = "=B14+B15"
+        
+        ' Formatting
+        With .Range("A7:B7")
+            .Font.Bold = True
+            .Font.Color = RGB(255, 255, 255)
+            .Interior.Color = HEADER_COLOR
+            .HorizontalAlignment = xlCenter
+        End With
+        
+        .Range("B8:B16").NumberFormat = "$#,##0.00_);($#,##0.00)"
+        
+        With .Range("A10:B10,A12:B12,A14:B14")
+            .Font.Bold = True
+            .Interior.Color = LIGHT_BLUE
+        End With
+        
+        With .Range("A16:B16")
+            .Font.Bold = True
+            .Font.Size = 12
+            .Interior.Color = ACCENT_COLOR
+        End With
+        
+        ' Column widths
+        .Columns("A").ColumnWidth = 35
+        .Columns("B").ColumnWidth = 20
+        
+        ' Add a footer
+        .Cells(18, 1).Value = "This proposal is valid for 30 days from bid date."
+        .Cells(19, 1).Value = "Terms: Net 30"
+        .Cells(20, 1).Value = "Signature: _________________________________________"
+        .Cells(22, 1).Value = "Sage Timberline-Style Estimating Template"
+        .Cells(22, 1).Font.Italic = True
+        .Cells(22, 1).Font.Color = HEADER_COLOR
+    End With
+End Sub
+
+Sub CreateAssembliesSheet(wb As Workbook)
+    Dim ws As Worksheet
+    Set ws = wb.Sheets.Add(After:=wb.Sheets("Bid"))
+    ws.Name = "Assemblies"
+    
+    With ws
+        ' Headers
+        Dim headers As Variant
+        headers = Array("Assembly Code", "Description", "Category", "Components", "Formula", _
+                       "UnitCost", "Labor Hours", "Material Cost", "Equipment Cost", "Notes")
+        
+        Dim i As Integer
+        For i = 0 To UBound(headers)
+            .Cells(1, i + 1).Value = headers(i)
+        Next i
+        
+        ' Format headers
+        With .Range("A1:J1")
+            .Font.Bold = True
+            .Font.Color = RGB(255, 255, 255)
+            .Interior.Color = HEADER_COLOR
+            .HorizontalAlignment = xlCenter
+            .Borders.LineStyle = xlContinuous
+        End With
+        
+        ' Sample assembly
+        .Cells(2, 1).Value = "WALL-INT-8"
+        .Cells(2, 2).Value = "Interior Wall Assembly 8' high"
+        .Cells(2, 3).Value = "Partitions"
+        .Cells(2, 4).Value = "STUD-25GA, GWB-1/2, INS-BATT"
+        .Cells(2, 5).Value = "Length * Height / 100 * Factor"
+        .Cells(2, 6).Value = 15.75
+        .Cells(2, 7).Value = 0.85
+        .Cells(2, 8).Value = 12.5
+        .Cells(2, 9).Value = 3.25
+        .Cells(2, 10).Value = "Includes studs at 16"" OC, one side GWB, insulation"
+        
+        ' Column widths
+        Dim colWidths As Variant
+        colWidths = Array(15, 30, 15, 25, 25, 12, 12, 12, 12, 30)
+        
+        For i = 0 To UBound(colWidths)
+            .Columns(i + 1).ColumnWidth = colWidths(i)
+        Next i
+        
+        ' Format cost columns
+        .Range("F2:I100").NumberFormat = "$#,##0.00_);($#,##0.00)"
+        
+        ' Instructions
+        .Cells(4, 1).Value = "Instructions:"
+        .Cells(4, 1).Font.Bold = True
+        .Cells(5, 1).Value = "1. Use this sheet to create parametric assemblies for faster estimating."
+        .Cells(6, 1).Value = "2. The Components field should contain comma-separated ItemCodes from the Items sheet."
+        .Cells(7, 1).Value = "3. The Formula field can reference dimensions (Length, Width, Height, Qty) for calculations."
+        .Cells(8, 1).Value = "4. Assemblies can be used in the Takeoff sheet by entering the Assembly Code."
+    End With
+End Sub
+
+Sub CreateDatabaseSheet(wb As Workbook)
+    Dim ws As Worksheet
+    Set ws = wb.Sheets.Add(After:=wb.Sheets("Assemblies"))
+    ws.Name = "Database"
+    
+    With ws
+        .Cells(1, 1).Value = "Cost Database Selection"
+        .Cells(1, 1).Font.Bold = True
+        .Cells(1, 1).Font.Size = 14
+        .Cells(1, 1).Font.Color = HEADER_COLOR
+        
+        .Cells(3, 1).Value = "Select Industry Database:"
+        .Cells(3, 2).Value = "Commercial Building"
+        
+        ' Add data validation for database selection
+        With .Range("B3:B3").Validation
+            .Delete
+            .Add Type:=xlValidateList, Formula1:="Commercial Building,Residential,Heavy Civil,Industrial,Institutional"
+            .IgnoreBlank = False
+        End With
+        
+        .Cells(4, 1).Value = "Cost Source:"
+        .Cells(4, 2).Value = "RS Means 2023"
+        
+        With .Range("B4:B4").Validation
+            .Delete
+            .Add Type:=xlValidateList, Formula1:="RS Means 2023,Historical Data,Supplier Quotes,Custom Database"
+            .IgnoreBlank = False
+        End With
+        
+        .Cells(5, 1).Value = "Location Factor:"
+        .Cells(5, 2).Value = 1.05
+        
+        .Cells(6, 1).Value = "Update Frequency:"
+        .Cells(6, 2).Value = "Quarterly"
+        
+        With .Range("B6:B6").Validation
+            .Delete
+            .Add Type:=xlValidateList, Formula1:="Monthly,Quarterly,Semi-Annually,Annually,Manual"
+            .IgnoreBlank = False
+        End With
+        
+        .Cells(8, 1).Value = "Database Information"
+        .Cells(8, 1).Font.Bold = True
+        
+        .Cells(9, 1).Value = "Last Updated:"
+        .Cells(9, 2).Value = Date
+        
+        .Cells(10, 1).Value = "Item Count:"
+        .Cells(10, 2).Formula = "=COUNTA(Items!C:C)-1"
+        
+        .Cells(11, 1).Value = "Assembly Count:"
+        .Cells(11, 2).Formula = "=COUNTA(Assemblies!A:A)-1"
+        
+        ' Formatting
+        .Columns("A").ColumnWidth = 20
+        .Columns("B").ColumnWidth = 25
+        .Range("B5:B5").NumberFormat = "0.00"
+        
+        ' Add a button to update costs
+        Dim btn As Button
+        Set btn = .Buttons.Add(100, 100, 120, 30)
+        With btn
+            .Caption = "Update Costs"
+            .OnAction = "UpdateCosts"
+            .Name = "btnUpdateCosts"
+        End With
+    End With
+End Sub
+
+Sub CreateReportsSheet(wb As Workbook)
+    Dim ws As Worksheet
+    Set ws = wb.Sheets.Add(After:=wb.Sheets("Database"))
+    ws.Name = "Reports"
+    
+    With ws
+        .Cells(1, 1).Value = "Report Generator"
+        .Cells(1, 1).Font.Bold = True
+        .Cells(1, 1).Font.Size = 14
+        .Cells(1, 1).Font.Color = HEADER_COLOR
+        
+        .Cells(3, 1).Value = "Select Report Type:"
+        .Cells(3, 2).Value = "Bid Proposal"
+        
+        ' Add data validation for report selection
+        With .Range("B3:B3").Validation
+            .Delete
+            .Add Type:=xlValidateList, Formula1:="Bid Proposal,Division Summary,Cost Breakdown,Equipment Summary,Labour Analysis,Markup Analysis,Assembly Details"
+            .IgnoreBlank = False
+        End With
+        
+        .Cells(4, 1).Value = "Format:"
+        .Cells(4, 2).Value = "Detailed"
+        
+        With .Range("B4:B4").Validation
+            .Delete
+            .Add Type:=xlValidateList, Formula1:="Summary,Detailed,Comparative,Graphical"
+            .IgnoreBlank = False
+        End With
+        
+        .Cells(5, 1).Value = "Include:"
+        .Cells(5, 2).Value = "All Divisions"
+        
+        With .Range("B5:B5").Validation
+            .Delete
+            .Add Type:=xlValidateList, Formula1:="All Divisions,Selected Divisions,Markups Only,Assemblies Only"
+            .IgnoreBlank = False
+        End With
+        
+        ' Add a button to generate report
+        Dim btn As Button
+        Set btn = .Buttons.Add(100, 100, 120, 30)
+        With btn
+            .Caption = "Generate Report"
+            .OnAction = "GenerateReport"
+            .Name = "btnGenerateReport"
+        End With
+        
+        .Cells(7, 1).Value = "Report Library"
+        .Cells(7, 1).Font.Bold = True
+        
+        Dim reports As Variant
+        reports = Array( _
+            "Bid Proposal - Standard", _
+            "Bid Proposal - Detailed", _
+            "Division Summary", _
+            "Cost Breakdown by Category", _
+            "Labor Analysis", _
+            "Equipment Summary", _
+            "Material Summary", _
+            "Markup Analysis", _
+            "Assembly Details", _
+            "Historical Comparison", _
+            "Project Comparison", _
+            "Custom Report 1", _
+            "Custom Report 2" _
+        )
+        
+        Dim i As Integer
+        For i = 0 To UBound(reports)
+            .Cells(8 + i, 1).Value = reports(i)
+        Next i
+        
+        ' Formatting
+        .Columns("A").ColumnWidth = 30
+        .Columns("B").ColumnWidth = 20
+    End With
+End Sub
+
+Sub FinalizeWorkbook(wb As Workbook)
+    ' Protect sheets with password
+    Dim ws As Worksheet
+    For Each ws In wb.Sheets
+        If ws.Name <> "Instructions" And ws.Name <> "Takeoff" Then
+            ws.Protect Password:="sage", UserInterfaceOnly:=True
+        End If
+    Next ws
+    
+    ' Set calculation to automatic
+    wb.Application.Calculation = xlCalculationAutomatic
+    
+    ' Add custom properties
+    wb.CustomDocumentProperties.Add "TemplateVersion", False, msoPropertyTypeString, "2.0", False
+    wb.CustomDocumentProperties.Add "Company", False, msoPropertyTypeString, "Your Company Name", False
+    wb.CustomDocumentProperties.Add "Estimator", False, msoPropertyTypeString, "", False
+    
+    ' Save the workbook
+    wb.SaveAs Filename:="Sage_Timberline_Style_Estimating_Template.xlsm", FileFormat:=xlOpenXMLWorkbookMacroEnabled
+    
+    ' Navigate to instructions
+    wb.Sheets("Instructions").Activate
+End Sub
+
+' Additional procedures for button actions
+Sub UpdateCosts()
+    MsgBox "Cost update functionality would connect to your cost database here." & vbCrLf & _
+           "In a full implementation, this would update all cost items from your selected source.", _
+           vbInformation, "Update Costs"
+End Sub
+
+Sub GenerateReport()
+    MsgBox "Report generation would create a professional bid proposal or summary report here." & vbCrLf & _
+           "In a full implementation, this would format and print the selected report type.", _
+           vbInformation, "Generate Report"
+End Sub
+
+' Function to import from accounting software (conceptual)
+Sub ImportFromAccounting()
+    MsgBox "This function would integrate with Sage accounting software or other systems." & vbCrLf & _
+           "In a full implementation, this would pull actual costs for historical comparison.", _
+           vbInformation, "Import From Accounting"
+End Sub
+
+' Function to export to job costing (conceptual)
+Sub ExportToJobCosting()
+    MsgBox "This function would export the successful bid to job costing software." & vbCrLf & _
+           "In a full implementation, this would create a new job in your accounting system.", _
+           vbInformation, "Export To Job Costing"
+End Sub
