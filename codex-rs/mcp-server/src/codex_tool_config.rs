@@ -154,7 +154,7 @@ impl CodexToolCallParam {
         } = self;
 
         // Build the `ConfigOverrides` recognized by codex-core.
-        let overrides = codex_core::config::ConfigOverrides {
+        let mut overrides = codex_core::config::ConfigOverrides {
             model,
             config_profile: profile,
             cwd: cwd.map(PathBuf::from),
@@ -171,22 +171,50 @@ impl CodexToolCallParam {
             tools_web_search_request: None,
         };
 
-        let cli_overrides = cli_overrides
+        let cli_overrides: Vec<(String, toml::Value)> = cli_overrides
             .unwrap_or_default()
             .into_iter()
             .map(|(k, v)| (k, json_to_toml(v)))
             .collect();
 
-        let cfg = if let Some(base) = base_config {
-            // When we have a base config, load with overrides but preserve MCP settings
-            let mut cfg =
-                codex_core::config::Config::load_with_cli_overrides(cli_overrides, overrides)?;
-            // Preserve MCP settings from base config
-            cfg.mcp = base.mcp.clone();
-            cfg
-        } else {
-            // No base config, load normally
-            codex_core::config::Config::load_with_cli_overrides(cli_overrides, overrides)?
+        // Helper to load config with base preservation
+        let load_config = |cli_overrides: Vec<(String, toml::Value)>, 
+                           overrides: codex_core::config::ConfigOverrides| 
+                           -> std::io::Result<codex_core::config::Config> {
+            let mut cfg = codex_core::config::Config::load_with_cli_overrides(cli_overrides, overrides)?;
+            if let Some(base) = base_config {
+                // Preserve MCP settings from base config when available
+                cfg.mcp = base.mcp.clone();
+            }
+            Ok(cfg)
+        };
+
+        // Try to load config with the provided model first
+        let cfg = match load_config(cli_overrides.clone(), overrides.clone()) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                // If we have a model parameter and got an error, try without it
+                if let Some(model_name) = &overrides.model {
+                    let error_str = e.to_string();
+                    // Only retry for specific model-related errors
+                    if error_str.contains("Unsupported model") {
+                        tracing::warn!(
+                            "MCP client provided unsupported model '{}', falling back to profile/config default",
+                            model_name
+                        );
+                        
+                        // Retry without the model parameter
+                        overrides.model = None;
+                        load_config(cli_overrides, overrides)?
+                    } else {
+                        // Not a model error, propagate original error
+                        return Err(e);
+                    }
+                } else {
+                    // No model parameter, propagate error
+                    return Err(e);
+                }
+            }
         };
 
         Ok((prompt, cfg))
