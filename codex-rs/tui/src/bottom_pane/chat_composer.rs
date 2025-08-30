@@ -27,6 +27,7 @@ use super::command_popup::CommandPopup;
 use super::file_search_popup::FileSearchPopup;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
+use crate::bottom_pane::paste_burst::FlushResult;
 use crate::slash_command::SlashCommand;
 use codex_protocol::custom_prompts::CustomPrompt;
 
@@ -223,7 +224,7 @@ impl ChatComposer {
             let placeholder = format!("[Pasted Content {char_count} chars]");
             self.textarea.insert_element(&placeholder);
             self.pending_pastes.push((placeholder, pasted));
-        } else if self.handle_paste_image_path(pasted.clone()) {
+        } else if char_count > 1 && self.handle_paste_image_path(pasted.clone()) {
             self.textarea.insert_str(" ");
         } else {
             self.textarea.insert_str(&pasted);
@@ -298,12 +299,7 @@ impl ChatComposer {
     }
 
     pub(crate) fn flush_paste_burst_if_due(&mut self) -> bool {
-        let now = Instant::now();
-        if let Some(pasted) = self.paste_burst.flush_if_due(now) {
-            let _ = self.handle_paste(pasted);
-            return true;
-        }
-        false
+        self.handle_paste_burst_flush(Instant::now())
     }
 
     pub(crate) fn is_in_paste_burst(&self) -> bool {
@@ -848,15 +844,28 @@ impl ChatComposer {
         }
     }
 
+    fn handle_paste_burst_flush(&mut self, now: Instant) -> bool {
+        match self.paste_burst.flush_if_due(now) {
+            FlushResult::Paste(pasted) => {
+                self.handle_paste(pasted);
+                true
+            }
+            FlushResult::Typed(ch) => {
+                self.textarea.insert_str(ch.to_string().as_str());
+                true
+            }
+            FlushResult::None => false,
+        }
+    }
+
     /// Handle generic Input events that modify the textarea content.
     fn handle_input_basic(&mut self, input: KeyEvent) -> (InputResult, bool) {
         // If we have a buffered non-bracketed paste burst and enough time has
         // elapsed since the last char, flush it before handling a new input.
         let now = Instant::now();
-        if let Some(pasted) = self.paste_burst.flush_if_due(now) {
-            // Reuse normal paste path (handles large-paste placeholders).
-            self.handle_paste(pasted);
-        }
+        let flush_start = Instant::now();
+        self.handle_paste_burst_flush(now);
+        let flush_ms = flush_start.elapsed().as_secs_f64() * 1000.0;
 
         // If we're capturing a burst and receive Enter, accumulate it instead of inserting.
         if matches!(input.code, KeyCode::Enter)
