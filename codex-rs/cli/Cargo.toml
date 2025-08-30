@@ -18,6 +18,7 @@ workspace = true
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
+clap_complete_command = { version = "0.6.1", features = ["nushell"] }
 codex-arg0 = { path = "../arg0" }
 codex-chatgpt = { path = "../chatgpt" }
 codex-common = { path = "../common", features = ["cli"] }
