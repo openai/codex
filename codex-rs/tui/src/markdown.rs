@@ -9,9 +9,6 @@ use std::borrow::Cow;
 use std::path::Path;
 
 #[cfg(feature = "syntax-highlighting")]
-use once_cell::sync::Lazy;
-
-#[cfg(feature = "syntax-highlighting")]
 mod syntax_highlighting {
     use super::DEFAULT_CODE_BG;
     use once_cell::sync::Lazy;
@@ -39,6 +36,12 @@ mod syntax_highlighting {
             .split(|c| c == ',' || c == ';')
             .next()
             .unwrap_or("txt");
+
+        // Early return for plain-text tokens
+        if token.is_empty() || matches!(token, "nohighlight" | "text" | "plain" | "plaintext" | "txt") {
+            return SYNTAX_SET.find_syntax_plain_text();
+        }
+
         SYNTAX_SET
             .find_syntax_by_token(token)
             .or_else(|| SYNTAX_SET.find_syntax_by_extension(token))
@@ -56,7 +59,13 @@ mod syntax_highlighting {
 
     pub(super) fn highlight_code(content: &str, language: Option<&str>, lines: &mut Vec<Line<'static>>) {
         let syntax = get_syntax_definition(language);
-        let theme = match THEME.themes.get("base16-ocean.dark").or_else(|| THEME.themes.values().next()) {
+        // Prefer a stable fallback to avoid nondeterministic iteration
+        let theme = match THEME
+            .themes
+            .get("base16-ocean.dark")
+            .or_else(|| THEME.themes.get("InspiredGitHub"))
+            .or_else(|| THEME.themes.values().next())
+        {
             Some(t) => t,
             None => {
                 super::plain_text_fallback(content, lines);
@@ -221,7 +230,8 @@ fn split_text_and_fences(src: &str) -> Vec<Segment> {
         Indented,
     }
     let mut code_mode = CodeMode::None;
-    let mut fence_token = "";
+    let mut fence_char: char = '\0';
+    let mut fence_len: usize = 0;
     let mut code_lang: Option<String> = None;
     let mut code_content = String::new();
     // We intentionally do not require a preceding blank line for indented code blocks,
@@ -234,21 +244,24 @@ fn split_text_and_fences(src: &str) -> Vec<Segment> {
             None => line.trim_start(),
         };
         if code_mode == CodeMode::None {
-            let open = if trimmed_start.starts_with("```") {
-                Some("```")
-            } else if trimmed_start.starts_with("~~~") {
-                Some("~~~")
-            } else {
-                None
+            let open = {
+                let bt = trimmed_start.chars().take_while(|&c| c == '`').count();
+                if bt >= 3 {
+                    Some(('`', bt))
+                } else {
+                    let td = trimmed_start.chars().take_while(|&c| c == '~').count();
+                    if td >= 3 { Some(('~', td)) } else { None }
+                }
             };
-            if let Some(tok) = open {
+            if let Some((ch, len)) = open {
                 // Flush pending text segment.
                 if !curr_text.is_empty() {
                     segments.push(Segment::Text(std::mem::take(&mut curr_text)));
                 }
-                fence_token = tok;
-                // Capture language after the token on this line (before newline).
-                let after = &trimmed_start[tok.len()..];
+                fence_char = ch;
+                fence_len = len;
+                // Capture language after the full fence run on this line (before newline).
+                let after = &trimmed_start[len..];
                 let lang = after.trim();
                 code_lang = if lang.is_empty() {
                     None
@@ -293,14 +306,19 @@ fn split_text_and_fences(src: &str) -> Vec<Segment> {
                         Some(l) => l.trim(),
                         None => line.trim(),
                     };
-                    if trimmed == fence_token {
+                    if !trimmed.is_empty()
+                        && fence_len >= 3
+                        && trimmed.chars().all(|c| c == fence_char)
+                        && trimmed.chars().count() >= fence_len
+                    {
                         // End code block: emit segment without fences
                         segments.push(Segment::Code {
                             language: code_lang.take(),
                             content: std::mem::take(&mut code_content),
                         });
                         code_mode = CodeMode::None;
-                        fence_token = "";
+                        fence_char = '\0';
+                        fence_len = 0;
                         continue;
                     }
                     // Accumulate code content exactly as-is.
@@ -457,7 +475,7 @@ fn main() {
     fn citation_unchanged_without_file_opener() {
         let markdown = "Look at 【F:file.rs†L1】.";
         let cwd = Path::new("/");
-        let unchanged = rewrite_file_citations(markdown, UriBasedFileOpener::VsCode, cwd);
+        let rewritten = rewrite_file_citations(markdown, UriBasedFileOpener::VsCode, cwd);
         // The helper itself always rewrites – this test validates behaviour of
         // append_markdown when `file_opener` is None.
         let mut out = Vec::new();
@@ -471,7 +489,7 @@ fn main() {
             .join("");
         assert_eq!(markdown, rendered);
         // Ensure helper rewrites.
-        assert_ne!(markdown, unchanged);
+        assert_ne!(markdown, rewritten);
     }
 
     #[test]
