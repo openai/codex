@@ -224,7 +224,7 @@ impl ChatComposer {
             let placeholder = format!("[Pasted Content {char_count} chars]");
             self.textarea.insert_element(&placeholder);
             self.pending_pastes.push((placeholder, pasted));
-        } else if self.handle_paste_image_path(pasted.clone()) {
+        } else if char_count > 1 && self.handle_paste_image_path(pasted.clone()) {
             self.textarea.insert_str(" ");
         } else {
             self.textarea.insert_str(&pasted);
