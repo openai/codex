@@ -29,6 +29,7 @@ mod json_to_toml;
 pub(crate) mod message_processor;
 mod outgoing_message;
 mod patch_approval;
+mod session_storage;
 
 use crate::message_processor::MessageProcessor;
 use crate::outgoing_message::OutgoingMessage;
@@ -49,6 +50,7 @@ const CHANNEL_CAPACITY: usize = 128;
 pub async fn run_main(
     codex_linux_sandbox_exe: Option<PathBuf>,
     cli_config_overrides: CliConfigOverrides,
+    compatibility_mode: bool,
 ) -> IoResult<()> {
     // Install a simple subscriber so `tracing` output is visible.  Users can
     // control the log level with `RUST_LOG`.
@@ -92,10 +94,15 @@ pub async fn run_main(
             format!("error parsing -c overrides: {e}"),
         )
     })?;
-    let config = Config::load_with_cli_overrides(cli_kv_overrides, ConfigOverrides::default())
+    let mut config = Config::load_with_cli_overrides(cli_kv_overrides, ConfigOverrides::default())
         .map_err(|e| {
             std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))
         })?;
+
+    // Apply CLI compatibility mode override
+    if compatibility_mode {
+        config.mcp.compatibility_mode = true;
+    }
 
     // Task: process incoming messages.
     let processor_handle = tokio::spawn({
