@@ -234,6 +234,52 @@ pub(crate) fn create_tool_for_codex_tool_call_reply_param() -> Tool {
     }
 }
 
+/// Parameters for the Codex get-response tool-call.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CodexToolCallGetResponseParam {
+    /// Session ID to retrieve response from
+    pub session_id: String,
+    
+    /// Optional timeout in seconds to wait for response (defaults to 300)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout: Option<u64>,
+}
+
+/// Builds a `Tool` definition (JSON schema etc.) for the Codex get-response tool-call.
+///
+/// This tool allows clients to retrieve the response from a completed or running
+/// Codex session in compatibility mode. It supports polling with configurable timeout.
+pub(crate) fn create_tool_for_codex_tool_call_get_response_param() -> Tool {
+    let schema = SchemaSettings::draft2019_09()
+        .with(|s| {
+            s.inline_subschemas = true;
+            s.option_add_null_type = false;
+        })
+        .into_generator()
+        .into_root_schema_for::<CodexToolCallGetResponseParam>();
+
+    #[expect(clippy::expect_used)]
+    let schema_value =
+        serde_json::to_value(&schema).expect("Codex get-response tool schema should serialise to JSON");
+
+    let tool_input_schema =
+        serde_json::from_value::<ToolInputSchema>(schema_value).unwrap_or_else(|e| {
+            panic!("failed to create Tool from schema: {e}");
+        });
+
+    Tool {
+        name: "codex-get-response".to_string(),
+        title: Some("Codex Get Response".to_string()),
+        input_schema: tool_input_schema,
+        output_schema: None,
+        description: Some(
+            "Retrieve the response from a completed or running Codex session.".to_string(),
+        ),
+        annotations: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
