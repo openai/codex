@@ -53,6 +53,11 @@ pub fn assess_patch_safety(
         // paths outside the project.
         match get_platform_sandbox() {
             Some(sandbox_type) => SafetyCheck::AutoApprove { sandbox_type },
+            None if matches!(sandbox_policy, SandboxPolicy::DangerFullAccess) => {
+                SafetyCheck::AutoApprove {
+                    sandbox_type: SandboxType::None,
+                }
+            }
             None => SafetyCheck::AskUser,
         }
     } else if policy == AskForApproval::Never {
