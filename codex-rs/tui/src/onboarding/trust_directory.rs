@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use codex_core::config::set_project_trusted;
 use codex_core::git_info::resolve_root_git_project_for_trust;
+use codex_core::util::is_inside_git_repo;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
@@ -145,8 +146,13 @@ impl StepStateProvider for TrustDirectoryWidget {
 
 impl TrustDirectoryWidget {
     fn handle_trust(&mut self) {
-        let target =
-            resolve_root_git_project_for_trust(&self.cwd).unwrap_or_else(|| self.cwd.clone());
+        // Only try to resolve the Git project root when `cwd` is inside a Git repo.
+        let target = if is_inside_git_repo(&self.cwd) {
+            resolve_root_git_project_for_trust(&self.cwd).unwrap_or_else(|| self.cwd.clone())
+        } else {
+            self.cwd.clone()
+        };
+
         if let Err(e) = set_project_trusted(&self.codex_home, &target) {
             tracing::error!("Failed to set project trusted: {e:?}");
             self.error = Some(format!("Failed to set trust for {}: {e}", target.display()));
