@@ -134,10 +134,6 @@ pub async fn run_main(
                         error!("Failed to write newline to stdout: {e}");
                         break;
                     }
-                    if let Err(e) = stdout.flush().await {
-                        error!("Failed to flush stdout: {e}");
-                        break;
-                    }
                 }
                 Err(e) => error!("Failed to serialize JSONRPCMessage: {e}"),
             }
