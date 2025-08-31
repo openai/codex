@@ -45,8 +45,12 @@ pub struct Cli {
     pub cwd: Option<PathBuf>,
 
     /// Allow running Codex outside a Git repository.
-    #[arg(long = "skip-git-repo-check", default_value_t = false)]
-    pub skip_git_repo_check: bool,
+    #[arg(
+        long = "skip-repo-check",
+        alias = "skip-git-repo-check",
+        default_value_t = false
+    )]
+    pub skip_repo_check: bool,
 
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,

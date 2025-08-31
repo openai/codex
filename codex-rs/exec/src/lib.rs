@@ -19,7 +19,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::TaskCompleteEvent;
-use codex_core::util::is_inside_git_repo;
+use codex_core::util::is_inside_repo;
 use codex_login::AuthManager;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
@@ -42,7 +42,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         full_auto,
         dangerously_bypass_approvals_and_sandbox,
         cwd,
-        skip_git_repo_check,
+        skip_repo_check,
         color,
         last_message_file,
         json: json_mode,
@@ -183,8 +183,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     // is using.
     event_processor.print_config_summary(&config, &prompt);
 
-    if !skip_git_repo_check && !is_inside_git_repo(&config.cwd.to_path_buf()) {
-        eprintln!("Not inside a trusted directory and --skip-git-repo-check was not specified.");
+    if !skip_repo_check && !is_inside_repo(&config.cwd.to_path_buf()) {
+        eprintln!("Not inside a trusted directory and --skip-repo-check was not specified.");
         std::process::exit(1);
     }
 

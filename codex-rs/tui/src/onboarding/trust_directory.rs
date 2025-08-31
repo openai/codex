@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use codex_core::config::set_project_trusted;
 use codex_core::git_info::resolve_root_git_project_for_trust;
+use codex_core::util::is_inside_git_repo;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
@@ -25,7 +26,7 @@ use super::onboarding_screen::StepState;
 pub(crate) struct TrustDirectoryWidget {
     pub codex_home: PathBuf,
     pub cwd: PathBuf,
-    pub is_git_repo: bool,
+    pub is_repo: bool,
     pub selection: Option<TrustDirectorySelection>,
     pub highlighted: TrustDirectorySelection,
     pub error: Option<String>,
@@ -51,7 +52,7 @@ impl WidgetRef for &TrustDirectoryWidget {
             Line::from(""),
         ];
 
-        if self.is_git_repo {
+        if self.is_repo {
             lines.push(Line::from(
                 "  Since this folder is version controlled, you may wish to allow Codex",
             ));
@@ -76,7 +77,7 @@ impl WidgetRef for &TrustDirectoryWidget {
                 }
             };
 
-        if self.is_git_repo {
+        if self.is_repo {
             lines.push(create_option(
                 0,
                 TrustDirectorySelection::Trust,
@@ -145,8 +146,13 @@ impl StepStateProvider for TrustDirectoryWidget {
 
 impl TrustDirectoryWidget {
     fn handle_trust(&mut self) {
-        let target =
-            resolve_root_git_project_for_trust(&self.cwd).unwrap_or_else(|| self.cwd.clone());
+        // Only try to resolve the Git project root when `cwd` is inside a Git repo.
+        let target = if is_inside_git_repo(&self.cwd) {
+            resolve_root_git_project_for_trust(&self.cwd).unwrap_or_else(|| self.cwd.clone())
+        } else {
+            self.cwd.clone()
+        };
+
         if let Err(e) = set_project_trusted(&self.codex_home, &target) {
             tracing::error!("Failed to set project trusted: {e:?}");
             self.error = Some(format!("Failed to set trust for {}: {e}", target.display()));
@@ -167,12 +173,12 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    fn create_test_widget(cwd: PathBuf, is_git_repo: bool) -> TrustDirectoryWidget {
+    fn create_test_widget(cwd: PathBuf, is_repo: bool) -> TrustDirectoryWidget {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         TrustDirectoryWidget {
             codex_home: temp_dir.path().to_path_buf(),
             cwd,
-            is_git_repo,
+            is_repo,
             selection: None,
             highlighted: TrustDirectorySelection::Trust,
             error: None,
