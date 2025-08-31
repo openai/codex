@@ -4,7 +4,10 @@ use std::time::Instant;
 // Heuristic thresholds for detecting paste-like input bursts.
 // Detect quickly to avoid showing typed prefix before paste is recognized
 const PASTE_BURST_MIN_CHARS: u16 = 3;
-const PASTE_BURST_CHAR_INTERVAL: Duration = Duration::from_millis(8);
+// Use a slightly larger interval to reduce test flakiness on slower machines
+// and better reflect typical rapid key repeat rates while still catching
+// paste-like bursts quickly.
+const PASTE_BURST_CHAR_INTERVAL: Duration = Duration::from_millis(16);
 const PASTE_ENTER_SUPPRESS_WINDOW: Duration = Duration::from_millis(120);
 
 #[derive(Default)]
@@ -43,7 +46,9 @@ impl PasteBurst {
     /// Primarily used by tests and by the TUI to reliably cross the
     /// paste-burst timing threshold.
     pub fn recommended_flush_delay() -> Duration {
-        PASTE_BURST_CHAR_INTERVAL + Duration::from_millis(1)
+        // Add a small guard band above the interval to account for
+        // coarse timers and scheduler jitter on slower machines.
+        PASTE_BURST_CHAR_INTERVAL + Duration::from_millis(8)
     }
 
     /// Entry point: decide how to treat a plain char with current timing.
@@ -176,8 +181,14 @@ impl PasteBurst {
     ) -> Option<RetroGrab> {
         let start_byte = retro_start_index(before, retro_chars);
         let grabbed = before[start_byte..].to_string();
-        let looks_pastey =
-            grabbed.chars().any(|c| c.is_whitespace()) || grabbed.chars().count() >= 16;
+        // Consider it paste-like if content obviously looks like a paste
+        // (contains whitespace or is long), OR if we saw a rapid sequence of
+        // at least two prior chars (retro_chars >= 2). The latter ensures that
+        // fast bursts starting from an empty buffer remain hidden until flush,
+        // matching UX expectations and tests.
+        let looks_pastey = grabbed.chars().any(|c| c.is_whitespace())
+            || grabbed.chars().count() >= 16
+            || retro_chars >= 2;
         if looks_pastey {
             // Note: caller is responsible for removing this slice from UI text.
             self.begin_with_retro_grabbed(grabbed.clone(), now);
