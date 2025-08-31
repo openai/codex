@@ -172,11 +172,18 @@ pub fn run(
         }
 
         // For hidden entries, only allow certain top-level dot-directories.
-        let Ok(rel) = path.strip_prefix(&root_for_filter) else { return false };
+        let Ok(rel) = path.strip_prefix(&root_for_filter) else {
+            return false;
+        };
         let mut components = rel.components();
-        let Some(first) = components.next() else { return false };
+        let Some(first) = components.next() else {
+            return false;
+        };
         let first_str = first.as_os_str().to_string_lossy();
-        matches!(first_str.as_ref(), ".github" | ".azuredevops" | ".vscode" | ".cursor")
+        matches!(
+            first_str.as_ref(),
+            ".github" | ".azuredevops" | ".vscode" | ".cursor"
+        )
     });
 
     // Apply any caller-provided exclude patterns via overrides.
