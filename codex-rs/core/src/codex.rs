@@ -617,12 +617,20 @@ impl Session {
             id: sub_id.clone(),
             msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
                 call_id,
-                command,
+                command: command.clone(),
                 cwd,
                 reason,
             }),
         };
         let _ = self.tx_event.send(event).await;
+        
+        // Notify user that we're waiting for command approval
+        self.maybe_notify(UserNotification::PendingUserApproval {
+            turn_id: sub_id.clone(),
+            approval_type: "command_approval".to_string(),
+            description: format!("Waiting for approval to execute: {}", command.join(" ")),
+        });
+        
         {
             let mut state = self.state.lock_unchecked();
             state.pending_approvals.insert(sub_id, tx_approve);
@@ -649,6 +657,18 @@ impl Session {
             }),
         };
         let _ = self.tx_event.send(event).await;
+        
+        // Notify user that we're waiting for patch approval
+        let file_paths = action.changes().keys()
+            .map(|path| path.to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.maybe_notify(UserNotification::PendingUserApproval {
+            turn_id: sub_id.clone(),
+            approval_type: "file_approval".to_string(),
+            description: format!("Waiting for approval to modify files: {file_paths}"),
+        });
+        
         {
             let mut state = self.state.lock_unchecked();
             state.pending_approvals.insert(sub_id, tx_approve);
