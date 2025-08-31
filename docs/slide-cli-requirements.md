@@ -849,3 +849,649 @@ pub fn ansi_escape(s: &str) -> Text<'static> {
         },
     }
 }
+
+```
+
+#### codex-cli/package.json
+```json
+{
+  "name": "@openai/codex",
+  "version": "0.0.0-dev",
+  "license": "Apache-2.0",
+  "bin": {
+    "codex": "bin/codex.js"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "bin",
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/openai/codex.git"
+  },
+  "dependencies": {
+    "@vscode/ripgrep": "^1.15.14"
+  },
+  "devDependencies": {
+    "prettier": "^3.3.3"
+  }
+}
+```
+
+#### codex-cli/README.md
+```markdown
+(here follows the full README as in repo)
+```
+
+#### codex-cli/Dockerfile
+```dockerfile
+FROM node:24-slim
+
+ARG TZ
+ENV TZ="$TZ"
+
+# Install basic development tools, ca-certificates, and iptables/ipset, then clean up apt cache to reduce image size
+RUN apt-get update && apt-get install -y --no-install-recommends \
+  aggregate \
+  ca-certificates \
+  curl \
+  dnsutils \
+  fzf \
+  gh \
+  git \
+  gnupg2 \
+  iproute2 \
+  ipset \
+  iptables \
+  jq \
+  less \
+  man-db \
+  procps \
+  unzip \
+  ripgrep \
+  zsh \
+  && rm -rf /var/lib/apt/lists/*
+
+# Ensure default node user has access to /usr/local/share
+RUN mkdir -p /usr/local/share/npm-global && \
+  chown -R node:node /usr/local/share
+
+ARG USERNAME=node
+
+# Set up non-root user
+USER node
+
+# Install global packages
+ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global
+ENV PATH=$PATH:/usr/local/share/npm-global/bin
+
+# Install codex
+COPY dist/codex.tgz codex.tgz
+RUN npm install -g codex.tgz \
+  && npm cache clean --force \
+  && rm -rf /usr/local/share/npm-global/lib/node_modules/codex-cli/node_modules/.cache \
+  && rm -rf /usr/local/share/npm-global/lib/node_modules/codex-cli/tests \
+  && rm -rf /usr/local/share/npm-global/lib/node_modules/codex-cli/docs
+
+# Inside the container we consider the environment already sufficiently locked
+# down, therefore instruct Codex CLI to allow running without sandboxing.
+ENV CODEX_UNSAFE_ALLOW_NO_SANDBOX=1
+
+# Copy and set up firewall script as root.
+USER root
+COPY scripts/init_firewall.sh /usr/local/bin/
+RUN chmod 500 /usr/local/bin/init_firewall.sh
+
+# Drop back to non-root.
+USER node
+```
+
+#### codex-cli/scripts/build_container.sh
+```bash
+#!/bin/bash
+
+set -euo pipefail
+
+SCRIPT_DIR=$(realpath "$(dirname "$0")")
+trap "popd >> /dev/null" EXIT
+pushd "$SCRIPT_DIR/.." >> /dev/null || {
+  echo "Error: Failed to change directory to $SCRIPT_DIR/.."
+  exit 1
+}
+pnpm install
+pnpm run build
+rm -rf ./dist/openai-codex-*.tgz
+pnpm pack --pack-destination ./dist
+mv ./dist/openai-codex-*.tgz ./dist/codex.tgz
+docker build -t codex -f "./Dockerfile" .
+```
+
+#### codex-cli/scripts/init_firewall.sh
+```bash
+#!/bin/bash
+set -euo pipefail  # Exit on error, undefined vars, and pipeline failures
+IFS=$'\n\t'       # Stricter word splitting
+
+# Read allowed domains from file
+ALLOWED_DOMAINS_FILE="/etc/codex/allowed_domains.txt"
+if [ -f "$ALLOWED_DOMAINS_FILE" ]; then
+    ALLOWED_DOMAINS=()
+    while IFS= read -r domain; do
+        ALLOWED_DOMAINS+=("$domain")
+    done < "$ALLOWED_DOMAINS_FILE"
+    echo "Using domains from file: ${ALLOWED_DOMAINS[*]}"
+else
+    # Fallback to default domains
+    ALLOWED_DOMAINS=("api.openai.com")
+    echo "Domains file not found, using default: ${ALLOWED_DOMAINS[*]}"
+fi
+
+# Ensure we have at least one domain
+if [ ${#ALLOWED_DOMAINS[@]} -eq 0 ]; then
+    echo "ERROR: No allowed domains specified"
+    exit 1
+fi
+
+# Flush existing rules and delete existing ipsets
+iptables -F
+iptables -X
+iptables -t nat -F
+iptables -t nat -X
+iptables -t mangle -F
+iptables -t mangle -X
+ipset destroy allowed-domains 2>/dev/null || true
+
+# First allow DNS and localhost before any restrictions
+# Allow outbound DNS
+iptables -A OUTPUT -p udp --dport 53 -j ACCEPT
+# Allow inbound DNS responses
+iptables -A INPUT -p udp --sport 53 -j ACCEPT
+# Allow localhost
+iptables -A INPUT -i lo -j ACCEPT
+iptables -A OUTPUT -o lo -j ACCEPT
+
+# Create ipset with CIDR support
+ipset create allowed-domains hash:net
+
+# Resolve and add other allowed domains
+for domain in "${ALLOWED_DOMAINS[@]}"; do
+    echo "Resolving $domain..."
+    ips=$(dig +short A "$domain")
+    if [ -z "$ips" ]; then
+        echo "ERROR: Failed to resolve $domain"
+        exit 1
+    fi
+
+    while read -r ip; do
+        if [[ ! "$ip" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+            echo "ERROR: Invalid IP from DNS for $domain: $ip"
+            exit 1
+        fi
+        echo "Adding $ip for $domain"
+        ipset add allowed-domains "$ip"
+    done < <(echo "$ips")
+done
+
+# Get host IP from default route
+HOST_IP=$(ip route | grep default | cut -d" " -f3)
+if [ -z "$HOST_IP" ]; then
+    echo "ERROR: Failed to detect host IP"
+    exit 1
+fi
+
+HOST_NETWORK=$(echo "$HOST_IP" | sed "s/\.[0-9]*$/.0\/24/")
+echo "Host network detected as: $HOST_NETWORK"
+
+# Set up remaining iptables rules
+iptables -A INPUT -s "$HOST_NETWORK" -j ACCEPT
+iptables -A OUTPUT -d "$HOST_NETWORK" -j ACCEPT
+
+# Set default policies to DROP first
+iptables -P INPUT DROP
+iptables -P FORWARD DROP
+iptables -P OUTPUT DROP
+
+# First allow established connections for already approved traffic
+iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+iptables -A OUTPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
+
+# Then allow only specific outbound traffic to allowed domains
+iptables -A OUTPUT -m set --match-set allowed-domains dst -j ACCEPT
+
+# Append final REJECT rules for immediate error responses
+# For TCP traffic, send a TCP reset; for UDP, send ICMP port unreachable.
+iptables -A INPUT -p tcp -j REJECT --reject-with tcp-reset
+iptables -A INPUT -p udp -j REJECT --reject-with icmp-port-unreachable
+iptables -A OUTPUT -p tcp -j REJECT --reject-with tcp-reset
+iptables -A OUTPUT -p udp -j REJECT --reject-with icmp-port-unreachable
+iptables -A FORWARD -p tcp -j REJECT --reject-with tcp-reset
+iptables -A FORWARD -p udp -j REJECT --reject-with icmp-port-unreachable
+
+echo "Firewall configuration complete"
+echo "Verifying firewall rules..."
+if curl --connect-timeout 5 https://example.com >/dev/null 2>&1; then
+    echo "ERROR: Firewall verification failed - was able to reach https://example.com"
+    exit 1
+else
+    echo "Firewall verification passed - unable to reach https://example.com as expected"
+fi
+
+# Always verify OpenAI API access is working
+if ! curl --connect-timeout 5 https://api.openai.com >/dev/null 2>&1; then
+    echo "ERROR: Firewall verification failed - unable to reach https://api.openai.com"
+    exit 1
+else
+    echo "Firewall verification passed - able to reach https://api.openai.com as expected"
+fi
+```
+
+#### codex-cli/scripts/install_native_deps.sh
+```bash
+#!/usr/bin/env bash
+
+# Install native runtime dependencies for codex-cli.
+#
+# Usage
+#   install_native_deps.sh [--workflow-url URL] [CODEX_CLI_ROOT]
+#
+# The optional RELEASE_ROOT is the path that contains package.json.  Omitting
+# it installs the binaries into the repository's own bin/ folder to support
+# local development.
+
+set -euo pipefail
+
+# ------------------
+# Parse arguments
+# ------------------
+
+CODEX_CLI_ROOT=""
+
+# Until we start publishing stable GitHub releases, we have to grab the binaries
+# from the GitHub Action that created them. Update the URL below to point to the
+# appropriate workflow run:
+WORKFLOW_URL="https://github.com/openai/codex/actions/runs/16840150768" # rust-v0.20.0-alpha.2
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --workflow-url)
+      shift || { echo "--workflow-url requires an argument"; exit 1; }
+      if [ -n "$1" ]; then
+        WORKFLOW_URL="$1"
+      fi
+      ;;
+    *)
+      if [[ -z "$CODEX_CLI_ROOT" ]]; then
+        CODEX_CLI_ROOT="$1"
+      else
+        echo "Unexpected argument: $1" >&2
+        exit 1
+      fi
+      ;;
+  esac
+  shift
+
+done
+
+# ----------------------------------------------------------------------------
+# Determine where the binaries should be installed.
+# ----------------------------------------------------------------------------
+
+if [ -n "$CODEX_CLI_ROOT" ]; then
+  # The caller supplied a release root directory.
+  BIN_DIR="$CODEX_CLI_ROOT/bin"
+else
+  # No argument; fall back to the repo’s own bin directory.
+  # Resolve the path of this script, then walk up to the repo root.
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  CODEX_CLI_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+  BIN_DIR="$CODEX_CLI_ROOT/bin"
+fi
+
+# Make sure the destination directory exists.
+mkdir -p "$BIN_DIR"
+
+# ----------------------------------------------------------------------------
+# Download and decompress the artifacts from the GitHub Actions workflow.
+# ----------------------------------------------------------------------------
+
+WORKFLOW_ID="${WORKFLOW_URL##*/}"
+
+ARTIFACTS_DIR="$(mktemp -d)"
+trap 'rm -rf "$ARTIFACTS_DIR"' EXIT
+
+# NB: The GitHub CLI `gh` must be installed and authenticated.
+gh run download --dir "$ARTIFACTS_DIR" --repo openai/codex "$WORKFLOW_ID"
+
+# x64 Linux
+zstd -d "$ARTIFACTS_DIR/x86_64-unknown-linux-musl/codex-x86_64-unknown-linux-musl.zst" \
+    -o "$BIN_DIR/codex-x86_64-unknown-linux-musl"
+# ARM64 Linux
+zstd -d "$ARTIFACTS_DIR/aarch64-unknown-linux-musl/codex-aarch64-unknown-linux-musl.zst" \
+    -o "$BIN_DIR/codex-aarch64-unknown-linux-musl"
+# x64 macOS
+zstd -d "$ARTIFACTS_DIR/x86_64-apple-darwin/codex-x86_64-apple-darwin.zst" \
+    -o "$BIN_DIR/codex-x86_64-apple-darwin"
+# ARM64 macOS
+zstd -d "$ARTIFACTS_DIR/aarch64-apple-darwin/codex-aarch64-apple-darwin.zst" \
+    -o "$BIN_DIR/codex-aarch64-apple-darwin"
+# x64 Windows
+zstd -d "$ARTIFACTS_DIR/x86_64-pc-windows-msvc/codex-x86_64-pc-windows-msvc.exe.zst" \
+    -o "$BIN_DIR/codex-x86_64-pc-windows-msvc.exe"
+
+echo "Installed native dependencies into $BIN_DIR"
+```
+
+#### codex-cli/scripts/run_in_container.sh
+```bash
+#!/bin/bash
+set -e
+
+# Usage:
+#   ./run_in_container.sh [--work_dir directory] "COMMAND"
+#
+#   Examples:
+#     ./run_in_container.sh --work_dir project/code "ls -la"
+#     ./run_in_container.sh "echo Hello, world!"
+
+# Default the work directory to WORKSPACE_ROOT_DIR if not provided.
+WORK_DIR="${WORKSPACE_ROOT_DIR:-$(pwd)}"
+# Default allowed domains - can be overridden with OPENAI_ALLOWED_DOMAINS env var
+OPENAI_ALLOWED_DOMAINS="${OPENAI_ALLOWED_DOMAINS:-api.openai.com}"
+
+# Parse optional flag.
+if [ "$1" = "--work_dir" ]; then
+  if [ -z "$2" ]; then
+    echo "Error: --work_dir flag provided but no directory specified."
+    exit 1
+  fi
+  WORK_DIR="$2"
+  shift 2
+fi
+
+WORK_DIR=$(realpath "$WORK_DIR")
+
+# Generate a unique container name based on the normalized work directory
+CONTAINER_NAME="codex_$(echo "$WORK_DIR" | sed 's/\//_/g' | sed 's/[^a-zA-Z0-9_-]//g')"
+
+# Define cleanup to remove the container on script exit, ensuring no leftover containers
+cleanup() {
+  docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+}
+# Trap EXIT to invoke cleanup regardless of how the script terminates
+trap cleanup EXIT
+
+# Ensure a command is provided.
+if [ "$#" -eq 0 ]; then
+  echo "Usage: $0 [--work_dir directory] \"COMMAND\""
+  exit 1
+fi
+
+# Check if WORK_DIR is set.
+if [ -z "$WORK_DIR" ]; then
+  echo "Error: No work directory provided and WORKSPACE_ROOT_DIR is not set."
+  exit 1
+fi
+
+# Verify that OPENAI_ALLOWED_DOMAINS is not empty
+if [ -z "$OPENAI_ALLOWED_DOMAINS" ]; then
+  echo "Error: OPENAI_ALLOWED_DOMAINS is empty."
+  exit 1
+fi
+
+# Kill any existing container for the working directory using cleanup(), centralizing removal logic.
+cleanup
+
+# Run the container with the specified directory mounted at the same path inside the container.
+docker run --name "$CONTAINER_NAME" -d \
+  -e OPENAI_API_KEY \
+  --cap-add=NET_ADMIN \
+  --cap-add=NET_RAW \
+  -v "$WORK_DIR:/app$WORK_DIR" \
+  codex \
+  sleep infinity
+
+# Write the allowed domains to a file in the container
+docker exec --user root "$CONTAINER_NAME" bash -c "mkdir -p /etc/codex"
+for domain in $OPENAI_ALLOWED_DOMAINS; do
+  # Validate domain format to prevent injection
+  if [[ ! "$domain" =~ ^[a-zA-Z0-9][a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
+    echo "Error: Invalid domain format: $domain"
+    exit 1
+  fi
+  echo "$domain" | docker exec --user root -i "$CONTAINER_NAME" bash -c "cat >> /etc/codex/allowed_domains.txt"
+done
+
+# Set proper permissions on the domains file
+docker exec --user root "$CONTAINER_NAME" bash -c "chmod 444 /etc/codex/allowed_domains.txt && chown root:root /etc/codex/allowed_domains.txt"
+
+# Initialize the firewall inside the container as root user
+docker exec --user root "$CONTAINER_NAME" bash -c "/usr/local/bin/init_firewall.sh"
+
+# Remove the firewall script after running it
+docker exec --user root "$CONTAINER_NAME" bash -c "rm -f /usr/local/bin/init_firewall.sh"
+
+# Execute the provided command in the container, ensuring it runs in the work directory.
+# We use a parameterized bash command to safely handle the command and directory.
+
+quoted_args=""
+for arg in "$@"; do
+  quoted_args+=" $(printf '%q' "$arg")"
+done
+docker exec -it "$CONTAINER_NAME" bash -c "cd \"/app$WORK_DIR\" && codex --full-auto ${quoted_args}"
+```
+
+#### codex-cli/scripts/stage_release.sh
+```bash
+#!/usr/bin/env bash
+# -----------------------------------------------------------------------------
+# stage_release.sh
+# -----------------------------------------------------------------------------
+# Stages an npm release for @openai/codex.
+#
+# Usage:
+#
+#   --tmp <dir>  : Use <dir> instead of a freshly created temp directory.
+#   -h|--help    : Print usage.
+#
+# -----------------------------------------------------------------------------
+
+set -euo pipefail
+
+# Helper - usage / flag parsing
+
+usage() {
+  cat <<EOF
+Usage: $(basename "$0") [--tmp DIR] [--version VERSION]
+
+Options
+  --tmp DIR   Use DIR to stage the release (defaults to a fresh mktemp dir)
+  --version   Specify the version to release (defaults to a timestamp-based version)
+  -h, --help  Show this help
+
+Legacy positional argument: the first non-flag argument is still interpreted
+as the temporary directory (for backwards compatibility) but is deprecated.
+EOF
+  exit "${1:-0}"
+}
+
+TMPDIR=""
+# Default to a timestamp-based version (keep same scheme as before)
+VERSION="$(printf '0.1.%d' "$(date +%y%m%d%H%M)")"
+WORKFLOW_URL=""
+
+# Manual flag parser - Bash getopts does not handle GNU long options well.
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --tmp)
+      shift || { echo "--tmp requires an argument"; usage 1; }
+      TMPDIR="$1"
+      ;;
+    --tmp=*)
+      TMPDIR="${1#*=}"
+      ;;
+    --version)
+      shift || { echo "--version requires an argument"; usage 1; }
+      VERSION="$1"
+      ;;
+    --workflow-url)
+      shift || { echo "--workflow-url requires an argument"; exit 1; }
+      WORKFLOW_URL="$1"
+      ;;
+    -h|--help)
+      usage 0
+      ;;
+    --*)
+      echo "Unknown option: $1" >&2
+      usage 1
+      ;;
+    *)
+      echo "Unexpected extra argument: $1" >&2
+      usage 1
+      ;;
+  esac
+  shift
+
+done
+
+# Fallback when the caller did not specify a directory.
+# If no directory was specified create a fresh temporary one.
+if [[ -z "$TMPDIR" ]]; then
+  TMPDIR="$(mktemp -d)"
+fi
+
+# Ensure the directory exists, then resolve to an absolute path.
+mkdir -p "$TMPDIR"
+TMPDIR="$(cd "$TMPDIR" && pwd)"
+
+# Main build logic
+
+echo "Staging release in $TMPDIR"
+
+# The script lives in codex-cli/scripts/ - change into codex-cli root so that
+# relative paths keep working.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CODEX_CLI_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+pushd "$CODEX_CLI_ROOT" >/dev/null
+
+# 1. Build the JS artifacts ---------------------------------------------------
+
+# Paths inside the staged package
+mkdir -p "$TMPDIR/bin"
+
+cp -r bin/codex.js "$TMPDIR/bin/codex.js"
+cp ../README.md "$TMPDIR" || true # README is one level up - ignore if missing
+
+# Modify package.json - bump version and optionally add the native directory to
+# the files array so that the binaries are published to npm.
+
+jq --arg version "$VERSION" \
+    '.version = $version' \
+    package.json > "$TMPDIR/package.json"
+
+# 2. Native runtime deps (sandbox plus optional Rust binaries)
+
+./scripts/install_native_deps.sh --workflow-url "$WORKFLOW_URL" "$TMPDIR"
+
+popd >/dev/null
+
+echo "Staged version $VERSION for release in $TMPDIR"
+
+echo "Verify the CLI:"
+echo "    node ${TMPDIR}/bin/codex.js --version"
+echo "    node ${TMPDIR}/bin/codex.js --help"
+
+# Print final hint for convenience
+echo "Next:  cd \"$TMPDIR\" && npm publish"
+```
+
+#### codex-cli/scripts/stage_rust_release.py
+```python
+#!/usr/bin/env python3
+
+import json
+import subprocess
+import sys
+import argparse
+from pathlib import Path
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(
+        description="""Stage a release for the npm module.
+
+Run this after the GitHub Release has been created and use
+`--release-version` to specify the version to release.
+
+Optionally pass `--tmp` to control the temporary staging directory that will be
+forwarded to stage_release.sh.
+"""
+    )
+    parser.add_argument(
+        "--release-version", required=True, help="Version to release, e.g., 0.3.0"
+    )
+    parser.add_argument(
+        "--tmp",
+        help="Optional path to stage the npm package; forwarded to stage_release.sh",
+    )
+    args = parser.parse_args()
+    version = args.release_version
+
+    gh_run = subprocess.run(
+        [
+            "gh",
+            "run",
+            "list",
+            "--branch",
+            f"rust-v{version}",
+            "--json",
+            "workflowName,url,headSha",
+            "--jq",
+            'first(.[] | select(.workflowName == "rust-release"))',
+        ],
+        stdout=subprocess.PIPE,
+        check=True,
+    )
+    gh_run.check_returncode()
+    workflow = json.loads(gh_run.stdout)
+    sha = workflow["headSha"]
+
+    print(f"should `git checkout {sha}`")
+
+    current_dir = Path(__file__).parent.resolve()
+    cmd = [
+        str(current_dir / "stage_release.sh"),
+        "--version",
+        version,
+        "--workflow-url",
+        workflow["url"],
+    ]
+    if args.tmp:
+        cmd.extend(["--tmp", args.tmp])
+
+    stage_release = subprocess.run(cmd)
+    stage_release.check_returncode()
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+```
+
+#### codex-cli/scripts/README.md
+```markdown
+# npm releases
+
+Run the following:
+
+To build the 0.2.x or later version of the npm module, which runs the Rust version of the CLI, build it as follows:
+
+```bash
+./codex-cli/scripts/stage_rust_release.py --release-version 0.6.0
+```
+```
