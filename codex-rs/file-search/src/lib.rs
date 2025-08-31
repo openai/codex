@@ -182,7 +182,13 @@ pub fn run(
         let first_str = first.as_os_str().to_string_lossy();
         matches!(
             first_str.as_ref(),
-            ".github" | ".azuredevops" | ".vscode" | ".cursor"
+            ".github"
+                | ".gitlab"
+                | ".circleci"
+                | ".devcontainer"
+                | ".azuredevops"
+                | ".vscode"
+                | ".cursor"
         )
     });
 
