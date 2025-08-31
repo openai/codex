@@ -386,3 +386,466 @@ For the MVP, no scripts are required. Keep this as a placeholder for future tool
 - 画像サポート
 - PPTX/PDF 変換連携
 ```
+
+### 参考: 現行実装（変更不要のまま引用）
+
+#### codex-cli/bin/codex.js
+```javascript
+#!/usr/bin/env node
+// Unified entry point for the Codex CLI.
+
+import path from "path";
+import { fileURLToPath } from "url";
+
+// __dirname equivalent in ESM
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const { platform, arch } = process;
+
+let targetTriple = null;
+switch (platform) {
+  case "linux":
+  case "android":
+    switch (arch) {
+      case "x64":
+        targetTriple = "x86_64-unknown-linux-musl";
+        break;
+      case "arm64":
+        targetTriple = "aarch64-unknown-linux-musl";
+        break;
+      default:
+        break;
+    }
+    break;
+  case "darwin":
+    switch (arch) {
+      case "x64":
+        targetTriple = "x86_64-apple-darwin";
+        break;
+      case "arm64":
+        targetTriple = "aarch64-apple-darwin";
+        break;
+      default:
+        break;
+    }
+    break;
+  case "win32":
+    switch (arch) {
+      case "x64":
+        targetTriple = "x86_64-pc-windows-msvc.exe";
+        break;
+      case "arm64":
+      // We do not build this today, fall through...
+      default:
+        break;
+    }
+    break;
+  default:
+    break;
+}
+
+if (!targetTriple) {
+  throw new Error(`Unsupported platform: ${platform} (${arch})`);
+}
+
+const binaryPath = path.join(__dirname, "..", "bin", `codex-${targetTriple}`);
+
+// Use an asynchronous spawn instead of spawnSync so that Node is able to
+// respond to signals (e.g. Ctrl-C / SIGINT) while the native binary is
+// executing. This allows us to forward those signals to the child process
+// and guarantees that when either the child terminates or the parent
+// receives a fatal signal, both processes exit in a predictable manner.
+const { spawn } = await import("child_process");
+
+async function tryImport(moduleName) {
+  try {
+    // eslint-disable-next-line node/no-unsupported-features/es-syntax
+    return await import(moduleName);
+  } catch (err) {
+    return null;
+  }
+}
+
+async function resolveRgDir() {
+  const ripgrep = await tryImport("@vscode/ripgrep");
+  if (!ripgrep?.rgPath) {
+    return null;
+  }
+  return path.dirname(ripgrep.rgPath);
+}
+
+function getUpdatedPath(newDirs) {
+  const pathSep = process.platform === "win32" ? ";" : ":";
+  const existingPath = process.env.PATH || "";
+  const updatedPath = [
+    ...newDirs,
+    ...existingPath.split(pathSep).filter(Boolean),
+  ].join(pathSep);
+  return updatedPath;
+}
+
+const additionalDirs = [];
+const rgDir = await resolveRgDir();
+if (rgDir) {
+  additionalDirs.push(rgDir);
+}
+const updatedPath = getUpdatedPath(additionalDirs);
+
+const child = spawn(binaryPath, process.argv.slice(2), {
+  stdio: "inherit",
+  env: { ...process.env, PATH: updatedPath, CODEX_MANAGED_BY_NPM: "1" },
+});
+
+child.on("error", (err) => {
+  // Typically triggered when the binary is missing or not executable.
+  // Re-throwing here will terminate the parent with a non-zero exit code
+  // while still printing a helpful stack trace.
+  // eslint-disable-next-line no-console
+  console.error(err);
+  process.exit(1);
+});
+
+// Forward common termination signals to the child so that it shuts down
+// gracefully. In the handler we temporarily disable the default behavior of
+// exiting immediately; once the child has been signaled we simply wait for
+// its exit event which will in turn terminate the parent (see below).
+const forwardSignal = (signal) => {
+  if (child.killed) {
+    return;
+  }
+  try {
+    child.kill(signal);
+  } catch {
+    /* ignore */
+  }
+};
+
+["SIGINT", "SIGTERM", "SIGHUP"].forEach((sig) => {
+  process.on(sig, () => forwardSignal(sig));
+});
+
+// When the child exits, mirror its termination reason in the parent so that
+// shell scripts and other tooling observe the correct exit status.
+// Wrap the lifetime of the child process in a Promise so that we can await
+// its termination in a structured way. The Promise resolves with an object
+// describing how the child exited: either via exit code or due to a signal.
+const childResult = await new Promise((resolve) => {
+  child.on("exit", (code, signal) => {
+    if (signal) {
+      resolve({ type: "signal", signal });
+    } else {
+      resolve({ type: "code", exitCode: code ?? 1 });
+    }
+  });
+});
+
+if (childResult.type === "signal") {
+  // Re-emit the same signal so that the parent terminates with the expected
+  // semantics (this also sets the correct exit code of 128 + n).
+  process.kill(process.pid, childResult.signal);
+} else {
+  process.exit(childResult.exitCode);
+}
+```
+
+#### codex-rs/cli/src/main.rs
+```rust
+use clap::CommandFactory;
+use clap::Parser;
+use clap_complete::Shell;
+use clap_complete::generate;
+use codex_arg0::arg0_dispatch_or_else;
+use codex_chatgpt::apply_command::ApplyCommand;
+use codex_chatgpt::apply_command::run_apply_command;
+use codex_cli::LandlockCommand;
+use codex_cli::SeatbeltCommand;
+use codex_cli::login::run_login_status;
+use codex_cli::login::run_login_with_api_key;
+use codex_cli::login::run_login_with_chatgpt;
+use codex_cli::login::run_logout;
+use codex_cli::proto;
+use codex_common::CliConfigOverrides;
+use codex_exec::Cli as ExecCli;
+use codex_tui::Cli as TuiCli;
+use std::path::PathBuf;
+
+use crate::proto::ProtoCli;
+
+/// Codex CLI
+///
+/// If no subcommand is specified, options will be forwarded to the interactive CLI.
+#[derive(Debug, Parser)]
+#[clap(
+    author,
+    version,
+    // If a sub‑command is given, ignore requirements of the default args.
+    subcommand_negates_reqs = true,
+    // The executable is sometimes invoked via a platform‑specific name like
+    // `codex-x86_64-unknown-linux-musl`, but the help output should always use
+    // the generic `codex` command name that users run.
+    bin_name = "codex"
+)]
+struct MultitoolCli {
+    #[clap(flatten)]
+    pub config_overrides: CliConfigOverrides,
+
+    #[clap(flatten)]
+    interactive: TuiCli,
+
+    #[clap(subcommand)]
+    subcommand: Option<Subcommand>,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum Subcommand {
+    /// Run Codex non-interactively.
+    #[clap(visible_alias = "e")]
+    Exec(ExecCli),
+
+    /// Manage login.
+    Login(LoginCommand),
+
+    /// Remove stored authentication credentials.
+    Logout(LogoutCommand),
+
+    /// Experimental: run Codex as an MCP server.
+    Mcp,
+
+    /// Run the Protocol stream via stdin/stdout
+    #[clap(visible_alias = "p")]
+    Proto(ProtoCli),
+
+    /// Generate shell completion scripts.
+    Completion(CompletionCommand),
+
+    /// Internal debugging commands.
+    Debug(DebugArgs),
+
+    /// Apply the latest diff produced by Codex agent as a `git apply` to your local working tree.
+    #[clap(visible_alias = "a")]
+    Apply(ApplyCommand),
+
+    /// Internal: generate TypeScript protocol bindings.
+    #[clap(hide = true)]
+    GenerateTs(GenerateTsCommand),
+}
+
+#[derive(Debug, Parser)]
+struct CompletionCommand {
+    /// Shell to generate completions for
+    #[clap(value_enum, default_value_t = Shell::Bash)]
+    shell: Shell,
+}
+
+#[derive(Debug, Parser)]
+struct DebugArgs {
+    #[command(subcommand)]
+    cmd: DebugCommand,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum DebugCommand {
+    /// Run a command under Seatbelt (macOS only).
+    Seatbelt(SeatbeltCommand),
+
+    /// Run a command under Landlock+seccomp (Linux only).
+    Landlock(LandlockCommand),
+}
+
+#[derive(Debug, Parser)]
+struct LoginCommand {
+    #[clap(skip)]
+    config_overrides: CliConfigOverrides,
+
+    #[arg(long = "api-key", value_name = "API_KEY")]
+    api_key: Option<String>,
+
+    #[command(subcommand)]
+    action: Option<LoginSubcommand>,
+}
+
+#[derive(Debug, clap::Subcommand)]
+enum LoginSubcommand {
+    /// Show login status.
+    Status,
+}
+
+#[derive(Debug, Parser)]
+struct LogoutCommand {
+    #[clap(skip)]
+    config_overrides: CliConfigOverrides,
+}
+
+#[derive(Debug, Parser)]
+struct GenerateTsCommand {
+    /// Output directory where .ts files will be written
+    #[arg(short = 'o', long = "out", value_name = "DIR")]
+    out_dir: PathBuf,
+
+    /// Optional path to the Prettier executable to format generated files
+    #[arg(short = 'p', long = "prettier", value_name = "PRETTIER_BIN")]
+    prettier: Option<PathBuf>,
+}
+
+fn main() -> anyhow::Result<()> {
+    arg0_dispatch_or_else(|codex_linux_sandbox_exe| async move {
+        cli_main(codex_linux_sandbox_exe).await?;
+        Ok(())
+    })
+}
+
+async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
+    let cli = MultitoolCli::parse();
+
+    match cli.subcommand {
+        None => {
+            let mut tui_cli = cli.interactive;
+            prepend_config_flags(&mut tui_cli.config_overrides, cli.config_overrides);
+            let usage = codex_tui::run_main(tui_cli, codex_linux_sandbox_exe).await?;
+            if !usage.is_zero() {
+                println!("{}", codex_core::protocol::FinalOutput::from(usage));
+            }
+        }
+        Some(Subcommand::Exec(mut exec_cli)) => {
+            prepend_config_flags(&mut exec_cli.config_overrides, cli.config_overrides);
+            codex_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
+        }
+        Some(Subcommand::Mcp) => {
+            codex_mcp_server::run_main(codex_linux_sandbox_exe, cli.config_overrides).await?;
+        }
+        Some(Subcommand::Login(mut login_cli)) => {
+            prepend_config_flags(&mut login_cli.config_overrides, cli.config_overrides);
+            match login_cli.action {
+                Some(LoginSubcommand::Status) => {
+                    run_login_status(login_cli.config_overrides).await;
+                }
+                None => {
+                    if let Some(api_key) = login_cli.api_key {
+                        run_login_with_api_key(login_cli.config_overrides, api_key).await;
+                    } else {
+                        run_login_with_chatgpt(login_cli.config_overrides).await;
+                    }
+                }
+            }
+        }
+        Some(Subcommand::Logout(mut logout_cli)) => {
+            prepend_config_flags(&mut logout_cli.config_overrides, cli.config_overrides);
+            run_logout(logout_cli.config_overrides).await;
+        }
+        Some(Subcommand::Proto(mut proto_cli)) => {
+            prepend_config_flags(&mut proto_cli.config_overrides, cli.config_overrides);
+            proto::run_main(proto_cli).await?;
+        }
+        Some(Subcommand::Completion(completion_cli)) => {
+            print_completion(completion_cli);
+        }
+        Some(Subcommand::Debug(debug_args)) => match debug_args.cmd {
+            DebugCommand::Seatbelt(mut seatbelt_cli) => {
+                prepend_config_flags(&mut seatbelt_cli.config_overrides, cli.config_overrides);
+                codex_cli::debug_sandbox::run_command_under_seatbelt(
+                    seatbelt_cli,
+                    codex_linux_sandbox_exe,
+                )
+                .await?;
+            }
+            DebugCommand::Landlock(mut landlock_cli) => {
+                prepend_config_flags(&mut landlock_cli.config_overrides, cli.config_overrides);
+                codex_cli::debug_sandbox::run_command_under_landlock(
+                    landlock_cli,
+                    codex_linux_sandbox_exe,
+                )
+                .await?;
+            }
+        },
+        Some(Subcommand::Apply(mut apply_cli)) => {
+            prepend_config_flags(&mut apply_cli.config_overrides, cli.config_overrides);
+            run_apply_command(apply_cli, None).await?;
+        }
+        Some(Subcommand::GenerateTs(gen_cli)) => {
+            codex_protocol_ts::generate_ts(&gen_cli.out_dir, gen_cli.prettier.as_deref())?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Prepend root-level overrides so they have lower precedence than
+/// CLI-specific ones specified after the subcommand (if any).
+fn prepend_config_flags(
+    subcommand_config_overrides: &mut CliConfigOverrides,
+    cli_config_overrides: CliConfigOverrides,
+) {
+    subcommand_config_overrides
+        .raw_overrides
+        .splice(0..0, cli_config_overrides.raw_overrides);
+}
+
+fn print_completion(cmd: CompletionCommand) {
+    let mut app = MultitoolCli::command();
+    let name = "codex";
+    generate(cmd.shell, &mut app, name, &mut std::io::stdout());
+}
+```
+
+#### codex-rs/ansi-escape/Cargo.toml
+```toml
+[package]
+edition = "2024"
+name = "codex-ansi-escape"
+version = { workspace = true }
+
+[lib]
+name = "codex_ansi_escape"
+path = "src/lib.rs"
+
+[dependencies]
+ansi-to-tui = "7.0.0"
+ratatui = { version = "0.29.0", features = [
+    "unstable-rendered-line-info",
+    "unstable-widget-ref",
+] }
+tracing = { version = "0.1.41", features = ["log"] }
+```
+
+#### codex-rs/ansi-escape/src/lib.rs
+```rust
+use ansi_to_tui::Error;
+use ansi_to_tui::IntoText;
+use ratatui::text::Line;
+use ratatui::text::Text;
+
+/// This function should be used when the contents of `s` are expected to match
+/// a single line. If multiple lines are found, a warning is logged and only the
+/// first line is returned.
+pub fn ansi_escape_line(s: &str) -> Line<'static> {
+    let text = ansi_escape(s);
+    match text.lines.as_slice() {
+        [] => Line::from(""),
+        [only] => only.clone(),
+        [first, rest @ ..] => {
+            tracing::warn!("ansi_escape_line: expected a single line, got {first:?} and {rest:?}");
+            first.clone()
+        }
+    }
+}
+
+pub fn ansi_escape(s: &str) -> Text<'static> {
+    // to_text() claims to be faster, but introduces complex lifetime issues
+    // such that it's not worth it.
+    match s.into_text() {
+        Ok(text) => text,
+        Err(err) => match err {
+            Error::NomError(message) => {
+                tracing::error!(
+                    "ansi_to_tui NomError docs claim should never happen when parsing `{s}`: {message}"
+                );
+                panic!();
+            }
+            Error::Utf8Error(utf8error) => {
+                tracing::error!("Utf8Error: {utf8error}");
+                panic!();
+            }
+        },
+    }
+}
