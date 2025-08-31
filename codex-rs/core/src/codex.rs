@@ -663,18 +663,12 @@ impl Session {
         let mut changes = Vec::new();
         for (path, change) in action.changes() {
             let (operation, new_path) = match change {
-                ApplyPatchFileChange::Add { .. } => ("A".to_string(), None),
-                ApplyPatchFileChange::Delete => ("D".to_string(), None),
-                ApplyPatchFileChange::Update { move_path, .. } => {
-                    if let Some(new_path) = move_path {
-                        ("R".to_string(), Some(new_path.clone()))
-                    } else {
-                        ("M".to_string(), None)
-                    }
-                }
+                ApplyPatchFileChange::Add { .. } => ("A", None),
+                ApplyPatchFileChange::Delete => ("D", None),
+                ApplyPatchFileChange::Update { move_path, .. } => ("M", move_path.clone()),
             };
             changes.push(FileChangeInfo {
-                operation,
+                operation: operation.to_string(),
                 path: path.clone(),
                 new_path,
             });

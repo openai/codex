@@ -34,7 +34,7 @@ pub(crate) enum UserNotification {
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub(crate) struct FileChangeInfo {
-    pub operation: String, // "A", "D", "M", "R"
+    pub operation: String, // "A", "D", "M"
     pub path: PathBuf,
     pub new_path: Option<PathBuf>, // For rename operations
 }
@@ -93,7 +93,7 @@ mod tests {
                     new_path: None,
                 },
                 FileChangeInfo {
-                    operation: "R".to_string(),
+                    operation: "M".to_string(),
                     path: "/path/to/old_file.rs".into(),
                     new_path: Some("/path/to/renamed_file.rs".into()),
                 },
@@ -102,7 +102,7 @@ mod tests {
         let serialized = serde_json::to_string(&notification).unwrap();
         assert_eq!(
             serialized,
-            r#"{"type":"pending-file-approval","turn-id":"12345","changes":[{"operation":"A","path":"/path/to/new_file.rs","new-path":null},{"operation":"D","path":"/path/to/deleted_file.rs","new-path":null},{"operation":"M","path":"/path/to/existing.rs","new-path":null},{"operation":"R","path":"/path/to/old_file.rs","new-path":"/path/to/renamed_file.rs"}]}"#
+            r#"{"type":"pending-file-approval","turn-id":"12345","changes":[{"operation":"A","path":"/path/to/new_file.rs","new-path":null},{"operation":"D","path":"/path/to/deleted_file.rs","new-path":null},{"operation":"M","path":"/path/to/existing.rs","new-path":null},{"operation":"M","path":"/path/to/old_file.rs","new-path":"/path/to/renamed_file.rs"}]}"#
         );
     }
 }
