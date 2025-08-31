@@ -101,3 +101,31 @@
 - パッケージ名（npm）: 仮 `@yourorg/slide`（要確定）。
 - 設定ファイル: `~/.slide/*` 新設か `~/.codex/*` 流用か（MVPは流用案）。
 - リリース戦略: codex と同一トリプル/同梱方式で問題ないか。
+
+## 想定ディレクトリ構造（MVP）
+```
+repo-root/
+├─ codex-cli/                # 既存: Codex 用 Node ランチャ
+│  └─ ...
+├─ codex-rs/                 # 既存: Rust ワークスペース
+│  ├─ cli/                   # 既存: Rust CLI 本体
+│  ├─ core/                  # 既存: コア機能
+│  ├─ ...
+│  └─ (他の既存クレート)
+├─ slide-cli/                # 新規: Slide 用 Node ランチャ（codex-cli と同構成）
+│  ├─ package.json
+│  ├─ bin/
+│  │  └─ slide.js           # エントリポイント（プラットフォーム判定→ slide-<target> 実行）
+│  ├─ scripts/               # （必要なら）リリース・サンドボックス補助
+│  └─ (bin/slide-<target> はリリース時に同梱)
+├─ docs/
+│  ├─ slide-cli-requirements.md
+│  └─ ...
+├─ slides/                   # 生成物（Markdown）出力先（初回生成時に作成）
+│  └─ <timestamp>_<slug>.md
+└─ ...
+```
+
+- Node ランチャを分ける理由: コマンド名 `slide` を npm 経由で配布しやすくするため（`codex` と並存）。
+- Rust 側は既存 CLI にモード追加（`--app slide` or argv0）で最小改修方針。
+- 将来、共通化できる箇所（スクリプト・配布手順）は `codex-cli` と揃える。
