@@ -151,7 +151,35 @@ pub fn run(
     // Use the same tree-walker library that ripgrep uses. We use it directly so
     // that we can leverage the parallelism it provides.
     let mut walk_builder = WalkBuilder::new(search_directory);
-    walk_builder.threads(num_walk_builder_threads);
+    walk_builder
+        .threads(num_walk_builder_threads)
+        // Allow hidden entries so we can selectively include specific dot-dirs.
+        .hidden(false);
+
+    // Restrict traversal of hidden paths to a small allowlist of dot-dirs at
+    // the workspace root. All other hidden entries remain excluded.
+    let root_for_filter = search_directory.to_path_buf();
+    walk_builder.filter_entry(move |entry| {
+        let path = entry.path();
+        // Fast path: non-hidden entries are always allowed.
+        let is_hidden = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|name| name.starts_with('.'))
+            .unwrap_or(false);
+        if !is_hidden {
+            return true;
+        }
+
+        // For hidden entries, only allow certain top-level dot-directories.
+        let Ok(rel) = path.strip_prefix(&root_for_filter) else { return false };
+        let mut components = rel.components();
+        let Some(first) = components.next() else { return false };
+        let first_str = first.as_os_str().to_string_lossy();
+        matches!(first_str.as_ref(), ".github" | ".azuredevops" | ".vscode" | ".cursor")
+    });
+
+    // Apply any caller-provided exclude patterns via overrides.
     if !exclude.is_empty() {
         let mut override_builder = OverrideBuilder::new(search_directory);
         for exclude in exclude {
