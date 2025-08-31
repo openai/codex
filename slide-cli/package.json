@@ -1,0 +1,22 @@
+{
+  "name": "@yourorg/slide",
+  "version": "0.0.1",
+  "license": "Apache-2.0",
+  "bin": {
+    "slide": "bin/slide.js"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "bin",
+    "dist"
+  ],
+  "dependencies": {
+    "@vscode/ripgrep": "^1.15.14"
+  },
+  "devDependencies": {
+    "prettier": "^3.3.3"
+  }
+}
