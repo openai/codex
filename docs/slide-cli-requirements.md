@@ -183,3 +183,179 @@ repo-root/
 7) 失敗時の扱い
    - 書き込み失敗や生成不十分な場合は差分提示・再試行をガイド
    - Quiet/JSON モードでは機械可読な結果を返す
+
+## 実装コード（計画反映）
+
+### slide-cli/package.json
+```json
+{
+  "name": "@yourorg/slide",
+  "version": "0.0.1",
+  "license": "Apache-2.0",
+  "bin": {
+    "slide": "bin/slide.js"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "files": [
+    "bin",
+    "dist"
+  ],
+  "dependencies": {
+    "@vscode/ripgrep": "^1.15.14"
+  },
+  "devDependencies": {
+    "prettier": "^3.3.3"
+  }
+}
+```
+
+### slide-cli/bin/slide.js
+```javascript
+#!/usr/bin/env node
+// Slide CLI launcher: selects platform-specific native binary and runs it.
+
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const { platform, arch } = process;
+
+let targetTriple = null;
+switch (platform) {
+  case "linux":
+  case "android":
+    switch (arch) {
+      case "x64":
+        targetTriple = "x86_64-unknown-linux-musl";
+        break;
+      case "arm64":
+        targetTriple = "aarch64-unknown-linux-musl";
+        break;
+      default:
+        break;
+    }
+    break;
+  case "darwin":
+    switch (arch) {
+      case "x64":
+        targetTriple = "x86_64-apple-darwin";
+        break;
+      case "arm64":
+        targetTriple = "aarch64-apple-darwin";
+        break;
+      default:
+        break;
+    }
+    break;
+  case "win32":
+    switch (arch) {
+      case "x64":
+        targetTriple = "x86_64-pc-windows-msvc.exe";
+        break;
+      default:
+        break;
+    }
+    break;
+  default:
+    break;
+}
+
+if (!targetTriple) {
+  throw new Error(`Unsupported platform: ${platform} (${arch})`);
+}
+
+const binaryPath = path.join(__dirname, "..", "bin", `slide-${targetTriple}`);
+
+const { spawn } = await import("child_process");
+
+async function tryImport(moduleName) {
+  try {
+    return await import(moduleName);
+  } catch {
+    return null;
+  }
+}
+
+async function resolveRgDir() {
+  const ripgrep = await tryImport("@vscode/ripgrep");
+  if (!ripgrep?.rgPath) return null;
+  return path.dirname(ripgrep.rgPath);
+}
+
+function getUpdatedPath(newDirs) {
+  const pathSep = process.platform === "win32" ? ";" : ":";
+  const existingPath = process.env.PATH || "";
+  return [...newDirs, ...existingPath.split(pathSep).filter(Boolean)].join(pathSep);
+}
+
+const additionalDirs = [];
+const rgDir = await resolveRgDir();
+if (rgDir) additionalDirs.push(rgDir);
+const updatedPath = getUpdatedPath(additionalDirs);
+
+// Pass a hint so the native binary can switch to Slide mode if shared
+const env = { ...process.env, PATH: updatedPath, SLIDE_APP: "1" };
+
+const child = spawn(binaryPath, process.argv.slice(2), {
+  stdio: "inherit",
+  env,
+});
+
+child.on("error", (err) => {
+  console.error(err);
+  process.exit(1);
+});
+
+const forwardSignal = (signal) => {
+  if (child.killed) return;
+  try { child.kill(signal); } catch {}
+};
+
+["SIGINT", "SIGTERM", "SIGHUP"].forEach((sig) => {
+  process.on(sig, () => forwardSignal(sig));
+});
+
+const childResult = await new Promise((resolve) => {
+  child.on("exit", (code, signal) => {
+    if (signal) resolve({ type: "signal", signal });
+    else resolve({ type: "code", exitCode: code ?? 1 });
+  });
+});
+
+if (childResult.type === "signal") {
+  process.kill(process.pid, childResult.signal);
+} else {
+  process.exit(childResult.exitCode);
+}
+```
+
+### slide-cli/README.md
+```markdown
+# Slide CLI (MVP)
+
+Lightweight terminal agent to generate Markdown slides via chat. Ships as a Node launcher that executes platform-specific native binaries.
+
+## Quickstart
+```
+npm i -g @yourorg/slide
+slide
+slide "営業向け提案 10枚 日本語で"
+```
+
+## Preview TUI (MVP)
+```
+slide preview slides/<file>.md
+```
+
+- Navigate: ←/→ (or j/k)
+- Quit: q
+
+## Notes
+- Generates Markdown into `slides/` as `<timestamp>_<slug>.md`.
+- PPTX/PDF conversion is out of scope for MVP (use external tools).
+```
