@@ -1,4 +1,4 @@
-use codex_core::util::is_inside_git_repo;
+use codex_core::util::is_inside_repo;
 use codex_login::AuthManager;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -88,18 +88,18 @@ impl OnboardingScreen {
                 auth_manager,
             }))
         }
-        let is_git_repo = is_inside_git_repo(&cwd);
-        let highlighted = if is_git_repo {
+        let is_repo = is_inside_repo(&cwd);
+        let highlighted = if is_repo {
             TrustDirectorySelection::Trust
         } else {
-            // Default to not trusting the directory if it's not a git repo.
+            // Default to not trusting the directory if it's not a repo.
             TrustDirectorySelection::DontTrust
         };
         if show_trust_screen {
             steps.push(Step::TrustDirectory(TrustDirectoryWidget {
                 cwd,
                 codex_home,
-                is_git_repo,
+                is_repo,
                 selection: None,
                 highlighted,
                 error: None,

@@ -26,7 +26,7 @@ use super::onboarding_screen::StepState;
 pub(crate) struct TrustDirectoryWidget {
     pub codex_home: PathBuf,
     pub cwd: PathBuf,
-    pub is_git_repo: bool,
+    pub is_repo: bool,
     pub selection: Option<TrustDirectorySelection>,
     pub highlighted: TrustDirectorySelection,
     pub error: Option<String>,
@@ -52,7 +52,7 @@ impl WidgetRef for &TrustDirectoryWidget {
             Line::from(""),
         ];
 
-        if self.is_git_repo {
+        if self.is_repo {
             lines.push(Line::from(
                 "  Since this folder is version controlled, you may wish to allow Codex",
             ));
@@ -77,7 +77,7 @@ impl WidgetRef for &TrustDirectoryWidget {
                 }
             };
 
-        if self.is_git_repo {
+        if self.is_repo {
             lines.push(create_option(
                 0,
                 TrustDirectorySelection::Trust,
@@ -173,12 +173,12 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    fn create_test_widget(cwd: PathBuf, is_git_repo: bool) -> TrustDirectoryWidget {
+    fn create_test_widget(cwd: PathBuf, is_repo: bool) -> TrustDirectoryWidget {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         TrustDirectoryWidget {
             codex_home: temp_dir.path().to_path_buf(),
             cwd,
-            is_git_repo,
+            is_repo,
             selection: None,
             highlighted: TrustDirectorySelection::Trust,
             error: None,
