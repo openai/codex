@@ -359,3 +359,30 @@ slide preview slides/<file>.md
 - Generates Markdown into `slides/` as `<timestamp>_<slug>.md`.
 - PPTX/PDF conversion is out of scope for MVP (use external tools).
 ```
+
+### slide-cli/scripts/README.md
+```markdown
+# scripts (optional for MVP)
+
+This directory is reserved for release and sandbox helpers (e.g., staging native binaries).
+For the MVP, no scripts are required. Keep this as a placeholder for future tooling.
+```
+
+### slides/sample.md
+```markdown
+# デモスライド：Slide CLI MVP
+
+## 1. 目的
+- ターミナルからチャットでスライドを生成
+- Markdown を生成し、ユーザーが任意ツールで変換
+
+## 2. スコープ（MVP）
+- `slide` コマンド
+- チャット→Markdown 生成
+- 簡易プレビューTUI（ページ送り）
+
+## 3. 次の一歩
+- テンプレート/テーマ対応
+- 画像サポート
+- PPTX/PDF 変換連携
+```
