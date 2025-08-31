@@ -11,6 +11,7 @@ use std::time::Duration;
 use async_channel::Receiver;
 use async_channel::Sender;
 use codex_apply_patch::ApplyPatchAction;
+use codex_apply_patch::ApplyPatchFileChange;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
 use codex_login::AuthManager;
@@ -108,6 +109,7 @@ use crate::safety::assess_command_safety;
 use crate::safety::assess_safety_for_untrusted_command;
 use crate::shell;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use crate::user_notification::FileChangeInfo;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
@@ -623,14 +625,13 @@ impl Session {
             }),
         };
         let _ = self.tx_event.send(event).await;
-        
+
         // Notify user that we're waiting for command approval
-        self.maybe_notify(UserNotification::PendingUserApproval {
+        self.maybe_notify(UserNotification::PendingCommandApproval {
             turn_id: sub_id.clone(),
-            approval_type: "command_approval".to_string(),
-            description: format!("Waiting for approval to execute: {}", command.join(" ")),
+            command: command.clone(),
         });
-        
+
         {
             let mut state = self.state.lock_unchecked();
             state.pending_approvals.insert(sub_id, tx_approve);
@@ -657,18 +658,32 @@ impl Session {
             }),
         };
         let _ = self.tx_event.send(event).await;
-        
+
         // Notify user that we're waiting for patch approval
-        let file_paths = action.changes().keys()
-            .map(|path| path.to_string_lossy().to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        self.maybe_notify(UserNotification::PendingUserApproval {
+        let mut changes = Vec::new();
+        for (path, change) in action.changes() {
+            let (operation, new_path) = match change {
+                ApplyPatchFileChange::Add { .. } => ("A".to_string(), None),
+                ApplyPatchFileChange::Delete => ("D".to_string(), None),
+                ApplyPatchFileChange::Update { move_path, .. } => {
+                    if let Some(new_path) = move_path {
+                        ("R".to_string(), Some(new_path.clone()))
+                    } else {
+                        ("M".to_string(), None)
+                    }
+                }
+            };
+            changes.push(FileChangeInfo {
+                operation,
+                path: path.clone(),
+                new_path,
+            });
+        }
+        self.maybe_notify(UserNotification::PendingFileApproval {
             turn_id: sub_id.clone(),
-            approval_type: "file_approval".to_string(),
-            description: format!("Waiting for approval to modify files: {file_paths}"),
+            changes,
         });
-        
+
         {
             let mut state = self.state.lock_unchecked();
             state.pending_approvals.insert(sub_id, tx_approve);
