@@ -3,7 +3,7 @@
   "version": "0.0.0-dev",
   "license": "Apache-2.0",
   "bin": {
-    "codex": "bin/codex.js"
+    "codex-test": "bin/codex.js"
   },
   "type": "module",
   "engines": {
@@ -11,14 +11,20 @@
   },
   "files": [
     "bin",
-    "dist"
+    "postinstall.js"
   ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/openai/codex.git"
   },
+  "scripts": {
+    "postinstall": "node postinstall.js"
+  },
+  "binaryVersion": "rust-v0.27.0",
   "dependencies": {
-    "@vscode/ripgrep": "^1.15.14"
+    "@vscode/ripgrep": "^1.15.14",
+    "https-proxy-agent": "^7.0.5",
+    "tar-stream": "^3.1.7"
   },
   "devDependencies": {
     "prettier": "^3.3.3"

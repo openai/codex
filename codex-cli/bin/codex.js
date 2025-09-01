@@ -8,55 +8,9 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const { platform, arch } = process;
-
-let targetTriple = null;
-switch (platform) {
-  case "linux":
-  case "android":
-    switch (arch) {
-      case "x64":
-        targetTriple = "x86_64-unknown-linux-musl";
-        break;
-      case "arm64":
-        targetTriple = "aarch64-unknown-linux-musl";
-        break;
-      default:
-        break;
-    }
-    break;
-  case "darwin":
-    switch (arch) {
-      case "x64":
-        targetTriple = "x86_64-apple-darwin";
-        break;
-      case "arm64":
-        targetTriple = "aarch64-apple-darwin";
-        break;
-      default:
-        break;
-    }
-    break;
-  case "win32":
-    switch (arch) {
-      case "x64":
-        targetTriple = "x86_64-pc-windows-msvc.exe";
-        break;
-      case "arm64":
-      // We do not build this today, fall through...
-      default:
-        break;
-    }
-    break;
-  default:
-    break;
-}
-
-if (!targetTriple) {
-  throw new Error(`Unsupported platform: ${platform} (${arch})`);
-}
-
-const binaryPath = path.join(__dirname, "..", "bin", `codex-${targetTriple}`);
+// Simple binary path - post install script ensures the correct one exists
+const binaryName = process.platform === 'win32' ? 'codex.exe' : 'codex';
+const binaryPath = path.join(__dirname, "..", "bin", binaryName);
 
 // Use an asynchronous spawn instead of spawnSync so that Node is able to
 // respond to signals (e.g. Ctrl-C / SIGINT) while the native binary is

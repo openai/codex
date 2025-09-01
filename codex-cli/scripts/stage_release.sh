@@ -104,9 +104,11 @@ jq --arg version "$VERSION" \
     '.version = $version' \
     package.json > "$TMPDIR/package.json"
 
-# 2. Native runtime deps (sandbox plus optional Rust binaries)
+# 2. Copy postinstall script for platform-specific binary downloads
 
-./scripts/install_native_deps.sh --workflow-url "$WORKFLOW_URL" "$TMPDIR"
+cp postinstall.js "$TMPDIR/postinstall.js"
+
+echo "Using postinstall approach - binaries will be downloaded per platform"
 
 popd >/dev/null
 
