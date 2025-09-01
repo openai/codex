@@ -30,6 +30,7 @@ use ratatui::prelude::*;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
+use ratatui::style::Styled;
 use ratatui::style::Stylize;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
@@ -1211,100 +1212,93 @@ pub(crate) fn new_stream_error_event(message: String) -> PlainHistoryCell {
 }
 
 /// Render a user‑friendly plan update styled like a checkbox todo list.
-pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlainHistoryCell {
+pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlanUpdateCell {
     let UpdatePlanArgs { explanation, plan } = update;
+    PlanUpdateCell { explanation, plan }
+}
 
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    // Leading blank for separation
-    lines.push(Line::from(""));
-    // Header with progress summary
-    let total = plan.len();
-    let completed = plan
-        .iter()
-        .filter(|p| matches!(p.status, StepStatus::Completed))
-        .count();
+#[derive(Debug)]
+pub(crate) struct PlanUpdateCell {
+    explanation: Option<String>,
+    plan: Vec<PlanItemArg>,
+}
 
-    let width: usize = 10;
-    let filled = if total > 0 {
-        (completed * width + total / 2) / total
-    } else {
-        0
-    };
-    let empty = width.saturating_sub(filled);
+impl HistoryCell for PlanUpdateCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let render_note = |text: &str| -> Vec<Line<'static>> {
+            let wrap_width = width.saturating_sub(4).max(1) as usize;
+            textwrap::wrap(text, wrap_width)
+                .into_iter()
+                .map(|s| s.to_string().dim().italic().into())
+                .collect()
+        };
 
-    let mut header: Vec<Span> = Vec::new();
-    header.push("• ".into());
-    header.push("Update Plan".bold());
-    header.push(Span::raw(" ["));
-    if filled > 0 {
-        header.push(Span::styled(
-            "█".repeat(filled),
-            Style::default().fg(Color::Green),
-        ));
-    }
-    if empty > 0 {
-        header.push(Span::styled(
-            "░".repeat(empty),
-            Style::default().add_modifier(Modifier::DIM),
-        ));
-    }
-    header.push(Span::raw("] "));
-    header.push(Span::raw(format!("{completed}/{total}")));
-    lines.push(Line::from(header));
-
-    // Optional explanation/note from the model
-    if let Some(expl) = explanation.and_then(|s| {
-        let t = s.trim().to_string();
-        if t.is_empty() { None } else { Some(t) }
-    }) {
-        lines.push(Line::from("note".dim().italic()));
-        for l in expl.lines() {
-            lines.push(Line::from(l.to_string()).dim());
-        }
-    }
-
-    // Steps styled as checkbox items
-    if plan.is_empty() {
-        lines.push(Line::from("(no steps provided)".dim().italic()));
-    } else {
-        for (idx, PlanItemArg { step, status }) in plan.into_iter().enumerate() {
-            let (box_span, text_span) = match status {
-                StepStatus::Completed => (
-                    Span::styled("✔", Style::default().fg(Color::Green)),
-                    Span::styled(
-                        step,
-                        Style::default().add_modifier(Modifier::CROSSED_OUT | Modifier::DIM),
-                    ),
-                ),
-                StepStatus::InProgress => (
-                    Span::raw("□"),
-                    Span::styled(
-                        step,
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ),
-                StepStatus::Pending => (
-                    Span::raw("□"),
-                    Span::styled(step, Style::default().add_modifier(Modifier::DIM)),
-                ),
+        let render_step = |status: &StepStatus, text: &str| -> Vec<Line<'static>> {
+            let (box_str, step_style) = match status {
+                StepStatus::Completed => ("✔ ", Style::default().crossed_out().dim()),
+                StepStatus::InProgress => ("□ ", Style::default().cyan().bold()),
+                StepStatus::Pending => ("□ ", Style::default().dim()),
             };
-            let prefix = if idx == 0 {
-                Span::raw("  └ ")
-            } else {
-                Span::raw("    ")
-            };
-            lines.push(Line::from(vec![
-                prefix,
-                box_span,
-                Span::raw(" "),
-                text_span,
-            ]));
-        }
-    }
+            let wrap_width = (width as usize)
+                .saturating_sub(4)
+                .saturating_sub(box_str.width())
+                .max(1);
+            let parts = textwrap::wrap(text, wrap_width);
+            let step_text = parts
+                .into_iter()
+                .map(|s| s.to_string().set_style(step_style).into())
+                .collect();
+            prefix_lines(step_text, &box_str.into(), &"  ".into())
+        };
 
-    PlainHistoryCell { lines }
+        fn prefix_lines(
+            lines: Vec<Line<'static>>,
+            initial_prefix: &Span<'static>,
+            subsequent_prefix: &Span<'static>,
+        ) -> Vec<Line<'static>> {
+            lines
+                .into_iter()
+                .enumerate()
+                .map(|(i, l)| {
+                    Line::from(
+                        [
+                            vec![if i == 0 {
+                                initial_prefix.clone()
+                            } else {
+                                subsequent_prefix.clone()
+                            }],
+                            l.spans,
+                        ]
+                        .concat(),
+                    )
+                })
+                .collect()
+        }
+
+        let mut lines: Vec<Line<'static>> = vec!["".into()];
+        lines.push(vec!["• ".into(), "Updated Plan".bold()].into());
+
+        let mut indented_lines = vec![];
+        let note = self
+            .explanation
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|t| !t.is_empty());
+        if let Some(expl) = note {
+            indented_lines.extend(render_note(expl));
+        };
+
+        if self.plan.is_empty() {
+            indented_lines.push(Line::from("(no steps provided)".dim().italic()));
+        } else {
+            for PlanItemArg { step, status } in self.plan.iter() {
+                indented_lines.extend(render_step(status, step));
+            }
+        }
+        lines.extend(prefix_lines(indented_lines, &"  └ ".into(), &"    ".into()));
+
+        lines
+    }
 }
 
 /// Create a new `PendingPatch` cell that lists the file‑level summary of
@@ -1926,6 +1920,77 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn plan_update_with_note_and_wrapping_snapshot() {
+        // Long explanation forces wrapping; include long step text to verify step wrapping and alignment.
+        let update = UpdatePlanArgs {
+            explanation: Some(
+                "I’ll update Grafana call error handling by adding retries and clearer messages when the backend is unreachable."
+                    .to_string(),
+            ),
+            plan: vec![
+                PlanItemArg {
+                    step: "Investigate existing error paths and logging around HTTP timeouts".into(),
+                    status: StepStatus::Completed,
+                },
+                PlanItemArg {
+                    step: "Harden Grafana client error handling with retry/backoff and user‑friendly messages".into(),
+                    status: StepStatus::InProgress,
+                },
+                PlanItemArg {
+                    step: "Add tests for transient failure scenarios and surfacing to the UI".into(),
+                    status: StepStatus::Pending,
+                },
+            ],
+        };
+
+        let cell = new_plan_update(update);
+        // Narrow width to force wrapping for both the note and steps
+        let lines = cell.display_lines(32);
+        let rendered = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn plan_update_without_note_snapshot() {
+        let update = UpdatePlanArgs {
+            explanation: None,
+            plan: vec![
+                PlanItemArg {
+                    step: "Define error taxonomy".into(),
+                    status: StepStatus::InProgress,
+                },
+                PlanItemArg {
+                    step: "Implement mapping to user messages".into(),
+                    status: StepStatus::Pending,
+                },
+            ],
+        };
+
+        let cell = new_plan_update(update);
+        let lines = cell.display_lines(40);
+        let rendered = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
         insta::assert_snapshot!(rendered);
     }
 }
