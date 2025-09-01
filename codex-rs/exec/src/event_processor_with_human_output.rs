@@ -25,6 +25,7 @@ use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnDiffEvent;
 use codex_core::protocol::WebSearchBeginEvent;
+use codex_core::protocol::WebSearchEndEvent;
 use owo_colors::OwoColorize;
 use owo_colors::Style;
 use shlex::try_join;
@@ -362,8 +363,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     }
                 }
             }
-            EventMsg::WebSearchBegin(WebSearchBeginEvent { call_id: _, query }) => {
-                ts_println!(self, "🌐 {query}");
+            EventMsg::WebSearchBegin(WebSearchBeginEvent { call_id: _ }) => {}
+            EventMsg::WebSearchEnd(WebSearchEndEvent { call_id: _, query }) => {
+                ts_println!(self, "🌐 Searched: {query}");
             }
             EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
                 call_id,
@@ -531,6 +533,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 // Currently ignored in exec output.
             }
             EventMsg::McpListToolsResponse(_) => {
+                // Currently ignored in exec output.
+            }
+            EventMsg::ListCustomPromptsResponse(_) => {
                 // Currently ignored in exec output.
             }
             EventMsg::TurnAborted(abort_reason) => match abort_reason.reason {

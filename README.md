@@ -14,10 +14,16 @@
 
 ### Installing and running Codex CLI
 
-Install globally with your preferred package manager:
+Install globally with your preferred package manager. If you use npm:
 
 ```shell
-npm install -g @openai/codex  # Alternatively: `brew install codex`
+npm install -g @openai/codex
+```
+
+Alternatively, if you use Homebrew:
+
+```shell
+brew install codex
 ```
 
 Then simply run `codex` to get started:

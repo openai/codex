@@ -64,8 +64,6 @@ mod chatwidget_stream_tests;
 
 #[cfg(not(debug_assertions))]
 mod updates;
-#[cfg(not(debug_assertions))]
-use color_eyre::owo_colors::OwoColorize;
 
 pub use cli::Cli;
 

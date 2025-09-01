@@ -28,7 +28,7 @@ impl Respond for SeqResponder {
             Some(body) => wiremock::ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
                 .set_body_raw(
-                    load_sse_fixture_with_id_from_str(body, &format!("request_{}", call_num)),
+                    load_sse_fixture_with_id_from_str(body, &format!("request_{call_num}")),
                     "text/event-stream",
                 ),
             None => panic!("no response for {call_num}"),
@@ -63,7 +63,7 @@ pub(crate) async fn run_e2e_exec_test(cwd: &Path, response_streams: Vec<String>)
         .current_dir(cwd.clone())
         .env("CODEX_HOME", cwd.clone())
         .env("OPENAI_API_KEY", "dummy")
-        .env("OPENAI_BASE_URL", format!("{}/v1", uri))
+        .env("OPENAI_BASE_URL", format!("{uri}/v1"))
         .arg("--skip-git-repo-check")
         .arg("-s")
         .arg("danger-full-access")

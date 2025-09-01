@@ -100,6 +100,7 @@ mod tests {
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
         });
         assert_eq!(CancellationEvent::Handled, view.on_ctrl_c(&mut pane));
         assert!(view.queue.is_empty());

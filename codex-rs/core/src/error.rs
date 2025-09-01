@@ -170,15 +170,15 @@ fn format_reset_duration(total_secs: u64) -> String {
     let mut parts: Vec<String> = Vec::new();
     if days > 0 {
         let unit = if days == 1 { "day" } else { "days" };
-        parts.push(format!("{} {}", days, unit));
+        parts.push(format!("{days} {unit}"));
     }
     if hours > 0 {
         let unit = if hours == 1 { "hour" } else { "hours" };
-        parts.push(format!("{} {}", hours, unit));
+        parts.push(format!("{hours} {unit}"));
     }
     if minutes > 0 {
         let unit = if minutes == 1 { "minute" } else { "minutes" };
-        parts.push(format!("{} {}", minutes, unit));
+        parts.push(format!("{minutes} {unit}"));
     }
 
     if parts.is_empty() {

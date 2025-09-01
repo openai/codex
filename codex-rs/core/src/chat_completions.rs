@@ -129,7 +129,9 @@ pub(crate) async fn stream_chat_completions(
                     "content": output,
                 }));
             }
-            ResponseItem::Reasoning { .. } | ResponseItem::Other => {
+            ResponseItem::Reasoning { .. }
+            | ResponseItem::WebSearchCall { .. }
+            | ResponseItem::Other => {
                 // Omit these items from the conversation history.
                 continue;
             }
@@ -623,11 +625,8 @@ where
                 Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryPartAdded))) => {
                     continue;
                 }
-                Poll::Ready(Some(Ok(ResponseEvent::WebSearchCallBegin { .. }))) => {
-                    return Poll::Ready(Some(Ok(ResponseEvent::WebSearchCallBegin {
-                        call_id: String::new(),
-                        query: None,
-                    })));
+                Poll::Ready(Some(Ok(ResponseEvent::WebSearchCallBegin { call_id }))) => {
+                    return Poll::Ready(Some(Ok(ResponseEvent::WebSearchCallBegin { call_id })));
                 }
             }
         }

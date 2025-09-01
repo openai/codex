@@ -87,7 +87,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ${{ github.workspace }}/codex-rs/target/
-          key: cargo-release-${{ matrix.runner }}-${{ matrix.target }}-release-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-${{ matrix.runner }}-${{ matrix.target }}-release-${{ hashFiles('**/Cargo.lock') }}
 
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Install musl build tools
