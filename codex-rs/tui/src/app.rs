@@ -212,6 +212,13 @@ impl App {
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::UpdateRepoInfo {
+                repo_name,
+                git_branch,
+            } => {
+                self.chat_widget.apply_repo_info(repo_name, git_branch);
+            }
+
             AppEvent::InsertHistoryCell(cell) => {
                 let mut cell_transcript = cell.transcript_lines();
                 if !cell.is_stream_continuation() && !self.transcript_lines.is_empty() {
