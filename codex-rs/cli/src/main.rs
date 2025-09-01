@@ -81,8 +81,8 @@ enum Subcommand {
 #[derive(Debug, Parser)]
 struct CompletionCommand {
     /// Shell to generate completions for
-    #[clap(value_enum, default_value_t = Shell::Bash)]
-    shell: Shell,
+    #[clap(value_enum)]
+    shell: Option<Shell>,
 }
 
 #[derive(Debug, Parser)]
@@ -231,5 +231,6 @@ fn prepend_config_flags(
 fn print_completion(cmd: CompletionCommand) {
     let mut app = MultitoolCli::command();
     let name = "codex";
-    generate(cmd.shell, &mut app, name, &mut std::io::stdout());
+    let shell = cmd.shell.unwrap_or_else(|| Shell::from_env().unwrap_or(Shell::Bash));
+    generate(shell, &mut app, name, &mut std::io::stdout());
 }
