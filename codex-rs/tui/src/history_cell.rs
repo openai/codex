@@ -9,6 +9,7 @@ use base64::Engine;
 use codex_ansi_escape::ansi_escape_line;
 use codex_common::create_config_summary_entries;
 use codex_common::elapsed::format_duration;
+use codex_core::bash::try_parse_bash;
 use codex_core::config::Config;
 use codex_core::plan_tool::PlanItemArg;
 use codex_core::plan_tool::StepStatus;
@@ -43,7 +44,6 @@ use std::time::Instant;
 use tracing::error;
 use unicode_width::UnicodeWidthStr;
 use uuid::Uuid;
-use codex_core::bash::try_parse_bash;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CommandOutput {
@@ -95,7 +95,7 @@ impl HistoryCell for UserHistoryCell {
             .lines()
             .map(|l| Line::from(l.to_string().dim()))
             .collect();
-        let wrapped = crate::insert_history::word_wrap_lines(&content_lines, wrap_width);
+        let wrapped = crate::insert_history::word_wrap_lines(&content_lines, wrap_width as usize);
 
         for mut line in wrapped {
             let mut spans = Vec::with_capacity(line.spans.len() + 1);
@@ -141,7 +141,7 @@ impl HistoryCell for AgentMessageCell {
         // - First visual line: "> " prefix (collapse with header logic)
         // - All subsequent visual lines: two-space prefix
         let mut is_first_visual = true;
-        let wrap_width = width.saturating_sub(2); // account for prefix
+        let wrap_width = width.saturating_sub(2) as usize; // account for prefix
         for line in &self.lines {
             let wrapped =
                 crate::insert_history::word_wrap_lines(std::slice::from_ref(line), wrap_width);
@@ -279,56 +279,89 @@ impl HistoryCell for ExecCell {
 }
 
 impl ExecCell {
-    /// Produce syntax-highlighted spans for bash, dimming operator tokens like
-    /// &&, ||, |, &, (, ) and leaving other text regular. If parsing fails,
-    /// returns the entire string as a single unstyled span.
-    fn bash_syntax_spans(s: &str) -> Vec<Span<'static>> {
-        let Some(tree) = try_parse_bash(s) else {
-            return vec![s.to_string().into()];
-        };
-        let mut ranges: Vec<(usize, usize)> = Vec::new();
-        let root = tree.root_node();
-        let mut cursor = root.walk();
-        let mut stack = vec![root];
-        while let Some(node) = stack.pop() {
-            if !node.is_named() && !node.is_extra() {
-                let kind = node.kind();
-                // Treat anonymous, non-extra punctuation/delimiter tokens as operators to dim,
-                // but leave quotes/backticks unstyled to keep strings readable.
-                let is_quote = matches!(kind, "\"" | "'" | "`");
-                let is_whitespace = kind.trim().is_empty();
-                if !is_quote && !is_whitespace {
+    /// Convert the full bash script into per-line styled content by first
+    /// computing operator-dimmed spans across the entire script, then splitting
+    /// by newlines and dimming heredoc body lines. Performs a single parse and
+    /// reuses it for both highlighting and heredoc detection.
+    fn highlight_bash_to_lines(script: &str) -> Vec<Line<'static>> {
+        // Parse once; use the tree for both highlighting and heredoc body detection.
+        let spans: Vec<Span<'static>> = if let Some(tree) = try_parse_bash(script) {
+            // Single walk: collect operator ranges and heredoc rows.
+            let root = tree.root_node();
+            let mut cursor = root.walk();
+            let mut stack = vec![root];
+            let mut ranges: Vec<(usize, usize)> = Vec::new();
+            while let Some(node) = stack.pop() {
+                if !node.is_named() && !node.is_extra() {
+                    let kind = node.kind();
+                    let is_quote = matches!(kind, "\"" | "'" | "`");
+                    let is_whitespace = kind.trim().is_empty();
+                    if !is_quote && !is_whitespace {
+                        ranges.push((node.start_byte(), node.end_byte()));
+                    }
+                } else if node.kind() == "heredoc_body" {
                     ranges.push((node.start_byte(), node.end_byte()));
                 }
-            }
-            for child in node.children(&mut cursor) {
-                stack.push(child);
-            }
-        }
-        if ranges.is_empty() {
-            return vec![s.to_string().into()];
-        }
-        ranges.sort_by_key(|(st, _)| *st);
-
-        let mut out: Vec<Span<'static>> = Vec::new();
-        let mut i = 0usize; // current cursor in source string
-        for (start, end) in ranges.into_iter() {
-            // Defensively handle overlapping or out-of-order ranges by clamping.
-            let dim_start = start.max(i);
-            let dim_end = end;
-            if dim_start < dim_end {
-                if dim_start > i {
-                    out.push(s[i..dim_start].to_string().into());
+                for child in node.children(&mut cursor) {
+                    stack.push(child);
                 }
-                out.push(s[dim_start..dim_end].to_string().dim());
-                i = dim_end;
+            }
+            if ranges.is_empty() {
+                ranges.push((script.len(), script.len()));
+            }
+            ranges.sort_by_key(|(st, _)| *st);
+            let mut spans: Vec<Span<'static>> = Vec::new();
+            let mut i = 0usize;
+            for (start, end) in ranges.into_iter() {
+                let dim_start = start.max(i);
+                let dim_end = end;
+                if dim_start < dim_end {
+                    if dim_start > i {
+                        spans.push(script[i..dim_start].to_string().into());
+                    }
+                    spans.push(script[dim_start..dim_end].to_string().dim());
+                    i = dim_end;
+                }
+            }
+            if i < script.len() {
+                spans.push(script[i..].to_string().into());
+            }
+            spans
+        } else {
+            vec![script.to_string().into()]
+        };
+        // Split spans into lines preserving style boundaries and highlights across newlines.
+        let mut lines: Vec<Line<'static>> = vec![Line::from("")];
+        for sp in spans {
+            let style = sp.style;
+            let text = sp.content.into_owned();
+            for (i, part) in text.split('\n').enumerate() {
+                if i > 0 {
+                    lines.push(Line::from(""));
+                }
+                if part.is_empty() {
+                    continue;
+                }
+                let span = Span {
+                    style,
+                    content: std::borrow::Cow::Owned(part.to_string()),
+                };
+                if let Some(last) = lines.last_mut() {
+                    last.spans.push(span);
+                }
             }
         }
-        if i < s.len() {
-            out.push(s[i..].to_string().into());
-        }
-        out
+        lines
     }
+
+    /// Visual width of a Line (sum of span content widths).
+    fn line_visual_width(line: &Line<'_>) -> usize {
+        line.spans
+            .iter()
+            .map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref()))
+            .sum()
+    }
+
     fn is_active(&self) -> bool {
         self.calls.iter().any(|c| c.output.is_none())
     }
@@ -432,7 +465,7 @@ impl ExecCell {
                 let prefix_len = 4 + title.len() + 1; // "  └ " + title + " "
                 let wrapped = crate::insert_history::word_wrap_lines(
                     &[Line::from(line)],
-                    width.saturating_sub(prefix_len as u16),
+                    (width as usize).saturating_sub(prefix_len),
                 );
                 let mut first_sub = true;
                 for mut line in wrapped {
@@ -481,11 +514,15 @@ impl ExecCell {
         let reserved = "• Running ".width();
         let mut branch_consumed = false;
 
-        if !cmd_display.contains('\n')
-            && cmd_display.width() < (width as usize).saturating_sub(reserved)
+        // Produce syntax-highlighted lines for the full script first, before any wrapping.
+        let highlighted_lines = Self::highlight_bash_to_lines(&cmd_display);
+
+        if highlighted_lines.len() == 1
+            && Self::line_visual_width(&highlighted_lines[0])
+                < (width as usize).saturating_sub(reserved)
         {
             let mut spans = vec![bullet, " ".into(), title.bold(), " ".into()];
-            spans.extend(Self::bash_syntax_spans(&cmd_display));
+            spans.extend(highlighted_lines[0].spans.clone());
             lines.push(Line::from(spans));
         } else {
             lines.push(Line::from(vec![bullet, " ".into(), title.bold()]));
@@ -495,11 +532,10 @@ impl ExecCell {
             let cont_prefix_w = cont_prefix.width();
             let extra_cont_prefix: Span<'static> = "        ".into(); // 8 spaces
             let extra_cont_prefix_w = extra_cont_prefix.width();
-
-            if cmd_display.contains('\n') {
-                for (li, raw_line) in cmd_display.split('\n').enumerate() {
+            if highlighted_lines.len() > 1 {
+                for (li, hl_line) in highlighted_lines.iter().enumerate() {
                     // Choose indent widths for this original line
-                    let (line_first_prefix, line_first_w, line_cont_prefix, line_cont_w) =
+                    let (line_first_prefix, _line_first_w, line_cont_prefix, line_cont_w) =
                         if li == 0 {
                             // First original line: branch, then 8-space continuations
                             (
@@ -517,11 +553,15 @@ impl ExecCell {
                                 extra_cont_prefix_w,
                             )
                         };
-                    let first_avail = (width as usize).saturating_sub(line_first_w);
                     let cont_avail = (width as usize).saturating_sub(line_cont_w);
-                    let pieces =
-                        ExecCell::wrap_command_line_by_widths(raw_line, first_avail, cont_avail);
-                    for (wi, piece) in pieces.iter().enumerate() {
+                    // Wrap once at continuation width; use same pieces for first and subsequent lines.
+                    use textwrap::Options as TwOptions;
+                    use textwrap::WordSplitter;
+                    let opts = TwOptions::new(cont_avail)
+                        .break_words(true)
+                        .word_splitter(WordSplitter::NoHyphenation);
+                    let pieces = crate::insert_history::word_wrap_line(hl_line, opts);
+                    for (wi, piece) in pieces.into_iter().enumerate() {
                         let prefix_span = if wi == 0 {
                             if li == 0 {
                                 branch_consumed = true;
@@ -530,30 +570,29 @@ impl ExecCell {
                         } else {
                             line_cont_prefix.clone()
                         };
-                        let mut spans = vec![prefix_span];
-                        spans.extend(Self::bash_syntax_spans(piece));
-                        lines.push(Line::from(spans));
+                        let mut out_line = piece;
+                        out_line.spans.insert(0, prefix_span);
+                        lines.push(out_line);
                     }
                 }
             } else {
                 // Single original line: first piece with "  └ ", subsequent pieces with 4 spaces
-                let first_avail = (width as usize).saturating_sub(first_prefix_w);
                 let cont_avail = (width as usize).saturating_sub(cont_prefix_w);
-                let pieces = ExecCell::wrap_command_line_by_widths(
-                    cmd_display.as_str(),
-                    first_avail,
-                    cont_avail,
-                );
-                for (i, piece) in pieces.iter().enumerate() {
+                use textwrap::Options as TwOptions;
+                use textwrap::WordSplitter;
+                let opts = TwOptions::new(cont_avail)
+                    .break_words(true)
+                    .word_splitter(WordSplitter::NoHyphenation);
+                let pieces = crate::insert_history::word_wrap_line(&highlighted_lines[0], opts);
+                for (i, mut piece) in pieces.into_iter().enumerate() {
                     let prefix_span = if i == 0 {
                         branch_consumed = true;
                         first_prefix.clone()
                     } else {
                         cont_prefix.clone()
                     };
-                    let mut spans = vec![prefix_span];
-                    spans.extend(Self::bash_syntax_spans(piece));
-                    lines.push(Line::from(spans));
+                    piece.spans.insert(0, prefix_span);
+                    lines.push(piece);
                 }
             }
         }
@@ -603,19 +642,25 @@ mod syntax_tests {
     #[test]
     fn dims_expected_bash_operators() {
         let s = "echo foo && bar || baz | qux & (echo hi)";
-        let spans = ExecCell::bash_syntax_spans(s);
-
-        let reconstructed: String = spans
+        let lines = ExecCell::highlight_bash_to_lines(s);
+        let reconstructed: String = lines
             .iter()
-            .map(|sp| sp.content.clone())
-            .collect();
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|sp| sp.content.clone())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
         assert_eq!(reconstructed, s);
 
         fn is_dim(span: &Span<'_>) -> bool {
             span.style.add_modifier.contains(Modifier::DIM)
         }
-        let dimmed: Vec<String> = spans
+        let dimmed: Vec<String> = lines
             .iter()
+            .flat_map(|l| l.spans.iter())
             .filter(|sp| is_dim(sp))
             .map(|sp| sp.content.clone().into_owned())
             .collect();
@@ -625,19 +670,25 @@ mod syntax_tests {
     #[test]
     fn does_not_dim_quotes_but_dims_other_punct() {
         let s = "echo \"hi\" > out.txt; echo 'ok'";
-        let spans = ExecCell::bash_syntax_spans(s);
-
-        let reconstructed: String = spans
+        let lines = ExecCell::highlight_bash_to_lines(s);
+        let reconstructed: String = lines
             .iter()
-            .map(|sp| sp.content.clone())
-            .collect();
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|sp| sp.content.clone())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
         assert_eq!(reconstructed, s);
 
         fn is_dim(span: &Span<'_>) -> bool {
             span.style.add_modifier.contains(Modifier::DIM)
         }
-        let dimmed: Vec<String> = spans
+        let dimmed: Vec<String> = lines
             .iter()
+            .flat_map(|l| l.spans.iter())
             .filter(|sp| is_dim(sp))
             .map(|sp| sp.content.clone().into_owned())
             .collect();

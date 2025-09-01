@@ -336,22 +336,23 @@ where
 }
 
 /// Word-aware wrapping for a list of `Line`s preserving styles.
-pub(crate) fn word_wrap_lines<'a, I>(lines: I, width: u16) -> Vec<Line<'static>>
+pub(crate) fn word_wrap_lines<'a, I, O>(lines: I, width_or_options: O) -> Vec<Line<'static>>
 where
+    O: Into<TwOptions<'a>>,
     I: IntoIterator<Item = &'a Line<'a>>,
 {
+    let opts = width_or_options.into();
     let mut out = Vec::new();
-    let w = width.max(1) as usize;
     for line in lines {
-        out.extend(word_wrap_line(line, w));
+        out.extend(word_wrap_line(line, &opts));
     }
     out
 }
 
-fn word_wrap_line(line: &Line, width: usize) -> Vec<Line<'static>> {
-    if width == 0 {
-        return vec![to_owned_line(line)];
-    }
+pub(crate) fn word_wrap_line<'a, O>(line: &Line, width_or_options: O) -> Vec<Line<'static>>
+where
+    O: Into<TwOptions<'a>>,
+{
     // Concatenate content and keep span boundaries for later re-slicing.
     let mut flat = String::new();
     let mut span_bounds = Vec::new(); // (start_byte, end_byte, style)
@@ -364,10 +365,8 @@ fn word_wrap_line(line: &Line, width: usize) -> Vec<Line<'static>> {
         span_bounds.push((start, cursor, s.style));
     }
 
-    // Use textwrap for robust word-aware wrapping; no hyphenation, no breaking words.
-    let opts = TwOptions::new(width)
-        .break_words(false)
-        .word_splitter(WordSplitter::NoHyphenation);
+    // Use textwrap for robust word-aware wrapping.
+    let opts: TwOptions<'a> = width_or_options.into();
     let wrapped = textwrap::wrap(&flat, &opts);
 
     if wrapped.len() <= 1 {
