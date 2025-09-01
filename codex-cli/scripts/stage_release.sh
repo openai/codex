@@ -106,9 +106,8 @@ jq --arg version "$VERSION" \
 
 # 2. Copy postinstall script for platform-specific binary downloads
 
-cp postinstall.js "$TMPDIR/postinstall.js"
-
 echo "Using postinstall approach - binaries will be downloaded per platform"
+cp postinstall.js "$TMPDIR/postinstall.js"
 
 popd >/dev/null
 
