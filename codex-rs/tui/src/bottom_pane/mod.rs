@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use crate::app_event_sender::AppEventSender;
 use crate::tui::FrameRequester;
 use bottom_pane_view::BottomPaneView;
+use codex_core::protocol::TokenUsageInfo;
 use codex_file_search::FileMatch;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -365,6 +366,11 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    pub(crate) fn set_token_usage_info(&mut self, info: Option<TokenUsageInfo>) {
+        self.composer.set_token_usage_info(info);
+        self.request_redraw();
+    }
+
     /// Show a generic list selection view with the provided items.
     pub(crate) fn show_selection_view(&mut self, params: list_selection_view::SelectionViewParams) {
         let view = list_selection_view::ListSelectionView::new(params, self.app_event_tx.clone());
@@ -383,6 +389,12 @@ impl BottomPane {
     /// Update custom prompts available for the slash popup.
     pub(crate) fn set_custom_prompts(&mut self, prompts: Vec<CustomPrompt>) {
         self.composer.set_custom_prompts(prompts);
+        self.request_redraw();
+    }
+
+    /// Update repository and branch information for status display.
+    pub(crate) fn set_repo_info(&mut self, repo_name: Option<String>, git_branch: Option<String>) {
+        self.composer.set_repo_info(repo_name, git_branch);
         self.request_redraw();
     }
 

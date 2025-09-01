@@ -162,6 +162,16 @@ pub async fn recent_commits(cwd: &Path, limit: usize) -> Vec<CommitLogEntry> {
 
     entries
 }
+/// Extract repository name from the current working directory.
+/// Returns the directory name, or "unknown" if it cannot be determined.
+pub fn extract_repo_name(cwd: &Path) -> String {
+    cwd.file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("unknown")
+        .to_string()
+}
+
+// tests live in the bottom test module
 
 /// Returns the closest git sha to HEAD that is on a remote as well as the diff to that sha.
 pub async fn git_diff_to_remote(cwd: &Path) -> Option<GitDiffToRemote> {
@@ -593,6 +603,22 @@ mod tests {
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
+
+    #[test]
+    fn extract_repo_name_basic_paths() {
+        assert_eq!(extract_repo_name(std::path::Path::new("")), "unknown");
+        assert_eq!(extract_repo_name(std::path::Path::new("repo")), "repo");
+        assert_eq!(
+            extract_repo_name(std::path::Path::new("path/to/repo")),
+            "repo"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn extract_repo_name_unix_root() {
+        assert_eq!(extract_repo_name(std::path::Path::new("/")), "unknown");
+    }
 
     // Helper function to create a test git repository
     async fn create_test_git_repo(temp_dir: &TempDir) -> PathBuf {

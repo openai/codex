@@ -1,3 +1,5 @@
+use crate::live_wrap::ellipsize_middle_by_width;
+use codex_core::protocol::TokenUsageInfo;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -7,6 +9,7 @@ use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Margin;
 use ratatui::layout::Rect;
+use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
@@ -14,6 +17,7 @@ use ratatui::text::Span;
 use ratatui::widgets::Block;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::WidgetRef;
+use unicode_width::UnicodeWidthStr;
 
 use super::chat_composer_history::ChatComposerHistory;
 use super::command_popup::CommandItem;
@@ -35,6 +39,7 @@ use crate::bottom_pane::prompt_args::parse_slash_name;
 use crate::bottom_pane::prompt_args::prompt_argument_names;
 use crate::bottom_pane::prompt_args::prompt_command_with_arg_placeholders;
 use crate::bottom_pane::prompt_args::prompt_has_numeric_placeholders;
+use crate::key_hint;
 use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
 use crate::style::user_message_style;
@@ -48,6 +53,7 @@ use crate::bottom_pane::textarea::TextAreaState;
 use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
 use crate::history_cell;
+use crate::ui_consts::FOOTER_INDENT_COLS;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
@@ -108,7 +114,11 @@ pub(crate) struct ChatComposer {
     custom_prompts: Vec<CustomPrompt>,
     footer_mode: FooterMode,
     footer_hint_override: Option<Vec<(String, String)>>,
+    token_usage_info: Option<TokenUsageInfo>,
     context_window_percent: Option<u8>,
+    // Repository and branch information for status display
+    repo_name: Option<String>,
+    git_branch: Option<String>,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -151,7 +161,10 @@ impl ChatComposer {
             custom_prompts: Vec::new(),
             footer_mode: FooterMode::ShortcutSummary,
             footer_hint_override: None,
+            token_usage_info: None,
             context_window_percent: None,
+            repo_name: None,
+            git_branch: None,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -205,6 +218,177 @@ impl ChatComposer {
         [composer_rect, textarea_rect, popup_rect]
     }
 
+    // Footer composition returns the full list of spans for the bottom line, respecting width.
+    fn build_footer_spans(&self, total_width: u16) -> Vec<Span<'static>> {
+        let span_width = |span: &Span<'_>| span.content.width();
+        let spans_width = |spans: &[Span<'static>]| spans.iter().map(span_width).sum();
+
+        let mode = self.footer_mode();
+
+        let mut token_spans: Vec<Span<'static>> = Vec::new();
+        if let Some(token_usage_info) = &self.token_usage_info {
+            let token_usage = &token_usage_info.total_token_usage;
+            token_spans.push("   ".into());
+            let tokens = token_usage.blended_total();
+            token_spans.push(format!("{tokens} tokens used").dim());
+            let last_token_usage = &token_usage_info.last_token_usage;
+            let mut appended_percent = false;
+            if let Some(context_window) = token_usage_info.model_context_window {
+                let percent_remaining: u8 = if context_window > 0 {
+                    last_token_usage.percent_of_context_window_remaining(context_window)
+                } else {
+                    100
+                };
+                token_spans.push("   ".into());
+                token_spans.push(format!("{percent_remaining}% context left").dim());
+                appended_percent = true;
+            }
+            if !appended_percent && let Some(percent) = self.context_window_percent {
+                token_spans.push("   ".into());
+                token_spans.push(format!("{percent}% context left").dim());
+            }
+        } else if let Some(percent) = self.context_window_percent {
+            token_spans.push("   ".into());
+            token_spans.push(format!("{percent}% context left").dim());
+        }
+
+        let total_width = total_width as usize;
+        let token_width = spans_width(&token_spans);
+        let mut available = total_width.saturating_sub(token_width);
+
+        let mut repo_spans = Vec::new();
+        if available > 0 {
+            let (spans, used) = self.build_repo_spans(available);
+            repo_spans = spans;
+            available = available.saturating_sub(used);
+        }
+
+        let mut hint_segments = self.build_hint_segments(mode);
+        let mut hints_width: usize = hint_segments
+            .iter()
+            .map(|segment| segment.iter().map(span_width).sum::<usize>())
+            .sum();
+
+        while hints_width > available
+            && (!repo_spans.is_empty() || !token_spans.is_empty())
+            && hint_segments.len() > 1
+        {
+            if let Some(removed) = hint_segments.pop() {
+                let removed_width: usize = removed.iter().map(span_width).sum();
+                hints_width = hints_width.saturating_sub(removed_width);
+            }
+        }
+
+        let mut spans: Vec<Span<'static>> = hint_segments.into_iter().flatten().collect();
+        spans.extend(repo_spans);
+        spans.extend(token_spans);
+        spans
+    }
+
+    fn build_hint_segments(&self, mode: FooterMode) -> Vec<Vec<Span<'static>>> {
+        match mode {
+            FooterMode::CtrlCReminder => {
+                let indent: Span<'static> = " ".repeat(FOOTER_INDENT_COLS).into();
+                let action = if self.is_task_running {
+                    "interrupt"
+                } else {
+                    "quit"
+                };
+                vec![vec![
+                    indent,
+                    key_hint::ctrl_span('C'),
+                    format!(" again to {action}").into(),
+                ]]
+            }
+            FooterMode::EscHint => {
+                let indent: Span<'static> = " ".repeat(FOOTER_INDENT_COLS).into();
+                if self.esc_backtrack_hint {
+                    vec![vec![
+                        indent,
+                        key_hint::plain_span("Esc"),
+                        " again to edit previous message".into(),
+                    ]]
+                } else {
+                    vec![vec![
+                        indent,
+                        key_hint::plain_span("Esc"),
+                        " ".into(),
+                        key_hint::plain_span("Esc"),
+                        " to edit previous message".into(),
+                    ]]
+                }
+            }
+            FooterMode::Empty => Vec::new(),
+            FooterMode::ShortcutOverlay | FooterMode::ShortcutPrompt => {
+                let mut segments: Vec<Vec<Span<'static>>> = Vec::new();
+                let indent: Span<'static> = " ".repeat(FOOTER_INDENT_COLS).into();
+                segments.push(vec![indent, key_hint::plain_span('?'), " shortcuts".into()]);
+                if self.esc_backtrack_hint && matches!(mode, FooterMode::ShortcutPrompt) {
+                    segments.push(vec![
+                        "   ".into(),
+                        key_hint::plain_span("Esc"),
+                        " edit prev".into(),
+                    ]);
+                }
+                segments
+            }
+        }
+    }
+
+    fn build_repo_spans(&self, available_width: usize) -> (Vec<Span<'static>>, usize) {
+        let Some(repo_name) = &self.repo_name else {
+            return (Vec::new(), 0);
+        };
+
+        if available_width <= 4 {
+            return (Vec::new(), 0);
+        }
+
+        let sep = "   ";
+        let sep_width = sep.width();
+        if available_width <= sep_width {
+            return (Vec::new(), 0);
+        }
+
+        let remaining = available_width - sep_width;
+        let min_repo = 8usize;
+        let min_branch = 6usize;
+        let colon_width = 1usize;
+
+        if remaining < min_repo {
+            return (Vec::new(), 0);
+        }
+
+        let mut repo_budget = ((remaining as f32) * 0.6) as usize;
+        repo_budget = repo_budget.clamp(min_repo, remaining);
+        let mut branch_budget = remaining.saturating_sub(repo_budget + colon_width);
+
+        if branch_budget < min_branch {
+            repo_budget = remaining;
+            branch_budget = 0;
+        }
+
+        let repo_disp = ellipsize_middle_by_width(repo_name, repo_budget);
+        let repo_width = repo_disp.width();
+        let mut spans = vec![sep.into(), repo_disp.bold()];
+        let mut used_width = sep_width + repo_width;
+        let mut leftover = remaining.saturating_sub(repo_width);
+
+        if branch_budget > 0 && leftover > colon_width {
+            spans.push(Span::from(":"));
+            used_width += colon_width;
+            leftover = leftover.saturating_sub(colon_width);
+            if let Some(branch) = &self.git_branch {
+                let branch_disp = ellipsize_middle_by_width(branch, leftover);
+                let branch_width = branch_disp.width();
+                spans.push(branch_disp.dim());
+                used_width += branch_width;
+            }
+        }
+
+        (spans, used_width)
+    }
+
     fn footer_spacing(footer_hint_height: u16) -> u16 {
         if footer_hint_height == 0 {
             0
@@ -245,6 +429,16 @@ impl ChatComposer {
         self.textarea.set_text(&text);
         self.textarea.set_cursor(0);
         true
+    }
+
+    /// Update repository and branch information for status display.
+    pub(crate) fn set_token_usage_info(&mut self, info: Option<TokenUsageInfo>) {
+        self.token_usage_info = info;
+    }
+
+    pub(crate) fn set_repo_info(&mut self, repo_name: Option<String>, git_branch: Option<String>) {
+        self.repo_name = repo_name;
+        self.git_branch = git_branch;
     }
 
     pub fn handle_paste(&mut self, pasted: String) -> bool {
@@ -1549,6 +1743,14 @@ impl WidgetRef for ChatComposer {
                         Constraint::Length(footer_hint_height),
                     ])
                     .areas(popup_rect);
+                    if self.repo_name.is_some() {
+                        let spacing_y = hint_rect.y.saturating_sub(1);
+                        if spacing_y >= popup_rect.y {
+                            buf[(hint_rect.x, spacing_y)]
+                                .set_symbol("▌")
+                                .set_style(Style::default().add_modifier(Modifier::DIM));
+                        }
+                    }
                     hint_rect
                 } else {
                     popup_rect
@@ -1573,6 +1775,23 @@ impl WidgetRef for ChatComposer {
                     }
                 } else {
                     render_footer(hint_rect, buf, footer_props);
+                }
+
+                // Render footer using the computed spans helper.
+                let bottom_line_rect = hint_rect;
+                if bottom_line_rect.height > 0 {
+                    let hint_spans = self.build_footer_spans(bottom_line_rect.width);
+                    let blank = " ".repeat(bottom_line_rect.width as usize);
+                    buf.set_stringn(
+                        bottom_line_rect.x,
+                        bottom_line_rect.y,
+                        &blank,
+                        bottom_line_rect.width as usize,
+                        Style::default(),
+                    );
+                    Line::from(hint_spans)
+                        .style(Style::default().dim())
+                        .render_ref(bottom_line_rect, buf);
                 }
             }
         }
@@ -1689,9 +1908,10 @@ mod tests {
         };
 
         let mut hint_row: Option<(u16, String)> = None;
+        const HINT_MARKERS: &[&str] = &["? shortcuts", "Ctrl+C again to ", "edit previous message"];
         for y in 0..area.height {
             let row = row_to_string(y);
-            if row.contains("? for shortcuts") {
+            if HINT_MARKERS.iter().any(|marker| row.contains(marker)) {
                 hint_row = Some((y, row));
                 break;
             }
@@ -1715,6 +1935,53 @@ mod tests {
             spacing_row.trim(),
             "",
             "expected blank spacing row above hints but saw: {spacing_row:?}",
+        );
+    }
+
+    #[test]
+    fn footer_truncates_repo_and_branch_for_narrow_width() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut composer = ChatComposer::new(true, tx, false, "placeholder".to_string(), false);
+
+        // Long names to force truncation
+        let repo = "very-long-repository-name-with-many-segments".to_string();
+        let branch = "feature/super/long/branch/name".to_string();
+        composer.set_repo_info(Some(repo.clone()), Some(branch.clone()));
+
+        // Width chosen so repo + branch still exceed available space even after hints are trimmed
+        // width 60 -> repo_budget 27, branch_budget 16
+        let area = Rect::new(0, 0, 60, 3);
+        let mut buf = Buffer::empty(area);
+        composer.render_ref(area, &mut buf);
+
+        // Read last row where the footer is rendered
+        let mut row = String::new();
+        for x in 0..area.width {
+            row.push(
+                buf[(x, area.height - 1)]
+                    .symbol()
+                    .chars()
+                    .next()
+                    .unwrap_or(' '),
+            );
+        }
+
+        assert!(
+            row.contains("..."),
+            "footer should contain ellipsis for truncation: {row}"
+        );
+        assert!(
+            row.contains("  "),
+            "footer should include space-separated segments: {row}"
+        );
+        assert!(
+            !row.contains(&repo),
+            "original repo should not fully appear: {row}"
+        );
+        assert!(
+            !row.contains(&branch),
+            "original branch should not fully appear: {row}"
         );
     }
 
@@ -2274,6 +2541,39 @@ mod tests {
                 None => panic!("no selected command for '/mo'"),
             },
             _ => panic!("slash popup not active after typing '/mo'"),
+        }
+    }
+
+    #[test]
+    fn footer_repo_branch_snapshots_various_widths() {
+        use insta::assert_snapshot;
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let widths = [40u16, 80u16, 120u16];
+
+        for &w in &widths {
+            let mut composer = ChatComposer::new(
+                true,
+                sender.clone(),
+                false,
+                "Ask Codex to do anything".to_string(),
+                false,
+            );
+            composer.set_repo_info(
+                Some("very-long-repository-name-with-many-segments".to_string()),
+                Some("feature/super/long/branch/name".to_string()),
+            );
+
+            let mut terminal = Terminal::new(TestBackend::new(w, 4)).expect("terminal");
+            terminal
+                .draw(|f| f.render_widget_ref(composer, f.area()))
+                .expect("draw");
+
+            let name = format!("footer_repo_branch_w{w}");
+            assert_snapshot!(name, terminal.backend());
         }
     }
 
