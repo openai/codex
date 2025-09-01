@@ -1,0 +1,9 @@
+---
+source: tui/src/bottom_pane/chat_composer.rs
+assertion_line: 1777
+expression: terminal.backend()
+---
+"▌ Ask Codex to do anything                                                      "
+"▌                                                                               "
+"▌                                                                               "
+" ⏎ send   Ctrl+J newline   Ctrl+T transcript   Ctrl+C quit   very...ents:fe...me"

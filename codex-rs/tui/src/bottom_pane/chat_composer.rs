@@ -20,6 +20,8 @@ use ratatui::widgets::BorderType;
 use ratatui::widgets::Borders;
 use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::WidgetRef;
+use unicode_width::UnicodeWidthStr;
+use crate::live_wrap::ellipsize_middle_by_width;
 
 use super::chat_composer_history::ChatComposerHistory;
 use super::command_popup::CommandItem;
@@ -98,6 +100,9 @@ pub(crate) struct ChatComposer {
     // When true, disables paste-burst logic and inserts characters immediately.
     disable_paste_burst: bool,
     custom_prompts: Vec<CustomPrompt>,
+    // Repository and branch information for status display
+    repo_name: Option<String>,
+    git_branch: Option<String>,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -136,6 +141,8 @@ impl ChatComposer {
             paste_burst: PasteBurst::default(),
             disable_paste_burst: false,
             custom_prompts: Vec::new(),
+            repo_name: None,
+            git_branch: None,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -149,6 +156,120 @@ impl ChatComposer {
                 ActivePopup::Command(c) => c.calculate_required_height(),
                 ActivePopup::File(c) => c.calculate_required_height(),
             }
+    }
+
+    // Footer composition returns the full list of spans for the bottom line, respecting width.
+    fn build_footer_spans(&self, total_width: u16) -> Vec<Span<'static>> {
+        let mut spans: Vec<Span<'static>> = Vec::new();
+
+        // Base key-hint spans
+        let key_hint_style = Style::default().fg(Color::Cyan);
+        spans.push(" ".into());
+        if self.ctrl_c_quit_hint {
+            spans.push("Ctrl+C again".set_style(key_hint_style));
+            spans.push(" to quit".into());
+        } else {
+            let newline_hint_key = if self.use_shift_enter_hint { "Shift+⏎" } else { "Ctrl+J" };
+            spans.push("⏎".set_style(key_hint_style));
+            spans.push(" send   ".into());
+            spans.push(newline_hint_key.set_style(key_hint_style));
+            spans.push(" newline   ".into());
+            spans.push("Ctrl+T".set_style(key_hint_style));
+            spans.push(" transcript   ".into());
+            spans.push("Ctrl+C".set_style(key_hint_style));
+            spans.push(" quit".into());
+        }
+
+        if !self.ctrl_c_quit_hint && self.esc_backtrack_hint {
+            spans.push("   ".into());
+            spans.push("Esc".set_style(key_hint_style));
+            spans.push(" edit prev".into());
+        }
+
+        // Token/context usage spans (computed now so we reserve width before repo/branch)
+        let mut token_spans: Vec<Span<'static>> = Vec::new();
+        if let Some(token_usage_info) = &self.token_usage_info {
+            let token_usage = &token_usage_info.total_token_usage;
+            token_spans.push("   ".into());
+            let tokens = token_usage.blended_total();
+            token_spans.push(format!("{tokens} tokens used").dim());
+            let last_token_usage = &token_usage_info.last_token_usage;
+            if let Some(context_window) = token_usage_info.model_context_window {
+                let percent_remaining: u8 = if context_window > 0 {
+                    last_token_usage.percent_of_context_window_remaining(
+                        context_window,
+                        token_usage_info.initial_prompt_tokens,
+                    )
+                } else {
+                    100
+                };
+                token_spans.push("   ".into());
+                token_spans.push(format!("{percent_remaining}% context left").dim());
+            }
+        }
+
+        // Compute reserved width for base + tokens
+        let base_width: usize = spans
+            .iter()
+            .map(|s| s.content.width())
+            .sum();
+        let token_width: usize = token_spans.iter().map(|s| s.content.width()).sum();
+        let mut remaining = (total_width as usize).saturating_sub(base_width + token_width);
+
+        // Repo/branch spans, only if there is space and repo info is present
+        if let Some(repo_name) = &self.repo_name {
+            if remaining > 4 {
+                // Reserve leading spacing before repo
+                let sep = "   ";
+                let sep_w = sep.width();
+                if remaining > sep_w {
+                    remaining -= sep_w;
+                    let mut repo_branch_spans: Vec<Span<'static>> = Vec::new();
+                    repo_branch_spans.push(sep.into());
+
+                    // If not enough for minimal repo, skip entirely.
+                    let min_repo = 8usize;
+                    let min_branch = 6usize;
+                    let colon_w = 1usize; // ":"
+
+                    if remaining >= min_repo {
+                        // First assume we can show both
+                        let mut repo_budget = ((remaining as f32) * 0.6) as usize;
+                        repo_budget = repo_budget.clamp(min_repo, remaining);
+                        let mut branch_budget = remaining.saturating_sub(repo_budget + colon_w);
+
+                        if branch_budget < min_branch {
+                            // Not enough space for branch alongside repo; use all for repo
+                            repo_budget = remaining;
+                            branch_budget = 0;
+                        }
+
+                        // Truncate and push repo
+                        let repo_disp = ellipsize_middle_by_width(repo_name, repo_budget);
+                        repo_branch_spans.push(repo_disp.bold());
+                        let used_repo_w = repo_branch_spans.last().unwrap().content.width();
+                        let mut leftover = remaining.saturating_sub(used_repo_w);
+
+                        // If space permits, push branch with preceding ':'
+                        if branch_budget > 0 && leftover > colon_w {
+                            repo_branch_spans.push(Span::from(":"));
+                            leftover = leftover.saturating_sub(colon_w);
+                            if let Some(branch) = &self.git_branch {
+                                let branch_disp = ellipsize_middle_by_width(branch, leftover);
+                                repo_branch_spans.push(branch_disp.dim());
+                            }
+                        }
+
+                        // Append repo/branch spans
+                        spans.extend(repo_branch_spans);
+                    }
+                }
+            }
+        }
+
+        // Finally append tokens (always fits because we reserved width earlier)
+        spans.extend(token_spans);
+        spans
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
@@ -215,6 +336,12 @@ impl ChatComposer {
         self.textarea.set_text(&text);
         self.textarea.set_cursor(0);
         true
+    }
+
+    /// Update repository and branch information for status display.
+    pub(crate) fn set_repo_info(&mut self, repo_name: Option<String>, git_branch: Option<String>) {
+        self.repo_name = repo_name;
+        self.git_branch = git_branch;
     }
 
     pub fn handle_paste(&mut self, pasted: String) -> bool {
@@ -1235,65 +1362,8 @@ impl WidgetRef for ChatComposer {
             }
             ActivePopup::None => {
                 let bottom_line_rect = popup_rect;
-                let key_hint_style = Style::default().fg(Color::Cyan);
-                let mut hint = if self.ctrl_c_quit_hint {
-                    vec![
-                        Span::from(" "),
-                        "Ctrl+C again".set_style(key_hint_style),
-                        Span::from(" to quit"),
-                    ]
-                } else {
-                    let newline_hint_key = if self.use_shift_enter_hint {
-                        "Shift+⏎"
-                    } else {
-                        "Ctrl+J"
-                    };
-                    vec![
-                        Span::from(" "),
-                        "⏎".set_style(key_hint_style),
-                        Span::from(" send   "),
-                        newline_hint_key.set_style(key_hint_style),
-                        Span::from(" newline   "),
-                        "Ctrl+T".set_style(key_hint_style),
-                        Span::from(" transcript   "),
-                        "Ctrl+C".set_style(key_hint_style),
-                        Span::from(" quit"),
-                    ]
-                };
-
-                if !self.ctrl_c_quit_hint && self.esc_backtrack_hint {
-                    hint.push(Span::from("   "));
-                    hint.push("Esc".set_style(key_hint_style));
-                    hint.push(Span::from(" edit prev"));
-                }
-
-                // Append token/context usage info to the footer hints when available.
-                if let Some(token_usage_info) = &self.token_usage_info {
-                    let token_usage = &token_usage_info.total_token_usage;
-                    hint.push(Span::from("   "));
-                    hint.push(
-                        Span::from(format!("{} tokens used", token_usage.blended_total()))
-                            .style(Style::default().add_modifier(Modifier::DIM)),
-                    );
-                    let last_token_usage = &token_usage_info.last_token_usage;
-                    if let Some(context_window) = token_usage_info.model_context_window {
-                        let percent_remaining: u8 = if context_window > 0 {
-                            last_token_usage.percent_of_context_window_remaining(
-                                context_window,
-                                token_usage_info.initial_prompt_tokens,
-                            )
-                        } else {
-                            100
-                        };
-                        hint.push(Span::from("   "));
-                        hint.push(
-                            Span::from(format!("{percent_remaining}% context left"))
-                                .style(Style::default().add_modifier(Modifier::DIM)),
-                        );
-                    }
-                }
-
-                Line::from(hint)
+                let hint_spans = self.build_footer_spans(bottom_line_rect.width);
+                Line::from(hint_spans)
                     .style(Style::default().dim())
                     .render_ref(bottom_line_rect, buf);
             }
@@ -1341,6 +1411,41 @@ mod tests {
     use crate::bottom_pane::chat_composer::LARGE_PASTE_CHAR_THRESHOLD;
     use crate::bottom_pane::textarea::TextArea;
     use tokio::sync::mpsc::unbounded_channel;
+
+    #[test]
+    fn footer_truncates_repo_and_branch_for_narrow_width() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut composer = ChatComposer::new(
+            true,
+            tx,
+            false,
+            "placeholder".to_string(),
+            false,
+        );
+
+        // Long names to force truncation
+        let repo = "very-long-repository-name-with-many-segments".to_string();
+        let branch = "feature/super/long/branch/name".to_string();
+        composer.set_repo_info(Some(repo.clone()), Some(branch.clone()));
+
+        // Width large enough to include repo and branch after key hints
+        // width 100 -> repo_budget 25, branch_budget 16
+        let area = Rect::new(0, 0, 100, 3);
+        let mut buf = Buffer::empty(area);
+        composer.render_ref(area, &mut buf);
+
+        // Read last row where the footer is rendered
+        let mut row = String::new();
+        for x in 0..area.width {
+            row.push(buf[(x, area.height - 1)].symbol().chars().next().unwrap_or(' '));
+        }
+
+        assert!(row.contains("..."), "footer should contain ellipsis for truncation: {row}");
+        assert!(row.contains("  "), "footer should include space-separated segments: {row}");
+        assert!(!row.contains(&repo), "original repo should not fully appear: {row}");
+        assert!(!row.contains(&branch), "original branch should not fully appear: {row}");
+    }
 
     #[test]
     fn test_current_at_token_basic_cases() {
@@ -1636,6 +1741,39 @@ mod tests {
                 .draw(|f| f.render_widget_ref(composer, f.area()))
                 .unwrap_or_else(|e| panic!("Failed to draw {name} composer: {e}"));
 
+            assert_snapshot!(name, terminal.backend());
+        }
+    }
+
+    #[test]
+    fn footer_repo_branch_snapshots_various_widths() {
+        use insta::assert_snapshot;
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let widths = [40u16, 80u16, 120u16];
+
+        for &w in &widths {
+            let mut composer = ChatComposer::new(
+                true,
+                sender.clone(),
+                false,
+                "Ask Codex to do anything".to_string(),
+                false,
+            );
+            composer.set_repo_info(
+                Some("very-long-repository-name-with-many-segments".to_string()),
+                Some("feature/super/long/branch/name".to_string()),
+            );
+
+            let mut terminal = Terminal::new(TestBackend::new(w, 4)).expect("terminal");
+            terminal
+                .draw(|f| f.render_widget_ref(composer, f.area()))
+                .expect("draw");
+
+            let name = format!("footer_repo_branch_w{w}");
             assert_snapshot!(name, terminal.backend());
         }
     }

@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_core::config::Config;
+use codex_core::git_info;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -605,7 +606,7 @@ impl ChatWidget {
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
 
-        Self {
+        let widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
             codex_op_tx,
@@ -636,7 +637,11 @@ impl ChatWidget {
             last_history_was_exec: false,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: true,
-        }
+        };
+
+        // Update repository information for status display asynchronously
+        widget.spawn_repo_info_task();
+        widget
     }
 
     /// Create a ChatWidget attached to an existing conversation (e.g., a fork).
@@ -654,7 +659,7 @@ impl ChatWidget {
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
 
-        Self {
+        let widget = Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
             codex_op_tx,
@@ -682,7 +687,11 @@ impl ChatWidget {
             last_history_was_exec: false,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: false,
-        }
+        };
+
+        // Update repository information for status display asynchronously
+        widget.spawn_repo_info_task();
+        widget
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
@@ -800,6 +809,9 @@ impl ChatWidget {
                 }
                 self.app_event_tx.send(AppEvent::ExitRequest);
             }
+            SlashCommand::Sessions => {
+                self.open_sessions_popup();
+            }
             SlashCommand::Diff => {
                 self.add_diff_in_progress();
                 let tx = self.app_event_tx.clone();
@@ -822,6 +834,9 @@ impl ChatWidget {
             }
             SlashCommand::Status => {
                 self.add_status_output();
+            }
+            SlashCommand::Usage => {
+                self.add_usage_output();
             }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
@@ -871,6 +886,50 @@ impl ChatWidget {
         self.bottom_pane.handle_paste(text);
     }
 
+    fn open_sessions_popup(&mut self) {
+        let sessions = match codex_core::sessions::list_sessions(&self.config) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("failed to list sessions: {e}");
+                Vec::new()
+            }
+        };
+        let mut items: Vec<crate::bottom_pane::SelectionItem> = Vec::new();
+        for s in sessions {
+            let title = s.title.clone().unwrap_or_else(|| "(no title)".to_string());
+            let desc = Some(format!(
+                "created: {}   last: {}",
+                s.created,
+                s.last_active.unwrap_or_else(|| "unknown".to_string())
+            ));
+            let path = s.path.clone();
+            let id = s.id;
+            let actions: Vec<crate::bottom_pane::SelectionAction> = vec![Box::new(move |tx| {
+                tracing::info!("resume selected session: {id}");
+                tx.send(crate::app_event::AppEvent::ResumeSession(path.clone()));
+            })];
+            items.push(crate::bottom_pane::SelectionItem {
+                name: format!("{title} — {id}"),
+                description: desc,
+                is_current: false,
+                actions,
+            });
+        }
+        if items.is_empty() {
+            items.push(crate::bottom_pane::SelectionItem {
+                name: "No saved sessions".to_string(),
+                description: None,
+                is_current: true,
+                actions: vec![],
+            });
+        }
+        self.bottom_pane.show_selection_view(
+            "Sessions".to_string(),
+            Some("Select a session to resume".to_string()),
+            Some("Up/Down to navigate; Enter to resume; Esc to cancel".to_string()),
+            items,
+        );
+    }
     // Returns true if caller should skip rendering this frame (a future frame is scheduled).
     pub(crate) fn handle_paste_burst_tick(&mut self, frame_requester: FrameRequester) -> bool {
         if self.bottom_pane.flush_paste_burst_if_due() {
@@ -1070,6 +1129,10 @@ impl ChatWidget {
         ));
     }
 
+    pub(crate) fn add_usage_output(&mut self) {
+        self.add_to_history(history_cell::new_usage_output(&self.config));
+    }
+
     /// Open a popup to choose the model preset (model + reasoning effort).
     pub(crate) fn open_model_popup(&mut self) {
         let current_model = self.config.model.clone();
@@ -1262,6 +1325,36 @@ impl ChatWidget {
     /// runtime overrides applied via TUI, e.g., model or approval policy).
     pub(crate) fn config_ref(&self) -> &Config {
         &self.config
+    }
+
+    /// Spawn a background task to collect repo/branch and post an AppEvent.
+    pub(crate) fn spawn_repo_info_task(&self) {
+        let cwd = self.config.cwd.clone();
+        let tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let info = git_info::collect_git_info(&cwd).await;
+            if let Some(info) = info {
+                let repo_name = git_info::extract_repo_name(&cwd);
+                tx.send(crate::app_event::AppEvent::UpdateRepoInfo {
+                    repo_name: Some(repo_name),
+                    git_branch: info.branch,
+                });
+            } else {
+                tx.send(crate::app_event::AppEvent::UpdateRepoInfo {
+                    repo_name: None,
+                    git_branch: None,
+                });
+            }
+        });
+    }
+
+    /// Apply repository info to the UI.
+    pub(crate) fn apply_repo_info(
+        &mut self,
+        repo_name: Option<String>,
+        git_branch: Option<String>,
+    ) {
+        self.bottom_pane.set_repo_info(repo_name, git_branch);
     }
 
     pub(crate) fn clear_token_usage(&mut self) {

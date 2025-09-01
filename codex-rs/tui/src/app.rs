@@ -177,6 +177,25 @@ impl App {
                 );
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::UpdateRepoInfo {
+                repo_name,
+                git_branch,
+            } => {
+                self.chat_widget.apply_repo_info(repo_name, git_branch);
+            }
+            AppEvent::ResumeSession(path) => {
+                self.config.experimental_resume = Some(path);
+                self.chat_widget = ChatWidget::new(
+                    self.config.clone(),
+                    self.server.clone(),
+                    tui.frame_requester(),
+                    self.app_event_tx.clone(),
+                    None,
+                    Vec::new(),
+                    self.enhanced_keys_supported,
+                );
+                tui.frame_requester().schedule_frame();
+            }
             AppEvent::InsertHistoryLines(lines) => {
                 if let Some(Overlay::Transcript(t)) = &mut self.overlay {
                     t.insert_lines(lines.clone());

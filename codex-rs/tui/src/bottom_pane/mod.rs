@@ -343,6 +343,12 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    /// Update repository and branch information for status display.
+    pub(crate) fn set_repo_info(&mut self, repo_name: Option<String>, git_branch: Option<String>) {
+        self.composer.set_repo_info(repo_name, git_branch);
+        self.request_redraw();
+    }
+
     pub(crate) fn composer_is_empty(&self) -> bool {
         self.composer.is_empty()
     }

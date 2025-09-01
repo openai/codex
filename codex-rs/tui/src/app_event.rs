@@ -20,6 +20,9 @@ pub(crate) enum AppEvent {
     /// Request to exit the application gracefully.
     ExitRequest,
 
+    /// Resume a saved session by path to the rollout file.
+    ResumeSession(std::path::PathBuf),
+
     /// Forward an `Op` to the Agent. Using an `AppEvent` for this avoids
     /// bubbling channels through layers of widgets.
     CodexOp(codex_core::protocol::Op),
@@ -61,4 +64,11 @@ pub(crate) enum AppEvent {
 
     /// Forwarded conversation history snapshot from the current conversation.
     ConversationHistory(ConversationHistoryResponseEvent),
+
+    /// Update repository information shown in the bottom pane footer.
+    /// If not in a Git repo, both values are None and the footer hides them.
+    UpdateRepoInfo {
+        repo_name: Option<String>,
+        git_branch: Option<String>,
+    },
 }
