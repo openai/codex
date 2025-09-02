@@ -25,11 +25,16 @@ pub fn run_main() -> ! {
     } = LandlockCommand::parse();
 
     if let Err(e) = apply_sandbox_policy_to_current_thread(&sandbox_policy, &sandbox_policy_cwd) {
-        panic!("error running landlock: {e:?}");
+        eprintln!(
+            "error: failed to enable Linux sandbox (Landlock): {}\n\nThis usually means your kernel/container doesn't support Landlock or it is disabled (e.g., older kernel, WSL2, or a restricted container).",
+            e
+        );
+        std::process::exit(1);
     }
 
     if command.is_empty() {
-        panic!("No command specified to execute.");
+        eprintln!("error: no command specified to execute");
+        std::process::exit(2);
     }
 
     #[expect(clippy::expect_used)]
@@ -50,5 +55,10 @@ pub fn run_main() -> ! {
 
     // If execvp returns, there was an error.
     let err = std::io::Error::last_os_error();
-    panic!("Failed to execvp {}: {err}", command[0].as_str());
+    eprintln!(
+        "error: failed to execute {}: {}\n\nHint: ensure the command exists and is on PATH.",
+        command[0].as_str(),
+        err
+    );
+    std::process::exit(127);
 }
