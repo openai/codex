@@ -174,7 +174,7 @@ pub(crate) fn create_text_param_for_request(
     })
 }
 
-pub(crate) struct ResponseStream {
+pub struct ResponseStream {
     pub(crate) rx_event: mpsc::Receiver<Result<ResponseEvent>>,
 }
 

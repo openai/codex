@@ -1,0 +1,6 @@
+model = "gpt-oss:20b"
+model_provider = "ollama"
+
+[model_providers.ollama]
+name = "Ollama"
+base_url = "http://localhost:11434/v1"

@@ -15,34 +15,34 @@ use crate::tool_apply_patch::create_apply_patch_json_tool;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ResponsesApiTool {
-    pub(crate) name: String,
-    pub(crate) description: String,
+    pub name: String,
+    pub description: String,
     /// TODO: Validation. When strict is set to true, the JSON schema,
     /// `required` and `additional_properties` must be present. All fields in
     /// `properties` must be present in `required`.
-    pub(crate) strict: bool,
-    pub(crate) parameters: JsonSchema,
+    pub strict: bool,
+    pub parameters: JsonSchema,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FreeformTool {
-    pub(crate) name: String,
-    pub(crate) description: String,
-    pub(crate) format: FreeformToolFormat,
+    pub name: String,
+    pub description: String,
+    pub format: FreeformToolFormat,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FreeformToolFormat {
-    pub(crate) r#type: String,
-    pub(crate) syntax: String,
-    pub(crate) definition: String,
+    pub r#type: String,
+    pub syntax: String,
+    pub definition: String,
 }
 
 /// When serialized as JSON, this produces a valid "Tool" in the OpenAI
 /// Responses API.
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(tag = "type")]
-pub(crate) enum OpenAiTool {
+pub enum OpenAiTool {
     #[serde(rename = "function")]
     Function(ResponsesApiTool),
     #[serde(rename = "local_shell")]
@@ -133,7 +133,7 @@ impl ToolsConfig {
 /// Generic JSON‑Schema subset needed for our tool definitions
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "lowercase")]
-pub(crate) enum JsonSchema {
+pub enum JsonSchema {
     Boolean {
         #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
