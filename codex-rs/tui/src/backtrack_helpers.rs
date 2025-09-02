@@ -113,10 +113,9 @@ fn highlight_range_from_header(lines: &[Line<'_>], header_idx: usize) -> (usize,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::text::Span;
 
     fn line(s: &str) -> Line<'static> {
-        Line::from(Span::raw(s.to_string()))
+        s.to_string().into()
     }
 
     fn transcript_with_users(count: usize) -> Vec<Line<'static>> {

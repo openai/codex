@@ -256,7 +256,6 @@ async fn run_ratatui_app(
     if let Some(latest_version) = updates::get_upgrade_version(&config) {
         use ratatui::style::Stylize as _;
         use ratatui::text::Line;
-        use ratatui::text::Span;
 
         let current_version = env!("CARGO_PKG_VERSION");
         let exe = std::env::current_exe()?;
@@ -265,35 +264,35 @@ async fn run_ratatui_app(
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from(vec![
             "✨⬆️ Update available!".bold().cyan(),
-            Span::raw(" "),
-            Span::raw(format!("{current_version} -> {latest_version}.")),
+            " ".into(),
+            format!("{current_version} -> {latest_version}.").into(),
         ]));
 
         if managed_by_npm {
             let npm_cmd = "npm install -g @openai/codex@latest";
             lines.push(Line::from(vec![
-                Span::raw("Run "),
+                "Run ".into(),
                 npm_cmd.cyan(),
-                Span::raw(" to update."),
+                " to update.".into(),
             ]));
         } else if cfg!(target_os = "macos")
             && (exe.starts_with("/opt/homebrew") || exe.starts_with("/usr/local"))
         {
             let brew_cmd = "brew upgrade codex";
             lines.push(Line::from(vec![
-                Span::raw("Run "),
+                "Run ".into(),
                 brew_cmd.cyan(),
-                Span::raw(" to update."),
+                " to update.".into(),
             ]));
         } else {
             lines.push(Line::from(vec![
-                Span::raw("See "),
+                "See ".into(),
                 "https://github.com/openai/codex/releases/latest".cyan(),
-                Span::raw(" for the latest releases and installation options."),
+                " for the latest releases and installation options.".into(),
             ]));
         }
 
-        lines.push(Line::from(""));
+        lines.push("".into());
         tui.insert_history_lines(lines);
     }
 
