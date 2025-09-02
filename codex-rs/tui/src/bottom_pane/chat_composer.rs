@@ -878,7 +878,6 @@ impl ChatComposer {
         let now = Instant::now();
         let flush_start = Instant::now();
         self.handle_paste_burst_flush(now);
-        let flush_ms = flush_start.elapsed().as_secs_f64() * 1000.0;
 
         // If we're capturing a burst and receive Enter, accumulate it instead of inserting.
         if matches!(input.code, KeyCode::Enter)
