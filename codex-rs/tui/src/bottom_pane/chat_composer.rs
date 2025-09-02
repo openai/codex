@@ -397,7 +397,6 @@ impl ChatComposer {
                 let first_line = self.textarea.text().lines().next().unwrap_or("");
                 popup.on_composer_text_change(first_line.to_string());
                 if let Some(sel) = popup.selected_item() {
-
                     match sel {
                         CommandItem::Builtin(cmd) => {
                             let starts_with_cmd = first_line
@@ -876,7 +875,6 @@ impl ChatComposer {
         // If we have a buffered non-bracketed paste burst and enough time has
         // elapsed since the last char, flush it before handling a new input.
         let now = Instant::now();
-        let flush_start = Instant::now();
         self.handle_paste_burst_flush(now);
 
         // If we're capturing a burst and receive Enter, accumulate it instead of inserting.
@@ -1664,8 +1662,8 @@ mod tests {
     #[test]
     fn slash_popup_model_first_for_mo_ui() {
         use insta::assert_snapshot;
-        use ratatui::backend::TestBackend;
         use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
 
         let (tx, _rx) = unbounded_channel::<AppEvent>();
         let sender = AppEventSender::new(tx);
