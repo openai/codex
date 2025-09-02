@@ -1080,8 +1080,7 @@ impl ChatWidget {
         for preset in presets.iter() {
             let name = preset.label.to_string();
             let description = Some(preset.description.to_string());
-            let is_current =
-                preset.model == current_model.clone() && preset.effort == current_effort;
+            let is_current = preset.model == current_model && preset.effort == current_effort;
             let model_slug = preset.model.to_string();
             let effort = preset.effort;
             let current_model = current_model.clone();
