@@ -1282,7 +1282,7 @@ fn plan_update_renders_history_cell() {
     assert!(!cells.is_empty(), "expected plan update cell to be sent");
     let blob = lines_to_single_string(cells.last().unwrap());
     assert!(
-        blob.contains("Update Plan"),
+        blob.contains("Updated Plan"),
         "missing plan header: {blob:?}"
     );
     assert!(blob.contains("Explore codebase"));
