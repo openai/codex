@@ -74,9 +74,24 @@ pub enum HistoryPersistence {
     None,
 }
 
+/// Keymap preference for the TUI editor.
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+pub enum EditorKeymap {
+    /// Standard key bindings (default when unset). Accept legacy "emacs" as an alias.
+    #[serde(rename = "standard", alias = "emacs")]
+    Standard,
+    /// Vim‑style key bindings. Accept both "vim" and the legacy "vi" spelling.
+    #[serde(rename = "vim", alias = "vi")]
+    Vim,
+}
+
 /// Collection of settings that are specific to the TUI.
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
-pub struct Tui {}
+pub struct Tui {
+    /// Select editor key bindings. Defaults to the standard key bindings when unset.
+    #[serde(default)]
+    pub editor_keymap: Option<EditorKeymap>,
+}
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct SandboxWorkspaceWrite {

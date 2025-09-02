@@ -14,6 +14,17 @@ use textwrap::Options;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VimState {
+    Insert,
+    Normal,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VimPendingOp {
+    Delete,
+}
+
 #[derive(Debug, Clone)]
 struct TextElement {
     range: Range<usize>,
@@ -26,6 +37,10 @@ pub(crate) struct TextArea {
     wrap_cache: RefCell<Option<WrapCache>>,
     preferred_col: Option<usize>,
     elements: Vec<TextElement>,
+    // Vim mode support
+    vim_mode_enabled: bool,
+    vim_state: VimState,
+    vim_pending: Option<VimPendingOp>,
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +63,9 @@ impl TextArea {
             wrap_cache: RefCell::new(None),
             preferred_col: None,
             elements: Vec::new(),
+            vim_mode_enabled: false,
+            vim_state: VimState::Insert,
+            vim_pending: None,
         }
     }
 
@@ -203,6 +221,161 @@ impl TextArea {
     }
 
     pub fn input(&mut self, event: KeyEvent) {
+        // Handle Vim mode state machine first. When enabled and in Normal mode,
+        // we consume most keystrokes here and return early.
+        if self.vim_mode_enabled {
+            // ESC (or Ctrl+[) always returns to Normal from either state.
+            match event {
+                KeyEvent { code: KeyCode::Esc, .. }
+                | KeyEvent { code: KeyCode::Char('['), modifiers: KeyModifiers::CONTROL, .. } => {
+                    self.vim_state = VimState::Normal;
+                    self.preferred_col = None;
+                    self.vim_pending = None;
+                    return;
+                }
+                _ => {}
+            }
+
+            match self.vim_state {
+                VimState::Normal => {
+                    match event {
+                        // If a delete is pending, complete with a motion.
+                        KeyEvent { code: KeyCode::Char('w'), .. } if matches!(self.vim_pending, Some(VimPendingOp::Delete)) => {
+                            let end = self.beginning_of_next_word();
+                            self.vim_delete_forward_to(end);
+                            self.vim_pending = None;
+                            return;
+                        }
+                        KeyEvent { code: KeyCode::Char('e'), .. } if matches!(self.vim_pending, Some(VimPendingOp::Delete)) => {
+                            let end = self.end_of_next_word();
+                            self.vim_delete_forward_to(end);
+                            self.vim_pending = None;
+                            return;
+                        }
+                        // Pending operators
+                        KeyEvent { code: KeyCode::Char('d'), .. } => {
+                            // If already pending delete, 'dd' deletes current line.
+                            if matches!(self.vim_pending, Some(VimPendingOp::Delete)) {
+                                self.vim_delete_current_line();
+                                self.vim_pending = None;
+                            } else {
+                                self.vim_pending = Some(VimPendingOp::Delete);
+                            }
+                            return;
+                        }
+                        // Any other printable char cancels pending op (for now)
+                        KeyEvent { code: KeyCode::Char(_), .. } if self.vim_pending.is_some() => {
+                            self.vim_pending = None;
+                            // fall through and handle below (movement/edits)
+                        }
+                        // Enter Insert mode
+                        KeyEvent { code: KeyCode::Char('i'), .. } => {
+                            self.vim_state = VimState::Insert;
+                            return;
+                        }
+                        KeyEvent { code: KeyCode::Char('I'), .. } => {
+                            self.move_cursor_to_beginning_of_line(false);
+                            self.vim_state = VimState::Insert;
+                            return;
+                        }
+                        KeyEvent { code: KeyCode::Char('a'), .. } => {
+                            self.move_cursor_right();
+                            self.vim_state = VimState::Insert;
+                            return;
+                        }
+                        KeyEvent { code: KeyCode::Char('A'), .. } => {
+                            self.move_cursor_to_end_of_line(false);
+                            self.vim_state = VimState::Insert;
+                            return;
+                        }
+                        KeyEvent { code: KeyCode::Char('o'), .. } => {
+                            // newline below current line
+                            let eol = self.end_of_current_line();
+                            self.set_cursor(eol);
+                            self.insert_str("\n");
+                            self.vim_state = VimState::Insert;
+                            return;
+                        }
+                        KeyEvent { code: KeyCode::Char('O'), .. } => {
+                            // newline above current line
+                            let bol = self.beginning_of_current_line();
+                            self.set_cursor(bol);
+                            self.insert_str("\n");
+                            self.set_cursor(bol);
+                            self.vim_state = VimState::Insert;
+                            return;
+                        }
+
+                        // Movement
+                        KeyEvent { code: KeyCode::Char('h'), .. }
+                        | KeyEvent { code: KeyCode::Left, .. } => {
+                            self.move_cursor_left();
+                            return;
+                        }
+                        KeyEvent { code: KeyCode::Char('l'), .. }
+                        | KeyEvent { code: KeyCode::Right, .. } => {
+                            self.move_cursor_right();
+                            return;
+                        }
+                        KeyEvent { code: KeyCode::Char('k'), .. }
+                        | KeyEvent { code: KeyCode::Up, .. } => {
+                            self.move_cursor_up();
+                            return;
+                        }
+                        KeyEvent { code: KeyCode::Char('j'), .. }
+                        | KeyEvent { code: KeyCode::Down, .. } => {
+                            self.move_cursor_down();
+                            return;
+                        }
+                        KeyEvent { code: KeyCode::Char('0'), .. } => {
+                            self.move_cursor_to_beginning_of_line(false);
+                            return;
+                        }
+                        KeyEvent { code: KeyCode::Char('$'), .. } => {
+                            self.move_cursor_to_end_of_line(false);
+                            return;
+                        }
+                        KeyEvent { code: KeyCode::Char('b'), .. } => {
+                            let p = self.beginning_of_previous_word();
+                            self.set_cursor(p);
+                            return;
+                        }
+                        KeyEvent { code: KeyCode::Char('e'), .. } => {
+                            let p = self.end_of_next_word();
+                            self.set_cursor(p);
+                            return;
+                        }
+                        KeyEvent { code: KeyCode::Char('w'), .. } => {
+                            let p = self.beginning_of_next_word();
+                            self.set_cursor(p);
+                            return;
+                        }
+
+                        // Edits
+                        KeyEvent { code: KeyCode::Char('x'), .. } => {
+                            self.delete_forward(1);
+                            return;
+                        }
+                        KeyEvent { code: KeyCode::Char('X'), .. } => {
+                            self.delete_backward(1);
+                            return;
+                        }
+                        KeyEvent { code: KeyCode::Char('D'), .. } => {
+                            self.kill_to_end_of_line();
+                            return;
+                        }
+                        _ => {
+                            // Ignore other keys in Normal mode
+                            return;
+                        }
+                    }
+                }
+                VimState::Insert => {
+                    // fall through to default behavior below
+                }
+            }
+        }
+
         match event {
             // Some terminals (or configurations) send Control key chords as
             // C0 control characters without reporting the CONTROL modifier.
@@ -399,6 +572,61 @@ impl TextArea {
                 #[cfg(feature = "debug-logs")]
                 tracing::debug!("Unhandled key event in TextArea: {:?}", _o);
             }
+        }
+    }
+
+    /// Enable or disable Vim key bindings. When enabled, the default state is Insert.
+    pub fn set_vim_mode_enabled(&mut self, enabled: bool) {
+        self.vim_mode_enabled = enabled;
+        self.vim_state = VimState::Insert;
+        self.vim_pending = None;
+    }
+
+    /// Returns true when Vim mode is enabled and the state machine is currently in Normal mode.
+    pub fn vim_is_normal_mode(&self) -> bool {
+        self.vim_mode_enabled && matches!(self.vim_state, VimState::Normal)
+    }
+
+    /// Return a short label for the current Vim mode, if Vim is enabled.
+    /// Used by the footer to display INSERT/NORMAL.
+    pub fn vim_mode_state_label(&self) -> Option<&'static str> {
+        if !self.vim_mode_enabled {
+            return None;
+        }
+        // When an operator is pending (e.g., after a single 'd'), show a hint.
+        match (self.vim_state, self.vim_pending) {
+            (VimState::Insert, _) => Some("INSERT"),
+            (VimState::Normal, Some(VimPendingOp::Delete)) => Some("(d...)"),
+            (VimState::Normal, None) => Some("NORMAL"),
+        }
+    }
+
+    pub fn vim_mode_enabled(&self) -> bool {
+        self.vim_mode_enabled
+    }
+
+    fn vim_delete_current_line(&mut self) {
+        let bol = self.beginning_of_current_line();
+        let eol = self.end_of_current_line();
+        // Delete newline after line if present to remove the line cleanly.
+        let mut end = eol;
+        if eol < self.text.len() {
+            // There is a newline following this line.
+            end = end.saturating_add(1);
+        }
+        self.replace_range(bol..end, "");
+        // Cursor is placed at start of the deleted region by replace_range
+        // which matches expected behavior for dd.
+    }
+
+    fn vim_delete_forward_to(&mut self, mut end: usize) {
+        let start = self.cursor_pos;
+        if end == start {
+            // Ensure we delete at least one atom if possible.
+            end = self.next_atomic_boundary(start);
+        }
+        if end > start {
+            self.replace_range(start..end, "");
         }
     }
 
@@ -810,6 +1038,45 @@ impl TextArea {
         self.adjust_pos_out_of_elements(candidate, false)
     }
 
+    /// Start of the next word (Vim 'w'). If currently on a word, moves to the
+    /// start of the following word; if on whitespace, moves to the first
+    /// non-whitespace ahead. Falls back to end-of-text when no next word.
+    pub(crate) fn beginning_of_next_word(&self) -> usize {
+        let text = &self.text[self.cursor_pos..];
+        if text.is_empty() {
+            return self.text.len();
+        }
+        let mut offset = 0usize;
+        let mut chars = text.chars();
+        let first = chars.next().unwrap();
+        if first.is_whitespace() {
+            // Skip whitespace to the start of the next word.
+            offset += 1;
+            for c in chars {
+                if !c.is_whitespace() { break; }
+                offset += 1;
+            }
+            let pos = (self.cursor_pos + offset).min(self.text.len());
+            return self.adjust_pos_out_of_elements(pos, true);
+        } else {
+            // Inside a word: skip to its end, then skip following whitespace to next word start.
+            // Find end of current word
+            let rest = &self.text[self.cursor_pos..];
+            let end_rel = rest.find(|c: char| c.is_whitespace()).unwrap_or(rest.len());
+            let after_word = self.cursor_pos + end_rel;
+            let after = &self.text[after_word..];
+            if after.is_empty() {
+                return self.text.len();
+            }
+            let ws = after.find(|c: char| !c.is_whitespace());
+            let pos = match ws {
+                Some(non_ws) => after_word + non_ws,
+                None => self.text.len(),
+            };
+            return self.adjust_pos_out_of_elements(pos, true);
+        }
+    }
+
     fn adjust_pos_out_of_elements(&self, pos: usize, prefer_start: bool) -> usize {
         if let Some(idx) = self.find_element_containing(pos) {
             let e = &self.elements[idx];
@@ -1171,6 +1438,108 @@ mod tests {
     }
 
     #[test]
+    fn vim_mode_basic_navigation_and_insert() {
+        let mut t = ta_with("hello world\nsecond");
+        // Enable Vim mode (defaults to Insert state)
+        t.set_vim_mode_enabled(true);
+
+        // ESC -> Normal
+        t.input(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        // Place cursor at BOL to ensure 'l' can move right
+        t.set_cursor(0);
+        // 'l' moves right from BOL
+        let c0 = t.cursor();
+        t.input(KeyEvent::new(KeyCode::Char('l'), KeyModifiers::NONE));
+        assert!(t.cursor() > c0);
+        // '0' -> BOL
+        t.input(KeyEvent::new(KeyCode::Char('0'), KeyModifiers::NONE));
+        assert_eq!(t.cursor(), 0);
+        // '$' -> EOL of first line
+        t.input(KeyEvent::new(KeyCode::Char('$'), KeyModifiers::NONE));
+        let eol = "hello world".len();
+        assert_eq!(t.cursor(), eol);
+        // 'k' at first line should stay within bounds (no panic)
+        t.input(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
+
+        // 'b' beginning of previous word from end of first line
+        t.input(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::NONE));
+        assert!(t.cursor() < eol);
+        // 'e' end of next word
+        t.input(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+        assert!(t.cursor() <= eol);
+
+        // 'i' enter insert mode and insert a char
+        t.input(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE));
+        let before = t.text().len();
+        t.input(KeyEvent::new(KeyCode::Char('Z'), KeyModifiers::NONE));
+        assert_eq!(t.text().len(), before + 1);
+
+        // ESC normal; 'x' deletes one char
+        t.input(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        let before_del = t.text().len();
+        t.input(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE));
+        assert_eq!(t.text().len(), before_del.saturating_sub(1));
+    }
+
+    #[test]
+    fn vim_mode_dd_deletes_current_line() {
+        let mut t = ta_with("alpha\nbeta\ngamma");
+        // Position cursor somewhere on the middle line
+        let pos_beta = t.text().find("beta").unwrap() + 2; // inside 'beta'
+        t.set_cursor(pos_beta);
+        t.set_vim_mode_enabled(true);
+        // Enter Normal
+        t.input(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+
+        // dd
+        t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+
+        // Expect 'beta\n' removed; remaining text should be "alpha\ngamma" or "alpha\n\ngamma" depending on trailing newline handling.
+        assert_eq!(t.text(), "alpha\ngamma");
+        // Cursor should be at the position where the deleted line used to start
+        // i.e., at the newline between 'alpha' and 'gamma', or at start of 'gamma'
+        let pos_gamma = t.text().find("gamma").unwrap();
+        assert!(t.cursor() == pos_gamma || t.cursor() == pos_gamma.saturating_sub(1));
+    }
+
+    #[test]
+    fn vim_mode_dw_and_de() {
+        // Case 1: 'dw' from start of word removes word and trailing space
+        let mut t = ta_with("foo bar baz");
+        t.set_cursor(0);
+        t.set_vim_mode_enabled(true);
+        t.input(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        // dw
+        t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+        assert_eq!(t.text(), "bar baz");
+        assert_eq!(t.cursor(), 0);
+
+        // Case 2: 'de' from start of word removes word but keeps one space
+        let mut t = ta_with("foo bar");
+        t.set_cursor(0);
+        t.set_vim_mode_enabled(true);
+        t.input(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE));
+        assert_eq!(t.text(), " bar");
+        assert_eq!(t.cursor(), 0);
+
+        // Case 3: 'dw' on whitespace deletes up to next word start (removes all spaces)
+        let mut t = ta_with("foo   bar");
+        // put cursor on one of the spaces
+        let pos = "foo".len();
+        t.set_cursor(pos);
+        t.set_vim_mode_enabled(true);
+        t.input(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE));
+        t.input(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::NONE));
+        assert_eq!(t.text(), "foobar");
+        assert_eq!(t.cursor(), pos);
+    }
+
+    #[test]
     fn delete_backward_word_alt_keys() {
         // Test the custom Alt+Ctrl+h binding
         let mut t = ta_with("hello world");
@@ -1245,7 +1614,7 @@ mod tests {
     }
 
     #[test]
-    fn home_end_and_emacs_style_home_end() {
+    fn home_end_and_default_style_home_end() {
         let mut t = ta_with("one\ntwo\nthree");
         // Position at middle of second line
         let second_line_start = t.text().find("two").unwrap();

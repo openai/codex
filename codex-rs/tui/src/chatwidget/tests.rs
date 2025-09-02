@@ -165,6 +165,7 @@ fn make_chatwidget_manual() -> (
         enhanced_keys_supported: false,
         placeholder_text: "Ask Codex to do anything".to_string(),
         disable_paste_burst: false,
+        vim_mode_enabled: false,
     });
     let widget = ChatWidget {
         app_event_tx,

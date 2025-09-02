@@ -605,6 +605,9 @@ impl ChatWidget {
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
 
+        // Enable Vim mode if configured
+        let vim_mode_enabled = matches!(config.tui.editor_keymap, Some(codex_core::config_types::EditorKeymap::Vim));
+
         Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
@@ -616,6 +619,7 @@ impl ChatWidget {
                 enhanced_keys_supported,
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
+                vim_mode_enabled,
             }),
             active_exec_cell: None,
             config: config.clone(),
@@ -654,6 +658,8 @@ impl ChatWidget {
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
 
+        let vim_mode_enabled = matches!(config.tui.editor_keymap, Some(codex_core::config_types::EditorKeymap::Vim));
+
         Self {
             app_event_tx: app_event_tx.clone(),
             frame_requester: frame_requester.clone(),
@@ -665,6 +671,7 @@ impl ChatWidget {
                 enhanced_keys_supported,
                 placeholder_text: placeholder,
                 disable_paste_burst: config.disable_paste_burst,
+                vim_mode_enabled,
             }),
             active_exec_cell: None,
             config: config.clone(),
@@ -774,6 +781,11 @@ impl ChatWidget {
             return;
         }
         match cmd {
+            SlashCommand::Vim => {
+                self.bottom_pane.toggle_vim_mode();
+                // No history cell needed; footer shows mode. Ensure UI refresh.
+                self.request_redraw();
+            }
             SlashCommand::New => {
                 self.app_event_tx.send(AppEvent::NewSession);
             }

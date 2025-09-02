@@ -71,6 +71,28 @@ When the chat composer is empty, press Esc to prime “backtrack” mode. Press 
 
 In the transcript preview, the footer shows an `Esc edit prev` hint while editing is active.
 
+#### Vim editing mode
+
+Prefer Vim-style editing in the composer? Enable Vim key bindings:
+
+1. In your `~/.codex/config.toml`:
+
+```toml
+[tui]
+editor_keymap = "vim"  # default is standard key bindings when unset
+```
+
+2. Or per-run via CLI override:
+
+```bash
+codex -c tui.editor_keymap=vim
+```
+
+Basics: `Esc` or `Ctrl+[` toggles to Normal mode; `i/I/a/A/o/O` enter Insert; movement `h j k l 0 $ b w e`; edits `x X D`, `dd`, `dw`, `de`. Enter/Shift+Enter behavior for send/newline remains unchanged.
+
+- Runtime toggle: Type `/vim` in the composer and press Enter to switch Vim key bindings on/off without restarting.
+- Note on Esc: When the composer is empty, `Esc` primes backtrack (edit‑previous) instead of entering Vim Normal. Use `Ctrl+[` to enter Normal reliably, or type some text first and then press `Esc`.
+
 #### Shell completions
 
 Generate shell completion scripts via:
