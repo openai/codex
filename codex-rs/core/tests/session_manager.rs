@@ -89,7 +89,7 @@ async fn test_list_conversations_latest_first() {
 
     // Each item should have up to 5 head records (1 meta + up to 4 more given num_records=3)
     for it in page.items {
-        assert!(it.head.len() >= 1 && it.head.len() <= 5);
+        assert!(!it.head.is_empty() && it.head.len() <= 5);
     }
 }
 
