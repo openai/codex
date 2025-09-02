@@ -20,28 +20,39 @@ expression: visible_after
 
 > Here’s what’s driving size in this workspace’s binaries.
 
+
+
   Main Causes
+
+
 
   - Static linking style: Each bin (codex, codex-tui, codex-exec, codex-mcp-
   server, etc.) statically links its full dependency graph, so common code isn’t
   shared at runtime across executables.
+
   - Heavy deps (HTTP/TLS): reqwest brings in Hyper, HTTP/2, compressors,
   and a TLS stack (rustls by default; OpenSSL on musl). In core, login, tui,
   and ollama you enable reqwest with json/stream, which still pulls a large
   transitive set.
+
   - Image/terminal stack: codex-tui includes image (with jpeg), ratatui,
   crossterm, and ratatui-image, which together contribute significant code size
   (decoders, pixel ops, terminal backends).
+
   - Parsers/VMs: tree-sitter + tree-sitter-bash (in core and apply-patch) and
   starlark (in execpolicy) include sizeable parser/VM tables and runtimes.
+
   - Tokio runtime: Broad tokio features (rt-multi-thread, macros, process,
   signal) across many crates inflate code size even if only subsets are used
   per bin.
+
   - Panic + backtraces: Default panic = unwind and backtrace support keep
   unwinding tables and symbols that add weight.
+
   - Per-target OpenSSL (musl): For *-unknown-linux-musl, core enables openssl-
   sys with vendored, compiling OpenSSL into the binary—this adds multiple
   megabytes per executable.
+
 
   Build-Mode Notes
 

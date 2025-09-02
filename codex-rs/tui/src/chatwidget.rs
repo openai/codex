@@ -592,7 +592,7 @@ impl ChatWidget {
             Constraint::Max(
                 self.active_exec_cell
                     .as_ref()
-                    .map_or(0, |c| c.desired_height(area.width)),
+                    .map_or(0, |c| c.desired_height(area.width) + 1),
             ),
             Constraint::Min(self.bottom_pane.desired_height(area.width)),
         ])
@@ -693,7 +693,7 @@ impl ChatWidget {
             + self
                 .active_exec_cell
                 .as_ref()
-                .map_or(0, |c| c.desired_height(width))
+                .map_or(0, |c| c.desired_height(width) + 1)
     }
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
@@ -769,7 +769,7 @@ impl ChatWidget {
     fn dispatch_command(&mut self, cmd: SlashCommand) {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
-                "'/'{}' is disabled while a task is in progress.",
+                "'/{}' is disabled while a task is in progress.",
                 cmd.command()
             );
             self.add_to_history(history_cell::new_error_event(message));
@@ -1283,6 +1283,9 @@ impl WidgetRef for &ChatWidget {
         let [active_cell_area, bottom_pane_area] = self.layout_areas(area);
         (&self.bottom_pane).render(bottom_pane_area, buf);
         if let Some(cell) = &self.active_exec_cell {
+            let mut active_cell_area = active_cell_area;
+            active_cell_area.y += 1;
+            active_cell_area.height -= 1;
             cell.render_ref(active_cell_area, buf);
         }
     }

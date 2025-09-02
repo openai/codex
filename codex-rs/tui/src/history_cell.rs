@@ -77,6 +77,10 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync {
             .try_into()
             .unwrap_or(0)
     }
+
+    fn is_stream_continuation(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug)]
@@ -87,7 +91,6 @@ pub(crate) struct UserHistoryCell {
 impl HistoryCell for UserHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(Line::from(""));
 
         // Wrap the content first, then prefix each wrapped line with the marker.
         let wrap_width = width.saturating_sub(1); // account for the ▌ prefix
@@ -106,7 +109,6 @@ impl HistoryCell for UserHistoryCell {
 
     fn transcript_lines(&self) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(Line::from(""));
         lines.push(Line::from("user".cyan().bold()));
         lines.extend(self.message.lines().map(|l| Line::from(l.to_string())));
         lines
@@ -131,9 +133,6 @@ impl AgentMessageCell {
 impl HistoryCell for AgentMessageCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut out: Vec<Line<'static>> = Vec::new();
-        if self.is_first_line {
-            out.push(Line::from(""));
-        }
         // We want:
         // - First visual line: "> " prefix (collapse with header logic)
         // - All subsequent visual lines: two-space prefix
@@ -203,15 +202,12 @@ pub(crate) struct PatchHistoryCell {
 
 impl HistoryCell for PatchHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines: Vec<Line<'static>> = create_diff_summary(
+        create_diff_summary(
             &self.changes,
             self.event_type.clone(),
             &self.cwd,
             width as usize,
-        );
-        // Leading blank separator for the cell
-        lines.insert(0, Line::from(""));
-        lines
+        )
     }
 }
 
@@ -239,7 +235,7 @@ impl HistoryCell for ExecCell {
     }
 
     fn transcript_lines(&self) -> Vec<Line<'static>> {
-        let mut lines: Vec<Line<'static>> = vec!["".into()];
+        let mut lines: Vec<Line<'static>> = vec![];
         for call in &self.calls {
             let cmd_display = strip_bash_lc_and_escape(&call.command);
             for (i, part) in cmd_display.lines().enumerate() {
@@ -280,7 +276,6 @@ impl ExecCell {
 
     fn exploring_display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(Line::from(""));
         let active_start_time = self
             .calls
             .iter()
@@ -412,7 +407,6 @@ impl ExecCell {
         let [call] = &self.calls.as_slice() else {
             panic!("Expected exactly one call in a command display cell");
         };
-        lines.push(Line::from(""));
         let success = call.output.as_ref().map(|o| o.exit_code == 0);
         let bullet = match success {
             Some(true) => "•".green().bold(),
@@ -755,10 +749,7 @@ struct CompletedMcpToolCallWithImageOutput {
 }
 impl HistoryCell for CompletedMcpToolCallWithImageOutput {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
-        vec![
-            Line::from(""),
-            Line::from("tool result (image output omitted)"),
-        ]
+        vec![Line::from("tool result (image output omitted)")]
     }
 }
 
@@ -813,7 +804,6 @@ pub(crate) fn new_session_info(
         };
 
         let lines: Vec<Line<'static>> = vec![
-            Line::from(Span::from("")),
             Line::from(vec![
                 Span::raw(">_ ").dim(),
                 Span::styled(
@@ -879,7 +869,6 @@ pub(crate) fn new_session_info(
         PlainHistoryCell { lines: Vec::new() }
     } else {
         let lines = vec![
-            Line::from(""),
             Line::from("model changed:".magenta().bold()),
             Line::from(format!("requested: {}", config.model)),
             Line::from(format!("used: {model}")),
@@ -890,6 +879,10 @@ pub(crate) fn new_session_info(
 
 pub(crate) fn new_user_prompt(message: String) -> UserHistoryCell {
     UserHistoryCell { message }
+}
+
+pub(crate) fn new_user_approval_decision(lines: Vec<Line<'static>>) -> PlainHistoryCell {
+    PlainHistoryCell { lines }
 }
 
 pub(crate) fn new_active_exec_command(
@@ -918,20 +911,13 @@ fn spinner(start_time: Option<Instant>) -> Span<'static> {
 
 pub(crate) fn new_active_mcp_tool_call(invocation: McpInvocation) -> PlainHistoryCell {
     let title_line = Line::from(vec!["tool".magenta(), " running...".dim()]);
-    let lines: Vec<Line> = vec![
-        Line::from(""),
-        title_line,
-        format_mcp_invocation(invocation.clone()),
-    ];
+    let lines: Vec<Line> = vec![title_line, format_mcp_invocation(invocation.clone())];
 
     PlainHistoryCell { lines }
 }
 
 pub(crate) fn new_web_search_call(query: String) -> PlainHistoryCell {
-    let lines: Vec<Line<'static>> = vec![
-        Line::from(""),
-        Line::from(vec![padded_emoji("🌐").into(), query.into()]),
-    ];
+    let lines: Vec<Line<'static>> = vec![Line::from(vec![padded_emoji("🌐").into(), query.into()])];
     PlainHistoryCell { lines }
 }
 
@@ -1051,8 +1037,6 @@ pub(crate) fn new_completed_mcp_tool_call(
         }
     };
 
-    // Leading blank separator at the start of this cell
-    lines.insert(0, Line::from(""));
     Box::new(PlainHistoryCell { lines })
 }
 
@@ -1062,7 +1046,6 @@ pub(crate) fn new_status_output(
     session_id: &Option<Uuid>,
 ) -> PlainHistoryCell {
     let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(Line::from(""));
     lines.push(Line::from("/status".magenta()));
 
     let config_entries = create_config_summary_entries(config);
@@ -1254,7 +1237,6 @@ pub(crate) fn new_status_output(
 /// Render a summary of configured MCP servers from the current `Config`.
 pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
     let lines: Vec<Line<'static>> = vec![
-        Line::from(""),
         Line::from("/mcp".magenta()),
         Line::from(""),
         Line::from(vec!["🔌  ".into(), "MCP Tools".bold()]),
@@ -1344,18 +1326,13 @@ pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
     // Use a hair space (U+200A) to create a subtle, near-invisible separation
     // before the text. VS16 is intentionally omitted to keep spacing tighter
     // in terminals like Ghostty.
-    let lines: Vec<Line<'static>> = vec![
-        "".into(),
-        vec![padded_emoji("🖐").red().bold(), " ".into(), message.into()].into(),
-    ];
+    let lines: Vec<Line<'static>> =
+        vec![vec![padded_emoji("🖐").red().bold(), " ".into(), message.into()].into()];
     PlainHistoryCell { lines }
 }
 
 pub(crate) fn new_stream_error_event(message: String) -> PlainHistoryCell {
-    let lines: Vec<Line<'static>> = vec![
-        "".into(),
-        vec![padded_emoji("⚠️").into(), message.dim()].into(),
-    ];
+    let lines: Vec<Line<'static>> = vec![vec![padded_emoji("⚠️").into(), message.dim()].into()];
     PlainHistoryCell { lines }
 }
 
@@ -1423,7 +1400,7 @@ impl HistoryCell for PlanUpdateCell {
                 .collect()
         }
 
-        let mut lines: Vec<Line<'static>> = vec!["".into()];
+        let mut lines: Vec<Line<'static>> = vec![];
         lines.push(vec!["• ".into(), "Updated Plan".bold()].into());
 
         let mut indented_lines = vec![];
@@ -1484,8 +1461,6 @@ pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
         ));
     }
 
-    // Leading blank separator
-    lines.insert(0, Line::from(""));
     PlainHistoryCell { lines }
 }
 
@@ -1494,7 +1469,6 @@ pub(crate) fn new_reasoning_block(
     config: &Config,
 ) -> TranscriptOnlyHistoryCell {
     let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(Line::from(""));
     lines.push(Line::from("thinking".magenta().italic()));
     append_markdown(&full_reasoning_buffer, &mut lines, config);
     TranscriptOnlyHistoryCell { lines }
