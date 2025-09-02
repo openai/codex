@@ -36,11 +36,12 @@ pub(crate) fn render_rows(
     state: &ScrollState,
     max_results: usize,
     _dim_non_selected: bool,
+    empty_message: &str,
 ) {
     let mut rows: Vec<Row> = Vec::new();
     if rows_all.is_empty() {
         rows.push(Row::new(vec![Cell::from(Line::from(
-            "no matches".dim().italic(),
+            empty_message.dim().italic(),
         ))]));
     } else {
         let max_rows_from_area = area.height as usize;
