@@ -290,6 +290,20 @@ fn open_fixture(name: &str) -> std::fs::File {
 }
 
 #[test]
+fn empty_enter_during_task_does_not_queue() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    // Simulate running task so submissions would normally be queued.
+    chat.bottom_pane.set_task_running(true);
+
+    // Press Enter with an empty composer.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    // Ensure nothing was queued.
+    assert!(chat.queued_user_messages.is_empty());
+}
+
+#[test]
 fn alt_up_edits_most_recent_queued_message() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
@@ -431,6 +445,25 @@ fn exec_history_extends_previous_when_consecutive() {
     begin_exec(&mut chat, "call-cat-bar", "cat bar.txt");
     end_exec(&mut chat, "call-cat-bar", "hello from bar", "", 0);
     assert_snapshot!("exploring_step6_finish_cat_bar", active_blob(&chat));
+}
+
+#[test]
+fn disabled_slash_command_while_task_running_snapshot() {
+    // Build a chat widget and simulate an active task
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+    chat.bottom_pane.set_task_running(true);
+
+    // Dispatch a command that is unavailable while a task runs (e.g., /model)
+    chat.dispatch_command(SlashCommand::Model);
+
+    // Drain history and snapshot the rendered error line(s)
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        !cells.is_empty(),
+        "expected an error message history cell to be emitted",
+    );
+    let blob = lines_to_single_string(cells.last().unwrap());
+    assert_snapshot!(blob);
 }
 
 #[tokio::test(flavor = "current_thread")]
