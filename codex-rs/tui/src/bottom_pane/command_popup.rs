@@ -245,7 +245,9 @@ mod tests {
         let matches = popup.filtered_items();
         match matches.first() {
             Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "model"),
-            Some(CommandItem::UserPrompt(_)) => panic!("unexpected prompt ranked before '/model' for '/mo'"),
+            Some(CommandItem::UserPrompt(_)) => {
+                panic!("unexpected prompt ranked before '/model' for '/mo'")
+            }
             None => panic!("expected at least one match for '/mo'"),
         }
     }
