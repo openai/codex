@@ -392,9 +392,11 @@ impl ChatComposer {
             KeyEvent {
                 code: KeyCode::Tab, ..
             } => {
+                // Ensure popup filtering/selection reflects the latest composer text
+                // before applying completion.
+                let first_line = self.textarea.text().lines().next().unwrap_or("");
+                popup.on_composer_text_change(first_line.to_string());
                 if let Some(sel) = popup.selected_item() {
-                    let first_line = self.textarea.text().lines().next().unwrap_or("");
-
                     match sel {
                         CommandItem::Builtin(cmd) => {
                             let starts_with_cmd = first_line
@@ -851,7 +853,17 @@ impl ChatComposer {
                 true
             }
             FlushResult::Typed(ch) => {
+                // Mirror insert_str() behavior so popups stay in sync when a
+                // pending fast char flushes as normal typed input.
                 self.textarea.insert_str(ch.to_string().as_str());
+                // Keep popup sync consistent with key handling: prefer slash popup; only
+                // sync file popup when slash popup is NOT active.
+                self.sync_command_popup();
+                if matches!(self.active_popup, ActivePopup::Command(_)) {
+                    self.dismissed_file_popup_token = None;
+                } else {
+                    self.sync_file_search_popup();
+                }
                 true
             }
             FlushResult::None => false,
@@ -863,7 +875,6 @@ impl ChatComposer {
         // If we have a buffered non-bracketed paste burst and enough time has
         // elapsed since the last char, flush it before handling a new input.
         let now = Instant::now();
-        let flush_start = Instant::now();
         self.handle_paste_burst_flush(now);
 
         // If we're capturing a burst and receive Enter, accumulate it instead of inserting.
@@ -1645,6 +1656,66 @@ mod tests {
                 .unwrap_or_else(|e| panic!("Failed to draw {name} composer: {e}"));
 
             assert_snapshot!(name, terminal.backend());
+        }
+    }
+
+    #[test]
+    fn slash_popup_model_first_for_mo_ui() {
+        use insta::assert_snapshot;
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        // Type "/mo" humanlike so paste-burst doesn’t interfere.
+        type_chars_humanlike(&mut composer, &['/', 'm', 'o']);
+
+        let mut terminal = match Terminal::new(TestBackend::new(60, 4)) {
+            Ok(t) => t,
+            Err(e) => panic!("Failed to create terminal: {e}"),
+        };
+        terminal
+            .draw(|f| f.render_widget_ref(composer, f.area()))
+            .unwrap_or_else(|e| panic!("Failed to draw composer: {e}"));
+
+        // Visual snapshot should show the slash popup with /model as the first entry.
+        assert_snapshot!("slash_popup_mo", terminal.backend());
+    }
+
+    #[test]
+    fn slash_popup_model_first_for_mo_logic() {
+        use super::super::command_popup::CommandItem;
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        type_chars_humanlike(&mut composer, &['/', 'm', 'o']);
+
+        match &composer.active_popup {
+            ActivePopup::Command(popup) => match popup.selected_item() {
+                Some(CommandItem::Builtin(cmd)) => {
+                    assert_eq!(cmd.command(), "model")
+                }
+                Some(CommandItem::UserPrompt(_)) => {
+                    panic!("unexpected prompt selected for '/mo'")
+                }
+                None => panic!("no selected command for '/mo'"),
+            },
+            _ => panic!("slash popup not active after typing '/mo'"),
         }
     }
 
