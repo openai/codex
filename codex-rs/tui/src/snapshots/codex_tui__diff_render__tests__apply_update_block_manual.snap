@@ -1,0 +1,16 @@
+---
+source: tui/src/diff_render.rs
+expression: terminal.backend()
+---
+"• Change Approved example.txt (+1 -1)                                           "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "
+"                                                                                "

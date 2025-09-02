@@ -1,0 +1,8 @@
+---
+source: tui/src/history_cell.rs
+expression: rendered
+---
+▌one two
+▌three four
+▌five six
+▌seven
