@@ -16,8 +16,6 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::shimmer::shimmer_spans;
 use crate::tui::FrameRequester;
-use textwrap::Options as TwOptions;
-use textwrap::WordSplitter;
 
 pub(crate) struct StatusIndicatorWidget {
     /// Animated header text (defaults to "Working").

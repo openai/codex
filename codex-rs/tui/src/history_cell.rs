@@ -444,7 +444,8 @@ impl ExecCell {
                     line,
                     TwOptions::new(width as usize)
                         .initial_indent("    ")
-                        .subsequent_indent("        "),
+                        .subsequent_indent("        ")
+                        .word_splitter(WordSplitter::NoHyphenation),
                 );
                 lines.extend(wrapped.into_iter().enumerate().map(|(j, l)| {
                     if i == 0 && j == 0 {
