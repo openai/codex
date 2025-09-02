@@ -42,6 +42,55 @@ pub async fn run_main(cmd: AmbientCommand) -> Result<()> {
 
 use std::path::Path;
 
+async fn run_analysis_prompt(
+    prompt_text: String,
+    config: &Config,
+    client: &reqwest::Client,
+) -> Result<()> {
+    let model_family = model_family::find_family_for_model(&config.model)
+        .ok_or_else(|| anyhow::anyhow!("Model family not found for: {}", config.model))?;
+
+    let provider = config
+        .model_providers
+        .get(&config.model_provider_id)
+        .ok_or_else(|| anyhow::anyhow!("Provider not found: {}", config.model_provider_id))?;
+
+    let user_message = ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText { text: prompt_text }],
+    };
+
+    let prompt = Prompt {
+        input: vec![user_message],
+        store: false,
+        tools: vec![],
+        base_instructions_override: None,
+    };
+
+    let stream_result = stream_chat_completions(&prompt, &model_family, client, provider).await;
+
+    match stream_result {
+        Ok(mut stream) => {
+            while let Some(event) = stream.next().await {
+                match event {
+                    Ok(ResponseEvent::OutputTextDelta(delta)) => {
+                        print!("{delta}");
+                    }
+                    Ok(ResponseEvent::Completed { .. }) => {
+                        println!(); // Newline after output
+                        break;
+                    }
+                    Err(e) => return Err(anyhow::anyhow!("Error processing stream: {e:?}")),
+                    _ => {}
+                }
+            }
+        }
+        Err(e) => return Err(anyhow::anyhow!("Failed to get AI insight: {e}")),
+    }
+    Ok(())
+}
+
 async fn perform_ambient_check(
     config: &Config,
     client: &reqwest::Client,
@@ -60,76 +109,82 @@ async fn perform_ambient_check(
     let stdout = String::from_utf8_lossy(&output.stdout);
     let lines: Vec<&str> = stdout.trim().lines().collect();
 
-    println!(
-        "[{}] Found {} changed file(s).",
-        chrono::Local::now().to_rfc2822(),
-        lines.len()
-    );
+    if !lines.is_empty() {
+        println!(
+            "[{}] Found {} changed file(s).",
+            chrono::Local::now().to_rfc2822(),
+            lines.len()
+        );
+    }
 
-    if let Some(first_line) = lines.first() {
-        let parts: Vec<&str> = first_line.split_whitespace().collect();
-        if parts.len() == 2 {
-            let file_path = parts[1];
-            println!("Analyzing: {file_path}");
-
-            let full_path = cwd.join(file_path);
-            let content = fs::read_to_string(&full_path)
-                .map_err(|e| anyhow::anyhow!("Failed to read file {}: {e}", full_path.display()))?;
-
-            let model_family = model_family::find_family_for_model(&config.model)
-                .ok_or_else(|| anyhow::anyhow!("Model family not found for: {}", config.model))?;
-
-            let provider = config
-                .model_providers
-                .get(&config.model_provider_id)
-                .ok_or_else(|| {
-                    anyhow::anyhow!("Provider not found: {}", config.model_provider_id)
-                })?;
-
-            let prompt_text = format!(
-                "You are an ambient AI assistant. Briefly summarize the change in this file:\n\n---\n\n{content}"
-            );
-
-            let user_message = ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText { text: prompt_text }],
-            };
-
-            let prompt = Prompt {
-                input: vec![user_message],
-                store: false,
-                tools: vec![],
-                base_instructions_override: None,
-            };
-
-            let stream_result =
-                stream_chat_completions(&prompt, &model_family, client, provider).await;
-
-            match stream_result {
-                Ok(mut stream) => {
-                    println!("AI Insight:");
-                    while let Some(event) = stream.next().await {
-                        match event {
-                            Ok(ResponseEvent::OutputTextDelta(delta)) => {
-                                print!("{delta}");
-                            }
-                            Ok(ResponseEvent::Completed { .. }) => {
-                                println!("\n---");
-                                break;
-                            }
-                            Err(e) => {
-                                return Err(anyhow::anyhow!("Error processing stream: {e:?}"));
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-                Err(e) => {
-                    return Err(anyhow::anyhow!("Failed to get AI insight: {e}"));
-                }
-            }
+    for line in lines {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 2 {
+            continue;
         }
+        let file_path = parts[1];
+        println!("--- Analyzing: {file_path} ---");
+
+        // Task A: Diff-based analysis
+        let diff_output = Command::new("git")
+            .arg("diff")
+            .arg("HEAD")
+            .arg("--")
+            .arg(file_path)
+            .current_dir(cwd)
+            .output()?;
+        let diff_content = String::from_utf8_lossy(&diff_output.stdout);
+
+        if !diff_content.trim().is_empty() {
+            // A.1: Summarize changes
+            println!("\n[1/4] Summary of changes:");
+            let prompt1 = format!(
+                "You are an ambient AI assistant. Here is the diff for `{file_path}`. Please provide a brief, one-sentence summary of the changes.\n\n---\n\n{diff_content}"
+            );
+            if let Err(e) = run_analysis_prompt(prompt1, config, client).await {
+                eprintln!("Error: {e}");
+            }
+
+            // A.2: Secret detection
+            println!("\n[2/4] Secret detection:");
+            let prompt2 = format!(
+                "You are a security scanner. Analyze the following diff for `{file_path}` and report any potential secrets like API keys or credentials. If none are found, say 'No secrets found'.\n\n---\n\n{diff_content}"
+            );
+            if let Err(e) = run_analysis_prompt(prompt2, config, client).await {
+                eprintln!("Error: {e}");
+            }
+        } else {
+            println!("\nSkipping diff analysis (file is new or unstaged).");
+        }
+
+        // Task B: Full-file analysis
+        let full_path = cwd.join(file_path);
+        let content = match fs::read_to_string(&full_path) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Failed to read file {}: {e}", full_path.display());
+                continue;
+            }
+        };
+
+        // B.1: Magic number detection
+        println!("\n[3/4] Magic number detection:");
+        let prompt3 = format!(
+            "You are a code quality assistant. Analyze the following file `{file_path}` and identify any hard-coded constants (magic numbers). If any are found, suggest defining them as named constants. If none are found, say 'No magic numbers found'.\n\n---\n\n{content}"
+        );
+        if let Err(e) = run_analysis_prompt(prompt3, config, client).await {
+            eprintln!("Error: {e}");
+        }
+
+        // B.2: Complexity/Duplication detection
+        println!("\n[4/4] Complexity and duplication check:");
+        let prompt4 = format!(
+            "You are a code quality assistant. Analyze the following file `{file_path}` for overly complex functions or duplicated code blocks. If any are found, suggest refactoring or adding comments for clarity. If none are found, say 'No complexity or duplication issues found'.\n\n---\n\n{content}"
+        );
+        if let Err(e) = run_analysis_prompt(prompt4, config, client).await {
+            eprintln!("Error: {e}");
+        }
+        println!("--- Finished analyzing: {file_path} ---\n");
     }
     Ok(())
 }
@@ -278,8 +333,9 @@ mod tests {
             .await;
 
         let result = perform_ambient_check(&config, &client, dir.path()).await;
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.to_string().contains("Failed to get AI insight"));
+    // The new logic continues on error, so the overall result should be Ok.
+    // The errors are printed to stderr, but the test doesn't capture that.
+    // We are asserting that the function doesn't panic and completes.
+    assert!(result.is_ok());
     }
 }
