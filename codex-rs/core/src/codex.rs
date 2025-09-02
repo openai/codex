@@ -384,8 +384,7 @@ impl Session {
         // - spin up MCP connection manager
         // - perform default shell discovery
         // - load history metadata
-        let rollout_fut =
-            async { RolloutRecorder::new(&config, session_id, user_instructions.clone()).await };
+        let rollout_fut = RolloutRecorder::new(&config, session_id, user_instructions.clone());
 
         let mcp_fut = McpConnectionManager::new(config.mcp_servers.clone());
         let default_shell_fut = shell::default_user_shell();
@@ -395,15 +394,10 @@ impl Session {
         let (rollout_recorder, mcp_res, default_shell, (history_log_id, history_entry_count)) =
             tokio::join!(rollout_fut, mcp_fut, default_shell_fut, history_meta_fut);
 
-        let rollout_recorder = match rollout_recorder {
-            Ok(recorder) => recorder,
-            Err(e) => {
-                error!("failed to initialize rollout recorder: {e:#}");
-                return Err(anyhow::anyhow!(
-                    "failed to initialize rollout recorder: {e:#}"
-                ));
-            }
-        };
+        let rollout_recorder = rollout_recorder.map_err(|e| {
+            error!("failed to initialize rollout recorder: {e:#}");
+            anyhow::anyhow!("failed to initialize rollout recorder: {e:#}")
+        })?;
         // Create the mutable state for the Session.
         let state = State {
             history: ConversationHistory::new(),
@@ -514,6 +508,7 @@ impl Session {
             state.current_task.take();
         }
     }
+
     async fn record_initial_history(
         &self,
         turn_context: &TurnContext,

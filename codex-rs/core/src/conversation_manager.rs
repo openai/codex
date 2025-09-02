@@ -20,13 +20,14 @@ use crate::protocol::SessionConfiguredEvent;
 use crate::rollout::RolloutRecorder;
 use codex_protocol::models::ResponseItem;
 
-/// Represents a newly created Codex conversation, including the first event
-/// (which is [`EventMsg::SessionConfigured`]).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum InitialHistory {
     New,
     Resumed(Vec<ResponseItem>),
 }
+
+/// Represents a newly created Codex conversation, including the first event
+/// (which is [`EventMsg::SessionConfigured`]).
 pub struct NewConversation {
     pub conversation_id: Uuid,
     pub conversation: Arc<CodexConversation>,
@@ -190,7 +191,7 @@ fn truncate_after_dropping_last_messages(items: Vec<ResponseItem>, n: usize) -> 
         }
     }
     if cut_index == 0 {
-        // If fewer than n messages exist, drop everything.
+        // No prefix remains after dropping; start a new conversation.
         InitialHistory::New
     } else {
         InitialHistory::Resumed(items.into_iter().take(cut_index).collect())
@@ -249,13 +250,12 @@ mod tests {
         ];
 
         let truncated = truncate_after_dropping_last_messages(items.clone(), 1);
-        assert!(matches!(
+        assert_eq!(
             truncated,
-            InitialHistory::Resumed(items)
-                if items == vec![items[0].clone(), items[1].clone(), items[2].clone()]
-        ));
+            InitialHistory::Resumed(vec![items[0].clone(), items[1].clone(), items[2].clone(),])
+        );
 
         let truncated2 = truncate_after_dropping_last_messages(items, 2);
-        assert!(matches!(truncated2, InitialHistory::New));
+        assert_eq!(truncated2, InitialHistory::New);
     }
 }
