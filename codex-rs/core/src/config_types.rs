@@ -5,11 +5,11 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use strum_macros::Display;
 use wildmatch::WildMatchPattern;
 
 use serde::Deserialize;
 use serde::Serialize;
+use strum_macros::Display;
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
@@ -77,20 +77,6 @@ pub enum HistoryPersistence {
 /// Collection of settings that are specific to the TUI.
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct Tui {}
-
-#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Default, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum SandboxMode {
-    #[serde(rename = "read-only")]
-    #[default]
-    ReadOnly,
-
-    #[serde(rename = "workspace-write")]
-    WorkspaceWrite,
-
-    #[serde(rename = "danger-full-access")]
-    DangerFullAccess,
-}
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct SandboxWorkspaceWrite {
@@ -226,4 +212,16 @@ pub enum ReasoningSummary {
     Detailed,
     /// Option to disable reasoning summaries.
     None,
+}
+
+/// Controls output length/detail on GPT-5 models via the Responses API.
+/// Serialized with lowercase values to match the OpenAI API.
+#[derive(Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq, Display)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum Verbosity {
+    Low,
+    #[default]
+    Medium,
+    High,
 }

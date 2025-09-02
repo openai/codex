@@ -1,3 +1,3 @@
-model = "o3"
+model = "gpt-5"
 
 # Consider setting [mcp_servers] here!

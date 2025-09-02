@@ -1,4 +1,5 @@
 use codex_core::config::Config;
+use codex_core::user_agent::get_codex_user_agent;
 
 use crate::chatgpt_token::get_chatgpt_token_data;
 use crate::chatgpt_token::init_chatgpt_token_from_auth;
@@ -30,7 +31,7 @@ pub(crate) async fn chatgpt_get_request<T: DeserializeOwned>(
         .bearer_auth(&token.access_token)
         .header("chatgpt-account-id", account_id?)
         .header("Content-Type", "application/json")
-        .header("User-Agent", "codex-cli")
+        .header("User-Agent", get_codex_user_agent(None))
         .send()
         .await
         .context("Failed to send request")?;
