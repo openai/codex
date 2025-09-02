@@ -1,7 +1,6 @@
 ---
 source: tui/src/chatwidget/tests.rs
-assertion_line: 779
 expression: terminal.backend()
 ---
 "▌ Ask Codex to do anything              "
-"                                        "
+" ⏎ send   Ctrl+J newline   Ctrl+T transc"
