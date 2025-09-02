@@ -260,6 +260,20 @@ fn open_fixture(name: &str) -> std::fs::File {
 }
 
 #[test]
+fn empty_enter_during_task_does_not_queue() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
+
+    // Simulate running task so submissions would normally be queued.
+    chat.bottom_pane.set_task_running(true);
+
+    // Press Enter with an empty composer.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    // Ensure nothing was queued.
+    assert!(chat.queued_user_messages.is_empty());
+}
+
+#[test]
 fn alt_up_edits_most_recent_queued_message() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
 
