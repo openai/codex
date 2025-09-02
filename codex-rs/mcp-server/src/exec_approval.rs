@@ -106,15 +106,19 @@ pub(crate) async fn handle_exec_approval_request(
     // Listen for the response on a separate task so we don't block the main agent loop.
     {
         let codex = codex.clone();
-        let event_id = event_id.clone();
+        // Use the tool_call_id (the MCP tools/call request id) for correlating
+        // approval responses back to the pending approval in codex-core.
+        // This ensures we notify the same sub_id that was used to register
+        // the pending approval.
+        let approval_id = tool_call_id.clone();
         tokio::spawn(async move {
-            on_exec_approval_response(event_id, on_response, codex).await;
+            on_exec_approval_response(approval_id, on_response, codex).await;
         });
     }
 }
 
 async fn on_exec_approval_response(
-    event_id: String,
+    approval_id: String,
     receiver: tokio::sync::oneshot::Receiver<mcp_types::Result>,
     codex: Arc<CodexConversation>,
 ) {
@@ -139,7 +143,7 @@ async fn on_exec_approval_response(
 
     if let Err(err) = codex
         .submit(Op::ExecApproval {
-            id: event_id,
+            id: approval_id,
             decision: response.decision,
         })
         .await

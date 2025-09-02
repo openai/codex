@@ -21,3 +21,4 @@ tokio = { version = "1", features = [
     "sync",
     "time",
 ] }
+which = "6"

@@ -87,7 +87,25 @@ impl McpClient {
         args: Vec<OsString>,
         env: Option<HashMap<String, String>>,
     ) -> std::io::Result<Self> {
-        let mut child = Command::new(program)
+        // On Windows, resolve the program via PATH + PATHEXT using `which` when possible.
+        #[allow(unused_mut)]
+        let mut program_resolved = program.clone();
+        #[cfg(windows)]
+        {
+            use std::path::Path;
+            // Only try to resolve when it's a bare command (no path separators)
+            let needs_resolution = {
+                let s = program.to_string_lossy();
+                !s.contains('/') && !s.contains('\\')
+            };
+            if needs_resolution {
+                if let Ok(path) = which::which(&program) {
+                    program_resolved = OsString::from(path);
+                }
+            }
+        }
+
+        let mut child = Command::new(program_resolved)
             .args(args)
             .env_clear()
             .envs(create_env_for_mcp_server(env))

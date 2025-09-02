@@ -22,7 +22,10 @@ use mcp_types::Tool;
 use serde_json::json;
 use sha1::Digest;
 use sha1::Sha1;
+use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::watch;
 use tokio::task::JoinSet;
+use tokio::time::sleep;
 use tracing::info;
 use tracing::warn;
 
@@ -81,17 +84,37 @@ struct ToolInfo {
     tool: Tool,
 }
 
-/// A thin wrapper around a set of running [`McpClient`] instances.
-#[derive(Default)]
+/// A thin wrapper around MCP client state with lazy spawning.
+#[derive(Default, Clone)]
 pub(crate) struct McpConnectionManager {
-    /// Server-name -> client instance.
-    ///
-    /// The server name originates from the keys of the `mcp_servers` map in
-    /// the user configuration.
-    clients: HashMap<String, std::sync::Arc<McpClient>>,
+    inner: std::sync::Arc<std::sync::Mutex<Inner>>, // interior mutability for lazy spawn
+}
 
-    /// Fully qualified tool name -> tool instance.
+impl McpConnectionManager {
+    #[inline]
+    fn lock_inner(&self) -> std::sync::MutexGuard<'_, Inner> {
+        // Recover poisoned locks by taking the inner state; avoid unwrap()
+        match self.inner.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+}
+
+#[derive(Default)]
+struct Inner {
+    /// Server-name -> client instance (spawned lazily on first use).
+    clients: HashMap<String, std::sync::Arc<McpClient>>,
+    /// Fully qualified tool name -> tool instance (populated after server initialize/list).
     tools: HashMap<String, ToolInfo>,
+    /// Monotonic version incremented whenever tools set changes.
+    tools_version: u64,
+    /// Watch channel to notify listeners when tools_version changes.
+    tools_tx: watch::Sender<u64>,
+    /// Original server spawn configs kept for lazy creation.
+    server_configs: HashMap<String, McpServerConfig>,
+    /// Per-server async init locks to serialize initialization and avoid races.
+    init_locks: HashMap<String, std::sync::Arc<AsyncMutex<()>>>,
 }
 
 impl McpConnectionManager {
@@ -106,17 +129,10 @@ impl McpConnectionManager {
     pub async fn new(
         mcp_servers: HashMap<String, McpServerConfig>,
     ) -> Result<(Self, ClientStartErrors)> {
-        // Early exit if no servers are configured.
-        if mcp_servers.is_empty() {
-            return Ok((Self::default(), ClientStartErrors::default()));
-        }
-
-        // Launch all configured servers concurrently.
-        let mut join_set = JoinSet::new();
+        // Validate server names but do not spawn – we will spawn lazily.
         let mut errors = ClientStartErrors::new();
-
+        let mut valid_cfgs = HashMap::new();
         for (server_name, cfg) in mcp_servers {
-            // Validate server name before spawning
             if !is_valid_mcp_server_name(&server_name) {
                 let error = anyhow::anyhow!(
                     "invalid server name '{}': must match pattern ^[a-zA-Z0-9_-]+$",
@@ -125,79 +141,106 @@ impl McpConnectionManager {
                 errors.insert(server_name, error);
                 continue;
             }
-
-            join_set.spawn(async move {
-                let McpServerConfig { command, args, env } = cfg;
-                let client_res = McpClient::new_stdio_client(
-                    command.into(),
-                    args.into_iter().map(OsString::from).collect(),
-                    env,
-                )
-                .await;
-                match client_res {
-                    Ok(client) => {
-                        // Initialize the client.
-                        let params = mcp_types::InitializeRequestParams {
-                            capabilities: ClientCapabilities {
-                                experimental: None,
-                                roots: None,
-                                sampling: None,
-                                // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
-                                // indicates this should be an empty object.
-                                elicitation: Some(json!({})),
-                            },
-                            client_info: Implementation {
-                                name: "codex-mcp-client".to_owned(),
-                                version: env!("CARGO_PKG_VERSION").to_owned(),
-                                title: Some("Codex".into()),
-                            },
-                            protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_owned(),
-                        };
-                        let initialize_notification_params = None;
-                        let timeout = Some(Duration::from_secs(10));
-                        match client
-                            .initialize(params, initialize_notification_params, timeout)
-                            .await
-                        {
-                            Ok(_response) => (server_name, Ok(client)),
-                            Err(e) => (server_name, Err(e)),
-                        }
-                    }
-                    Err(e) => (server_name, Err(e.into())),
-                }
-            });
+            valid_cfgs.insert(server_name, cfg);
         }
-
-        let mut clients: HashMap<String, std::sync::Arc<McpClient>> =
-            HashMap::with_capacity(join_set.len());
-
-        while let Some(res) = join_set.join_next().await {
-            let (server_name, client_res) = res?; // JoinError propagation
-
-            match client_res {
-                Ok(client) => {
-                    clients.insert(server_name, std::sync::Arc::new(client));
-                }
-                Err(e) => {
-                    errors.insert(server_name, e);
-                }
-            }
-        }
-
-        let all_tools = list_all_tools(&clients).await?;
-
-        let tools = qualify_tools(all_tools);
-
-        Ok((Self { clients, tools }, errors))
+        let (tools_tx, _tools_rx) = watch::channel(0u64);
+        let mgr = McpConnectionManager {
+            inner: std::sync::Arc::new(std::sync::Mutex::new(Inner {
+                clients: HashMap::new(),
+                tools: HashMap::new(),
+                tools_version: 0,
+                tools_tx,
+                server_configs: valid_cfgs,
+                init_locks: HashMap::new(),
+            })),
+        };
+        Ok((mgr, errors))
     }
 
     /// Returns a single map that contains **all** tools. Each key is the
     /// fully-qualified name for the tool.
     pub fn list_all_tools(&self) -> HashMap<String, Tool> {
-        self.tools
+        // Return the snapshot of known tools (may be empty until servers are first used).
+        let guard = self.lock_inner();
+        guard
+            .tools
             .iter()
             .map(|(name, tool)| (name.clone(), tool.tool.clone()))
             .collect()
+    }
+
+    /// Ensure all configured servers are spawned in the background (non-blocking),
+    /// then return the current snapshot of the tool map.
+    /// This supports on-demand discovery for UI listing without blocking the UI.
+    pub async fn list_all_tools_on_demand(&self) -> HashMap<String, Tool> {
+        // Collect server names to avoid holding the lock across awaits.
+        // Also compute a per-server cache presence flag by checking if we have
+        // any qualified tool names starting with "<server>__".
+        let (server_names, has_clients, server_has_tools): (Vec<String>, Vec<bool>, Vec<bool>) = {
+            let guard = self.lock_inner();
+            let names: Vec<String> = guard.server_configs.keys().cloned().collect();
+            let has_clients: Vec<bool> = names
+                .iter()
+                .map(|n| guard.clients.contains_key(n))
+                .collect();
+            let server_has_tools: Vec<bool> = names
+                .iter()
+                .map(|n| {
+                    let prefix = format!("{n}{MCP_TOOL_NAME_DELIMITER}");
+                    guard.tools.keys().any(|k| k.starts_with(&prefix))
+                })
+                .collect();
+            (names, has_clients, server_has_tools)
+        };
+
+        // Kick off background initialization or refresh without awaiting.
+        for (idx, server) in server_names.iter().enumerate() {
+            let server = server.clone();
+            let already_client = has_clients[idx];
+            let has_tools_for_server = server_has_tools[idx];
+            // Spawn a task per server; best effort.
+            let this = self.clone();
+            tokio::spawn(async move {
+                if !already_client {
+                    // Lazy spawn and initialization also attempts to prefill this server's tools.
+                    let _ = this.ensure_client(&server).await;
+                } else if !has_tools_for_server {
+                    // Try to refresh tools only for this server if its cache is empty.
+                    let client_opt = {
+                        let guard = this.lock_inner();
+                        guard.clients.get(&server).cloned()
+                    };
+                    if let Some(client) = client_opt {
+                        let _ =
+                            client
+                                .list_tools(None, Some(LIST_TOOLS_TIMEOUT))
+                                .await
+                                .map(|list| {
+                                    let mut guard = this.lock_inner();
+                                    let mut added = false;
+                                    for tool in list.tools {
+                                        let info = ToolInfo {
+                                            server_name: server.clone(),
+                                            tool_name: tool.name.clone(),
+                                            tool: tool.clone(),
+                                        };
+                                        let qualified = qualify_tools(vec![info]);
+                                        if !qualified.is_empty() {
+                                            added = true;
+                                        }
+                                        guard.tools.extend(qualified);
+                                    }
+                                    if added {
+                                        guard.tools_version = guard.tools_version.saturating_add(1);
+                                        let _ = guard.tools_tx.send(guard.tools_version);
+                                    }
+                                });
+                    }
+                }
+            });
+        }
+
+        self.list_all_tools()
     }
 
     /// Invoke the tool indicated by the (server, tool) pair.
@@ -208,11 +251,28 @@ impl McpConnectionManager {
         arguments: Option<serde_json::Value>,
         timeout: Option<Duration>,
     ) -> Result<mcp_types::CallToolResult> {
-        let client = self
-            .clients
-            .get(server)
-            .ok_or_else(|| anyhow!("unknown MCP server '{server}'"))?
-            .clone();
+        // Jeśli mamy timeout dla wywołania, wykorzystaj go także na inicjalizację serwera.
+        if let Some(t) = timeout {
+            match tokio::time::timeout(t, self.ensure_client(server)).await {
+                Ok(Ok(client)) => {
+                    return client
+                        .call_tool(tool.to_string(), arguments, timeout)
+                        .await
+                        .with_context(|| format!("tool call failed for `{server}/{tool}`"));
+                }
+                Ok(Err(e)) => {
+                    return Err(e)
+                        .with_context(|| format!("failed to initialize MCP server '{server}'"));
+                }
+                Err(_) => {
+                    return Err(anyhow!(format!(
+                        "MCP server '{server}' is still initializing; try again later"
+                    )));
+                }
+            }
+        }
+
+        let client = self.ensure_client(server).await?;
 
         client
             .call_tool(tool.to_string(), arguments, timeout)
@@ -220,15 +280,142 @@ impl McpConnectionManager {
             .with_context(|| format!("tool call failed for `{server}/{tool}`"))
     }
 
+    /// Ensure a client exists for the given server, spawning and initializing lazily if needed.
+    async fn ensure_client(&self, server: &str) -> Result<std::sync::Arc<McpClient>> {
+        // Fast path: already spawned
+        {
+            let guard = self.lock_inner();
+            if let Some(c) = guard.clients.get(server) {
+                return Ok(c.clone());
+            }
+        }
+
+        // Take config and initialize per-server async lock
+        let (cfg, lock_arc) = {
+            let mut guard = self.lock_inner();
+            let cfg = guard
+                .server_configs
+                .get(server)
+                .cloned()
+                .ok_or_else(|| anyhow!(format!("unknown MCP server '{server}'")))?;
+            let lock = guard
+                .init_locks
+                .entry(server.to_string())
+                .or_insert_with(|| std::sync::Arc::new(AsyncMutex::new(())))
+                .clone();
+            (cfg, lock)
+        };
+
+        // Serialize initialization for this server
+        let _init_guard = lock_arc.lock().await;
+        // Check again in case another waiter already finished init.
+        {
+            let guard = self.lock_inner();
+            if let Some(c) = guard.clients.get(server) {
+                return Ok(c.clone());
+            }
+        }
+
+        let McpServerConfig { command, args, env } = cfg;
+        let client = McpClient::new_stdio_client(
+            command.into(),
+            args.into_iter().map(OsString::from).collect(),
+            env,
+        )
+        .await?;
+
+        // Initialize
+        let params = mcp_types::InitializeRequestParams {
+            capabilities: ClientCapabilities {
+                experimental: None,
+                roots: None,
+                sampling: None,
+                // https://modelcontextprotocol.io/specification/2025-06-18/client/elicitation#capabilities
+                // indicates this should be an empty object.
+                elicitation: Some(json!({})),
+            },
+            client_info: Implementation {
+                name: "codex-mcp-client".to_owned(),
+                version: env!("CARGO_PKG_VERSION").to_owned(),
+                title: Some("Codex".into()),
+            },
+            protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_owned(),
+        };
+        let initialize_notification_params = None;
+        let timeout = Some(Duration::from_secs(10));
+        client
+            .initialize(params, initialize_notification_params, timeout)
+            .await
+            .with_context(|| format!("failed to initialize MCP server '{server}'"))?;
+
+        let client = std::sync::Arc::new(client);
+
+        // Record client in map
+        {
+            let mut guard = self.lock_inner();
+            guard.clients.insert(server.to_string(), client.clone());
+        }
+
+        // Try to fetch and cache tools for this server with light retry; ignore failures.
+        let delays = [
+            Duration::from_millis(50),
+            Duration::from_millis(200),
+            Duration::from_secs(1),
+        ];
+        for (i, d) in delays.iter().enumerate() {
+            match client.list_tools(None, Some(LIST_TOOLS_TIMEOUT)).await {
+                Ok(list) => {
+                    let mut guard = self.lock_inner();
+                    let mut added = false;
+                    for tool in list.tools {
+                        let info = ToolInfo {
+                            server_name: server.to_string(),
+                            tool_name: tool.name.clone(),
+                            tool: tool.clone(),
+                        };
+                        let qualified = qualify_tools(vec![info]);
+                        if !qualified.is_empty() {
+                            added = true;
+                        }
+                        guard.tools.extend(qualified);
+                    }
+                    if added {
+                        guard.tools_version = guard.tools_version.saturating_add(1);
+                        let _ = guard.tools_tx.send(guard.tools_version);
+                    }
+                    break;
+                }
+                Err(_) if i + 1 < delays.len() => sleep(*d).await,
+                Err(_) => break,
+            }
+        }
+
+        Ok(client)
+    }
+
     pub fn parse_tool_name(&self, tool_name: &str) -> Option<(String, String)> {
-        self.tools
+        let guard = self.lock_inner();
+        guard
+            .tools
             .get(tool_name)
             .map(|tool| (tool.server_name.clone(), tool.tool_name.clone()))
+    }
+
+    /// Subskrybuj zmiany listy narzędzi; emituje rosnący `tools_version` przy aktualizacji.
+    ///
+    /// Uwaga: obecnie nieużywane przez ścieżkę renderowania `/mcp`, która
+    /// zwraca natychmiastowy snapshot bez oczekiwania. Pozostawiamy API
+    /// do ewentualnych przyszłych live‑update’ów w TUI.
+    #[allow(dead_code)]
+    pub fn subscribe_tools_changes(&self) -> watch::Receiver<u64> {
+        let guard = self.lock_inner();
+        guard.tools_tx.subscribe()
     }
 }
 
 /// Query every server for its available tools and return a single map that
 /// contains **all** tools. Each key is the fully-qualified name for the tool.
+#[allow(dead_code)]
 async fn list_all_tools(
     clients: &HashMap<String, std::sync::Arc<McpClient>>,
 ) -> Result<Vec<ToolInfo>> {

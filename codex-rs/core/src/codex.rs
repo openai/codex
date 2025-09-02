@@ -545,6 +545,16 @@ impl Session {
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         });
 
+        // Proactively initialize configured MCP servers in the background so
+        // `/mcp` acts as a read‑only status view rather than the trigger for
+        // loading. Best‑effort; errors are surfaced later when listing/calling.
+        {
+            let mgr = sess.mcp_connection_manager.clone();
+            tokio::spawn(async move {
+                let _ = mgr.list_all_tools_on_demand().await;
+            });
+        }
+
         // record the initial user instructions and environment context,
         // regardless of whether we restored items.
         let mut conversation_items = Vec::<ResponseItem>::with_capacity(2);
@@ -1285,18 +1295,31 @@ async fn submission_loop(
             Op::ListMcpTools => {
                 let tx_event = sess.tx_event.clone();
                 let sub_id = sub.id.clone();
+                let mgr = sess.mcp_connection_manager.clone();
 
-                // This is a cheap lookup from the connection manager's cache.
-                let tools = sess.mcp_connection_manager.list_all_tools();
-                let event = Event {
-                    id: sub_id,
-                    msg: EventMsg::McpListToolsResponse(
-                        crate::protocol::McpListToolsResponseEvent { tools },
-                    ),
-                };
-                if let Err(e) = tx_event.send(event).await {
-                    warn!("failed to send McpListToolsResponse event: {e}");
-                }
+                // Render-only behavior: return current snapshot immediately without waiting.
+                // Keep loading logic unchanged by triggering on-demand discovery in the background.
+                tokio::spawn(async move {
+                    // Fire-and-forget initialization (does not block rendering of the current snapshot)
+                    {
+                        let mgr_bg = mgr.clone();
+                        tokio::spawn(async move {
+                            let _ = mgr_bg.list_all_tools_on_demand().await;
+                        });
+                    }
+
+                    // Immediately emit whatever snapshot is currently available.
+                    let snapshot = mgr.list_all_tools();
+                    let event = Event {
+                        id: sub_id.clone(),
+                        msg: EventMsg::McpListToolsResponse(
+                            crate::protocol::McpListToolsResponseEvent { tools: snapshot },
+                        ),
+                    };
+                    if let Err(e) = tx_event.send(event).await {
+                        warn!("failed to send McpListToolsResponse event: {e}");
+                    }
+                });
             }
             Op::ListCustomPrompts => {
                 let tx_event = sess.tx_event.clone();

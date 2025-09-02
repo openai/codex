@@ -9,7 +9,6 @@ use std::time::Duration;
 use std::time::Instant;
 
 use async_channel::Sender;
-use tokio::io::AsyncRead;
 use tokio::io::AsyncReadExt;
 use tokio::io::BufReader;
 use tokio::process::Child;
@@ -39,6 +38,8 @@ const EXIT_CODE_SIGNAL_BASE: i32 = 128; // conventional shell: 128 + signal
 // I/O buffer sizing
 const READ_CHUNK_SIZE: usize = 8192; // bytes per read
 const AGGREGATE_BUFFER_INITIAL_CAPACITY: usize = 8 * 1024; // 8 KiB
+
+// (no per-stream truncation limits here; formatting limits are handled elsewhere)
 
 /// Limit the number of ExecCommandOutputDelta events emitted per exec call.
 /// Aggregation still collects full output; only the live event stream is capped.
@@ -284,51 +285,116 @@ async fn consume_truncated_output(
         ))
     })?;
 
-    let (agg_tx, agg_rx) = async_channel::unbounded::<Vec<u8>>();
+    // Interleave reads from stdout and stderr to preserve write order as much as possible.
+    let mut stdout_reader = BufReader::new(stdout_reader);
+    let mut stderr_reader = BufReader::new(stderr_reader);
 
-    let stdout_handle = tokio::spawn(read_capped(
-        BufReader::new(stdout_reader),
-        stdout_stream.clone(),
-        false,
-        Some(agg_tx.clone()),
-    ));
-    let stderr_handle = tokio::spawn(read_capped(
-        BufReader::new(stderr_reader),
-        stdout_stream.clone(),
-        true,
-        Some(agg_tx.clone()),
-    ));
+    let mut out_stdout: Vec<u8> = Vec::with_capacity(AGGREGATE_BUFFER_INITIAL_CAPACITY);
+    let mut out_stderr: Vec<u8> = Vec::with_capacity(AGGREGATE_BUFFER_INITIAL_CAPACITY);
+    let mut out_agg: Vec<u8> = Vec::with_capacity(AGGREGATE_BUFFER_INITIAL_CAPACITY);
 
-    let exit_status = tokio::select! {
-        result = tokio::time::timeout(timeout, child.wait()) => {
-            match result {
-                Ok(Ok(exit_status)) => exit_status,
-                Ok(e) => e?,
-                Err(_) => {
-                    // timeout
-                    child.start_kill()?;
-                    // Debatable whether `child.wait().await` should be called here.
-                    synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + TIMEOUT_CODE)
-                }
-            }
-        }
-        _ = tokio::signal::ctrl_c() => {
-            child.start_kill()?;
-            synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + SIGKILL_CODE)
+    let mut tmp_stdout = [0u8; READ_CHUNK_SIZE];
+    let mut tmp_stderr = [0u8; READ_CHUNK_SIZE];
+
+    let mut stdout_open = true;
+    let mut stderr_open = true;
+
+    // Helper to emit a delta event, if enabled
+    let mut emitted_deltas: usize = 0;
+    let mut emit_delta = |chunk: &[u8], is_stderr: bool| {
+        if let Some(stream) = &stdout_stream
+            && emitted_deltas < MAX_EXEC_OUTPUT_DELTAS_PER_CALL
+        {
+            let msg = EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
+                call_id: stream.call_id.clone(),
+                stream: if is_stderr {
+                    ExecOutputStream::Stderr
+                } else {
+                    ExecOutputStream::Stdout
+                },
+                chunk: ByteBuf::from(chunk.to_vec()),
+            });
+            let event = Event {
+                id: stream.sub_id.clone(),
+                msg,
+            };
+            let _ = stream.tx_event.try_send(event);
+            emitted_deltas += 1;
         }
     };
 
-    let stdout = stdout_handle.await??;
-    let stderr = stderr_handle.await??;
+    let mut child_finished = false;
+    let mut exit_status: Option<ExitStatus> = None;
+    let timeout_fut = tokio::time::sleep(timeout);
+    tokio::pin!(timeout_fut);
 
-    drop(agg_tx);
+    // Drive process, timeout, and both pipes concurrently to provide live streaming
+    while (stdout_open || stderr_open) || !child_finished {
+        tokio::select! {
+            // Timeout
+            _ = &mut timeout_fut, if exit_status.is_none() => {
+                let _ = child.start_kill();
+                exit_status = Some(synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + TIMEOUT_CODE));
+                child_finished = true;
+            }
 
-    let mut combined_buf = Vec::with_capacity(AGGREGATE_BUFFER_INITIAL_CAPACITY);
-    while let Ok(chunk) = agg_rx.recv().await {
-        append_all(&mut combined_buf, &chunk);
+            // Process exit
+            res = child.wait(), if !child_finished => {
+                match res {
+                    Ok(status) => exit_status = Some(status),
+                    Err(e) => return Err(CodexErr::Io(e)),
+                }
+                child_finished = true;
+            }
+
+            // Stdout chunk
+            read = stdout_reader.read(&mut tmp_stdout), if stdout_open => {
+                match read {
+                    Ok(0) => stdout_open = false,
+                    Ok(n) => {
+                        append_all(&mut out_stdout, &tmp_stdout[..n]);
+                        append_all(&mut out_agg, &tmp_stdout[..n]);
+                        emit_delta(&tmp_stdout[..n], false);
+                    }
+                    Err(e) => return Err(CodexErr::Io(e)),
+                }
+            }
+
+            // Stderr chunk
+            read = stderr_reader.read(&mut tmp_stderr), if stderr_open => {
+                match read {
+                    Ok(0) => stderr_open = false,
+                    Ok(n) => {
+                        append_all(&mut out_stderr, &tmp_stderr[..n]);
+                        append_all(&mut out_agg, &tmp_stderr[..n]);
+                        emit_delta(&tmp_stderr[..n], true);
+                    }
+                    Err(e) => return Err(CodexErr::Io(e)),
+                }
+            }
+
+            // Ctrl-C termination
+            _ = tokio::signal::ctrl_c() => {
+                let _ = child.start_kill();
+                exit_status = Some(synthetic_exit_status(EXIT_CODE_SIGNAL_BASE + SIGKILL_CODE));
+                child_finished = true;
+            }
+        }
     }
+
+    // Ensure we have an exit status
+    let exit_status = exit_status.unwrap_or_else(|| synthetic_exit_status(0));
+
+    let stdout = StreamOutput {
+        text: out_stdout,
+        truncated_after_lines: None,
+    };
+    let stderr = StreamOutput {
+        text: out_stderr,
+        truncated_after_lines: None,
+    };
     let aggregated_output = StreamOutput {
-        text: combined_buf,
+        text: out_agg,
         truncated_after_lines: None,
     };
 
@@ -337,60 +403,6 @@ async fn consume_truncated_output(
         stdout,
         stderr,
         aggregated_output,
-    })
-}
-
-async fn read_capped<R: AsyncRead + Unpin + Send + 'static>(
-    mut reader: R,
-    stream: Option<StdoutStream>,
-    is_stderr: bool,
-    aggregate_tx: Option<Sender<Vec<u8>>>,
-) -> io::Result<StreamOutput<Vec<u8>>> {
-    let mut buf = Vec::with_capacity(AGGREGATE_BUFFER_INITIAL_CAPACITY);
-    let mut tmp = [0u8; READ_CHUNK_SIZE];
-    let mut emitted_deltas: usize = 0;
-
-    // No caps: append all bytes
-
-    loop {
-        let n = reader.read(&mut tmp).await?;
-        if n == 0 {
-            break;
-        }
-
-        if let Some(stream) = &stream
-            && emitted_deltas < MAX_EXEC_OUTPUT_DELTAS_PER_CALL
-        {
-            let chunk = tmp[..n].to_vec();
-            let msg = EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
-                call_id: stream.call_id.clone(),
-                stream: if is_stderr {
-                    ExecOutputStream::Stderr
-                } else {
-                    ExecOutputStream::Stdout
-                },
-                chunk: ByteBuf::from(chunk),
-            });
-            let event = Event {
-                id: stream.sub_id.clone(),
-                msg,
-            };
-            #[allow(clippy::let_unit_value)]
-            let _ = stream.tx_event.send(event).await;
-            emitted_deltas += 1;
-        }
-
-        if let Some(tx) = &aggregate_tx {
-            let _ = tx.send(tmp[..n].to_vec()).await;
-        }
-
-        append_all(&mut buf, &tmp[..n]);
-        // Continue reading to EOF to avoid back-pressure
-    }
-
-    Ok(StreamOutput {
-        text: buf,
-        truncated_after_lines: None,
     })
 }
 
