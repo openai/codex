@@ -246,5 +246,3 @@ fn read_first_jsonl_records(path: &Path, max_records: usize) -> io::Result<Vec<s
     }
     Ok(head)
 }
-
-

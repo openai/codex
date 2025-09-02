@@ -19,12 +19,12 @@ use tracing::info;
 use tracing::warn;
 use uuid::Uuid;
 
+use super::SESSIONS_SUBDIR;
 use crate::config::Config;
 use crate::conversation_manager::InitialHistory;
 use crate::git_info::GitInfo;
 use crate::git_info::collect_git_info;
 use codex_protocol::models::ResponseItem;
-use super::SESSIONS_SUBDIR;
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct SessionMeta {
@@ -342,5 +342,3 @@ impl JsonlWriter {
         Ok(())
     }
 }
-
-
