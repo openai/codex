@@ -1,6 +1,5 @@
 To get started, describe a task or try one of these commands:
 
- /init - create an AGENTS.md file with instructions for Codex
  /status - show current session configuration and token usage
  /approvals - choose what Codex can do without approval
  /model - choose what model and reasoning effort to use
