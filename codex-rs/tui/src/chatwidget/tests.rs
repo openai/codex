@@ -193,10 +193,12 @@ fn drain_insert_history(
 ) -> Vec<Vec<ratatui::text::Line<'static>>> {
     let mut out = Vec::new();
     while let Ok(ev) = rx.try_recv() {
-        match ev {
-            AppEvent::InsertHistoryLines(lines) => out.push(lines),
-            AppEvent::InsertHistoryCell(cell) => out.push(cell.display_lines(80)),
-            _ => {}
+        if let AppEvent::InsertHistoryCell(cell) = ev {
+            let mut lines = cell.display_lines(80);
+            if !cell.is_stream_continuation() && !out.is_empty() && !lines.is_empty() {
+                lines.insert(0, "".into());
+            }
+            out.push(lines)
         }
     }
     out
@@ -449,6 +451,7 @@ async fn binary_size_transcript_snapshot() {
     let reader = BufReader::new(file);
     let mut transcript = String::new();
     let mut ansi: Vec<u8> = Vec::new();
+    let mut has_emitted_history = false;
 
     for line in reader.lines() {
         let line = line.expect("read line");
@@ -495,25 +498,21 @@ async fn binary_size_transcript_snapshot() {
                     };
                     chat.handle_codex_event(ev);
                     while let Ok(app_ev) = rx.try_recv() {
-                        match app_ev {
-                            AppEvent::InsertHistoryLines(lines) => {
-                                transcript.push_str(&lines_to_single_string(&lines));
-                                crate::insert_history::insert_history_lines_to_writer(
-                                    &mut terminal,
-                                    &mut ansi,
-                                    lines,
-                                );
+                        if let AppEvent::InsertHistoryCell(cell) = app_ev {
+                            let mut lines = cell.display_lines(width);
+                            if has_emitted_history
+                                && !cell.is_stream_continuation()
+                                && !lines.is_empty()
+                            {
+                                lines.insert(0, "".into());
                             }
-                            AppEvent::InsertHistoryCell(cell) => {
-                                let lines = cell.display_lines(80);
-                                transcript.push_str(&lines_to_single_string(&lines));
-                                crate::insert_history::insert_history_lines_to_writer(
-                                    &mut terminal,
-                                    &mut ansi,
-                                    lines,
-                                );
-                            }
-                            _ => {}
+                            has_emitted_history = true;
+                            transcript.push_str(&lines_to_single_string(&lines));
+                            crate::insert_history::insert_history_lines_to_writer(
+                                &mut terminal,
+                                &mut ansi,
+                                lines,
+                            );
                         }
                     }
                 }
@@ -524,25 +523,21 @@ async fn binary_size_transcript_snapshot() {
                 {
                     chat.on_commit_tick();
                     while let Ok(app_ev) = rx.try_recv() {
-                        match app_ev {
-                            AppEvent::InsertHistoryLines(lines) => {
-                                transcript.push_str(&lines_to_single_string(&lines));
-                                crate::insert_history::insert_history_lines_to_writer(
-                                    &mut terminal,
-                                    &mut ansi,
-                                    lines,
-                                );
+                        if let AppEvent::InsertHistoryCell(cell) = app_ev {
+                            let mut lines = cell.display_lines(width);
+                            if has_emitted_history
+                                && !cell.is_stream_continuation()
+                                && !lines.is_empty()
+                            {
+                                lines.insert(0, "".into());
                             }
-                            AppEvent::InsertHistoryCell(cell) => {
-                                let lines = cell.display_lines(80);
-                                transcript.push_str(&lines_to_single_string(&lines));
-                                crate::insert_history::insert_history_lines_to_writer(
-                                    &mut terminal,
-                                    &mut ansi,
-                                    lines,
-                                );
-                            }
-                            _ => {}
+                            has_emitted_history = true;
+                            transcript.push_str(&lines_to_single_string(&lines));
+                            crate::insert_history::insert_history_lines_to_writer(
+                                &mut terminal,
+                                &mut ansi,
+                                lines,
+                            );
                         }
                     }
                 }
@@ -1310,96 +1305,6 @@ fn stream_error_is_rendered_to_history() {
 }
 
 #[test]
-fn headers_emitted_on_stream_begin_for_answer_and_not_for_reasoning() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
-
-    // Answer: no header until a newline commit
-    chat.handle_codex_event(Event {
-        id: "sub-a".into(),
-        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
-            delta: "Hello".into(),
-        }),
-    });
-    let mut saw_codex_pre = false;
-    while let Ok(ev) = rx.try_recv() {
-        if let AppEvent::InsertHistoryLines(lines) = ev {
-            let s = lines
-                .iter()
-                .flat_map(|l| l.spans.iter())
-                .map(|sp| sp.content.clone())
-                .collect::<Vec<_>>()
-                .join("");
-            if s.contains("codex") {
-                saw_codex_pre = true;
-                break;
-            }
-        }
-    }
-    assert!(
-        !saw_codex_pre,
-        "answer header should not be emitted before first newline commit"
-    );
-
-    // Newline arrives; header is not emitted
-    chat.handle_codex_event(Event {
-        id: "sub-a".into(),
-        msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent {
-            delta: "!\n".into(),
-        }),
-    });
-    chat.on_commit_tick();
-    let mut saw_codex_post = false;
-    while let Ok(ev) = rx.try_recv() {
-        if let AppEvent::InsertHistoryLines(lines) = ev {
-            let s = lines
-                .iter()
-                .flat_map(|l| l.spans.iter())
-                .map(|sp| sp.content.clone())
-                .collect::<Vec<_>>()
-                .join("");
-            if s.contains("codex") {
-                saw_codex_post = true;
-                break;
-            }
-        }
-    }
-    assert!(
-        !saw_codex_post,
-        "answer header should not be emitted on newline commit without final message"
-    );
-
-    // No additional checks for final message emission in this test.
-
-    // Reasoning: do NOT emit a history header; status text is updated instead
-    let (mut chat2, mut rx2, _op_rx2) = make_chatwidget_manual();
-    chat2.handle_codex_event(Event {
-        id: "sub-b".into(),
-        msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent {
-            delta: "Thinking".into(),
-        }),
-    });
-    let mut saw_thinking = false;
-    while let Ok(ev) = rx2.try_recv() {
-        if let AppEvent::InsertHistoryLines(lines) = ev {
-            let s = lines
-                .iter()
-                .flat_map(|l| l.spans.iter())
-                .map(|sp| sp.content.clone())
-                .collect::<Vec<_>>()
-                .join("");
-            if s.contains("thinking") {
-                saw_thinking = true;
-                break;
-            }
-        }
-    }
-    assert!(
-        !saw_thinking,
-        "reasoning deltas should not emit history headers"
-    );
-}
-
-#[test]
 fn multiple_agent_messages_in_single_turn_emit_multiple_headers() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
@@ -1603,7 +1508,7 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     // Dimensions
     let width: u16 = 80;
     let ui_height: u16 = chat.desired_height(width);
-    let vt_height: u16 = ui_height.saturating_add(6);
+    let vt_height: u16 = 40;
     let viewport = ratatui::layout::Rect::new(0, vt_height - ui_height, width, ui_height);
 
     // Use TestBackend for the terminal (no real ANSI emitted by drawing),

@@ -592,7 +592,7 @@ impl ChatWidget {
             Constraint::Max(
                 self.active_exec_cell
                     .as_ref()
-                    .map_or(0, |c| c.desired_height(area.width)),
+                    .map_or(0, |c| c.desired_height(area.width) + 1),
             ),
             Constraint::Min(self.bottom_pane.desired_height(area.width)),
         ])
@@ -693,7 +693,7 @@ impl ChatWidget {
             + self
                 .active_exec_cell
                 .as_ref()
-                .map_or(0, |c| c.desired_height(width))
+                .map_or(0, |c| c.desired_height(width) + 1)
     }
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
@@ -1283,6 +1283,9 @@ impl WidgetRef for &ChatWidget {
         let [active_cell_area, bottom_pane_area] = self.layout_areas(area);
         (&self.bottom_pane).render(bottom_pane_area, buf);
         if let Some(cell) = &self.active_exec_cell {
+            let mut active_cell_area = active_cell_area;
+            active_cell_area.y += 1;
+            active_cell_area.height -= 1;
             cell.render_ref(active_cell_area, buf);
         }
     }
