@@ -252,10 +252,10 @@ impl Tui {
                                 if next_deadline.is_none_or(|cur| at < cur) {
                                     next_deadline = Some(at);
                                 }
-                                if at <= Instant::now() {
-                                    next_deadline = None;
-                                    let _ = draw_tx_clone.send(());
-                                }
+                                // Do not send a draw immediately here. By continuing the loop,
+                                // we recompute the sleep target so the draw fires once via the
+                                // sleep branch, coalescing multiple requests into a single draw.
+                                continue;
                             }
                             None => break,
                         }
@@ -403,7 +403,10 @@ impl Tui {
     ) -> Result<Option<PreparedResumeAction>> {
         match action {
             ResumeAction::RealignInline => {
-                let cursor_pos = self.terminal.get_cursor_position()?;
+                let cursor_pos = self
+                    .terminal
+                    .get_cursor_position()
+                    .unwrap_or(self.terminal.last_known_cursor_pos);
                 Ok(Some(PreparedResumeAction::RealignViewport(
                     ratatui::layout::Rect::new(0, cursor_pos.y, 0, 0),
                 )))
@@ -496,8 +499,9 @@ impl Tui {
             let terminal = &mut self.terminal;
             let screen_size = terminal.size()?;
             let last_known_screen_size = terminal.last_known_screen_size;
-            if screen_size != last_known_screen_size {
-                let cursor_pos = terminal.get_cursor_position()?;
+            if screen_size != last_known_screen_size
+                && let Ok(cursor_pos) = terminal.get_cursor_position()
+            {
                 let last_known_cursor_pos = terminal.last_known_cursor_pos;
                 if cursor_pos.y != last_known_cursor_pos.y {
                     let cursor_delta = cursor_pos.y as i32 - last_known_cursor_pos.y as i32;
@@ -510,6 +514,7 @@ impl Tui {
             }
         }
 
+        // Use synchronized update via backend instead of stdout()
         std::io::stdout().sync_update(|_| {
             #[cfg(unix)]
             {
@@ -560,8 +565,7 @@ impl Tui {
             }
             terminal.draw(|frame| {
                 draw_fn(frame);
-            })?;
-            Ok(())
+            })
         })?
     }
 }

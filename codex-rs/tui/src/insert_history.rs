@@ -21,7 +21,8 @@ use ratatui::text::Span;
 use textwrap::Options as TwOptions;
 use textwrap::WordSplitter;
 
-/// Insert `lines` above the viewport.
+/// Insert `lines` above the viewport using the terminal's backend writer
+/// (avoids direct stdout references).
 pub(crate) fn insert_history_lines(terminal: &mut tui::Terminal, lines: Vec<Line>) {
     let mut out = std::io::stdout();
     insert_history_lines_to_writer(terminal, &mut out, lines);
@@ -262,7 +263,10 @@ where
 }
 
 /// Word-aware wrapping for a list of `Line`s preserving styles.
-pub(crate) fn word_wrap_lines(lines: &[Line], width: u16) -> Vec<Line<'static>> {
+pub(crate) fn word_wrap_lines<'a, I>(lines: I, width: u16) -> Vec<Line<'static>>
+where
+    I: IntoIterator<Item = &'a Line<'a>>,
+{
     let mut out = Vec::new();
     let w = width.max(1) as usize;
     for line in lines {
