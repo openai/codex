@@ -43,6 +43,7 @@ pub(crate) struct App {
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
     pub(crate) deferred_history_lines: Vec<Line<'static>>,
+    has_emitted_history_lines: bool,
 
     pub(crate) enhanced_keys_supported: bool,
 
@@ -91,6 +92,7 @@ impl App {
             transcript_lines: Vec::new(),
             overlay: None,
             deferred_history_lines: Vec::new(),
+            has_emitted_history_lines: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
         };
@@ -177,27 +179,23 @@ impl App {
                 );
                 tui.frame_requester().schedule_frame();
             }
-            AppEvent::InsertHistoryLines(lines) => {
-                if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                    t.insert_lines(lines.clone());
-                    tui.frame_requester().schedule_frame();
-                }
-                self.transcript_lines.extend(lines.clone());
-                if self.overlay.is_some() {
-                    self.deferred_history_lines.extend(lines);
-                } else {
-                    tui.insert_history_lines(lines);
-                }
-            }
             AppEvent::InsertHistoryCell(cell) => {
-                let cell_transcript = cell.transcript_lines();
+                let mut cell_transcript = cell.transcript_lines();
+                if !cell.is_stream_continuation() && !self.transcript_lines.is_empty() {
+                    cell_transcript.insert(0, Line::from(""));
+                }
                 if let Some(Overlay::Transcript(t)) = &mut self.overlay {
                     t.insert_lines(cell_transcript.clone());
                     tui.frame_requester().schedule_frame();
                 }
                 self.transcript_lines.extend(cell_transcript.clone());
-                let display = cell.display_lines();
+                let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
                 if !display.is_empty() {
+                    if self.has_emitted_history_lines {
+                        display.insert(0, Line::from(""));
+                    } else {
+                        self.has_emitted_history_lines = true;
+                    }
                     if self.overlay.is_some() {
                         self.deferred_history_lines.extend(display);
                     } else {

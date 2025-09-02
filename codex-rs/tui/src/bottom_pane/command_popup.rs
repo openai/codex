@@ -239,6 +239,20 @@ mod tests {
     }
 
     #[test]
+    fn model_is_first_suggestion_for_mo() {
+        let mut popup = CommandPopup::new(Vec::new());
+        popup.on_composer_text_change("/mo".to_string());
+        let matches = popup.filtered_items();
+        match matches.first() {
+            Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "model"),
+            Some(CommandItem::UserPrompt(_)) => {
+                panic!("unexpected prompt ranked before '/model' for '/mo'")
+            }
+            None => panic!("expected at least one match for '/mo'"),
+        }
+    }
+
+    #[test]
     fn prompt_discovery_lists_custom_prompts() {
         let prompts = vec![
             CustomPrompt {
