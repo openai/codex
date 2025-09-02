@@ -159,11 +159,14 @@ impl HistoryCell for AgentMessageCell {
     fn transcript_lines(&self) -> Vec<Line<'static>> {
         let mut out: Vec<Line<'static>> = Vec::new();
         if self.is_first_line {
-            out.push(Line::from(""));
             out.push(Line::from("codex".magenta().bold()));
         }
         out.extend(self.lines.clone());
         out
+    }
+
+    fn is_stream_continuation(&self) -> bool {
+        !self.is_first_line
     }
 }
 
