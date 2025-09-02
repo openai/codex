@@ -41,3 +41,7 @@ This repo uses snapshot tests (via `insta`), especially in `codex-rs/tui`, to va
 
 If you don’t have the tool:
 - `cargo install cargo-insta`
+
+### TUI Command Highlighting
+- Always parse and syntax-highlight the entire command or script before any wrapping; never re‑highlight per wrapped chunk.
+- Perform wrapping in a style‑preserving way and add visual prefixes/indents after wrapping so line breaks account for the intended gutter.
