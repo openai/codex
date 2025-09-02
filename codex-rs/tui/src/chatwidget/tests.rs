@@ -216,6 +216,25 @@ fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {
     s
 }
 
+#[test]
+fn disabled_slash_command_while_task_running_snapshot() {
+    // Build a chat widget and simulate an active task
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+    chat.bottom_pane.set_task_running(true);
+
+    // Dispatch a command that is unavailable while a task runs (e.g., /model)
+    chat.dispatch_command(SlashCommand::Model);
+
+    // Drain history and snapshot the rendered error line(s)
+    let cells = drain_insert_history(&mut rx);
+    assert!(
+        !cells.is_empty(),
+        "expected an error message history cell to be emitted",
+    );
+    let blob = lines_to_single_string(cells.last().unwrap());
+    assert_snapshot!(blob);
+}
+
 fn open_fixture(name: &str) -> std::fs::File {
     // 1) Prefer fixtures within this crate
     {
