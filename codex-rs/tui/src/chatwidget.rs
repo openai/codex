@@ -272,6 +272,7 @@ impl ChatWidget {
             
             let omnara_clone = omnara.clone();
             let tx = self.codex_op_tx.clone();
+            let app_tx = self.app_event_tx.clone();
             
             // If there's a last_agent_message from the event, we might need to send it
             // But for now, let's just wait for any pending send and then request input
@@ -283,10 +284,21 @@ impl ChatWidget {
                     
                     // Now request input on whatever the last message ID is
                     if let Some(user_input) = omnara_clone.handle_task_complete().await {
+                        tracing::info!("DEBUG: Received remote input from Omnara: {}", user_input);
+                        
+                        // Display the message in the TUI
+                        let history_cell = history_cell::new_user_prompt(user_input.clone());
+                        let _ = app_tx.send(AppEvent::InsertHistoryCell(Box::new(history_cell)));
+                        
                         // Inject user input into Codex as if it was typed
-                        let items = vec![InputItem::Text { text: user_input }];
+                        let items = vec![InputItem::Text { text: user_input.clone() }];
                         if let Err(e) = tx.send(Op::UserInput { items }) {
                             tracing::debug!("Failed to inject Omnara input: {}", e);
+                        }
+                        
+                        // Also add to history for persistence
+                        if let Err(e) = tx.send(Op::AddToHistory { text: user_input }) {
+                            tracing::debug!("Failed to add Omnara input to history: {}", e);
                         }
                     }
                 }));
@@ -295,10 +307,21 @@ impl ChatWidget {
                 self.omnara_polling_handle = Some(tokio::spawn(async move {
                     tracing::info!("DEBUG: No pending send, requesting user input");
                     if let Some(user_input) = omnara_clone.handle_task_complete().await {
+                        tracing::info!("DEBUG: Received remote input from Omnara: {}", user_input);
+                        
+                        // Display the message in the TUI
+                        let history_cell = history_cell::new_user_prompt(user_input.clone());
+                        let _ = app_tx.send(AppEvent::InsertHistoryCell(Box::new(history_cell)));
+                        
                         // Inject user input into Codex as if it was typed
-                        let items = vec![InputItem::Text { text: user_input }];
+                        let items = vec![InputItem::Text { text: user_input.clone() }];
                         if let Err(e) = tx.send(Op::UserInput { items }) {
                             tracing::debug!("Failed to inject Omnara input: {}", e);
+                        }
+                        
+                        // Also add to history for persistence
+                        if let Err(e) = tx.send(Op::AddToHistory { text: user_input }) {
+                            tracing::debug!("Failed to add Omnara input to history: {}", e);
                         }
                     }
                 }));

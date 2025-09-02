@@ -11,8 +11,9 @@ This document describes the Omnara integration for the OpenAI Codex CLI (Rust im
 - ✅ Agent message sending with message ID tracking
 - ✅ User message sending from local TUI
 - ✅ Request user input on task completion
-- ✅ Polling for remote user responses
-- ✅ Deterministic message handling (no race conditions)
+- ✅ Polling for remote user responses (matches Python SDK exactly)
+- ✅ Remote messages displayed in TUI and processed by agent
+- ✅ Deterministic message handling (no race conditions, no delays)
 - ✅ Comprehensive logging to `~/.omnara/codex_wrapper/`
 
 ## System Architecture
@@ -142,13 +143,16 @@ Called on the last agent message when task completes.
     {
       "id": "...",
       "content": "user message",
-      "sender_type": "user",
-      ...
+      "sender_type": "USER",  // Note: uppercase, but we don't filter by this
+      "created_at": "...",
+      "requires_user_input": false
     }
   ],
   "status": "ok"
 }
 ```
+
+**Important**: Following Python SDK, we return ANY messages without filtering by sender_type.
 
 ## Debugging
 
@@ -209,12 +213,33 @@ tail -f ~/.omnara/codex_wrapper/*.log
 2. **Async Requires Care**: Always track JoinHandles for determinism (NO DELAYS!)
 3. **State is Distributed**: Some in OmnaraClient, some in ChatWidget
 4. **Logging is Critical**: Debug logs essential for understanding timing
-5. **API Compatibility**: Must match Python SDK's request/response format
+5. **API Compatibility**: Must match Python SDK's request/response format exactly
 6. **No Arbitrary Delays**: We wait for actual operations, not fixed timeouts
 7. **TaskComplete Contains Info**: The event includes `last_agent_message` field
 8. **Agent Instance Creation**: First agent message creates the instance with `agent_type`
 9. **Why Async**: UI must remain responsive; blocking network calls would freeze terminal
 10. **Session ID**: Must be valid UUID, auto-generates if not provided
+
+## Critical Implementation Lessons
+
+### Always Follow the Python SDK
+The Python SDK is the reference implementation. Don't make assumptions about API behavior:
+- **Polling**: Python SDK doesn't filter by sender_type, neither should we
+- **Message IDs**: Must pass `last_read_message_id` when polling (not just agent_instance_id)
+- **Response Handling**: Return all messages, don't filter
+
+### Polling Implementation Details
+1. **Request user input** on the last message: `PATCH /api/v1/messages/{id}/request-input`
+2. **Poll with last_read_message_id**: Critical for getting new messages
+3. **Don't filter messages**: API returns `sender_type: "USER"` (uppercase) but Python SDK doesn't filter
+4. **Display in TUI**: Use `AppEvent::InsertHistoryCell` to show remote messages in terminal
+5. **Polling duration**: 24 hours with 5-second intervals (matching Python SDK defaults)
+
+### Common Pitfalls
+- Assuming lowercase "user" when API returns uppercase "USER"
+- Forgetting to pass `last_read_message_id` when polling
+- Not displaying remote messages in the TUI (just sending to agent isn't enough)
+- Making assumptions instead of checking Python SDK implementation
 
 ## Future Improvements
 

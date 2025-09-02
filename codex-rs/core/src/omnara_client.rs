@@ -285,16 +285,28 @@ impl OmnaraClient {
     }
     
     /// Poll Omnara for user responses
-    pub async fn poll_for_user_response(&self) -> Option<String> {
+    pub async fn poll_for_user_response(&self, last_read_message_id: Option<String>) -> Option<String> {
         self.polling_active.store(true, Ordering::Relaxed);
         
-        let url = format!("{}/api/v1/messages/pending?agent_instance_id={}", self.api_url, self.session_id);
-        let mut backoff = Duration::from_millis(100);
-        let max_backoff = Duration::from_secs(2);
-        let timeout = Duration::from_secs(30);
+        let mut url = format!("{}/api/v1/messages/pending?agent_instance_id={}", self.api_url, self.session_id);
+        if let Some(msg_id) = &last_read_message_id {
+            url.push_str(&format!("&last_read_message_id={}", msg_id));
+        }
+        // Poll for 24 hours with 5-second intervals (matching Python SDK defaults)
+        let poll_interval = Duration::from_secs(5);
+        let timeout = Duration::from_secs(24 * 60 * 60); // 24 hours
         let start = std::time::Instant::now();
         
+        self.log(&format!(
+            "\n--- STARTING POLLING FOR USER RESPONSE ---\nTime: {}\nURL: {}\nTimeout: {} hours (5-second intervals)\n",
+            Utc::now().to_rfc3339(),
+            url,
+            timeout.as_secs() / 3600
+        ));
+        
+        let mut poll_count = 0;
         while self.polling_active.load(Ordering::Relaxed) && start.elapsed() < timeout {
+            poll_count += 1;
             match self.client
                 .get(&url)
                 .header("Authorization", format!("Bearer {}", self.api_key))
@@ -302,34 +314,64 @@ impl OmnaraClient {
                 .await
             {
                 Ok(response) => {
-                    if response.status().is_success() {
+                    let status = response.status();
+                    if status.is_success() {
                         if let Ok(pending_response) = response.json::<PendingMessagesResponse>().await {
-                            // Check if we got any user messages
-                            for msg in pending_response.messages {
-                                if msg.sender_type == "user" {
+                            // Log polling attempt
+                            self.log(&format!(
+                                "Poll #{}: Status: {}, Messages: {}\n",
+                                poll_count,
+                                status,
+                                pending_response.messages.len()
+                            ));
+                            
+                            // Check if we got any messages (don't filter by sender_type, just like Python SDK)
+                            if !pending_response.messages.is_empty() {
+                                // Log all messages
+                                for msg in &pending_response.messages {
+                                    self.log(&format!(
+                                        "  Message: sender_type='{}', content='{}'\n",
+                                        msg.sender_type,
+                                        if msg.content.len() > 50 { &msg.content[..50] } else { &msg.content }
+                                    ));
+                                }
+                                
+                                // Return the first message content (Python SDK returns all, but we return one at a time)
+                                if let Some(first_msg) = pending_response.messages.first() {
                                     self.polling_active.store(false, Ordering::Relaxed);
                                     self.log(&format!(
-                                        "\n--- RECEIVED USER MESSAGE FROM POLLING ---\nTime: {}\nContent: {}\n",
+                                        "\n--- RECEIVED MESSAGE FROM POLLING ---\nTime: {}\nSender: {}\nContent: {}\n✓ Polling successful\n",
                                         Utc::now().to_rfc3339(),
-                                        msg.content
+                                        first_msg.sender_type,
+                                        first_msg.content
                                     ));
-                                    return Some(msg.content);
+                                    return Some(first_msg.content.clone());
                                 }
                             }
+                        } else {
+                            self.log(&format!("Poll #{}: Failed to parse response\n", poll_count));
                         }
+                    } else {
+                        self.log(&format!("Poll #{}: HTTP {}\n", poll_count, status));
                     }
                 }
                 Err(e) => {
+                    self.log(&format!("Poll #{}: Network error: {}\n", poll_count, e));
                     tracing::debug!("Omnara polling error: {}", e);
                 }
             }
             
-            // Exponential backoff
-            tokio::time::sleep(backoff).await;
-            backoff = (backoff * 2).min(max_backoff);
+            // Fixed interval polling (5 seconds)
+            tokio::time::sleep(poll_interval).await;
         }
         
         self.polling_active.store(false, Ordering::Relaxed);
+        self.log(&format!(
+            "\n--- POLLING TIMED OUT ---\nTime: {}\nPolled {} times over {:.1} hours\n",
+            Utc::now().to_rfc3339(),
+            poll_count,
+            start.elapsed().as_secs() as f64 / 3600.0
+        ));
         None
     }
     
@@ -361,8 +403,8 @@ impl OmnaraClient {
                 return None;
             }
             
-            // Poll for user response
-            self.poll_for_user_response().await
+            // Poll for user response, passing the message ID as last_read
+            self.poll_for_user_response(Some(msg_id)).await
         } else {
             tracing::info!("DEBUG: No agent message ID to request input for");
             None
