@@ -930,11 +930,11 @@ impl MessageProcessor {
                             return;
                         }
                         SessionStatus::Failed => {
-                            let error_msg = response.error.as_ref().map(|s| s.as_str()).unwrap_or("unknown error");
+                            let error_msg = response.error.as_deref().unwrap_or("unknown error");
                             let result = CallToolResult {
                                 content: vec![ContentBlock::TextContent(TextContent {
                                     r#type: "text".to_string(),
-                                    text: format!("session failed: {}", error_msg),
+                                    text: format!("session failed: {error_msg}"),
                                     annotations: None,
                                 })],
                                 is_error: Some(true),

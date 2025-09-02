@@ -276,9 +276,7 @@ pub(crate) fn create_tool_for_codex_tool_call_get_response_param() -> Tool {
         input_schema: tool_input_schema,
         output_schema: None,
         description: Some(format!(
-            "Retrieve the response from a completed or running Codex session. IMPORTANT: Omit timeout parameter to use default ({} seconds). Only specify timeout if you need MORE than {} seconds. Short timeouts WILL cause failures.",
-            DEFAULT_GET_RESPONSE_TIMEOUT_SECS,
-            DEFAULT_GET_RESPONSE_TIMEOUT_SECS
+            "Retrieve the response from a completed or running Codex session. IMPORTANT: Omit timeout parameter to use default ({DEFAULT_GET_RESPONSE_TIMEOUT_SECS} seconds). Only specify timeout if you need MORE than {DEFAULT_GET_RESPONSE_TIMEOUT_SECS} seconds. Short timeouts WILL cause failures."
         )),
         annotations: None,
     }
