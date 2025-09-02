@@ -1080,9 +1080,11 @@ impl ChatWidget {
         for preset in presets.iter() {
             let name = preset.label.to_string();
             let description = Some(preset.description.to_string());
-            let is_current = preset.model == current_model && preset.effort == current_effort;
+            let is_current =
+                preset.model == current_model.clone() && preset.effort == current_effort;
             let model_slug = preset.model.to_string();
             let effort = preset.effort;
+            let current_model = current_model.clone();
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                 tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
                     cwd: None,
@@ -1094,6 +1096,13 @@ impl ChatWidget {
                 }));
                 tx.send(AppEvent::UpdateModel(model_slug.clone()));
                 tx.send(AppEvent::UpdateReasoningEffort(effort));
+                tracing::info!(
+                    "New model: {}, New effort: {}, Current model: {}, Current effort: {}",
+                    model_slug.clone(),
+                    effort,
+                    current_model,
+                    current_effort
+                );
             })];
             items.push(SelectionItem {
                 name,
