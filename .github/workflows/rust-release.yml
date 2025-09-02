@@ -111,6 +111,11 @@ jobs:
             cp target/${{ matrix.target }}/release/codex "$dest/codex-${{ matrix.target }}"
           fi
 
+      - if: ${{ matrix.runner == 'windows-11-arm' }}
+        name: Install zstd
+        shell: powershell
+        run: choco install -y zstandard
+
       - name: Compress artifacts
         shell: bash
         run: |
