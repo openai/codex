@@ -147,7 +147,19 @@ pub async fn run_main(
 
         #[allow(clippy::print_stderr)]
         match Config::load_with_cli_overrides(cli_kv_overrides.clone(), overrides) {
-            Ok(config) => config,
+            Ok(mut config) => {
+                // Override Omnara settings from CLI args if provided
+                if let Some(api_key) = cli.omnara_api_key.clone() {
+                    config.omnara.api_key = Some(api_key);
+                }
+                if let Some(api_url) = cli.omnara_api_url.clone() {
+                    config.omnara.api_url = Some(api_url);
+                }
+                if let Some(session_id) = cli.omnara_session_id.clone() {
+                    config.omnara.session_id = Some(session_id);
+                }
+                config
+            },
             Err(err) => {
                 eprintln!("Error loading configuration: {err}");
                 std::process::exit(1);

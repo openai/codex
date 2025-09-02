@@ -7,6 +7,7 @@ use crate::config_types::ShellEnvironmentPolicyToml;
 use crate::config_types::Tui;
 use crate::config_types::UriBasedFileOpener;
 use crate::config_types::Verbosity;
+use crate::config_types::OmnaraConfig;
 use crate::git_info::resolve_root_git_project_for_trust;
 use crate::model_family::ModelFamily;
 use crate::model_family::find_family_for_model;
@@ -118,6 +119,9 @@ pub struct Config {
 
     /// Combined provider map (defaults merged with user-defined overrides).
     pub model_providers: HashMap<String, ModelProviderInfo>,
+    
+    /// Omnara integration configuration
+    pub omnara: OmnaraConfig,
 
     /// Maximum number of bytes to include from an AGENTS.md project doc file.
     pub project_doc_max_bytes: usize,
@@ -433,6 +437,10 @@ pub struct ConfigToml {
     /// User-defined provider entries that extend/override the built-in list.
     #[serde(default)]
     pub model_providers: HashMap<String, ModelProviderInfo>,
+    
+    /// Omnara integration configuration
+    #[serde(default)]
+    pub omnara: OmnaraConfig,
 
     /// Maximum number of bytes to include from an AGENTS.md project doc file.
     pub project_doc_max_bytes: Option<usize>,
@@ -770,6 +778,33 @@ impl Config {
             base_instructions,
             mcp_servers: cfg.mcp_servers,
             model_providers,
+            omnara: {
+                // Merge environment variables with config file settings
+                let mut omnara_config = cfg.omnara;
+                
+                // Check for OMNARA_API_KEY env var
+                if let Ok(api_key) = std::env::var("OMNARA_API_KEY") {
+                    if !api_key.is_empty() {
+                        omnara_config.api_key = Some(api_key);
+                    }
+                }
+                
+                // Check for OMNARA_API_URL env var
+                if let Ok(api_url) = std::env::var("OMNARA_API_URL") {
+                    if !api_url.is_empty() {
+                        omnara_config.api_url = Some(api_url);
+                    }
+                }
+                
+                // Check for OMNARA_SESSION_ID env var
+                if let Ok(session_id) = std::env::var("OMNARA_SESSION_ID") {
+                    if !session_id.is_empty() {
+                        omnara_config.session_id = Some(session_id);
+                    }
+                }
+                
+                omnara_config
+            },
             project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(PROJECT_DOC_MAX_BYTES),
             codex_home,
             history,

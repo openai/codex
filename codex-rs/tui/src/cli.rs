@@ -57,6 +57,18 @@ pub struct Cli {
     /// Enable web search (off by default). When enabled, the native Responses `web_search` tool is available to the model (no per‑call approval).
     #[arg(long = "search", default_value_t = false)]
     pub web_search: bool,
+    
+    /// Omnara API key for sending messages to Omnara dashboard
+    #[arg(long = "omnara-api-key")]
+    pub omnara_api_key: Option<String>,
+    
+    /// Omnara API URL (defaults to production)
+    #[arg(long = "omnara-api-url")]
+    pub omnara_api_url: Option<String>,
+    
+    /// Omnara session ID (auto-generated if not provided)
+    #[arg(long = "omnara-session-id")]
+    pub omnara_session_id: Option<String>,
 
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,

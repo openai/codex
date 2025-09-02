@@ -80,6 +80,7 @@ use codex_core::ConversationManager;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
+use codex_core::omnara_client::{OmnaraClient, create_omnara_client};
 use codex_file_search::FileMatch;
 use uuid::Uuid;
 
@@ -116,6 +117,12 @@ pub(crate) struct ChatWidget {
     last_history_was_exec: bool,
     // User messages queued while a turn is in progress
     queued_user_messages: VecDeque<UserMessage>,
+    // Omnara client for sending messages
+    omnara_client: Option<Arc<OmnaraClient>>,
+    // Handle for polling Omnara for user input
+    omnara_polling_handle: Option<tokio::task::JoinHandle<()>>,
+    // Handle for the last agent message send task
+    last_agent_send_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 struct UserMessage {
@@ -164,9 +171,28 @@ impl ChatWidget {
     }
 
     fn on_agent_message(&mut self, message: String) {
+        // DEBUG: Log when we receive an agent message
+        tracing::info!("DEBUG: on_agent_message called with: '{}'", 
+            if message.len() > 50 { &message[..50] } else { &message }
+        );
+        
         let sink = AppEventHistorySink(self.app_event_tx.clone());
         let finished = self.stream.apply_final_answer(&message, &sink);
         self.handle_if_stream_finished(finished);
+        
+        // Send to Omnara if configured (message ID is stored automatically in the client)
+        if let Some(omnara) = &self.omnara_client {
+            let omnara_clone = omnara.clone();
+            let message_clone = message.clone();
+            
+            // Store the handle so we can await it in on_task_complete
+            self.last_agent_send_handle = Some(tokio::spawn(async move {
+                if let Err(e) = omnara_clone.send_message(message_clone, false).await {
+                    tracing::debug!("Failed to send agent message to Omnara: {}", e);
+                }
+            }));
+        }
+        
         self.request_redraw();
     }
 
@@ -221,7 +247,11 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_task_complete(&mut self) {
+    fn on_task_complete(&mut self, last_agent_message: Option<String>) {
+        // DEBUG: Log when task completes
+        tracing::info!("DEBUG: on_task_complete called with last_agent_message: {:?}", 
+            last_agent_message.as_ref().map(|m| if m.len() > 50 { &m[..50] } else { m }));
+        
         // If a stream is currently active, finalize only that stream to flush any tail
         // without emitting stray headers for other streams.
         if self.stream.is_write_cycle_active() {
@@ -232,6 +262,48 @@ impl ChatWidget {
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
         self.request_redraw();
+        
+        // Handle Omnara task completion
+        if let Some(omnara) = &self.omnara_client {
+            // Cancel any existing polling
+            if let Some(handle) = self.omnara_polling_handle.take() {
+                handle.abort();
+            }
+            
+            let omnara_clone = omnara.clone();
+            let tx = self.codex_op_tx.clone();
+            
+            // If there's a last_agent_message from the event, we might need to send it
+            // But for now, let's just wait for any pending send and then request input
+            if let Some(handle) = self.last_agent_send_handle.take() {
+                self.omnara_polling_handle = Some(tokio::spawn(async move {
+                    // Wait for the last send to complete
+                    let _ = handle.await;
+                    tracing::info!("DEBUG: Last agent message send completed, now requesting user input");
+                    
+                    // Now request input on whatever the last message ID is
+                    if let Some(user_input) = omnara_clone.handle_task_complete().await {
+                        // Inject user input into Codex as if it was typed
+                        let items = vec![InputItem::Text { text: user_input }];
+                        if let Err(e) = tx.send(Op::UserInput { items }) {
+                            tracing::debug!("Failed to inject Omnara input: {}", e);
+                        }
+                    }
+                }));
+            } else {
+                // No pending send, just handle task complete
+                self.omnara_polling_handle = Some(tokio::spawn(async move {
+                    tracing::info!("DEBUG: No pending send, requesting user input");
+                    if let Some(user_input) = omnara_clone.handle_task_complete().await {
+                        // Inject user input into Codex as if it was typed
+                        let items = vec![InputItem::Text { text: user_input }];
+                        if let Err(e) = tx.send(Op::UserInput { items }) {
+                            tracing::debug!("Failed to inject Omnara input: {}", e);
+                        }
+                    }
+                }));
+            }
+        }
 
         // If there is a queued user message, send exactly one now to begin the next turn.
         self.maybe_send_next_queued_input();
@@ -604,6 +676,19 @@ impl ChatWidget {
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
+        
+        // Initialize Omnara client if configured
+        let omnara_client = create_omnara_client(
+            config.omnara.api_key.clone(),
+            config.omnara.api_url.clone(),
+            config.omnara.session_id.clone(),
+        ).map(Arc::new);
+        
+        if omnara_client.is_some() {
+            tracing::info!("Omnara client initialized successfully");
+        } else {
+            tracing::info!("Omnara client not configured (no API key)");
+        }
 
         Self {
             app_event_tx: app_event_tx.clone(),
@@ -636,6 +721,9 @@ impl ChatWidget {
             last_history_was_exec: false,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: true,
+            omnara_client,
+            omnara_polling_handle: None,
+            last_agent_send_handle: None,
         }
     }
 
@@ -653,6 +741,19 @@ impl ChatWidget {
 
         let codex_op_tx =
             spawn_agent_from_existing(conversation, session_configured, app_event_tx.clone());
+        
+        // Initialize Omnara client if configured
+        let omnara_client = create_omnara_client(
+            config.omnara.api_key.clone(),
+            config.omnara.api_url.clone(),
+            config.omnara.session_id.clone(),
+        ).map(Arc::new);
+        
+        if omnara_client.is_some() {
+            tracing::info!("Omnara client initialized successfully");
+        } else {
+            tracing::info!("Omnara client not configured (no API key)");
+        }
 
         Self {
             app_event_tx: app_event_tx.clone(),
@@ -682,6 +783,9 @@ impl ChatWidget {
             last_history_was_exec: false,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: false,
+            omnara_client,
+            omnara_polling_handle: None,
+            last_agent_send_handle: None,
         }
     }
 
@@ -915,6 +1019,20 @@ impl ChatWidget {
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
         let UserMessage { text, image_paths } = user_message;
+        
+        // Send user message to Omnara if configured
+        if !text.is_empty() {
+            if let Some(omnara) = &self.omnara_client {
+                let omnara_clone = omnara.clone();
+                let text_clone = text.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = omnara_clone.send_user_message(text_clone).await {
+                        tracing::debug!("Failed to send user message to Omnara: {}", e);
+                    }
+                });
+            }
+        }
+        
         let mut items: Vec<InputItem> = Vec::new();
 
         if !text.is_empty() {
@@ -978,7 +1096,7 @@ impl ChatWidget {
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
             EventMsg::TaskStarted(_) => self.on_task_started(),
-            EventMsg::TaskComplete(TaskCompleteEvent { .. }) => self.on_task_complete(),
+            EventMsg::TaskComplete(event) => self.on_task_complete(event.last_agent_message),
             EventMsg::TokenCount(token_usage) => self.on_token_count(token_usage),
             EventMsg::Error(ErrorEvent { message }) => self.on_error(message),
             EventMsg::TurnAborted(ev) => match ev.reason {

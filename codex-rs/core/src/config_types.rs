@@ -225,3 +225,16 @@ pub enum Verbosity {
     Medium,
     High,
 }
+
+/// Configuration for Omnara integration
+#[derive(Debug, Deserialize, Clone, Default, PartialEq)]
+pub struct OmnaraConfig {
+    /// API key for Omnara authentication
+    pub api_key: Option<String>,
+    
+    /// API URL for Omnara (defaults to production)
+    pub api_url: Option<String>,
+    
+    /// Session ID for Omnara (auto-generated if not provided)
+    pub session_id: Option<String>,
+}
