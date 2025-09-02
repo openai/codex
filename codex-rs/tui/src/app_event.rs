@@ -61,4 +61,7 @@ pub(crate) enum AppEvent {
 
     /// Forwarded conversation history snapshot from the current conversation.
     ConversationHistory(ConversationHistoryResponseEvent),
+    
+    /// Remote approval response from Omnara dashboard
+    OmnaraApprovalResponse(String),
 }

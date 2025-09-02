@@ -26,7 +26,6 @@ use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::StreamErrorEvent;
-use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnDiffEvent;
@@ -44,6 +43,7 @@ use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
+use tokio::sync::mpsc;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::debug;
 
@@ -61,6 +61,7 @@ use crate::history_cell::CommandOutput;
 use crate::history_cell::ExecCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PatchEventType;
+use crate::patch_formatter;
 use crate::slash_command::SlashCommand;
 use crate::tui::FrameRequester;
 // streaming internals are provided by crate::streaming and crate::markdown_stream
@@ -121,8 +122,8 @@ pub(crate) struct ChatWidget {
     omnara_client: Option<Arc<OmnaraClient>>,
     // Handle for polling Omnara for user input
     omnara_polling_handle: Option<tokio::task::JoinHandle<()>>,
-    // Handle for the last agent message send task
-    last_agent_send_handle: Option<tokio::task::JoinHandle<()>>,
+    // Handle for the last agent message send task (returns Result<message_id, error>)
+    last_agent_send_handle: Option<tokio::task::JoinHandle<Result<String, String>>>,
 }
 
 struct UserMessage {
@@ -164,6 +165,19 @@ impl ChatWidget {
         ));
         // Ask codex-core to enumerate custom prompts for this session.
         self.submit_op(Op::ListCustomPrompts);
+        
+        // Send initial message to Omnara and start polling for user input
+        if let Some(omnara) = &self.omnara_client {
+            if self.initial_user_message.is_none() {
+                // Only send initial message if there's no initial user message
+                let omnara_clone = omnara.clone();
+                let future = async move {
+                    omnara_clone.start_session_polling().await
+                };
+                self.spawn_omnara_poll(future, "start_session_polling");
+            }
+        }
+        
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
         }
@@ -171,26 +185,28 @@ impl ChatWidget {
     }
 
     fn on_agent_message(&mut self, message: String) {
-        // DEBUG: Log when we receive an agent message
-        tracing::info!("DEBUG: on_agent_message called with: '{}'", 
-            if message.len() > 50 { &message[..50] } else { &message }
-        );
+        // Send to Omnara if configured
+        if let Some(omnara) = &self.omnara_client {
+            let omnara_clone = omnara.clone();
+            let message_clone = message.clone();
+            
+            // Store the send handle - we'll check after if we need to poll
+            self.last_agent_send_handle = Some(tokio::spawn(async move {
+                omnara_clone.send_agent_message(message_clone).await
+            }));
+        }
         
         let sink = AppEventHistorySink(self.app_event_tx.clone());
         let finished = self.stream.apply_final_answer(&message, &sink);
         self.handle_if_stream_finished(finished);
         
-        // Send to Omnara if configured (message ID is stored automatically in the client)
-        if let Some(omnara) = &self.omnara_client {
-            let omnara_clone = omnara.clone();
-            let message_clone = message.clone();
-            
-            // Store the handle so we can await it in on_task_complete
-            self.last_agent_send_handle = Some(tokio::spawn(async move {
-                if let Err(e) = omnara_clone.send_message(message_clone, false).await {
-                    tracing::debug!("Failed to send agent message to Omnara: {}", e);
-                }
-            }));
+        // After processing the message, check if we should start polling
+        // This happens whenever the agent is not actively working
+        if !self.bottom_pane.is_task_running() {
+            tracing::info!("Task not running after agent message, starting polling");
+            self.start_omnara_polling_if_needed("on_agent_message");
+        } else {
+            tracing::info!("Task still running after agent message, NOT starting polling yet");
         }
         
         self.request_redraw();
@@ -247,11 +263,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_task_complete(&mut self, last_agent_message: Option<String>) {
-        // DEBUG: Log when task completes
-        tracing::info!("DEBUG: on_task_complete called with last_agent_message: {:?}", 
-            last_agent_message.as_ref().map(|m| if m.len() > 50 { &m[..50] } else { m }));
-        
+    fn on_task_complete(&mut self, _last_agent_message: Option<String>) {
         // If a stream is currently active, finalize only that stream to flush any tail
         // without emitting stray headers for other streams.
         if self.stream.is_write_cycle_active() {
@@ -263,7 +275,72 @@ impl ChatWidget {
         self.running_commands.clear();
         self.request_redraw();
         
-        // Handle Omnara task completion
+        // Start polling for Omnara input now that task is complete
+        // This handles cases where task completes without sending a final agent message
+        tracing::info!("Task complete, starting Omnara polling");
+        self.start_omnara_polling_if_needed("on_task_complete");
+
+        // If there is a queued user message, send exactly one now to begin the next turn.
+        self.maybe_send_next_queued_input();
+    }
+
+    /// Static helper to handle Omnara responses
+    fn handle_omnara_response(
+        user_response: String, 
+        app_event_tx: AppEventSender,
+        codex_op_tx: mpsc::UnboundedSender<Op>
+    ) {
+        // Check if this is an approval response (actual option text from Omnara)
+        if codex_core::omnara_client::OmnaraClient::is_approval_response(&user_response) {
+            // Send approval response event
+            let _ = app_event_tx.send(AppEvent::OmnaraApprovalResponse(user_response));
+        } else {
+            // Display the message in the TUI
+            let history_cell = history_cell::new_user_prompt(user_response.clone());
+            let _ = app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(history_cell)));
+            
+            // Inject user input into Codex as if it was typed
+            let items = vec![InputItem::Text { text: user_response.clone() }];
+            if let Err(e) = codex_op_tx.send(Op::UserInput { items }) {
+                tracing::debug!("Failed to inject Omnara input: {}", e);
+            }
+            
+            // Also add to history for persistence
+            if let Err(e) = codex_op_tx.send(Op::AddToHistory { text: user_response }) {
+                tracing::debug!("Failed to add Omnara input to history: {}", e);
+            }
+        }
+    }
+    
+    /// Handle approval response from Omnara dashboard
+    pub(crate) fn handle_omnara_approval_response(&mut self, response: String) {
+        if !self.handle_potential_approval_response(&response) {
+            // If it wasn't a valid approval response, treat it as normal input
+            // Display the message in the TUI
+            self.add_to_history(history_cell::new_user_prompt(response.clone()));
+            
+            // Send it to the agent
+            let items = vec![InputItem::Text { text: response }];
+            self.codex_op_tx.send(Op::UserInput { items });
+        }
+    }
+    
+    /// Check if a message is an approval response and handle it
+    fn handle_potential_approval_response(&mut self, message: &str) -> bool {
+        // Use the helper from OmnaraClient to parse approval responses
+        if let Some(key_char) = OmnaraClient::parse_approval_response(message) {
+            // Send the key event to the approval modal
+            let key_code = KeyCode::Char(key_char);
+            let key_event = crossterm::event::KeyEvent::new(key_code, crossterm::event::KeyModifiers::NONE);
+            self.bottom_pane.handle_key_event(key_event);
+            true
+        } else {
+            false
+        }
+    }
+    
+    /// Send feedback prompt to Omnara and start polling
+    fn send_feedback_prompt_and_poll(&mut self) {
         if let Some(omnara) = &self.omnara_client {
             // Cancel any existing polling
             if let Some(handle) = self.omnara_polling_handle.take() {
@@ -271,65 +348,82 @@ impl ChatWidget {
             }
             
             let omnara_clone = omnara.clone();
-            let tx = self.codex_op_tx.clone();
-            let app_tx = self.app_event_tx.clone();
+            let future = async move {
+                // Send feedback prompt and poll for response
+                if let Ok(message_id) = omnara_clone.send_feedback_prompt().await {
+                    if let Some((_is_approval, user_response)) = omnara_clone.poll_and_wait_for_response(Some(message_id)).await {
+                        return Some(user_response);
+                    }
+                }
+                None
+            };
+            self.spawn_omnara_poll(future, "send_feedback_prompt");
+        }
+    }
+    
+    /// Helper to spawn an Omnara polling task with a future that returns optional user input
+    fn spawn_omnara_poll<F>(&mut self, poll_future: F, description: &str)
+    where
+        F: std::future::Future<Output = Option<String>> + Send + 'static,
+    {
+        let app_tx = self.app_event_tx.clone();
+        let tx = self.codex_op_tx.clone();
+        let desc = description.to_string();
+        
+        self.omnara_polling_handle = Some(tokio::spawn(async move {
+            tracing::info!("Starting Omnara polling: {}", desc);
+            if let Some(user_response) = poll_future.await {
+                tracing::info!("Received remote input from Omnara: {}", user_response);
+                Self::handle_omnara_response(user_response, app_tx, tx);
+            }
+        }));
+    }
+    
+    /// Helper method to start Omnara polling when task is not running
+    fn start_omnara_polling_if_needed(&mut self, caller: &str) {
+        if let Some(omnara) = &self.omnara_client {
+            tracing::info!("start_omnara_polling_if_needed called from: {}", caller);
             
-            // If there's a last_agent_message from the event, we might need to send it
-            // But for now, let's just wait for any pending send and then request input
+            // Check if polling is already running - make this truly idempotent
+            if let Some(ref handle) = self.omnara_polling_handle {
+                if !handle.is_finished() {
+                    tracing::debug!("Polling already active, skipping (idempotent check from: {})", caller);
+                    return;
+                }
+            }
+            
+            // Cancel any finished polling handle
+            if let Some(handle) = self.omnara_polling_handle.take() {
+                handle.abort();
+            }
+            
+            let omnara_clone = omnara.clone();
+            
+            // Check if we have a pending send that we need to wait for
             if let Some(handle) = self.last_agent_send_handle.take() {
-                self.omnara_polling_handle = Some(tokio::spawn(async move {
-                    // Wait for the last send to complete
-                    let _ = handle.await;
-                    tracing::info!("DEBUG: Last agent message send completed, now requesting user input");
-                    
-                    // Now request input on whatever the last message ID is
-                    if let Some(user_input) = omnara_clone.handle_task_complete().await {
-                        tracing::info!("DEBUG: Received remote input from Omnara: {}", user_input);
-                        
-                        // Display the message in the TUI
-                        let history_cell = history_cell::new_user_prompt(user_input.clone());
-                        let _ = app_tx.send(AppEvent::InsertHistoryCell(Box::new(history_cell)));
-                        
-                        // Inject user input into Codex as if it was typed
-                        let items = vec![InputItem::Text { text: user_input.clone() }];
-                        if let Err(e) = tx.send(Op::UserInput { items }) {
-                            tracing::debug!("Failed to inject Omnara input: {}", e);
-                        }
-                        
-                        // Also add to history for persistence
-                        if let Err(e) = tx.send(Op::AddToHistory { text: user_input }) {
-                            tracing::debug!("Failed to add Omnara input to history: {}", e);
+                tracing::info!("Starting polling with pending send handle (from: {})", caller);
+                let future = async move {
+                    // Wait for the last send to complete and get the message ID
+                    if let Ok(result) = handle.await {
+                        if let Ok(message_id) = result {
+                            // Use the new helper method
+                            if let Some((_is_approval, user_response)) = omnara_clone.request_and_poll(message_id).await {
+                                return Some(user_response);
+                            }
                         }
                     }
-                }));
+                    None
+                };
+                self.spawn_omnara_poll(future, &format!("request_and_poll from {}", caller));
             } else {
-                // No pending send, just handle task complete
-                self.omnara_polling_handle = Some(tokio::spawn(async move {
-                    tracing::info!("DEBUG: No pending send, requesting user input");
-                    if let Some(user_input) = omnara_clone.handle_task_complete().await {
-                        tracing::info!("DEBUG: Received remote input from Omnara: {}", user_input);
-                        
-                        // Display the message in the TUI
-                        let history_cell = history_cell::new_user_prompt(user_input.clone());
-                        let _ = app_tx.send(AppEvent::InsertHistoryCell(Box::new(history_cell)));
-                        
-                        // Inject user input into Codex as if it was typed
-                        let items = vec![InputItem::Text { text: user_input.clone() }];
-                        if let Err(e) = tx.send(Op::UserInput { items }) {
-                            tracing::debug!("Failed to inject Omnara input: {}", e);
-                        }
-                        
-                        // Also add to history for persistence
-                        if let Err(e) = tx.send(Op::AddToHistory { text: user_input }) {
-                            tracing::debug!("Failed to add Omnara input to history: {}", e);
-                        }
-                    }
-                }));
+                // No pending send, use the last stored message ID
+                tracing::info!("Starting polling without pending send (from: {})", caller);
+                let future = async move {
+                    omnara_clone.handle_task_complete().await
+                };
+                self.spawn_omnara_poll(future, &format!("handle_task_complete from {}", caller));
             }
         }
-
-        // If there is a queued user message, send exactly one now to begin the next turn.
-        self.maybe_send_next_queued_input();
     }
 
     fn on_token_count(&mut self, token_usage: TokenUsage) {
@@ -358,6 +452,9 @@ impl ChatWidget {
     fn on_error(&mut self, message: String) {
         self.finalize_turn_with_error_message(message);
         self.request_redraw();
+        
+        // Start polling since task is no longer running
+        self.start_omnara_polling_if_needed("on_error");
 
         // After an error ends the turn, try sending the next queued input.
         self.maybe_send_next_queued_input();
@@ -385,6 +482,9 @@ impl ChatWidget {
         }
 
         self.request_redraw();
+        
+        // Send feedback prompt to Omnara and start polling
+        self.send_feedback_prompt_and_poll();
     }
 
     fn on_plan_update(&mut self, update: codex_core::plan_tool::UpdatePlanArgs) {
@@ -480,7 +580,23 @@ impl ChatWidget {
     }
 
     fn on_shutdown_complete(&mut self) {
-        self.app_event_tx.send(AppEvent::ExitRequest);
+        // End the Omnara session if configured
+        if let Some(omnara) = &self.omnara_client {
+            let omnara_clone = omnara.clone();
+            let app_tx = self.app_event_tx.clone();
+            
+            // Spawn task to end session and THEN send exit request
+            tokio::spawn(async move {
+                if let Err(e) = omnara_clone.end_session().await {
+                    tracing::debug!("Failed to end Omnara session: {}", e);
+                }
+                // Send exit request AFTER ending session
+                let _ = app_tx.send(AppEvent::ExitRequest);
+            });
+        } else {
+            // No Omnara configured, exit immediately
+            self.app_event_tx.send(AppEvent::ExitRequest);
+        }
     }
 
     fn on_turn_diff(&mut self, unified_diff: String) {
@@ -600,6 +716,29 @@ impl ChatWidget {
     pub(crate) fn handle_exec_approval_now(&mut self, id: String, ev: ExecApprovalRequestEvent) {
         self.flush_answer_stream_with_separator();
 
+        // Send approval request to Omnara if configured
+        if let Some(omnara) = &self.omnara_client {
+            let omnara_clone = omnara.clone();
+            let request_id = id.clone();
+            let command = ev.command.clone();
+            let reason = ev.reason.clone();
+            
+            // Cancel any existing polling before starting new one
+            if let Some(handle) = self.omnara_polling_handle.take() {
+                handle.abort();
+            }
+            
+            let future = async move {
+                if let Ok(message_id) = omnara_clone.send_exec_approval_request(request_id, command, reason).await {
+                    if let Some((_is_approval, user_response)) = omnara_clone.poll_and_wait_for_response(Some(message_id)).await {
+                        return Some(user_response);
+                    }
+                }
+                None
+            };
+            self.spawn_omnara_poll(future, "exec_approval_request");
+        }
+
         let request = ApprovalRequest::Exec {
             id,
             command: ev.command,
@@ -619,6 +758,41 @@ impl ChatWidget {
             PatchEventType::ApprovalRequest,
             ev.changes.clone(),
         ));
+
+        // Send approval request to Omnara if configured
+        if let Some(omnara) = &self.omnara_client {
+            // Use the helper to format patch details
+            let file_count = ev.changes.len();
+            let (patch_details, added_lines, removed_lines) = patch_formatter::format_patch_details(&ev.changes);
+            
+            let omnara_clone = omnara.clone();
+            let request_id = id.clone();
+            let reason = ev.reason.clone();
+            let grant_root = ev.grant_root.clone();
+            
+            // Cancel any existing polling before starting new one
+            if let Some(handle) = self.omnara_polling_handle.take() {
+                handle.abort();
+            }
+            
+            let future = async move {
+                if let Ok(message_id) = omnara_clone.send_patch_approval_request(
+                    request_id,
+                    file_count,
+                    added_lines,
+                    removed_lines,
+                    reason,
+                    grant_root,
+                    Some(patch_details)
+                ).await {
+                    if let Some((_is_approval, user_response)) = omnara_clone.poll_and_wait_for_response(Some(message_id)).await {
+                        return Some(user_response);
+                    }
+                }
+                None
+            };
+            self.spawn_omnara_poll(future, "patch_approval_request");
+        }
 
         let request = ApprovalRequest::ApplyPatch {
             id,
@@ -1042,6 +1216,21 @@ impl ChatWidget {
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
         let UserMessage { text, image_paths } = user_message;
+        
+        // Cancel any ongoing Omnara polling since user is typing locally
+        if let Some(handle) = self.omnara_polling_handle.take() {
+            handle.abort();
+            tracing::info!("POLLING CANCELLED: Aborted Omnara polling handle due to local user input");
+        } else {
+            tracing::info!("POLLING STATUS: No active Omnara polling to cancel");
+        }
+        
+        // Cancel the polling flag in the client as well
+        if let Some(omnara) = &self.omnara_client {
+            let was_polling = omnara.is_polling();
+            omnara.cancel_polling();
+            tracing::info!("POLLING FLAG: Was polling: {}, now cancelled", was_polling);
+        }
         
         // Send user message to Omnara if configured
         if !text.is_empty() {

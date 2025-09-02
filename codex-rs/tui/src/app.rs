@@ -273,6 +273,10 @@ impl App {
             AppEvent::UpdateSandboxPolicy(policy) => {
                 self.chat_widget.set_sandbox_policy(policy);
             }
+            AppEvent::OmnaraApprovalResponse(response) => {
+                // Handle approval response from Omnara
+                self.chat_widget.handle_omnara_approval_response(response);
+            }
         }
         Ok(true)
     }

@@ -10,11 +10,14 @@ This document describes the Omnara integration for the OpenAI Codex CLI (Rust im
 - ✅ Configuration via CLI args, env vars, and config file  
 - ✅ Agent message sending with message ID tracking
 - ✅ User message sending from local TUI
-- ✅ Request user input on task completion
-- ✅ Polling for remote user responses (matches Python SDK exactly)
+- ✅ Request user input on task completion OR when task not running
+- ✅ Polling for remote user responses (24 hours, 5-second intervals)
 - ✅ Remote messages displayed in TUI and processed by agent
 - ✅ Deterministic message handling (no race conditions, no delays)
 - ✅ Comprehensive logging to `~/.omnara/codex_wrapper/`
+- ✅ Initial session message with automatic polling on startup
+- ✅ Polling cancellation when local user input arrives
+- ✅ Session end API call when user exits
 
 ## System Architecture
 
@@ -49,9 +52,10 @@ This document describes the Omnara integration for the OpenAI Codex CLI (Rust im
 
 2. **Message Flow**:
    ```
+   Session Start → Send initial message → Poll for 24 hours
    Agent Message → Send to Omnara (get message_id) → Store ID
    Task Complete → Wait for send → Request user input → Poll for response
-   User types locally → Cancel polling → Send to Omnara
+   User types locally → Cancel ALL polling (handle + flag) → Send to Omnara
    ```
 
 3. **API Endpoints Used**:
@@ -59,6 +63,7 @@ This document describes the Omnara integration for the OpenAI Codex CLI (Rust im
    - `POST /api/v1/messages/user` - Send user messages  
    - `PATCH /api/v1/messages/{id}/request-input` - Mark message as requiring input
    - `GET /api/v1/messages/pending` - Poll for user responses
+   - `POST /api/v1/sessions/end` - End session when user exits
 
 ### Deterministic Message Handling
 
@@ -182,6 +187,11 @@ tail -f ~/.omnara/codex_wrapper/*.log
 2. **User Messages Before Agent Exists**:
    - Cause: User types before first agent message
    - Solution: First agent message creates instance with `agent_type`
+
+3. **End Session Not Completing**:
+   - Cause: App exits before async end_session task completes
+   - Solution: Spawn nested async tasks - one to call end_session, another to wait for it and then send ExitRequest
+   - Also added sync_all() calls to ensure logs are flushed to disk
 
 ## Testing
 
