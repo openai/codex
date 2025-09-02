@@ -694,9 +694,11 @@ dependencies = [
  "futures",
  "reqwest",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "wiremock",
 ]
 
 [[package]]
