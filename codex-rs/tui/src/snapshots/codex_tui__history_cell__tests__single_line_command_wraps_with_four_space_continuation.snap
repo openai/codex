@@ -3,6 +3,7 @@ source: tui/src/history_cell.rs
 expression: rendered
 ---
 • Ran
-  └ a_very_long_token_wi
-    thout_spaces_to_forc
-    e_wrapping
+  └ a_very_long_toke
+        n_without_spaces
+        _to_force_wrappi
+        ng

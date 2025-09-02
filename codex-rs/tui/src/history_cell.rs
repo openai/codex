@@ -1,4 +1,3 @@
-// use crate::diff_render::create_diff_summary; // no longer used directly
 use crate::diff_render::create_diff_summary;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
@@ -32,12 +31,14 @@ use ratatui::prelude::*;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
+use ratatui::style::Styled;
 use ratatui::style::Stylize;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 use std::collections::HashMap;
 use std::io::Cursor;
+use std::path::Path;
 use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
@@ -90,19 +91,15 @@ impl HistoryCell for UserHistoryCell {
 
         // Wrap the content first, then prefix each wrapped line with the marker.
         let wrap_width = width.saturating_sub(1); // account for the ▌ prefix
-        let content_lines: Vec<Line> = self
-            .message
-            .lines()
-            .map(|l| Line::from(l.to_string().dim()))
-            .collect();
-        let wrapped = crate::insert_history::word_wrap_lines(&content_lines, wrap_width as usize);
+        let wrapped = textwrap::wrap(
+            &self.message,
+            textwrap::Options::new(wrap_width as usize)
+                .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit) // Match textarea wrap
+                .word_splitter(textwrap::WordSplitter::NoHyphenation),
+        );
 
-        for mut line in wrapped {
-            let mut spans = Vec::with_capacity(line.spans.len() + 1);
-            spans.push("▌".cyan().dim());
-            spans.extend(line.spans.into_iter());
-            line.spans = spans;
-            lines.push(line);
+        for line in wrapped {
+            lines.push(Line::from(vec!["▌".cyan().dim(), line.to_string().dim()]));
         }
         lines
     }
@@ -119,14 +116,14 @@ impl HistoryCell for UserHistoryCell {
 #[derive(Debug)]
 pub(crate) struct AgentMessageCell {
     lines: Vec<Line<'static>>,
-    include_header_in_transcript: bool,
+    is_first_line: bool,
 }
 
 impl AgentMessageCell {
-    pub(crate) fn new(lines: Vec<Line<'static>>, include_header_in_transcript: bool) -> Self {
+    pub(crate) fn new(lines: Vec<Line<'static>>, is_first_line: bool) -> Self {
         Self {
             lines,
-            include_header_in_transcript,
+            is_first_line,
         }
     }
 }
@@ -134,7 +131,7 @@ impl AgentMessageCell {
 impl HistoryCell for AgentMessageCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
         let mut out: Vec<Line<'static>> = Vec::new();
-        if self.include_header_in_transcript {
+        if self.is_first_line {
             out.push(Line::from(""));
         }
         // We want:
@@ -145,31 +142,24 @@ impl HistoryCell for AgentMessageCell {
         for line in &self.lines {
             let wrapped =
                 crate::insert_history::word_wrap_lines(std::slice::from_ref(line), wrap_width);
-            for (i, mut piece) in wrapped.into_iter().enumerate() {
+            for (i, piece) in wrapped.into_iter().enumerate() {
                 let mut spans = Vec::with_capacity(piece.spans.len() + 1);
-                if is_first_visual && i == 0 {
-                    if self.include_header_in_transcript {
-                        spans.push("> ".into());
-                    } else {
-                        spans.push("  ".into());
-                    }
+                spans.push(if is_first_visual && i == 0 && self.is_first_line {
+                    "> ".into()
                 } else {
-                    spans.push("  ".into());
-                }
+                    "  ".into()
+                });
                 spans.extend(piece.spans.into_iter());
-                piece.spans = spans;
-                out.push(piece);
+                out.push(Line::from(spans));
             }
-            if is_first_visual {
-                is_first_visual = false;
-            }
+            is_first_visual = false;
         }
         out
     }
 
     fn transcript_lines(&self) -> Vec<Line<'static>> {
         let mut out: Vec<Line<'static>> = Vec::new();
-        if self.include_header_in_transcript {
+        if self.is_first_line {
             out.push(Line::from(""));
             out.push(Line::from("codex".magenta().bold()));
         }
@@ -208,12 +198,17 @@ impl HistoryCell for TranscriptOnlyHistoryCell {
 pub(crate) struct PatchHistoryCell {
     event_type: PatchEventType,
     changes: HashMap<PathBuf, FileChange>,
+    cwd: PathBuf,
 }
 
 impl HistoryCell for PatchHistoryCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines: Vec<Line<'static>> =
-            create_diff_summary(&self.changes, self.event_type.clone(), width as usize);
+        let mut lines: Vec<Line<'static>> = create_diff_summary(
+            &self.changes,
+            self.event_type.clone(),
+            &self.cwd,
+            width as usize,
+        );
         // Leading blank separator for the cell
         lines.insert(0, Line::from(""));
         lines
@@ -410,6 +405,9 @@ impl ExecCell {
     }
 
     fn command_display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        use textwrap::Options as TwOptions;
+        use textwrap::WordSplitter;
+
         let mut lines: Vec<Line<'static>> = Vec::new();
         let [call] = &self.calls.as_slice() else {
             panic!("Expected exactly one call in a command display cell");
@@ -432,85 +430,34 @@ impl ExecCell {
         let mut branch_consumed = false;
 
         // Produce syntax-highlighted lines for the full script first, before any wrapping.
-        let highlighted_lines = Self::highlight_bash_to_lines(&cmd_display);
+        let highlighted_lines = highlight_bash_to_lines(&cmd_display);
 
         if highlighted_lines.len() == 1
-            && Self::line_visual_width(&highlighted_lines[0])
-                < (width as usize).saturating_sub(reserved)
+            && line_visual_width(&highlighted_lines[0]) < (width as usize).saturating_sub(reserved)
         {
             let mut spans = vec![bullet, " ".into(), title.bold(), " ".into()];
             spans.extend(highlighted_lines[0].spans.clone());
             lines.push(Line::from(spans));
         } else {
+            branch_consumed = true;
             lines.push(Line::from(vec![bullet, " ".into(), title.bold()]));
-            let first_prefix = "  └ ".dim();
-            let first_prefix_w = first_prefix.width();
-            let cont_prefix: Span<'static> = "    ".into();
-            let cont_prefix_w = cont_prefix.width();
-            let extra_cont_prefix: Span<'static> = "        ".into(); // 8 spaces
-            let extra_cont_prefix_w = extra_cont_prefix.width();
-            if highlighted_lines.len() > 1 {
-                for (li, hl_line) in highlighted_lines.iter().enumerate() {
-                    // Choose indent widths for this original line
-                    let (line_first_prefix, _line_first_w, line_cont_prefix, line_cont_w) =
-                        if li == 0 {
-                            // First original line: branch, then 8-space continuations
-                            (
-                                first_prefix.clone(),
-                                first_prefix_w,
-                                extra_cont_prefix.clone(),
-                                extra_cont_prefix_w,
-                            )
-                        } else {
-                            // Subsequent original lines: start with 4 spaces, wrap with 8 spaces
-                            (
-                                cont_prefix.clone(),
-                                cont_prefix_w,
-                                extra_cont_prefix.clone(),
-                                extra_cont_prefix_w,
-                            )
-                        };
-                    let cont_avail = (width as usize).saturating_sub(line_cont_w);
-                    // Wrap once at continuation width; use same pieces for first and subsequent lines.
-                    use textwrap::Options as TwOptions;
-                    use textwrap::WordSplitter;
-                    let opts = TwOptions::new(cont_avail)
-                        .break_words(true)
-                        .word_splitter(WordSplitter::NoHyphenation);
-                    let pieces = crate::insert_history::word_wrap_line(hl_line, opts);
-                    for (wi, piece) in pieces.into_iter().enumerate() {
-                        let prefix_span = if wi == 0 {
-                            if li == 0 {
-                                branch_consumed = true;
-                            }
-                            line_first_prefix.clone()
-                        } else {
-                            line_cont_prefix.clone()
-                        };
-                        let mut out_line = piece;
-                        out_line.spans.insert(0, prefix_span);
-                        lines.push(out_line);
-                    }
-                }
-            } else {
-                // Single original line: first piece with "  └ ", subsequent pieces with 4 spaces
-                let cont_avail = (width as usize).saturating_sub(cont_prefix_w);
-                use textwrap::Options as TwOptions;
-                use textwrap::WordSplitter;
-                let opts = TwOptions::new(cont_avail)
-                    .break_words(true)
-                    .word_splitter(WordSplitter::NoHyphenation);
-                let pieces = crate::insert_history::word_wrap_line(&highlighted_lines[0], opts);
-                for (i, mut piece) in pieces.into_iter().enumerate() {
-                    let prefix_span = if i == 0 {
-                        branch_consumed = true;
-                        first_prefix.clone()
+
+            // Wrap the command line.
+            for (i, line) in cmd_display.lines().enumerate() {
+                let wrapped = textwrap::wrap(
+                    line,
+                    TwOptions::new(width as usize)
+                        .initial_indent("    ")
+                        .subsequent_indent("        ")
+                        .word_splitter(WordSplitter::NoHyphenation),
+                );
+                lines.extend(wrapped.into_iter().enumerate().map(|(j, l)| {
+                    if i == 0 && j == 0 {
+                        Line::from(vec!["  └ ".dim(), l[4..].to_string().into()])
                     } else {
-                        cont_prefix.clone()
-                    };
-                    piece.spans.insert(0, prefix_span);
-                    lines.push(piece);
-                }
+                        Line::from(l.to_string())
+                    }
+                }));
             }
         }
         if let Some(output) = call.output.as_ref()
@@ -520,30 +467,23 @@ impl ExecCell {
                 .into_iter()
                 .join("\n");
             if !out.trim().is_empty() {
-                // Prefix the first output line with a branch ("  └ "), and
-                // continuation/wrapped lines with four spaces to align under it.
-                // Prefixes both render to width 4, so use a single width
-                // for wrapping and only vary the prefix glyph.
-                let first_prefix = "  └ ".dim();
-                let cont_prefix: Span<'static> = "    ".into();
-                let prefix_w = cont_prefix.width(); // same visual width as first_prefix
-
-                let mut used_first = branch_consumed;
-                for raw_line in out.lines() {
-                    let pieces = ExecCell::wrap_command_line_by_widths(
-                        raw_line,
-                        (width as usize).saturating_sub(prefix_w),
-                        (width as usize).saturating_sub(prefix_w),
+                // Wrap the output.
+                for (i, line) in out.lines().enumerate() {
+                    let wrapped = textwrap::wrap(
+                        line,
+                        TwOptions::new(width as usize - 4)
+                            .word_splitter(WordSplitter::NoHyphenation),
                     );
-                    for piece in pieces.iter() {
-                        let prefix_span = if !used_first {
-                            used_first = true;
-                            first_prefix.clone()
-                        } else {
-                            cont_prefix.clone()
-                        };
-                        lines.push(Line::from(vec![prefix_span, piece.to_string().dim()]));
-                    }
+                    lines.extend(wrapped.into_iter().map(|l| {
+                        Line::from(vec![
+                            if i == 0 && !branch_consumed {
+                                "  └ ".dim()
+                            } else {
+                                "    ".dim()
+                            },
+                            l.to_string().dim(),
+                        ])
+                    }));
                 }
             }
         }
@@ -642,7 +582,7 @@ mod syntax_tests {
     #[test]
     fn dims_expected_bash_operators() {
         let s = "echo foo && bar || baz | qux & (echo hi)";
-        let lines = ExecCell::highlight_bash_to_lines(s);
+        let lines = highlight_bash_to_lines(s);
         let reconstructed: String = lines
             .iter()
             .map(|l| {
@@ -670,7 +610,7 @@ mod syntax_tests {
     #[test]
     fn does_not_dim_quotes_but_dims_other_punct() {
         let s = "echo \"hi\" > out.txt; echo 'ok'";
-        let lines = ExecCell::highlight_bash_to_lines(s);
+        let lines = highlight_bash_to_lines(s);
         let reconstructed: String = lines
             .iter()
             .map(|l| {
@@ -752,10 +692,6 @@ impl ExecCell {
         ExecCell { calls: vec![call] }
     }
 
-    pub(crate) fn calls_len(&self) -> usize {
-        self.calls.len()
-    }
-
     fn is_exploring_call(call: &ExecCall) -> bool {
         !call.parsed.is_empty()
             && call.parsed.iter().all(|p| {
@@ -770,54 +706,6 @@ impl ExecCell {
 
     fn is_exploring_cell(&self) -> bool {
         self.calls.iter().all(Self::is_exploring_call)
-    }
-
-    /// Wrap a single raw command line to the given first/continuation widths using textwrap.
-    /// Prefer wrapping at whitespace boundaries; if a single token exceeds the
-    /// available width, allow breaking inside the word.
-    fn wrap_command_line_by_widths(
-        raw: &str,
-        first_avail: usize,
-        cont_avail: usize,
-    ) -> Vec<String> {
-        use textwrap::Options as TwOptions;
-        use textwrap::WordSplitter;
-        use unicode_width::UnicodeWidthStr;
-
-        // First, wrap the entire line using the continuation width. This gives
-        // us word-boundary splits that we can then re-pack into a first line
-        // using the larger first_avail, if applicable.
-        let opts = TwOptions::new(cont_avail)
-            .break_words(true)
-            .word_splitter(WordSplitter::NoHyphenation);
-        let pieces = textwrap::wrap(raw, &opts);
-
-        let mut out: Vec<String> = Vec::new();
-        let mut cur_line = String::new();
-        let mut cur_limit = first_avail;
-        let mut cur_width = 0usize;
-
-        for p in pieces.iter() {
-            let s = p.as_ref();
-            let s_w = UnicodeWidthStr::width(s);
-            if cur_line.is_empty() {
-                cur_line.push_str(s);
-                cur_width = s_w;
-            } else if cur_width + 1 + s_w <= cur_limit {
-                cur_line.push(' ');
-                cur_line.push_str(s);
-                cur_width += 1 + s_w;
-            } else {
-                out.push(std::mem::take(&mut cur_line));
-                cur_limit = cont_avail;
-                cur_line.push_str(s);
-                cur_width = s_w;
-            }
-        }
-        if !cur_line.is_empty() {
-            out.push(cur_line);
-        }
-        out
     }
 
     pub(crate) fn with_added_call(
@@ -854,6 +742,10 @@ impl ExecCell {
             call.duration = Some(duration);
             call.start_time = None;
         }
+    }
+
+    pub(crate) fn should_flush(&self) -> bool {
+        !self.is_exploring_cell() && self.calls.iter().all(|c| c.output.is_some())
     }
 }
 
@@ -1468,100 +1360,93 @@ pub(crate) fn new_stream_error_event(message: String) -> PlainHistoryCell {
 }
 
 /// Render a user‑friendly plan update styled like a checkbox todo list.
-pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlainHistoryCell {
+pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlanUpdateCell {
     let UpdatePlanArgs { explanation, plan } = update;
+    PlanUpdateCell { explanation, plan }
+}
 
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    // Leading blank for separation
-    lines.push(Line::from(""));
-    // Header with progress summary
-    let total = plan.len();
-    let completed = plan
-        .iter()
-        .filter(|p| matches!(p.status, StepStatus::Completed))
-        .count();
+#[derive(Debug)]
+pub(crate) struct PlanUpdateCell {
+    explanation: Option<String>,
+    plan: Vec<PlanItemArg>,
+}
 
-    let width: usize = 10;
-    let filled = if total > 0 {
-        (completed * width + total / 2) / total
-    } else {
-        0
-    };
-    let empty = width.saturating_sub(filled);
+impl HistoryCell for PlanUpdateCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let render_note = |text: &str| -> Vec<Line<'static>> {
+            let wrap_width = width.saturating_sub(4).max(1) as usize;
+            textwrap::wrap(text, wrap_width)
+                .into_iter()
+                .map(|s| s.to_string().dim().italic().into())
+                .collect()
+        };
 
-    let mut header: Vec<Span> = Vec::new();
-    header.push("• ".into());
-    header.push("Update Plan".bold());
-    header.push(Span::raw(" ["));
-    if filled > 0 {
-        header.push(Span::styled(
-            "█".repeat(filled),
-            Style::default().fg(Color::Green),
-        ));
-    }
-    if empty > 0 {
-        header.push(Span::styled(
-            "░".repeat(empty),
-            Style::default().add_modifier(Modifier::DIM),
-        ));
-    }
-    header.push(Span::raw("] "));
-    header.push(Span::raw(format!("{completed}/{total}")));
-    lines.push(Line::from(header));
-
-    // Optional explanation/note from the model
-    if let Some(expl) = explanation.and_then(|s| {
-        let t = s.trim().to_string();
-        if t.is_empty() { None } else { Some(t) }
-    }) {
-        lines.push(Line::from("note".dim().italic()));
-        for l in expl.lines() {
-            lines.push(Line::from(l.to_string()).dim());
-        }
-    }
-
-    // Steps styled as checkbox items
-    if plan.is_empty() {
-        lines.push(Line::from("(no steps provided)".dim().italic()));
-    } else {
-        for (idx, PlanItemArg { step, status }) in plan.into_iter().enumerate() {
-            let (box_span, text_span) = match status {
-                StepStatus::Completed => (
-                    Span::styled("✔", Style::default().fg(Color::Green)),
-                    Span::styled(
-                        step,
-                        Style::default().add_modifier(Modifier::CROSSED_OUT | Modifier::DIM),
-                    ),
-                ),
-                StepStatus::InProgress => (
-                    Span::raw("□"),
-                    Span::styled(
-                        step,
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                ),
-                StepStatus::Pending => (
-                    Span::raw("□"),
-                    Span::styled(step, Style::default().add_modifier(Modifier::DIM)),
-                ),
+        let render_step = |status: &StepStatus, text: &str| -> Vec<Line<'static>> {
+            let (box_str, step_style) = match status {
+                StepStatus::Completed => ("✔ ", Style::default().crossed_out().dim()),
+                StepStatus::InProgress => ("□ ", Style::default().cyan().bold()),
+                StepStatus::Pending => ("□ ", Style::default().dim()),
             };
-            let prefix = if idx == 0 {
-                Span::raw("  └ ")
-            } else {
-                Span::raw("    ")
-            };
-            lines.push(Line::from(vec![
-                prefix,
-                box_span,
-                Span::raw(" "),
-                text_span,
-            ]));
-        }
-    }
+            let wrap_width = (width as usize)
+                .saturating_sub(4)
+                .saturating_sub(box_str.width())
+                .max(1);
+            let parts = textwrap::wrap(text, wrap_width);
+            let step_text = parts
+                .into_iter()
+                .map(|s| s.to_string().set_style(step_style).into())
+                .collect();
+            prefix_lines(step_text, &box_str.into(), &"  ".into())
+        };
 
-    PlainHistoryCell { lines }
+        fn prefix_lines(
+            lines: Vec<Line<'static>>,
+            initial_prefix: &Span<'static>,
+            subsequent_prefix: &Span<'static>,
+        ) -> Vec<Line<'static>> {
+            lines
+                .into_iter()
+                .enumerate()
+                .map(|(i, l)| {
+                    Line::from(
+                        [
+                            vec![if i == 0 {
+                                initial_prefix.clone()
+                            } else {
+                                subsequent_prefix.clone()
+                            }],
+                            l.spans,
+                        ]
+                        .concat(),
+                    )
+                })
+                .collect()
+        }
+
+        let mut lines: Vec<Line<'static>> = vec!["".into()];
+        lines.push(vec!["• ".into(), "Updated Plan".bold()].into());
+
+        let mut indented_lines = vec![];
+        let note = self
+            .explanation
+            .as_ref()
+            .map(|s| s.trim())
+            .filter(|t| !t.is_empty());
+        if let Some(expl) = note {
+            indented_lines.extend(render_note(expl));
+        };
+
+        if self.plan.is_empty() {
+            indented_lines.push(Line::from("(no steps provided)".dim().italic()));
+        } else {
+            for PlanItemArg { step, status } in self.plan.iter() {
+                indented_lines.extend(render_step(status, step));
+            }
+        }
+        lines.extend(prefix_lines(indented_lines, &"  └ ".into(), &"    ".into()));
+
+        lines
+    }
 }
 
 /// Create a new `PendingPatch` cell that lists the file‑level summary of
@@ -1570,10 +1455,12 @@ pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlainHistoryCell {
 pub(crate) fn new_patch_event(
     event_type: PatchEventType,
     changes: HashMap<PathBuf, FileChange>,
+    cwd: &Path,
 ) -> PatchHistoryCell {
     PatchHistoryCell {
         event_type,
         changes,
+        cwd: cwd.to_path_buf(),
     }
 }
 
@@ -1601,8 +1488,6 @@ pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
     lines.insert(0, Line::from(""));
     PlainHistoryCell { lines }
 }
-
-// new_patch_apply_success removed per updated styling (no success block)
 
 pub(crate) fn new_reasoning_block(
     full_reasoning_buffer: String,
@@ -2115,6 +2000,52 @@ mod tests {
             .join("\n");
         insta::assert_snapshot!(rendered);
     }
+
+    #[test]
+    fn ran_cell_multiline_with_stderr_snapshot() {
+        // Build an exec cell that completes (so it renders as "Ran") with a
+        // command long enough that it must render on its own line under the
+        // header, and include a couple of stderr lines to verify the output
+        // block prefixes and wrapping.
+        let call_id = "c_wrap_err".to_string();
+        let long_cmd =
+            "echo this_is_a_very_long_single_token_that_will_wrap_across_the_available_width";
+        let mut cell = ExecCell::new(ExecCall {
+            call_id: call_id.clone(),
+            command: vec!["bash".into(), "-lc".into(), long_cmd.to_string()],
+            parsed: Vec::new(),
+            output: None,
+            start_time: Some(Instant::now()),
+            duration: None,
+        });
+
+        let stderr = "error: first line on stderr\nerror: second line on stderr".to_string();
+        cell.complete_call(
+            &call_id,
+            CommandOutput {
+                exit_code: 1,
+                stdout: String::new(),
+                stderr,
+                formatted_output: String::new(),
+            },
+            Duration::from_millis(5),
+        );
+
+        // Narrow width to force the command to render under the header line.
+        let width: u16 = 28;
+        let rendered = cell
+            .display_lines(width)
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        insta::assert_snapshot!(rendered);
+    }
     #[test]
     fn user_history_cell_wraps_and_prefixes_each_line_snapshot() {
         let msg = "one two three four five six seven";
@@ -2122,8 +2053,8 @@ mod tests {
             message: msg.to_string(),
         };
 
-        // Small width to force wrapping. Effective wrap width is width-1 due to the ▌ prefix.
-        let width: u16 = 8;
+        // Small width to force wrapping more clearly. Effective wrap width is width-1 due to the ▌ prefix.
+        let width: u16 = 12;
         let lines = cell.display_lines(width);
 
         let rendered = lines
@@ -2137,6 +2068,77 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
 
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn plan_update_with_note_and_wrapping_snapshot() {
+        // Long explanation forces wrapping; include long step text to verify step wrapping and alignment.
+        let update = UpdatePlanArgs {
+            explanation: Some(
+                "I’ll update Grafana call error handling by adding retries and clearer messages when the backend is unreachable."
+                    .to_string(),
+            ),
+            plan: vec![
+                PlanItemArg {
+                    step: "Investigate existing error paths and logging around HTTP timeouts".into(),
+                    status: StepStatus::Completed,
+                },
+                PlanItemArg {
+                    step: "Harden Grafana client error handling with retry/backoff and user‑friendly messages".into(),
+                    status: StepStatus::InProgress,
+                },
+                PlanItemArg {
+                    step: "Add tests for transient failure scenarios and surfacing to the UI".into(),
+                    status: StepStatus::Pending,
+                },
+            ],
+        };
+
+        let cell = new_plan_update(update);
+        // Narrow width to force wrapping for both the note and steps
+        let lines = cell.display_lines(32);
+        let rendered = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn plan_update_without_note_snapshot() {
+        let update = UpdatePlanArgs {
+            explanation: None,
+            plan: vec![
+                PlanItemArg {
+                    step: "Define error taxonomy".into(),
+                    status: StepStatus::InProgress,
+                },
+                PlanItemArg {
+                    step: "Implement mapping to user messages".into(),
+                    status: StepStatus::Pending,
+                },
+            ],
+        };
+
+        let cell = new_plan_update(update);
+        let lines = cell.display_lines(40);
+        let rendered = lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
         insta::assert_snapshot!(rendered);
     }
 }

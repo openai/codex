@@ -699,7 +699,7 @@ mod tests {
 
         pane.set_task_running(true);
 
-        // Height=2 → composer visible; status is hidden to preserve composer. Spacer may collapse.
+        // Height=2 → status on one row, composer on the other.
         let area2 = Rect::new(0, 0, 20, 2);
         let mut buf2 = Buffer::empty(area2);
         (&pane).render_ref(area2, &mut buf2);
@@ -715,8 +715,8 @@ mod tests {
             "expected composer to be visible on one of the rows: row0={row0:?}, row1={row1:?}"
         );
         assert!(
-            !row0.contains("Working") && !row1.contains("Working"),
-            "status header should be hidden when height=2"
+            row0.contains("Working") || row1.contains("Working"),
+            "expected status header to be visible at height=2: row0={row0:?}, row1={row1:?}"
         );
 
         // Height=1 → no padding; single row is the composer (status hidden).

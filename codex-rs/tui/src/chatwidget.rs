@@ -101,7 +101,6 @@ pub(crate) struct ChatWidget {
     // Stream lifecycle controller
     stream: StreamController,
     running_commands: HashMap<String, RunningCommand>,
-    // No longer needed; completions are stored within the active ExecCell
     task_complete_pending: bool,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
@@ -332,6 +331,7 @@ impl ChatWidget {
                 auto_approved: event.auto_approved,
             },
             event.changes,
+            &self.config.cwd,
         ));
     }
 
@@ -441,7 +441,6 @@ impl ChatWidget {
                 self.task_complete_pending = false;
             }
             // A completed stream indicates non-exec content was just inserted.
-            // Exec grouping relies on active_exec_cell now; nothing to toggle.
             self.flush_interrupt_queue();
         }
     }
@@ -449,7 +448,6 @@ impl ChatWidget {
     #[inline]
     fn handle_streaming_delta(&mut self, delta: String) {
         // Before streaming agent content, flush any active exec cell group.
-        tracing::info!(target: "codex_tui::exec", "flushing active_exec_cell: reason=agent_stream_delta");
         self.flush_active_exec_cell();
         let sink = AppEventHistorySink(self.app_event_tx.clone());
         self.stream.begin(&sink);
@@ -464,8 +462,9 @@ impl ChatWidget {
             None => (vec![ev.call_id.clone()], Vec::new()),
         };
 
-        // Ensure we have an active cell, then record completion into it.
         if self.active_exec_cell.is_none() {
+            // This should have been created by handle_exec_begin_now, but in case it wasn't,
+            // create it now.
             self.active_exec_cell = Some(history_cell::new_active_exec_command(
                 ev.call_id.clone(),
                 command,
@@ -483,6 +482,9 @@ impl ChatWidget {
                 },
                 ev.duration,
             );
+            if cell.should_flush() {
+                self.flush_active_exec_cell();
+            }
         }
     }
 
@@ -490,9 +492,9 @@ impl ChatWidget {
         &mut self,
         event: codex_core::protocol::PatchApplyEndEvent,
     ) {
-        if event.success {
-            // Suppress success block per new styling spec (no "✓ Applied patch" block)
-        } else {
+        // If the patch was successful, just let the "Edited" block stand.
+        // Otherwise, add a failure block.
+        if !event.success {
             self.add_to_history(history_cell::new_patch_apply_failure(event.stderr));
         }
     }
@@ -518,6 +520,7 @@ impl ChatWidget {
         self.add_to_history(history_cell::new_patch_event(
             PatchEventType::ApprovalRequest,
             ev.changes.clone(),
+            &self.config.cwd,
         ));
 
         let request = ApprovalRequest::ApplyPatch {
@@ -538,32 +541,28 @@ impl ChatWidget {
                 parsed_cmd: ev.parsed_cmd.clone(),
             },
         );
-        // Accumulate each exec begin as a new call within the active Exec cell.
-        match self.active_exec_cell.as_mut() {
-            Some(exec) => {
-                if let Some(new_exec) = exec.with_added_call(
-                    ev.call_id.clone(),
-                    ev.command.clone(),
-                    ev.parsed_cmd.clone(),
-                ) {
-                    self.active_exec_cell = Some(new_exec);
-                } else {
-                    // Make a new cell.
-                    self.flush_active_exec_cell();
-                    self.active_exec_cell = Some(history_cell::new_active_exec_command(
-                        ev.call_id.clone(),
-                        ev.command.clone(),
-                        ev.parsed_cmd.clone(),
-                    ));
-                }
-            }
-            _ => {
+        if let Some(exec) = &self.active_exec_cell {
+            if let Some(new_exec) = exec.with_added_call(
+                ev.call_id.clone(),
+                ev.command.clone(),
+                ev.parsed_cmd.clone(),
+            ) {
+                self.active_exec_cell = Some(new_exec);
+            } else {
+                // Make a new cell.
+                self.flush_active_exec_cell();
                 self.active_exec_cell = Some(history_cell::new_active_exec_command(
                     ev.call_id.clone(),
                     ev.command.clone(),
                     ev.parsed_cmd.clone(),
                 ));
             }
+        } else {
+            self.active_exec_cell = Some(history_cell::new_active_exec_command(
+                ev.call_id.clone(),
+                ev.command.clone(),
+                ev.parsed_cmd.clone(),
+            ));
         }
 
         // Request a redraw so the working header and command list are visible immediately.
@@ -635,7 +634,6 @@ impl ChatWidget {
             last_token_usage: TokenUsage::default(),
             stream: StreamController::new(config),
             running_commands: HashMap::new(),
-
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
@@ -680,7 +678,6 @@ impl ChatWidget {
             last_token_usage: TokenUsage::default(),
             stream: StreamController::new(config),
             running_commands: HashMap::new(),
-
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
@@ -897,24 +894,16 @@ impl ChatWidget {
 
     fn flush_active_exec_cell(&mut self) {
         if let Some(active) = self.active_exec_cell.take() {
-            tracing::info!(
-                target = "codex_tui::exec",
-                "flush_active_exec_cell: calls={}",
-                active.calls_len(),
-            );
             self.app_event_tx
                 .send(AppEvent::InsertHistoryCell(Box::new(active)));
         }
     }
 
     fn add_to_history(&mut self, cell: impl HistoryCell + 'static) {
-        // Only break exec grouping if the cell renders visible lines.
-        let has_display_lines = !cell.display_lines(u16::MAX).is_empty();
-        if has_display_lines {
-            tracing::info!(target: "codex_tui::exec", "flushing active_exec_cell: reason=insert_other_history_cell");
+        if !cell.display_lines(u16::MAX).is_empty() {
+            // Only break exec grouping if the cell renders visible lines.
             self.flush_active_exec_cell();
         }
-        // Exec grouping relies on active_exec_cell now; nothing to toggle.
         self.app_event_tx
             .send(AppEvent::InsertHistoryCell(Box::new(cell)));
     }

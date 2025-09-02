@@ -116,7 +116,9 @@ pub enum ApplyPatchFileChange {
     Add {
         content: String,
     },
-    Delete,
+    Delete {
+        content: String,
+    },
     Update {
         unified_diff: String,
         move_path: Option<PathBuf>,
@@ -210,7 +212,18 @@ pub fn maybe_parse_apply_patch_verified(argv: &[String], cwd: &Path) -> MaybeApp
                         changes.insert(path, ApplyPatchFileChange::Add { content: contents });
                     }
                     Hunk::DeleteFile { .. } => {
-                        changes.insert(path, ApplyPatchFileChange::Delete);
+                        let content = match std::fs::read_to_string(&path) {
+                            Ok(content) => content,
+                            Err(e) => {
+                                return MaybeApplyPatchVerified::CorrectnessError(
+                                    ApplyPatchError::IoError(IoError {
+                                        context: format!("Failed to read {}", path.display()),
+                                        source: e,
+                                    }),
+                                );
+                            }
+                        };
+                        changes.insert(path, ApplyPatchFileChange::Delete { content });
                     }
                     Hunk::UpdateFile {
                         move_path, chunks, ..

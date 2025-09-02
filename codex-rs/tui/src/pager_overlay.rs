@@ -279,7 +279,7 @@ impl PagerView {
         let mut wrapped: Vec<Line<'static>> = Vec::new();
         let mut src_idx: Vec<usize> = Vec::new();
         for (i, line) in self.lines.iter().enumerate() {
-            let ws = insert_history::word_wrap_lines(std::slice::from_ref(line), width);
+            let ws = insert_history::word_wrap_lines(std::slice::from_ref(line), width as usize);
             src_idx.extend(std::iter::repeat_n(i, ws.len()));
             wrapped.extend(ws);
         }

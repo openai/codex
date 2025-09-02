@@ -13,7 +13,6 @@ use crossterm::style::SetAttribute;
 use crossterm::style::SetBackgroundColor;
 use crossterm::style::SetColors;
 use crossterm::style::SetForegroundColor;
-use ratatui::backend::Backend as _;
 use ratatui::layout::Size;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
@@ -24,80 +23,8 @@ use textwrap::Options as TwOptions;
 /// Insert `lines` above the viewport using the terminal's backend writer
 /// (avoids direct stdout references).
 pub(crate) fn insert_history_lines(terminal: &mut tui::Terminal, lines: Vec<Line>) {
-    use ratatui::layout::Size;
-
-    let screen_size = terminal.backend().size().unwrap_or(Size::new(0, 0));
-
-    let mut area = terminal.viewport_area;
-
-    // Pre-wrap lines using word-aware wrapping so terminal scrollback sees the same
-    // formatting as the TUI. This avoids character-level hard wrapping by the terminal.
-    let wrapped = word_wrap_lines(&lines, area.width.max(1) as usize);
-    let wrapped_lines = wrapped.len() as u16;
-    let cursor_top = if area.bottom() < screen_size.height {
-        // If the viewport is not at the bottom of the screen, scroll it down to make room.
-        // Don't scroll it past the bottom of the screen.
-        let scroll_amount = wrapped_lines.min(screen_size.height - area.bottom());
-
-        // Emit ANSI to scroll the lower region (from the top of the viewport to the bottom
-        // of the screen) downward by `scroll_amount` lines. We do this by:
-        //   1) Limiting the scroll region to [area.top()+1 .. screen_height] (1-based bounds)
-        //   2) Placing the cursor at the top margin of that region
-        //   3) Emitting Reverse Index (RI, ESC M) `scroll_amount` times
-        //   4) Resetting the scroll region back to full screen
-        let top_1based = area.top() + 1; // Convert 0-based row to 1-based for DECSTBM
-        queue!(
-            terminal.backend_mut(),
-            SetScrollRegion(top_1based..screen_size.height)
-        )
-        .ok();
-        queue!(terminal.backend_mut(), MoveTo(0, area.top())).ok();
-        for _ in 0..scroll_amount {
-            // Reverse Index (RI): ESC M
-            queue!(terminal.backend_mut(), Print("\x1bM")).ok();
-        }
-        queue!(terminal.backend_mut(), ResetScrollRegion).ok();
-
-        let cursor_top = area.top().saturating_sub(1);
-        area.y += scroll_amount;
-        terminal.set_viewport_area(area);
-        cursor_top
-    } else {
-        area.top().saturating_sub(1)
-    };
-
-    // Limit the scroll region to the lines from the top of the screen to the
-    // top of the viewport. With this in place, when we add lines inside this
-    // area, only the lines in this area will be scrolled. We place the cursor
-    // at the end of the scroll region, and add lines starting there.
-    //
-    // ┌─Screen───────────────────────┐
-    // │┌╌Scroll region╌╌╌╌╌╌╌╌╌╌╌╌╌╌┐│
-    // │┆                            ┆│
-    // │┆                            ┆│
-    // │┆                            ┆│
-    // │█╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┘│
-    // │╭─Viewport───────────────────╮│
-    // ││                            ││
-    // │╰────────────────────────────╯│
-    // └──────────────────────────────┘
-    queue!(terminal.backend_mut(), SetScrollRegion(1..area.top())).ok();
-
-    // NB: we are using MoveTo instead of set_cursor_position here to avoid messing with the
-    // terminal's last_known_cursor_position, which hopefully will still be accurate after we
-    // fetch/restore the cursor position. insert_history_lines should be cursor-position-neutral :)
-    queue!(terminal.backend_mut(), MoveTo(0, cursor_top)).ok();
-
-    for line in wrapped {
-        queue!(terminal.backend_mut(), Print("\r\n")).ok();
-        write_spans(terminal.backend_mut(), line.iter()).ok();
-    }
-
-    queue!(terminal.backend_mut(), ResetScrollRegion).ok();
-
-    // Restore the cursor position to where it was before we started.
-    let last_pos = terminal.last_known_cursor_pos;
-    queue!(terminal.backend_mut(), MoveTo(last_pos.x, last_pos.y)).ok();
+    let mut out = std::io::stdout();
+    insert_history_lines_to_writer(terminal, &mut out, lines);
 }
 
 /// Like `insert_history_lines`, but writes ANSI to the provided writer. This
