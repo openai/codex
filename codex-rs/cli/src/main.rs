@@ -19,6 +19,8 @@ use std::path::PathBuf;
 
 use crate::proto::ProtoCli;
 
+mod ambient;
+
 /// Codex CLI
 ///
 /// If no subcommand is specified, options will be forwarded to the interactive CLI.
@@ -76,6 +78,9 @@ enum Subcommand {
     /// Internal: generate TypeScript protocol bindings.
     #[clap(hide = true)]
     GenerateTs(GenerateTsCommand),
+
+    /// Run the ambient agent.
+    Ambient(ambient::AmbientCommand),
 }
 
 #[derive(Debug, Parser)]
@@ -211,6 +216,10 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         }
         Some(Subcommand::GenerateTs(gen_cli)) => {
             codex_protocol_ts::generate_ts(&gen_cli.out_dir, gen_cli.prettier.as_deref())?;
+        }
+        Some(Subcommand::Ambient(mut ambient_cli)) => {
+            prepend_config_flags(&mut ambient_cli.config_overrides, cli.config_overrides);
+            ambient::run_main(ambient_cli).await?;
         }
     }
 

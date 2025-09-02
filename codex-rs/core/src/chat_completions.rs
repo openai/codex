@@ -29,7 +29,7 @@ use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ResponseItem;
 
 /// Implementation for the classic Chat Completions API.
-pub(crate) async fn stream_chat_completions(
+pub async fn stream_chat_completions(
     prompt: &Prompt,
     model_family: &ModelFamily,
     client: &reqwest::Client,

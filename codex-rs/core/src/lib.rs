@@ -7,9 +7,9 @@
 
 mod apply_patch;
 mod bash;
-mod chat_completions;
+pub mod chat_completions;
 mod client;
-mod client_common;
+pub mod client_common;
 pub mod codex;
 mod codex_conversation;
 pub use codex_conversation::CodexConversation;
