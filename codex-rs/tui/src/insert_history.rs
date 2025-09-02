@@ -419,7 +419,7 @@ mod tests {
 
     #[test]
     fn line_height_counts_double_width_emoji() {
-        let line = Line::from("😀😀😀"); // each emoji ~ width 2
+        let line = "😀😀😀".into(); // each emoji ~ width 2
         assert_eq!(word_wrap_line(&line, 4).len(), 2);
         assert_eq!(word_wrap_line(&line, 2).len(), 3);
         assert_eq!(word_wrap_line(&line, 6).len(), 1);
@@ -428,7 +428,7 @@ mod tests {
     #[test]
     fn word_wrap_does_not_split_words_simple_english() {
         let sample = "Years passed, and Willowmere thrived in peace and friendship. Mira’s herb garden flourished with both ordinary and enchanted plants, and travelers spoke of the kindness of the woman who tended them.";
-        let line = Line::from(sample);
+        let line = sample.into();
         // Force small width to exercise wrapping at spaces.
         let wrapped = word_wrap_lines(&[line], 40);
         let joined: String = wrapped

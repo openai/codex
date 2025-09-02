@@ -115,10 +115,7 @@ fn to_command_display<'a>(
     cmd: String,
     last_line: Vec<Span<'a>>,
 ) -> Vec<Line<'a>> {
-    let command_lines: Vec<Span> = cmd
-        .lines()
-        .map(|line| Span::from(line.to_string()).style(Style::new().add_modifier(Modifier::DIM)))
-        .collect();
+    let command_lines: Vec<Span> = cmd.lines().map(|line| line.to_string().dim()).collect();
 
     let mut lines: Vec<Line<'a>> = vec![];
 
@@ -128,7 +125,7 @@ fn to_command_display<'a>(
         first_line.extend(last_line);
     } else {
         for line in command_lines {
-            lines.push(Line::from(vec![Span::from("    "), line]));
+            lines.push(vec!["    ".into(), line].into());
         }
         let last_line = last_line.clone();
         lines.push(Line::from(last_line));
