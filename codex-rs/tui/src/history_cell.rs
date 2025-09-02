@@ -97,8 +97,7 @@ impl HistoryCell for UserHistoryCell {
         let wrapped = textwrap::wrap(
             &self.message,
             textwrap::Options::new(wrap_width as usize)
-                .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit) // Match textarea wrap
-                .word_splitter(textwrap::WordSplitter::NoHyphenation),
+                .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit), // Match textarea wrap
         );
 
         for line in wrapped {
@@ -445,8 +444,7 @@ impl ExecCell {
                     line,
                     TwOptions::new(width as usize)
                         .initial_indent("    ")
-                        .subsequent_indent("        ")
-                        .word_splitter(WordSplitter::NoHyphenation),
+                        .subsequent_indent("        "),
                 );
                 lines.extend(wrapped.into_iter().enumerate().map(|(j, l)| {
                     if i == 0 && j == 0 {
@@ -466,11 +464,7 @@ impl ExecCell {
             if !out.trim().is_empty() {
                 // Wrap the output.
                 for (i, line) in out.lines().enumerate() {
-                    let wrapped = textwrap::wrap(
-                        line,
-                        TwOptions::new(width as usize - 4)
-                            .word_splitter(WordSplitter::NoHyphenation),
-                    );
+                    let wrapped = textwrap::wrap(line, TwOptions::new(width as usize - 4));
                     lines.extend(wrapped.into_iter().map(|l| {
                         Line::from(vec![
                             if i == 0 && !branch_consumed {

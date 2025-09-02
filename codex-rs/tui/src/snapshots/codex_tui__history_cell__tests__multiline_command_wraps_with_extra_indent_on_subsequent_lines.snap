@@ -4,6 +4,5 @@ expression: rendered
 ---
 • Ran
   └ set -o pipefail
-    cargo test
-        --all-features
-        --quiet
+    cargo test --all-
+        features --quiet
