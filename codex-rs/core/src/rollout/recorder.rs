@@ -75,6 +75,15 @@ enum RolloutCmd {
 }
 
 impl RolloutRecorder {
+    /// List conversations (rollout files) under the provided Codex home directory.
+    pub async fn list_conversations(
+        codex_home: &Path,
+        page_size: usize,
+        cursor: Option<&str>,
+    ) -> std::io::Result<crate::rollout::list::ConversationsPage> {
+        super::list::get_conversations(codex_home, page_size, cursor).await
+    }
+
     /// Attempt to create a new [`RolloutRecorder`]. If the sessions directory
     /// cannot be created or the rollout file cannot be opened we return the
     /// error so the caller can decide whether to disable persistence.
