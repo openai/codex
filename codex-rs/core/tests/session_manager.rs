@@ -73,19 +73,24 @@ async fn test_list_conversations_latest_first() {
 
     let page = get_conversations(home, 10, None).await.unwrap();
 
-    assert_eq!(page.paths.len(), 3);
+    assert_eq!(page.items.len(), 3);
     assert!(!page.reached_scan_cap);
     assert_eq!(page.scanned_files, 3);
 
     // Verify newest first: 03, 02, 01
     let names: Vec<String> = page
-        .paths
+        .items
         .iter()
-        .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+        .map(|it| it.path.file_name().unwrap().to_string_lossy().to_string())
         .collect();
     assert!(names[0].contains("2025-01-03T12-00-00"));
     assert!(names[1].contains("2025-01-02T12-00-00"));
     assert!(names[2].contains("2025-01-01T12-00-00"));
+
+    // Each item should have up to 5 head records (1 meta + up to 4 more given num_records=3)
+    for it in page.items {
+        assert!(it.head.len() >= 1 && it.head.len() <= 5);
+    }
 }
 
 #[tokio::test]
@@ -101,11 +106,11 @@ async fn test_pagination_cursor() {
 
     // First page of 2: expect 05, 04
     let page1 = get_conversations(home, 2, None).await.unwrap();
-    assert_eq!(page1.paths.len(), 2);
+    assert_eq!(page1.items.len(), 2);
     let n1: Vec<_> = page1
-        .paths
+        .items
         .iter()
-        .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+        .map(|it| it.path.file_name().unwrap().to_string_lossy().to_string())
         .collect();
     assert!(n1[0].contains("2025-03-05T09-00-00"));
     assert!(n1[1].contains("2025-03-04T09-00-00"));
@@ -114,11 +119,11 @@ async fn test_pagination_cursor() {
     let page2 = get_conversations(home, 2, page1.next_cursor.as_deref())
         .await
         .unwrap();
-    assert_eq!(page2.paths.len(), 2);
+    assert_eq!(page2.items.len(), 2);
     let n2: Vec<_> = page2
-        .paths
+        .items
         .iter()
-        .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+        .map(|it| it.path.file_name().unwrap().to_string_lossy().to_string())
         .collect();
     assert!(n2[0].contains("2025-03-03T09-00-00"));
     assert!(n2[1].contains("2025-03-02T09-00-00"));
@@ -127,11 +132,11 @@ async fn test_pagination_cursor() {
     let page3 = get_conversations(home, 2, page2.next_cursor.as_deref())
         .await
         .unwrap();
-    assert_eq!(page3.paths.len(), 1);
+    assert_eq!(page3.items.len(), 1);
     let n3: Vec<_> = page3
-        .paths
+        .items
         .iter()
-        .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+        .map(|it| it.path.file_name().unwrap().to_string_lossy().to_string())
         .collect();
     assert!(n3[0].contains("2025-03-01T09-00-00"));
 }
@@ -146,12 +151,15 @@ async fn test_get_conversation_contents() {
     write_session_file(home, ts, uuid, 2).unwrap();
 
     let page = get_conversations(home, 1, None).await.unwrap();
-    let path = &page.paths[0];
+    let path = &page.items[0].path;
 
     let content = get_conversation(path).await.unwrap();
 
     assert!(content.contains("2025-04-01T10-30-00"));
     assert!(content.contains(&uuid.to_string()));
+
+    // Head should include meta + two records (capped by 5)
+    assert_eq!(page.items[0].head.len(), 3);
 }
 
 #[tokio::test]
@@ -171,9 +179,9 @@ async fn test_stable_ordering_same_second_pagination() {
 
     let page1 = get_conversations(home, 2, None).await.unwrap();
     let names1: Vec<_> = page1
-        .paths
+        .items
         .iter()
-        .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+        .map(|it| it.path.file_name().unwrap().to_string_lossy().to_string())
         .collect();
     // Expect u3 then u2 on the first page
     assert!(names1[0].contains(&u3.to_string()));
@@ -182,8 +190,9 @@ async fn test_stable_ordering_same_second_pagination() {
     let page2 = get_conversations(home, 2, page1.next_cursor.as_deref())
         .await
         .unwrap();
-    assert_eq!(page2.paths.len(), 1);
-    let name2 = page2.paths[0]
+    assert_eq!(page2.items.len(), 1);
+    let name2 = page2.items[0]
+        .path
         .file_name()
         .unwrap()
         .to_string_lossy()

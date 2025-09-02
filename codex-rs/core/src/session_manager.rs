@@ -10,20 +10,28 @@ use time::format_description::FormatItem;
 use time::macros::format_description;
 use uuid::Uuid;
 
-
 pub(crate) const SESSIONS_SUBDIR: &str = "sessions";
 
-/// Returned page of conversation file paths.
+/// Returned page of conversation summaries.
 #[derive(Debug)]
 pub struct ConversationsPage {
-    /// Absolute paths to rollout files, ordered newest first.
-    pub paths: Vec<PathBuf>,
+    /// Conversation summaries ordered newest first.
+    pub items: Vec<ConversationItem>,
     /// Opaque pagination token to resume after the last item, or `None` if end.
     pub next_cursor: Option<String>,
     /// Total number of files touched while scanning this request.
     pub scanned_files: usize,
     /// True if a hard scan cap was hit; consider resuming with `next_cursor`.
     pub reached_scan_cap: bool,
+}
+
+/// Summary information for a conversation rollout file.
+#[derive(Debug)]
+pub struct ConversationItem {
+    /// Absolute path to the rollout file.
+    pub path: PathBuf,
+    /// First up to 5 JSONL records parsed as JSON (includes meta line).
+    pub head: Vec<serde_json::Value>,
 }
 
 const MAX_SCAN_FILES: usize = 50_000; // Hard cap to bound worst‑case work per request.
@@ -40,7 +48,7 @@ pub async fn get_conversations(
     root.push(SESSIONS_SUBDIR);
     if !root.exists() {
         return Ok(ConversationsPage {
-            paths: Vec::new(),
+            items: Vec::new(),
             next_cursor: None,
             scanned_files: 0,
             reached_scan_cap: false,
@@ -73,7 +81,7 @@ fn traverse_directories_for_paths(
     page_size: usize,
     anchor: Option<(OffsetDateTime, Uuid)>,
 ) -> io::Result<ConversationsPage> {
-    let mut paths = Vec::with_capacity(page_size);
+    let mut items: Vec<ConversationItem> = Vec::with_capacity(page_size);
     let mut scanned_files = 0usize;
     let mut anchor_passed = anchor.is_none();
     let (anchor_ts, anchor_id) =
@@ -106,7 +114,7 @@ fn traverse_directories_for_paths(
                 day_files.sort_by_key(|(ts, sid, _name_str, _path)| (Reverse(*ts), Reverse(*sid)));
                 for (ts, sid, _name_str, path) in day_files.into_iter() {
                     scanned_files += 1;
-                    if scanned_files >= MAX_SCAN_FILES && paths.len() >= page_size {
+                    if scanned_files >= MAX_SCAN_FILES && items.len() >= page_size {
                         break 'outer;
                     }
                     if !anchor_passed {
@@ -116,18 +124,19 @@ fn traverse_directories_for_paths(
                             continue;
                         }
                     }
-                    if paths.len() == page_size {
+                    if items.len() == page_size {
                         break 'outer;
                     }
-                    paths.push(path);
+                    let head = read_first_jsonl_records(&path, 5).unwrap_or_default();
+                    items.push(ConversationItem { path, head });
                 }
             }
         }
     }
 
-    let next = build_next_cursor(&paths);
+    let next = build_next_cursor(&items);
     Ok(ConversationsPage {
-        paths,
+        items,
         next_cursor: next,
         scanned_files,
         reached_scan_cap: scanned_files >= MAX_SCAN_FILES,
@@ -148,9 +157,9 @@ fn parse_cursor(token: &str) -> Option<(OffsetDateTime, Uuid)> {
     Some((ts, uuid))
 }
 
-fn build_next_cursor(paths: &[PathBuf]) -> Option<String> {
-    let last = paths.last()?;
-    let file_name = last.file_name()?.to_string_lossy();
+fn build_next_cursor(items: &[ConversationItem]) -> Option<String> {
+    let last = items.last()?;
+    let file_name = last.path.file_name()?.to_string_lossy();
     let (ts, id) = parse_timestamp_uuid_from_filename(&file_name)?;
     Some(format!(
         "{}|{}",
@@ -214,4 +223,26 @@ fn parse_timestamp_uuid_from_filename(name: &str) -> Option<(OffsetDateTime, Uui
         format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
     let ts = PrimitiveDateTime::parse(ts_str, format).ok()?.assume_utc();
     Some((ts, uuid))
+}
+
+fn read_first_jsonl_records(path: &Path, max_records: usize) -> io::Result<Vec<serde_json::Value>> {
+    use std::io::BufRead;
+
+    let file = fs::File::open(path)?;
+    let reader = std::io::BufReader::new(file);
+    let mut head: Vec<serde_json::Value> = Vec::new();
+    for line_res in reader.lines().take(max_records) {
+        let line = match line_res {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
+            head.push(v);
+        }
+    }
+    Ok(head)
 }
