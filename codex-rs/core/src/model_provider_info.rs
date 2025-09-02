@@ -99,8 +99,19 @@ impl ModelProviderInfo {
         client: &'a reqwest::Client,
         auth: &Option<CodexAuth>,
     ) -> crate::error::Result<reqwest::RequestBuilder> {
+        // Prefer provider-specific env key when present, but only if it can
+        // produce a valid HTTP Authorization header value. If it cannot (e.g.,
+        // contains characters rejected by HeaderValue), gracefully fall back
+        // to the supplied `auth` so we don't fail requests with a "builder error".
         let effective_auth = match self.api_key() {
-            Ok(Some(key)) => Some(CodexAuth::from_api_key(&key)),
+            Ok(Some(key)) => {
+                let candidate = format!("Bearer {key}");
+                if reqwest::header::HeaderValue::from_str(&candidate).is_ok() {
+                    Some(CodexAuth::from_api_key(&key))
+                } else {
+                    auth.clone()
+                }
+            }
             Ok(None) => auth.clone(),
             Err(err) => {
                 if auth.is_some() {
@@ -165,7 +176,8 @@ impl ModelProviderInfo {
     fn apply_http_headers(&self, mut builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         if let Some(extra) = &self.http_headers {
             for (k, v) in extra {
-                builder = builder.header(k, v);
+                // Lowercase header names to satisfy HTTP/2 rules.
+                builder = builder.header(k.to_ascii_lowercase(), v);
             }
         }
 
@@ -174,7 +186,8 @@ impl ModelProviderInfo {
                 if let Ok(val) = std::env::var(env_var)
                     && !val.trim().is_empty()
                 {
-                    builder = builder.header(header, val);
+                    // Lowercase header names to satisfy HTTP/2 rules.
+                    builder = builder.header(header.to_ascii_lowercase(), val);
                 }
             }
         }

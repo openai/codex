@@ -32,7 +32,15 @@ pub fn get_codex_user_agent(originator: Option<&str>) -> String {
     let arch = sanitize_header_value(os_info.architecture().unwrap_or("unknown"));
     let term = sanitize_header_value(crate::terminal::user_agent());
 
-    format!("{originator}/{build_version} ({os_type} {os_version}; {arch}) {term}")
+    // Build descriptive UA first.
+    let ua = format!("{originator}/{build_version} ({os_type} {os_version}; {arch}) {term}");
+
+    // Validate against reqwest's HeaderValue rules; fall back if rejected.
+    if reqwest::header::HeaderValue::from_str(&ua).is_ok() {
+        ua
+    } else {
+        format!("{DEFAULT_ORIGINATOR}/{build_version}")
+    }
 }
 
 #[cfg(test)]

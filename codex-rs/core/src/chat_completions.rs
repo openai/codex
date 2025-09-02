@@ -157,7 +157,17 @@ pub(crate) async fn stream_chat_completions(
     loop {
         attempt += 1;
 
-        let req_builder = provider.create_request_builder(client, &None).await?;
+        let mut req_builder = provider.create_request_builder(client, &None).await?;
+
+        // Align header behaviour with the Responses API path: include a stable
+        // originator and a sanitized User-Agent to avoid reqwest HeaderValue
+        // builder errors on unusual locales or terminals.
+        {
+            // Use a conservative, always-valid UA to avoid builder errors caused by
+            // unusual locale/terminal strings on some systems.
+            let ua = format!("codex_cli_rs/{}", env!("CARGO_PKG_VERSION"));
+            req_builder = req_builder.header(reqwest::header::USER_AGENT, ua);
+        }
 
         let res = req_builder
             .header(reqwest::header::ACCEPT, "text/event-stream")

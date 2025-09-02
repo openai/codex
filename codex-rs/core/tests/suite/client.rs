@@ -593,7 +593,9 @@ async fn includes_user_instructions_message_in_request() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn azure_overrides_assign_properties_used_for_responses_url() {
-    let existing_env_var_with_random_value = if cfg!(windows) { "USERNAME" } else { "USER" };
+    // This test verifies Azure-style base URL + query params + custom headers are applied
+    // and that Authorization is set from provided API key auth.
+    let test_api_key = "Test API Key";
 
     // Mock server
     let server = MockServer::start().await;
@@ -610,11 +612,7 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
         .and(header_regex("Custom-Header", "Value"))
         .and(header_regex(
             "Authorization",
-            format!(
-                "Bearer {}",
-                std::env::var(existing_env_var_with_random_value).unwrap()
-            )
-            .as_str(),
+            format!("Bearer {test_api_key}").as_str(),
         ))
         .respond_with(first)
         .expect(1)
@@ -624,8 +622,8 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
     let provider = ModelProviderInfo {
         name: "custom".to_string(),
         base_url: Some(format!("{}/openai", server.uri())),
-        // Reuse the existing environment variable to avoid using unsafe code
-        env_key: Some(existing_env_var_with_random_value.to_string()),
+        // No env key for this test; we pass API key via auth.
+        env_key: None,
         query_params: Some(std::collections::HashMap::from([(
             "api-version".to_string(),
             "2025-04-01-preview".to_string(),
@@ -648,7 +646,8 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = provider;
 
-    let conversation_manager = ConversationManager::with_auth(create_dummy_codex_auth());
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key(test_api_key));
     let codex = conversation_manager
         .new_conversation(config)
         .await
@@ -669,7 +668,8 @@ async fn azure_overrides_assign_properties_used_for_responses_url() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn env_var_overrides_loaded_auth() {
-    let existing_env_var_with_random_value = if cfg!(windows) { "USERNAME" } else { "USER" };
+    // Choose a reliable, cross-platform env var that should always be set.
+    let existing_env_var_with_random_value = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
 
     // Mock server
     let server = MockServer::start().await;
@@ -686,10 +686,10 @@ async fn env_var_overrides_loaded_auth() {
         .and(header_regex("Custom-Header", "Value"))
         .and(header_regex(
             "Authorization",
-            format!(
-                "Bearer {}",
-                std::env::var(existing_env_var_with_random_value).unwrap()
-            )
+            {
+                let v = std::env::var(existing_env_var_with_random_value).unwrap();
+                format!("Bearer {v}")
+            }
             .as_str(),
         ))
         .respond_with(first)
@@ -700,7 +700,7 @@ async fn env_var_overrides_loaded_auth() {
     let provider = ModelProviderInfo {
         name: "custom".to_string(),
         base_url: Some(format!("{}/openai", server.uri())),
-        // Reuse the existing environment variable to avoid using unsafe code
+        // Reuse a guaranteed-present environment variable to avoid unsafe set_var
         env_key: Some(existing_env_var_with_random_value.to_string()),
         query_params: Some(std::collections::HashMap::from([(
             "api-version".to_string(),

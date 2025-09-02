@@ -38,7 +38,6 @@ use crate::model_provider_info::WireApi;
 use crate::openai_model_info::get_model_info;
 use crate::openai_tools::create_tools_json_for_responses_api;
 use crate::protocol::TokenUsage;
-use crate::user_agent::get_codex_user_agent;
 use crate::util::backoff;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -226,7 +225,10 @@ impl ModelClient {
                 .await?;
 
             req_builder = req_builder
-                .header("OpenAI-Beta", "responses=experimental")
+                // Header names must be lowercase to satisfy http/2 rules.
+                .header("openai-beta", "responses=experimental")
+                // Tests (and internal consumers) expect this underscore form.
+                // underscore is valid per RFC7230 tchar set.
                 .header("session_id", self.session_id.to_string())
                 .header(reqwest::header::ACCEPT, "text/event-stream")
                 .json(&payload);
@@ -238,9 +240,21 @@ impl ModelClient {
                 req_builder = req_builder.header("chatgpt-account-id", account_id);
             }
 
-            let originator = &self.config.responses_originator_header;
-            req_builder = req_builder.header("originator", originator);
-            req_builder = req_builder.header("User-Agent", get_codex_user_agent(Some(originator)));
+            // Validate and set originator + User-Agent headers. If reqwest rejects
+            // either value, fall back to minimal safe defaults to avoid a
+            // "builder error" before the request is sent.
+            let originator_raw = &self.config.responses_originator_header;
+            let originator = if reqwest::header::HeaderValue::from_str(originator_raw).is_ok() {
+                originator_raw.clone()
+            } else {
+                "codex_cli_rs".to_string()
+            };
+            req_builder = req_builder.header("originator", &originator);
+
+            // Use a conservative, always-valid UA to avoid builder errors caused by
+            // unusual locale/terminal strings on some systems.
+            let user_agent = format!("codex_cli_rs/{}", env!("CARGO_PKG_VERSION"));
+            req_builder = req_builder.header(reqwest::header::USER_AGENT, user_agent);
 
             let res = req_builder.send().await;
             if let Ok(resp) = &res {

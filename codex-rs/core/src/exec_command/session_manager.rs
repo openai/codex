@@ -472,17 +472,9 @@ mod tests {
 
         let session_manager = SessionManager::default();
         // Long-running loop that prints an increasing counter every ~100ms.
-        // Use Python for a portable, reliable sleep across shells/PTYs.
-        let cmd = r#"python3 - <<'PY'
-import sys, time
-count = 0
-while True:
-    print(count)
-    sys.stdout.flush()
-    count += 100
-    time.sleep(0.1)
-PY"#
-        .to_string();
+        // Use a pure-bash loop to avoid heredoc/PTY quirks or Python dependency.
+        // The loop echoes 0, 100, 200, ... with a 100ms sleep between prints.
+        let cmd = r#"i=0; while true; do echo "$i"; i=$((i+100)); sleep 0.1; done"#.to_string();
 
         // Start the session and collect ~3s of output.
         let params = ExecCommandParams {
