@@ -10,7 +10,6 @@ use time::format_description::FormatItem;
 use time::macros::format_description;
 use uuid::Uuid;
 
-use crate::config::Config;
 
 pub(crate) const SESSIONS_SUBDIR: &str = "sessions";
 
@@ -33,11 +32,11 @@ const MAX_SCAN_FILES: usize = 50_000; // Hard cap to bound worst‑case work per
 /// can be supplied on the next call to resume after the last returned item, resilient to
 /// concurrent new sessions being appended. Ordering is stable by timestamp desc, then UUID desc.
 pub async fn get_conversations(
-    config: &Config,
+    codex_home: &Path,
     page_size: usize,
     cursor: Option<&str>,
 ) -> io::Result<ConversationsPage> {
-    let mut root = config.codex_home.clone();
+    let mut root = codex_home.to_path_buf();
     root.push(SESSIONS_SUBDIR);
     if !root.exists() {
         return Ok(ConversationsPage {

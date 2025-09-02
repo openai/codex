@@ -6,9 +6,6 @@ use std::fs::{self};
 use std::io::Write;
 use std::path::Path;
 
-use codex_core::config::Config;
-use codex_core::config::ConfigOverrides;
-use codex_core::config::ConfigToml;
 use codex_core::get_conversation;
 use codex_core::get_conversations;
 use tempfile::TempDir;
@@ -61,18 +58,7 @@ fn write_session_file(
     Ok((dt, uuid))
 }
 
-/// Construct a minimal `Config` that points to the given `codex_home` directory.
-fn make_config(codex_home: &Path) -> Config {
-    Config::load_from_base_config_with_overrides(
-        ConfigToml::default(),
-        ConfigOverrides {
-            cwd: Some(codex_home.to_path_buf()),
-            ..Default::default()
-        },
-        codex_home.to_path_buf(),
-    )
-    .expect("failed to construct Config for tests")
-}
+// No Config needed for conversation listing tests; we pass `codex_home` directly.
 
 #[tokio::test]
 async fn test_list_conversations_latest_first() {
@@ -85,8 +71,7 @@ async fn test_list_conversations_latest_first() {
         write_session_file(home, &ts, Uuid::new_v4(), 3).unwrap();
     }
 
-    let cfg = make_config(home);
-    let page = get_conversations(&cfg, 10, None).await.unwrap();
+    let page = get_conversations(home, 10, None).await.unwrap();
 
     assert_eq!(page.paths.len(), 3);
     assert!(!page.reached_scan_cap);
@@ -114,10 +99,8 @@ async fn test_pagination_cursor() {
         write_session_file(home, &ts, Uuid::new_v4(), 1).unwrap();
     }
 
-    let cfg = make_config(home);
-
     // First page of 2: expect 05, 04
-    let page1 = get_conversations(&cfg, 2, None).await.unwrap();
+    let page1 = get_conversations(home, 2, None).await.unwrap();
     assert_eq!(page1.paths.len(), 2);
     let n1: Vec<_> = page1
         .paths
@@ -128,7 +111,7 @@ async fn test_pagination_cursor() {
     assert!(n1[1].contains("2025-03-04T09-00-00"));
 
     // Second page of 2: pass cursor
-    let page2 = get_conversations(&cfg, 2, page1.next_cursor.as_deref())
+    let page2 = get_conversations(home, 2, page1.next_cursor.as_deref())
         .await
         .unwrap();
     assert_eq!(page2.paths.len(), 2);
@@ -141,7 +124,7 @@ async fn test_pagination_cursor() {
     assert!(n2[1].contains("2025-03-02T09-00-00"));
 
     // Third page of 1: expect 01
-    let page3 = get_conversations(&cfg, 2, page2.next_cursor.as_deref())
+    let page3 = get_conversations(home, 2, page2.next_cursor.as_deref())
         .await
         .unwrap();
     assert_eq!(page3.paths.len(), 1);
@@ -162,8 +145,7 @@ async fn test_get_conversation_contents() {
     let ts = "2025-04-01T10-30-00";
     write_session_file(home, ts, uuid, 2).unwrap();
 
-    let cfg = make_config(home);
-    let page = get_conversations(&cfg, 1, None).await.unwrap();
+    let page = get_conversations(home, 1, None).await.unwrap();
     let path = &page.paths[0];
 
     let content = get_conversation(path).await.unwrap();
@@ -187,9 +169,7 @@ async fn test_stable_ordering_same_second_pagination() {
     write_session_file(home, ts, u2, 0).unwrap();
     write_session_file(home, ts, u3, 0).unwrap();
 
-    let cfg = make_config(home);
-
-    let page1 = get_conversations(&cfg, 2, None).await.unwrap();
+    let page1 = get_conversations(home, 2, None).await.unwrap();
     let names1: Vec<_> = page1
         .paths
         .iter()
@@ -199,7 +179,7 @@ async fn test_stable_ordering_same_second_pagination() {
     assert!(names1[0].contains(&u3.to_string()));
     assert!(names1[1].contains(&u2.to_string()));
 
-    let page2 = get_conversations(&cfg, 2, page1.next_cursor.as_deref())
+    let page2 = get_conversations(home, 2, page1.next_cursor.as_deref())
         .await
         .unwrap();
     assert_eq!(page2.paths.len(), 1);
