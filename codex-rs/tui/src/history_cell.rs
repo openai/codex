@@ -656,35 +656,40 @@ pub(crate) fn new_session_info(
             Some(_) => "~".to_string(),
             None => config.cwd.display().to_string(),
         };
+        // Discover AGENTS.md files to decide whether to suggest `/init`.
+        let has_agents_md = discover_project_doc_paths(config)
+            .map(|v| !v.is_empty())
+            .unwrap_or(false);
 
-        let lines: Vec<Line<'static>> = vec![
-            Line::from(vec![
-                ">_ ".dim(),
-                "You are using OpenAI Codex in".bold(),
-                format!(" {cwd_str}").dim(),
-            ]),
-            "".dim().into(),
-            " To get started, describe a task or try one of these commands:"
-                .dim()
-                .into(),
-            "".dim().into(),
-            Line::from(vec![
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        lines.push(Line::from(vec![
+            ">_ ".dim(),
+            "You are using OpenAI Codex in".bold(),
+            format!(" {cwd_str}").dim(),
+        ]));
+        lines.push(Line::from("".dim()));
+        lines.push(Line::from(
+            " To get started, describe a task or try one of these commands:".dim(),
+        ));
+        lines.push(Line::from("".dim()));
+        if !has_agents_md {
+            lines.push(Line::from(vec![
                 " /init".bold(),
                 format!(" - {}", SlashCommand::Init.description()).dim(),
-            ]),
-            Line::from(vec![
-                " /status".bold(),
-                format!(" - {}", SlashCommand::Status.description()).dim(),
-            ]),
-            Line::from(vec![
-                " /approvals".bold(),
-                format!(" - {}", SlashCommand::Approvals.description()).dim(),
-            ]),
-            Line::from(vec![
-                " /model".bold(),
-                format!(" - {}", SlashCommand::Model.description()).dim(),
-            ]),
-        ];
+            ]));
+        }
+        lines.push(Line::from(vec![
+            " /status".bold(),
+            format!(" - {}", SlashCommand::Status.description()).dim(),
+        ]));
+        lines.push(Line::from(vec![
+            " /approvals".bold(),
+            format!(" - {}", SlashCommand::Approvals.description()).dim(),
+        ]));
+        lines.push(Line::from(vec![
+            " /model".bold(),
+            format!(" - {}", SlashCommand::Model.description()).dim(),
+        ]));
         PlainHistoryCell { lines }
     } else if config.model == model {
         PlainHistoryCell { lines: Vec::new() }
