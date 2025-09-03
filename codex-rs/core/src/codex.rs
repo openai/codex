@@ -475,8 +475,8 @@ impl Session {
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         });
 
-        // Dispatch the SessionConfiguredEvent. If resuming, include converted
-        // initial messages in the payload so UIs can render them immediately.
+        // Dispatch the SessionConfiguredEvent first and then report any errors.
+        // If resuming, include converted initial messages in the payload so UIs can render them immediately.
         let initial_messages = match &initial_history {
             InitialHistory::New => None,
             InitialHistory::Resumed(items) => Some(sess.build_initial_messages(items)),
