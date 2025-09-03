@@ -12,7 +12,7 @@ use uuid::Uuid;
 use super::SESSIONS_SUBDIR;
 
 /// Returned page of conversation summaries.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, PartialEq)]
 pub struct ConversationsPage {
     /// Conversation summaries ordered newest first.
     pub items: Vec<ConversationItem>,
@@ -25,7 +25,7 @@ pub struct ConversationsPage {
 }
 
 /// Summary information for a conversation rollout file.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct ConversationItem {
     /// Absolute path to the rollout file.
     pub path: PathBuf,
