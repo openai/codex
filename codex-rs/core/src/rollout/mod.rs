@@ -9,4 +9,4 @@ pub use recorder::RolloutRecorder;
 pub use recorder::SessionStateSnapshot;
 
 #[cfg(test)]
-mod tests;
+pub mod tests;
