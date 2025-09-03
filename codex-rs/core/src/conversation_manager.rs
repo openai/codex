@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use codex_login::AuthManager;
-use codex_login::CodexAuth;
+use crate::AuthManager;
+use crate::CodexAuth;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
@@ -52,7 +52,7 @@ impl ConversationManager {
     /// Construct with a dummy AuthManager containing the provided CodexAuth.
     /// Used for integration tests: should not be used by ordinary business logic.
     pub fn with_auth(auth: CodexAuth) -> Self {
-        Self::new(codex_login::AuthManager::from_auth_for_testing(auth))
+        Self::new(crate::AuthManager::from_auth_for_testing(auth))
     }
 
     pub async fn new_conversation(&self, config: Config) -> CodexResult<NewConversation> {

@@ -10,10 +10,10 @@ use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::OutgoingMessageSender;
 use codex_protocol::mcp_protocol::ClientRequest;
 
+use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::protocol::Submission;
-use codex_login::AuthManager;
 use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
 use mcp_types::ClientRequest as McpClientRequest;

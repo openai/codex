@@ -1,5 +1,5 @@
+use codex_core::AuthManager;
 use codex_core::git_info::get_git_repo_root;
-use codex_login::AuthManager;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -9,7 +9,7 @@ use ratatui::prelude::Widget;
 use ratatui::widgets::Clear;
 use ratatui::widgets::WidgetRef;
 
-use codex_login::AuthMode;
+use codex_protocol::mcp_protocol::AuthMode;
 
 use crate::LoginStatus;
 use crate::onboarding::auth::AuthModeWidget;
