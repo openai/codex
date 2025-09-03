@@ -1247,6 +1247,44 @@ pub(crate) fn new_reasoning_block(
     TranscriptOnlyHistoryCell { lines }
 }
 
+pub(crate) fn new_reasoning_summary_block(
+    full_reasoning_buffer: String,
+    config: &Config,
+) -> Vec<Box<dyn HistoryCell>> {
+    if config.use_experimental_reasoning_summary {
+        // Experimental format is following:
+        // ** header **
+        //
+        // reasoning summary
+        //
+        // So we need to strip header from reasoning summary
+        if let Some(open) = full_reasoning_buffer.find("**") {
+            let after_open = &full_reasoning_buffer[(open + 2)..];
+            if let Some(close) = after_open.find("**") {
+                let after_close_idx = open + 2 + close + 2;
+                let header_buffer = full_reasoning_buffer[..after_close_idx].to_string();
+                let summary_buffer = full_reasoning_buffer[after_close_idx..].to_string();
+
+                let mut header_lines: Vec<Line<'static>> = Vec::new();
+                header_lines.push(Line::from("Thinking".magenta().italic()));
+                append_markdown(&header_buffer, &mut header_lines, config);
+
+                let mut summary_lines: Vec<Line<'static>> = Vec::new();
+                summary_lines.push(Line::from("Thinking".magenta().bold()));
+                append_markdown(&summary_buffer, &mut summary_lines, config);
+
+                return vec![
+                    Box::new(TranscriptOnlyHistoryCell {
+                        lines: header_lines,
+                    }),
+                    Box::new(AgentMessageCell::new(summary_lines, true)),
+                ];
+            }
+        }
+    }
+    vec![Box::new(new_reasoning_block(full_reasoning_buffer, config))]
+}
+
 fn output_lines(
     output: Option<&CommandOutput>,
     only_err: bool,
