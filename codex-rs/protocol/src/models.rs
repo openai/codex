@@ -7,7 +7,12 @@ use serde::Deserializer;
 use serde::Serialize;
 use serde::ser::Serializer;
 
+use crate::protocol::AgentMessageEvent;
+use crate::protocol::AgentReasoningEvent;
+use crate::protocol::AgentReasoningRawContentEvent;
+use crate::protocol::EventMsg;
 use crate::protocol::InputItem;
+use crate::protocol::WebSearchEndEvent;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
