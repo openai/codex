@@ -59,6 +59,7 @@ pub mod spawn;
 pub mod terminal;
 mod tool_apply_patch;
 pub mod turn_diff_tracker;
+pub use rollout::list::ConversationsPage;
 mod user_notification;
 pub mod util;
 pub use apply_patch::CODEX_APPLY_PATCH_ARG1;
@@ -69,3 +70,14 @@ pub use codex_protocol::protocol;
 // Re-export protocol config enums to ensure call sites can use the same types
 // as those in the protocol crate when constructing protocol messages.
 pub use codex_protocol::config_types as protocol_config_types;
+
+pub use client::ModelClient;
+pub use client_common::Prompt;
+pub use client_common::ResponseEvent;
+pub use client_common::ResponseStream;
+pub use codex_protocol::models::ContentItem;
+pub use codex_protocol::models::LocalShellAction;
+pub use codex_protocol::models::LocalShellExecAction;
+pub use codex_protocol::models::LocalShellStatus;
+pub use codex_protocol::models::ReasoningItemContent;
+pub use codex_protocol::models::ResponseItem;

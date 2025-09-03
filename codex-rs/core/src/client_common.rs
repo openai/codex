@@ -35,7 +35,7 @@ pub struct Prompt {
 
     /// Tools available to the model, including additional tools sourced from
     /// external MCP servers.
-    pub tools: Vec<OpenAiTool>,
+    pub(crate) tools: Vec<OpenAiTool>,
 
     /// Optional override for the built-in BASE_INSTRUCTIONS.
     pub base_instructions_override: Option<String>,
@@ -174,7 +174,7 @@ pub(crate) fn create_text_param_for_request(
     })
 }
 
-pub(crate) struct ResponseStream {
+pub struct ResponseStream {
     pub(crate) rx_event: mpsc::Receiver<Result<ResponseEvent>>,
 }
 
