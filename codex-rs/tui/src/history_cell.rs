@@ -45,6 +45,32 @@ use tracing::error;
 use unicode_width::UnicodeWidthStr;
 use uuid::Uuid;
 
+/// Prefix each provided line with `initial_prefix` for the first, and
+/// `subsequent_prefix` for all following lines.
+fn prefix_lines(
+    lines: Vec<Line<'static>>,
+    initial_prefix: &Span<'static>,
+    subsequent_prefix: &Span<'static>,
+) -> Vec<Line<'static>> {
+    lines
+        .into_iter()
+        .enumerate()
+        .map(|(i, l)| {
+            Line::from(
+                [
+                    vec![if i == 0 {
+                        initial_prefix.clone()
+                    } else {
+                        subsequent_prefix.clone()
+                    }],
+                    l.spans,
+                ]
+                .concat(),
+            )
+        })
+        .collect()
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct CommandOutput {
     pub(crate) exit_code: i32,
@@ -1203,30 +1229,6 @@ impl HistoryCell for PlanUpdateCell {
             prefix_lines(step_text, &box_str.into(), &"  ".into())
         };
 
-        fn prefix_lines(
-            lines: Vec<Line<'static>>,
-            initial_prefix: &Span<'static>,
-            subsequent_prefix: &Span<'static>,
-        ) -> Vec<Line<'static>> {
-            lines
-                .into_iter()
-                .enumerate()
-                .map(|(i, l)| {
-                    Line::from(
-                        [
-                            vec![if i == 0 {
-                                initial_prefix.clone()
-                            } else {
-                                subsequent_prefix.clone()
-                            }],
-                            l.spans,
-                        ]
-                        .concat(),
-                    )
-                })
-                .collect()
-        }
-
         let mut lines: Vec<Line<'static>> = vec![];
         lines.push(vec!["• ".into(), "Updated Plan".bold()].into());
 
@@ -1287,6 +1289,28 @@ pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
             true,
         ));
     }
+
+    PlainHistoryCell { lines }
+}
+
+/// Create a new history cell for a proposed command approval.
+/// Renders a header and the command preview similar to how proposed patches
+/// show a header and summary.
+pub(crate) fn new_proposed_command(command: &[String]) -> PlainHistoryCell {
+    let cmd = strip_bash_lc_and_escape(command);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    // Header: "• Proposed Command"
+    lines.push(Line::from(vec!["• ".into(), "Proposed Command".bold()]));
+
+    // Command preview with an indented connector on the first line.
+    let cmd_lines: Vec<Line<'static>> = cmd
+        .lines()
+        .map(|part| Line::from(part.to_string()))
+        .collect();
+    let initial_prefix: Span<'static> = "  └ ".dim();
+    let subsequent_prefix: Span<'static> = "    ".into();
+    lines.extend(prefix_lines(cmd_lines, &initial_prefix, &subsequent_prefix));
 
     PlainHistoryCell { lines }
 }
