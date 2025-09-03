@@ -19,13 +19,15 @@ use tracing::info;
 use tracing::warn;
 use uuid::Uuid;
 
+use super::SESSIONS_SUBDIR;
+use super::list::ConversationsPage;
+use super::list::Cursor;
+use super::list::get_conversations;
 use crate::config::Config;
 use crate::conversation_manager::InitialHistory;
 use crate::git_info::GitInfo;
 use crate::git_info::collect_git_info;
 use codex_protocol::models::ResponseItem;
-
-const SESSIONS_SUBDIR: &str = "sessions";
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct SessionMeta {
@@ -65,7 +67,7 @@ pub struct SavedSession {
 /// $ fx ~/.codex/sessions/rollout-2025-05-07T17-24-21-5973b6c0-94b8-487b-a530-2aeb6098ae0e.jsonl
 /// ```
 #[derive(Clone)]
-pub(crate) struct RolloutRecorder {
+pub struct RolloutRecorder {
     tx: Sender<RolloutCmd>,
 }
 
@@ -76,6 +78,16 @@ enum RolloutCmd {
 }
 
 impl RolloutRecorder {
+    #[allow(dead_code)]
+    /// List conversations (rollout files) under the provided Codex home directory.
+    pub async fn list_conversations(
+        codex_home: &Path,
+        page_size: usize,
+        cursor: Option<&Cursor>,
+    ) -> std::io::Result<ConversationsPage> {
+        get_conversations(codex_home, page_size, cursor).await
+    }
+
     /// Attempt to create a new [`RolloutRecorder`]. If the sessions directory
     /// cannot be created or the rollout file cannot be opened we return the
     /// error so the caller can decide whether to disable persistence.

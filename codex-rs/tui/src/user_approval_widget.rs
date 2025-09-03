@@ -111,7 +111,7 @@ pub(crate) struct UserApprovalWidget {
     done: bool,
 }
 
-// (removed unused helper)
+ 
 
 impl UserApprovalWidget {
     pub(crate) fn new(approval_request: ApprovalRequest, app_event_tx: AppEventSender) -> Self {
