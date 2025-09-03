@@ -8,12 +8,12 @@ use std::sync::MutexGuard;
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
+use crate::AuthManager;
 use async_channel::Receiver;
 use async_channel::Sender;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
-use codex_login::AuthManager;
 use codex_protocol::protocol::ConversationHistoryResponseEvent;
 use codex_protocol::protocol::TaskStartedEvent;
 use codex_protocol::protocol::TurnAbortReason;
