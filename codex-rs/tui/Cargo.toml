@@ -22,7 +22,6 @@ workspace = true
 
 [dependencies]
 anyhow = "1"
-arboard = "3"
 async-stream = "0.3.6"
 base64 = "0.22.1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -49,6 +48,7 @@ image = { version = "^0.25.6", default-features = false, features = [
     "jpeg",
     "png",
 ] }
+itertools = "0.14.0"
 lazy_static = "1"
 mcp-types = { path = "../mcp-types" }
 once_cell = "1"
@@ -87,9 +87,15 @@ unicode-segmentation = "1.12.0"
 unicode-width = "0.1"
 url = "2"
 uuid = "1"
+pathdiff = "0.2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# Clipboard support via `arboard` is not available on Android/Termux.
+# Only include it for non-Android targets so the crate builds on Android.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+arboard = "3"
 
 
 [dev-dependencies]

@@ -90,7 +90,7 @@ http_headers = { "X-Example-Header" = "example-value" }
 # This will add the HTTP header `X-Example-Features` with the value of the
 # `EXAMPLE_FEATURES` environment variable to each request to the model provider
 # _if_ the environment variable is set and its value is non-empty.
-env_http_headers = { "X-Example-Features": "EXAMPLE_FEATURES" }
+env_http_headers = { "X-Example-Features" = "EXAMPLE_FEATURES" }
 ```
 
 ### Per-provider network tuning
@@ -116,7 +116,7 @@ How many times Codex will retry a failed HTTP request to the model provider. Def
 
 #### stream_max_retries
 
-Number of times Codex will attempt to reconnect when a streaming response is interrupted. Defaults to `10`.
+Number of times Codex will attempt to reconnect when a streaming response is interrupted. Defaults to `5`.
 
 #### stream_idle_timeout_ms
 
@@ -181,7 +181,7 @@ Here is an example of a `config.toml` that defines multiple profiles:
 
 ```toml
 model = "o3"
-approval_policy = "unless-allow-listed"
+approval_policy = "untrusted"
 disable_response_storage = false
 
 # Setting `profile` is equivalent to specifying `--profile o3` on the command
@@ -572,8 +572,8 @@ Options that are specific to the TUI.
 | `model_provider` | string | Provider id from `model_providers` (default: `openai`). |
 | `model_context_window` | number | Context window tokens. |
 | `model_max_output_tokens` | number | Max output tokens. |
-| `approval_policy` | `untrusted` | `on-failure` | `on-request` | `never` | When to prompt for approval. |
-| `sandbox_mode` | `read-only` | `workspace-write` | `danger-full-access` | OS sandbox policy. |
+| `approval_policy` | `untrusted` \| `on-failure` \| `on-request` \| `never` | When to prompt for approval. |
+| `sandbox_mode` | `read-only` \| `workspace-write` \| `danger-full-access` | OS sandbox policy. |
 | `sandbox_workspace_write.writable_roots` | array<string> | Extra writable roots in workspace‑write. |
 | `sandbox_workspace_write.network_access` | boolean | Allow network in workspace‑write (default: false). |
 | `sandbox_workspace_write.exclude_tmpdir_env_var` | boolean | Exclude `$TMPDIR` from writable roots (default: false). |
@@ -587,7 +587,7 @@ Options that are specific to the TUI.
 | `model_providers.<id>.name` | string | Display name. |
 | `model_providers.<id>.base_url` | string | API base URL. |
 | `model_providers.<id>.env_key` | string | Env var for API key. |
-| `model_providers.<id>.wire_api` | `chat` | `responses` | Protocol used (default: `chat`). |
+| `model_providers.<id>.wire_api` | `chat` \| `responses` | Protocol used (default: `chat`). |
 | `model_providers.<id>.query_params` | map<string,string> | Extra query params (e.g., Azure `api-version`). |
 | `model_providers.<id>.http_headers` | map<string,string> | Additional static headers. |
 | `model_providers.<id>.env_http_headers` | map<string,string> | Headers sourced from env vars. |
@@ -597,15 +597,15 @@ Options that are specific to the TUI.
 | `project_doc_max_bytes` | number | Max bytes to read from `AGENTS.md`. |
 | `profile` | string | Active profile name. |
 | `profiles.<name>.*` | various | Profile‑scoped overrides of the same keys. |
-| `history.persistence` | `save-all` | `none` | History file persistence (default: `save-all`). |
+| `history.persistence` | `save-all` \| `none` | History file persistence (default: `save-all`). |
 | `history.max_bytes` | number | Currently ignored (not enforced). |
-| `file_opener` | `vscode` | `vscode-insiders` | `windsurf` | `cursor` | `none` | URI scheme for clickable citations (default: `vscode`). |
+| `file_opener` | `vscode` \| `vscode-insiders` \| `windsurf` \| `cursor` \| `none` | URI scheme for clickable citations (default: `vscode`). |
 | `tui` | table | TUI‑specific options (reserved). |
 | `hide_agent_reasoning` | boolean | Hide model reasoning events. |
 | `show_raw_agent_reasoning` | boolean | Show raw reasoning (when available). |
-| `model_reasoning_effort` | `minimal` | `low` | `medium` | `high` | Responses API reasoning effort. |
-| `model_reasoning_summary` | `auto` | `concise` | `detailed` | `none` | Reasoning summaries. |
-| `model_verbosity` | `low` | `medium` | `high` | GPT‑5 text verbosity (Responses API). |
+| `model_reasoning_effort` | `minimal` \| `low` \| `medium` \| `high` | Responses API reasoning effort. |
+| `model_reasoning_summary` | `auto` \| `concise` \| `detailed` \| `none` | Reasoning summaries. |
+| `model_verbosity` | `low` \| `medium` \| `high` | GPT‑5 text verbosity (Responses API). |
 | `model_supports_reasoning_summaries` | boolean | Force‑enable reasoning summaries. |
 | `chatgpt_base_url` | string | Base URL for ChatGPT auth flow. |
 | `experimental_resume` | string (path) | Resume JSONL path (internal/experimental). |
@@ -613,5 +613,5 @@ Options that are specific to the TUI.
 | `experimental_use_exec_command_tool` | boolean | Use experimental exec command tool. |
 | `responses_originator_header_internal_override` | string | Override `originator` header value. |
 | `projects.<path>.trust_level` | string | Mark project/worktree as trusted (only `"trusted"` is recognized). |
-| `preferred_auth_method` | `chatgpt` | `apikey` | Select default auth method (default: `chatgpt`). |
+| `preferred_auth_method` | `chatgpt` \| `apikey` | Select default auth method (default: `chatgpt`). |
 | `tools.web_search` | boolean | Enable web search tool (alias: `web_search_request`) (default: false). |

@@ -13,6 +13,7 @@ use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::widgets::WidgetRef;
+use std::time::Duration;
 
 mod approval_modal_view;
 mod bottom_pane_view;
@@ -21,6 +22,7 @@ mod chat_composer_history;
 mod command_popup;
 mod file_search_popup;
 mod list_selection_view;
+mod paste_burst;
 mod popup_consts;
 mod scroll_state;
 mod selection_popup_common;
@@ -34,6 +36,7 @@ pub(crate) enum CancellationEvent {
 
 pub(crate) use chat_composer::ChatComposer;
 pub(crate) use chat_composer::InputResult;
+use codex_protocol::custom_prompts::CustomPrompt;
 
 use crate::status_indicator_widget::StatusIndicatorWidget;
 use approval_modal_view::ApprovalModalView;
@@ -69,6 +72,7 @@ pub(crate) struct BottomPaneParams {
     pub(crate) has_input_focus: bool,
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) placeholder_text: String,
+    pub(crate) disable_paste_burst: bool,
 }
 
 impl BottomPane {
@@ -81,6 +85,7 @@ impl BottomPane {
                 params.app_event_tx.clone(),
                 enhanced_keys_supported,
                 params.placeholder_text,
+                params.disable_paste_burst,
             ),
             active_view: None,
             app_event_tx: params.app_event_tx,
@@ -95,53 +100,47 @@ impl BottomPane {
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
-        let top_margin = if self.active_view.is_some() { 0 } else { 1 };
+        // Always reserve one blank row above the pane for visual spacing.
+        let top_margin = 1;
 
         // Base height depends on whether a modal/overlay is active.
-        let mut base = if let Some(view) = self.active_view.as_ref() {
-            view.desired_height(width)
-        } else {
-            self.composer.desired_height(width)
+        let base = match self.active_view.as_ref() {
+            Some(view) => view.desired_height(width),
+            None => self.composer.desired_height(width).saturating_add(
+                self.status
+                    .as_ref()
+                    .map_or(0, |status| status.desired_height(width)),
+            ),
         };
-        // If a status indicator is active and no modal is covering the composer,
-        // include its height above the composer.
-        if self.active_view.is_none()
-            && let Some(status) = self.status.as_ref()
-        {
-            base = base.saturating_add(status.desired_height(width));
-        }
         // Account for bottom padding rows. Top spacing is handled in layout().
         base.saturating_add(Self::BOTTOM_PAD_LINES)
             .saturating_add(top_margin)
     }
 
     fn layout(&self, area: Rect) -> [Rect; 2] {
-        // Prefer showing the status header when space is extremely tight.
-        // Drop the top spacer if there is only one row available.
-        let mut top_margin = if self.active_view.is_some() { 0 } else { 1 };
-        if area.height <= 1 {
-            top_margin = 0;
-        }
-
-        let status_height = if self.active_view.is_none() {
-            if let Some(status) = self.status.as_ref() {
-                status.desired_height(area.width)
-            } else {
-                0
-            }
+        // At small heights, bottom pane takes the entire height.
+        let (top_margin, bottom_margin) = if area.height <= BottomPane::BOTTOM_PAD_LINES + 1 {
+            (0, 0)
         } else {
-            0
+            (1, BottomPane::BOTTOM_PAD_LINES)
         };
 
-        let [_, status, content, _] = Layout::vertical([
-            Constraint::Max(top_margin),
-            Constraint::Max(status_height),
-            Constraint::Min(1),
-            Constraint::Max(BottomPane::BOTTOM_PAD_LINES),
-        ])
-        .areas(area);
-
-        [status, content]
+        let area = Rect {
+            x: area.x,
+            y: area.y + top_margin,
+            width: area.width,
+            height: area.height - top_margin - bottom_margin,
+        };
+        match self.active_view.as_ref() {
+            Some(_) => [Rect::ZERO, area],
+            None => {
+                let status_height = self
+                    .status
+                    .as_ref()
+                    .map_or(0, |status| status.desired_height(area.width));
+                Layout::vertical([Constraint::Max(status_height), Constraint::Min(1)]).areas(area)
+            }
+        }
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
@@ -181,6 +180,9 @@ impl BottomPane {
             let (input_result, needs_redraw) = self.composer.handle_key_event(key_event);
             if needs_redraw {
                 self.request_redraw();
+            }
+            if self.composer.is_in_paste_burst() {
+                self.request_redraw_in(ChatComposer::recommended_paste_flush_delay());
             }
             input_result
         }
@@ -329,6 +331,12 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    /// Update custom prompts available for the slash popup.
+    pub(crate) fn set_custom_prompts(&mut self, prompts: Vec<CustomPrompt>) {
+        self.composer.set_custom_prompts(prompts);
+        self.request_redraw();
+    }
+
     pub(crate) fn composer_is_empty(&self) -> bool {
         self.composer.is_empty()
     }
@@ -382,10 +390,22 @@ impl BottomPane {
         self.frame_requester.schedule_frame();
     }
 
+    pub(crate) fn request_redraw_in(&self, dur: Duration) {
+        self.frame_requester.schedule_frame_in(dur);
+    }
+
     // --- History helpers ---
 
     pub(crate) fn set_history_metadata(&mut self, log_id: u64, entry_count: usize) {
         self.composer.set_history_metadata(log_id, entry_count);
+    }
+
+    pub(crate) fn flush_paste_burst_if_due(&mut self) -> bool {
+        self.composer.flush_paste_burst_if_due()
+    }
+
+    pub(crate) fn is_in_paste_burst(&self) -> bool {
+        self.composer.is_in_paste_burst()
     }
 
     pub(crate) fn on_history_entry_response(
@@ -473,6 +493,7 @@ mod tests {
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
         });
         pane.push_approval_request(exec_request());
         assert_eq!(CancellationEvent::Handled, pane.on_ctrl_c());
@@ -492,6 +513,7 @@ mod tests {
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
         });
 
         // Create an approval modal (active view).
@@ -522,6 +544,7 @@ mod tests {
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
         });
 
         // Start a running task so the status indicator is active above the composer.
@@ -589,6 +612,7 @@ mod tests {
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
         });
 
         // Begin a task: show initial status.
@@ -619,6 +643,7 @@ mod tests {
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
         });
 
         // Activate spinner (status view replaces composer) with no live ring.
@@ -669,11 +694,12 @@ mod tests {
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
         });
 
         pane.set_task_running(true);
 
-        // Height=2 → composer visible; status is hidden to preserve composer. Spacer may collapse.
+        // Height=2 → status on one row, composer on the other.
         let area2 = Rect::new(0, 0, 20, 2);
         let mut buf2 = Buffer::empty(area2);
         (&pane).render_ref(area2, &mut buf2);
@@ -689,8 +715,8 @@ mod tests {
             "expected composer to be visible on one of the rows: row0={row0:?}, row1={row1:?}"
         );
         assert!(
-            !row0.contains("Working") && !row1.contains("Working"),
-            "status header should be hidden when height=2"
+            row0.contains("Working") || row1.contains("Working"),
+            "expected status header to be visible at height=2: row0={row0:?}, row1={row1:?}"
         );
 
         // Height=1 → no padding; single row is the composer (status hidden).

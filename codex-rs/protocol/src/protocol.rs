@@ -10,6 +10,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
+use crate::custom_prompts::CustomPrompt;
 use mcp_types::CallToolResult;
 use mcp_types::Tool as McpTool;
 use serde::Deserialize;
@@ -145,6 +146,9 @@ pub enum Op {
     /// Request the list of MCP tools available across all configured servers.
     /// Reply is delivered via `EventMsg::McpListToolsResponse`.
     ListMcpTools,
+
+    /// Request the list of available custom prompts.
+    ListCustomPrompts,
 
     /// Request the agent to summarize the current conversation context.
     /// The agent will use its existing context (either conversation history or previous response id)
@@ -439,6 +443,8 @@ pub enum EventMsg {
 
     WebSearchBegin(WebSearchBeginEvent),
 
+    WebSearchEnd(WebSearchEndEvent),
+
     /// Notification that the server is about to execute a command.
     ExecCommandBegin(ExecCommandBeginEvent),
 
@@ -471,6 +477,9 @@ pub enum EventMsg {
 
     /// List of MCP tools available to the agent.
     McpListToolsResponse(McpListToolsResponseEvent),
+
+    /// List of custom prompts available to the agent.
+    ListCustomPromptsResponse(ListCustomPromptsResponseEvent),
 
     PlanUpdate(UpdatePlanArgs),
 
@@ -668,6 +677,11 @@ impl McpToolCallEndEvent {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WebSearchBeginEvent {
     pub call_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct WebSearchEndEvent {
+    pub call_id: String,
     pub query: String,
 }
 
@@ -806,6 +820,12 @@ pub struct McpListToolsResponseEvent {
     pub tools: std::collections::HashMap<String, McpTool>,
 }
 
+/// Response payload for `Op::ListCustomPrompts`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ListCustomPromptsResponseEvent {
+    pub custom_prompts: Vec<CustomPrompt>,
+}
+
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct SessionConfiguredEvent {
     /// Unique id for this session.
@@ -849,7 +869,9 @@ pub enum FileChange {
     Add {
         content: String,
     },
-    Delete,
+    Delete {
+        content: String,
+    },
     Update {
         unified_diff: String,
         move_path: Option<PathBuf>,

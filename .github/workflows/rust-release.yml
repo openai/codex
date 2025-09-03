@@ -72,6 +72,8 @@ jobs:
             target: aarch64-unknown-linux-gnu
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
 
     steps:
       - uses: actions/checkout@v5
@@ -87,7 +89,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             ${{ github.workspace }}/codex-rs/target/
-          key: cargo-release-${{ matrix.runner }}-${{ matrix.target }}-release-${{ hashFiles('**/Cargo.lock') }}
+          key: cargo-${{ matrix.runner }}-${{ matrix.target }}-release-${{ hashFiles('**/Cargo.lock') }}
 
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Install musl build tools
@@ -108,6 +110,11 @@ jobs:
           else
             cp target/${{ matrix.target }}/release/codex "$dest/codex-${{ matrix.target }}"
           fi
+
+      - if: ${{ matrix.runner == 'windows-11-arm' }}
+        name: Install zstd
+        shell: powershell
+        run: choco install -y zstandard
 
       - name: Compress artifacts
         shell: bash

@@ -1,5 +1,5 @@
-use codex_core::util::is_inside_git_repo;
-use codex_login::AuthManager;
+use codex_core::AuthManager;
+use codex_core::git_info::get_git_repo_root;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -9,7 +9,7 @@ use ratatui::prelude::Widget;
 use ratatui::widgets::Clear;
 use ratatui::widgets::WidgetRef;
 
-use codex_login::AuthMode;
+use codex_protocol::mcp_protocol::AuthMode;
 
 use crate::LoginStatus;
 use crate::onboarding::auth::AuthModeWidget;
@@ -88,7 +88,7 @@ impl OnboardingScreen {
                 auth_manager,
             }))
         }
-        let is_git_repo = is_inside_git_repo(&cwd);
+        let is_git_repo = get_git_repo_root(&cwd).is_some();
         let highlighted = if is_git_repo {
             TrustDirectorySelection::Trust
         } else {

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use codex_core::AuthManager;
 use codex_core::CodexConversation;
 use codex_core::ConversationManager;
 use codex_core::NewConversation;
@@ -16,7 +17,6 @@ use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ReviewDecision;
-use codex_login::AuthManager;
 use codex_protocol::mcp_protocol::AuthMode;
 use codex_protocol::mcp_protocol::GitDiffToRemoteResponse;
 use mcp_types::JSONRPCErrorError;
@@ -31,9 +31,9 @@ use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::json_to_toml::json_to_toml;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
+use codex_core::auth::CLIENT_ID;
 use codex_core::protocol::InputItem as CoreInputItem;
 use codex_core::protocol::Op;
-use codex_login::CLIENT_ID;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
@@ -798,6 +798,7 @@ fn derive_config_from_params(
         base_instructions,
         include_plan_tool,
         include_apply_patch_tool,
+        include_view_image_tool: None,
         disable_response_storage: None,
         show_raw_agent_reasoning: None,
         tools_web_search_request: None,

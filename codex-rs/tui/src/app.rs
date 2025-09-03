@@ -7,10 +7,10 @@ use crate::pager_overlay::Overlay;
 use crate::tui;
 use crate::tui::TuiEvent;
 use codex_ansi_escape::ansi_escape_line;
+use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::protocol::TokenUsage;
-use codex_login::AuthManager;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -43,6 +43,7 @@ pub(crate) struct App {
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
     pub(crate) deferred_history_lines: Vec<Line<'static>>,
+    has_emitted_history_lines: bool,
 
     pub(crate) enhanced_keys_supported: bool,
 
@@ -91,6 +92,7 @@ impl App {
             transcript_lines: Vec::new(),
             overlay: None,
             deferred_history_lines: Vec::new(),
+            has_emitted_history_lines: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
         };
@@ -133,6 +135,12 @@ impl App {
                     self.chat_widget.handle_paste(pasted);
                 }
                 TuiEvent::Draw => {
+                    if self
+                        .chat_widget
+                        .handle_paste_burst_tick(tui.frame_requester())
+                    {
+                        return Ok(true);
+                    }
                     tui.draw(
                         self.chat_widget.desired_height(tui.terminal.size()?.width),
                         |frame| {
@@ -171,27 +179,28 @@ impl App {
                 );
                 tui.frame_requester().schedule_frame();
             }
-            AppEvent::InsertHistoryLines(lines) => {
-                if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                    t.insert_lines(lines.clone());
-                    tui.frame_requester().schedule_frame();
-                }
-                self.transcript_lines.extend(lines.clone());
-                if self.overlay.is_some() {
-                    self.deferred_history_lines.extend(lines);
-                } else {
-                    tui.insert_history_lines(lines);
-                }
-            }
             AppEvent::InsertHistoryCell(cell) => {
-                let cell_transcript = cell.transcript_lines();
+                let mut cell_transcript = cell.transcript_lines();
+                if !cell.is_stream_continuation() && !self.transcript_lines.is_empty() {
+                    cell_transcript.insert(0, Line::from(""));
+                }
                 if let Some(Overlay::Transcript(t)) = &mut self.overlay {
                     t.insert_lines(cell_transcript.clone());
                     tui.frame_requester().schedule_frame();
                 }
                 self.transcript_lines.extend(cell_transcript.clone());
-                let display = cell.display_lines();
+                let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
                 if !display.is_empty() {
+                    // Only insert a separating blank line for new cells that are not
+                    // part of an ongoing stream. Streaming continuations should not
+                    // accrue extra blank lines between chunks.
+                    if !cell.is_stream_continuation() {
+                        if self.has_emitted_history_lines {
+                            display.insert(0, Line::from(""));
+                        } else {
+                            self.has_emitted_history_lines = true;
+                        }
+                    }
                     if self.overlay.is_some() {
                         self.deferred_history_lines.extend(display);
                     } else {
