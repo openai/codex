@@ -7,3 +7,6 @@ pub mod recorder;
 
 pub use recorder::RolloutRecorder;
 pub use recorder::SessionStateSnapshot;
+
+#[cfg(test)]
+mod tests;
