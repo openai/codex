@@ -59,6 +59,7 @@ pub mod terminal;
 mod tool_apply_patch;
 pub mod turn_diff_tracker;
 pub mod user_agent;
+pub use rollout::list::ConversationsPage;
 mod user_notification;
 pub mod util;
 pub use apply_patch::CODEX_APPLY_PATCH_ARG1;
