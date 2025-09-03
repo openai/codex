@@ -475,13 +475,11 @@ impl Session {
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         });
 
-        // Dispatch the SessionConfiguredEvent first and then report any errors.
-        // If resuming, also emit the converted initial history right after configured.
-        let initial_history_events = match &initial_history {
-            InitialHistory::New => Vec::new(),
-            InitialHistory::Resumed(items) => {
-                sess.response_items_to_events_with_id(INITIAL_SUBMIT_ID, items)
-            }
+        // Dispatch the SessionConfiguredEvent. If resuming, include converted
+        // initial messages in the payload so UIs can render them immediately.
+        let initial_messages = match &initial_history {
+            InitialHistory::New => None,
+            InitialHistory::Resumed(items) => Some(sess.build_initial_messages(items)),
         };
         let events = std::iter::once(Event {
             id: INITIAL_SUBMIT_ID.to_owned(),
@@ -490,9 +488,9 @@ impl Session {
                 model,
                 history_log_id,
                 history_entry_count,
+                initial_messages,
             }),
         })
-        .chain(initial_history_events.into_iter())
         .chain(post_session_configured_error_events.into_iter());
         for event in events {
             if let Err(e) = tx_event.send(event).await {
@@ -556,22 +554,16 @@ impl Session {
         self.record_conversation_items(&items).await;
     }
 
-    // Helper: convert a list of `ResponseItem`s into `Event`s with a specific id,
-    // applying the session's raw reasoning visibility. Not public; used internally
-    // for initial history emission and similar cases.
-    fn response_items_to_events_with_id(&self, id: &str, items: &[ResponseItem]) -> Vec<Event> {
-        let mut out: Vec<Event> = Vec::new();
+    /// build the initial messages vector for SessionConfigured by converting
+    /// ResponseItems into EventMsg.
+    fn build_initial_messages(&self, items: &[ResponseItem]) -> Vec<EventMsg> {
+        let mut out: Vec<EventMsg> = Vec::new();
         for item in items {
             let mut msgs: Vec<EventMsg> = (item).into();
             if !self.show_raw_agent_reasoning {
                 msgs.retain(|m| !matches!(m, EventMsg::AgentReasoningRawContent(_)));
             }
-            for msg in msgs {
-                out.push(Event {
-                    id: id.to_string(),
-                    msg,
-                });
-            }
+            out.extend(msgs);
         }
         out
     }
