@@ -96,7 +96,7 @@ fn write_auth_json(
         "OPENAI_API_KEY": openai_api_key,
         "tokens": tokens,
         // RFC3339 datetime; value doesn't matter for these tests
-        "last_refresh": "2025-08-06T20:41:36.232376Z",
+        "last_refresh": chrono::Utc::now(),
     });
 
     std::fs::write(
