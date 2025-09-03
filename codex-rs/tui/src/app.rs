@@ -207,15 +207,17 @@ impl App {
             }
             AppEvent::InsertHistoryCell(cell) => {
                 let mut cell_transcript = cell.transcript_lines();
+                let mut prepend_line_count = 0;
                 if !cell.is_stream_continuation() && !self.transcript_lines.is_empty() {
                     cell_transcript.insert(0, Line::from(""));
+                    prepend_line_count += 1;
                 }
                 if let Some(Overlay::Transcript(t)) = &mut self.overlay {
                     t.insert_lines(cell_transcript.clone());
                     tui.frame_requester().schedule_frame();
                 }
                 // Compute absolute indices before extending transcript
-                let start = self.transcript_lines.len();
+                let start = self.transcript_lines.len() + prepend_line_count;
                 if let Some(span) = cell.message_span()
                     && matches!(cell.kind(), crate::history_cell::MessageKind::User)
                 {
