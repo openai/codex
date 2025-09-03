@@ -90,7 +90,7 @@ http_headers = { "X-Example-Header" = "example-value" }
 # This will add the HTTP header `X-Example-Features` with the value of the
 # `EXAMPLE_FEATURES` environment variable to each request to the model provider
 # _if_ the environment variable is set and its value is non-empty.
-env_http_headers = { "X-Example-Features": "EXAMPLE_FEATURES" }
+env_http_headers = { "X-Example-Features" = "EXAMPLE_FEATURES" }
 ```
 
 ### Per-provider network tuning
