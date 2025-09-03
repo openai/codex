@@ -100,3 +100,4 @@ Codex CLI supports a rich set of configuration options, with preferences stored 
 
 This repository is licensed under the [Apache-2.0 License](LICENSE).
 
+
