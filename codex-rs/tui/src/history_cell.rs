@@ -436,23 +436,26 @@ impl ExecCell {
             branch_consumed = true;
             lines.push(Line::from(vec![bullet, " ".into(), title.bold()]));
 
-            // Highlight once, then wrap each line with subsequent indents
-            // applied by the wrapper. Use `prefix_lines` to add the branch
-            // marker and base left padding.
+            // Highlight once, then wrap each individual line so subsequent
+            // indents apply within that line only.
             let full_hl = highlight_bash_to_lines(&cmd_display);
             for (i, hl_line) in full_hl.iter().enumerate() {
-                let opts = TwOptions::new((width as usize).saturating_sub(4))
-                    .initial_indent("")
-                    .subsequent_indent("    ")
+                let opts = crate::wrapping::RtOptions::new((width as usize).saturating_sub(4))
+                    .initial_indent(Line::from(""))
+                    .subsequent_indent(Line::from("    "))
                     .word_splitter(textwrap::WordSplitter::NoHyphenation);
-                let wrapped = crate::insert_history::word_wrap_line(hl_line, opts);
+                let wrapped_borrowed = crate::wrapping::word_wrap_line(hl_line, opts);
                 let initial_prefix = if i == 0 {
                     "  └ ".dim()
                 } else {
                     "    ".into()
                 };
                 let subsequent_prefix: Span<'static> = "    ".into();
-                let prefixed = prefix_lines(wrapped, initial_prefix, subsequent_prefix);
+                let prefixed = prefix_lines_borrowed(
+                    wrapped_borrowed,
+                    initial_prefix,
+                    subsequent_prefix,
+                );
                 lines.extend(prefixed);
             }
         }
@@ -582,6 +585,31 @@ fn prefix_lines(
                 subsequent_prefix.clone()
             });
             spans.extend(l.spans);
+            Line::from(spans)
+        })
+        .collect()
+}
+
+fn prefix_lines_borrowed<'a>(
+    lines: Vec<Line<'a>>,
+    initial_prefix: Span<'static>,
+    subsequent_prefix: Span<'static>,
+) -> Vec<Line<'static>> {
+    lines
+        .into_iter()
+        .enumerate()
+        .map(|(i, l)| {
+            let mut spans: Vec<Span<'static>> = Vec::with_capacity(l.spans.len() + 1);
+            spans.push(if i == 0 {
+                initial_prefix.clone()
+            } else {
+                subsequent_prefix.clone()
+            });
+            spans.extend(
+                l.spans
+                    .into_iter()
+                    .map(|s| Span { style: s.style, content: std::borrow::Cow::Owned(s.content.into_owned()) }),
+            );
             Line::from(spans)
         })
         .collect()
