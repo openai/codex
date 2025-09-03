@@ -21,6 +21,7 @@ use uuid::Uuid;
 
 use super::SESSIONS_SUBDIR;
 use super::list::ConversationsPage;
+use super::list::Cursor;
 use super::list::get_conversations;
 use crate::config::Config;
 use crate::conversation_manager::InitialHistory;
@@ -82,7 +83,7 @@ impl RolloutRecorder {
     pub async fn list_conversations(
         codex_home: &Path,
         page_size: usize,
-        cursor: Option<&str>,
+        cursor: Option<&Cursor>,
     ) -> std::io::Result<ConversationsPage> {
         get_conversations(codex_home, page_size, cursor).await
     }

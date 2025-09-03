@@ -1,5 +1,4 @@
 use std::cmp::Reverse;
-use std::fs;
 use std::io::{self};
 use std::path::Path;
 use std::path::PathBuf;
@@ -13,14 +12,14 @@ use uuid::Uuid;
 use super::SESSIONS_SUBDIR;
 
 /// Returned page of conversation summaries.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ConversationsPage {
     /// Conversation summaries ordered newest first.
     pub items: Vec<ConversationItem>,
     /// Opaque pagination token to resume after the last item, or `None` if end.
-    pub next_cursor: Option<String>,
+    pub next_cursor: Option<Cursor>,
     /// Total number of files touched while scanning this request.
-    pub scanned_files: usize,
+    pub num_scanned_files: usize,
     /// True if a hard scan cap was hit; consider resuming with `next_cursor`.
     pub reached_scan_cap: bool,
 }
@@ -34,7 +33,46 @@ pub struct ConversationItem {
     pub head: Vec<serde_json::Value>,
 }
 
-const MAX_SCAN_FILES: usize = 50_000; // Hard cap to bound worst‑case work per request.
+/// Hard cap to bound worst‑case work per request.
+const MAX_SCAN_FILES: usize = 50_000;
+
+/// Pagination cursor identifying a file by timestamp and UUID.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Cursor {
+    ts: OffsetDateTime,
+    id: Uuid,
+}
+
+impl Cursor {
+    fn new(ts: OffsetDateTime, id: Uuid) -> Self {
+        Self { ts, id }
+    }
+}
+
+impl serde::Serialize for Cursor {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let ts_str = self
+            .ts
+            .format(&format_description!(
+                "[year]-[month]-[day]T[hour]-[minute]-[second]"
+            ))
+            .map_err(|e| serde::ser::Error::custom(format!("format error: {e}")))?;
+        serializer.serialize_str(&format!("{ts_str}|{}", self.id))
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Cursor {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        parse_cursor(&s).ok_or_else(|| serde::de::Error::custom("invalid cursor"))
+    }
+}
 
 /// Retrieve recorded conversation file paths with token pagination. The returned `next_cursor`
 /// can be supplied on the next call to resume after the last returned item, resilient to
@@ -42,7 +80,7 @@ const MAX_SCAN_FILES: usize = 50_000; // Hard cap to bound worst‑case work per
 pub(crate) async fn get_conversations(
     codex_home: &Path,
     page_size: usize,
-    cursor: Option<&str>,
+    cursor: Option<&Cursor>,
 ) -> io::Result<ConversationsPage> {
     let mut root = codex_home.to_path_buf();
     root.push(SESSIONS_SUBDIR);
@@ -50,19 +88,14 @@ pub(crate) async fn get_conversations(
         return Ok(ConversationsPage {
             items: Vec::new(),
             next_cursor: None,
-            scanned_files: 0,
+            num_scanned_files: 0,
             reached_scan_cap: false,
         });
     }
 
-    let anchor = cursor.and_then(parse_cursor);
+    let anchor = cursor.cloned();
 
-    let result = tokio::task::spawn_blocking({
-        let root = root.clone();
-        move || traverse_directories_for_paths(root, page_size, anchor)
-    })
-    .await
-    .map_err(|e| io::Error::other(format!("join error: {e}")))??;
+    let result = traverse_directories_for_paths(root.clone(), page_size, anchor).await?;
     Ok(result)
 }
 
@@ -77,29 +110,31 @@ pub(crate) async fn get_conversation(path: &Path) -> io::Result<String> {
 ///
 /// Directory layout: `~/.codex/sessions/YYYY/MM/DD/rollout-YYYY-MM-DDThh-mm-ss-<uuid>.jsonl`
 /// Returned newest (latest) first.
-fn traverse_directories_for_paths(
+async fn traverse_directories_for_paths(
     root: PathBuf,
     page_size: usize,
-    anchor: Option<(OffsetDateTime, Uuid)>,
+    anchor: Option<Cursor>,
 ) -> io::Result<ConversationsPage> {
     let mut items: Vec<ConversationItem> = Vec::with_capacity(page_size);
     let mut scanned_files = 0usize;
     let mut anchor_passed = anchor.is_none();
-    let (anchor_ts, anchor_id) =
-        anchor.unwrap_or_else(|| (OffsetDateTime::UNIX_EPOCH, Uuid::nil()));
+    let (anchor_ts, anchor_id) = match anchor {
+        Some(c) => (c.ts, c.id),
+        None => (OffsetDateTime::UNIX_EPOCH, Uuid::nil()),
+    };
 
-    let year_dirs = collect_dirs_desc(&root, |s| s.parse::<u16>().ok())?;
+    let year_dirs = collect_dirs_desc(&root, |s| s.parse::<u16>().ok()).await?;
 
     'outer: for (_year, year_path) in year_dirs.iter() {
         if scanned_files >= MAX_SCAN_FILES {
             break;
         }
-        let month_dirs = collect_dirs_desc(year_path, |s| s.parse::<u8>().ok())?;
+        let month_dirs = collect_dirs_desc(year_path, |s| s.parse::<u8>().ok()).await?;
         for (_month, month_path) in month_dirs.iter() {
             if scanned_files >= MAX_SCAN_FILES {
                 break 'outer;
             }
-            let day_dirs = collect_dirs_desc(month_path, |s| s.parse::<u8>().ok())?;
+            let day_dirs = collect_dirs_desc(month_path, |s| s.parse::<u8>().ok()).await?;
             for (_day, day_path) in day_dirs.iter() {
                 if scanned_files >= MAX_SCAN_FILES {
                     break 'outer;
@@ -110,7 +145,8 @@ fn traverse_directories_for_paths(
                     }
                     parse_timestamp_uuid_from_filename(name_str)
                         .map(|(ts, id)| (ts, id, name_str.to_string(), path.to_path_buf()))
-                })?;
+                })
+                .await?;
                 // Stable ordering within the same second: (timestamp desc, uuid desc)
                 day_files.sort_by_key(|(ts, sid, _name_str, _path)| (Reverse(*ts), Reverse(*sid)));
                 for (ts, sid, _name_str, path) in day_files.into_iter() {
@@ -128,7 +164,7 @@ fn traverse_directories_for_paths(
                     if items.len() == page_size {
                         break 'outer;
                     }
-                    let head = read_first_jsonl_records(&path, 5).unwrap_or_default();
+                    let head = read_first_jsonl_records(&path, 5).await.unwrap_or_default();
                     items.push(ConversationItem { path, head });
                 }
             }
@@ -139,7 +175,7 @@ fn traverse_directories_for_paths(
     Ok(ConversationsPage {
         items,
         next_cursor: next,
-        scanned_files,
+        num_scanned_files: scanned_files,
         reached_scan_cap: scanned_files >= MAX_SCAN_FILES,
     })
 }
@@ -147,7 +183,7 @@ fn traverse_directories_for_paths(
 /// Pagination cursor token format: "<file_ts>|<uuid>" where `file_ts` matches the
 /// filename timestamp portion (YYYY-MM-DDThh-mm-ss) used in rollout filenames.
 /// The cursor orders files by timestamp desc, then UUID desc.
-fn parse_cursor(token: &str) -> Option<(OffsetDateTime, Uuid)> {
+fn parse_cursor(token: &str) -> Option<Cursor> {
     let (file_ts, uuid_str) = token.split_once('|')?;
     let Ok(uuid) = Uuid::parse_str(uuid_str) else {
         return None;
@@ -155,58 +191,66 @@ fn parse_cursor(token: &str) -> Option<(OffsetDateTime, Uuid)> {
     let format: &[FormatItem] =
         format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
     let ts = PrimitiveDateTime::parse(file_ts, format).ok()?.assume_utc();
-    Some((ts, uuid))
+
+    Some(Cursor::new(ts, uuid))
 }
 
-fn build_next_cursor(items: &[ConversationItem]) -> Option<String> {
+fn build_next_cursor(items: &[ConversationItem]) -> Option<Cursor> {
     let last = items.last()?;
     let file_name = last.path.file_name()?.to_string_lossy();
     let (ts, id) = parse_timestamp_uuid_from_filename(&file_name)?;
-    Some(format!(
-        "{}|{}",
-        ts.format(&format_description!(
-            "[year]-[month]-[day]T[hour]-[minute]-[second]"
-        ))
-        .ok()?,
-        id
-    ))
+    Some(Cursor::new(ts, id))
 }
 
 /// Collects immediate subdirectories of `parent`, parses their (string) names with `parse`,
 /// and returns them sorted descending by the parsed key.
-fn collect_dirs_desc<T, F>(parent: &Path, parse: F) -> io::Result<Vec<(T, PathBuf)>>
+async fn collect_dirs_desc<T, F>(parent: &Path, parse: F) -> io::Result<Vec<(T, PathBuf)>>
 where
     T: Ord + Copy,
     F: Fn(&str) -> Option<T>,
 {
-    let mut vec: Vec<(T, PathBuf)> = fs::read_dir(parent)?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
-        .filter_map(|e| {
-            let name = e.file_name();
-            let s = name.to_str()?;
-            parse(s).map(|v| (v, e.path()))
-        })
-        .collect();
+    let mut dir = tokio::fs::read_dir(parent).await?;
+    let mut vec: Vec<(T, PathBuf)> = Vec::new();
+    while let Some(entry) = dir.next_entry().await? {
+        if entry
+            .file_type()
+            .await
+            .map(|ft| ft.is_dir())
+            .unwrap_or(false)
+        {
+            if let Some(s) = entry.file_name().to_str() {
+                if let Some(v) = parse(s) {
+                    vec.push((v, entry.path()));
+                }
+            }
+        }
+    }
     vec.sort_by_key(|(v, _)| Reverse(*v));
     Ok(vec)
 }
 
-// Collects files in a directory and parses them with `parse`.
-fn collect_files<T, F>(parent: &Path, parse: F) -> io::Result<Vec<T>>
+/// Collects files in a directory and parses them with `parse`.
+async fn collect_files<T, F>(parent: &Path, parse: F) -> io::Result<Vec<T>>
 where
     F: Fn(&str, &Path) -> Option<T>,
 {
-    let vec: Vec<T> = fs::read_dir(parent)?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().map(|ft| ft.is_file()).unwrap_or(false))
-        .filter_map(|e| {
-            let name = e.file_name();
-            let s = name.to_str()?;
-            parse(s, &e.path())
-        })
-        .collect();
-    Ok(vec)
+    let mut dir = tokio::fs::read_dir(parent).await?;
+    let mut collected: Vec<T> = Vec::new();
+    while let Some(entry) = dir.next_entry().await? {
+        if entry
+            .file_type()
+            .await
+            .map(|ft| ft.is_file())
+            .unwrap_or(false)
+        {
+            if let Some(s) = entry.file_name().to_str() {
+                if let Some(v) = parse(s, &entry.path()) {
+                    collected.push(v);
+                }
+            }
+        }
+    }
+    Ok(collected)
 }
 
 fn parse_timestamp_uuid_from_filename(name: &str) -> Option<(OffsetDateTime, Uuid)> {
@@ -226,17 +270,19 @@ fn parse_timestamp_uuid_from_filename(name: &str) -> Option<(OffsetDateTime, Uui
     Some((ts, uuid))
 }
 
-fn read_first_jsonl_records(path: &Path, max_records: usize) -> io::Result<Vec<serde_json::Value>> {
-    use std::io::BufRead;
+async fn read_first_jsonl_records(
+    path: &Path,
+    max_records: usize,
+) -> io::Result<Vec<serde_json::Value>> {
+    use tokio::io::AsyncBufReadExt;
 
-    let file = fs::File::open(path)?;
-    let reader = std::io::BufReader::new(file);
+    let file = tokio::fs::File::open(path).await?;
+    let reader = tokio::io::BufReader::new(file);
+    let mut lines = reader.lines();
     let mut head: Vec<serde_json::Value> = Vec::new();
-    for line_res in reader.lines().take(max_records) {
-        let line = match line_res {
-            Ok(l) => l,
-            Err(_) => continue,
-        };
+    while head.len() < max_records {
+        let line_opt = lines.next_line().await?;
+        let Some(line) = line_opt else { break };
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;

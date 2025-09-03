@@ -67,7 +67,7 @@ async fn test_list_conversations_latest_first() {
 
     assert_eq!(page.items.len(), 3);
     assert!(!page.reached_scan_cap);
-    assert_eq!(page.scanned_files, 3);
+    assert_eq!(page.num_scanned_files, 3);
 
     let names: Vec<String> = page
         .items
@@ -103,7 +103,7 @@ async fn test_pagination_cursor() {
     assert!(n1[0].contains("2025-03-05T09-00-00"));
     assert!(n1[1].contains("2025-03-04T09-00-00"));
 
-    let page2 = get_conversations(home, 2, page1.next_cursor.as_deref())
+    let page2 = get_conversations(home, 2, page1.next_cursor.as_ref())
         .await
         .unwrap();
     assert_eq!(page2.items.len(), 2);
@@ -115,7 +115,7 @@ async fn test_pagination_cursor() {
     assert!(n2[0].contains("2025-03-03T09-00-00"));
     assert!(n2[1].contains("2025-03-02T09-00-00"));
 
-    let page3 = get_conversations(home, 2, page2.next_cursor.as_deref())
+    let page3 = get_conversations(home, 2, page2.next_cursor.as_ref())
         .await
         .unwrap();
     assert_eq!(page3.items.len(), 1);
@@ -170,7 +170,7 @@ async fn test_stable_ordering_same_second_pagination() {
     assert!(names1[0].contains(&u3.to_string()));
     assert!(names1[1].contains(&u2.to_string()));
 
-    let page2 = get_conversations(home, 2, page1.next_cursor.as_deref())
+    let page2 = get_conversations(home, 2, page1.next_cursor.as_ref())
         .await
         .unwrap();
     assert_eq!(page2.items.len(), 1);
