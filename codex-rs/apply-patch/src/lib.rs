@@ -303,6 +303,21 @@ pub fn maybe_parse_apply_patch_verified(argv: &[String], cwd: &Path) -> MaybeApp
 fn extract_apply_patch_from_bash(
     src: &str,
 ) -> std::result::Result<(String, Option<String>), ExtractHeredocError> {
+    // This function uses a Tree-sitter query to recognize one of two
+    // whole-script forms, each expressed as a single top-level statement:
+    //
+    // 1. apply_patch <<'EOF'\n...\nEOF
+    // 2. cd <path> && apply_patch <<'EOF'\n...\nEOF
+    //
+    // Key ideas when reading the query:
+    // - dots (`.`) between named nodes enforces adjacency among named children and
+    //   anchor to the start/end of the expression.
+    // - we match a single redirected_statement directly under program with leading
+    //   and trailing anchors (`.`). This ensures it is the only top-level statement
+    //   (so prefixes like `echo ...;` or suffixes like `... && echo done` do not match).
+    //
+    // Overall, we want to be conservative and only match the intended forms, as other
+    // forms are likely to be model errors, or incorrectly interpreted by later code.
     static APPLY_PATCH_QUERY: Lazy<Query> = Lazy::new(|| {
         let language = BASH.into();
         #[expect(clippy::expect_used)]
@@ -313,7 +328,7 @@ fn extract_apply_patch_from_bash(
               program
                 . (redirected_statement
                     body: (command
-                            name: (command_name (word) @apply_name))
+                            name: (command_name (word) @apply_name) .)
                     (#any-of? @apply_name "apply_patch" "applypatch")
                     redirect: (heredoc_redirect
                                 . (heredoc_start)
@@ -328,7 +343,11 @@ fn extract_apply_patch_from_bash(
                     body: (list
                             . (command
                                 name: (command_name (word) @cd_name) .
-                                argument: (word) @cd_path .)
+                                argument: [
+                                  (word) @cd_path
+                                  (string (string_content) @cd_path)
+                                  (raw_string) @cd_raw_string
+                                ] .)
                             "&&"
                             . (command
                                 name: (command_name (word) @apply_name))
@@ -383,6 +402,17 @@ fn extract_apply_patch_from_bash(
                         .map_err(ExtractHeredocError::HeredocNotUtf8)?
                         .to_string();
                     cd_path = Some(text);
+                }
+                "cd_raw_string" => {
+                    let raw = capture
+                        .node
+                        .utf8_text(bytes)
+                        .map_err(ExtractHeredocError::HeredocNotUtf8)?;
+                    let trimmed = raw
+                        .strip_prefix('\'')
+                        .and_then(|s| s.strip_suffix('\''))
+                        .unwrap_or(raw);
+                    cd_path = Some(trimmed.to_string());
                 }
                 _ => {}
             }
@@ -831,7 +861,10 @@ mod tests {
 
     fn assert_not_match(script: &str) {
         let args = args_bash(script);
-        assert!(matches!(maybe_parse_apply_patch(&args), MaybeApplyPatch::NotApplyPatch));
+        assert!(matches!(
+            maybe_parse_apply_patch(&args),
+            MaybeApplyPatch::NotApplyPatch
+        ));
     }
 
     #[test]
@@ -938,8 +971,24 @@ PATCH"#,
     }
 
     #[test]
+    fn test_cd_single_quoted_path_with_spaces() {
+        assert_match(&heredoc_script("cd 'foo bar' && "), Some("foo bar"));
+    }
+
+    #[test]
+    fn test_cd_double_quoted_path_with_spaces() {
+        assert_match(&heredoc_script("cd \"foo bar\" && "), Some("foo bar"));
+    }
+
+    #[test]
     fn test_echo_and_apply_patch_is_ignored() {
         assert_not_match(&heredoc_script("echo foo && "));
+    }
+
+    #[test]
+    fn test_apply_patch_with_arg_is_ignored() {
+        let script = "apply_patch foo <<'PATCH'\n*** Begin Patch\n*** Add File: foo\n+hi\n*** End Patch\nPATCH";
+        assert_not_match(script);
     }
 
     #[test]
