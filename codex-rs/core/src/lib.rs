@@ -61,3 +61,14 @@ pub use codex_protocol::protocol;
 // Re-export protocol config enums to ensure call sites can use the same types
 // as those in the protocol crate when constructing protocol messages.
 pub use codex_protocol::config_types as protocol_config_types;
+
+pub use client::ModelClient;
+pub use client_common::Prompt;
+pub use client_common::ResponseEvent;
+pub use client_common::ResponseStream;
+pub use models::ContentItem;
+pub use models::LocalShellAction;
+pub use models::LocalShellExecAction;
+pub use models::LocalShellStatus;
+pub use models::ReasoningItemContent;
+pub use models::ResponseItem;
