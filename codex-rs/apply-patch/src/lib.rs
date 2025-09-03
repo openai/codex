@@ -9,6 +9,7 @@ use std::str::Utf8Error;
 
 use anyhow::Context;
 use anyhow::Result;
+use once_cell::sync::Lazy;
 pub use parser::Hunk;
 pub use parser::ParseError;
 use parser::ParseError::*;
@@ -18,6 +19,9 @@ use similar::TextDiff;
 use thiserror::Error;
 use tree_sitter::LanguageError;
 use tree_sitter::Parser;
+use tree_sitter::Query;
+use tree_sitter::QueryCursor;
+use tree_sitter::StreamingIterator;
 use tree_sitter_bash::LANGUAGE as BASH;
 
 pub use standalone_executable::main;
@@ -84,6 +88,7 @@ pub enum MaybeApplyPatch {
 pub struct ApplyPatchArgs {
     pub patch: String,
     pub hunks: Vec<Hunk>,
+    pub workdir: Option<String>,
 }
 
 pub fn maybe_parse_apply_patch(argv: &[String]) -> MaybeApplyPatch {
@@ -92,18 +97,18 @@ pub fn maybe_parse_apply_patch(argv: &[String]) -> MaybeApplyPatch {
             Ok(source) => MaybeApplyPatch::Body(source),
             Err(e) => MaybeApplyPatch::PatchParseError(e),
         },
-        [bash, flag, script]
-            if bash == "bash"
-                && flag == "-lc"
-                && APPLY_PATCH_COMMANDS
-                    .iter()
-                    .any(|cmd| script.trim_start().starts_with(cmd)) =>
-        {
-            match extract_heredoc_body_from_apply_patch_command(script) {
-                Ok(body) => match parse_patch(&body) {
-                    Ok(source) => MaybeApplyPatch::Body(source),
+        [bash, flag, script] if bash == "bash" && flag == "-lc" => {
+            match extract_apply_patch_from_bash(script) {
+                Ok((body, workdir)) => match parse_patch(&body) {
+                    Ok(mut source) => {
+                        source.workdir = workdir;
+                        MaybeApplyPatch::Body(source)
+                    }
                     Err(e) => MaybeApplyPatch::PatchParseError(e),
                 },
+                Err(ExtractHeredocError::CommandDidNotStartWithApplyPatch) => {
+                    MaybeApplyPatch::NotApplyPatch
+                }
                 Err(e) => MaybeApplyPatch::ShellParseError(e),
             }
         }
@@ -203,10 +208,25 @@ impl ApplyPatchAction {
 /// patch.
 pub fn maybe_parse_apply_patch_verified(argv: &[String], cwd: &Path) -> MaybeApplyPatchVerified {
     match maybe_parse_apply_patch(argv) {
-        MaybeApplyPatch::Body(ApplyPatchArgs { patch, hunks }) => {
+        MaybeApplyPatch::Body(ApplyPatchArgs {
+            patch,
+            hunks,
+            workdir,
+        }) => {
+            let effective_cwd = workdir
+                .as_ref()
+                .map(|dir| {
+                    let path = Path::new(dir);
+                    if path.is_absolute() {
+                        path.to_path_buf()
+                    } else {
+                        cwd.join(path)
+                    }
+                })
+                .unwrap_or_else(|| cwd.to_path_buf());
             let mut changes = HashMap::new();
             for hunk in hunks {
-                let path = hunk.resolve_path(cwd);
+                let path = hunk.resolve_path(&effective_cwd);
                 match hunk {
                     Hunk::AddFile { contents, .. } => {
                         changes.insert(path, ApplyPatchFileChange::Add { content: contents });
@@ -251,7 +271,7 @@ pub fn maybe_parse_apply_patch_verified(argv: &[String], cwd: &Path) -> MaybeApp
             MaybeApplyPatchVerified::Body(ApplyPatchAction {
                 changes,
                 patch,
-                cwd: cwd.to_path_buf(),
+                cwd: effective_cwd,
             })
         }
         MaybeApplyPatch::ShellParseError(e) => MaybeApplyPatchVerified::ShellParseError(e),
@@ -260,33 +280,71 @@ pub fn maybe_parse_apply_patch_verified(argv: &[String], cwd: &Path) -> MaybeApp
     }
 }
 
-/// Attempts to extract a heredoc_body object from a string bash command like:
-/// Optimistically
+/// Extract the heredoc body (and optional `cd` workdir) from a `bash -lc` script
+/// that invokes the apply_patch tool using a heredoc.
 ///
-/// ```bash
-/// bash -lc 'apply_patch <<EOF\n***Begin Patch\n...EOF'
-/// ```
+/// Supported top‑level forms (must be the only top‑level statement):
+/// - `apply_patch <<'EOF'\n...\nEOF`
+/// - `cd <path> && apply_patch <<'EOF'\n...\nEOF`
 ///
-/// # Arguments
+/// Notes about matching:
+/// - Parsed with Tree‑sitter Bash and a strict query that uses anchors so the
+///   heredoc‑redirected statement is the only top‑level statement.
+/// - The connector between `cd` and `apply_patch` must be `&&` (not `|` or `||`).
+/// - Exactly one positional `word` argument is allowed for `cd` (no flags, no quoted
+///   strings, no second argument).
+/// - The apply command is validated in‑query via `#any-of?` to allow `apply_patch`
+///   or `applypatch`.
+/// - Preceding or trailing commands (e.g., `echo ...;` or `... && echo done`) do not match.
 ///
-/// * `src` - A string slice that holds the full command
-///
-/// # Returns
-///
-/// This function returns a `Result` which is:
-///
-/// * `Ok(String)` - The heredoc body if the extraction is successful.
-/// * `Err(anyhow::Error)` - An error if the extraction fails.
-///
-fn extract_heredoc_body_from_apply_patch_command(
+/// Returns `(heredoc_body, Some(path))` when the `cd` variant matches, or
+/// `(heredoc_body, None)` for the direct form. Errors are returned if the script
+/// cannot be parsed or does not match the allowed patterns.
+fn extract_apply_patch_from_bash(
     src: &str,
-) -> std::result::Result<String, ExtractHeredocError> {
-    if !APPLY_PATCH_COMMANDS
-        .iter()
-        .any(|cmd| src.trim_start().starts_with(cmd))
-    {
-        return Err(ExtractHeredocError::CommandDidNotStartWithApplyPatch);
-    }
+) -> std::result::Result<(String, Option<String>), ExtractHeredocError> {
+    static APPLY_PATCH_QUERY: Lazy<Query> = Lazy::new(|| {
+        let language = BASH.into();
+        #[expect(clippy::expect_used)]
+        Query::new(
+            &language,
+            r#"
+            (
+              program
+                . (redirected_statement
+                    body: (command
+                            name: (command_name (word) @apply_name))
+                    (#any-of? @apply_name "apply_patch" "applypatch")
+                    redirect: (heredoc_redirect
+                                . (heredoc_start)
+                                . (heredoc_body) @heredoc
+                                . (heredoc_end)
+                                .))
+                .)
+
+            (
+              program
+                . (redirected_statement
+                    body: (list
+                            . (command
+                                name: (command_name (word) @cd_name) .
+                                argument: (word) @cd_path .)
+                            "&&"
+                            . (command
+                                name: (command_name (word) @apply_name))
+                            .)
+                    (#eq? @cd_name "cd")
+                    (#any-of? @apply_name "apply_patch" "applypatch")
+                    redirect: (heredoc_redirect
+                                . (heredoc_start)
+                                . (heredoc_body) @heredoc
+                                . (heredoc_end)
+                                .))
+                .)
+            "#,
+        )
+        .expect("valid bash query")
+    });
 
     let lang = BASH.into();
     let mut parser = Parser::new();
@@ -298,26 +356,44 @@ fn extract_heredoc_body_from_apply_patch_command(
         .ok_or(ExtractHeredocError::FailedToParsePatchIntoAst)?;
 
     let bytes = src.as_bytes();
-    let mut c = tree.root_node().walk();
+    let root = tree.root_node();
 
-    loop {
-        let node = c.node();
-        if node.kind() == "heredoc_body" {
-            let text = node
-                .utf8_text(bytes)
-                .map_err(ExtractHeredocError::HeredocNotUtf8)?;
-            return Ok(text.trim_end_matches('\n').to_owned());
-        }
+    let mut cursor = QueryCursor::new();
+    let mut matches = cursor.matches(&APPLY_PATCH_QUERY, root, bytes);
+    while let Some(m) = matches.next() {
+        let mut heredoc_text: Option<String> = None;
+        let mut cd_path: Option<String> = None;
 
-        if c.goto_first_child() {
-            continue;
-        }
-        while !c.goto_next_sibling() {
-            if !c.goto_parent() {
-                return Err(ExtractHeredocError::FailedToFindHeredocBody);
+        for capture in m.captures.iter() {
+            let name = APPLY_PATCH_QUERY.capture_names()[capture.index as usize];
+            match name {
+                "heredoc" => {
+                    let text = capture
+                        .node
+                        .utf8_text(bytes)
+                        .map_err(ExtractHeredocError::HeredocNotUtf8)?
+                        .trim_end_matches('\n')
+                        .to_string();
+                    heredoc_text = Some(text);
+                }
+                "cd_path" => {
+                    let text = capture
+                        .node
+                        .utf8_text(bytes)
+                        .map_err(ExtractHeredocError::HeredocNotUtf8)?
+                        .to_string();
+                    cd_path = Some(text);
+                }
+                _ => {}
             }
         }
+
+        if let Some(heredoc) = heredoc_text {
+            return Ok((heredoc, cd_path));
+        }
     }
+
+    Err(ExtractHeredocError::CommandDidNotStartWithApplyPatch)
 }
 
 #[derive(Debug, PartialEq)]
@@ -730,7 +806,7 @@ mod tests {
         ]);
 
         match maybe_parse_apply_patch(&args) {
-            MaybeApplyPatch::Body(ApplyPatchArgs { hunks, patch: _ }) => {
+            MaybeApplyPatch::Body(ApplyPatchArgs { hunks, .. }) => {
                 assert_eq!(
                     hunks,
                     vec![Hunk::AddFile {
@@ -755,7 +831,7 @@ mod tests {
         ]);
 
         match maybe_parse_apply_patch(&args) {
-            MaybeApplyPatch::Body(ApplyPatchArgs { hunks, patch: _ }) => {
+            MaybeApplyPatch::Body(ApplyPatchArgs { hunks, .. }) => {
                 assert_eq!(
                     hunks,
                     vec![Hunk::AddFile {
@@ -782,7 +858,8 @@ PATCH"#,
         ]);
 
         match maybe_parse_apply_patch(&args) {
-            MaybeApplyPatch::Body(ApplyPatchArgs { hunks, patch: _ }) => {
+            MaybeApplyPatch::Body(ApplyPatchArgs { hunks, workdir, .. }) => {
+                assert_eq!(workdir, None);
                 assert_eq!(
                     hunks,
                     vec![Hunk::AddFile {
@@ -809,7 +886,8 @@ PATCH"#,
         ]);
 
         match maybe_parse_apply_patch(&args) {
-            MaybeApplyPatch::Body(ApplyPatchArgs { hunks, patch: _ }) => {
+            MaybeApplyPatch::Body(ApplyPatchArgs { hunks, workdir, .. }) => {
+                assert_eq!(workdir, None);
                 assert_eq!(
                     hunks,
                     vec![Hunk::AddFile {
@@ -820,6 +898,187 @@ PATCH"#,
             }
             result => panic!("expected MaybeApplyPatch::Body got {result:?}"),
         }
+    }
+
+    #[test]
+    fn test_heredoc_with_leading_cd() {
+        let args = strs_to_strings(&[
+            "bash",
+            "-lc",
+            r#"cd foo && apply_patch <<'PATCH'
+*** Begin Patch
+*** Add File: foo
++hi
+*** End Patch
+PATCH"#,
+        ]);
+
+        match maybe_parse_apply_patch(&args) {
+            MaybeApplyPatch::Body(ApplyPatchArgs { hunks, workdir, .. }) => {
+                assert_eq!(
+                    hunks,
+                    vec![Hunk::AddFile {
+                        path: PathBuf::from("foo"),
+                        contents: "hi\n".to_string()
+                    }]
+                );
+                assert_eq!(workdir, Some("foo".to_string()));
+            }
+            result => panic!("expected MaybeApplyPatch::Body got {result:?}"),
+        }
+    }
+
+    #[test]
+    fn test_cd_with_semicolon_is_ignored() {
+        let args = strs_to_strings(&[
+            "bash",
+            "-lc",
+            r#"cd foo; apply_patch <<'PATCH'
+*** Begin Patch
+*** Add File: foo
++hi
+*** End Patch
+PATCH"#,
+        ]);
+
+        assert!(matches!(
+            maybe_parse_apply_patch(&args),
+            MaybeApplyPatch::NotApplyPatch
+        ));
+    }
+
+    #[test]
+    fn test_cd_or_apply_patch_is_ignored() {
+        let args = strs_to_strings(&[
+            "bash",
+            "-lc",
+            r#"cd bar || apply_patch <<'PATCH'
+*** Begin Patch
+*** Add File: foo
++hi
+*** End Patch
+PATCH"#,
+        ]);
+
+        assert!(matches!(
+            maybe_parse_apply_patch(&args),
+            MaybeApplyPatch::NotApplyPatch
+        ));
+    }
+
+    #[test]
+    fn test_cd_pipe_apply_patch_is_ignored() {
+        let args = strs_to_strings(&[
+            "bash",
+            "-lc",
+            r#"cd bar | apply_patch <<'PATCH'
+*** Begin Patch
+*** Add File: foo
++hi
+*** End Patch
+PATCH"#,
+        ]);
+
+        assert!(matches!(
+            maybe_parse_apply_patch(&args),
+            MaybeApplyPatch::NotApplyPatch
+        ));
+    }
+
+    #[test]
+    fn test_echo_and_apply_patch_is_ignored() {
+        let args = strs_to_strings(&[
+            "bash",
+            "-lc",
+            r#"echo foo && apply_patch <<'PATCH'
+*** Begin Patch
+*** Add File: foo
++hi
+*** End Patch
+PATCH"#,
+        ]);
+
+        assert!(matches!(
+            maybe_parse_apply_patch(&args),
+            MaybeApplyPatch::NotApplyPatch
+        ));
+    }
+
+    #[test]
+    fn test_double_cd_then_apply_patch_is_ignored() {
+        let args = strs_to_strings(&[
+            "bash",
+            "-lc",
+            r#"cd foo && cd bar && apply_patch <<'PATCH'
+*** Begin Patch
+*** Add File: foo
++hi
+*** End Patch
+PATCH"#,
+        ]);
+
+        assert!(matches!(
+            maybe_parse_apply_patch(&args),
+            MaybeApplyPatch::NotApplyPatch
+        ));
+    }
+
+    #[test]
+    fn test_cd_two_args_is_ignored() {
+        let args = strs_to_strings(&[
+            "bash",
+            "-lc",
+            r#"cd foo bar && apply_patch <<'PATCH'
+*** Begin Patch
+*** Add File: foo
++hi
+*** End Patch
+PATCH"#,
+        ]);
+
+        assert!(matches!(
+            maybe_parse_apply_patch(&args),
+            MaybeApplyPatch::NotApplyPatch
+        ));
+    }
+
+    #[test]
+    fn test_cd_then_apply_patch_then_extra_is_ignored() {
+        let args = strs_to_strings(&[
+            "bash",
+            "-lc",
+            r#"cd bar && apply_patch <<'PATCH' && echo done
+*** Begin Patch
+*** Add File: foo
++hi
+*** End Patch
+PATCH"#,
+        ]);
+
+        assert!(matches!(
+            maybe_parse_apply_patch(&args),
+            MaybeApplyPatch::NotApplyPatch
+        ));
+    }
+
+    #[test]
+    fn test_echo_then_cd_and_apply_patch_is_ignored() {
+        // Ensure preceding commands before the `cd && apply_patch <<...` sequence do not match.
+        let args = strs_to_strings(&[
+            "bash",
+            "-lc",
+            r#"echo foo; cd bar && apply_patch <<'PATCH'
+*** Begin Patch
+*** Add File: foo
++hi
+*** End Patch
+PATCH"#,
+        ]);
+
+        assert!(matches!(
+            maybe_parse_apply_patch(&args),
+            MaybeApplyPatch::NotApplyPatch
+        ));
     }
 
     #[test]
