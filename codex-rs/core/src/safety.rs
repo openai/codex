@@ -53,6 +53,13 @@ pub fn assess_patch_safety(
         // paths outside the project.
         match get_platform_sandbox() {
             Some(sandbox_type) => SafetyCheck::AutoApprove { sandbox_type },
+            None if sandbox_policy == &SandboxPolicy::DangerFullAccess => {
+                // If the user has explicitly requested DangerFullAccess, then
+                // we can auto-approve even without a sandbox.
+                SafetyCheck::AutoApprove {
+                    sandbox_type: SandboxType::None,
+                }
+            }
             None => SafetyCheck::AskUser,
         }
     } else if policy == AskForApproval::Never {
