@@ -24,6 +24,7 @@ use crate::config::Config;
 use crate::conversation_manager::InitialHistory;
 use crate::git_info::GitInfo;
 use crate::git_info::collect_git_info;
+use crate::{ConversationsPage, get_conversations};
 use codex_protocol::models::ResponseItem;
 
 #[derive(Serialize, Deserialize, Clone, Default)]
@@ -81,8 +82,8 @@ impl RolloutRecorder {
         codex_home: &Path,
         page_size: usize,
         cursor: Option<&str>,
-    ) -> std::io::Result<crate::rollout::list::ConversationsPage> {
-        super::list::get_conversations(codex_home, page_size, cursor).await
+    ) -> std::io::Result<ConversationsPage> {
+        get_conversations(codex_home, page_size, cursor).await
     }
 
     /// Attempt to create a new [`RolloutRecorder`]. If the sessions directory
