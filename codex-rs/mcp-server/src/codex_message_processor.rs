@@ -424,7 +424,7 @@ impl CodexMessageProcessor {
     }
 
     async fn exec_one_off_command(&self, request_id: RequestId, params: ExecOneOffCommandParams) {
-        tracing::debug!("execArbitraryCommand params: {params:?}");
+        tracing::debug!("ExecOneOffCommand params: {params:?}");
 
         if params.command.is_empty() {
             let error = JSONRPCErrorError {
@@ -438,7 +438,7 @@ impl CodexMessageProcessor {
 
         let cwd = params.cwd.unwrap_or_else(|| self.config.cwd.clone());
         let env = create_env(&self.config.shell_environment_policy);
-        let timeout_ms = params.timeout;
+        let timeout_ms = params.timeout_ms;
         let exec_params = ExecParams {
             command: params.command,
             cwd,
