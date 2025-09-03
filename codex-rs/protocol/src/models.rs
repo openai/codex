@@ -310,6 +310,7 @@ impl std::ops::Deref for FunctionCallOutputPayload {
 }
 
 // (Moved event mapping logic into codex-core to avoid coupling protocol to UI-facing events.)
+// (Moved event mapping logic into codex-core to avoid coupling protocol to UI-facing events.)
 
 #[cfg(test)]
 mod tests {
