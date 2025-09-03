@@ -4,13 +4,14 @@ use crate::exec_command::strip_bash_lc_and_escape;
 use crate::markdown::append_markdown;
 use crate::slash_command::SlashCommand;
 use crate::text_formatting::format_and_truncate_tool_result;
+use crate::wrapping::to_owned_static_line;
 use base64::Engine;
 use codex_ansi_escape::ansi_escape_line;
 use codex_common::create_config_summary_entries;
 use codex_common::elapsed::format_duration;
-use codex_core::bash::try_parse_bash;
 use codex_core::auth::get_auth_file;
 use codex_core::auth::try_read_auth_json;
+use codex_core::bash::try_parse_bash;
 use codex_core::config::Config;
 use codex_core::plan_tool::PlanItemArg;
 use codex_core::plan_tool::StepStatus;
@@ -370,19 +371,9 @@ impl ExecCell {
             };
             for (title, line) in call_lines {
                 let prefix_len = 4 + title.len() + 1; // "  └ " + title + " "
-<<<<<<< HEAD
                 let wrapped = crate::insert_history::word_wrap_line(
                     &Line::from(line),
                     (width as usize).saturating_sub(prefix_len),
-||||||| eb40fe34
-                let wrapped = crate::insert_history::word_wrap_lines(
-                    &[Line::from(line)],
-                    width.saturating_sub(prefix_len as u16),
-=======
-                let wrapped = crate::insert_history::word_wrap_lines(
-                    &[line.into()],
-                    width.saturating_sub(prefix_len as u16),
->>>>>>> origin/main
                 );
                 let mut first_sub = true;
                 for mut line in wrapped {
@@ -430,9 +421,9 @@ impl ExecCell {
         // "• Running " (including trailing space) as the reserved prefix width.
         // If the command contains newlines, always use the multi-line variant.
         let reserved = "• Running ".width();
-        let mut branch_consumed = false;
 
-        // Produce syntax-highlighted lines for the full script first, before any wrapping.
+        let mut body_lines: Vec<Line<'static>> = Vec::new();
+
         let highlighted_lines = highlight_bash_to_lines(&cmd_display);
 
         if highlighted_lines.len() == 1
@@ -442,48 +433,16 @@ impl ExecCell {
             spans.extend(highlighted_lines[0].spans.clone());
             lines.push(Line::from(spans));
         } else {
-            branch_consumed = true;
             lines.push(vec![bullet, " ".into(), title.bold()].into());
 
-            // Highlight once, then wrap each individual line so subsequent
-            // indents apply within that line only.
-            let full_hl = highlight_bash_to_lines(&cmd_display);
-            for (i, hl_line) in full_hl.iter().enumerate() {
+            for hl_line in highlighted_lines.iter() {
                 let opts = crate::wrapping::RtOptions::new((width as usize).saturating_sub(4))
-                    .initial_indent(Line::from(""))
-                    .subsequent_indent(Line::from("    "))
+                    .initial_indent("".into())
+                    .subsequent_indent("    ".into())
+                    // Hyphenation likes to break words on hyphens, which is bad for bash scripts --because-of-flags.
                     .word_splitter(textwrap::WordSplitter::NoHyphenation);
                 let wrapped_borrowed = crate::wrapping::word_wrap_line(hl_line, opts);
-                let initial_prefix = if i == 0 {
-                    "  └ ".dim()
-                } else {
-                    "    ".into()
-                };
-                let subsequent_prefix: Span<'static> = "    ".into();
-                let prefixed = prefix_lines_borrowed(
-                    wrapped_borrowed,
-                    initial_prefix,
-                    subsequent_prefix,
-                );
-<<<<<<< HEAD
-                lines.extend(prefixed);
-||||||| eb40fe34
-                lines.extend(wrapped.into_iter().enumerate().map(|(j, l)| {
-                    if i == 0 && j == 0 {
-                        Line::from(vec!["  └ ".dim(), l[4..].to_string().into()])
-                    } else {
-                        Line::from(l.to_string())
-                    }
-                }));
-=======
-                lines.extend(wrapped.into_iter().enumerate().map(|(j, l)| {
-                    if i == 0 && j == 0 {
-                        vec!["  └ ".dim(), l[4..].to_string().into()].into()
-                    } else {
-                        l.to_string().into()
-                    }
-                }));
->>>>>>> origin/main
+                body_lines.extend(wrapped_borrowed.iter().map(|l| to_owned_static_line(l)));
             }
         }
         if let Some(output) = call.output.as_ref()
@@ -494,21 +453,13 @@ impl ExecCell {
                 .join("\n");
             if !out.trim().is_empty() {
                 // Wrap the output.
-                for (i, line) in out.lines().enumerate() {
+                for line in out.lines() {
                     let wrapped = textwrap::wrap(line, TwOptions::new(width as usize - 4));
-                    lines.extend(wrapped.into_iter().map(|l| {
-                        Line::from(vec![
-                            if i == 0 && !branch_consumed {
-                                "  └ ".dim()
-                            } else {
-                                "    ".dim()
-                            },
-                            l.to_string().dim(),
-                        ])
-                    }));
+                    body_lines.extend(wrapped.into_iter().map(|l| Line::from(l.to_string().dim())));
                 }
             }
         }
+        lines.extend(prefix_lines(body_lines, "  └ ".dim(), "    ".into()));
         lines
     }
 }
@@ -612,31 +563,6 @@ fn prefix_lines(
                 subsequent_prefix.clone()
             });
             spans.extend(l.spans);
-            Line::from(spans)
-        })
-        .collect()
-}
-
-fn prefix_lines_borrowed<'a>(
-    lines: Vec<Line<'a>>,
-    initial_prefix: Span<'static>,
-    subsequent_prefix: Span<'static>,
-) -> Vec<Line<'static>> {
-    lines
-        .into_iter()
-        .enumerate()
-        .map(|(i, l)| {
-            let mut spans: Vec<Span<'static>> = Vec::with_capacity(l.spans.len() + 1);
-            spans.push(if i == 0 {
-                initial_prefix.clone()
-            } else {
-                subsequent_prefix.clone()
-            });
-            spans.extend(
-                l.spans
-                    .into_iter()
-                    .map(|s| Span { style: s.style, content: std::borrow::Cow::Owned(s.content.into_owned()) }),
-            );
             Line::from(spans)
         })
         .collect()

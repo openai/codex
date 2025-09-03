@@ -217,7 +217,7 @@ where
     out
 }
 
-fn to_owned_static_line(l: &Line<'_>) -> Line<'static> {
+pub(crate) fn to_owned_static_line(l: &Line<'_>) -> Line<'static> {
     Line {
         style: l.style,
         alignment: l.alignment,
