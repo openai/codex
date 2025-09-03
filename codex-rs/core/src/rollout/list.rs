@@ -143,6 +143,7 @@ async fn traverse_directories_for_paths(
                     if !name_str.starts_with("rollout-") || !name_str.ends_with(".jsonl") {
                         return None;
                     }
+
                     parse_timestamp_uuid_from_filename(name_str)
                         .map(|(ts, id)| (ts, id, name_str.to_string(), path.to_path_buf()))
                 })

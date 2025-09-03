@@ -234,6 +234,7 @@ impl RolloutRecorder {
         }
     }
 }
+
 struct LogFileInfo {
     /// Opened file handle to the rollout file.
     file: File,
