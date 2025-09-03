@@ -1010,6 +1010,7 @@ impl ChatWidget {
                 self.on_background_event(message)
             }
             EventMsg::StreamError(StreamErrorEvent { message }) => self.on_stream_error(message),
+            EventMsg::UserMessage(..) => {}
             EventMsg::ConversationHistory(ev) => {
                 // Forward to App so it can process backtrack flows.
                 self.app_event_tx

@@ -23,7 +23,7 @@ impl UserInstructions {
     /// with <user_instructions> so clients can classify it.
     pub fn serialize_to_xml(self) -> String {
         format!(
-            "{USER_INSTRUCTIONS_OPEN_TAG}\n\n{t}{USER_INSTRUCTIONS_CLOSE_TAG}",
+            "{USER_INSTRUCTIONS_OPEN_TAG}\n\n{t}\n\n{USER_INSTRUCTIONS_CLOSE_TAG}",
             t = self.text
         )
     }
