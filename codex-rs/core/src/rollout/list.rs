@@ -217,12 +217,10 @@ where
             .await
             .map(|ft| ft.is_dir())
             .unwrap_or(false)
+            && let Some(s) = entry.file_name().to_str()
+            && let Some(v) = parse(s)
         {
-            if let Some(s) = entry.file_name().to_str() {
-                if let Some(v) = parse(s) {
-                    vec.push((v, entry.path()));
-                }
-            }
+            vec.push((v, entry.path()));
         }
     }
     vec.sort_by_key(|(v, _)| Reverse(*v));
@@ -242,12 +240,10 @@ where
             .await
             .map(|ft| ft.is_file())
             .unwrap_or(false)
+            && let Some(s) = entry.file_name().to_str()
+            && let Some(v) = parse(s, &entry.path())
         {
-            if let Some(s) = entry.file_name().to_str() {
-                if let Some(v) = parse(s, &entry.path()) {
-                    collected.push(v);
-                }
-            }
+            collected.push(v);
         }
     }
     Ok(collected)
