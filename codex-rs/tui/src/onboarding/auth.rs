@@ -2,6 +2,7 @@
 
 use codex_core::AuthManager;
 use codex_core::auth::CLIENT_ID;
+use codex_core::config::Config;
 use codex_login::ServerOptions;
 use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
@@ -113,6 +114,7 @@ pub(crate) struct AuthModeWidget {
     pub login_status: LoginStatus,
     pub preferred_auth_method: AuthMode,
     pub auth_manager: Arc<AuthManager>,
+    pub config: Config,
 }
 
 impl AuthModeWidget {
@@ -314,7 +316,11 @@ impl AuthModeWidget {
         }
 
         self.error = None;
-        let opts = ServerOptions::new(self.codex_home.clone(), CLIENT_ID.to_string());
+        let opts = ServerOptions::new(
+            self.codex_home.clone(),
+            CLIENT_ID.to_string(),
+            self.config.responses_originator_header.clone(),
+        );
         match run_login_server(opts) {
             Ok(child) => {
                 let sign_in_state = self.sign_in_state.clone();
