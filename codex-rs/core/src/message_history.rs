@@ -133,8 +133,6 @@ pub(crate) async fn append_entry(text: &str, session_id: &Uuid, config: &Config)
     Ok(())
 }
 
-// Exclusive lock handled inline in append_entry using std::fs::File::try_lock.
-
 /// Asynchronously fetch the history file's *identifier* (inode on Unix) and
 /// the current number of entries by counting newline characters.
 pub(crate) async fn history_metadata(config: &Config) -> (u64, usize) {
@@ -213,10 +211,6 @@ pub(crate) fn lookup(log_id: u64, offset: usize, config: &Config) -> Option<Hist
     // Open & lock file for reading using a shared lock.
     // Retry a few times to avoid indefinite blocking.
     for _ in 0..MAX_RETRIES {
-        // Note: On Windows, try_lock_shared behaves identically to try_lock
-        #[cfg(windows)]
-        let lock_result = file.try_lock();
-        #[cfg(not(windows))]
         let lock_result = file.try_lock_shared();
 
         match lock_result {
