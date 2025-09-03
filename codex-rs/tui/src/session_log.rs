@@ -132,40 +132,20 @@ pub(crate) fn log_inbound_app_event(event: &AppEvent) {
         AppEvent::CodexEvent(ev) => {
             write_record("to_tui", "codex_event", ev);
         }
-        AppEvent::KeyEvent(k) => {
+        AppEvent::NewSession => {
             let value = json!({
                 "ts": now_ts(),
                 "dir": "to_tui",
-                "kind": "key_event",
-                "event": format!("{:?}", k),
+                "kind": "new_session",
             });
             LOGGER.write_json_line(value);
         }
-        AppEvent::Paste(s) => {
+        AppEvent::InsertHistoryCell(cell) => {
             let value = json!({
                 "ts": now_ts(),
                 "dir": "to_tui",
-                "kind": "paste",
-                "text": s,
-            });
-            LOGGER.write_json_line(value);
-        }
-        AppEvent::DispatchCommand(cmd) => {
-            let value = json!({
-                "ts": now_ts(),
-                "dir": "to_tui",
-                "kind": "slash_command",
-                "command": format!("{:?}", cmd),
-            });
-            LOGGER.write_json_line(value);
-        }
-        // Internal UI events; still log for fidelity, but avoid heavy payloads.
-        AppEvent::InsertHistory(lines) => {
-            let value = json!({
-                "ts": now_ts(),
-                "dir": "to_tui",
-                "kind": "insert_history",
-                "lines": lines.len(),
+                "kind": "insert_history_cell",
+                "lines": cell.transcript_lines().len(),
             });
             LOGGER.write_json_line(value);
         }

@@ -13,7 +13,9 @@ use async_channel::Sender;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
-use codex_login::CodexAuth;
+use codex_login::AuthManager;
+use codex_protocol::protocol::ConversationHistoryResponseEvent;
+use codex_protocol::protocol::TaskStartedEvent;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use futures::prelude::*;
@@ -41,6 +43,7 @@ use crate::client_common::ResponseEvent;
 use crate::config::Config;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::conversation_history::ConversationHistory;
+use crate::conversation_manager::InitialHistory;
 use crate::environment_context::EnvironmentContext;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
@@ -52,20 +55,19 @@ use crate::exec::SandboxType;
 use crate::exec::StdoutStream;
 use crate::exec::StreamOutput;
 use crate::exec::process_exec_tool_call;
+use crate::exec_command::EXEC_COMMAND_TOOL_NAME;
+use crate::exec_command::ExecCommandParams;
+use crate::exec_command::ExecSessionManager;
+use crate::exec_command::WRITE_STDIN_TOOL_NAME;
+use crate::exec_command::WriteStdinParams;
 use crate::exec_env::create_env;
 use crate::mcp_connection_manager::McpConnectionManager;
 use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::model_family::find_family_for_model;
-use crate::models::ContentItem;
-use crate::models::FunctionCallOutputPayload;
-use crate::models::LocalShellAction;
-use crate::models::ReasoningItemContent;
-use crate::models::ReasoningItemReasoningSummary;
-use crate::models::ResponseInputItem;
-use crate::models::ResponseItem;
-use crate::models::ShellToolCallParams;
+use crate::openai_model_info::get_model_info;
 use crate::openai_tools::ApplyPatchToolArgs;
 use crate::openai_tools::ToolsConfig;
+use crate::openai_tools::ToolsConfigParams;
 use crate::openai_tools::get_openai_tools;
 use crate::parse_command::parse_command;
 use crate::plan_tool::handle_update_plan;
@@ -88,15 +90,19 @@ use crate::protocol::ExecCommandBeginEvent;
 use crate::protocol::ExecCommandEndEvent;
 use crate::protocol::FileChange;
 use crate::protocol::InputItem;
+use crate::protocol::ListCustomPromptsResponseEvent;
 use crate::protocol::Op;
 use crate::protocol::PatchApplyBeginEvent;
 use crate::protocol::PatchApplyEndEvent;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
 use crate::protocol::SessionConfiguredEvent;
+use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
 use crate::protocol::TaskCompleteEvent;
 use crate::protocol::TurnDiffEvent;
+use crate::protocol::WebSearchBeginEvent;
+use crate::protocol::WebSearchEndEvent;
 use crate::rollout::RolloutRecorder;
 use crate::safety::SafetyCheck;
 use crate::safety::assess_command_safety;
@@ -107,6 +113,16 @@ use crate::user_notification::UserNotification;
 use crate::util::backoff;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::custom_prompts::CustomPrompt;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::LocalShellAction;
+use codex_protocol::models::ReasoningItemContent;
+use codex_protocol::models::ReasoningItemReasoningSummary;
+use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::models::ShellToolCallParams;
+use codex_protocol::models::WebSearchAction;
 
 // A convenience extension trait for acquiring mutex locks where poisoning is
 // unrecoverable and should abort the program. This avoids scattered `.unwrap()`
@@ -140,17 +156,28 @@ pub struct CodexSpawnOk {
 }
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
+pub(crate) const SUBMISSION_CHANNEL_CAPACITY: usize = 64;
+
+// Model-formatting limits: clients get full streams; oonly content sent to the model is truncated.
+pub(crate) const MODEL_FORMAT_MAX_BYTES: usize = 10 * 1024; // 10 KiB
+pub(crate) const MODEL_FORMAT_MAX_LINES: usize = 256; // lines
+pub(crate) const MODEL_FORMAT_HEAD_LINES: usize = MODEL_FORMAT_MAX_LINES / 2;
+pub(crate) const MODEL_FORMAT_TAIL_LINES: usize = MODEL_FORMAT_MAX_LINES - MODEL_FORMAT_HEAD_LINES; // 128
+pub(crate) const MODEL_FORMAT_HEAD_BYTES: usize = MODEL_FORMAT_MAX_BYTES / 2;
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
-    pub async fn spawn(config: Config, auth: Option<CodexAuth>) -> CodexResult<CodexSpawnOk> {
-        let (tx_sub, rx_sub) = async_channel::bounded(64);
+    pub async fn spawn(
+        config: Config,
+        auth_manager: Arc<AuthManager>,
+        conversation_history: InitialHistory,
+    ) -> CodexResult<CodexSpawnOk> {
+        let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
         let (tx_event, rx_event) = async_channel::unbounded();
 
         let user_instructions = get_user_instructions(&config).await;
 
         let config = Arc::new(config);
-        let resume_path = config.experimental_resume.clone();
 
         let configure_session = ConfigureSession {
             provider: config.model_provider.clone(),
@@ -164,21 +191,32 @@ impl Codex {
             disable_response_storage: config.disable_response_storage,
             notify: config.notify.clone(),
             cwd: config.cwd.clone(),
-            resume_path,
         };
 
         // Generate a unique ID for the lifetime of this Codex session.
-        let (session, turn_context) =
-            Session::new(configure_session, config.clone(), auth, tx_event.clone())
-                .await
-                .map_err(|e| {
-                    error!("Failed to create session: {e:#}");
-                    CodexErr::InternalAgentDied
-                })?;
+        let (session, turn_context) = Session::new(
+            configure_session,
+            config.clone(),
+            auth_manager.clone(),
+            tx_event.clone(),
+        )
+        .await
+        .map_err(|e| {
+            error!("Failed to create session: {e:#}");
+            CodexErr::InternalAgentDied
+        })?;
+        session
+            .record_initial_history(&turn_context, conversation_history)
+            .await;
         let session_id = session.session_id;
 
         // This task will run until Op::Shutdown is received.
-        tokio::spawn(submission_loop(session, turn_context, config, rx_sub));
+        tokio::spawn(submission_loop(
+            session.clone(),
+            turn_context,
+            config,
+            rx_sub,
+        ));
         let codex = Codex {
             next_id: AtomicU64::new(0),
             tx_sub,
@@ -238,6 +276,7 @@ pub(crate) struct Session {
 
     /// Manager for external MCP servers/tools.
     mcp_connection_manager: McpConnectionManager,
+    session_manager: ExecSessionManager,
 
     /// External notifier command (will be passed as args to exec()). When
     /// `None` this feature is disabled.
@@ -314,17 +353,16 @@ struct ConfigureSession {
     /// `ConfigureSession` operation so that the business-logic layer can
     /// operate deterministically.
     cwd: PathBuf,
-
-    resume_path: Option<PathBuf>,
 }
 
 impl Session {
     async fn new(
         configure_session: ConfigureSession,
         config: Arc<Config>,
-        auth: Option<CodexAuth>,
+        auth_manager: Arc<AuthManager>,
         tx_event: Sender<Event>,
     ) -> anyhow::Result<(Arc<Self>, TurnContext)> {
+        let session_id = Uuid::new_v4();
         let ConfigureSession {
             provider,
             model,
@@ -337,7 +375,6 @@ impl Session {
             disable_response_storage,
             notify,
             cwd,
-            resume_path,
         } = configure_session;
         debug!("Configuring session: model={model}; provider={provider:?}");
         if !cwd.is_absolute() {
@@ -353,88 +390,25 @@ impl Session {
         // - spin up MCP connection manager
         // - perform default shell discovery
         // - load history metadata
-        let rollout_fut = async {
-            match resume_path.as_ref() {
-                Some(path) => RolloutRecorder::resume(path, cwd.clone())
-                    .await
-                    .map(|(rec, saved)| (saved.session_id, Some(saved), rec)),
-                None => {
-                    let session_id = Uuid::new_v4();
-                    RolloutRecorder::new(&config, session_id, user_instructions.clone())
-                        .await
-                        .map(|rec| (session_id, None, rec))
-                }
-            }
-        };
+        let rollout_fut = RolloutRecorder::new(&config, session_id, user_instructions.clone());
 
         let mcp_fut = McpConnectionManager::new(config.mcp_servers.clone());
         let default_shell_fut = shell::default_user_shell();
         let history_meta_fut = crate::message_history::history_metadata(&config);
 
         // Join all independent futures.
-        let (rollout_res, mcp_res, default_shell, (history_log_id, history_entry_count)) =
+        let (rollout_recorder, mcp_res, default_shell, (history_log_id, history_entry_count)) =
             tokio::join!(rollout_fut, mcp_fut, default_shell_fut, history_meta_fut);
 
-        // Handle rollout result, which determines the session_id.
-        struct RolloutResult {
-            session_id: Uuid,
-            rollout_recorder: Option<RolloutRecorder>,
-            restored_items: Option<Vec<ResponseItem>>,
-        }
-        let rollout_result = match rollout_res {
-            Ok((session_id, maybe_saved, recorder)) => {
-                let restored_items: Option<Vec<ResponseItem>> =
-                    maybe_saved.and_then(|saved_session| {
-                        if saved_session.items.is_empty() {
-                            None
-                        } else {
-                            Some(saved_session.items)
-                        }
-                    });
-                RolloutResult {
-                    session_id,
-                    rollout_recorder: Some(recorder),
-                    restored_items,
-                }
-            }
-            Err(e) => {
-                if let Some(path) = resume_path.as_ref() {
-                    return Err(anyhow::anyhow!(
-                        "failed to resume rollout from {path:?}: {e}"
-                    ));
-                }
-
-                let message = format!("failed to initialize rollout recorder: {e}");
-                post_session_configured_error_events.push(Event {
-                    id: INITIAL_SUBMIT_ID.to_owned(),
-                    msg: EventMsg::Error(ErrorEvent {
-                        message: message.clone(),
-                    }),
-                });
-                warn!("{message}");
-
-                RolloutResult {
-                    session_id: Uuid::new_v4(),
-                    rollout_recorder: None,
-                    restored_items: None,
-                }
-            }
-        };
-
-        let RolloutResult {
-            session_id,
-            rollout_recorder,
-            restored_items,
-        } = rollout_result;
-
+        let rollout_recorder = rollout_recorder.map_err(|e| {
+            error!("failed to initialize rollout recorder: {e:#}");
+            anyhow::anyhow!("failed to initialize rollout recorder: {e:#}")
+        })?;
         // Create the mutable state for the Session.
-        let mut state = State {
+        let state = State {
             history: ConversationHistory::new(),
             ..Default::default()
         };
-        if let Some(restored_items) = restored_items {
-            state.history.record_items(&restored_items);
-        }
 
         // Handle MCP manager result and record any startup failures.
         let (mcp_connection_manager, failed_clients) = match mcp_res {
@@ -466,7 +440,7 @@ impl Session {
         // construct the model client.
         let client = ModelClient::new(
             config.clone(),
-            auth.clone(),
+            Some(auth_manager.clone()),
             provider.clone(),
             model_reasoning_effort,
             model_reasoning_summary,
@@ -474,13 +448,16 @@ impl Session {
         );
         let turn_context = TurnContext {
             client,
-            tools_config: ToolsConfig::new(
-                &config.model_family,
+            tools_config: ToolsConfig::new(&ToolsConfigParams {
+                model_family: &config.model_family,
                 approval_policy,
-                sandbox_policy.clone(),
-                config.include_plan_tool,
-                config.include_apply_patch_tool,
-            ),
+                sandbox_policy: sandbox_policy.clone(),
+                include_plan_tool: config.include_plan_tool,
+                include_apply_patch_tool: config.include_apply_patch_tool,
+                include_web_search_request: config.tools_web_search_request,
+                use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
+                include_view_image_tool: config.include_view_image_tool,
+            }),
             user_instructions,
             base_instructions,
             approval_policy,
@@ -493,26 +470,14 @@ impl Session {
             session_id,
             tx_event: tx_event.clone(),
             mcp_connection_manager,
+            session_manager: ExecSessionManager::default(),
             notify,
             state: Mutex::new(state),
-            rollout: Mutex::new(rollout_recorder),
+            rollout: Mutex::new(Some(rollout_recorder)),
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             user_shell: default_shell,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         });
-
-        // record the initial user instructions and environment context,
-        // regardless of whether we restored items.
-        let mut conversation_items = Vec::<ResponseItem>::with_capacity(2);
-        if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
-            conversation_items.push(Prompt::format_user_instructions_message(user_instructions));
-        }
-        conversation_items.push(ResponseItem::from(EnvironmentContext::new(
-            turn_context.cwd.to_path_buf(),
-            turn_context.approval_policy,
-            turn_context.sandbox_policy.clone(),
-        )));
-        sess.record_conversation_items(&conversation_items).await;
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         let events = std::iter::once(Event {
@@ -549,6 +514,42 @@ impl Session {
         {
             state.current_task.take();
         }
+    }
+
+    async fn record_initial_history(
+        &self,
+        turn_context: &TurnContext,
+        conversation_history: InitialHistory,
+    ) {
+        match conversation_history {
+            InitialHistory::New => {
+                self.record_initial_history_new(turn_context).await;
+            }
+            InitialHistory::Resumed(items) => {
+                self.record_initial_history_resumed(items).await;
+            }
+        }
+    }
+
+    async fn record_initial_history_new(&self, turn_context: &TurnContext) {
+        // record the initial user instructions and environment context,
+        // regardless of whether we restored items.
+        // TODO: Those items shouldn't be "user messages" IMO. Maybe developer messages.
+        let mut conversation_items = Vec::<ResponseItem>::with_capacity(2);
+        if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
+            conversation_items.push(Prompt::format_user_instructions_message(user_instructions));
+        }
+        conversation_items.push(ResponseItem::from(EnvironmentContext::new(
+            Some(turn_context.cwd.clone()),
+            Some(turn_context.approval_policy),
+            Some(turn_context.sandbox_policy.clone()),
+            Some(self.user_shell.clone()),
+        )));
+        self.record_conversation_items(&conversation_items).await;
+    }
+
+    async fn record_initial_history_resumed(&self, items: Vec<ResponseItem>) {
+        self.record_conversation_items(&items).await;
     }
 
     /// Sends the given event to the client and swallows the send event, if
@@ -612,9 +613,17 @@ impl Session {
     }
 
     pub fn notify_approval(&self, sub_id: &str, decision: ReviewDecision) {
-        let mut state = self.state.lock_unchecked();
-        if let Some(tx_approve) = state.pending_approvals.remove(sub_id) {
-            tx_approve.send(decision).ok();
+        let entry = {
+            let mut state = self.state.lock_unchecked();
+            state.pending_approvals.remove(sub_id)
+        };
+        match entry {
+            Some(tx_approve) => {
+                tx_approve.send(decision).ok();
+            }
+            None => {
+                warn!("No pending approval found for sub_id: {sub_id}");
+            }
         }
     }
 
@@ -692,7 +701,6 @@ impl Session {
         let _ = self.tx_event.send(event).await;
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn on_exec_command_end(
         &self,
         turn_diff_tracker: &mut TurnDiffTracker,
@@ -704,14 +712,15 @@ impl Session {
         let ExecToolCallOutput {
             stdout,
             stderr,
+            aggregated_output,
             duration,
             exit_code,
         } = output;
-        // Because stdout and stderr could each be up to 100 KiB, we send
-        // truncated versions.
-        const MAX_STREAM_OUTPUT: usize = 5 * 1024; // 5KiB
-        let stdout = stdout.text.chars().take(MAX_STREAM_OUTPUT).collect();
-        let stderr = stderr.text.chars().take(MAX_STREAM_OUTPUT).collect();
+        // Send full stdout/stderr to clients; do not truncate.
+        let stdout = stdout.text.clone();
+        let stderr = stderr.text.clone();
+        let formatted_output = format_exec_output_str(output);
+        let aggregated_output: String = aggregated_output.text.clone();
 
         let msg = if is_apply_patch {
             EventMsg::PatchApplyEnd(PatchApplyEndEvent {
@@ -725,8 +734,10 @@ impl Session {
                 call_id: call_id.to_string(),
                 stdout,
                 stderr,
-                duration: *duration,
+                aggregated_output,
                 exit_code: *exit_code,
+                duration: *duration,
+                formatted_output,
             })
         };
 
@@ -784,6 +795,7 @@ impl Session {
                     exit_code: -1,
                     stdout: StreamOutput::new(String::new()),
                     stderr: StreamOutput::new(get_error_message_ui(e)),
+                    aggregated_output: StreamOutput::new(get_error_message_ui(e)),
                     duration: Duration::default(),
                 };
                 &output_stderr
@@ -808,6 +820,16 @@ impl Session {
         let event = Event {
             id: sub_id.to_string(),
             msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
+                message: message.into(),
+            }),
+        };
+        let _ = self.tx_event.send(event).await;
+    }
+
+    async fn notify_stream_error(&self, sub_id: &str, message: impl Into<String>) {
+        let event = Event {
+            id: sub_id.to_string(),
+            msg: EventMsg::StreamError(StreamErrorEvent {
                 message: message.into(),
             }),
         };
@@ -1022,15 +1044,19 @@ async fn submission_loop(
                 let effective_effort = effort.unwrap_or(prev.client.get_reasoning_effort());
                 let effective_summary = summary.unwrap_or(prev.client.get_reasoning_summary());
 
-                let auth = prev.client.get_auth();
+                let auth_manager = prev.client.get_auth_manager();
+
                 // Build updated config for the client
                 let mut updated_config = (*config).clone();
                 updated_config.model = effective_model.clone();
                 updated_config.model_family = effective_family.clone();
+                if let Some(model_info) = get_model_info(&effective_family) {
+                    updated_config.model_context_window = Some(model_info.context_window);
+                }
 
                 let client = ModelClient::new(
                     Arc::new(updated_config),
-                    auth,
+                    auth_manager,
                     provider,
                     effective_effort,
                     effective_summary,
@@ -1043,13 +1069,16 @@ async fn submission_loop(
                     .unwrap_or(prev.sandbox_policy.clone());
                 let new_cwd = cwd.clone().unwrap_or_else(|| prev.cwd.clone());
 
-                let tools_config = ToolsConfig::new(
-                    &effective_family,
-                    new_approval_policy,
-                    new_sandbox_policy.clone(),
-                    config.include_plan_tool,
-                    config.include_apply_patch_tool,
-                );
+                let tools_config = ToolsConfig::new(&ToolsConfigParams {
+                    model_family: &effective_family,
+                    approval_policy: new_approval_policy,
+                    sandbox_policy: new_sandbox_policy.clone(),
+                    include_plan_tool: config.include_plan_tool,
+                    include_apply_patch_tool: config.include_apply_patch_tool,
+                    include_web_search_request: config.tools_web_search_request,
+                    use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
+                    include_view_image_tool: config.include_view_image_tool,
+                });
 
                 let new_turn_context = TurnContext {
                     client,
@@ -1067,9 +1096,11 @@ async fn submission_loop(
                 turn_context = Arc::new(new_turn_context);
                 if cwd.is_some() || approval_policy.is_some() || sandbox_policy.is_some() {
                     sess.record_conversation_items(&[ResponseItem::from(EnvironmentContext::new(
-                        new_cwd,
-                        new_approval_policy,
-                        new_sandbox_policy,
+                        cwd,
+                        approval_policy,
+                        sandbox_policy,
+                        // Shell is not configurable from turn to turn
+                        None,
                     ))])
                     .await;
                 }
@@ -1096,6 +1127,7 @@ async fn submission_loop(
                 if let Err(items) = sess.inject_input(items) {
                     // Derive a fresh TurnContext for this turn using the provided overrides.
                     let provider = turn_context.client.get_provider();
+                    let auth_manager = turn_context.client.get_auth_manager();
 
                     // Derive a model family for the requested model; fall back to the session's.
                     let model_family = find_family_for_model(&model)
@@ -1105,12 +1137,15 @@ async fn submission_loop(
                     let mut per_turn_config = (*config).clone();
                     per_turn_config.model = model.clone();
                     per_turn_config.model_family = model_family.clone();
+                    if let Some(model_info) = get_model_info(&model_family) {
+                        per_turn_config.model_context_window = Some(model_info.context_window);
+                    }
 
                     // Build a new client with per‑turn reasoning settings.
                     // Reuse the same provider and session id; auth defaults to env/API key.
                     let client = ModelClient::new(
                         Arc::new(per_turn_config),
-                        None,
+                        auth_manager,
                         provider,
                         effort,
                         summary,
@@ -1119,13 +1154,17 @@ async fn submission_loop(
 
                     let fresh_turn_context = TurnContext {
                         client,
-                        tools_config: ToolsConfig::new(
-                            &model_family,
+                        tools_config: ToolsConfig::new(&ToolsConfigParams {
+                            model_family: &model_family,
                             approval_policy,
-                            sandbox_policy.clone(),
-                            config.include_plan_tool,
-                            config.include_apply_patch_tool,
-                        ),
+                            sandbox_policy: sandbox_policy.clone(),
+                            include_plan_tool: config.include_plan_tool,
+                            include_apply_patch_tool: config.include_apply_patch_tool,
+                            include_web_search_request: config.tools_web_search_request,
+                            use_streamable_shell_tool: config
+                                .use_experimental_streamable_shell_tool,
+                            include_view_image_tool: config.include_view_image_tool,
+                        }),
                         user_instructions: turn_context.user_instructions.clone(),
                         base_instructions: turn_context.base_instructions.clone(),
                         approval_policy,
@@ -1215,6 +1254,27 @@ async fn submission_loop(
                     warn!("failed to send McpListToolsResponse event: {e}");
                 }
             }
+            Op::ListCustomPrompts => {
+                let tx_event = sess.tx_event.clone();
+                let sub_id = sub.id.clone();
+
+                let custom_prompts: Vec<CustomPrompt> =
+                    if let Some(dir) = crate::custom_prompts::default_prompts_dir() {
+                        crate::custom_prompts::discover_prompts_in(&dir).await
+                    } else {
+                        Vec::new()
+                    };
+
+                let event = Event {
+                    id: sub_id,
+                    msg: EventMsg::ListCustomPromptsResponse(ListCustomPromptsResponseEvent {
+                        custom_prompts,
+                    }),
+                };
+                if let Err(e) = tx_event.send(event).await {
+                    warn!("failed to send ListCustomPromptsResponse event: {e}");
+                }
+            }
             Op::Compact => {
                 // Create a summarization request as user input
                 const SUMMARIZATION_PROMPT: &str = include_str!("prompt_for_compact_command.md");
@@ -1263,6 +1323,21 @@ async fn submission_loop(
                 }
                 break;
             }
+            Op::GetHistory => {
+                let tx_event = sess.tx_event.clone();
+                let sub_id = sub.id.clone();
+
+                let event = Event {
+                    id: sub_id.clone(),
+                    msg: EventMsg::ConversationHistory(ConversationHistoryResponseEvent {
+                        conversation_id: sess.session_id,
+                        entries: sess.state.lock_unchecked().history.contents(),
+                    }),
+                };
+                if let Err(e) = tx_event.send(event).await {
+                    warn!("failed to send ConversationHistory event: {e}");
+                }
+            }
             _ => {
                 // Ignore unknown ops; enum is non_exhaustive to allow extensions.
             }
@@ -1295,7 +1370,9 @@ async fn run_task(
     }
     let event = Event {
         id: sub_id.clone(),
-        msg: EventMsg::TaskStarted,
+        msg: EventMsg::TaskStarted(TaskStartedEvent {
+            model_context_window: turn_context.client.get_model_context_window(),
+        }),
     };
     if sess.tx_event.send(event).await.is_err() {
         return;
@@ -1385,28 +1462,37 @@ async fn run_task(
                             );
                         }
                         (
+                            ResponseItem::CustomToolCall { .. },
+                            Some(ResponseInputItem::CustomToolCallOutput { call_id, output }),
+                        ) => {
+                            items_to_record_in_conversation_history.push(item);
+                            items_to_record_in_conversation_history.push(
+                                ResponseItem::CustomToolCallOutput {
+                                    call_id: call_id.clone(),
+                                    output: output.clone(),
+                                },
+                            );
+                        }
+                        (
                             ResponseItem::FunctionCall { .. },
                             Some(ResponseInputItem::McpToolCallOutput { call_id, result }),
                         ) => {
                             items_to_record_in_conversation_history.push(item);
-                            let (content, success): (String, Option<bool>) = match result {
-                                Ok(CallToolResult {
-                                    content,
-                                    is_error,
-                                    structured_content: _,
-                                }) => match serde_json::to_string(content) {
-                                    Ok(content) => (content, *is_error),
-                                    Err(e) => {
-                                        warn!("Failed to serialize MCP tool call output: {e}");
-                                        (e.to_string(), Some(true))
-                                    }
+                            let output = match result {
+                                Ok(call_tool_result) => {
+                                    convert_call_tool_result_to_function_call_output_payload(
+                                        call_tool_result,
+                                    )
+                                }
+                                Err(err) => FunctionCallOutputPayload {
+                                    content: err.clone(),
+                                    success: Some(false),
                                 },
-                                Err(e) => (e.clone(), Some(true)),
                             };
                             items_to_record_in_conversation_history.push(
                                 ResponseItem::FunctionCallOutput {
                                     call_id: call_id.clone(),
-                                    output: FunctionCallOutputPayload { content, success },
+                                    output,
                                 },
                             );
                         }
@@ -1520,7 +1606,7 @@ async fn run_turn(
                     // Surface retry information to any UI/front‑end so the
                     // user understands what is happening instead of staring
                     // at a seemingly frozen screen.
-                    sess.notify_background_event(
+                    sess.notify_stream_error(
                         &sub_id,
                         format!(
                             "stream error: {e}; retrying {retries}/{max_retries} in {delay:?}…"
@@ -1564,6 +1650,7 @@ async fn try_run_turn(
                 call_id: Some(call_id),
                 ..
             } => Some(call_id),
+            ResponseItem::CustomToolCallOutput { call_id, .. } => Some(call_id),
             _ => None,
         })
         .collect::<Vec<_>>();
@@ -1581,6 +1668,7 @@ async fn try_run_turn(
                     call_id: Some(call_id),
                     ..
                 } => Some(call_id),
+                ResponseItem::CustomToolCall { call_id, .. } => Some(call_id),
                 _ => None,
             })
             .filter_map(|call_id| {
@@ -1590,12 +1678,9 @@ async fn try_run_turn(
                     Some(call_id.clone())
                 }
             })
-            .map(|call_id| ResponseItem::FunctionCallOutput {
+            .map(|call_id| ResponseItem::CustomToolCallOutput {
                 call_id: call_id.clone(),
-                output: FunctionCallOutputPayload {
-                    content: "aborted".to_string(),
-                    success: Some(false),
-                },
+                output: "aborted".to_string(),
             })
             .collect::<Vec<_>>()
     };
@@ -1613,6 +1698,7 @@ async fn try_run_turn(
     let mut stream = turn_context.client.clone().stream(&prompt).await?;
 
     let mut output = Vec::new();
+
     loop {
         // Poll the next item from the model stream. We must inspect *both* Ok and Err
         // cases so that transient stream failures (e.g., dropped SSE connection before
@@ -1649,6 +1735,15 @@ async fn try_run_turn(
                 .await?;
                 output.push(ProcessedResponseItem { item, response });
             }
+            ResponseEvent::WebSearchCallBegin { call_id } => {
+                let _ = sess
+                    .tx_event
+                    .send(Event {
+                        id: sub_id.to_string(),
+                        msg: EventMsg::WebSearchBegin(WebSearchBeginEvent { call_id }),
+                    })
+                    .await;
+            }
             ResponseEvent::Completed {
                 response_id: _,
                 token_usage,
@@ -1676,11 +1771,6 @@ async fn try_run_turn(
                 return Ok(output);
             }
             ResponseEvent::OutputTextDelta(delta) => {
-                {
-                    let mut st = sess.state.lock_unchecked();
-                    st.history.append_assistant_text(&delta);
-                }
-
                 let event = Event {
                     id: sub_id.to_string(),
                     msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
@@ -1723,9 +1813,12 @@ async fn run_compact_task(
     input: Vec<InputItem>,
     compact_instructions: String,
 ) {
+    let model_context_window = turn_context.client.get_model_context_window();
     let start_event = Event {
         id: sub_id.clone(),
-        msg: EventMsg::TaskStarted,
+        msg: EventMsg::TaskStarted(TaskStartedEvent {
+            model_context_window,
+        }),
     };
     if sess.tx_event.send(start_event).await.is_err() {
         return;
@@ -1755,7 +1848,7 @@ async fn run_compact_task(
                 if retries < max_retries {
                     retries += 1;
                     let delay = backoff(retries);
-                    sess.notify_background_event(
+                    sess.notify_stream_error(
                         &sub_id,
                         format!(
                             "stream error: {e}; retrying {retries}/{max_retries} in {delay:?}…"
@@ -1779,6 +1872,12 @@ async fn run_compact_task(
     }
 
     sess.remove_task(&sub_id);
+
+    {
+        let mut state = sess.state.lock_unchecked();
+        state.history.keep_last_messages(1);
+    }
+
     let event = Event {
         id: sub_id.clone(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
@@ -1793,9 +1892,6 @@ async fn run_compact_task(
         }),
     };
     sess.send_event(event).await;
-
-    let mut state = sess.state.lock_unchecked();
-    state.history.keep_last_messages(1);
 }
 
 async fn handle_response_item(
@@ -1860,7 +1956,7 @@ async fn handle_response_item(
             call_id,
             ..
         } => {
-            info!("FunctionCall: {arguments}");
+            info!("FunctionCall: {name}({arguments})");
             Some(
                 handle_function_call(
                     sess,
@@ -1917,8 +2013,41 @@ async fn handle_response_item(
                 .await,
             )
         }
+        ResponseItem::CustomToolCall {
+            id: _,
+            call_id,
+            name,
+            input,
+            status: _,
+        } => Some(
+            handle_custom_tool_call(
+                sess,
+                turn_context,
+                turn_diff_tracker,
+                sub_id.to_string(),
+                name,
+                input,
+                call_id,
+            )
+            .await,
+        ),
         ResponseItem::FunctionCallOutput { .. } => {
             debug!("unexpected FunctionCallOutput from stream");
+            None
+        }
+        ResponseItem::CustomToolCallOutput { .. } => {
+            debug!("unexpected CustomToolCallOutput from stream");
+            None
+        }
+        ResponseItem::WebSearchCall { id, action, .. } => {
+            if let WebSearchAction::Search { query } = action {
+                let call_id = id.unwrap_or_else(|| "".to_string());
+                let event = Event {
+                    id: sub_id.to_string(),
+                    msg: EventMsg::WebSearchEnd(WebSearchEndEvent { call_id, query }),
+                };
+                sess.tx_event.send(event).await.ok();
+            }
             None
         }
         ResponseItem::Other => None,
@@ -1953,6 +2082,36 @@ async fn handle_function_call(
             )
             .await
         }
+        "view_image" => {
+            #[derive(serde::Deserialize)]
+            struct SeeImageArgs {
+                path: String,
+            }
+            let args = match serde_json::from_str::<SeeImageArgs>(&arguments) {
+                Ok(a) => a,
+                Err(e) => {
+                    return ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: FunctionCallOutputPayload {
+                            content: format!("failed to parse function arguments: {e}"),
+                            success: Some(false),
+                        },
+                    };
+                }
+            };
+            let abs = turn_context.resolve_path(Some(args.path));
+            let output = match sess.inject_input(vec![InputItem::LocalImage { path: abs }]) {
+                Ok(()) => FunctionCallOutputPayload {
+                    content: "attached local image path".to_string(),
+                    success: Some(true),
+                },
+                Err(_) => FunctionCallOutputPayload {
+                    content: "unable to attach image (no active task)".to_string(),
+                    success: Some(false),
+                },
+            };
+            ResponseInputItem::FunctionCallOutput { call_id, output }
+        }
         "apply_patch" => {
             let args = match serde_json::from_str::<ApplyPatchToolArgs>(&arguments) {
                 Ok(a) => a,
@@ -1985,6 +2144,54 @@ async fn handle_function_call(
             .await
         }
         "update_plan" => handle_update_plan(sess, arguments, sub_id, call_id).await,
+        EXEC_COMMAND_TOOL_NAME => {
+            // TODO(mbolin): Sandbox check.
+            let exec_params = match serde_json::from_str::<ExecCommandParams>(&arguments) {
+                Ok(params) => params,
+                Err(e) => {
+                    return ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: FunctionCallOutputPayload {
+                            content: format!("failed to parse function arguments: {e}"),
+                            success: Some(false),
+                        },
+                    };
+                }
+            };
+            let result = sess
+                .session_manager
+                .handle_exec_command_request(exec_params)
+                .await;
+            let function_call_output = crate::exec_command::result_into_payload(result);
+            ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: function_call_output,
+            }
+        }
+        WRITE_STDIN_TOOL_NAME => {
+            let write_stdin_params = match serde_json::from_str::<WriteStdinParams>(&arguments) {
+                Ok(params) => params,
+                Err(e) => {
+                    return ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: FunctionCallOutputPayload {
+                            content: format!("failed to parse function arguments: {e}"),
+                            success: Some(false),
+                        },
+                    };
+                }
+            };
+            let result = sess
+                .session_manager
+                .handle_write_stdin_request(write_stdin_params)
+                .await;
+            let function_call_output: FunctionCallOutputPayload =
+                crate::exec_command::result_into_payload(result);
+            ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: function_call_output,
+            }
+        }
         _ => {
             match sess.mcp_connection_manager.parse_tool_name(&name) {
                 Some((server, tool_name)) => {
@@ -2005,6 +2212,58 @@ async fn handle_function_call(
                         },
                     }
                 }
+            }
+        }
+    }
+}
+
+async fn handle_custom_tool_call(
+    sess: &Session,
+    turn_context: &TurnContext,
+    turn_diff_tracker: &mut TurnDiffTracker,
+    sub_id: String,
+    name: String,
+    input: String,
+    call_id: String,
+) -> ResponseInputItem {
+    info!("CustomToolCall: {name} {input}");
+    match name.as_str() {
+        "apply_patch" => {
+            let exec_params = ExecParams {
+                command: vec!["apply_patch".to_string(), input.clone()],
+                cwd: turn_context.cwd.clone(),
+                timeout_ms: None,
+                env: HashMap::new(),
+                with_escalated_permissions: None,
+                justification: None,
+            };
+            let resp = handle_container_exec_with_params(
+                exec_params,
+                sess,
+                turn_context,
+                turn_diff_tracker,
+                sub_id,
+                call_id,
+            )
+            .await;
+
+            // Convert function-call style output into a custom tool call output
+            match resp {
+                ResponseInputItem::FunctionCallOutput { call_id, output } => {
+                    ResponseInputItem::CustomToolCallOutput {
+                        call_id,
+                        output: output.content,
+                    }
+                }
+                // Pass through if already a custom tool output or other variant
+                other => other,
+            }
+        }
+        _ => {
+            debug!("unexpected CustomToolCall from stream");
+            ResponseInputItem::CustomToolCallOutput {
+                call_id,
+                output: format!("unsupported custom tool call: {name}"),
             }
         }
     }
@@ -2051,18 +2310,20 @@ pub struct ExecInvokeArgs<'a> {
     pub stdout_stream: Option<StdoutStream>,
 }
 
-fn maybe_run_with_user_profile(
+fn maybe_translate_shell_command(
     params: ExecParams,
     sess: &Session,
     turn_context: &TurnContext,
 ) -> ExecParams {
-    if turn_context.shell_environment_policy.use_profile {
-        let command = sess
+    let should_translate = matches!(sess.user_shell, crate::shell::Shell::PowerShell(_))
+        || turn_context.shell_environment_policy.use_profile;
+
+    if should_translate
+        && let Some(command) = sess
             .user_shell
-            .format_default_shell_invocation(params.command.clone());
-        if let Some(command) = command {
-            return ExecParams { command, ..params };
-        }
+            .format_default_shell_invocation(params.command.clone())
+    {
+        return ExecParams { command, ..params };
     }
     params
 }
@@ -2227,7 +2488,7 @@ async fn handle_container_exec_with_params(
         ),
     };
 
-    let params = maybe_run_with_user_profile(params, sess, turn_context);
+    let params = maybe_translate_shell_command(params, sess, turn_context);
     let output_result = sess
         .run_exec_with_events(
             turn_diff_tracker,
@@ -2237,11 +2498,15 @@ async fn handle_container_exec_with_params(
                 sandbox_type,
                 sandbox_policy: &turn_context.sandbox_policy,
                 codex_linux_sandbox_exe: &sess.codex_linux_sandbox_exe,
-                stdout_stream: Some(StdoutStream {
-                    sub_id: sub_id.clone(),
-                    call_id: call_id.clone(),
-                    tx_event: sess.tx_event.clone(),
-                }),
+                stdout_stream: if exec_command_context.apply_patch.is_some() {
+                    None
+                } else {
+                    Some(StdoutStream {
+                        sub_id: sub_id.clone(),
+                        call_id: call_id.clone(),
+                        tx_event: sess.tx_event.clone(),
+                    })
+                },
             },
         )
         .await;
@@ -2251,7 +2516,7 @@ async fn handle_container_exec_with_params(
             let ExecToolCallOutput { exit_code, .. } = &output;
 
             let is_success = *exit_code == 0;
-            let content = format_exec_output(output);
+            let content = format_exec_output(&output);
             ResponseInputItem::FunctionCallOutput {
                 call_id: call_id.clone(),
                 output: FunctionCallOutputPayload {
@@ -2370,11 +2635,15 @@ async fn handle_sandbox_error(
                         sandbox_type: SandboxType::None,
                         sandbox_policy: &turn_context.sandbox_policy,
                         codex_linux_sandbox_exe: &sess.codex_linux_sandbox_exe,
-                        stdout_stream: Some(StdoutStream {
-                            sub_id: sub_id.clone(),
-                            call_id: call_id.clone(),
-                            tx_event: sess.tx_event.clone(),
-                        }),
+                        stdout_stream: if exec_command_context.apply_patch.is_some() {
+                            None
+                        } else {
+                            Some(StdoutStream {
+                                sub_id: sub_id.clone(),
+                                call_id: call_id.clone(),
+                                tx_event: sess.tx_event.clone(),
+                            })
+                        },
                     },
                 )
                 .await;
@@ -2384,7 +2653,7 @@ async fn handle_sandbox_error(
                     let ExecToolCallOutput { exit_code, .. } = &retry_output;
 
                     let is_success = *exit_code == 0;
-                    let content = format_exec_output(retry_output);
+                    let content = format_exec_output(&retry_output);
 
                     ResponseInputItem::FunctionCallOutput {
                         call_id: call_id.clone(),
@@ -2416,13 +2685,113 @@ async fn handle_sandbox_error(
     }
 }
 
+fn format_exec_output_str(exec_output: &ExecToolCallOutput) -> String {
+    let ExecToolCallOutput {
+        aggregated_output, ..
+    } = exec_output;
+
+    // Head+tail truncation for the model: show the beginning and end with an elision.
+    // Clients still receive full streams; only this formatted summary is capped.
+
+    let s = aggregated_output.text.as_str();
+    let total_lines = s.lines().count();
+    if s.len() <= MODEL_FORMAT_MAX_BYTES && total_lines <= MODEL_FORMAT_MAX_LINES {
+        return s.to_string();
+    }
+
+    let lines: Vec<&str> = s.lines().collect();
+    let head_take = MODEL_FORMAT_HEAD_LINES.min(lines.len());
+    let tail_take = MODEL_FORMAT_TAIL_LINES.min(lines.len().saturating_sub(head_take));
+    let omitted = lines.len().saturating_sub(head_take + tail_take);
+
+    // Join head and tail blocks (lines() strips newlines; reinsert them)
+    let head_block = lines
+        .iter()
+        .take(head_take)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+    let tail_block = if tail_take > 0 {
+        lines[lines.len() - tail_take..].join("\n")
+    } else {
+        String::new()
+    };
+    let marker = format!("\n[... omitted {omitted} of {total_lines} lines ...]\n\n");
+
+    // Byte budgets for head/tail around the marker
+    let mut head_budget = MODEL_FORMAT_HEAD_BYTES.min(MODEL_FORMAT_MAX_BYTES);
+    let tail_budget = MODEL_FORMAT_MAX_BYTES.saturating_sub(head_budget + marker.len());
+    if tail_budget == 0 && marker.len() >= MODEL_FORMAT_MAX_BYTES {
+        // Degenerate case: marker alone exceeds budget; return a clipped marker
+        return take_bytes_at_char_boundary(&marker, MODEL_FORMAT_MAX_BYTES).to_string();
+    }
+    if tail_budget == 0 {
+        // Make room for the marker by shrinking head
+        head_budget = MODEL_FORMAT_MAX_BYTES.saturating_sub(marker.len());
+    }
+
+    // Enforce line-count cap by trimming head/tail lines
+    let head_lines_text = head_block;
+    let tail_lines_text = tail_block;
+    // Build final string respecting byte budgets
+    let head_part = take_bytes_at_char_boundary(&head_lines_text, head_budget);
+    let mut result = String::with_capacity(MODEL_FORMAT_MAX_BYTES.min(s.len()));
+    result.push_str(head_part);
+    result.push_str(&marker);
+
+    let remaining = MODEL_FORMAT_MAX_BYTES.saturating_sub(result.len());
+    let tail_budget_final = remaining;
+    let tail_part = take_last_bytes_at_char_boundary(&tail_lines_text, tail_budget_final);
+    result.push_str(tail_part);
+
+    result
+}
+
+// Truncate a &str to a byte budget at a char boundary (prefix)
+#[inline]
+fn take_bytes_at_char_boundary(s: &str, maxb: usize) -> &str {
+    if s.len() <= maxb {
+        return s;
+    }
+    let mut last_ok = 0;
+    for (i, ch) in s.char_indices() {
+        let nb = i + ch.len_utf8();
+        if nb > maxb {
+            break;
+        }
+        last_ok = nb;
+    }
+    &s[..last_ok]
+}
+
+// Take a suffix of a &str within a byte budget at a char boundary
+#[inline]
+fn take_last_bytes_at_char_boundary(s: &str, maxb: usize) -> &str {
+    if s.len() <= maxb {
+        return s;
+    }
+    let mut start = s.len();
+    let mut used = 0usize;
+    for (i, ch) in s.char_indices().rev() {
+        let nb = ch.len_utf8();
+        if used + nb > maxb {
+            break;
+        }
+        start = i;
+        used += nb;
+        if start == 0 {
+            break;
+        }
+    }
+    &s[start..]
+}
+
 /// Exec output is a pre-serialized JSON payload
-fn format_exec_output(exec_output: ExecToolCallOutput) -> String {
+fn format_exec_output(exec_output: &ExecToolCallOutput) -> String {
     let ExecToolCallOutput {
         exit_code,
-        stdout,
-        stderr,
         duration,
+        ..
     } = exec_output;
 
     #[derive(Serialize)]
@@ -2440,20 +2809,12 @@ fn format_exec_output(exec_output: ExecToolCallOutput) -> String {
     // round to 1 decimal place
     let duration_seconds = ((duration.as_secs_f32()) * 10.0).round() / 10.0;
 
-    let is_success = exit_code == 0;
-    let output = if is_success { stdout } else { stderr };
-
-    let mut formatted_output = output.text;
-    if let Some(truncated_after_lines) = output.truncated_after_lines {
-        formatted_output.push_str(&format!(
-            "\n\n[Output truncated after {truncated_after_lines} lines: too many lines or bytes.]",
-        ));
-    }
+    let formatted_output = format_exec_output_str(exec_output);
 
     let payload = ExecOutput {
         output: &formatted_output,
         metadata: ExecMetadata {
-            exit_code,
+            exit_code: *exit_code,
             duration_seconds,
         },
     };
@@ -2507,15 +2868,9 @@ async fn drain_to_completed(
                 response_id: _,
                 token_usage,
             }) => {
-                let token_usage = match token_usage {
-                    Some(usage) => usage,
-                    None => {
-                        return Err(CodexErr::Stream(
-                            "token_usage was None in ResponseEvent::Completed".into(),
-                            None,
-                        ));
-                    }
-                };
+                // some providers don't return token usage, so we default
+                // TODO: consider approximate token usage
+                let token_usage = token_usage.unwrap_or_default();
                 sess.tx_event
                     .send(Event {
                         id: sub_id.to_string(),
@@ -2523,10 +2878,217 @@ async fn drain_to_completed(
                     })
                     .await
                     .ok();
+
                 return Ok(());
             }
             Ok(_) => continue,
             Err(e) => return Err(e),
         }
+    }
+}
+
+fn convert_call_tool_result_to_function_call_output_payload(
+    call_tool_result: &CallToolResult,
+) -> FunctionCallOutputPayload {
+    let CallToolResult {
+        content,
+        is_error,
+        structured_content,
+    } = call_tool_result;
+
+    // In terms of what to send back to the model, we prefer structured_content,
+    // if available, and fallback to content, otherwise.
+    let mut is_success = is_error != &Some(true);
+    let content = if let Some(structured_content) = structured_content
+        && structured_content != &serde_json::Value::Null
+        && let Ok(serialized_structured_content) = serde_json::to_string(&structured_content)
+    {
+        serialized_structured_content
+    } else {
+        match serde_json::to_string(&content) {
+            Ok(serialized_content) => serialized_content,
+            Err(err) => {
+                // If we could not serialize either content or structured_content to
+                // JSON, flag this as an error.
+                is_success = false;
+                err.to_string()
+            }
+        }
+    };
+
+    FunctionCallOutputPayload {
+        content,
+        success: Some(is_success),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mcp_types::ContentBlock;
+    use mcp_types::TextContent;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+    use std::time::Duration as StdDuration;
+
+    fn text_block(s: &str) -> ContentBlock {
+        ContentBlock::TextContent(TextContent {
+            annotations: None,
+            text: s.to_string(),
+            r#type: "text".to_string(),
+        })
+    }
+
+    #[test]
+    fn prefers_structured_content_when_present() {
+        let ctr = CallToolResult {
+            // Content present but should be ignored because structured_content is set.
+            content: vec![text_block("ignored")],
+            is_error: None,
+            structured_content: Some(json!({
+                "ok": true,
+                "value": 42
+            })),
+        };
+
+        let got = convert_call_tool_result_to_function_call_output_payload(&ctr);
+        let expected = FunctionCallOutputPayload {
+            content: serde_json::to_string(&json!({
+                "ok": true,
+                "value": 42
+            }))
+            .unwrap(),
+            success: Some(true),
+        };
+
+        assert_eq!(expected, got);
+    }
+
+    #[test]
+    fn model_truncation_head_tail_by_lines() {
+        // Build 400 short lines so line-count limit, not byte budget, triggers truncation
+        let lines: Vec<String> = (1..=400).map(|i| format!("line{i}")).collect();
+        let full = lines.join("\n");
+
+        let exec = ExecToolCallOutput {
+            exit_code: 0,
+            stdout: StreamOutput::new(String::new()),
+            stderr: StreamOutput::new(String::new()),
+            aggregated_output: StreamOutput::new(full.clone()),
+            duration: StdDuration::from_secs(1),
+        };
+
+        let out = format_exec_output_str(&exec);
+
+        // Expect elision marker with correct counts
+        let omitted = 400 - MODEL_FORMAT_MAX_LINES; // 144
+        let marker = format!("\n[... omitted {omitted} of 400 lines ...]\n\n");
+        assert!(out.contains(&marker), "missing marker: {out}");
+
+        // Validate head and tail
+        let parts: Vec<&str> = out.split(&marker).collect();
+        assert_eq!(parts.len(), 2, "expected one marker split");
+        let head = parts[0];
+        let tail = parts[1];
+
+        let expected_head: String = (1..=MODEL_FORMAT_HEAD_LINES)
+            .map(|i| format!("line{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(head.starts_with(&expected_head), "head mismatch");
+
+        let expected_tail: String = ((400 - MODEL_FORMAT_TAIL_LINES + 1)..=400)
+            .map(|i| format!("line{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(tail.ends_with(&expected_tail), "tail mismatch");
+    }
+
+    #[test]
+    fn model_truncation_respects_byte_budget() {
+        // Construct a large output (about 100kB) so byte budget dominates
+        let big_line = "x".repeat(100);
+        let full = std::iter::repeat_n(big_line.clone(), 1000)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let exec = ExecToolCallOutput {
+            exit_code: 0,
+            stdout: StreamOutput::new(String::new()),
+            stderr: StreamOutput::new(String::new()),
+            aggregated_output: StreamOutput::new(full.clone()),
+            duration: StdDuration::from_secs(1),
+        };
+
+        let out = format_exec_output_str(&exec);
+        assert!(out.len() <= MODEL_FORMAT_MAX_BYTES, "exceeds byte budget");
+        assert!(out.contains("omitted"), "should contain elision marker");
+
+        // Ensure head and tail are drawn from the original
+        assert!(full.starts_with(out.chars().take(8).collect::<String>().as_str()));
+        assert!(
+            full.ends_with(
+                out.chars()
+                    .rev()
+                    .take(8)
+                    .collect::<String>()
+                    .chars()
+                    .rev()
+                    .collect::<String>()
+                    .as_str()
+            )
+        );
+    }
+
+    #[test]
+    fn falls_back_to_content_when_structured_is_null() {
+        let ctr = CallToolResult {
+            content: vec![text_block("hello"), text_block("world")],
+            is_error: None,
+            structured_content: Some(serde_json::Value::Null),
+        };
+
+        let got = convert_call_tool_result_to_function_call_output_payload(&ctr);
+        let expected = FunctionCallOutputPayload {
+            content: serde_json::to_string(&vec![text_block("hello"), text_block("world")])
+                .unwrap(),
+            success: Some(true),
+        };
+
+        assert_eq!(expected, got);
+    }
+
+    #[test]
+    fn success_flag_reflects_is_error_true() {
+        let ctr = CallToolResult {
+            content: vec![text_block("unused")],
+            is_error: Some(true),
+            structured_content: Some(json!({ "message": "bad" })),
+        };
+
+        let got = convert_call_tool_result_to_function_call_output_payload(&ctr);
+        let expected = FunctionCallOutputPayload {
+            content: serde_json::to_string(&json!({ "message": "bad" })).unwrap(),
+            success: Some(false),
+        };
+
+        assert_eq!(expected, got);
+    }
+
+    #[test]
+    fn success_flag_true_with_no_error_and_content_used() {
+        let ctr = CallToolResult {
+            content: vec![text_block("alpha")],
+            is_error: Some(false),
+            structured_content: None,
+        };
+
+        let got = convert_call_tool_result_to_function_call_output_payload(&ctr);
+        let expected = FunctionCallOutputPayload {
+            content: serde_json::to_string(&vec![text_block("alpha")]).unwrap(),
+            success: Some(true),
+        };
+
+        assert_eq!(expected, got);
     }
 }

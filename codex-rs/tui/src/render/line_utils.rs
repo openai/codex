@@ -34,12 +34,3 @@ pub fn is_blank_line_spaces_only(line: &Line<'_>) -> bool {
         .iter()
         .all(|s| s.content.is_empty() || s.content.chars().all(|c| c == ' '))
 }
-
-/// Consider a line blank if its spans are empty or all span contents are
-/// whitespace when trimmed.
-pub fn is_blank_line_trim(line: &Line<'_>) -> bool {
-    if line.spans.is_empty() {
-        return true;
-    }
-    line.spans.iter().all(|s| s.content.trim().is_empty())
-}

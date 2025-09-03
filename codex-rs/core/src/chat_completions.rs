@@ -22,11 +22,11 @@ use crate::client_common::ResponseStream;
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::model_family::ModelFamily;
-use crate::models::ContentItem;
-use crate::models::ReasoningItemContent;
-use crate::models::ResponseItem;
 use crate::openai_tools::create_tools_json_for_chat_completions_api;
 use crate::util::backoff;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ReasoningItemContent;
+use codex_protocol::models::ResponseItem;
 
 /// Implementation for the classic Chat Completions API.
 pub(crate) async fn stream_chat_completions(
@@ -61,6 +61,9 @@ pub(crate) async fn stream_chat_completions(
             }
             ResponseItem::FunctionCallOutput { .. } => last_emitted_role = Some("tool"),
             ResponseItem::Reasoning { .. } | ResponseItem::Other => {}
+            ResponseItem::CustomToolCall { .. } => {}
+            ResponseItem::CustomToolCallOutput { .. } => {}
+            ResponseItem::WebSearchCall { .. } => {}
         }
     }
 
@@ -228,8 +231,39 @@ pub(crate) async fn stream_chat_completions(
                     "content": output.content,
                 }));
             }
-            ResponseItem::Reasoning { .. } => continue,
-            ResponseItem::Other => continue,
+            ResponseItem::CustomToolCall {
+                id,
+                call_id: _,
+                name,
+                input,
+                status: _,
+            } => {
+                messages.push(json!({
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": id,
+                        "type": "custom",
+                        "custom": {
+                            "name": name,
+                            "input": input,
+                        }
+                    }]
+                }));
+            }
+            ResponseItem::CustomToolCallOutput { call_id, output } => {
+                messages.push(json!({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": output,
+                }));
+            }
+            ResponseItem::Reasoning { .. }
+            | ResponseItem::WebSearchCall { .. }
+            | ResponseItem::Other => {
+                // Omit these items from the conversation history.
+                continue;
+            }
         }
     }
 
@@ -636,7 +670,10 @@ where
                     // do NOT emit yet. Forward any other item (e.g. FunctionCall) right
                     // away so downstream consumers see it.
 
-                    let is_assistant_message = matches!(&item, crate::models::ResponseItem::Message { role, .. } if role == "assistant");
+                    let is_assistant_message = matches!(
+                        &item,
+                        codex_protocol::models::ResponseItem::Message { role, .. } if role == "assistant"
+                    );
 
                     if is_assistant_message {
                         match this.mode {
@@ -645,12 +682,14 @@ where
                                 // seen any deltas; otherwise, deltas already built the
                                 // cumulative text and this would duplicate it.
                                 if this.cumulative.is_empty()
-                                    && let crate::models::ResponseItem::Message { content, .. } =
-                                        &item
+                                    && let codex_protocol::models::ResponseItem::Message {
+                                        content,
+                                        ..
+                                    } = &item
                                     && let Some(text) = content.iter().find_map(|c| match c {
-                                        crate::models::ContentItem::OutputText { text } => {
-                                            Some(text)
-                                        }
+                                        codex_protocol::models::ContentItem::OutputText {
+                                            text,
+                                        } => Some(text),
                                         _ => None,
                                     })
                                 {
@@ -687,16 +726,17 @@ where
                     if !this.cumulative_reasoning.is_empty()
                         && matches!(this.mode, AggregateMode::AggregatedOnly)
                     {
-                        let aggregated_reasoning = crate::models::ResponseItem::Reasoning {
-                            id: String::new(),
-                            summary: Vec::new(),
-                            content: Some(vec![
-                                crate::models::ReasoningItemContent::ReasoningText {
-                                    text: std::mem::take(&mut this.cumulative_reasoning),
-                                },
-                            ]),
-                            encrypted_content: None,
-                        };
+                        let aggregated_reasoning =
+                            codex_protocol::models::ResponseItem::Reasoning {
+                                id: String::new(),
+                                summary: Vec::new(),
+                                content: Some(vec![
+                                    codex_protocol::models::ReasoningItemContent::ReasoningText {
+                                        text: std::mem::take(&mut this.cumulative_reasoning),
+                                    },
+                                ]),
+                                encrypted_content: None,
+                            };
                         this.pending
                             .push_back(ResponseEvent::OutputItemDone(aggregated_reasoning));
                         emitted_any = true;
@@ -708,10 +748,10 @@ where
                     // the streamed deltas into a terminal OutputItemDone so callers
                     // can persist/render the message once per turn.
                     if !this.cumulative.is_empty() {
-                        let aggregated_message = crate::models::ResponseItem::Message {
+                        let aggregated_message = codex_protocol::models::ResponseItem::Message {
                             id: None,
                             role: "assistant".to_string(),
-                            content: vec![crate::models::ContentItem::OutputText {
+                            content: vec![codex_protocol::models::ContentItem::OutputText {
                                 text: std::mem::take(&mut this.cumulative),
                             }],
                         };
@@ -768,6 +808,9 @@ where
                 }
                 Poll::Ready(Some(Ok(ResponseEvent::ReasoningSummaryPartAdded))) => {
                     continue;
+                }
+                Poll::Ready(Some(Ok(ResponseEvent::WebSearchCallBegin { call_id }))) => {
+                    return Poll::Ready(Some(Ok(ResponseEvent::WebSearchCallBegin { call_id })));
                 }
             }
         }

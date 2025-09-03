@@ -159,7 +159,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             codex_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
         }
         Some(Subcommand::Mcp) => {
-            codex_mcp_server::run_main(codex_linux_sandbox_exe).await?;
+            codex_mcp_server::run_main(codex_linux_sandbox_exe, cli.config_overrides).await?;
         }
         Some(Subcommand::Login(mut login_cli)) => {
             prepend_config_flags(&mut login_cli.config_overrides, cli.config_overrides);

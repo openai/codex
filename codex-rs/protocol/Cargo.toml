@@ -11,12 +11,15 @@ path = "src/lib.rs"
 workspace = true
 
 [dependencies]
+base64 = "0.22.1"
 mcp-types = { path = "../mcp-types" }
+mime_guess = "2.0.5"
 serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
 serde_json = "1"
 strum = "0.27.2"
 strum_macros = "0.27.2"
+tracing = "0.1.41"
 ts-rs = { version = "11", features = ["uuid-impl", "serde-json-impl"] }
 uuid = { version = "1", features = ["serde", "v4"] }
 
