@@ -417,6 +417,9 @@ pub enum EventMsg {
     /// Agent text output message
     AgentMessage(AgentMessageEvent),
 
+    /// User/system input message (what was sent to the model)
+    UserMessage(UserMessageEvent),
+
     /// Agent text output delta message
     AgentMessageDelta(AgentMessageDeltaEvent),
 
@@ -608,6 +611,28 @@ impl fmt::Display for FinalOutput {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AgentMessageEvent {
     pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputMessageKind {
+    /// Plain user text (default)
+    Plain,
+    /// XML-wrapped user instructions (<user_instructions>...)
+    UserInstructions,
+    /// XML-wrapped environment context (<environment_context>...)
+    EnvironmentContext,
+    /// Any additional developer-authored instructions
+    DeveloperInstructions,
+    /// System-level instructions
+    SystemInstructions,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct UserMessageEvent {
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<InputMessageKind>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

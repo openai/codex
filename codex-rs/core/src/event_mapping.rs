@@ -2,6 +2,8 @@ use crate::protocol::AgentMessageEvent;
 use crate::protocol::AgentReasoningEvent;
 use crate::protocol::AgentReasoningRawContentEvent;
 use crate::protocol::EventMsg;
+use crate::protocol::InputMessageKind;
+use crate::protocol::UserMessageEvent;
 use crate::protocol::WebSearchEndEvent;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemContent;
@@ -17,13 +19,32 @@ pub(crate) fn map_response_item_to_event_messages(
     show_raw_agent_reasoning: bool,
 ) -> Vec<EventMsg> {
     match item {
-        ResponseItem::Message { content, .. } => {
+        ResponseItem::Message { role, content, .. } => {
             let mut events = Vec::new();
             for content_item in content {
-                if let ContentItem::OutputText { text } = content_item {
-                    events.push(EventMsg::AgentMessage(AgentMessageEvent {
-                        message: text.clone(),
-                    }));
+                match content_item {
+                    ContentItem::OutputText { text } => {
+                        events.push(EventMsg::AgentMessage(AgentMessageEvent {
+                            message: text.clone(),
+                        }));
+                    }
+                    ContentItem::InputText { text } => {
+                        let trimmed = text.trim_start();
+                        let kind = if trimmed.starts_with("<environment_context>") {
+                            Some(InputMessageKind::EnvironmentContext)
+                        } else if trimmed.starts_with("<user_instructions>") {
+                            Some(InputMessageKind::UserInstructions)
+                        } else if role == "system" {
+                            Some(InputMessageKind::SystemInstructions)
+                        } else {
+                            Some(InputMessageKind::Plain)
+                        };
+                        events.push(EventMsg::UserMessage(UserMessageEvent {
+                            message: text.clone(),
+                            kind,
+                        }));
+                    }
+                    _ => {}
                 }
             }
             events
