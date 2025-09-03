@@ -1,4 +1,3 @@
-use crate::config_types::Verbosity as VerbosityConfig;
 use crate::error::Result;
 use crate::model_family::ModelFamily;
 use crate::openai_tools::OpenAiTool;
@@ -6,6 +5,7 @@ use crate::protocol::TokenUsage;
 use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
+use codex_protocol::config_types::Verbosity as VerbosityConfig;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use futures::Stream;
