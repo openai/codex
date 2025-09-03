@@ -111,8 +111,6 @@ pub(crate) struct UserApprovalWidget {
     done: bool,
 }
 
- 
-
 impl UserApprovalWidget {
     pub(crate) fn new(approval_request: ApprovalRequest, app_event_tx: AppEventSender) -> Self {
         let confirmation_prompt = match &approval_request {
