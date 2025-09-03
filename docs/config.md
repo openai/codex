@@ -90,7 +90,7 @@ http_headers = { "X-Example-Header" = "example-value" }
 # This will add the HTTP header `X-Example-Features` with the value of the
 # `EXAMPLE_FEATURES` environment variable to each request to the model provider
 # _if_ the environment variable is set and its value is non-empty.
-env_http_headers = { "X-Example-Features": "EXAMPLE_FEATURES" }
+env_http_headers = { "X-Example-Features" = "EXAMPLE_FEATURES" }
 ```
 
 ### Per-provider network tuning
@@ -611,6 +611,7 @@ Options that are specific to the TUI.
 | `experimental_resume` | string (path) | Resume JSONL path (internal/experimental). |
 | `experimental_instructions_file` | string (path) | Replace built‑in instructions (experimental). |
 | `experimental_use_exec_command_tool` | boolean | Use experimental exec command tool. |
+| `use_experimental_reasoning_summary` | boolean | Use experimental summary for reasoning chain. |
 | `responses_originator_header_internal_override` | string | Override `originator` header value. |
 | `projects.<path>.trust_level` | string | Mark project/worktree as trusted (only `"trusted"` is recognized). |
 | `preferred_auth_method` | `chatgpt` \| `apikey` | Select default auth method (default: `chatgpt`). |

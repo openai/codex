@@ -8,6 +8,8 @@ use base64::Engine;
 use codex_ansi_escape::ansi_escape_line;
 use codex_common::create_config_summary_entries;
 use codex_common::elapsed::format_duration;
+use codex_core::auth::get_auth_file;
+use codex_core::auth::try_read_auth_json;
 use codex_core::config::Config;
 use codex_core::plan_tool::PlanItemArg;
 use codex_core::plan_tool::StepStatus;
@@ -18,8 +20,6 @@ use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TokenUsage;
-use codex_login::get_auth_file;
-use codex_login::try_read_auth_json;
 use codex_protocol::parse_command::ParsedCommand;
 use image::DynamicImage;
 use image::ImageReader;
@@ -1032,7 +1032,7 @@ pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
         "  • No MCP servers configured.".italic().into(),
         Line::from(vec![
             "    See the ".into(),
-            "\u{1b}]8;;https://github.com/openai/codex/blob/main/codex-rs/config.md#mcp_servers\u{7}MCP docs\u{1b}]8;;\u{7}".underlined(),
+            "\u{1b}]8;;https://github.com/openai/codex/blob/main/docs/config.md#mcp_servers\u{7}MCP docs\u{1b}]8;;\u{7}".underlined(),
             " to configure them.".into(),
         ])
         .style(Style::default().add_modifier(Modifier::DIM)),
@@ -1245,6 +1245,44 @@ pub(crate) fn new_reasoning_block(
     lines.push(Line::from("thinking".magenta().italic()));
     append_markdown(&full_reasoning_buffer, &mut lines, config);
     TranscriptOnlyHistoryCell { lines }
+}
+
+pub(crate) fn new_reasoning_summary_block(
+    full_reasoning_buffer: String,
+    config: &Config,
+) -> Vec<Box<dyn HistoryCell>> {
+    if config.use_experimental_reasoning_summary {
+        // Experimental format is following:
+        // ** header **
+        //
+        // reasoning summary
+        //
+        // So we need to strip header from reasoning summary
+        if let Some(open) = full_reasoning_buffer.find("**") {
+            let after_open = &full_reasoning_buffer[(open + 2)..];
+            if let Some(close) = after_open.find("**") {
+                let after_close_idx = open + 2 + close + 2;
+                let header_buffer = full_reasoning_buffer[..after_close_idx].to_string();
+                let summary_buffer = full_reasoning_buffer[after_close_idx..].to_string();
+
+                let mut header_lines: Vec<Line<'static>> = Vec::new();
+                header_lines.push(Line::from("Thinking".magenta().italic()));
+                append_markdown(&header_buffer, &mut header_lines, config);
+
+                let mut summary_lines: Vec<Line<'static>> = Vec::new();
+                summary_lines.push(Line::from("Thinking".magenta().bold()));
+                append_markdown(&summary_buffer, &mut summary_lines, config);
+
+                return vec![
+                    Box::new(TranscriptOnlyHistoryCell {
+                        lines: header_lines,
+                    }),
+                    Box::new(AgentMessageCell::new(summary_lines, true)),
+                ];
+            }
+        }
+    }
+    vec![Box::new(new_reasoning_block(full_reasoning_buffer, config))]
 }
 
 fn output_lines(

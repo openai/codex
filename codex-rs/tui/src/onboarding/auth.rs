@@ -1,7 +1,7 @@
 #![allow(clippy::unwrap_used)]
 
-use codex_login::AuthManager;
-use codex_login::CLIENT_ID;
+use codex_core::AuthManager;
+use codex_core::auth::CLIENT_ID;
 use codex_login::ServerOptions;
 use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
@@ -19,7 +19,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 
-use codex_login::AuthMode;
+use codex_protocol::mcp_protocol::AuthMode;
 use std::sync::RwLock;
 
 use crate::LoginStatus;
