@@ -777,6 +777,14 @@ impl Config {
             .responses_originator_header_internal_override
             .unwrap_or(DEFAULT_RESPONSES_ORIGINATOR_HEADER.to_owned());
 
+        // Merge MCP servers from top-level with any provided by the selected profile.
+        let mut merged_mcp_servers = cfg.mcp_servers.clone();
+        if let Some(profile_servers) = config_profile.mcp_servers.clone() {
+            for (k, v) in profile_servers.into_iter() {
+                merged_mcp_servers.entry(k).or_insert(v);
+            }
+        }
+
         let config = Self {
             model,
             model_family,
@@ -794,7 +802,7 @@ impl Config {
             notify: cfg.notify,
             user_instructions,
             base_instructions,
-            mcp_servers: cfg.mcp_servers,
+            mcp_servers: merged_mcp_servers,
             model_providers,
             project_doc_max_bytes: cfg.project_doc_max_bytes.unwrap_or(PROJECT_DOC_MAX_BYTES),
             codex_home,
@@ -1030,6 +1038,66 @@ exclude_slash_tmp = true
             },
             sandbox_workspace_write_cfg.derive_sandbox_policy(sandbox_mode_override)
         );
+    }
+
+    #[test]
+    fn test_mcp_servers_merge_from_profile() -> std::io::Result<()> {
+        // Build a minimal config TOML with:
+        // - top-level mcp_servers.global
+        // - profile p1 with its own mcp_servers.profile and an overriding mcp_servers.global
+        // Top-level should win on key conflicts.
+        let raw = r#"
+model = "o3"
+
+[mcp_servers.global]
+command = "echo"
+args = ["global"]
+
+[profiles.p1]
+model = "o3"
+
+[profiles.p1.mcp_servers.profile]
+command = "echo"
+args = ["profile"]
+
+[profiles.p1.mcp_servers.global]
+command = "echo"
+args = ["profile-override"]
+"#;
+
+        let cfg: ConfigToml =
+            toml::from_str(raw).expect("TOML deserialization should succeed for test config");
+
+        // Prepare overrides: pick profile p1 and provide a temp cwd.
+        let cwd_temp_dir = TempDir::new().unwrap();
+        let overrides = ConfigOverrides {
+            config_profile: Some("p1".to_string()),
+            cwd: Some(cwd_temp_dir.path().to_path_buf()),
+            ..Default::default()
+        };
+
+        // Provide a temporary CODEX_HOME path.
+        let codex_home = TempDir::new().unwrap();
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            overrides,
+            codex_home.path().to_path_buf(),
+        )?;
+
+        // Expect both entries present, with top-level taking precedence for "global".
+        assert!(config.mcp_servers.contains_key("global"));
+        assert!(config.mcp_servers.contains_key("profile"));
+
+        let global = config.mcp_servers.get("global").unwrap();
+        assert_eq!(global.command, "echo");
+        assert_eq!(global.args, vec!["global".to_string()]);
+
+        let profile = config.mcp_servers.get("profile").unwrap();
+        assert_eq!(profile.command, "echo");
+        assert_eq!(profile.args, vec!["profile".to_string()]);
+
+        Ok(())
     }
 
     struct PrecedenceTestFixture {
