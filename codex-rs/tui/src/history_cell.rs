@@ -436,15 +436,16 @@ impl ExecCell {
             branch_consumed = true;
             lines.push(Line::from(vec![bullet, " ".into(), title.bold()]));
 
-            // Highlight once, then wrap each line using a fixed 4-space
-            // indent for all wrapped pieces. This drops the extra continuation
-            // indent for simplicity while preserving styles.
+            // Highlight once, then wrap each line with subsequent indents
+            // applied by the wrapper. Use `prefix_lines` to add the branch
+            // marker and base left padding.
             let full_hl = highlight_bash_to_lines(&cmd_display);
             for (i, hl_line) in full_hl.iter().enumerate() {
-                let wrapped = crate::insert_history::word_wrap_line(
-                    hl_line,
-                    (width as usize).saturating_sub(4),
-                );
+                let opts = TwOptions::new((width as usize).saturating_sub(4))
+                    .initial_indent("")
+                    .subsequent_indent("    ")
+                    .word_splitter(textwrap::WordSplitter::NoHyphenation);
+                let wrapped = crate::insert_history::word_wrap_line(hl_line, opts);
                 let initial_prefix = if i == 0 {
                     "  └ ".dim()
                 } else {
@@ -573,14 +574,14 @@ fn prefix_lines(
     lines
         .into_iter()
         .enumerate()
-        .map(|(i, mut l)| {
+        .map(|(i, l)| {
             let mut spans = Vec::with_capacity(l.spans.len() + 1);
             spans.push(if i == 0 {
                 initial_prefix.clone()
             } else {
                 subsequent_prefix.clone()
             });
-            spans.extend(l.spans.into_iter());
+            spans.extend(l.spans);
             Line::from(spans)
         })
         .collect()

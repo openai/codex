@@ -302,28 +302,55 @@ where
     // Map wrapped pieces back to byte ranges in `flat` sequentially.
     let mut start_cursor = 0usize;
     let mut out: Vec<Line<'static>> = Vec::with_capacity(wrapped.len());
-    for piece in wrapped {
-        let piece_str: &str = &piece;
+    for (i, piece) in wrapped.into_iter().enumerate() {
+        let mut piece_str: &str = &piece;
+        let indent = if i == 0 {
+            opts.initial_indent
+        } else {
+            opts.subsequent_indent
+        };
+        let mut prefix_spans: Vec<Span<'static>> = Vec::new();
+        if !indent.is_empty() && piece_str.starts_with(indent) {
+            piece_str = &piece_str[indent.len()..];
+            prefix_spans.push(Span {
+                style: ratatui::style::Style::default(),
+                content: std::borrow::Cow::Owned(indent.to_string()),
+            });
+        }
+
         if piece_str.is_empty() {
             out.push(Line {
                 style: line.style,
                 alignment: line.alignment,
-                spans: Vec::new(),
+                spans: prefix_spans,
             });
             continue;
         }
+
         // Find the next occurrence of piece_str at or after start_cursor.
         // textwrap preserves order, so a linear scan is sufficient.
         if let Some(rel) = flat[start_cursor..].find(piece_str) {
             let s = start_cursor + rel;
             let e = s + piece_str.len();
-            out.push(slice_line_spans(line, &span_bounds, s, e));
+            let mut sliced = slice_line_spans(line, &span_bounds, s, e);
+            if !prefix_spans.is_empty() {
+                let mut spans = prefix_spans;
+                spans.extend(sliced.spans.into_iter());
+                sliced.spans = spans;
+            }
+            out.push(sliced);
             start_cursor = e;
         } else {
-            // Fallback: slice by length from cursor.
+            // Fallback: slice by content length from cursor (prefix handled separately).
             let s = start_cursor;
             let e = (start_cursor + piece_str.len()).min(flat.len());
-            out.push(slice_line_spans(line, &span_bounds, s, e));
+            let mut sliced = slice_line_spans(line, &span_bounds, s, e);
+            if !prefix_spans.is_empty() {
+                let mut spans = prefix_spans;
+                spans.extend(sliced.spans.into_iter());
+                sliced.spans = spans;
+            }
+            out.push(sliced);
             start_cursor = e;
         }
     }
