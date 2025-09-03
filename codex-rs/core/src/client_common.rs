@@ -19,7 +19,6 @@ use tokio::sync::mpsc;
 /// with this content.
 const BASE_INSTRUCTIONS: &str = include_str!("../prompt.md");
 
-
 /// API request payload for a single model turn
 #[derive(Default, Debug, Clone)]
 pub struct Prompt {
@@ -64,8 +63,6 @@ impl Prompt {
     pub(crate) fn get_formatted_input(&self) -> Vec<ResponseItem> {
         self.input.clone()
     }
-
-    // keep Prompt impl focused on payload construction for model requests
 }
 
 #[derive(Debug)]
