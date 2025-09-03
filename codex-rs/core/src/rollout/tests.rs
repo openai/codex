@@ -12,6 +12,9 @@ use time::format_description::FormatItem;
 use time::macros::format_description;
 use uuid::Uuid;
 
+use crate::rollout::list::ConversationItem;
+use crate::rollout::list::ConversationsPage;
+use crate::rollout::list::Cursor;
 use crate::rollout::list::get_conversation;
 use crate::rollout::list::get_conversations;
 
@@ -58,29 +61,81 @@ async fn test_list_conversations_latest_first() {
     let temp = TempDir::new().unwrap();
     let home = temp.path();
 
-    for day in 1..=3 {
-        let ts = format!("2025-01-{day:02}T12-00-00");
-        write_session_file(home, &ts, Uuid::new_v4(), 3).unwrap();
-    }
+    // Fixed UUIDs for deterministic expectations
+    let u1 = Uuid::from_u128(1);
+    let u2 = Uuid::from_u128(2);
+    let u3 = Uuid::from_u128(3);
+
+    // Create three sessions across three days
+    write_session_file(home, "2025-01-01T12-00-00", u1, 3).unwrap();
+    write_session_file(home, "2025-01-02T12-00-00", u2, 3).unwrap();
+    write_session_file(home, "2025-01-03T12-00-00", u3, 3).unwrap();
 
     let page = get_conversations(home, 10, None).await.unwrap();
 
-    assert_eq!(page.items.len(), 3);
-    assert!(!page.reached_scan_cap);
-    assert_eq!(page.num_scanned_files, 3);
+    // Build expected objects
+    let p1 = home
+        .join("sessions")
+        .join("2025")
+        .join("01")
+        .join("03")
+        .join(format!("rollout-2025-01-03T12-00-00-{u3}.jsonl"));
+    let p2 = home
+        .join("sessions")
+        .join("2025")
+        .join("01")
+        .join("02")
+        .join(format!("rollout-2025-01-02T12-00-00-{u2}.jsonl"));
+    let p3 = home
+        .join("sessions")
+        .join("2025")
+        .join("01")
+        .join("01")
+        .join(format!("rollout-2025-01-01T12-00-00-{u1}.jsonl"));
 
-    let names: Vec<String> = page
-        .items
-        .iter()
-        .map(|it| it.path.file_name().unwrap().to_string_lossy().to_string())
-        .collect();
-    assert!(names[0].contains("2025-01-03T12-00-00"));
-    assert!(names[1].contains("2025-01-02T12-00-00"));
-    assert!(names[2].contains("2025-01-01T12-00-00"));
+    let head_3 = vec![
+        serde_json::json!({"timestamp": "2025-01-03T12-00-00", "id": u3.to_string()}),
+        serde_json::json!({"record_type": "response", "index": 0}),
+        serde_json::json!({"record_type": "response", "index": 1}),
+        serde_json::json!({"record_type": "response", "index": 2}),
+    ];
+    let head_2 = vec![
+        serde_json::json!({"timestamp": "2025-01-02T12-00-00", "id": u2.to_string()}),
+        serde_json::json!({"record_type": "response", "index": 0}),
+        serde_json::json!({"record_type": "response", "index": 1}),
+        serde_json::json!({"record_type": "response", "index": 2}),
+    ];
+    let head_1 = vec![
+        serde_json::json!({"timestamp": "2025-01-01T12-00-00", "id": u1.to_string()}),
+        serde_json::json!({"record_type": "response", "index": 0}),
+        serde_json::json!({"record_type": "response", "index": 1}),
+        serde_json::json!({"record_type": "response", "index": 2}),
+    ];
 
-    for it in page.items {
-        assert!(!it.head.is_empty() && it.head.len() <= 5);
-    }
+    let expected_cursor: Cursor =
+        serde_json::from_str(&format!("\"2025-01-01T12-00-00|{u1}\"")).unwrap();
+
+    let expected = ConversationsPage {
+        items: vec![
+            ConversationItem {
+                path: p1,
+                head: head_3,
+            },
+            ConversationItem {
+                path: p2,
+                head: head_2,
+            },
+            ConversationItem {
+                path: p3,
+                head: head_1,
+            },
+        ],
+        next_cursor: Some(expected_cursor),
+        num_scanned_files: 3,
+        reached_scan_cap: false,
+    };
+
+    assert_eq!(page, expected);
 }
 
 #[tokio::test]
@@ -88,43 +143,127 @@ async fn test_pagination_cursor() {
     let temp = TempDir::new().unwrap();
     let home = temp.path();
 
-    for i in 0..5 {
-        let ts = format!("2025-03-{:02}T09-00-00", i + 1);
-        write_session_file(home, &ts, Uuid::new_v4(), 1).unwrap();
-    }
+    // Fixed UUIDs for deterministic expectations
+    let u1 = Uuid::from_u128(11);
+    let u2 = Uuid::from_u128(22);
+    let u3 = Uuid::from_u128(33);
+    let u4 = Uuid::from_u128(44);
+    let u5 = Uuid::from_u128(55);
+
+    // Oldest to newest
+    write_session_file(home, "2025-03-01T09-00-00", u1, 1).unwrap();
+    write_session_file(home, "2025-03-02T09-00-00", u2, 1).unwrap();
+    write_session_file(home, "2025-03-03T09-00-00", u3, 1).unwrap();
+    write_session_file(home, "2025-03-04T09-00-00", u4, 1).unwrap();
+    write_session_file(home, "2025-03-05T09-00-00", u5, 1).unwrap();
 
     let page1 = get_conversations(home, 2, None).await.unwrap();
-    assert_eq!(page1.items.len(), 2);
-    let n1: Vec<_> = page1
-        .items
-        .iter()
-        .map(|it| it.path.file_name().unwrap().to_string_lossy().to_string())
-        .collect();
-    assert!(n1[0].contains("2025-03-05T09-00-00"));
-    assert!(n1[1].contains("2025-03-04T09-00-00"));
+    let p5 = home
+        .join("sessions")
+        .join("2025")
+        .join("03")
+        .join("05")
+        .join(format!("rollout-2025-03-05T09-00-00-{u5}.jsonl"));
+    let p4 = home
+        .join("sessions")
+        .join("2025")
+        .join("03")
+        .join("04")
+        .join(format!("rollout-2025-03-04T09-00-00-{u4}.jsonl"));
+    let head_5 = vec![
+        serde_json::json!({"timestamp": "2025-03-05T09-00-00", "id": u5.to_string()}),
+        serde_json::json!({"record_type": "response", "index": 0}),
+    ];
+    let head_4 = vec![
+        serde_json::json!({"timestamp": "2025-03-04T09-00-00", "id": u4.to_string()}),
+        serde_json::json!({"record_type": "response", "index": 0}),
+    ];
+    let expected_cursor1: Cursor =
+        serde_json::from_str(&format!("\"2025-03-04T09-00-00|{u4}\"")).unwrap();
+    let expected_page1 = ConversationsPage {
+        items: vec![
+            ConversationItem {
+                path: p5,
+                head: head_5,
+            },
+            ConversationItem {
+                path: p4,
+                head: head_4,
+            },
+        ],
+        next_cursor: Some(expected_cursor1.clone()),
+        num_scanned_files: 3, // scanned 05, 04, and peeked at 03 before breaking
+        reached_scan_cap: false,
+    };
+    assert_eq!(page1, expected_page1);
 
     let page2 = get_conversations(home, 2, page1.next_cursor.as_ref())
         .await
         .unwrap();
-    assert_eq!(page2.items.len(), 2);
-    let n2: Vec<_> = page2
-        .items
-        .iter()
-        .map(|it| it.path.file_name().unwrap().to_string_lossy().to_string())
-        .collect();
-    assert!(n2[0].contains("2025-03-03T09-00-00"));
-    assert!(n2[1].contains("2025-03-02T09-00-00"));
+    let p3 = home
+        .join("sessions")
+        .join("2025")
+        .join("03")
+        .join("03")
+        .join(format!("rollout-2025-03-03T09-00-00-{u3}.jsonl"));
+    let p2 = home
+        .join("sessions")
+        .join("2025")
+        .join("03")
+        .join("02")
+        .join(format!("rollout-2025-03-02T09-00-00-{u2}.jsonl"));
+    let head_3 = vec![
+        serde_json::json!({"timestamp": "2025-03-03T09-00-00", "id": u3.to_string()}),
+        serde_json::json!({"record_type": "response", "index": 0}),
+    ];
+    let head_2 = vec![
+        serde_json::json!({"timestamp": "2025-03-02T09-00-00", "id": u2.to_string()}),
+        serde_json::json!({"record_type": "response", "index": 0}),
+    ];
+    let expected_cursor2: Cursor =
+        serde_json::from_str(&format!("\"2025-03-02T09-00-00|{u2}\"")).unwrap();
+    let expected_page2 = ConversationsPage {
+        items: vec![
+            ConversationItem {
+                path: p3,
+                head: head_3,
+            },
+            ConversationItem {
+                path: p2,
+                head: head_2,
+            },
+        ],
+        next_cursor: Some(expected_cursor2.clone()),
+        num_scanned_files: 5, // scanned 05, 04 (anchor), 03, 02, and peeked at 01
+        reached_scan_cap: false,
+    };
+    assert_eq!(page2, expected_page2);
 
     let page3 = get_conversations(home, 2, page2.next_cursor.as_ref())
         .await
         .unwrap();
-    assert_eq!(page3.items.len(), 1);
-    let n3: Vec<_> = page3
-        .items
-        .iter()
-        .map(|it| it.path.file_name().unwrap().to_string_lossy().to_string())
-        .collect();
-    assert!(n3[0].contains("2025-03-01T09-00-00"));
+    let p1 = home
+        .join("sessions")
+        .join("2025")
+        .join("03")
+        .join("01")
+        .join(format!("rollout-2025-03-01T09-00-00-{u1}.jsonl"));
+    let head_1 = vec![
+        serde_json::json!({"timestamp": "2025-03-01T09-00-00", "id": u1.to_string()}),
+        serde_json::json!({"record_type": "response", "index": 0}),
+    ];
+    let expected_cursor3: Cursor =
+        serde_json::from_str(&format!("\"2025-03-01T09-00-00|{u1}\"")).unwrap();
+    let expected_page3 = ConversationsPage {
+        items: vec![ConversationItem {
+            path: p1,
+            head: head_1,
+        }],
+        next_cursor: Some(expected_cursor3.clone()),
+        num_scanned_files: 5, // scanned 05, 04 (anchor), 03, 02 (anchor), 01
+        reached_scan_cap: false,
+    };
+    assert_eq!(page3, expected_page3);
 }
 
 #[tokio::test]
@@ -141,10 +280,36 @@ async fn test_get_conversation_contents() {
 
     let content = get_conversation(path).await.unwrap();
 
-    assert!(content.contains("2025-04-01T10-30-00"));
-    assert!(content.contains(&uuid.to_string()));
+    // Page equality (single item)
+    let expected_path = home
+        .join("sessions")
+        .join("2025")
+        .join("04")
+        .join("01")
+        .join(format!("rollout-2025-04-01T10-30-00-{uuid}.jsonl"));
+    let expected_head = vec![
+        serde_json::json!({"timestamp": ts, "id": uuid.to_string()}),
+        serde_json::json!({"record_type": "response", "index": 0}),
+        serde_json::json!({"record_type": "response", "index": 1}),
+    ];
+    let expected_cursor: Cursor = serde_json::from_str(&format!("\"{ts}|{uuid}\"")).unwrap();
+    let expected_page = ConversationsPage {
+        items: vec![ConversationItem {
+            path: expected_path.clone(),
+            head: expected_head,
+        }],
+        next_cursor: Some(expected_cursor),
+        num_scanned_files: 1,
+        reached_scan_cap: false,
+    };
+    assert_eq!(page, expected_page);
 
-    assert_eq!(page.items[0].head.len(), 3);
+    // Entire file contents equality
+    let meta = serde_json::json!({"timestamp": ts, "id": uuid.to_string()});
+    let rec0 = serde_json::json!({"record_type": "response", "index": 0});
+    let rec1 = serde_json::json!({"record_type": "response", "index": 1});
+    let expected_content = format!("{meta}\n{rec0}\n{rec1}\n");
+    assert_eq!(content, expected_content);
 }
 
 #[tokio::test]
@@ -162,23 +327,58 @@ async fn test_stable_ordering_same_second_pagination() {
     write_session_file(home, ts, u3, 0).unwrap();
 
     let page1 = get_conversations(home, 2, None).await.unwrap();
-    let names1: Vec<_> = page1
-        .items
-        .iter()
-        .map(|it| it.path.file_name().unwrap().to_string_lossy().to_string())
-        .collect();
-    assert!(names1[0].contains(&u3.to_string()));
-    assert!(names1[1].contains(&u2.to_string()));
+
+    let p3 = home
+        .join("sessions")
+        .join("2025")
+        .join("07")
+        .join("01")
+        .join(format!("rollout-2025-07-01T00-00-00-{u3}.jsonl"));
+    let p2 = home
+        .join("sessions")
+        .join("2025")
+        .join("07")
+        .join("01")
+        .join(format!("rollout-2025-07-01T00-00-00-{u2}.jsonl"));
+    let head = |u: Uuid| -> Vec<serde_json::Value> {
+        vec![serde_json::json!({"timestamp": ts, "id": u.to_string()})]
+    };
+    let expected_cursor1: Cursor = serde_json::from_str(&format!("\"{ts}|{u2}\"")).unwrap();
+    let expected_page1 = ConversationsPage {
+        items: vec![
+            ConversationItem {
+                path: p3,
+                head: head(u3),
+            },
+            ConversationItem {
+                path: p2,
+                head: head(u2),
+            },
+        ],
+        next_cursor: Some(expected_cursor1.clone()),
+        num_scanned_files: 3, // scanned u3, u2, peeked u1
+        reached_scan_cap: false,
+    };
+    assert_eq!(page1, expected_page1);
 
     let page2 = get_conversations(home, 2, page1.next_cursor.as_ref())
         .await
         .unwrap();
-    assert_eq!(page2.items.len(), 1);
-    let name2 = page2.items[0]
-        .path
-        .file_name()
-        .unwrap()
-        .to_string_lossy()
-        .to_string();
-    assert!(name2.contains(&u1.to_string()));
+    let p1 = home
+        .join("sessions")
+        .join("2025")
+        .join("07")
+        .join("01")
+        .join(format!("rollout-2025-07-01T00-00-00-{u1}.jsonl"));
+    let expected_cursor2: Cursor = serde_json::from_str(&format!("\"{ts}|{u1}\"")).unwrap();
+    let expected_page2 = ConversationsPage {
+        items: vec![ConversationItem {
+            path: p1,
+            head: head(u1),
+        }],
+        next_cursor: Some(expected_cursor2.clone()),
+        num_scanned_files: 3, // scanned u3, u2 (anchor), u1
+        reached_scan_cap: false,
+    };
+    assert_eq!(page2, expected_page2);
 }
