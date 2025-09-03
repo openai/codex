@@ -1,12 +1,14 @@
 use std::io::BufRead;
 use std::path::Path;
+use std::sync::OnceLock;
 use std::time::Duration;
 
+use crate::AuthManager;
 use bytes::Bytes;
-use codex_login::AuthManager;
-use codex_login::AuthMode;
+use codex_protocol::mcp_protocol::AuthMode;
 use eventsource_stream::Eventsource;
 use futures::prelude::*;
+use regex_lite::Regex;
 use reqwest::StatusCode;
 use serde::Deserialize;
 use serde::Serialize;
@@ -53,6 +55,8 @@ struct ErrorResponse {
 #[derive(Debug, Deserialize)]
 struct Error {
     r#type: Option<String>,
+    #[allow(dead_code)]
+    code: Option<String>,
     message: Option<String>,
 
     // Optional fields available on "usage_limit_reached" and "usage_not_included" errors
@@ -564,8 +568,9 @@ async fn process_sse<S>(
                     if let Some(error) = error {
                         match serde_json::from_value::<Error>(error.clone()) {
                             Ok(error) => {
+                                let delay = try_parse_retry_after(&error);
                                 let message = error.message.unwrap_or_default();
-                                response_error = Some(CodexErr::Stream(message, None));
+                                response_error = Some(CodexErr::Stream(message, delay));
                             }
                             Err(e) => {
                                 debug!("failed to parse ErrorResponse: {e}");
@@ -649,6 +654,40 @@ async fn stream_from_fixture(
         provider.stream_idle_timeout(),
     ));
     Ok(ResponseStream { rx_event })
+}
+
+fn rate_limit_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+
+    #[expect(clippy::unwrap_used)]
+    RE.get_or_init(|| Regex::new(r"Please try again in (\d+(?:\.\d+)?)(s|ms)").unwrap())
+}
+
+fn try_parse_retry_after(err: &Error) -> Option<Duration> {
+    if err.code != Some("rate_limit_exceeded".to_string()) {
+        return None;
+    }
+
+    // parse the Please try again in 1.898s format using regex
+    let re = rate_limit_regex();
+    if let Some(message) = &err.message
+        && let Some(captures) = re.captures(message)
+    {
+        let seconds = captures.get(1);
+        let unit = captures.get(2);
+
+        if let (Some(value), Some(unit)) = (seconds, unit) {
+            let value = value.as_str().parse::<f64>().ok()?;
+            let unit = unit.as_str();
+
+            if unit == "s" {
+                return Some(Duration::from_secs_f64(value));
+            } else if unit == "ms" {
+                return Some(Duration::from_millis(value as u64));
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -871,7 +910,7 @@ mod tests {
                     msg,
                     "Rate limit reached for gpt-5 in organization org-AAA on tokens per min (TPM): Limit 30000, Used 22999, Requested 12528. Please try again in 11.054s. Visit https://platform.openai.com/account/rate-limits to learn more."
                 );
-                assert_eq!(*delay, None);
+                assert_eq!(*delay, Some(Duration::from_secs_f64(11.054)));
             }
             other => panic!("unexpected second event: {other:?}"),
         }
@@ -974,5 +1013,32 @@ mod tests {
                 case.name
             );
         }
+    }
+
+    #[test]
+    fn test_try_parse_retry_after() {
+        let err = Error {
+            r#type: None,
+            message: Some("Rate limit reached for gpt-5 in organization org- on tokens per min (TPM): Limit 1, Used 1, Requested 19304. Please try again in 28ms. Visit https://platform.openai.com/account/rate-limits to learn more.".to_string()),
+            code: Some("rate_limit_exceeded".to_string()),
+            plan_type: None,
+            resets_in_seconds: None
+        };
+
+        let delay = try_parse_retry_after(&err);
+        assert_eq!(delay, Some(Duration::from_millis(28)));
+    }
+
+    #[test]
+    fn test_try_parse_retry_after_no_delay() {
+        let err = Error {
+            r#type: None,
+            message: Some("Rate limit reached for gpt-5 in organization <ORG> on tokens per min (TPM): Limit 30000, Used 6899, Requested 24050. Please try again in 1.898s. Visit https://platform.openai.com/account/rate-limits to learn more.".to_string()),
+            code: Some("rate_limit_exceeded".to_string()),
+            plan_type: None,
+            resets_in_seconds: None
+        };
+        let delay = try_parse_retry_after(&err);
+        assert_eq!(delay, Some(Duration::from_secs_f64(1.898)));
     }
 }

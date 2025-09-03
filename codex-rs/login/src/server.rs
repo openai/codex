@@ -5,12 +5,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
 
-use crate::AuthDotJson;
-use crate::get_auth_file;
 use crate::pkce::PkceCodes;
 use crate::pkce::generate_pkce;
 use base64::Engine;
 use chrono::Utc;
+use codex_core::auth::AuthDotJson;
+use codex_core::auth::get_auth_file;
+use codex_core::token_data::TokenData;
+use codex_core::token_data::parse_id_token;
 use rand::RngCore;
 use tiny_http::Header;
 use tiny_http::Request;
@@ -374,10 +376,8 @@ async fn persist_tokens_async(
         if let Some(key) = api_key {
             auth.openai_api_key = Some(key);
         }
-        let tokens = auth
-            .tokens
-            .get_or_insert_with(crate::token_data::TokenData::default);
-        tokens.id_token = crate::token_data::parse_id_token(&id_token).map_err(io::Error::other)?;
+        let tokens = auth.tokens.get_or_insert_with(TokenData::default);
+        tokens.id_token = parse_id_token(&id_token).map_err(io::Error::other)?;
         // Persist chatgpt_account_id if present in claims
         if let Some(acc) = jwt_auth_claims(&id_token)
             .get("chatgpt_account_id")
@@ -392,14 +392,14 @@ async fn persist_tokens_async(
             tokens.refresh_token = rt;
         }
         auth.last_refresh = Some(Utc::now());
-        super::write_auth_json(&auth_file, &auth)
+        codex_core::auth::write_auth_json(&auth_file, &auth)
     })
     .await
     .map_err(|e| io::Error::other(format!("persist task failed: {e}")))?
 }
 
 fn read_or_default(path: &Path) -> AuthDotJson {
-    match super::try_read_auth_json(path) {
+    match codex_core::auth::try_read_auth_json(path) {
         Ok(auth) => auth,
         Err(_) => AuthDotJson {
             openai_api_key: None,
