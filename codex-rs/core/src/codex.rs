@@ -75,9 +75,7 @@ use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageDeltaEvent;
 use crate::protocol::AgentMessageEvent;
 use crate::protocol::AgentReasoningDeltaEvent;
-use crate::protocol::AgentReasoningEvent;
 use crate::protocol::AgentReasoningRawContentDeltaEvent;
-use crate::protocol::AgentReasoningRawContentEvent;
 use crate::protocol::AgentReasoningSectionBreakEvent;
 use crate::protocol::ApplyPatchApprovalRequestEvent;
 use crate::protocol::AskForApproval;
@@ -102,7 +100,6 @@ use crate::protocol::Submission;
 use crate::protocol::TaskCompleteEvent;
 use crate::protocol::TurnDiffEvent;
 use crate::protocol::WebSearchBeginEvent;
-use crate::protocol::WebSearchEndEvent;
 use crate::rollout::RolloutRecorder;
 use crate::safety::SafetyCheck;
 use crate::safety::assess_command_safety;
@@ -117,12 +114,9 @@ use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::LocalShellAction;
-use codex_protocol::models::ReasoningItemContent;
-use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::ShellToolCallParams;
-use codex_protocol::models::WebSearchAction;
 
 // A convenience extension trait for acquiring mutex locks where poisoning is
 // unrecoverable and should abort the program. This avoids scattered `.unwrap()`
@@ -1903,53 +1897,6 @@ async fn handle_response_item(
 ) -> CodexResult<Option<ResponseInputItem>> {
     debug!(?item, "Output item");
     let output = match item {
-        ResponseItem::Message { content, .. } => {
-            for item in content {
-                if let ContentItem::OutputText { text } = item {
-                    let event = Event {
-                        id: sub_id.to_string(),
-                        msg: EventMsg::AgentMessage(AgentMessageEvent { message: text }),
-                    };
-                    sess.tx_event.send(event).await.ok();
-                }
-            }
-            None
-        }
-        ResponseItem::Reasoning {
-            id: _,
-            summary,
-            content,
-            encrypted_content: _,
-        } => {
-            for item in summary {
-                let text = match item {
-                    ReasoningItemReasoningSummary::SummaryText { text } => text,
-                };
-                let event = Event {
-                    id: sub_id.to_string(),
-                    msg: EventMsg::AgentReasoning(AgentReasoningEvent { text }),
-                };
-                sess.tx_event.send(event).await.ok();
-            }
-            if sess.show_raw_agent_reasoning
-                && let Some(content) = content
-            {
-                for item in content {
-                    let text = match item {
-                        ReasoningItemContent::ReasoningText { text } => text,
-                        ReasoningItemContent::Text { text } => text,
-                    };
-                    let event = Event {
-                        id: sub_id.to_string(),
-                        msg: EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent {
-                            text,
-                        }),
-                    };
-                    sess.tx_event.send(event).await.ok();
-                }
-            }
-            None
-        }
         ResponseItem::FunctionCall {
             name,
             arguments,
@@ -2039,12 +1986,19 @@ async fn handle_response_item(
             debug!("unexpected CustomToolCallOutput from stream");
             None
         }
-        ResponseItem::WebSearchCall { id, action, .. } => {
-            if let WebSearchAction::Search { query } = action {
-                let call_id = id.unwrap_or_else(|| "".to_string());
+        // Display-only items → convert to EventMsg explicitly
+        ResponseItem::Message { .. }
+        | ResponseItem::Reasoning { .. }
+        | ResponseItem::WebSearchCall { .. } => {
+            let msgs: Vec<EventMsg> = (&item).into();
+            let mut msgs = msgs;
+            if !sess.show_raw_agent_reasoning {
+                msgs.retain(|m| !matches!(m, EventMsg::AgentReasoningRawContent(_)));
+            }
+            for msg in msgs {
                 let event = Event {
                     id: sub_id.to_string(),
-                    msg: EventMsg::WebSearchEnd(WebSearchEndEvent { call_id, query }),
+                    msg,
                 };
                 sess.tx_event.send(event).await.ok();
             }
