@@ -132,6 +132,42 @@ impl RolloutRecorder {
         Ok(Self { tx })
     }
 
+    pub(crate) async fn record_items(&self, items: &[ResponseItem]) -> std::io::Result<()> {
+        let mut filtered = Vec::new();
+        for item in items {
+            match item {
+                // Note that function calls may look a bit strange if they are
+                // "fully qualified MCP tool calls," so we could consider
+                // reformatting them in that case.
+                ResponseItem::Message { .. }
+                | ResponseItem::LocalShellCall { .. }
+                | ResponseItem::FunctionCall { .. }
+                | ResponseItem::FunctionCallOutput { .. }
+                | ResponseItem::CustomToolCall { .. }
+                | ResponseItem::CustomToolCallOutput { .. }
+                | ResponseItem::Reasoning { .. } => filtered.push(item.clone()),
+                ResponseItem::WebSearchCall { .. } | ResponseItem::Other => {
+                    // These should never be serialized.
+                    continue;
+                }
+            }
+        }
+        if filtered.is_empty() {
+            return Ok(());
+        }
+        self.tx
+            .send(RolloutCmd::AddItems(filtered))
+            .await
+            .map_err(|e| IoError::other(format!("failed to queue rollout items: {e}")))
+    }
+
+    pub(crate) async fn record_state(&self, state: SessionStateSnapshot) -> std::io::Result<()> {
+        self.tx
+            .send(RolloutCmd::UpdateState(state))
+            .await
+            .map_err(|e| IoError::other(format!("failed to queue rollout state: {e}")))
+    }
+
     pub async fn get_rollout_history(path: &Path) -> std::io::Result<InitialHistory> {
         info!("Resuming rollout from {path:?}");
         let text = tokio::fs::read_to_string(path).await?;
@@ -195,44 +231,7 @@ impl RolloutRecorder {
             }
         }
     }
-
-    pub(crate) async fn record_items(&self, items: &[ResponseItem]) -> std::io::Result<()> {
-        let mut filtered = Vec::new();
-        for item in items {
-            match item {
-                // Note that function calls may look a bit strange if they are
-                // "fully qualified MCP tool calls," so we could consider
-                // reformatting them in that case.
-                ResponseItem::Message { .. }
-                | ResponseItem::LocalShellCall { .. }
-                | ResponseItem::FunctionCall { .. }
-                | ResponseItem::FunctionCallOutput { .. }
-                | ResponseItem::CustomToolCall { .. }
-                | ResponseItem::CustomToolCallOutput { .. }
-                | ResponseItem::Reasoning { .. } => filtered.push(item.clone()),
-                ResponseItem::WebSearchCall { .. } | ResponseItem::Other => {
-                    // These should never be serialized.
-                    continue;
-                }
-            }
-        }
-        if filtered.is_empty() {
-            return Ok(());
-        }
-        self.tx
-            .send(RolloutCmd::AddItems(filtered))
-            .await
-            .map_err(|e| IoError::other(format!("failed to queue rollout items: {e}")))
-    }
-
-    pub(crate) async fn record_state(&self, state: SessionStateSnapshot) -> std::io::Result<()> {
-        self.tx
-            .send(RolloutCmd::UpdateState(state))
-            .await
-            .map_err(|e| IoError::other(format!("failed to queue rollout state: {e}")))
-    }
 }
-
 struct LogFileInfo {
     /// Opened file handle to the rollout file.
     file: File,
