@@ -41,10 +41,10 @@ use codex_protocol::mcp_protocol::AuthStatusChangeNotification;
 use codex_protocol::mcp_protocol::ClientRequest;
 use codex_protocol::mcp_protocol::ConversationId;
 use codex_protocol::mcp_protocol::EXEC_COMMAND_APPROVAL_METHOD;
-use codex_protocol::mcp_protocol::ExecArbitraryCommandParams;
 use codex_protocol::mcp_protocol::ExecArbitraryCommandResponse;
 use codex_protocol::mcp_protocol::ExecCommandApprovalParams;
 use codex_protocol::mcp_protocol::ExecCommandApprovalResponse;
+use codex_protocol::mcp_protocol::ExecOneOffCommandParams;
 use codex_protocol::mcp_protocol::GetConfigTomlResponse;
 use codex_protocol::mcp_protocol::GitDiffToRemoteResponse;
 use codex_protocol::mcp_protocol::InputItem as WireInputItem;
@@ -156,8 +156,8 @@ impl CodexMessageProcessor {
             ClientRequest::GetConfigToml { request_id } => {
                 self.get_config_toml(request_id).await;
             }
-            ClientRequest::ExecArbitraryCommand { request_id, params } => {
-                self.exec_arbitrary_command(request_id, params).await;
+            ClientRequest::ExecOneOffCommand { request_id, params } => {
+                self.exec_one_off_command(request_id, params).await;
             }
         }
     }
@@ -423,11 +423,7 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
-    async fn exec_arbitrary_command(
-        &self,
-        request_id: RequestId,
-        params: ExecArbitraryCommandParams,
-    ) {
+    async fn exec_one_off_command(&self, request_id: RequestId, params: ExecOneOffCommandParams) {
         tracing::debug!("execArbitraryCommand params: {params:?}");
 
         if params.command.is_empty() {
@@ -442,10 +438,11 @@ impl CodexMessageProcessor {
 
         let cwd = params.cwd.unwrap_or_else(|| self.config.cwd.clone());
         let env = create_env(&self.config.shell_environment_policy);
+        let timeout_ms = params.timeout_ms;
         let exec_params = ExecParams {
             command: params.command,
             cwd,
-            timeout_ms: None,
+            timeout_ms,
             env,
             with_escalated_permissions: None,
             justification: None,
@@ -453,44 +450,47 @@ impl CodexMessageProcessor {
 
         let effective_policy = params
             .sandbox_policy
-            .as_ref()
-            .unwrap_or(&self.config.sandbox_policy);
+            .unwrap_or_else(|| self.config.sandbox_policy.clone());
 
-        let sandbox_type = match effective_policy {
+        let sandbox_type = match &effective_policy {
             codex_core::protocol::SandboxPolicy::DangerFullAccess => {
                 codex_core::exec::SandboxType::None
             }
             _ => get_platform_sandbox().unwrap_or(codex_core::exec::SandboxType::None),
         };
         tracing::debug!("Sandbox type: {sandbox_type:?}");
-        let codex_linux_sandbox_exe = &self.config.codex_linux_sandbox_exe;
+        let codex_linux_sandbox_exe = self.config.codex_linux_sandbox_exe.clone();
+        let outgoing = self.outgoing.clone();
+        let req_id = request_id;
 
-        match codex_core::exec::process_exec_tool_call(
-            exec_params,
-            sandbox_type,
-            effective_policy,
-            codex_linux_sandbox_exe,
-            None,
-        )
-        .await
-        {
-            Ok(output) => {
-                let response = ExecArbitraryCommandResponse {
-                    exit_code: output.exit_code,
-                    stdout: output.stdout.text,
-                    stderr: output.stderr.text,
-                };
-                self.outgoing.send_response(request_id, response).await;
+        tokio::spawn(async move {
+            match codex_core::exec::process_exec_tool_call(
+                exec_params,
+                sandbox_type,
+                &effective_policy,
+                &codex_linux_sandbox_exe,
+                None,
+            )
+            .await
+            {
+                Ok(output) => {
+                    let response = ExecArbitraryCommandResponse {
+                        exit_code: output.exit_code,
+                        stdout: output.stdout.text,
+                        stderr: output.stderr.text,
+                    };
+                    outgoing.send_response(req_id, response).await;
+                }
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!("exec failed: {err}"),
+                        data: None,
+                    };
+                    outgoing.send_error(req_id, error).await;
+                }
             }
-            Err(err) => {
-                let error = JSONRPCErrorError {
-                    code: INTERNAL_ERROR_CODE,
-                    message: format!("exec failed: {err}"),
-                    data: None,
-                };
-                self.outgoing.send_error(request_id, error).await;
-            }
-        }
+        });
     }
 
     async fn process_new_conversation(&self, request_id: RequestId, params: NewConversationParams) {

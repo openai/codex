@@ -106,11 +106,11 @@ pub enum ClientRequest {
         #[serde(rename = "id")]
         request_id: RequestId,
     },
-    /// Execute an arbitrary command (argv vector) under the server's sandbox.
-    ExecArbitraryCommand {
+    /// Execute a command (argv vector) under the server's sandbox.
+    ExecOneOffCommand {
         #[serde(rename = "id")]
         request_id: RequestId,
-        params: ExecArbitraryCommandParams,
+        params: ExecOneOffCommandParams,
     },
 }
 
@@ -226,9 +226,13 @@ pub struct GetAuthStatusParams {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ExecArbitraryCommandParams {
+pub struct ExecOneOffCommandParams {
     /// Command argv to execute.
     pub command: Vec<String>,
+    /// Timeout of the command in milliseconds.
+    /// If not specified, a sensible default is used server-side.
+    #[serde(alias = "timeout")]
+    pub timeout_ms: Option<u64>,
     /// Optional working directory for the process. Defaults to server config cwd.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathBuf>,
