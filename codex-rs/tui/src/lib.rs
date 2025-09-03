@@ -47,6 +47,7 @@ mod markdown_stream;
 pub mod onboarding;
 mod pager_overlay;
 mod render;
+mod resume_picker;
 mod session_log;
 mod shimmer;
 mod slash_command;
@@ -299,7 +300,12 @@ async fn run_ratatui_app(
     // Initialize high-fidelity session event logging if enabled.
     session_log::maybe_init(&config);
 
-    let Cli { prompt, images, .. } = cli;
+    let Cli {
+        prompt,
+        images,
+        resume,
+        ..
+    } = cli;
 
     let auth_manager = AuthManager::shared(
         config.codex_home.clone(),
@@ -327,7 +333,21 @@ async fn run_ratatui_app(
         }
     }
 
-    let app_result = App::run(&mut tui, auth_manager, config, prompt, images).await;
+    let resume_selection = if resume {
+        resume_picker::run_resume_picker(&mut tui, &config.codex_home).await?
+    } else {
+        resume_picker::ResumeSelection::StartFresh
+    };
+
+    let app_result = App::run(
+        &mut tui,
+        auth_manager,
+        config,
+        prompt,
+        images,
+        resume_selection,
+    )
+    .await;
 
     restore();
     // Mark the end of the recorded session.

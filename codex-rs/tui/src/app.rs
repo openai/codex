@@ -3,6 +3,7 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::chatwidget::ChatWidget;
 use crate::file_search::FileSearchManager;
+use crate::resume_picker::ResumeSelection;
 use crate::pager_overlay::Overlay;
 use crate::tui;
 use crate::tui::TuiEvent;
@@ -12,6 +13,7 @@ use codex_core::ConversationManager;
 use codex_core::config::Config;
 use codex_core::protocol::TokenUsage;
 use color_eyre::eyre::Result;
+use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -61,6 +63,7 @@ impl App {
         config: Config,
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
+        resume_selection: ResumeSelection,
     ) -> Result<TokenUsage> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
@@ -70,15 +73,37 @@ impl App {
 
         let enhanced_keys_supported = supports_keyboard_enhancement().unwrap_or(false);
 
-        let chat_widget = ChatWidget::new(
-            config.clone(),
-            conversation_manager.clone(),
-            tui.frame_requester(),
-            app_event_tx.clone(),
-            initial_prompt,
-            initial_images,
-            enhanced_keys_supported,
-        );
+        let chat_widget = match resume_selection {
+            ResumeSelection::StartFresh => ChatWidget::new(
+                config.clone(),
+                conversation_manager.clone(),
+                tui.frame_requester(),
+                app_event_tx.clone(),
+                initial_prompt.clone(),
+                initial_images.clone(),
+                enhanced_keys_supported,
+            ),
+            ResumeSelection::Resume(path) => {
+                let resumed = conversation_manager
+                    .resume_conversation_from_rollout(
+                        config.clone(),
+                        path.clone(),
+                        auth_manager.clone(),
+                    )
+                    .await
+                    .wrap_err_with(|| format!("Failed to resume session from {}", path.display()))?;
+                ChatWidget::new_from_existing(
+                    config.clone(),
+                    resumed.conversation,
+                    resumed.session_configured,
+                    tui.frame_requester(),
+                    app_event_tx.clone(),
+                    enhanced_keys_supported,
+                    initial_prompt.clone(),
+                    initial_images.clone(),
+                )
+            }
+        };
 
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
 

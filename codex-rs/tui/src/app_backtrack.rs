@@ -326,6 +326,8 @@ impl App {
             tui.frame_requester(),
             self.app_event_tx.clone(),
             self.enhanced_keys_supported,
+            None,
+            Vec::new(),
         );
         // Trim transcript up to the selected user message and re-render it.
         self.trim_transcript_for_backtrack(drop_count);

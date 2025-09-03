@@ -13,6 +13,10 @@ pub struct Cli {
     #[arg(long = "image", short = 'i', value_name = "FILE", value_delimiter = ',', num_args = 1..)]
     pub images: Vec<PathBuf>,
 
+    /// Open a picker to resume a previous session recorded on disk instead of starting a new one.
+    #[arg(long = "resume", short = 'r', default_value_t = false)]
+    pub resume: bool,
+
     /// Model the agent should use.
     #[arg(long, short = 'm')]
     pub model: Option<String>,

@@ -19,6 +19,7 @@ use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::InputItem;
+use codex_core::protocol::InputMessageKind;
 use codex_core::protocol::ListCustomPromptsResponseEvent;
 use codex_core::protocol::McpListToolsResponseEvent;
 use codex_core::protocol::McpToolCallBeginEvent;
@@ -30,6 +31,7 @@ use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnDiffEvent;
+use codex_core::protocol::UserMessageEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_protocol::parse_command::ParsedCommand;
@@ -148,6 +150,10 @@ impl ChatWidget {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.session_id = Some(event.session_id);
+        let initial_messages = event.initial_messages.clone();
+        if let Some(messages) = initial_messages {
+            self.replay_initial_messages(messages);
+        }
         self.add_to_history(history_cell::new_session_info(
             &self.config,
             event,
@@ -654,6 +660,8 @@ impl ChatWidget {
         frame_requester: FrameRequester,
         app_event_tx: AppEventSender,
         enhanced_keys_supported: bool,
+        initial_prompt: Option<String>,
+        initial_images: Vec<PathBuf>,
     ) -> Self {
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
@@ -675,7 +683,10 @@ impl ChatWidget {
             }),
             active_exec_cell: None,
             config: config.clone(),
-            initial_user_message: None,
+            initial_user_message: create_initial_user_message(
+                initial_prompt.unwrap_or_default(),
+                initial_images,
+            ),
             total_token_usage: TokenUsage::default(),
             last_token_usage: TokenUsage::default(),
             stream: StreamController::new(config),
@@ -950,9 +961,21 @@ impl ChatWidget {
         }
     }
 
+    fn replay_initial_messages(&mut self, events: Vec<EventMsg>) {
+        for msg in events {
+            if matches!(msg, EventMsg::SessionConfigured(_)) {
+                continue;
+            }
+            self.dispatch_event_msg(String::new(), msg, true);
+        }
+    }
+
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
         let Event { id, msg } = event;
+        self.dispatch_event_msg(id, msg, false);
+    }
 
+    fn dispatch_event_msg(&mut self, id: String, msg: EventMsg, from_replay: bool) {
         match msg {
             EventMsg::AgentMessageDelta(_)
             | EventMsg::AgentReasoningDelta(_)
@@ -1010,13 +1033,29 @@ impl ChatWidget {
                 self.on_background_event(message)
             }
             EventMsg::StreamError(StreamErrorEvent { message }) => self.on_stream_error(message),
-            EventMsg::UserMessage(..) => {}
+            EventMsg::UserMessage(ev) => {
+                if from_replay {
+                    self.on_user_message_event(ev);
+                }
+            }
             EventMsg::ConversationHistory(ev) => {
-                // Forward to App so it can process backtrack flows.
                 self.app_event_tx
                     .send(crate::app_event::AppEvent::ConversationHistory(ev));
             }
         }
+    }
+
+    fn on_user_message_event(&mut self, event: UserMessageEvent) {
+        match event.kind {
+            Some(InputMessageKind::EnvironmentContext) | Some(InputMessageKind::UserInstructions) => {
+                return;
+            }
+            _ => {}
+        }
+        if event.message.trim().is_empty() {
+            return;
+        }
+        self.add_to_history(history_cell::new_user_prompt(event.message));
     }
 
     fn request_redraw(&mut self) {
