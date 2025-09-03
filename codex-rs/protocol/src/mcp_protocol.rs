@@ -106,6 +106,12 @@ pub enum ClientRequest {
         #[serde(rename = "id")]
         request_id: RequestId,
     },
+    /// Execute an arbitrary command (argv vector) under the server's sandbox.
+    ExecArbitraryCommand {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: ExecArbitraryCommandParams,
+    },
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, TS)]
@@ -216,6 +222,27 @@ pub struct GetAuthStatusParams {
     /// If true, attempt to refresh the token before returning status.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refresh_token: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecArbitraryCommandParams {
+    /// Command argv to execute.
+    pub command: Vec<String>,
+    /// Optional working directory for the process. Defaults to server config cwd.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<PathBuf>,
+    /// Optional explicit sandbox policy overriding the server default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sandbox_policy: Option<SandboxPolicy>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecArbitraryCommandResponse {
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
