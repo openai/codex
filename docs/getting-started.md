@@ -48,7 +48,7 @@ You can give Codex extra instructions and guidance using `AGENTS.md` files. Code
 2. `AGENTS.md` at repo root - shared project notes
 3. `AGENTS.md` in the current working directory - sub-folder/feature specifics
 
-For more information on how to use AGENTS.md, see the [official AGENTS.md documentation](./agents.md).
+For more information on how to use AGENTS.md, see the [official AGENTS.md documentation](https://agents.md/).
 
 ### Tips & shortcuts
 

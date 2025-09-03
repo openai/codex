@@ -236,6 +236,28 @@ mod tests {
     }
 
     #[test]
+    fn bash_cd_then_bar_is_same_as_bar() {
+        // Ensure a leading `cd` inside bash -lc is dropped when followed by another command.
+        assert_parsed(
+            &shlex_split_safe("bash -lc 'cd foo && bar'"),
+            vec![ParsedCommand::Unknown {
+                cmd: "bar".to_string(),
+            }],
+        );
+    }
+
+    #[test]
+    fn bash_cd_then_cat_is_read() {
+        assert_parsed(
+            &shlex_split_safe("bash -lc 'cd foo && cat foo.txt'"),
+            vec![ParsedCommand::Read {
+                cmd: "cat foo.txt".to_string(),
+                name: "foo.txt".to_string(),
+            }],
+        );
+    }
+
+    #[test]
     fn supports_ls_with_pipe() {
         let inner = "ls -la | sed -n '1,120p'";
         assert_parsed(
@@ -1149,6 +1171,10 @@ fn parse_bash_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
             .collect();
         if commands.len() > 1 {
             commands.retain(|pc| !matches!(pc, ParsedCommand::Unknown { cmd } if cmd == "true"));
+            // Apply the same simplifications used for non-bash parsing, e.g., drop leading `cd`.
+            while let Some(next) = simplify_once(&commands) {
+                commands = next;
+            }
         }
         if commands.len() == 1 {
             // If we reduced to a single command, attribute the full original script
