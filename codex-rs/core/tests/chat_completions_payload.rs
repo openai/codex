@@ -1,10 +1,16 @@
 use std::sync::Arc;
 
+use codex_core::ContentItem;
+use codex_core::LocalShellAction;
+use codex_core::LocalShellExecAction;
+use codex_core::LocalShellStatus;
+use codex_core::ModelClient;
+use codex_core::ModelProviderInfo;
+use codex_core::Prompt;
+use codex_core::ReasoningItemContent;
+use codex_core::ResponseItem;
+use codex_core::WireApi;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
-use codex_core::{
-    ContentItem, LocalShellAction, LocalShellExecAction, LocalShellStatus, ModelClient,
-    ModelProviderInfo, Prompt, ReasoningItemContent, ResponseItem, WireApi,
-};
 use core_test_support::load_default_config_for_test;
 use futures::StreamExt;
 use serde_json::Value;
