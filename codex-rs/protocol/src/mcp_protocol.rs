@@ -231,8 +231,7 @@ pub struct ExecOneOffCommandParams {
     pub command: Vec<String>,
     /// Timeout of the command in milliseconds.
     /// If not specified, a sensible default is used server-side.
-    #[serde(alias = "timeout")]
-    pub timeout_ms: Option<u64>,
+    pub timeout: Option<u64>,
     /// Optional working directory for the process. Defaults to server config cwd.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cwd: Option<PathBuf>,
