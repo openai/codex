@@ -210,6 +210,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     assert_eq!(request_body["input"], expected_input);
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn includes_session_id_and_model_headers_in_request() {
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
