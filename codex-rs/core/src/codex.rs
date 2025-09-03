@@ -451,7 +451,6 @@ impl Session {
             tools_config: ToolsConfig::new(&ToolsConfigParams {
                 model_family: &config.model_family,
                 approval_policy,
-                sandbox_policy: sandbox_policy.clone(),
                 include_plan_tool: config.include_plan_tool,
                 include_apply_patch_tool: config.include_apply_patch_tool,
                 include_web_search_request: config.tools_web_search_request,
@@ -1072,7 +1071,6 @@ async fn submission_loop(
                 let tools_config = ToolsConfig::new(&ToolsConfigParams {
                     model_family: &effective_family,
                     approval_policy: new_approval_policy,
-                    sandbox_policy: new_sandbox_policy.clone(),
                     include_plan_tool: config.include_plan_tool,
                     include_apply_patch_tool: config.include_apply_patch_tool,
                     include_web_search_request: config.tools_web_search_request,
@@ -1094,25 +1092,18 @@ async fn submission_loop(
 
                 // Install the new persistent context for subsequent tasks/turns.
                 turn_context = Arc::new(new_turn_context);
-                if cwd.is_some() || approval_policy.is_some() || sandbox_policy.is_some() {
-                    sess.record_conversation_items(&[ResponseItem::from(EnvironmentContext::new(
-                        cwd,
-                        approval_policy,
-                        sandbox_policy,
-                        // Shell is not configurable from turn to turn
-                        None,
-                    ))])
-                    .await;
-                }
             }
             Op::UserInput { items } => {
-                // attempt to inject input into current task
-                if let Err(items) = sess.inject_input(items) {
-                    // no current task, spawn a new one
-                    let task =
-                        AgentTask::spawn(sess.clone(), Arc::clone(&turn_context), sub.id, items);
-                    sess.set_task(task);
-                }
+                submit_user_input(
+                    turn_context.cwd.clone(),
+                    turn_context.approval_policy,
+                    turn_context.sandbox_policy.clone(),
+                    &sess,
+                    &turn_context,
+                    sub.id.clone(),
+                    items,
+                )
+                .await;
             }
             Op::UserTurn {
                 items,
@@ -1157,7 +1148,6 @@ async fn submission_loop(
                         tools_config: ToolsConfig::new(&ToolsConfigParams {
                             model_family: &model_family,
                             approval_policy,
-                            sandbox_policy: sandbox_policy.clone(),
                             include_plan_tool: config.include_plan_tool,
                             include_apply_patch_tool: config.include_apply_patch_tool,
                             include_web_search_request: config.tools_web_search_request,
@@ -1173,11 +1163,16 @@ async fn submission_loop(
                         cwd,
                         disable_response_storage: turn_context.disable_response_storage,
                     };
-                    // TODO: record the new environment context in the conversation history
-                    // no current task, spawn a new one with the per‑turn context
-                    let task =
-                        AgentTask::spawn(sess.clone(), Arc::new(fresh_turn_context), sub.id, items);
-                    sess.set_task(task);
+                    submit_user_input(
+                        fresh_turn_context.cwd.clone(),
+                        fresh_turn_context.approval_policy,
+                        fresh_turn_context.sandbox_policy.clone(),
+                        &sess,
+                        &Arc::new(fresh_turn_context),
+                        sub.id.clone(),
+                        items,
+                    )
+                    .await;
                 }
             }
             Op::ExecApproval { id, decision } => match decision {
@@ -2682,6 +2677,30 @@ async fn handle_sandbox_error(
                 },
             }
         }
+    }
+}
+
+async fn submit_user_input(
+    cwd: PathBuf,
+    approval_policy: AskForApproval,
+    sandbox_policy: SandboxPolicy,
+    sess: &Arc<Session>,
+    turn_context: &Arc<TurnContext>,
+    sub_id: String,
+    items: Vec<InputItem>,
+) {
+    sess.record_conversation_items(&[ResponseItem::from(EnvironmentContext::new(
+        Some(cwd),
+        Some(approval_policy),
+        Some(sandbox_policy),
+        // Shell is not configurable from turn to turn
+        None,
+    ))])
+    .await;
+    if let Err(items) = sess.inject_input(items) {
+        // no current task, spawn a new one
+        let task = AgentTask::spawn(Arc::clone(sess), Arc::clone(turn_context), sub_id, items);
+        sess.set_task(task);
     }
 }
 

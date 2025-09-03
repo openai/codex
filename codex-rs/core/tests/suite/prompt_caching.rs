@@ -271,7 +271,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
 
     let shell = default_user_shell().await;
 
-    let expected_env_text = format!(
+    let expected_env_text_init = format!(
         r#"<environment_context>
   <cwd>{}</cwd>
   <approval_policy>on-request</approval_policy>
@@ -284,14 +284,30 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
             None => String::new(),
         }
     );
+    // Per-turn environment context omits the shell tag.
+    let expected_env_text_turn = format!(
+        r#"<environment_context>
+  <cwd>{}</cwd>
+  <approval_policy>on-request</approval_policy>
+  <sandbox_mode>read-only</sandbox_mode>
+  <network_access>restricted</network_access>
+</environment_context>"#,
+        cwd.path().to_string_lossy(),
+    );
     let expected_ui_text =
         "<user_instructions>\n\nbe consistent and helpful\n\n</user_instructions>";
 
-    let expected_env_msg = serde_json::json!({
+    let expected_env_msg_init = serde_json::json!({
         "type": "message",
         "id": serde_json::Value::Null,
         "role": "user",
-        "content": [ { "type": "input_text", "text": expected_env_text } ]
+        "content": [ { "type": "input_text", "text": expected_env_text_init } ]
+    });
+    let expected_env_msg_turn = serde_json::json!({
+        "type": "message",
+        "id": serde_json::Value::Null,
+        "role": "user",
+        "content": [ { "type": "input_text", "text": expected_env_text_turn } ]
     });
     let expected_ui_msg = serde_json::json!({
         "type": "message",
@@ -309,7 +325,12 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
     let body1 = requests[0].body_json::<serde_json::Value>().unwrap();
     assert_eq!(
         body1["input"],
-        serde_json::json!([expected_ui_msg, expected_env_msg, expected_user_message_1])
+        serde_json::json!([
+            expected_ui_msg,
+            expected_env_msg_init,
+            expected_env_msg_turn,
+            expected_user_message_1
+        ])
     );
 
     let expected_user_message_2 = serde_json::json!({
@@ -431,11 +452,15 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() {
     // After overriding the turn context, the environment context should be emitted again
     // reflecting the new approval policy and sandbox settings. Omit cwd because it did
     // not change.
-    let expected_env_text_2 = r#"<environment_context>
+    let expected_env_text_2 = format!(
+        r#"<environment_context>
+  <cwd>{}</cwd>
   <approval_policy>never</approval_policy>
   <sandbox_mode>workspace-write</sandbox_mode>
   <network_access>enabled</network_access>
-</environment_context>"#;
+</environment_context>"#,
+        cwd.path().to_string_lossy()
+    );
     let expected_env_msg_2 = serde_json::json!({
         "type": "message",
         "id": serde_json::Value::Null,
@@ -547,10 +572,25 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() {
         "role": "user",
         "content": [ { "type": "input_text", "text": "hello 2" } ]
     });
+    let expected_env_text_2 = format!(
+        r#"<environment_context>
+  <cwd>{}</cwd>
+  <approval_policy>never</approval_policy>
+  <sandbox_mode>workspace-write</sandbox_mode>
+  <network_access>enabled</network_access>
+</environment_context>"#,
+        new_cwd.path().to_string_lossy()
+    );
+    let expected_env_msg_2 = serde_json::json!({
+        "type": "message",
+        "id": serde_json::Value::Null,
+        "role": "user",
+        "content": [ { "type": "input_text", "text": expected_env_text_2 } ]
+    });
     let expected_body2 = serde_json::json!(
         [
             body1["input"].as_array().unwrap().as_slice(),
-            [expected_user_message_2].as_slice(),
+            [expected_env_msg_2, expected_user_message_2].as_slice(),
         ]
         .concat()
     );

@@ -8,7 +8,6 @@ use std::collections::HashMap;
 use crate::model_family::ModelFamily;
 use crate::plan_tool::PLAN_TOOL;
 use crate::protocol::AskForApproval;
-use crate::protocol::SandboxPolicy;
 use crate::tool_apply_patch::ApplyPatchToolType;
 use crate::tool_apply_patch::create_apply_patch_freeform_tool;
 use crate::tool_apply_patch::create_apply_patch_json_tool;
@@ -58,7 +57,7 @@ pub(crate) enum OpenAiTool {
 #[derive(Debug, Clone)]
 pub enum ConfigShellToolType {
     DefaultShell,
-    ShellWithRequest { sandbox_policy: SandboxPolicy },
+    ShellWithRequest,
     LocalShell,
     StreamableShell,
 }
@@ -75,7 +74,6 @@ pub(crate) struct ToolsConfig {
 pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) model_family: &'a ModelFamily,
     pub(crate) approval_policy: AskForApproval,
-    pub(crate) sandbox_policy: SandboxPolicy,
     pub(crate) include_plan_tool: bool,
     pub(crate) include_apply_patch_tool: bool,
     pub(crate) include_web_search_request: bool,
@@ -88,7 +86,6 @@ impl ToolsConfig {
         let ToolsConfigParams {
             model_family,
             approval_policy,
-            sandbox_policy,
             include_plan_tool,
             include_apply_patch_tool,
             include_web_search_request,
@@ -103,9 +100,7 @@ impl ToolsConfig {
             ConfigShellToolType::DefaultShell
         };
         if matches!(approval_policy, AskForApproval::OnRequest) && !use_streamable_shell_tool {
-            shell_type = ConfigShellToolType::ShellWithRequest {
-                sandbox_policy: sandbox_policy.clone(),
-            }
+            shell_type = ConfigShellToolType::ShellWithRequest;
         }
 
         let apply_patch_tool_type = match model_family.apply_patch_tool_type {
@@ -200,7 +195,7 @@ fn create_shell_tool() -> OpenAiTool {
     })
 }
 
-fn create_shell_tool_for_sandbox(sandbox_policy: &SandboxPolicy) -> OpenAiTool {
+fn create_shell_tool_for_sandbox() -> OpenAiTool {
     let mut properties = BTreeMap::new();
     properties.insert(
         "command".to_string(),
@@ -212,80 +207,70 @@ fn create_shell_tool_for_sandbox(sandbox_policy: &SandboxPolicy) -> OpenAiTool {
     properties.insert(
         "workdir".to_string(),
         JsonSchema::String {
-            description: Some("The working directory to execute the command in".to_string()),
+            description: Some("Working directory to execute the command in.".to_string()),
         },
     );
     properties.insert(
         "timeout_ms".to_string(),
         JsonSchema::Number {
-            description: Some("The timeout for the command in milliseconds".to_string()),
+            description: Some("Timeout for the command in milliseconds.".to_string()),
         },
     );
-
-    if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
-        properties.insert(
+    properties.insert(
         "with_escalated_permissions".to_string(),
         JsonSchema::Boolean {
-            description: Some("Whether to request escalated permissions. Set to true if command needs to be run without sandbox restrictions".to_string()),
+            description: Some("Request escalated permissions when a command would otherwise be blocked by the sandbox.".to_string()),
         },
     );
-        properties.insert(
+    properties.insert(
         "justification".to_string(),
         JsonSchema::String {
-            description: Some("Only set if with_escalated_permissions is true. 1-sentence explanation of why we want to run this command.".to_string()),
+            description: Some("Required iff with_escalated_permissions=true. One sentence explaining why escalation is needed (e.g., write outside CWD, network fetch, git commit).".to_string()),
         },
     );
-    }
 
-    let description = match sandbox_policy {
-        SandboxPolicy::WorkspaceWrite {
-            network_access,
-            ..
-        } => {
-            format!(
-                r#"
-The shell tool is used to execute shell commands.
-- When invoking the shell tool, your call will be running in a landlock sandbox, and some shell commands will require escalated privileges:
-  - Types of actions that require escalated privileges:
-    - Reading files outside the current directory
-    - Writing files outside the current directory, and protected folders like .git or .env{}
-  - Examples of commands that require escalated privileges:
-    - git commit
-    - npm install or pnpm install
-    - cargo build
-    - cargo test
-- When invoking a command that will require escalated privileges:
-  - Provide the with_escalated_permissions parameter with the boolean value true
-  - Include a short, 1 sentence explanation for why we need to run with_escalated_permissions in the justification parameter."#,
-                if !network_access {
-                    "\n  - Commands that require network access\n"
-                } else {
-                    ""
-                }
-            )
-        }
-        SandboxPolicy::DangerFullAccess => {
-            "Runs a shell command and returns its output.".to_string()
-        }
-        SandboxPolicy::ReadOnly => {
-            r#"
-The shell tool is used to execute shell commands.
-- When invoking the shell tool, your call will be running in a landlock sandbox, and some shell commands (including apply_patch) will require escalated permissions:
-  - Types of actions that require escalated privileges:
-    - Reading files outside the current directory
-    - Writing files
-    - Applying patches
-  - Examples of commands that require escalated privileges:
-    - apply_patch
-    - git commit
-    - npm install or pnpm install
-    - cargo build
-    - cargo test
-- When invoking a command that will require escalated privileges:
-  - Provide the with_escalated_permissions parameter with the boolean value true
-  - Include a short, 1 sentence explanation for why we need to run with_escalated_permissions in the justification parameter"#.to_string()
-        }
-    };
+    let description = r#"
+The shell tool executes shell commands inside a Landlock-style sandbox. Some operations may require escalated permissions depending on the *effective sandbox policy* (communicated separately at runtime).
+
+POLICY REFERENCE (names + descriptions)
+- SandboxPolicy::ReadOnly
+  - Description: Filesystem is read-only; no writes allowed. Some operations (including applying patches) are blocked unless escalated.
+  - Implications: Writing any file, applying patches, modifying VCS state, running installers/builds that write to disk will require escalation.
+
+- SandboxPolicy::WorkspaceWrite { network_access: bool }
+  - Description: Write access allowed within the current workspace (CWD), but writes outside CWD and to protected paths require escalation. Network availability depends on `network_access`.
+  - Implications:
+    - Escalation required for: reading/writing outside CWD; writing to protected paths (e.g., `.git`, `.env`).
+    - If `network_access == false`, commands needing the internet (e.g., `npm install` fetching packages) also require escalation.
+
+- SandboxPolicy::DangerFullAccess
+  - Description: Broadly permissive. Commands typically run without sandbox restrictions.
+  - Implications: Escalation is usually unnecessary, but may still be requested for sensitive operations if desired.
+
+OPERATIONS THAT OFTEN REQUIRE ESCALATION
+- Reading files outside the current working directory (CWD).
+- Writing files outside CWD, or to protected paths like `.git` or `.env`.
+- Applying patches (e.g., `apply_patch`).
+- Package installation (e.g., `npm install`, `pnpm install`).
+- Builds and tests that write to disk (e.g., `cargo build`, `cargo test`).
+- Git commands modifying repository state (e.g., `git commit`).
+- Any network operation when the policy disallows networking.
+
+HOW TO REQUEST ESCALATION
+- Set `with_escalated_permissions = true`.
+- Provide a one-sentence `justification` explaining why escalation is required
+  (e.g., “Needs to write to .git for commit”, “Requires network to fetch dependencies”, “Writes outside CWD”).
+
+EXAMPLES (commonly escalated)
+- `apply_patch`
+- `git commit`
+- `npm install` / `pnpm install`
+- `cargo build` / `cargo test`
+
+GUIDANCE
+- If unsure whether a command will be blocked, prefer setting `with_escalated_permissions=true` with a clear justification.
+- The effective policy (ReadOnly / WorkspaceWrite{network_access} / DangerFullAccess) is provided separately; the above reference tells you how each policy behaves.
+"#.to_string();
 
     OpenAiTool::Function(ResponsesApiTool {
         name: "shell".to_string(),
@@ -298,7 +283,6 @@ The shell tool is used to execute shell commands.
         },
     })
 }
-
 fn create_view_image_tool() -> OpenAiTool {
     // Support only local filesystem path.
     let mut properties = BTreeMap::new();
@@ -536,8 +520,8 @@ pub(crate) fn get_openai_tools(
         ConfigShellToolType::DefaultShell => {
             tools.push(create_shell_tool());
         }
-        ConfigShellToolType::ShellWithRequest { sandbox_policy } => {
-            tools.push(create_shell_tool_for_sandbox(sandbox_policy));
+        ConfigShellToolType::ShellWithRequest => {
+            tools.push(create_shell_tool_for_sandbox());
         }
         ConfigShellToolType::LocalShell => {
             tools.push(OpenAiTool::LocalShell {});
@@ -634,7 +618,6 @@ mod tests {
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
             include_plan_tool: true,
             include_apply_patch_tool: false,
             include_web_search_request: true,
@@ -655,7 +638,6 @@ mod tests {
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
             include_plan_tool: true,
             include_apply_patch_tool: false,
             include_web_search_request: true,
@@ -676,7 +658,6 @@ mod tests {
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
             include_plan_tool: false,
             include_apply_patch_tool: false,
             include_web_search_request: true,
@@ -781,7 +762,6 @@ mod tests {
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
             include_plan_tool: false,
             include_apply_patch_tool: false,
             include_web_search_request: false,
@@ -858,7 +838,6 @@ mod tests {
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
             include_plan_tool: false,
             include_apply_patch_tool: false,
             include_web_search_request: true,
@@ -920,7 +899,6 @@ mod tests {
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
             include_plan_tool: false,
             include_apply_patch_tool: false,
             include_web_search_request: true,
@@ -977,7 +955,6 @@ mod tests {
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
             include_plan_tool: false,
             include_apply_patch_tool: false,
             include_web_search_request: true,
@@ -1034,7 +1011,6 @@ mod tests {
         let config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &model_family,
             approval_policy: AskForApproval::Never,
-            sandbox_policy: SandboxPolicy::ReadOnly,
             include_plan_tool: false,
             include_apply_patch_tool: false,
             include_web_search_request: true,
