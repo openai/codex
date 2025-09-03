@@ -118,12 +118,37 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         return;
     }
 
-    // Create a fake rollout session file with one prior assistant message.
+    // Create a fake rollout session file with prior user + system + assistant messages.
     let tmpdir = TempDir::new().unwrap();
     let session_path = tmpdir.path().join("resume-session.jsonl");
     let mut f = std::fs::File::create(&session_path).unwrap();
     // First line: meta (content not used by reader other than non-empty)
-    writeln!(f, "{}", serde_json::json!({"meta":"test"})).unwrap();
+    writeln!(
+        f,
+        "{}",
+        serde_json::json!({"meta":"test","instructions":"be nice"})
+    )
+    .unwrap();
+
+    // Prior item: user message (should be delivered)
+    let prior_user = codex_protocol::models::ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![codex_protocol::models::ContentItem::InputText {
+            text: "resumed user message".to_string(),
+        }],
+    };
+    writeln!(f, "{}", serde_json::to_string(&prior_user).unwrap()).unwrap();
+
+    // Prior item: system message (excluded from API history)
+    let prior_system = codex_protocol::models::ResponseItem::Message {
+        id: None,
+        role: "system".to_string(),
+        content: vec![codex_protocol::models::ContentItem::OutputText {
+            text: "resumed system instruction".to_string(),
+        }],
+    };
+    writeln!(f, "{}", serde_json::to_string(&prior_system).unwrap()).unwrap();
 
     // Prior item: assistant message
     let prior_item = codex_protocol::models::ResponseItem::Message {
@@ -157,6 +182,8 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = model_provider;
     config.experimental_resume = Some(session_path.clone());
+    // Also configure user instructions to ensure they are NOT delivered on resume.
+    config.user_instructions = Some("be nice".to_string());
 
     let conversation_manager =
         ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
@@ -169,13 +196,14 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         .await
         .expect("create new conversation");
 
-    // 1) Assert initial_messages contains the prior assistant message as an EventMsg
+    // 1) Assert initial_messages contains the prior user + assistant messages as EventMsg entries
     let initial_msgs = session_configured
         .initial_messages
         .clone()
         .expect("expected initial messages for resumed session");
     let initial_json = serde_json::to_value(&initial_msgs).unwrap();
     let expected_initial_json = serde_json::json!([
+        { "type": "user_message", "message": "resumed user message", "kind": "plain" },
         { "type": "agent_message", "message": "resumed assistant message" }
     ]);
     assert_eq!(initial_json, expected_initial_json);
@@ -194,6 +222,12 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     let request = &server.received_requests().await.unwrap()[0];
     let request_body = request.body_json::<serde_json::Value>().unwrap();
     let expected_input = serde_json::json!([
+        {
+            "type": "message",
+            "id": null,
+            "role": "user",
+            "content": [{ "type": "input_text", "text": "resumed user message" }]
+        },
         {
             "type": "message",
             "id": null,
