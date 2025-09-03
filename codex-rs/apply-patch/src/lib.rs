@@ -318,6 +318,12 @@ fn extract_apply_patch_from_bash(
     //
     // Overall, we want to be conservative and only match the intended forms, as other
     // forms are likely to be model errors, or incorrectly interpreted by later code.
+    //
+    // If you're editing this query, it's helpful to start by creating a debugging binary
+    // which will let you see the AST of an arbitrary bash script passed in, and optionally
+    // also run an arbitrary query against the AST. This is useful for understanding
+    // how tree-sitter parses the script and whether the query syntax is correct. Be sure
+    // to test both positive and negative cases.
     static APPLY_PATCH_QUERY: Lazy<Query> = Lazy::new(|| {
         let language = BASH.into();
         #[expect(clippy::expect_used)]
