@@ -12,7 +12,8 @@ use time::format_description::FormatItem;
 use time::macros::format_description;
 use uuid::Uuid;
 
-use crate::rollout::list::{get_conversation, get_conversations};
+use crate::rollout::list::get_conversation;
+use crate::rollout::list::get_conversations;
 
 fn write_session_file(
     root: &Path,
@@ -181,5 +182,3 @@ async fn test_stable_ordering_same_second_pagination() {
         .to_string();
     assert!(name2.contains(&u1.to_string()));
 }
-
-

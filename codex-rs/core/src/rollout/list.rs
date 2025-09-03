@@ -39,7 +39,7 @@ const MAX_SCAN_FILES: usize = 50_000; // Hard cap to bound worst‑case work per
 /// Retrieve recorded conversation file paths with token pagination. The returned `next_cursor`
 /// can be supplied on the next call to resume after the last returned item, resilient to
 /// concurrent new sessions being appended. Ordering is stable by timestamp desc, then UUID desc.
-pub async fn get_conversations(
+pub(crate) async fn get_conversations(
     codex_home: &Path,
     page_size: usize,
     cursor: Option<&str>,
@@ -68,7 +68,8 @@ pub async fn get_conversations(
 
 /// Load the full contents of a single conversation session file at `path`.
 /// Returns the entire file contents as a String.
-pub async fn get_conversation(path: &Path) -> io::Result<String> {
+#[allow(dead_code)]
+pub(crate) async fn get_conversation(path: &Path) -> io::Result<String> {
     tokio::fs::read_to_string(path).await
 }
 

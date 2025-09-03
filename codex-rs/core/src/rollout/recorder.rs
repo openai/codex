@@ -20,11 +20,12 @@ use tracing::warn;
 use uuid::Uuid;
 
 use super::SESSIONS_SUBDIR;
+use super::list::ConversationsPage;
+use super::list::get_conversations;
 use crate::config::Config;
 use crate::conversation_manager::InitialHistory;
 use crate::git_info::GitInfo;
 use crate::git_info::collect_git_info;
-use crate::{ConversationsPage, get_conversations};
 use codex_protocol::models::ResponseItem;
 
 #[derive(Serialize, Deserialize, Clone, Default)]
