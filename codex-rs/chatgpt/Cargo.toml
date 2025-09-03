@@ -18,4 +18,4 @@ serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = "3.20.0"

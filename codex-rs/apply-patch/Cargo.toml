@@ -25,4 +25,4 @@ once_cell = "1"
 [dev-dependencies]
 assert_cmd = "2"
 pretty_assertions = "1.4.1"
-tempfile = "3.13.0"
+tempfile = "3.20.0"

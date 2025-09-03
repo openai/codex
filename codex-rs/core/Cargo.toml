@@ -14,9 +14,9 @@ workspace = true
 [dependencies]
 anyhow = "1"
 async-channel = "2.3.1"
-base64 = "0.22"
+base64 = "0.22.1"
 bytes = "1.10.1"
-chrono = { version = "0.4", features = ["serde"] }
+chrono = { version = "0.4.40", features = ["serde"] }
 codex-apply-patch = { path = "../apply-patch" }
 codex-mcp-client = { path = "../mcp-client" }
 codex-protocol = { path = "../protocol" }
@@ -39,7 +39,7 @@ sha1 = "0.10.6"
 shlex = "1.3.0"
 similar = "2.7.0"
 strum_macros = "0.27.2"
-tempfile = "3"
+tempfile = "3.20.0"
 thiserror = "2.0.16"
 time = { version = "0.3", features = ["formatting", "parsing", "local-offset", "macros"] }
 tokio = { version = "1", features = [
@@ -81,7 +81,7 @@ core_test_support = { path = "tests/common" }
 maplit = "1.0.2"
 predicates = "3"
 pretty_assertions = "1.4.1"
-tempfile = "3"
+tempfile = "3.20.0"
 tokio-test = "0.4"
 walkdir = "2.5.0"
 wiremock = "0.6"

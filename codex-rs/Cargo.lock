@@ -850,7 +850,7 @@ dependencies = [
  "codex-core",
  "codex-protocol",
  "pretty_assertions",
- "rand 0.8.5",
+ "rand 0.9.2",
  "reqwest",
  "serde",
  "serde_json",

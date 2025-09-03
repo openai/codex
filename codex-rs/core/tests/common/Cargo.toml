@@ -9,5 +9,5 @@ path = "lib.rs"
 [dependencies]
 codex-core = { path = "../.." }
 serde_json = "1"
-tempfile = "3"
+tempfile = "3.20.0"
 tokio = { version = "1", features = ["time"] }

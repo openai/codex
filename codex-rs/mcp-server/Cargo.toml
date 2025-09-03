@@ -34,7 +34,7 @@ tokio = { version = "1", features = [
     "rt-multi-thread",
     "signal",
 ] }
-toml = "0.9"
+toml = "0.9.5"
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 uuid = { version = "1", features = ["serde", "v4"] }
@@ -43,6 +43,6 @@ uuid = { version = "1", features = ["serde", "v4"] }
 assert_cmd = "2"
 mcp_test_support = { path = "tests/common" }
 pretty_assertions = "1.4.1"
-tempfile = "3"
+tempfile = "3.20.0"
 tokio-test = "0.4"
 wiremock = "0.6"

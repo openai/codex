@@ -30,4 +30,4 @@ serde_json = "1.0.143"
 serde_with = { version = "3", features = ["macros"] }
 
 [dev-dependencies]
-tempfile = "3.13.0"
+tempfile = "3.20.0"

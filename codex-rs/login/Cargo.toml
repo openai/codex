@@ -7,16 +7,16 @@ version = { workspace = true }
 workspace = true
 
 [dependencies]
-base64 = "0.22"
-chrono = { version = "0.4", features = ["serde"] }
+base64 = "0.22.1"
+chrono = { version = "0.4.40", features = ["serde"] }
 codex-core = { path = "../core" }
 codex-protocol = { path = "../protocol" }
-rand = "0.8"
+rand = "0.9"
 reqwest = { version = "0.12", features = ["json", "blocking"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
-tempfile = "3"
+tempfile = "3.20.0"
 thiserror = "2.0.16"
 tiny_http = "0.12"
 tokio = { version = "1", features = [
@@ -32,4 +32,4 @@ webbrowser = "1.0"
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"
-tempfile = "3"
+tempfile = "3.20.0"

@@ -16,7 +16,7 @@ workspace = true
 
 [dependencies]
 anyhow = "1"
-chrono = "0.4.40"
+chrono = { version = "0.4.40", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 codex-arg0 = { path = "../arg0" }
 codex-common = { path = "../common", features = [
@@ -46,5 +46,5 @@ assert_cmd = "2"
 core_test_support = { path = "../core/tests/common" }
 libc = "0.2"
 predicates = "3"
-tempfile = "3.13.0"
+tempfile = "3.20.0"
 wiremock = "0.6"

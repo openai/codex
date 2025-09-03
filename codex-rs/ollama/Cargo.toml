@@ -29,4 +29,4 @@ tracing = { version = "0.1.41", features = ["log"] }
 wiremock = "0.6"
 
 [dev-dependencies]
-tempfile = "3"
+tempfile = "3.20.0"
