@@ -414,12 +414,15 @@ async fn prefers_chatgpt_token_when_config_prefers_chatgpt() {
     config.model_provider = model_provider;
     config.preferred_auth_method = AuthMode::ChatGPT;
 
-    let auth_manager =
-        match CodexAuth::from_codex_home(codex_home.path(), config.preferred_auth_method) {
-            Ok(Some(auth)) => codex_core::AuthManager::from_auth_for_testing(auth),
-            Ok(None) => panic!("No CodexAuth found in codex_home"),
-            Err(e) => panic!("Failed to load CodexAuth: {e}"),
-        };
+    let auth_manager = match CodexAuth::from_codex_home(
+        codex_home.path(),
+        config.preferred_auth_method,
+        &config.responses_originator_header,
+    ) {
+        Ok(Some(auth)) => codex_core::AuthManager::from_auth_for_testing(auth),
+        Ok(None) => panic!("No CodexAuth found in codex_home"),
+        Err(e) => panic!("Failed to load CodexAuth: {e}"),
+    };
     let conversation_manager = ConversationManager::new(auth_manager);
     let NewConversation {
         conversation: codex,
@@ -495,12 +498,15 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
     config.model_provider = model_provider;
     config.preferred_auth_method = AuthMode::ApiKey;
 
-    let auth_manager =
-        match CodexAuth::from_codex_home(codex_home.path(), config.preferred_auth_method) {
-            Ok(Some(auth)) => codex_core::AuthManager::from_auth_for_testing(auth),
-            Ok(None) => panic!("No CodexAuth found in codex_home"),
-            Err(e) => panic!("Failed to load CodexAuth: {e}"),
-        };
+    let auth_manager = match CodexAuth::from_codex_home(
+        codex_home.path(),
+        config.preferred_auth_method,
+        &config.responses_originator_header,
+    ) {
+        Ok(Some(auth)) => codex_core::AuthManager::from_auth_for_testing(auth),
+        Ok(None) => panic!("No CodexAuth found in codex_home"),
+        Err(e) => panic!("Failed to load CodexAuth: {e}"),
+    };
     let conversation_manager = ConversationManager::new(auth_manager);
     let NewConversation {
         conversation: codex,

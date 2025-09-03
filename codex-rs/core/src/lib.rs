@@ -45,6 +45,7 @@ pub use conversation_manager::NewConversation;
 // Re-export common auth types for workspace consumers
 pub use auth::AuthManager;
 pub use auth::CodexAuth;
+pub mod default_client;
 pub mod model_family;
 mod openai_model_info;
 mod openai_tools;
@@ -58,7 +59,6 @@ pub mod spawn;
 pub mod terminal;
 mod tool_apply_patch;
 pub mod turn_diff_tracker;
-pub mod user_agent;
 pub use rollout::list::ConversationsPage;
 mod user_notification;
 pub mod util;

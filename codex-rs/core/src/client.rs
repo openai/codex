@@ -30,6 +30,7 @@ use crate::client_common::ResponsesApiRequest;
 use crate::client_common::create_reasoning_param_for_request;
 use crate::client_common::create_text_param_for_request;
 use crate::config::Config;
+use crate::default_client::create_client;
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::error::UsageLimitReachedError;
@@ -40,7 +41,6 @@ use crate::model_provider_info::WireApi;
 use crate::openai_model_info::get_model_info;
 use crate::openai_tools::create_tools_json_for_responses_api;
 use crate::protocol::TokenUsage;
-use crate::user_agent::get_codex_user_agent;
 use crate::util::backoff;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -84,10 +84,12 @@ impl ModelClient {
         summary: ReasoningSummaryConfig,
         session_id: Uuid,
     ) -> Self {
+        let client = create_client(&config.responses_originator_header);
+
         Self {
             config,
             auth_manager,
-            client: reqwest::Client::new(),
+            client,
             provider,
             session_id,
             effort,
@@ -241,10 +243,6 @@ impl ModelClient {
             {
                 req_builder = req_builder.header("chatgpt-account-id", account_id);
             }
-
-            let originator = &self.config.responses_originator_header;
-            req_builder = req_builder.header("originator", originator);
-            req_builder = req_builder.header("User-Agent", get_codex_user_agent(Some(originator)));
 
             let res = req_builder.send().await;
             if let Ok(resp) = &res {
