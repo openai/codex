@@ -476,19 +476,13 @@ impl Session {
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
         });
 
-        // Dispatch the SessionConfiguredEvent first and then report any errors.
-        // If resuming, include converted initial messages in the payload so UIs can render them immediately.
+        // Dispatch the SessionConfiguredEvent. If resuming, include converted
+        // initial messages in the payload so UIs can render them immediately.
         let initial_messages = match &initial_history {
             InitialHistory::New => None,
             InitialHistory::Resumed(items) => Some(sess.build_initial_messages(items)),
         };
-        // If resuming, also emit the converted initial history right after configured.
-        let initial_history_events = match &initial_history {
-            InitialHistory::New => Vec::new(),
-            InitialHistory::Resumed(items) => {
-                sess.response_items_to_events_with_id(INITIAL_SUBMIT_ID, items)
-            }
-        };
+
         let events = std::iter::once(Event {
             id: INITIAL_SUBMIT_ID.to_owned(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
@@ -499,7 +493,6 @@ impl Session {
                 initial_messages,
             }),
         })
-        .chain(initial_history_events.into_iter())
         .chain(post_session_configured_error_events.into_iter());
         for event in events {
             if let Err(e) = tx_event.send(event).await {
