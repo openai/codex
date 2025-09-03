@@ -1275,6 +1275,15 @@ impl Config {
             approval_policy = AskForApproval::OnRequest;
         }
 
+        // Merge MCP servers from top-level with any provided by the selected profile.
+        // Profile-scoped entries take precedence over top-level on key conflicts.
+        let mut merged_mcp_servers = cfg.mcp_servers.clone();
+        if let Some(profile_servers) = config_profile.mcp_servers.clone() {
+            for (key, value) in profile_servers {
+                merged_mcp_servers.insert(key, value);
+            }
+        }
+
         let config = Self {
             model,
             review_model,
@@ -1292,7 +1301,7 @@ impl Config {
             notify: cfg.notify,
             user_instructions,
             base_instructions,
-            mcp_servers: cfg.mcp_servers,
+            mcp_servers: merged_mcp_servers,
             // The config.toml omits "_mode" because it's a config file. However, "_mode"
             // is important in code to differentiate the mode from the store implementation.
             mcp_oauth_credentials_store_mode: cfg.mcp_oauth_credentials_store.unwrap_or_default(),
@@ -2560,6 +2569,82 @@ model = "gpt-5-codex"
                 .and_then(|profile| profile.model.as_deref()),
             Some("gpt-5-codex"),
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_mcp_servers_merge_from_profile() -> std::io::Result<()> {
+        // Build a minimal config TOML with:
+        // - top-level mcp_servers.global
+        // - profile p1 with its own mcp_servers.profile and an overriding mcp_servers.global
+        // Profile should win on key conflicts.
+        let raw = r#"
+model = "o3"
+
+[mcp_servers.global]
+command = "echo"
+args = ["global"]
+
+[profiles.p1]
+model = "o3"
+
+[profiles.p1.mcp_servers.profile]
+command = "echo"
+args = ["profile"]
+
+[profiles.p1.mcp_servers.global]
+command = "echo"
+args = ["profile-override"]
+"#;
+
+        let cfg: ConfigToml =
+            toml::from_str(raw).expect("TOML deserialization should succeed for test config");
+
+        // Prepare overrides: pick profile p1 and provide a temp cwd.
+        let cwd_temp_dir = TempDir::new().unwrap();
+        let overrides = ConfigOverrides {
+            config_profile: Some("p1".to_string()),
+            cwd: Some(cwd_temp_dir.path().to_path_buf()),
+            ..Default::default()
+        };
+
+        // Provide a temporary CODEX_HOME path.
+        let codex_home = TempDir::new().unwrap();
+
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            overrides,
+            codex_home.path().to_path_buf(),
+        )?;
+
+        // Expect both entries present, with profile taking precedence for "global".
+        assert!(config.mcp_servers.contains_key("global"));
+        assert!(config.mcp_servers.contains_key("profile"));
+
+        let global = config.mcp_servers.get("global").unwrap();
+        match &global.transport {
+            McpServerTransportConfig::Stdio {
+                command, args, env, ..
+            } => {
+                assert_eq!(command, "echo");
+                assert_eq!(args, &vec!["profile-override".to_string()]);
+                assert!(env.is_none());
+            }
+            transport => panic!("expected stdio transport, got {transport:?}"),
+        }
+
+        let profile = config.mcp_servers.get("profile").unwrap();
+        match &profile.transport {
+            McpServerTransportConfig::Stdio {
+                command, args, env, ..
+            } => {
+                assert_eq!(command, "echo");
+                assert_eq!(args, &vec!["profile".to_string()]);
+                assert!(env.is_none());
+            }
+            transport => panic!("expected stdio transport, got {transport:?}"),
+        }
 
         Ok(())
     }
