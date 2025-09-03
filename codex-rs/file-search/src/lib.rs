@@ -153,8 +153,9 @@ pub fn run(
     let mut walk_builder = WalkBuilder::new(search_directory);
     walk_builder
         .threads(num_walk_builder_threads)
-        // Allow hidden and git excluded entries.
+        // Allow hidden entries.
         .hidden(false)
+        // Don't require git to be present to apply to apply git-related ignore rules.
         .require_git(false);
 
     if !exclude.is_empty() {
