@@ -58,7 +58,10 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
         requires_openai_auth: false,
     };
 
-    let codex_home = TempDir::new().unwrap();
+    let codex_home = match TempDir::new() {
+        Ok(dir) => dir,
+        Err(e) => panic!("failed to create TempDir: {e}"),
+    };
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider_id = provider.name.clone();
     config.model_provider = provider.clone();
@@ -79,13 +82,24 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
     let mut prompt = Prompt::default();
     prompt.input = input;
 
-    let mut stream = client.stream(&prompt).await.expect("stream chat");
+    let mut stream = match client.stream(&prompt).await {
+        Ok(s) => s,
+        Err(e) => panic!("stream chat failed: {e}"),
+    };
     while let Some(event) = stream.next().await {
-        event.expect("stream event");
+        if let Err(e) = event {
+            panic!("stream event error: {e}");
+        }
     }
 
-    let requests = server.received_requests().await.expect("request made");
-    requests[0].body_json().expect("valid json body")
+    let requests = match server.received_requests().await {
+        Some(reqs) => reqs,
+        None => panic!("request not made"),
+    };
+    match requests[0].body_json() {
+        Ok(v) => v,
+        Err(e) => panic!("invalid json body: {e}"),
+    }
 }
 
 fn user_message(text: &str) -> ResponseItem {
@@ -144,14 +158,17 @@ fn local_shell_call() -> ResponseItem {
 }
 
 fn messages_from(body: &Value) -> Vec<Value> {
-    body["messages"].as_array().expect("messages array").clone()
+    match body["messages"].as_array() {
+        Some(arr) => arr.clone(),
+        None => panic!("messages array missing"),
+    }
 }
 
 fn first_assistant(messages: &[Value]) -> &Value {
-    messages
-        .iter()
-        .find(|msg| msg["role"] == "assistant")
-        .expect("assistant message present")
+    match messages.iter().find(|msg| msg["role"] == "assistant") {
+        Some(v) => v,
+        None => panic!("assistant message not present"),
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -212,7 +229,10 @@ async fn attaches_reasoning_to_function_call_anchor() {
     let assistant = first_assistant(&messages);
 
     assert_eq!(assistant["reasoning"], Value::String("rFunc".into()));
-    let tool_calls = assistant["tool_calls"].as_array().expect("tool call list");
+    let tool_calls = match assistant["tool_calls"].as_array() {
+        Some(arr) => arr,
+        None => panic!("tool call list missing"),
+    };
     assert_eq!(tool_calls.len(), 1);
     assert_eq!(tool_calls[0]["type"], Value::String("function".into()));
 }

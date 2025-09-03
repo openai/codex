@@ -51,7 +51,10 @@ async fn run_stream(sse_body: &str) -> Vec<ResponseEvent> {
         requires_openai_auth: false,
     };
 
-    let codex_home = TempDir::new().unwrap();
+    let codex_home = match TempDir::new() {
+        Ok(dir) => dir,
+        Err(e) => panic!("failed to create TempDir: {e}"),
+    };
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider_id = provider.name.clone();
     config.model_provider = provider.clone();
@@ -78,23 +81,29 @@ async fn run_stream(sse_body: &str) -> Vec<ResponseEvent> {
         }],
     }];
 
-    let mut stream = client.stream(&prompt).await.expect("stream chat");
+    let mut stream = match client.stream(&prompt).await {
+        Ok(s) => s,
+        Err(e) => panic!("stream chat failed: {e}"),
+    };
     let mut events = Vec::new();
     while let Some(event) = stream.next().await {
-        events.push(event.expect("event"));
+        match event {
+            Ok(ev) => events.push(ev),
+            Err(e) => panic!("stream event error: {e}"),
+        }
     }
     events
 }
 
 fn assert_message(item: &ResponseItem, expected: &str) {
     if let ResponseItem::Message { content, .. } = item {
-        let text = content
-            .iter()
-            .find_map(|part| match part {
-                ContentItem::OutputText { text } | ContentItem::InputText { text } => Some(text),
-                _ => None,
-            })
-            .expect("message missing text");
+        let text = content.iter().find_map(|part| match part {
+            ContentItem::OutputText { text } | ContentItem::InputText { text } => Some(text),
+            _ => None,
+        });
+        let Some(text) = text else {
+            panic!("message missing text: {item:?}");
+        };
         assert_eq!(text, expected);
     } else {
         panic!("expected message item, got: {item:?}");
@@ -248,9 +257,7 @@ async fn streams_reasoning_from_final_message() {
         return;
     }
 
-    let sse = concat!(
-        "data: {\"choices\":[{\"message\":{\"reasoning\":\"final-cot\"},\"finish_reason\":\"stop\"}]}\n\n",
-    );
+    let sse = "data: {\"choices\":[{\"message\":{\"reasoning\":\"final-cot\"},\"finish_reason\":\"stop\"}]}\n\n";
 
     let events = run_stream(sse).await;
     assert_eq!(events.len(), 3, "unexpected events: {events:?}");
