@@ -19,12 +19,16 @@ use tracing::info;
 use tracing::warn;
 use uuid::Uuid;
 
+use super::SESSIONS_SUBDIR;
+use super::list::ConversationsPage;
+use super::list::Cursor;
+use super::list::get_conversations;
+use super::policy::is_persisted_response_item;
 use crate::config::Config;
+use crate::conversation_manager::InitialHistory;
 use crate::git_info::GitInfo;
 use crate::git_info::collect_git_info;
 use codex_protocol::models::ResponseItem;
-
-const SESSIONS_SUBDIR: &str = "sessions";
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct SessionMeta {
@@ -64,7 +68,7 @@ pub struct SavedSession {
 /// $ fx ~/.codex/sessions/rollout-2025-05-07T17-24-21-5973b6c0-94b8-487b-a530-2aeb6098ae0e.jsonl
 /// ```
 #[derive(Clone)]
-pub(crate) struct RolloutRecorder {
+pub struct RolloutRecorder {
     tx: Sender<RolloutCmd>,
 }
 
@@ -75,6 +79,16 @@ enum RolloutCmd {
 }
 
 impl RolloutRecorder {
+    #[allow(dead_code)]
+    /// List conversations (rollout files) under the provided Codex home directory.
+    pub async fn list_conversations(
+        codex_home: &Path,
+        page_size: usize,
+        cursor: Option<&Cursor>,
+    ) -> std::io::Result<ConversationsPage> {
+        get_conversations(codex_home, page_size, cursor).await
+    }
+
     /// Attempt to create a new [`RolloutRecorder`]. If the sessions directory
     /// cannot be created or the rollout file cannot be opened we return the
     /// error so the caller can decide whether to disable persistence.
@@ -124,21 +138,11 @@ impl RolloutRecorder {
     pub(crate) async fn record_items(&self, items: &[ResponseItem]) -> std::io::Result<()> {
         let mut filtered = Vec::new();
         for item in items {
-            match item {
-                // Note that function calls may look a bit strange if they are
-                // "fully qualified MCP tool calls," so we could consider
-                // reformatting them in that case.
-                ResponseItem::Message { .. }
-                | ResponseItem::LocalShellCall { .. }
-                | ResponseItem::FunctionCall { .. }
-                | ResponseItem::FunctionCallOutput { .. }
-                | ResponseItem::CustomToolCall { .. }
-                | ResponseItem::CustomToolCallOutput { .. }
-                | ResponseItem::Reasoning { .. } => filtered.push(item.clone()),
-                ResponseItem::WebSearchCall { .. } | ResponseItem::Other => {
-                    // These should never be serialized.
-                    continue;
-                }
+            // Note that function calls may look a bit strange if they are
+            // "fully qualified MCP tool calls," so we could consider
+            // reformatting them in that case.
+            if is_persisted_response_item(item) {
+                filtered.push(item.clone());
             }
         }
         if filtered.is_empty() {
@@ -157,20 +161,14 @@ impl RolloutRecorder {
             .map_err(|e| IoError::other(format!("failed to queue rollout state: {e}")))
     }
 
-    pub async fn resume(
-        path: &Path,
-        cwd: std::path::PathBuf,
-    ) -> std::io::Result<(Self, SavedSession)> {
+    pub async fn get_rollout_history(path: &Path) -> std::io::Result<InitialHistory> {
         info!("Resuming rollout from {path:?}");
         let text = tokio::fs::read_to_string(path).await?;
         let mut lines = text.lines();
-        let meta_line = lines
+        let _ = lines
             .next()
             .ok_or_else(|| IoError::other("empty session file"))?;
-        let session: SessionMeta = serde_json::from_str(meta_line)
-            .map_err(|e| IoError::other(format!("failed to parse session meta: {e}")))?;
         let mut items = Vec::new();
-        let mut state = SessionStateSnapshot::default();
 
         for line in lines {
             if line.trim().is_empty() {
@@ -185,49 +183,26 @@ impl RolloutRecorder {
                 .map(|s| s == "state")
                 .unwrap_or(false)
             {
-                if let Ok(s) = serde_json::from_value::<SessionStateSnapshot>(v.clone()) {
-                    state = s
-                }
                 continue;
             }
             match serde_json::from_value::<ResponseItem>(v.clone()) {
-                Ok(item) => match item {
-                    ResponseItem::Message { .. }
-                    | ResponseItem::LocalShellCall { .. }
-                    | ResponseItem::FunctionCall { .. }
-                    | ResponseItem::FunctionCallOutput { .. }
-                    | ResponseItem::CustomToolCall { .. }
-                    | ResponseItem::CustomToolCallOutput { .. }
-                    | ResponseItem::Reasoning { .. } => items.push(item),
-                    ResponseItem::WebSearchCall { .. } | ResponseItem::Other => {}
-                },
+                Ok(item) => {
+                    if is_persisted_response_item(&item) {
+                        items.push(item);
+                    }
+                }
                 Err(e) => {
                     warn!("failed to parse item: {v:?}, error: {e}");
                 }
             }
         }
 
-        let saved = SavedSession {
-            session: session.clone(),
-            items: items.clone(),
-            state: state.clone(),
-            session_id: session.id,
-        };
-
-        let file = std::fs::OpenOptions::new()
-            .append(true)
-            .read(true)
-            .open(path)?;
-
-        let (tx, rx) = mpsc::channel::<RolloutCmd>(256);
-        tokio::task::spawn(rollout_writer(
-            tokio::fs::File::from_std(file),
-            rx,
-            None,
-            cwd,
-        ));
         info!("Resumed rollout successfully from {path:?}");
-        Ok((Self { tx }, saved))
+        if items.is_empty() {
+            Ok(InitialHistory::New)
+        } else {
+            Ok(InitialHistory::Resumed(items))
+        }
     }
 
     pub async fn shutdown(&self) -> std::io::Result<()> {
@@ -316,17 +291,8 @@ async fn rollout_writer(
         match cmd {
             RolloutCmd::AddItems(items) => {
                 for item in items {
-                    match item {
-                        ResponseItem::Message { .. }
-                        | ResponseItem::LocalShellCall { .. }
-                        | ResponseItem::FunctionCall { .. }
-                        | ResponseItem::FunctionCallOutput { .. }
-                        | ResponseItem::CustomToolCall { .. }
-                        | ResponseItem::CustomToolCallOutput { .. }
-                        | ResponseItem::Reasoning { .. } => {
-                            writer.write_line(&item).await?;
-                        }
-                        ResponseItem::WebSearchCall { .. } | ResponseItem::Other => {}
+                    if is_persisted_response_item(&item) {
+                        writer.write_line(&item).await?;
                     }
                 }
             }

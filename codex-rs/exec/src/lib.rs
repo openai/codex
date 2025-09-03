@@ -8,6 +8,7 @@ use std::io::Read;
 use std::path::PathBuf;
 
 pub use cli::Cli;
+use codex_core::AuthManager;
 use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_core::ConversationManager;
 use codex_core::NewConversation;
@@ -20,7 +21,6 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::TaskCompleteEvent;
-use codex_login::AuthManager;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
@@ -191,6 +191,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     let conversation_manager = ConversationManager::new(AuthManager::shared(
         config.codex_home.clone(),
         config.preferred_auth_method,
+        config.responses_originator_header.clone(),
     ));
     let NewConversation {
         conversation_id: _,

@@ -143,7 +143,7 @@ impl PagerView {
             .dim()
             .render_ref(area, buf);
         let header = format!("/ {}", self.title);
-        Span::from(header).dim().render_ref(area, buf);
+        header.dim().render_ref(area, buf);
     }
 
     // Removed unused render_content_page (replaced by render_content_page_prepared)
@@ -545,7 +545,7 @@ mod tests {
     fn static_overlay_snapshot_basic() {
         // Prepare a static overlay with a few lines and a title
         let mut overlay = StaticOverlay::with_title(
-            vec![Line::from("one"), Line::from("two"), Line::from("three")],
+            vec!["one".into(), "two".into(), "three".into()],
             "S T A T I C".to_string(),
         );
         let mut term = Terminal::new(TestBackend::new(40, 10)).expect("term");
@@ -557,7 +557,7 @@ mod tests {
     #[test]
     fn pager_wrap_cache_reuses_for_same_width_and_rebuilds_on_change() {
         let long = "This is a long line that should wrap multiple times to ensure non-empty wrapped output.";
-        let mut pv = PagerView::new(vec![Line::from(long), Line::from(long)], "T".to_string(), 0);
+        let mut pv = PagerView::new(vec![long.into(), long.into()], "T".to_string(), 0);
 
         // Build cache at width 24
         pv.ensure_wrapped(24);
@@ -586,13 +586,13 @@ mod tests {
     #[test]
     fn pager_wrap_cache_invalidates_on_append() {
         let long = "Another long line for wrapping behavior verification.";
-        let mut pv = PagerView::new(vec![Line::from(long)], "T".to_string(), 0);
+        let mut pv = PagerView::new(vec![long.into()], "T".to_string(), 0);
         pv.ensure_wrapped(28);
         let (w1, _) = pv.cached();
         let len1 = w1.len();
 
         // Append new lines should cause ensure_wrapped to rebuild due to len change
-        pv.lines.extend([Line::from(long), Line::from(long)]);
+        pv.lines.extend([long.into(), long.into()]);
         pv.ensure_wrapped(28);
         let (w2, _) = pv.cached();
         assert!(
