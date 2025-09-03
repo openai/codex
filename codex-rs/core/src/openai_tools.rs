@@ -49,7 +49,7 @@ pub(crate) enum OpenAiTool {
     LocalShell {},
     // TODO: Understand why we get an error on web_search although the API docs say it's supported.
     // https://platform.openai.com/docs/guides/tools-web-search?api-mode=responses#:~:text=%7B%20type%3A%20%22web_search%22%20%7D%2C
-    #[serde(rename = "web_search_preview")]
+    #[serde(rename = "web_search")]
     WebSearch {},
     #[serde(rename = "custom")]
     Freeform(FreeformTool),
