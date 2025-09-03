@@ -1,6 +1,7 @@
 use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use codex_core::CodexAuth;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
@@ -23,7 +24,6 @@ use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TaskStartedEvent;
-use codex_login::CodexAuth;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;

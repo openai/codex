@@ -1,14 +1,14 @@
 use codex_common::CliConfigOverrides;
+use codex_core::CodexAuth;
+use codex_core::auth::CLIENT_ID;
+use codex_core::auth::OPENAI_API_KEY_ENV_VAR;
+use codex_core::auth::login_with_api_key;
+use codex_core::auth::logout;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
-use codex_login::AuthMode;
-use codex_login::CLIENT_ID;
-use codex_login::CodexAuth;
-use codex_login::OPENAI_API_KEY_ENV_VAR;
 use codex_login::ServerOptions;
-use codex_login::login_with_api_key;
-use codex_login::logout;
 use codex_login::run_login_server;
+use codex_protocol::mcp_protocol::AuthMode;
 use std::env;
 use std::path::PathBuf;
 

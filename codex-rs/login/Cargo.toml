@@ -9,6 +9,7 @@ workspace = true
 [dependencies]
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
+codex-core = { path = "../core" }
 codex-protocol = { path = "../protocol" }
 rand = "0.8"
 reqwest = { version = "0.12", features = ["json", "blocking"] }
