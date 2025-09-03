@@ -191,10 +191,12 @@ impl ChatWidget {
         // At the end of a reasoning block, record transcript-only content.
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
         if !self.full_reasoning_buffer.is_empty() {
-            self.add_to_history(history_cell::new_reasoning_block(
+            for cell in history_cell::new_reasoning_summary_block(
                 self.full_reasoning_buffer.clone(),
                 &self.config,
-            ));
+            ) {
+                self.add_boxed_history(cell);
+            }
         }
         self.reasoning_buffer.clear();
         self.full_reasoning_buffer.clear();
@@ -798,7 +800,7 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::ExitRequest);
             }
             SlashCommand::Logout => {
-                if let Err(e) = codex_login::logout(&self.config.codex_home) {
+                if let Err(e) = codex_core::auth::logout(&self.config.codex_home) {
                     tracing::error!("failed to logout: {e}");
                 }
                 self.app_event_tx.send(AppEvent::ExitRequest);
@@ -900,16 +902,14 @@ impl ChatWidget {
     }
 
     fn add_to_history(&mut self, cell: impl HistoryCell + 'static) {
+        self.add_boxed_history(Box::new(cell));
+    }
+
+    fn add_boxed_history(&mut self, cell: Box<dyn HistoryCell>) {
         if !cell.display_lines(u16::MAX).is_empty() {
             // Only break exec grouping if the cell renders visible lines.
             self.flush_active_exec_cell();
         }
-        self.app_event_tx
-            .send(AppEvent::InsertHistoryCell(Box::new(cell)));
-    }
-
-    fn add_boxed_history(&mut self, cell: Box<dyn HistoryCell>) {
-        self.flush_active_exec_cell();
         self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
     }
 

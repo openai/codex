@@ -8,6 +8,8 @@ use base64::Engine;
 use codex_ansi_escape::ansi_escape_line;
 use codex_common::create_config_summary_entries;
 use codex_common::elapsed::format_duration;
+use codex_core::auth::get_auth_file;
+use codex_core::auth::try_read_auth_json;
 use codex_core::config::Config;
 use codex_core::plan_tool::PlanItemArg;
 use codex_core::plan_tool::StepStatus;
@@ -18,8 +20,6 @@ use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TokenUsage;
-use codex_login::get_auth_file;
-use codex_login::try_read_auth_json;
 use codex_protocol::parse_command::ParsedCommand;
 use image::DynamicImage;
 use image::ImageReader;
@@ -27,7 +27,6 @@ use itertools::Itertools;
 use mcp_types::EmbeddedResourceResource;
 use mcp_types::ResourceLink;
 use ratatui::prelude::*;
-use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Styled;
@@ -101,15 +100,15 @@ impl HistoryCell for UserHistoryCell {
         );
 
         for line in wrapped {
-            lines.push(Line::from(vec!["▌".cyan().dim(), line.to_string().dim()]));
+            lines.push(vec!["▌".cyan().dim(), line.to_string().dim()].into());
         }
         lines
     }
 
     fn transcript_lines(&self) -> Vec<Line<'static>> {
         let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(Line::from("user".cyan().bold()));
-        lines.extend(self.message.lines().map(|l| Line::from(l.to_string())));
+        lines.push("user".cyan().bold().into());
+        lines.extend(self.message.lines().map(|l| l.to_string().into()));
         lines
     }
 }
@@ -148,7 +147,7 @@ impl HistoryCell for AgentMessageCell {
                     "  ".into()
                 });
                 spans.extend(piece.spans.into_iter());
-                out.push(Line::from(spans));
+                out.push(spans.into());
             }
             is_first_visual = false;
         }
@@ -158,7 +157,7 @@ impl HistoryCell for AgentMessageCell {
     fn transcript_lines(&self) -> Vec<Line<'static>> {
         let mut out: Vec<Line<'static>> = Vec::new();
         if self.is_first_line {
-            out.push(Line::from("codex".magenta().bold()));
+            out.push("codex".magenta().bold().into());
         }
         out.extend(self.lines.clone());
         out
@@ -242,9 +241,9 @@ impl HistoryCell for ExecCell {
             let cmd_display = strip_bash_lc_and_escape(&call.command);
             for (i, part) in cmd_display.lines().enumerate() {
                 if i == 0 {
-                    lines.push(Line::from(vec!["$ ".magenta(), part.to_string().into()]));
+                    lines.push(vec!["$ ".magenta(), part.to_string().into()].into());
                 } else {
-                    lines.push(Line::from(vec!["    ".into(), part.to_string().into()]));
+                    lines.push(vec!["    ".into(), part.to_string().into()].into());
                 }
             }
 
@@ -254,7 +253,7 @@ impl HistoryCell for ExecCell {
                     .duration
                     .map(format_duration)
                     .unwrap_or_else(|| "unknown".to_string());
-                let mut result = if output.exit_code == 0 {
+                let mut result: Line = if output.exit_code == 0 {
                     Line::from("✓".green().bold())
                 } else {
                     Line::from(vec![
@@ -373,7 +372,7 @@ impl ExecCell {
             for (title, line) in call_lines {
                 let prefix_len = 4 + title.len() + 1; // "  └ " + title + " "
                 let wrapped = crate::insert_history::word_wrap_lines(
-                    &[Line::from(line)],
+                    &[line.into()],
                     width.saturating_sub(prefix_len as u16),
                 );
                 let mut first_sub = true;
@@ -437,7 +436,7 @@ impl ExecCell {
             ]));
         } else {
             branch_consumed = true;
-            lines.push(Line::from(vec![bullet, " ".into(), title.bold()]));
+            lines.push(vec![bullet, " ".into(), title.bold()].into());
 
             // Wrap the command line.
             for (i, line) in cmd_display.lines().enumerate() {
@@ -450,9 +449,9 @@ impl ExecCell {
                 );
                 lines.extend(wrapped.into_iter().enumerate().map(|(j, l)| {
                     if i == 0 && j == 0 {
-                        Line::from(vec!["  └ ".dim(), l[4..].to_string().into()])
+                        vec!["  └ ".dim(), l[4..].to_string().into()].into()
                     } else {
-                        Line::from(l.to_string())
+                        l.to_string().into()
                     }
                 }));
             }
@@ -604,7 +603,7 @@ struct CompletedMcpToolCallWithImageOutput {
 }
 impl HistoryCell for CompletedMcpToolCallWithImageOutput {
     fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
-        vec![Line::from("tool result (image output omitted)")]
+        vec!["tool result (image output omitted)".into()]
     }
 }
 
@@ -696,9 +695,9 @@ pub(crate) fn new_session_info(
         PlainHistoryCell { lines: Vec::new() }
     } else {
         let lines = vec![
-            Line::from("model changed:".magenta().bold()),
-            Line::from(format!("requested: {}", config.model)),
-            Line::from(format!("used: {model}")),
+            "model changed:".magenta().bold().into(),
+            format!("requested: {}", config.model).into(),
+            format!("used: {model}").into(),
         ];
         PlainHistoryCell { lines }
     }
@@ -854,13 +853,7 @@ pub(crate) fn new_completed_mcp_tool_call(
             }
         }
         Err(e) => {
-            lines.push(Line::from(vec![
-                Span::styled(
-                    "Error: ",
-                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(e),
-            ]));
+            lines.push(vec!["Error: ".red().bold(), e.into()].into());
         }
     };
 
@@ -873,7 +866,7 @@ pub(crate) fn new_status_output(
     session_id: &Option<Uuid>,
 ) -> PlainHistoryCell {
     let mut lines: Vec<Line<'static>> = Vec::new();
-    lines.push(Line::from("/status".magenta()));
+    lines.push("/status".magenta().into());
 
     let config_entries = create_config_summary_entries(config);
     let lookup = |k: &str| -> String {
@@ -885,10 +878,7 @@ pub(crate) fn new_status_output(
     };
 
     // 📂 Workspace
-    lines.push(Line::from(vec![
-        padded_emoji("📂").into(),
-        "Workspace".bold(),
-    ]));
+    lines.push(vec![padded_emoji("📂").into(), "Workspace".bold()].into());
     // Path (home-relative, e.g., ~/code/project)
     let cwd_str = match relativize_to_home(&config.cwd) {
         Some(rel) if !rel.as_os_str().is_empty() => {
@@ -898,22 +888,16 @@ pub(crate) fn new_status_output(
         Some(_) => "~".to_string(),
         None => config.cwd.display().to_string(),
     };
-    lines.push(Line::from(vec!["  • Path: ".into(), cwd_str.into()]));
+    lines.push(vec!["  • Path: ".into(), cwd_str.into()].into());
     // Approval mode (as-is)
-    lines.push(Line::from(vec![
-        "  • Approval Mode: ".into(),
-        lookup("approval").into(),
-    ]));
+    lines.push(vec!["  • Approval Mode: ".into(), lookup("approval").into()].into());
     // Sandbox (simplified name only)
     let sandbox_name = match &config.sandbox_policy {
         SandboxPolicy::DangerFullAccess => "danger-full-access",
         SandboxPolicy::ReadOnly => "read-only",
         SandboxPolicy::WorkspaceWrite { .. } => "workspace-write",
     };
-    lines.push(Line::from(vec![
-        "  • Sandbox: ".into(),
-        sandbox_name.into(),
-    ]));
+    lines.push(vec!["  • Sandbox: ".into(), sandbox_name.into()].into());
 
     // AGENTS.md files discovered via core's project_doc logic
     let agents_list = {
@@ -956,85 +940,62 @@ pub(crate) fn new_status_output(
         }
     };
     if agents_list.is_empty() {
-        lines.push(Line::from("  • AGENTS files: (none)"));
+        lines.push("  • AGENTS files: (none)".into());
     } else {
-        lines.push(Line::from(vec![
-            "  • AGENTS files: ".into(),
-            agents_list.join(", ").into(),
-        ]));
+        lines.push(vec!["  • AGENTS files: ".into(), agents_list.join(", ").into()].into());
     }
-    lines.push(Line::from(""));
+    lines.push("".into());
 
     // 👤 Account (only if ChatGPT tokens exist), shown under the first block
     let auth_file = get_auth_file(&config.codex_home);
     if let Ok(auth) = try_read_auth_json(&auth_file)
         && let Some(tokens) = auth.tokens.clone()
     {
-        lines.push(Line::from(vec![
-            padded_emoji("👤").into(),
-            "Account".bold(),
-        ]));
-        lines.push(Line::from("  • Signed in with ChatGPT"));
+        lines.push(vec![padded_emoji("👤").into(), "Account".bold()].into());
+        lines.push("  • Signed in with ChatGPT".into());
 
         let info = tokens.id_token;
         if let Some(email) = &info.email {
-            lines.push(Line::from(vec!["  • Login: ".into(), email.clone().into()]));
+            lines.push(vec!["  • Login: ".into(), email.clone().into()].into());
         }
 
         match auth.openai_api_key.as_deref() {
             Some(key) if !key.is_empty() => {
-                lines.push(Line::from(
-                    "  • Using API key. Run codex login to use ChatGPT plan",
-                ));
+                lines.push("  • Using API key. Run codex login to use ChatGPT plan".into());
             }
             _ => {
                 let plan_text = info
                     .get_chatgpt_plan_type()
                     .map(|s| title_case(&s))
                     .unwrap_or_else(|| "Unknown".to_string());
-                lines.push(Line::from(vec!["  • Plan: ".into(), plan_text.into()]));
+                lines.push(vec!["  • Plan: ".into(), plan_text.into()].into());
             }
         }
 
-        lines.push(Line::from(""));
+        lines.push("".into());
     }
 
     // 🧠 Model
-    lines.push(Line::from(vec![padded_emoji("🧠").into(), "Model".bold()]));
-    lines.push(Line::from(vec![
-        "  • Name: ".into(),
-        config.model.clone().into(),
-    ]));
+    lines.push(vec![padded_emoji("🧠").into(), "Model".bold()].into());
+    lines.push(vec!["  • Name: ".into(), config.model.clone().into()].into());
     let provider_disp = pretty_provider_name(&config.model_provider_id);
-    lines.push(Line::from(vec![
-        "  • Provider: ".into(),
-        provider_disp.into(),
-    ]));
+    lines.push(vec!["  • Provider: ".into(), provider_disp.into()].into());
     // Only show Reasoning fields if present in config summary
     let reff = lookup("reasoning effort");
     if !reff.is_empty() {
-        lines.push(Line::from(vec![
-            "  • Reasoning Effort: ".into(),
-            title_case(&reff).into(),
-        ]));
+        lines.push(vec!["  • Reasoning Effort: ".into(), title_case(&reff).into()].into());
     }
     let rsum = lookup("reasoning summaries");
     if !rsum.is_empty() {
-        lines.push(Line::from(vec![
-            "  • Reasoning Summaries: ".into(),
-            title_case(&rsum).into(),
-        ]));
+        lines.push(vec!["  • Reasoning Summaries: ".into(), title_case(&rsum).into()].into());
     }
 
-    lines.push(Line::from(""));
+    lines.push("".into());
 
     // 📊 Token Usage
-    lines.push(Line::from(vec!["📊 ".into(), "Token Usage".bold()]));
+    lines.push(vec!["📊 ".into(), "Token Usage".bold()].into());
     if let Some(session_id) = session_id {
-        lines.push(Line::from(vec![
-            "  • Session ID: ".into(),
-            session_id.to_string().into(),
-        ]));
+        lines.push(vec!["  • Session ID: ".into(), session_id.to_string().into()].into());
     }
     // Input: <input> [+ <cached> cached]
     let mut input_line_spans: Vec<Span<'static>> = vec![
@@ -1064,17 +1025,14 @@ pub(crate) fn new_status_output(
 /// Render a summary of configured MCP servers from the current `Config`.
 pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
     let lines: Vec<Line<'static>> = vec![
-        Line::from("/mcp".magenta()),
-        Line::from(""),
-        Line::from(vec!["🔌  ".into(), "MCP Tools".bold()]),
-        Line::from(""),
-        Line::from("  • No MCP servers configured.".italic()),
+        "/mcp".magenta().into(),
+        "".into(),
+        vec!["🔌  ".into(), "MCP Tools".bold()].into(),
+        "".into(),
+        "  • No MCP servers configured.".italic().into(),
         Line::from(vec![
             "    See the ".into(),
-            Span::styled(
-                "\u{1b}]8;;https://github.com/openai/codex/blob/main/codex-rs/config.md#mcp_servers\u{7}MCP docs\u{1b}]8;;\u{7}",
-                Style::default().add_modifier(Modifier::UNDERLINED),
-            ),
+            "\u{1b}]8;;https://github.com/openai/codex/blob/main/codex-rs/config.md#mcp_servers\u{7}MCP docs\u{1b}]8;;\u{7}".underlined(),
             " to configure them.".into(),
         ])
         .style(Style::default().add_modifier(Modifier::DIM)),
@@ -1089,15 +1047,15 @@ pub(crate) fn new_mcp_tools_output(
     tools: std::collections::HashMap<String, mcp_types::Tool>,
 ) -> PlainHistoryCell {
     let mut lines: Vec<Line<'static>> = vec![
-        Line::from("/mcp".magenta()),
-        Line::from(""),
-        Line::from(vec!["🔌  ".into(), "MCP Tools".bold()]),
-        Line::from(""),
+        "/mcp".magenta().into(),
+        "".into(),
+        vec!["🔌  ".into(), "MCP Tools".bold()].into(),
+        "".into(),
     ];
 
     if tools.is_empty() {
-        lines.push(Line::from("  • No MCP tools available.".italic()));
-        lines.push(Line::from(""));
+        lines.push("  • No MCP tools available.".italic().into());
+        lines.push("".into());
         return PlainHistoryCell { lines };
     }
 
@@ -1110,18 +1068,12 @@ pub(crate) fn new_mcp_tools_output(
             .collect();
         names.sort();
 
-        lines.push(Line::from(vec![
-            "  • Server: ".into(),
-            server.clone().into(),
-        ]));
+        lines.push(vec!["  • Server: ".into(), server.clone().into()].into());
 
         if !cfg.command.is_empty() {
             let cmd_display = format!("{} {}", cfg.command, cfg.args.join(" "));
 
-            lines.push(Line::from(vec![
-                "    • Command: ".into(),
-                cmd_display.into(),
-            ]));
+            lines.push(vec!["    • Command: ".into(), cmd_display.into()].into());
         }
 
         if let Some(env) = cfg.env.as_ref()
@@ -1129,19 +1081,13 @@ pub(crate) fn new_mcp_tools_output(
         {
             let mut env_pairs: Vec<String> = env.iter().map(|(k, v)| format!("{k}={v}")).collect();
             env_pairs.sort();
-            lines.push(Line::from(vec![
-                "    • Env: ".into(),
-                env_pairs.join(" ").into(),
-            ]));
+            lines.push(vec!["    • Env: ".into(), env_pairs.join(" ").into()].into());
         }
 
         if names.is_empty() {
-            lines.push(Line::from("    • Tools: (none)"));
+            lines.push("    • Tools: (none)".into());
         } else {
-            lines.push(Line::from(vec![
-                "    • Tools: ".into(),
-                names.join(", ").into(),
-            ]));
+            lines.push(vec!["    • Tools: ".into(), names.join(", ").into()].into());
         }
         lines.push(Line::from(""));
     }
@@ -1301,6 +1247,44 @@ pub(crate) fn new_reasoning_block(
     TranscriptOnlyHistoryCell { lines }
 }
 
+pub(crate) fn new_reasoning_summary_block(
+    full_reasoning_buffer: String,
+    config: &Config,
+) -> Vec<Box<dyn HistoryCell>> {
+    if config.use_experimental_reasoning_summary {
+        // Experimental format is following:
+        // ** header **
+        //
+        // reasoning summary
+        //
+        // So we need to strip header from reasoning summary
+        if let Some(open) = full_reasoning_buffer.find("**") {
+            let after_open = &full_reasoning_buffer[(open + 2)..];
+            if let Some(close) = after_open.find("**") {
+                let after_close_idx = open + 2 + close + 2;
+                let header_buffer = full_reasoning_buffer[..after_close_idx].to_string();
+                let summary_buffer = full_reasoning_buffer[after_close_idx..].to_string();
+
+                let mut header_lines: Vec<Line<'static>> = Vec::new();
+                header_lines.push(Line::from("Thinking".magenta().italic()));
+                append_markdown(&header_buffer, &mut header_lines, config);
+
+                let mut summary_lines: Vec<Line<'static>> = Vec::new();
+                summary_lines.push(Line::from("Thinking".magenta().bold()));
+                append_markdown(&summary_buffer, &mut summary_lines, config);
+
+                return vec![
+                    Box::new(TranscriptOnlyHistoryCell {
+                        lines: header_lines,
+                    }),
+                    Box::new(AgentMessageCell::new(summary_lines, true)),
+                ];
+            }
+        }
+    }
+    vec![Box::new(new_reasoning_block(full_reasoning_buffer, config))]
+}
+
 fn output_lines(
     output: Option<&CommandOutput>,
     only_err: bool,
@@ -1346,7 +1330,7 @@ fn output_lines(
     let show_ellipsis = total > 2 * limit;
     if show_ellipsis {
         let omitted = total - 2 * limit;
-        out.push(Line::from(format!("… +{omitted} lines")));
+        out.push(format!("… +{omitted} lines").into());
     }
 
     let tail_start = if show_ellipsis {
@@ -1379,14 +1363,14 @@ fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
         .unwrap_or_default();
 
     let invocation_spans = vec![
-        Span::styled(invocation.server.clone(), Style::default().fg(Color::Cyan)),
-        Span::raw("."),
-        Span::styled(invocation.tool.clone(), Style::default().fg(Color::Cyan)),
-        Span::raw("("),
-        Span::styled(args_str, Style::default().add_modifier(Modifier::DIM)),
-        Span::raw(")"),
+        invocation.server.clone().cyan(),
+        ".".into(),
+        invocation.tool.clone().cyan(),
+        "(".into(),
+        args_str.dim(),
+        ")".into(),
     ];
-    Line::from(invocation_spans)
+    invocation_spans.into()
 }
 
 #[cfg(test)]

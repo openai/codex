@@ -195,7 +195,15 @@ impl WidgetRef for CommandPopup {
                 })
                 .collect()
         };
-        render_rows(area, buf, &rows_all, &self.state, MAX_POPUP_ROWS, false);
+        render_rows(
+            area,
+            buf,
+            &rows_all,
+            &self.state,
+            MAX_POPUP_ROWS,
+            false,
+            "no matches",
+        );
     }
 }
 

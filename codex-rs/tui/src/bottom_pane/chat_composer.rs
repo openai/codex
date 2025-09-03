@@ -1262,9 +1262,9 @@ impl WidgetRef for ChatComposer {
                 let key_hint_style = Style::default().fg(Color::Cyan);
                 let mut hint = if self.ctrl_c_quit_hint {
                     vec![
-                        Span::from(" "),
+                        " ".into(),
                         "Ctrl+C again".set_style(key_hint_style),
-                        Span::from(" to quit"),
+                        " to quit".into(),
                     ]
                 } else {
                     let newline_hint_key = if self.use_shift_enter_hint {
@@ -1273,28 +1273,28 @@ impl WidgetRef for ChatComposer {
                         "Ctrl+J"
                     };
                     vec![
-                        Span::from(" "),
+                        " ".into(),
                         "⏎".set_style(key_hint_style),
-                        Span::from(" send   "),
+                        " send   ".into(),
                         newline_hint_key.set_style(key_hint_style),
-                        Span::from(" newline   "),
+                        " newline   ".into(),
                         "Ctrl+T".set_style(key_hint_style),
-                        Span::from(" transcript   "),
+                        " transcript   ".into(),
                         "Ctrl+C".set_style(key_hint_style),
-                        Span::from(" quit"),
+                        " quit".into(),
                     ]
                 };
 
                 if !self.ctrl_c_quit_hint && self.esc_backtrack_hint {
-                    hint.push(Span::from("   "));
+                    hint.push("   ".into());
                     hint.push("Esc".set_style(key_hint_style));
-                    hint.push(Span::from(" edit prev"));
+                    hint.push(" edit prev".into());
                 }
 
                 // Append token/context usage info to the footer hints when available.
                 if let Some(token_usage_info) = &self.token_usage_info {
                     let token_usage = &token_usage_info.total_token_usage;
-                    hint.push(Span::from("   "));
+                    hint.push("   ".into());
                     hint.push(
                         Span::from(format!("{} tokens used", token_usage.blended_total()))
                             .style(Style::default().add_modifier(Modifier::DIM)),
@@ -1309,7 +1309,7 @@ impl WidgetRef for ChatComposer {
                         } else {
                             100
                         };
-                        hint.push(Span::from("   "));
+                        hint.push("   ".into());
                         hint.push(
                             Span::from(format!("{percent_remaining}% context left"))
                                 .style(Style::default().add_modifier(Modifier::DIM)),
@@ -2042,7 +2042,7 @@ mod tests {
                 composer.handle_paste(paste.clone());
                 composer
                     .textarea
-                    .set_cursor((placeholder.len() - pos_from_end) as usize);
+                    .set_cursor(placeholder.len() - pos_from_end);
                 composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
                 let result = (
                     composer.textarea.text().contains(&placeholder),
