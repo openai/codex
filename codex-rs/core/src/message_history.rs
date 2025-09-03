@@ -264,8 +264,6 @@ pub(crate) fn lookup(log_id: u64, offset: usize, config: &Config) -> Option<Hist
     None
 }
 
-// Shared lock handled inline in lookup using std::fs::File::try_lock_shared (Unix) or try_lock (Windows).
-
 /// On Unix systems ensure the file permissions are `0o600` (rw-------). If the
 /// permissions cannot be changed the error is propagated to the caller.
 #[cfg(unix)]
