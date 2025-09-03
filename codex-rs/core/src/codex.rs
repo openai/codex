@@ -193,6 +193,7 @@ impl Codex {
             config.clone(),
             auth_manager.clone(),
             tx_event.clone(),
+            conversation_history.clone(),
         )
         .await
         .map_err(|e| {
@@ -355,6 +356,7 @@ impl Session {
         config: Arc<Config>,
         auth_manager: Arc<AuthManager>,
         tx_event: Sender<Event>,
+        initial_history: InitialHistory,
     ) -> anyhow::Result<(Arc<Self>, TurnContext)> {
         let session_id = Uuid::new_v4();
         let ConfigureSession {
@@ -474,6 +476,13 @@ impl Session {
         });
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
+        // If resuming, also emit the converted initial history right after configured.
+        let initial_history_events = match &initial_history {
+            InitialHistory::New => Vec::new(),
+            InitialHistory::Resumed(items) => {
+                sess.response_items_to_events_with_id(INITIAL_SUBMIT_ID, items)
+            }
+        };
         let events = std::iter::once(Event {
             id: INITIAL_SUBMIT_ID.to_owned(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
@@ -483,6 +492,7 @@ impl Session {
                 history_entry_count,
             }),
         })
+        .chain(initial_history_events.into_iter())
         .chain(post_session_configured_error_events.into_iter());
         for event in events {
             if let Err(e) = tx_event.send(event).await {
@@ -544,6 +554,26 @@ impl Session {
 
     async fn record_initial_history_resumed(&self, items: Vec<ResponseItem>) {
         self.record_conversation_items(&items).await;
+    }
+
+    // Helper: convert a list of `ResponseItem`s into `Event`s with a specific id,
+    // applying the session's raw reasoning visibility. Not public; used internally
+    // for initial history emission and similar cases.
+    fn response_items_to_events_with_id(&self, id: &str, items: &[ResponseItem]) -> Vec<Event> {
+        let mut out: Vec<Event> = Vec::new();
+        for item in items {
+            let mut msgs: Vec<EventMsg> = (item).into();
+            if !self.show_raw_agent_reasoning {
+                msgs.retain(|m| !matches!(m, EventMsg::AgentReasoningRawContent(_)));
+            }
+            for msg in msgs {
+                out.push(Event {
+                    id: id.to_string(),
+                    msg,
+                });
+            }
+        }
+        out
     }
 
     /// Sends the given event to the client and swallows the send event, if
