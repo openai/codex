@@ -635,6 +635,28 @@ pub struct UserMessageEvent {
     pub kind: Option<InputMessageKind>,
 }
 
+impl<T, U> From<(T, U)> for InputMessageKind
+where
+    T: AsRef<str>,
+    U: AsRef<str>,
+{
+    fn from(value: (T, U)) -> Self {
+        let (role, message) = value;
+        let role = role.as_ref();
+        let message = message.as_ref();
+        let trimmed = message.trim_start();
+        if trimmed.starts_with("<environment_context>") {
+            InputMessageKind::EnvironmentContext
+        } else if trimmed.starts_with("<user_instructions>") {
+            InputMessageKind::UserInstructions
+        } else if role == "system" {
+            InputMessageKind::SystemInstructions
+        } else {
+            InputMessageKind::Plain
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AgentMessageDeltaEvent {
     pub delta: String,
