@@ -46,6 +46,7 @@ use crate::config_types::ShellEnvironmentPolicy;
 use crate::conversation_history::ConversationHistory;
 use crate::conversation_manager::InitialHistory;
 use crate::environment_context::EnvironmentContext;
+use crate::user_instructions::UserInstructions;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::error::SandboxErr;
