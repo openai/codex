@@ -7,7 +7,12 @@ use serde::Deserializer;
 use serde::Serialize;
 use serde::ser::Serializer;
 
+use crate::protocol::AgentMessageEvent;
+use crate::protocol::AgentReasoningEvent;
+use crate::protocol::AgentReasoningRawContentEvent;
+use crate::protocol::EventMsg;
 use crate::protocol::InputItem;
+use crate::protocol::WebSearchEndEvent;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -306,6 +311,63 @@ impl std::ops::Deref for FunctionCallOutputPayload {
     type Target = str;
     fn deref(&self) -> &Self::Target {
         &self.content
+    }
+}
+
+// Lightweight, lossless mapping from model `ResponseItem` values to one or more
+// `EventMsg` payloads that UIs can render directly. Variants that require
+// side-effects (e.g., FunctionCall, LocalShellCall, CustomToolCall) do not
+// emit any events here and are handled by higher layers.
+impl From<&ResponseItem> for Vec<EventMsg> {
+    fn from(item: &ResponseItem) -> Self {
+        let mut events: Vec<EventMsg> = Vec::new();
+
+        match item {
+            ResponseItem::Message { content, .. } => {
+                for content_item in content {
+                    if let ContentItem::OutputText { text } = content_item {
+                        events.push(EventMsg::AgentMessage(AgentMessageEvent {
+                            message: text.clone(),
+                        }));
+                    }
+                }
+            }
+            ResponseItem::Reasoning {
+                summary, content, ..
+            } => {
+                for ReasoningItemReasoningSummary::SummaryText { text } in summary {
+                    events.push(EventMsg::AgentReasoning(AgentReasoningEvent {
+                        text: text.clone(),
+                    }));
+                }
+
+                if let Some(items) = content {
+                    for c in items {
+                        let text = match c {
+                            ReasoningItemContent::ReasoningText { text }
+                            | ReasoningItemContent::Text { text } => text,
+                        };
+                        events.push(EventMsg::AgentReasoningRawContent(
+                            AgentReasoningRawContentEvent { text: text.clone() },
+                        ));
+                    }
+                }
+            }
+            ResponseItem::WebSearchCall {
+                id,
+                action: WebSearchAction::Search { query },
+                ..
+            } => {
+                let call_id = id.clone().unwrap_or_else(|| "".to_string());
+                events.push(EventMsg::WebSearchEnd(WebSearchEndEvent {
+                    call_id,
+                    query: query.clone(),
+                }));
+            }
+            _ => {}
+        }
+
+        events
     }
 }
 
