@@ -46,6 +46,7 @@ use crate::config_types::ShellEnvironmentPolicy;
 use crate::conversation_history::ConversationHistory;
 use crate::conversation_manager::InitialHistory;
 use crate::environment_context::EnvironmentContext;
+use crate::user_instructions::UserInstructions;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::error::SandboxErr;
@@ -541,7 +542,9 @@ impl Session {
         // TODO: Those items shouldn't be "user messages" IMO. Maybe developer messages.
         let mut conversation_items = Vec::<ResponseItem>::with_capacity(2);
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
-            conversation_items.push(Prompt::format_user_instructions_message(user_instructions));
+            conversation_items.push(ResponseItem::from(UserInstructions::new(
+                user_instructions.to_string(),
+            )));
         }
         conversation_items.push(ResponseItem::from(EnvironmentContext::new(
             Some(turn_context.cwd.clone()),

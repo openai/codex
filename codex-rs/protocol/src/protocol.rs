@@ -27,6 +27,13 @@ use crate::models::ResponseItem;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
 
+/// Open/close tags for special user-input blocks. Used across crates to avoid
+/// duplicated hardcoded strings.
+pub const USER_INSTRUCTIONS_OPEN_TAG: &str = "<user_instructions>";
+pub const USER_INSTRUCTIONS_CLOSE_TAG: &str = "</user_instructions>";
+pub const ENVIRONMENT_CONTEXT_OPEN_TAG: &str = "<environment_context>";
+pub const ENVIRONMENT_CONTEXT_CLOSE_TAG: &str = "</environment_context>";
+
 /// Submission Queue Entry - requests from user
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Submission {
@@ -622,10 +629,6 @@ pub enum InputMessageKind {
     UserInstructions,
     /// XML-wrapped environment context (<environment_context>...)
     EnvironmentContext,
-    /// Any additional developer-authored instructions
-    DeveloperInstructions,
-    /// System-level instructions
-    SystemInstructions,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -641,16 +644,13 @@ where
     U: AsRef<str>,
 {
     fn from(value: (T, U)) -> Self {
-        let (role, message) = value;
-        let role = role.as_ref();
+        let (_role, message) = value;
         let message = message.as_ref();
         let trimmed = message.trim_start();
-        if trimmed.starts_with("<environment_context>") {
+        if trimmed.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG) {
             InputMessageKind::EnvironmentContext
-        } else if trimmed.starts_with("<user_instructions>") {
+        } else if trimmed.starts_with(USER_INSTRUCTIONS_OPEN_TAG) {
             InputMessageKind::UserInstructions
-        } else if role == "system" {
-            InputMessageKind::SystemInstructions
         } else {
             InputMessageKind::Plain
         }
