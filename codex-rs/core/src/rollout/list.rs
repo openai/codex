@@ -84,6 +84,7 @@ pub(crate) async fn get_conversations(
 ) -> io::Result<ConversationsPage> {
     let mut root = codex_home.to_path_buf();
     root.push(SESSIONS_SUBDIR);
+
     if !root.exists() {
         return Ok(ConversationsPage {
             items: Vec::new(),
@@ -186,9 +187,11 @@ async fn traverse_directories_for_paths(
 /// The cursor orders files by timestamp desc, then UUID desc.
 fn parse_cursor(token: &str) -> Option<Cursor> {
     let (file_ts, uuid_str) = token.split_once('|')?;
+
     let Ok(uuid) = Uuid::parse_str(uuid_str) else {
         return None;
     };
+
     let format: &[FormatItem] =
         format_description!("[year]-[month]-[day]T[hour]-[minute]-[second]");
     let ts = PrimitiveDateTime::parse(file_ts, format).ok()?.assume_utc();
