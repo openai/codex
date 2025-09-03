@@ -22,8 +22,9 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
         // Refresh the cached latest version in the background so TUI startup
         // isn’t blocked by a network call. The UI reads the previously cached
         // value (if any) for this run; the next run shows the banner if needed.
+        let originator = config.responses_originator_header.clone();
         tokio::spawn(async move {
-            check_for_update(&version_file, config.responses_originator_header)
+            check_for_update(&version_file, &originator)
                 .await
                 .inspect_err(|e| tracing::error!("Failed to update version: {e}"))
         });
