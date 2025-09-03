@@ -1385,6 +1385,7 @@ model_verbosity = "high"
             use_experimental_streamable_shell_tool: false,
             include_view_image_tool: true,
             disable_paste_burst: false,
+            use_experimental_reasoning_summary: false,
         };
 
         assert_eq!(expected_gpt5_profile_config, gpt5_profile_config);
