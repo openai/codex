@@ -660,6 +660,10 @@ where
         }
     }
 }
+<<<<<<< HEAD
+=======
+
+>>>>>>> b05f2205e (send user message)
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AgentMessageDeltaEvent {
     pub delta: String,
