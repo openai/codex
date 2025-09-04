@@ -318,7 +318,9 @@ pub struct Profile {
 #[derive(Deserialize, Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Tools {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub web_search: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub view_image: Option<bool>,
 }
 
@@ -328,12 +330,12 @@ pub struct Tools {
 pub struct SandboxSettings {
     #[serde(default)]
     pub writable_roots: Vec<PathBuf>,
-    #[serde(default)]
-    pub network_access: bool,
-    #[serde(default)]
-    pub exclude_tmpdir_env_var: bool,
-    #[serde(default)]
-    pub exclude_slash_tmp: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub network_access: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exclude_tmpdir_env_var: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exclude_slash_tmp: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]

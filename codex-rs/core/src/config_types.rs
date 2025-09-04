@@ -92,9 +92,9 @@ impl From<SandboxWorkspaceWrite> for codex_protocol::mcp_protocol::SandboxSettin
     fn from(sandbox_workspace_write: SandboxWorkspaceWrite) -> Self {
         Self {
             writable_roots: sandbox_workspace_write.writable_roots,
-            network_access: sandbox_workspace_write.network_access,
-            exclude_tmpdir_env_var: sandbox_workspace_write.exclude_tmpdir_env_var,
-            exclude_slash_tmp: sandbox_workspace_write.exclude_slash_tmp,
+            network_access: Some(sandbox_workspace_write.network_access),
+            exclude_tmpdir_env_var: Some(sandbox_workspace_write.exclude_tmpdir_env_var),
+            exclude_slash_tmp: Some(sandbox_workspace_write.exclude_slash_tmp),
         }
     }
 }

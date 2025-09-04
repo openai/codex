@@ -89,9 +89,9 @@ async fn get_config_toml_parses_all_fields() {
             sandbox_mode: Some(SandboxMode::WorkspaceWrite),
             sandbox_settings: Some(SandboxSettings {
                 writable_roots: vec!["/tmp".into()],
-                network_access: true,
-                exclude_tmpdir_env_var: true,
-                exclude_slash_tmp: true,
+                network_access: Some(true),
+                exclude_tmpdir_env_var: Some(true),
+                exclude_slash_tmp: Some(true),
             }),
             model: Some("gpt-5".into()),
             model_reasoning_effort: Some(ReasoningEffort::High),
