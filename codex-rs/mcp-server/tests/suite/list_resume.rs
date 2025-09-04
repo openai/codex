@@ -77,6 +77,7 @@ async fn test_list_and_resume_conversations() {
     assert!(!reached_scan_cap);
     // Newest first; preview text should match
     assert_eq!(items[0].preview, "Hello A");
+    assert_eq!(items[1].preview, "Hello B");
     assert!(items[0].path.is_absolute());
     assert!(next_cursor.is_some());
 
@@ -101,8 +102,8 @@ async fn test_list_and_resume_conversations() {
         ..
     } = to_response::<ListConversationsResponse>(resp2).expect("deserialize response");
     assert_eq!(items2.len(), 1);
-    assert_eq!(items2[0].preview, "Hello B");
-    assert!(next2.is_none());
+    assert_eq!(items2[0].preview, "Hello C");
+    assert!(next2.is_some());
 
     // Now resume one of the sessions and expect a SessionConfigured notification and response.
     let resume_req_id = mcp
