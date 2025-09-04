@@ -4,6 +4,7 @@ use crate::exec_command::strip_bash_lc_and_escape;
 use crate::markdown::append_markdown;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
+use crate::render::line_utils::push_owned_lines;
 use crate::slash_command::SlashCommand;
 use crate::text_formatting::format_and_truncate_tool_result;
 use crate::wrapping::RtOptions;
@@ -268,13 +269,13 @@ impl ExecCell {
     }
 
     fn exploring_display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut lines: Vec<Line<'static>> = Vec::new();
+        let mut out: Vec<Line<'static>> = Vec::new();
         let active_start_time = self
             .calls
             .iter()
             .find(|c| c.output.is_none())
             .and_then(|c| c.start_time);
-        lines.push(Line::from(vec![
+        out.push(Line::from(vec![
             if self.is_active() {
                 // Show an animated spinner while exploring
                 spinner(active_start_time)
@@ -289,7 +290,7 @@ impl ExecCell {
             },
         ]));
         let mut calls = self.calls.clone();
-        let mut first = true;
+        let mut out_indented = Vec::new();
         while !calls.is_empty() {
             let mut call = calls.remove(0);
             if call
@@ -363,12 +364,7 @@ impl ExecCell {
             };
             for (title, line) in call_lines {
                 let line = Line::from(line);
-                let initial_indent = Line::from(vec![
-                    if first { "  └ ".dim() } else { "    ".into() },
-                    title.cyan(),
-                    " ".into(),
-                ]);
-                first = false;
+                let initial_indent = Line::from(vec![title.cyan(), " ".into()]);
                 let subsequent_indent = " ".repeat(initial_indent.width()).into();
                 let wrapped = word_wrap_line(
                     &line,
@@ -376,10 +372,11 @@ impl ExecCell {
                         .initial_indent(initial_indent)
                         .subsequent_indent(subsequent_indent),
                 );
-                lines.extend(wrapped.iter().map(|l| line_to_static(l)));
+                push_owned_lines(&wrapped, &mut out_indented);
             }
         }
-        lines
+        out.extend(prefix_lines(out_indented, "  └ ".dim(), "    ".into()));
+        out
     }
 
     fn command_display_lines(&self, width: u16) -> Vec<Line<'static>> {
