@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use codex_core::protocol::AskForApproval;
-use codex_login::AuthMode;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
@@ -33,7 +32,6 @@ sandbox_mode = "workspace-write"
 model_reasoning_summary = "detailed"
 model_reasoning_effort = "high"
 model_verbosity = "medium"
-preferred_auth_method = "apikey"
 profile = "test"
 
 [sandbox_workspace_write]
@@ -103,7 +101,6 @@ async fn get_config_toml_parses_all_fields() {
                 web_search: Some(false),
                 view_image: Some(true),
             }),
-            preferred_auth_method: Some(AuthMode::ApiKey),
             profile: Some("test".to_string()),
             profiles: HashMap::from([(
                 "test".into(),
@@ -159,7 +156,6 @@ async fn get_config_toml_empty() {
             model_reasoning_summary: None,
             model_verbosity: None,
             tools: None,
-            preferred_auth_method: None,
             profile: None,
             profiles: HashMap::new(),
         },

@@ -522,7 +522,6 @@ impl From<ConfigToml> for UserSavedConfig {
             model_reasoning_summary: config_toml.model_reasoning_summary,
             model_verbosity: config_toml.model_verbosity,
             tools: config_toml.tools.map(From::from),
-            preferred_auth_method: config_toml.preferred_auth_method,
             profile: config_toml.profile,
             profiles,
         }

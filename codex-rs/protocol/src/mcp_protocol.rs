@@ -292,10 +292,6 @@ pub struct UserSavedConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Tools>,
 
-    // Auth
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub preferred_auth_method: Option<AuthMode>,
-
     /// Profiles
     #[serde(skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
