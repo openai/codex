@@ -11,7 +11,6 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
-use ratatui::style::Styled;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -37,7 +36,7 @@ use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
 use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
-use crate::key_labels;
+use crate::key_hint;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -1260,40 +1259,35 @@ impl WidgetRef for ChatComposer {
             }
             ActivePopup::None => {
                 let bottom_line_rect = popup_rect;
-                let key_hint_style = Style::default().fg(Color::Cyan);
-                let ctrl_prefix = key_labels::ctrl_prefix();
-                let shift_prefix = key_labels::shift_prefix();
-                let ctrl_c_hint = key_labels::shortcut(ctrl_prefix, "C");
-                let mut hint = if self.ctrl_c_quit_hint {
-                    let ctrl_c_again_hint = format!("{ctrl_c_hint} again");
+                let mut hint: Vec<Span<'static>> = if self.ctrl_c_quit_hint {
                     vec![
                         " ".into(),
-                        Span::from(ctrl_c_again_hint).set_style(key_hint_style),
+                        key_hint::ctrl('C'),
+                        " again".into(),
                         " to quit".into(),
                     ]
                 } else {
                     let newline_hint_key = if self.use_shift_enter_hint {
-                        key_labels::shortcut(shift_prefix, "⏎")
+                        key_hint::shift('⏎')
                     } else {
-                        key_labels::shortcut(ctrl_prefix, "J")
+                        key_hint::ctrl('J')
                     };
-                    let ctrl_t_hint = key_labels::shortcut(ctrl_prefix, "T");
                     vec![
                         " ".into(),
-                        "⏎".set_style(key_hint_style),
+                        key_hint::plain('⏎'),
                         " send   ".into(),
-                        Span::from(newline_hint_key).set_style(key_hint_style),
+                        newline_hint_key,
                         " newline   ".into(),
-                        Span::from(ctrl_t_hint).set_style(key_hint_style),
+                        key_hint::ctrl('T'),
                         " transcript   ".into(),
-                        Span::from(ctrl_c_hint).set_style(key_hint_style),
+                        key_hint::ctrl('C'),
                         " quit".into(),
                     ]
                 };
 
                 if !self.ctrl_c_quit_hint && self.esc_backtrack_hint {
                     hint.push("   ".into());
-                    hint.push("Esc".set_style(key_hint_style));
+                    hint.push(key_hint::plain("Esc"));
                     hint.push(" edit prev".into());
                 }
 

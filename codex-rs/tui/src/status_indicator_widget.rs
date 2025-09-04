@@ -14,7 +14,7 @@ use ratatui::widgets::WidgetRef;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
-use crate::key_labels;
+use crate::key_hint;
 use crate::shimmer::shimmer_spans;
 use crate::tui::FrameRequester;
 use textwrap::Options as TwOptions;
@@ -131,8 +131,8 @@ impl WidgetRef for StatusIndicatorWidget {
             }
         }
         if !self.queued_messages.is_empty() {
-            let shortcut = key_labels::shortcut(key_labels::alt_prefix(), "↑");
-            lines.push(Line::from(vec!["   ".into(), shortcut.cyan(), " edit".into()]).dim());
+            let shortcut = key_hint::alt("↑");
+            lines.push(Line::from(vec!["   ".into(), shortcut, " edit".into()]).dim());
         }
 
         let paragraph = Paragraph::new(lines);

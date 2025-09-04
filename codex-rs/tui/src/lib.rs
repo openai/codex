@@ -41,7 +41,7 @@ mod file_search;
 mod get_git_diff;
 mod history_cell;
 pub mod insert_history;
-mod key_labels;
+mod key_hint;
 pub mod live_wrap;
 mod markdown;
 mod markdown_stream;
