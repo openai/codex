@@ -1286,9 +1286,7 @@ impl WidgetRef for ChatComposer {
                     let last_token_usage = &token_usage_info.last_token_usage;
                     if let Some(context_window) = token_usage_info.model_context_window {
                         let percent_remaining: u8 = if context_window > 0 {
-                            // Use a fixed baseline of 10,000 tokens.
-                            last_token_usage
-                                .percent_of_context_window_remaining(context_window, 10_000)
+                            last_token_usage.percent_of_context_window_remaining(context_window)
                         } else {
                             100
                         };
