@@ -52,16 +52,19 @@ pub(crate) fn map_response_item_to_event_messages(
             events
         }
 
-        ResponseItem::WebSearchCall { id, action, .. } => match action {
-            WebSearchAction::Search { query } => {
-                let call_id = id.clone().unwrap_or_else(|| "".to_string());
-                vec![EventMsg::WebSearchEnd(WebSearchEndEvent {
-                    call_id,
-                    query: query.clone(),
-                })]
-            }
-            WebSearchAction::Other => Vec::new(),
-        },
+        ResponseItem::WebSearchCall { id, action, .. }
+            if matches!(action, WebSearchAction::Search { .. }) =>
+        {
+            let call_id = id.clone().unwrap_or_else(|| "".to_string());
+            let query = match action {
+                WebSearchAction::Search { query } => query.clone(),
+                _ => unreachable!(),
+            };
+            vec![EventMsg::WebSearchEnd(WebSearchEndEvent { call_id, query })]
+        }
+
+        // Other web search actions emit no events
+        ResponseItem::WebSearchCall { .. } => Vec::new(),
 
         // Variants that require side effects are handled by higher layers and do not emit events here.
         ResponseItem::FunctionCall { .. }
