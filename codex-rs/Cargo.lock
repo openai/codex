@@ -923,6 +923,7 @@ dependencies = [
  "serde",
  "serde_bytes",
  "serde_json",
+ "serde_with",
  "strum 0.27.2",
  "strum_macros 0.27.2",
  "tracing",
