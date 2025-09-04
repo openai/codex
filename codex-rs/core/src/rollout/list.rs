@@ -167,8 +167,9 @@ async fn traverse_directories_for_paths(
                     if items.len() == page_size {
                         break 'outer;
                     }
-                    let head =
-                        read_first_jsonl_records(&path, HEAD_RECORD_LIMIT).await.unwrap_or_default();
+                    let head = read_first_jsonl_records(&path, HEAD_RECORD_LIMIT)
+                        .await
+                        .unwrap_or_default();
                     items.push(ConversationItem { path, head });
                 }
             }

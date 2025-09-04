@@ -114,6 +114,9 @@ pub(crate) struct ChatWidget {
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
+    // When resuming an existing session (selected via resume picker), avoid an
+    // immediate redraw on SessionConfigured to prevent a gratuitous UI flicker.
+    suppress_session_configured_redraw: bool,
     // User messages queued while a turn is in progress
     queued_user_messages: VecDeque<UserMessage>,
 }
@@ -164,7 +167,9 @@ impl ChatWidget {
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
         }
-        self.request_redraw();
+        if !self.suppress_session_configured_redraw {
+            self.request_redraw();
+        }
     }
 
     fn on_agent_message(&mut self, message: String) {
@@ -649,6 +654,7 @@ impl ChatWidget {
             session_id: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: true,
+            suppress_session_configured_redraw: false,
         }
     }
 
@@ -698,6 +704,7 @@ impl ChatWidget {
             session_id: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: false,
+            suppress_session_configured_redraw: true,
         }
     }
 
@@ -1047,7 +1054,8 @@ impl ChatWidget {
 
     fn on_user_message_event(&mut self, event: UserMessageEvent) {
         match event.kind {
-            Some(InputMessageKind::EnvironmentContext) | Some(InputMessageKind::UserInstructions) => {
+            Some(InputMessageKind::EnvironmentContext)
+            | Some(InputMessageKind::UserInstructions) => {
                 return;
             }
             _ => {}

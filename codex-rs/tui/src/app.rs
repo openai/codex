@@ -3,8 +3,8 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::chatwidget::ChatWidget;
 use crate::file_search::FileSearchManager;
-use crate::resume_picker::ResumeSelection;
 use crate::pager_overlay::Overlay;
+use crate::resume_picker::ResumeSelection;
 use crate::tui;
 use crate::tui::TuiEvent;
 use codex_ansi_escape::ansi_escape_line;
@@ -91,7 +91,9 @@ impl App {
                         auth_manager.clone(),
                     )
                     .await
-                    .wrap_err_with(|| format!("Failed to resume session from {}", path.display()))?;
+                    .wrap_err_with(|| {
+                        format!("Failed to resume session from {}", path.display())
+                    })?;
                 ChatWidget::new_from_existing(
                     config.clone(),
                     resumed.conversation,
