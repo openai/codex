@@ -37,6 +37,11 @@ See `codex-rs/tui/styles.md`.
 - Avoid churn: don’t refactor between equivalent forms (Span::styled ↔ set_style, Line::from ↔ .into()) without a clear readability or functional gain; follow file‑local conventions and do not introduce type annotations solely to satisfy .into().
 - Compactness: prefer the form that stays on one line after rustfmt; if only one of Line::from(vec![…]) or vec![…].into() avoids wrapping, choose that. If both wrap, pick the one with fewer wrapped lines.
 
+### Text wrapping
+- Always use textwrap::wrap to wrap plain strings.
+- If you have a ratatui Line, use the helpers in tui/src/wrapping.rs, e.g.
+  word_wrap_lines / word_wrap_line.
+
 ## Snapshot tests
 
 This repo uses snapshot tests (via `insta`), especially in `codex-rs/tui`, to validate rendered output. When UI or text output changes intentionally, update the snapshots as follows:
@@ -52,7 +57,3 @@ This repo uses snapshot tests (via `insta`), especially in `codex-rs/tui`, to va
 
 If you don’t have the tool:
 - `cargo install cargo-insta`
-
-### TUI Command Highlighting
-- Always parse and syntax-highlight the entire command or script before any wrapping; never re‑highlight per wrapped chunk.
-- Perform wrapping in a style‑preserving way and add visual prefixes/indents after wrapping so line breaks account for the intended gutter.

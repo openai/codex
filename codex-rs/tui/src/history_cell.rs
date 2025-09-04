@@ -2,9 +2,10 @@ use crate::diff_render::create_diff_summary;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::markdown::append_markdown;
+use crate::render::line_utils::line_to_static;
+use crate::render::line_utils::prefix_lines;
 use crate::slash_command::SlashCommand;
 use crate::text_formatting::format_and_truncate_tool_result;
-use crate::render::line_utils::line_to_static;
 use base64::Engine;
 use codex_ansi_escape::ansi_escape_line;
 use codex_common::create_config_summary_entries;
@@ -461,27 +462,6 @@ impl ExecCell {
         lines.extend(prefix_lines(body_lines, "  └ ".dim(), "    ".into()));
         lines
     }
-}
-
-fn prefix_lines(
-    lines: Vec<Line<'static>>,
-    initial_prefix: Span<'static>,
-    subsequent_prefix: Span<'static>,
-) -> Vec<Line<'static>> {
-    lines
-        .into_iter()
-        .enumerate()
-        .map(|(i, l)| {
-            let mut spans = Vec::with_capacity(l.spans.len() + 1);
-            spans.push(if i == 0 {
-                initial_prefix.clone()
-            } else {
-                subsequent_prefix.clone()
-            });
-            spans.extend(l.spans);
-            Line::from(spans)
-        })
-        .collect()
 }
 
 impl WidgetRef for &ExecCell {
