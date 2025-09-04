@@ -1,10 +1,14 @@
 use std::path::Path;
 use std::path::PathBuf;
 
+use chrono::DateTime;
+use chrono::TimeZone;
+use chrono::Utc;
 use codex_core::ConversationItem;
 use codex_core::ConversationsPage;
 use codex_core::Cursor;
 use codex_core::RolloutRecorder;
+use codex_core::protocol::InputMessageKind;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -14,8 +18,6 @@ use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize as _;
 use ratatui::text::Line;
-use chrono::{DateTime, TimeZone, Utc};
-use codex_core::protocol::InputMessageKind;
 
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
@@ -225,9 +227,10 @@ fn head_to_row(item: &ConversationItem) -> Option<Row> {
     let mut ts: Option<DateTime<Utc>> = None;
     if let Some(first) = item.head.first()
         && let Some(t) = first.get("timestamp").and_then(|v| v.as_str())
-            && let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(t) {
-                ts = Some(parsed.with_timezone(&Utc));
-            }
+        && let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(t)
+    {
+        ts = Some(parsed.with_timezone(&Utc));
+    }
 
     let preview = find_first_user_text(&item.head)?;
     if preview.trim().is_empty() {
@@ -412,14 +415,14 @@ mod tests {
         let head = vec![
             json!({"timestamp": "2025-01-01T00:00:00Z"}),
             json!({
-                "type":"message","role":"user","content":[{"type":"input_text","text":"<user_instructions>hi</user_instructions>"}] 
+                "type":"message","role":"user","content":[{"type":"input_text","text":"<user_instructions>hi</user_instructions>"}]
             }),
             json!({
-                "type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>cwd</environment_context>"}] 
+                "type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>cwd</environment_context>"}]
             }),
             json!({
-                "type":"message","role":"user","content":[{"type":"input_text","text":"real question"}] 
-            })
+                "type":"message","role":"user","content":[{"type":"input_text","text":"real question"}]
+            }),
         ];
         let first = find_first_user_text(&head);
         assert_eq!(first.as_deref(), Some("real question"));

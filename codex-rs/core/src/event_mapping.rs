@@ -24,7 +24,6 @@ pub(crate) fn map_response_item_to_event_messages(
             if role == "system" {
                 return Vec::new();
             }
-
             let events: Vec<EventMsg> = content
                 .iter()
                 .filter_map(|content_item| match content_item {
@@ -34,10 +33,6 @@ pub(crate) fn map_response_item_to_event_messages(
                         }))
                     }
                     ContentItem::InputText { text } => {
-                        // Do not surface system messages as user events.
-                        if role == "system" {
-                            continue;
-                        }
                         let trimmed = text.trim_start();
                         let kind = if trimmed.starts_with("<environment_context>") {
                             Some(InputMessageKind::EnvironmentContext)
@@ -46,10 +41,7 @@ pub(crate) fn map_response_item_to_event_messages(
                         } else {
                             Some(InputMessageKind::Plain)
                         };
-                        Some(EventMsg::UserMessage(UserMessageEvent {
-                            message: text.clone(),
-                            kind,
-                        }))
+                        Some(EventMsg::UserMessage(UserMessageEvent { message: text.clone(), kind }))
                     }
                     _ => None,
                 })

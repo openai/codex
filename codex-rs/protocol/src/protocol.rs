@@ -646,7 +646,6 @@ where
     fn from(value: (T, U)) -> Self {
         let (_role, message) = value;
         let message = message.as_ref();
-<<<<<<< HEAD
         let trimmed = message.trim();
         if trimmed.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG)
             && trimmed.ends_with(ENVIRONMENT_CONTEXT_CLOSE_TAG)
@@ -655,22 +654,12 @@ where
         } else if trimmed.starts_with(USER_INSTRUCTIONS_OPEN_TAG)
             && trimmed.ends_with(USER_INSTRUCTIONS_CLOSE_TAG)
         {
-=======
-        let trimmed = message.trim_start();
-        if trimmed.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG) {
-            InputMessageKind::EnvironmentContext
-        } else if trimmed.starts_with(USER_INSTRUCTIONS_OPEN_TAG) {
->>>>>>> 8a9f3af5c (send user message)
             InputMessageKind::UserInstructions
         } else {
             InputMessageKind::Plain
         }
     }
 }
-<<<<<<< HEAD
-=======
-
->>>>>>> b05f2205e (send user message)
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AgentMessageDeltaEvent {
     pub delta: String,
