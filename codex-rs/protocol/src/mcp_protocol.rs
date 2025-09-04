@@ -7,6 +7,7 @@ use crate::config_types::ReasoningEffort;
 use crate::config_types::ReasoningSummary;
 use crate::config_types::SandboxMode;
 use crate::protocol::AskForApproval;
+use crate::protocol::EventMsg;
 use crate::protocol::FileChange;
 use crate::protocol::ReviewDecision;
 use crate::protocol::SandboxPolicy;
@@ -182,7 +183,7 @@ pub struct ResumeConversationResponse {
     pub conversation_id: ConversationId,
     pub model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub initial_messages: Option<Vec<crate::protocol::EventMsg>>,
+    pub initial_messages: Option<Vec<EventMsg>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, TS)]
