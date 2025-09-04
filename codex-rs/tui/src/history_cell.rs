@@ -4,7 +4,7 @@ use crate::exec_command::strip_bash_lc_and_escape;
 use crate::markdown::append_markdown;
 use crate::slash_command::SlashCommand;
 use crate::text_formatting::format_and_truncate_tool_result;
-use crate::wrapping::to_owned_static_line;
+use crate::render::line_utils::line_to_static;
 use base64::Engine;
 use codex_ansi_escape::ansi_escape_line;
 use codex_common::create_config_summary_entries;
@@ -428,9 +428,9 @@ impl ExecCell {
         if highlighted_lines.len() == 1
             && highlighted_lines[0].width() < (width as usize).saturating_sub(reserved)
         {
-            let mut spans = vec![bullet, " ".into(), title.bold(), " ".into()];
-            spans.extend(highlighted_lines[0].spans.clone());
-            lines.push(Line::from(spans));
+            let mut line = Line::from(vec![bullet, " ".into(), title.bold(), " ".into()]);
+            line.extend(highlighted_lines[0].clone());
+            lines.push(line);
         } else {
             lines.push(vec![bullet, " ".into(), title.bold()].into());
 
@@ -441,7 +441,7 @@ impl ExecCell {
                     // Hyphenation likes to break words on hyphens, which is bad for bash scripts --because-of-flags.
                     .word_splitter(textwrap::WordSplitter::NoHyphenation);
                 let wrapped_borrowed = crate::wrapping::word_wrap_line(hl_line, opts);
-                body_lines.extend(wrapped_borrowed.iter().map(|l| to_owned_static_line(l)));
+                body_lines.extend(wrapped_borrowed.iter().map(|l| line_to_static(l)));
             }
         }
         if let Some(output) = call.output.as_ref()

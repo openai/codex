@@ -3,6 +3,8 @@ use ratatui::text::Span;
 use std::ops::Range;
 use textwrap::Options;
 
+use crate::render::line_utils::push_owned_lines;
+
 pub(crate) fn wrap_ranges<'a, O>(text: &str, width_or_options: O) -> Vec<Range<usize>>
 where
     O: Into<Options<'a>>,
@@ -218,21 +220,6 @@ where
     out
 }
 
-pub(crate) fn to_owned_static_line(l: &Line<'_>) -> Line<'static> {
-    Line {
-        style: l.style,
-        alignment: l.alignment,
-        spans: l
-            .spans
-            .iter()
-            .map(|s| Span {
-                style: s.style,
-                content: std::borrow::Cow::Owned(s.content.to_string()),
-            })
-            .collect(),
-    }
-}
-
 /// Wrap a sequence of lines, applying the initial indent only to the very first
 /// output line, and using the subsequent indent for all later wrapped pieces.
 #[allow(dead_code)]
@@ -256,9 +243,7 @@ where
             o
         };
         let wrapped = word_wrap_line(line, opts);
-        for w in wrapped {
-            out.push(to_owned_static_line(&w));
-        }
+        push_owned_lines(&wrapped, &mut out);
     }
 
     out

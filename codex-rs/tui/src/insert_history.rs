@@ -19,6 +19,7 @@ use ratatui::style::Modifier;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use textwrap::Options as TwOptions;
+use crate::render::line_utils::line_to_static;
 
 /// Insert `lines` above the viewport using the terminal's backend writer
 /// (avoids direct stdout references).
@@ -296,7 +297,7 @@ where
     let wrapped = textwrap::wrap(&flat, &opts);
 
     if wrapped.len() <= 1 {
-        return vec![to_owned_line(line)];
+        return vec![line_to_static(line)];
     }
 
     // Map wrapped pieces back to byte ranges in `flat` sequentially.
@@ -358,20 +359,7 @@ where
     out
 }
 
-fn to_owned_line(l: &Line<'_>) -> Line<'static> {
-    Line {
-        style: l.style,
-        alignment: l.alignment,
-        spans: l
-            .spans
-            .iter()
-            .map(|s| Span {
-                style: s.style,
-                content: std::borrow::Cow::Owned(s.content.to_string()),
-            })
-            .collect(),
-    }
-}
+ 
 
 fn slice_line_spans(
     original: &Line<'_>,
