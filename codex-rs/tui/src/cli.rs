@@ -13,11 +13,22 @@ pub struct Cli {
     #[arg(long = "image", short = 'i', value_name = "FILE", value_delimiter = ',', num_args = 1..)]
     pub images: Vec<PathBuf>,
 
-    /// Open a picker to resume a previous session recorded on disk instead of starting a new one.
+    /// Open an interactive picker to resume a previous session recorded on disk
+    /// instead of starting a new one.
+    ///
+    /// Notes:
+    /// - Mutually exclusive with `--continue`.
+    /// - The picker displays recent sessions and a preview of the first real user
+    ///   message to help you select the right one.
     #[arg(long = "resume", default_value_t = false, conflicts_with = "continue")]
     pub resume: bool,
 
     /// Continue the most recent conversation without showing the picker.
+    ///
+    /// Notes:
+    /// - Mutually exclusive with `--resume`.
+    /// - If no recorded sessions are found, this behaves like starting fresh.
+    /// - Equivalent to picking the newest item in the resume picker.
     #[arg(
         id = "continue",
         long = "continue",
