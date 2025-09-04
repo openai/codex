@@ -183,15 +183,15 @@ async fn helpers_are_available_and_do_not_panic() {
     let conversation_manager = Arc::new(ConversationManager::with_auth(CodexAuth::from_api_key(
         "test",
     )));
-    let mut w = ChatWidget::new(
-        cfg,
-        conversation_manager,
-        crate::tui::FrameRequester::test_dummy(),
-        tx,
-        None,
-        Vec::new(),
-        false,
-    );
+    let init = ChatWidgetInit {
+        config: cfg,
+        frame_requester: crate::tui::FrameRequester::test_dummy(),
+        app_event_tx: tx,
+        initial_prompt: None,
+        initial_images: Vec::new(),
+        enhanced_keys_supported: false,
+    };
+    let mut w = ChatWidget::new(init, conversation_manager);
     // Basic construction sanity.
     let _ = &mut w;
 }

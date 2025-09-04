@@ -91,6 +91,16 @@ struct RunningCommand {
     parsed_cmd: Vec<ParsedCommand>,
 }
 
+/// Common initialization parameters shared by all `ChatWidget` constructors.
+pub(crate) struct ChatWidgetInit {
+    pub(crate) config: Config,
+    pub(crate) frame_requester: FrameRequester,
+    pub(crate) app_event_tx: AppEventSender,
+    pub(crate) initial_prompt: Option<String>,
+    pub(crate) initial_images: Vec<PathBuf>,
+    pub(crate) enhanced_keys_supported: bool,
+}
+
 pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
@@ -613,14 +623,17 @@ impl ChatWidget {
     }
 
     pub(crate) fn new(
-        config: Config,
+        common: ChatWidgetInit,
         conversation_manager: Arc<ConversationManager>,
-        frame_requester: FrameRequester,
-        app_event_tx: AppEventSender,
-        initial_prompt: Option<String>,
-        initial_images: Vec<PathBuf>,
-        enhanced_keys_supported: bool,
     ) -> Self {
+        let ChatWidgetInit {
+            config,
+            frame_requester,
+            app_event_tx,
+            initial_prompt,
+            initial_images,
+            enhanced_keys_supported,
+        } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
@@ -660,15 +673,18 @@ impl ChatWidget {
 
     /// Create a ChatWidget attached to an existing conversation (e.g., a fork).
     pub(crate) fn new_from_existing(
-        config: Config,
+        common: ChatWidgetInit,
         conversation: std::sync::Arc<codex_core::CodexConversation>,
         session_configured: codex_core::protocol::SessionConfiguredEvent,
-        frame_requester: FrameRequester,
-        app_event_tx: AppEventSender,
-        enhanced_keys_supported: bool,
-        initial_prompt: Option<String>,
-        initial_images: Vec<PathBuf>,
     ) -> Self {
+        let ChatWidgetInit {
+            config,
+            frame_requester,
+            app_event_tx,
+            initial_prompt,
+            initial_images,
+            enhanced_keys_supported,
+        } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
 

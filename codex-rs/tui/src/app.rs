@@ -74,15 +74,17 @@ impl App {
         let enhanced_keys_supported = supports_keyboard_enhancement().unwrap_or(false);
 
         let chat_widget = match resume_selection {
-            ResumeSelection::StartFresh => ChatWidget::new(
-                config.clone(),
-                conversation_manager.clone(),
-                tui.frame_requester(),
-                app_event_tx.clone(),
-                initial_prompt.clone(),
-                initial_images.clone(),
-                enhanced_keys_supported,
-            ),
+            ResumeSelection::StartFresh => {
+                let init = crate::chatwidget::ChatWidgetInit {
+                    config: config.clone(),
+                    frame_requester: tui.frame_requester(),
+                    app_event_tx: app_event_tx.clone(),
+                    initial_prompt: initial_prompt.clone(),
+                    initial_images: initial_images.clone(),
+                    enhanced_keys_supported,
+                };
+                ChatWidget::new(init, conversation_manager.clone())
+            }
             ResumeSelection::Resume(path) => {
                 let resumed = conversation_manager
                     .resume_conversation_from_rollout(
@@ -94,15 +96,18 @@ impl App {
                     .wrap_err_with(|| {
                         format!("Failed to resume session from {}", path.display())
                     })?;
+                let init = crate::chatwidget::ChatWidgetInit {
+                    config: config.clone(),
+                    frame_requester: tui.frame_requester(),
+                    app_event_tx: app_event_tx.clone(),
+                    initial_prompt: initial_prompt.clone(),
+                    initial_images: initial_images.clone(),
+                    enhanced_keys_supported,
+                };
                 ChatWidget::new_from_existing(
-                    config.clone(),
+                    init,
                     resumed.conversation,
                     resumed.session_configured,
-                    tui.frame_requester(),
-                    app_event_tx.clone(),
-                    enhanced_keys_supported,
-                    initial_prompt.clone(),
-                    initial_images.clone(),
                 )
             }
         };
@@ -195,15 +200,15 @@ impl App {
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
         match event {
             AppEvent::NewSession => {
-                self.chat_widget = ChatWidget::new(
-                    self.config.clone(),
-                    self.server.clone(),
-                    tui.frame_requester(),
-                    self.app_event_tx.clone(),
-                    None,
-                    Vec::new(),
-                    self.enhanced_keys_supported,
-                );
+                let init = crate::chatwidget::ChatWidgetInit {
+                    config: self.config.clone(),
+                    frame_requester: tui.frame_requester(),
+                    app_event_tx: self.app_event_tx.clone(),
+                    initial_prompt: None,
+                    initial_images: Vec::new(),
+                    enhanced_keys_supported: self.enhanced_keys_supported,
+                };
+                self.chat_widget = ChatWidget::new(init, self.server.clone());
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::InsertHistoryCell(cell) => {
