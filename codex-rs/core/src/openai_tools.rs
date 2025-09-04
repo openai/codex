@@ -47,6 +47,8 @@ pub(crate) enum OpenAiTool {
     Function(ResponsesApiTool),
     #[serde(rename = "local_shell")]
     LocalShell {},
+    // TODO: Understand why we get an error on web_search although the API docs say it's supported.
+    // https://platform.openai.com/docs/guides/tools-web-search?api-mode=responses#:~:text=%7B%20type%3A%20%22web_search%22%20%7D%2C
     #[serde(rename = "web_search")]
     WebSearch {},
     #[serde(rename = "custom")]
@@ -67,6 +69,7 @@ pub(crate) struct ToolsConfig {
     pub plan_tool: bool,
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_request: bool,
+    pub include_view_image_tool: bool,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
@@ -77,6 +80,7 @@ pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) include_apply_patch_tool: bool,
     pub(crate) include_web_search_request: bool,
     pub(crate) use_streamable_shell_tool: bool,
+    pub(crate) include_view_image_tool: bool,
 }
 
 impl ToolsConfig {
@@ -89,6 +93,7 @@ impl ToolsConfig {
             include_apply_patch_tool,
             include_web_search_request,
             use_streamable_shell_tool,
+            include_view_image_tool,
         } = params;
         let mut shell_type = if *use_streamable_shell_tool {
             ConfigShellToolType::StreamableShell
@@ -120,6 +125,7 @@ impl ToolsConfig {
             plan_tool: *include_plan_tool,
             apply_patch_tool_type,
             web_search_request: *include_web_search_request,
+            include_view_image_tool: *include_view_image_tool,
         }
     }
 }
@@ -234,15 +240,17 @@ fn create_shell_tool_for_sandbox(sandbox_policy: &SandboxPolicy) -> OpenAiTool {
     let description = match sandbox_policy {
         SandboxPolicy::WorkspaceWrite {
             network_access,
+            writable_roots,
             ..
         } => {
             format!(
                 r#"
 The shell tool is used to execute shell commands.
-- When invoking the shell tool, your call will be running in a landlock sandbox, and some shell commands will require escalated privileges:
+- When invoking the shell tool, your call will be running in a sandbox, and some shell commands will require escalated privileges:
   - Types of actions that require escalated privileges:
-    - Reading files outside the current directory
-    - Writing files outside the current directory, and protected folders like .git or .env{}
+    - Writing files other than those in the writable roots
+      - writable roots:
+{}{}
   - Examples of commands that require escalated privileges:
     - git commit
     - npm install or pnpm install
@@ -251,8 +259,9 @@ The shell tool is used to execute shell commands.
 - When invoking a command that will require escalated privileges:
   - Provide the with_escalated_permissions parameter with the boolean value true
   - Include a short, 1 sentence explanation for why we need to run with_escalated_permissions in the justification parameter."#,
+                writable_roots.iter().map(|wr| format!("        - {}", wr.to_string_lossy())).collect::<Vec<String>>().join("\n"),
                 if !network_access {
-                    "\n  - Commands that require network access\n"
+                    "\n    - Commands that require network access\n"
                 } else {
                     ""
                 }
@@ -264,9 +273,8 @@ The shell tool is used to execute shell commands.
         SandboxPolicy::ReadOnly => {
             r#"
 The shell tool is used to execute shell commands.
-- When invoking the shell tool, your call will be running in a landlock sandbox, and some shell commands (including apply_patch) will require escalated permissions:
+- When invoking the shell tool, your call will be running in a sandbox, and some shell commands (including apply_patch) will require escalated permissions:
   - Types of actions that require escalated privileges:
-    - Reading files outside the current directory
     - Writing files
     - Applying patches
   - Examples of commands that require escalated privileges:
@@ -292,6 +300,30 @@ The shell tool is used to execute shell commands.
         },
     })
 }
+
+fn create_view_image_tool() -> OpenAiTool {
+    // Support only local filesystem path.
+    let mut properties = BTreeMap::new();
+    properties.insert(
+        "path".to_string(),
+        JsonSchema::String {
+            description: Some("Local filesystem path to an image file".to_string()),
+        },
+    );
+
+    OpenAiTool::Function(ResponsesApiTool {
+        name: "view_image".to_string(),
+        description:
+            "Attach a local image (by filesystem path) to the conversation context for this turn."
+                .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["path".to_string()]),
+            additional_properties: Some(false),
+        },
+    })
+}
 /// TODO(dylan): deprecate once we get rid of json tool
 #[derive(Serialize, Deserialize)]
 pub(crate) struct ApplyPatchToolArgs {
@@ -307,12 +339,12 @@ pub fn create_tools_json_for_responses_api(
     let mut tools_json = Vec::new();
 
     for tool in tools {
-        tools_json.push(serde_json::to_value(tool)?);
+        let json = serde_json::to_value(tool)?;
+        tools_json.push(json);
     }
 
     Ok(tools_json)
 }
-
 /// Returns JSON values that are compatible with Function Calling in the
 /// Chat Completions API:
 /// https://platform.openai.com/docs/guides/function-calling?api-mode=chat
@@ -541,6 +573,11 @@ pub(crate) fn get_openai_tools(
         tools.push(OpenAiTool::WebSearch {});
     }
 
+    // Include the view_image tool so the agent can attach images to context.
+    if config.include_view_image_tool {
+        tools.push(create_view_image_tool());
+    }
+
     if let Some(mcp_tools) = mcp_tools {
         // Ensure deterministic ordering to maximize prompt cache hits.
         // HashMap iteration order is non-deterministic, so sort by fully-qualified tool name.
@@ -604,10 +641,14 @@ mod tests {
             include_apply_patch_tool: false,
             include_web_search_request: true,
             use_streamable_shell_tool: false,
+            include_view_image_tool: true,
         });
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
-        assert_eq_tool_names(&tools, &["local_shell", "update_plan", "web_search"]);
+        assert_eq_tool_names(
+            &tools,
+            &["local_shell", "update_plan", "web_search", "view_image"],
+        );
     }
 
     #[test]
@@ -621,10 +662,14 @@ mod tests {
             include_apply_patch_tool: false,
             include_web_search_request: true,
             use_streamable_shell_tool: false,
+            include_view_image_tool: true,
         });
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
-        assert_eq_tool_names(&tools, &["shell", "update_plan", "web_search"]);
+        assert_eq_tool_names(
+            &tools,
+            &["shell", "update_plan", "web_search", "view_image"],
+        );
     }
 
     #[test]
@@ -638,6 +683,7 @@ mod tests {
             include_apply_patch_tool: false,
             include_web_search_request: true,
             use_streamable_shell_tool: false,
+            include_view_image_tool: true,
         });
         let tools = get_openai_tools(
             &config,
@@ -660,8 +706,8 @@ mod tests {
                                     "number_property": { "type": "number" },
                                 },
                                 "required": [
-                                    "string_property".to_string(),
-                                    "number_property".to_string()
+                                    "string_property",
+                                    "number_property",
                                 ],
                                 "additionalProperties": Some(false),
                             },
@@ -679,11 +725,16 @@ mod tests {
 
         assert_eq_tool_names(
             &tools,
-            &["shell", "web_search", "test_server/do_something_cool"],
+            &[
+                "shell",
+                "web_search",
+                "view_image",
+                "test_server/do_something_cool",
+            ],
         );
 
         assert_eq!(
-            tools[2],
+            tools[3],
             OpenAiTool::Function(ResponsesApiTool {
                 name: "test_server/do_something_cool".to_string(),
                 parameters: JsonSchema::Object {
@@ -737,6 +788,7 @@ mod tests {
             include_apply_patch_tool: false,
             include_web_search_request: false,
             use_streamable_shell_tool: false,
+            include_view_image_tool: true,
         });
 
         // Intentionally construct a map with keys that would sort alphabetically.
@@ -794,6 +846,7 @@ mod tests {
             &tools,
             &[
                 "shell",
+                "view_image",
                 "test_server/cool",
                 "test_server/do",
                 "test_server/something",
@@ -812,6 +865,7 @@ mod tests {
             include_apply_patch_tool: false,
             include_web_search_request: true,
             use_streamable_shell_tool: false,
+            include_view_image_tool: true,
         });
 
         let tools = get_openai_tools(
@@ -837,10 +891,13 @@ mod tests {
             )])),
         );
 
-        assert_eq_tool_names(&tools, &["shell", "web_search", "dash/search"]);
+        assert_eq_tool_names(
+            &tools,
+            &["shell", "web_search", "view_image", "dash/search"],
+        );
 
         assert_eq!(
-            tools[2],
+            tools[3],
             OpenAiTool::Function(ResponsesApiTool {
                 name: "dash/search".to_string(),
                 parameters: JsonSchema::Object {
@@ -870,6 +927,7 @@ mod tests {
             include_apply_patch_tool: false,
             include_web_search_request: true,
             use_streamable_shell_tool: false,
+            include_view_image_tool: true,
         });
 
         let tools = get_openai_tools(
@@ -893,9 +951,12 @@ mod tests {
             )])),
         );
 
-        assert_eq_tool_names(&tools, &["shell", "web_search", "dash/paginate"]);
+        assert_eq_tool_names(
+            &tools,
+            &["shell", "web_search", "view_image", "dash/paginate"],
+        );
         assert_eq!(
-            tools[2],
+            tools[3],
             OpenAiTool::Function(ResponsesApiTool {
                 name: "dash/paginate".to_string(),
                 parameters: JsonSchema::Object {
@@ -923,6 +984,7 @@ mod tests {
             include_apply_patch_tool: false,
             include_web_search_request: true,
             use_streamable_shell_tool: false,
+            include_view_image_tool: true,
         });
 
         let tools = get_openai_tools(
@@ -946,9 +1008,9 @@ mod tests {
             )])),
         );
 
-        assert_eq_tool_names(&tools, &["shell", "web_search", "dash/tags"]);
+        assert_eq_tool_names(&tools, &["shell", "web_search", "view_image", "dash/tags"]);
         assert_eq!(
-            tools[2],
+            tools[3],
             OpenAiTool::Function(ResponsesApiTool {
                 name: "dash/tags".to_string(),
                 parameters: JsonSchema::Object {
@@ -979,6 +1041,7 @@ mod tests {
             include_apply_patch_tool: false,
             include_web_search_request: true,
             use_streamable_shell_tool: false,
+            include_view_image_tool: true,
         });
 
         let tools = get_openai_tools(
@@ -1002,9 +1065,9 @@ mod tests {
             )])),
         );
 
-        assert_eq_tool_names(&tools, &["shell", "web_search", "dash/value"]);
+        assert_eq_tool_names(&tools, &["shell", "web_search", "view_image", "dash/value"]);
         assert_eq!(
-            tools[2],
+            tools[3],
             OpenAiTool::Function(ResponsesApiTool {
                 name: "dash/value".to_string(),
                 parameters: JsonSchema::Object {
@@ -1019,5 +1082,85 @@ mod tests {
                 strict: false,
             })
         );
+    }
+
+    #[test]
+    fn test_shell_tool_for_sandbox_workspace_write() {
+        let sandbox_policy = SandboxPolicy::WorkspaceWrite {
+            writable_roots: vec!["workspace".into()],
+            network_access: false,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        };
+        let tool = super::create_shell_tool_for_sandbox(&sandbox_policy);
+        let OpenAiTool::Function(ResponsesApiTool {
+            description, name, ..
+        }) = &tool
+        else {
+            panic!("expected function tool");
+        };
+        assert_eq!(name, "shell");
+
+        let expected = r#"
+The shell tool is used to execute shell commands.
+- When invoking the shell tool, your call will be running in a sandbox, and some shell commands will require escalated privileges:
+  - Types of actions that require escalated privileges:
+    - Writing files other than those in the writable roots
+      - writable roots:
+        - workspace
+    - Commands that require network access
+
+  - Examples of commands that require escalated privileges:
+    - git commit
+    - npm install or pnpm install
+    - cargo build
+    - cargo test
+- When invoking a command that will require escalated privileges:
+  - Provide the with_escalated_permissions parameter with the boolean value true
+  - Include a short, 1 sentence explanation for why we need to run with_escalated_permissions in the justification parameter."#;
+        assert_eq!(description, expected);
+    }
+
+    #[test]
+    fn test_shell_tool_for_sandbox_readonly() {
+        let tool = super::create_shell_tool_for_sandbox(&SandboxPolicy::ReadOnly);
+        let OpenAiTool::Function(ResponsesApiTool {
+            description, name, ..
+        }) = &tool
+        else {
+            panic!("expected function tool");
+        };
+        assert_eq!(name, "shell");
+
+        let expected = r#"
+The shell tool is used to execute shell commands.
+- When invoking the shell tool, your call will be running in a sandbox, and some shell commands (including apply_patch) will require escalated permissions:
+  - Types of actions that require escalated privileges:
+    - Writing files
+    - Applying patches
+  - Examples of commands that require escalated privileges:
+    - apply_patch
+    - git commit
+    - npm install or pnpm install
+    - cargo build
+    - cargo test
+- When invoking a command that will require escalated privileges:
+  - Provide the with_escalated_permissions parameter with the boolean value true
+  - Include a short, 1 sentence explanation for why we need to run with_escalated_permissions in the justification parameter"#;
+        assert_eq!(description, expected);
+    }
+
+    #[test]
+    fn test_shell_tool_for_sandbox_danger_full_access() {
+        let tool = super::create_shell_tool_for_sandbox(&SandboxPolicy::DangerFullAccess);
+        let OpenAiTool::Function(ResponsesApiTool {
+            description, name, ..
+        }) = &tool
+        else {
+            panic!("expected function tool");
+        };
+        assert_eq!(name, "shell");
+
+        assert_eq!(description, "Runs a shell command and returns its output.");
     }
 }

@@ -26,7 +26,6 @@ use crate::protocol::SandboxPolicy;
 use crate::seatbelt::spawn_command_under_seatbelt;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
-use serde_bytes::ByteBuf;
 
 const DEFAULT_TIMEOUT_MS: u64 = 10_000;
 
@@ -39,6 +38,10 @@ const EXIT_CODE_SIGNAL_BASE: i32 = 128; // conventional shell: 128 + signal
 // I/O buffer sizing
 const READ_CHUNK_SIZE: usize = 8192; // bytes per read
 const AGGREGATE_BUFFER_INITIAL_CAPACITY: usize = 8 * 1024; // 8 KiB
+
+/// Limit the number of ExecCommandOutputDelta events emitted per exec call.
+/// Aggregation still collects full output; only the live event stream is capped.
+pub(crate) const MAX_EXEC_OUTPUT_DELTAS_PER_CALL: usize = 10_000;
 
 #[derive(Debug, Clone)]
 pub struct ExecParams {
@@ -344,6 +347,7 @@ async fn read_capped<R: AsyncRead + Unpin + Send + 'static>(
 ) -> io::Result<StreamOutput<Vec<u8>>> {
     let mut buf = Vec::with_capacity(AGGREGATE_BUFFER_INITIAL_CAPACITY);
     let mut tmp = [0u8; READ_CHUNK_SIZE];
+    let mut emitted_deltas: usize = 0;
 
     // No caps: append all bytes
 
@@ -353,7 +357,9 @@ async fn read_capped<R: AsyncRead + Unpin + Send + 'static>(
             break;
         }
 
-        if let Some(stream) = &stream {
+        if let Some(stream) = &stream
+            && emitted_deltas < MAX_EXEC_OUTPUT_DELTAS_PER_CALL
+        {
             let chunk = tmp[..n].to_vec();
             let msg = EventMsg::ExecCommandOutputDelta(ExecCommandOutputDeltaEvent {
                 call_id: stream.call_id.clone(),
@@ -362,7 +368,7 @@ async fn read_capped<R: AsyncRead + Unpin + Send + 'static>(
                 } else {
                     ExecOutputStream::Stdout
                 },
-                chunk: ByteBuf::from(chunk),
+                chunk,
             });
             let event = Event {
                 id: stream.sub_id.clone(),
@@ -370,6 +376,7 @@ async fn read_capped<R: AsyncRead + Unpin + Send + 'static>(
             };
             #[allow(clippy::let_unit_value)]
             let _ = stream.tx_event.send(event).await;
+            emitted_deltas += 1;
         }
 
         if let Some(tx) = &aggregate_tx {
