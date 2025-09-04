@@ -314,6 +314,7 @@ fn slice_line_spans<'a>(
 mod tests {
     use super::*;
     use itertools::Itertools as _;
+    use pretty_assertions::assert_eq;
     use ratatui::style::Color;
     use ratatui::style::Stylize;
 
