@@ -647,6 +647,14 @@ impl CodexMessageProcessor {
                 session_configured,
                 ..
             }) => {
+                let event = codex_core::protocol::Event {
+                    id: "".to_string(),
+                    msg: codex_core::protocol::EventMsg::SessionConfigured(
+                        session_configured.clone(),
+                    ),
+                };
+                self.outgoing.send_event_as_notification(&event, None).await;
+
                 // Reply with conversation id + model and initial messages (when present)
                 let response = codex_protocol::mcp_protocol::ResumeConversationResponse {
                     conversation_id: ConversationId(conversation_id),
