@@ -1,6 +1,7 @@
 //! Project-level documentation discovery.
 //!
-//! Project-level documentation can be stored in files named `AGENTS.md`.
+//! Project-level documentation can be stored in files named `AGENTS.md`
+//! and optionally `AGENTS.local.md`.
 //! We include the concatenation of all files found along the path from the
 //! repository root to the current working directory as follows:
 //!
@@ -17,8 +18,9 @@ use std::path::PathBuf;
 use tokio::io::AsyncReadExt;
 use tracing::error;
 
-/// Currently, we only match the filename `AGENTS.md` exactly.
-const CANDIDATE_FILENAMES: &[&str] = &["AGENTS.md"];
+/// Filenames considered for project documentation in each directory, in order.
+/// All that exist will be included, in this order.
+const CANDIDATE_FILENAMES: &[&str] = &["AGENTS.md", "AGENTS.local.md"];
 
 /// When both `Config::instructions` and the project doc are present, they will
 /// be concatenated with the following separator.
@@ -161,7 +163,6 @@ pub fn discover_project_doc_paths(config: &Config) -> std::io::Result<Vec<PathBu
                     // Allow regular files and symlinks; opening will later fail for dangling links.
                     if ft.is_file() || ft.is_symlink() {
                         found.push(candidate);
-                        break;
                     }
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
@@ -346,5 +347,25 @@ mod tests {
 
         let res = get_user_instructions(&cfg).await.expect("doc expected");
         assert_eq!(res, "root doc\n\ncrate doc");
+    }
+
+    /// When both `AGENTS.md` and `AGENTS.local.md` exist in a directory,
+    /// both are included in order (base first, then local).
+    #[tokio::test]
+    async fn includes_local_doc_after_base_in_same_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+
+        // Simulate a git repository at tmp (so search does not walk past it).
+        std::fs::write(tmp.path().join(".git"), "gitdir: nowhere").unwrap();
+
+        // Place both files in the working directory.
+        fs::write(tmp.path().join("AGENTS.md"), "base").unwrap();
+        fs::write(tmp.path().join("AGENTS.local.md"), "local").unwrap();
+
+        let res = get_user_instructions(&make_config(&tmp, 4096, None))
+            .await
+            .expect("doc expected");
+
+        assert_eq!(res, "base\n\nlocal");
     }
 }
