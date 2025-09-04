@@ -34,6 +34,10 @@ pub(crate) fn map_response_item_to_event_messages(
                         }))
                     }
                     ContentItem::InputText { text } => {
+                        // Do not surface system messages as user events.
+                        if role == "system" {
+                            continue;
+                        }
                         let trimmed = text.trim_start();
                         let kind = if trimmed.starts_with("<environment_context>") {
                             Some(InputMessageKind::EnvironmentContext)
