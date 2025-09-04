@@ -1075,8 +1075,6 @@ fn apply_patch_manual_approval_adjusts_header() {
 
 #[test]
 fn apply_patch_manual_flow_snapshot() {
-    use insta::assert_snapshot;
-
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
     let mut proposed_changes = HashMap::new();
@@ -1647,5 +1645,5 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     }
 
     let visual = vt_lines.join("\n");
-    insta::assert_snapshot!(visual);
+    assert_snapshot!(visual);
 }
