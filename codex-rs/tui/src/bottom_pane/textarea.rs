@@ -203,6 +203,16 @@ impl TextArea {
     }
 
     pub fn input(&mut self, event: KeyEvent) {
+        // Windows AltGr is reported as Ctrl+Alt. If the resulting character is printable
+        // and non‑alphanumeric (e.g., '{' or '}'), treat it as normal input so Windows
+        // users can type braces and other symbols via AltGr.
+        #[cfg(windows)]
+        if let KeyEvent { code: KeyCode::Char(c), modifiers, .. } = event {
+            if modifiers == (KeyModifiers::CONTROL | KeyModifiers::ALT) && !c.is_ascii_alphanumeric() {
+                self.insert_str(&c.to_string());
+                return;
+            }
+        }
         match event {
             // Some terminals (or configurations) send Control key chords as
             // C0 control characters without reporting the CONTROL modifier.
