@@ -542,9 +542,7 @@ impl Session {
         // TODO: Those items shouldn't be "user messages" IMO. Maybe developer messages.
         let mut conversation_items = Vec::<ResponseItem>::with_capacity(2);
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
-            conversation_items.push(ResponseItem::from(UserInstructions::new(
-                user_instructions.to_string(),
-            )));
+            conversation_items.push(UserInstructions::new(user_instructions.to_string()).into());
         }
         conversation_items.push(ResponseItem::from(EnvironmentContext::new(
             Some(turn_context.cwd.clone()),
@@ -570,22 +568,7 @@ impl Session {
             .collect()
     }
 
-    // Helper: convert a list of `ResponseItem`s into `Event`s with a specific id,
-    // applying the session's raw reasoning visibility. Not public; used internally
-    // for initial history emission and similar cases.
-    fn response_items_to_events_with_id(&self, id: &str, items: &[ResponseItem]) -> Vec<Event> {
-        let mut out: Vec<Event> = Vec::new();
-        for item in items {
-            let msgs = map_response_item_to_event_messages(item, self.show_raw_agent_reasoning);
-            for msg in msgs {
-                out.push(Event {
-                    id: id.to_string(),
-                    msg,
-                });
-            }
-        }
-        out
-    }
+    
 
     /// Sends the given event to the client and swallows the send event, if
     /// any, logging it as an error.

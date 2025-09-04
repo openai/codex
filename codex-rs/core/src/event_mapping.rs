@@ -24,13 +24,14 @@ pub(crate) fn map_response_item_to_event_messages(
             if role == "system" {
                 return Vec::new();
             }
-            let mut events = Vec::new();
-            for content_item in content {
-                match content_item {
+
+            let events: Vec<EventMsg> = content
+                .iter()
+                .filter_map(|content_item| match content_item {
                     ContentItem::OutputText { text } => {
-                        events.push(EventMsg::AgentMessage(AgentMessageEvent {
+                        Some(EventMsg::AgentMessage(AgentMessageEvent {
                             message: text.clone(),
-                        }));
+                        }))
                     }
                     ContentItem::InputText { text } => {
                         let trimmed = text.trim_start();
@@ -41,14 +42,14 @@ pub(crate) fn map_response_item_to_event_messages(
                         } else {
                             Some(InputMessageKind::Plain)
                         };
-                        events.push(EventMsg::UserMessage(UserMessageEvent {
+                        Some(EventMsg::UserMessage(UserMessageEvent {
                             message: text.clone(),
                             kind,
-                        }));
+                        }))
                     }
-                    _ => {}
-                }
-            }
+                    _ => None,
+                })
+                .collect();
             events
         }
 

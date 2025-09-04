@@ -19,12 +19,12 @@ impl UserInstructions {
         Self { text: text.into() }
     }
 
-    /// Serializes the user instructions to an XML-like block that starts
+    /// Serializes the user instructions to an XML-like tagged block that starts
     /// with <user_instructions> so clients can classify it.
     pub fn serialize_to_xml(self) -> String {
         format!(
-            "{USER_INSTRUCTIONS_OPEN_TAG}\n\n{t}\n\n{USER_INSTRUCTIONS_CLOSE_TAG}",
-            t = self.text
+            "{USER_INSTRUCTIONS_OPEN_TAG}\n\n{}\n\n{USER_INSTRUCTIONS_CLOSE_TAG}",
+            self.text
         )
     }
 }
