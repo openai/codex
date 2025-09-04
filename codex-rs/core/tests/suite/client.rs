@@ -13,6 +13,7 @@ use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::wait_for_event;
 use serde_json::json;
+use std::io::Write;
 use tempfile::TempDir;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -122,7 +123,6 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     let session_path = tmpdir.path().join("resume-session.jsonl");
     let mut f = std::fs::File::create(&session_path).unwrap();
     // First line: meta (content not used by reader other than non-empty)
-    use std::io::Write as _;
     writeln!(f, "{}", serde_json::json!({"meta":"test"})).unwrap();
 
     // Prior item: assistant message

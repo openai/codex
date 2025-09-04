@@ -559,10 +559,10 @@ impl Session {
     fn build_initial_messages(&self, items: &[ResponseItem]) -> Vec<EventMsg> {
         let mut out: Vec<EventMsg> = Vec::new();
         for item in items {
-            let mut msgs: Vec<EventMsg> = (item).into();
-            if !self.show_raw_agent_reasoning {
-                msgs.retain(|m| !matches!(m, EventMsg::AgentReasoningRawContent(_)));
-            }
+            let msgs = crate::event_mapping::map_response_item_to_event_messages(
+                item,
+                self.show_raw_agent_reasoning,
+            );
             out.extend(msgs);
         }
         out
@@ -2012,11 +2012,10 @@ async fn handle_response_item(
         ResponseItem::Message { .. }
         | ResponseItem::Reasoning { .. }
         | ResponseItem::WebSearchCall { .. } => {
-            let msgs: Vec<EventMsg> = (&item).into();
-            let mut msgs = msgs;
-            if !sess.show_raw_agent_reasoning {
-                msgs.retain(|m| !matches!(m, EventMsg::AgentReasoningRawContent(_)));
-            }
+            let msgs = crate::event_mapping::map_response_item_to_event_messages(
+                &item,
+                sess.show_raw_agent_reasoning,
+            );
             for msg in msgs {
                 let event = Event {
                     id: sub_id.to_string(),
