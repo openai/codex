@@ -53,8 +53,6 @@ mod shimmer;
 mod slash_command;
 mod status_indicator_widget;
 mod streaming;
-#[cfg(test)]
-mod test_snapshots;
 mod text_formatting;
 mod tui;
 mod user_approval_widget;

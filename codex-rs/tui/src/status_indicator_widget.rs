@@ -149,14 +149,6 @@ mod tests {
     use ratatui::backend::TestBackend;
     use tokio::sync::mpsc::unbounded_channel;
 
-    macro_rules! assert_snapshot {
-        ($($tt:tt)*) => {
-            crate::test_snapshots::with_snapshot_settings(|| {
-                insta::assert_snapshot!($($tt)*);
-            });
-        };
-    }
-
     #[test]
     fn renders_with_working_header() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
@@ -168,7 +160,7 @@ mod tests {
         terminal
             .draw(|f| w.render_ref(f.area(), f.buffer_mut()))
             .expect("draw");
-        assert_snapshot!(terminal.backend());
+        insta::assert_snapshot!(terminal.backend());
     }
 
     #[test]
@@ -182,7 +174,7 @@ mod tests {
         terminal
             .draw(|f| w.render_ref(f.area(), f.buffer_mut()))
             .expect("draw");
-        assert_snapshot!(terminal.backend());
+        insta::assert_snapshot!(terminal.backend());
     }
 
     #[test]
@@ -197,6 +189,6 @@ mod tests {
         terminal
             .draw(|f| w.render_ref(f.area(), f.buffer_mut()))
             .expect("draw");
-        assert_snapshot!(terminal.backend());
+        insta::assert_snapshot!(terminal.backend());
     }
 }

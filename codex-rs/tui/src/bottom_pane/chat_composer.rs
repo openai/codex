@@ -1366,14 +1366,6 @@ mod tests {
     use crate::bottom_pane::textarea::TextArea;
     use tokio::sync::mpsc::unbounded_channel;
 
-    macro_rules! assert_snapshot {
-        ($($tt:tt)*) => {
-            crate::test_snapshots::with_snapshot_settings(|| {
-                insta::assert_snapshot!($($tt)*);
-            });
-        };
-    }
-
     #[test]
     fn test_current_at_token_basic_cases() {
         let test_cases = vec![
@@ -1694,7 +1686,7 @@ mod tests {
                 .draw(|f| f.render_widget_ref(composer, f.area()))
                 .unwrap_or_else(|e| panic!("Failed to draw {name} composer: {e}"));
 
-            assert_snapshot!(name, terminal.backend());
+            insta::assert_snapshot!(name, terminal.backend());
         }
     }
 
@@ -1726,7 +1718,7 @@ mod tests {
             .unwrap_or_else(|e| panic!("Failed to draw composer: {e}"));
 
         // Visual snapshot should show the slash popup with /model as the first entry.
-        assert_snapshot!("slash_popup_mo", terminal.backend());
+        insta::assert_snapshot!("slash_popup_mo", terminal.backend());
     }
 
     #[test]
