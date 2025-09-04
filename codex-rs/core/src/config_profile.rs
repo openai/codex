@@ -22,3 +22,18 @@ pub struct ConfigProfile {
     pub chatgpt_base_url: Option<String>,
     pub experimental_instructions_file: Option<PathBuf>,
 }
+
+impl From<ConfigProfile> for codex_protocol::mcp_protocol::Profile {
+    fn from(config_profile: ConfigProfile) -> Self {
+        Self {
+            model: config_profile.model,
+            model_provider: config_profile.model_provider,
+            approval_policy: config_profile.approval_policy,
+            disable_response_storage: config_profile.disable_response_storage,
+            model_reasoning_effort: config_profile.model_reasoning_effort,
+            model_reasoning_summary: config_profile.model_reasoning_summary,
+            model_verbosity: config_profile.model_verbosity,
+            chatgpt_base_url: config_profile.chatgpt_base_url,
+        }
+    }
+}
