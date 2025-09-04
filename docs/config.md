@@ -576,7 +576,7 @@ This is analogous to `model_context_window`, but for the maximum number of outpu
 
 ## project_doc_max_bytes
 
-Maximum number of bytes to read from an `AGENTS.md` file to include in the instructions sent with the first turn of a session. Defaults to 32 KiB.
+Maximum number of bytes to read from an `AGENTS.md` file (including per‑directory `AGENTS.local.md`) to include in the instructions sent with the first turn of a session. Defaults to 32 KiB.
 
 ## tui
 

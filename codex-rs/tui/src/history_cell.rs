@@ -1159,15 +1159,19 @@ pub(crate) fn new_status_output(
     };
     lines.push(vec!["  • Sandbox: ".into(), sandbox_name.into()].into());
 
-    // AGENTS.md files discovered via core's project_doc logic
+    // AGENTS files discovered via core's project_doc logic
     let agents_list = {
         match discover_project_doc_paths(config) {
             Ok(paths) => {
                 let mut rels: Vec<String> = Vec::new();
                 for p in paths {
+                    let fname = p
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("AGENTS.md");
                     let display = if let Some(parent) = p.parent() {
                         if parent == config.cwd {
-                            "AGENTS.md".to_string()
+                            fname.to_string()
                         } else {
                             let mut cur = config.cwd.as_path();
                             let mut ups = 0usize;
@@ -1182,7 +1186,7 @@ pub(crate) fn new_status_output(
                             }
                             if reached {
                                 let up = format!("..{}", std::path::MAIN_SEPARATOR);
-                                format!("{}AGENTS.md", up.repeat(ups))
+                                format!("{}{}", up.repeat(ups), fname)
                             } else if let Ok(stripped) = p.strip_prefix(&config.cwd) {
                                 stripped.display().to_string()
                             } else {
