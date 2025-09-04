@@ -1251,27 +1251,32 @@ pub(crate) fn new_reasoning_summary_block(
         // reasoning summary
         //
         // So we need to strip header from reasoning summary
+        let full_reasoning_buffer = full_reasoning_buffer.trim();
         if let Some(open) = full_reasoning_buffer.find("**") {
             let after_open = &full_reasoning_buffer[(open + 2)..];
             if let Some(close) = after_open.find("**") {
                 let after_close_idx = open + 2 + close + 2;
-                let header_buffer = full_reasoning_buffer[..after_close_idx].to_string();
-                let summary_buffer = full_reasoning_buffer[after_close_idx..].to_string();
+                // if we don't have anything beyond `after_close_idx`
+                // then we don't have a summary to inject into history
+                if after_close_idx < full_reasoning_buffer.len() {
+                    let header_buffer = full_reasoning_buffer[..after_close_idx].to_string();
+                    let summary_buffer = full_reasoning_buffer[after_close_idx..].to_string();
 
-                let mut header_lines: Vec<Line<'static>> = Vec::new();
-                header_lines.push(Line::from("Thinking".magenta().italic()));
-                append_markdown(&header_buffer, &mut header_lines, config);
+                    let mut header_lines: Vec<Line<'static>> = Vec::new();
+                    header_lines.push(Line::from("Thinking".magenta().italic()));
+                    append_markdown(&header_buffer, &mut header_lines, config);
 
-                let mut summary_lines: Vec<Line<'static>> = Vec::new();
-                summary_lines.push(Line::from("Thinking".magenta().bold()));
-                append_markdown(&summary_buffer, &mut summary_lines, config);
+                    let mut summary_lines: Vec<Line<'static>> = Vec::new();
+                    summary_lines.push(Line::from("Thinking".magenta().bold()));
+                    append_markdown(&summary_buffer, &mut summary_lines, config);
 
-                return vec![
-                    Box::new(TranscriptOnlyHistoryCell {
-                        lines: header_lines,
-                    }),
-                    Box::new(AgentMessageCell::new(summary_lines, true)),
-                ];
+                    return vec![
+                        Box::new(TranscriptOnlyHistoryCell {
+                            lines: header_lines,
+                        }),
+                        Box::new(AgentMessageCell::new(summary_lines, true)),
+                    ];
+                }
             }
         }
     }
@@ -1369,6 +1374,34 @@ fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codex_core::config::Config;
+    use codex_core::config::ConfigOverrides;
+    use codex_core::config::ConfigToml;
+
+    fn test_config() -> Config {
+        Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            std::env::temp_dir(),
+        )
+        .expect("config")
+    }
+
+    fn render_lines(lines: &[Line<'static>]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    fn render_transcript(cell: &dyn HistoryCell) -> Vec<String> {
+        render_lines(&cell.transcript_lines())
+    }
 
     #[test]
     fn coalesces_sequential_reads_within_one_call() {
@@ -1409,16 +1442,7 @@ mod tests {
         );
 
         let lines = cell.display_lines(80);
-        let rendered = lines
-            .iter()
-            .map(|l| {
-                l.spans
-                    .iter()
-                    .map(|s| s.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
     }
 
@@ -1491,16 +1515,7 @@ mod tests {
         );
 
         let lines = cell.display_lines(80);
-        let rendered = lines
-            .iter()
-            .map(|l| {
-                l.spans
-                    .iter()
-                    .map(|s| s.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
     }
 
@@ -1538,16 +1553,7 @@ mod tests {
             Duration::from_millis(1),
         );
         let lines = cell.display_lines(80);
-        let rendered = lines
-            .iter()
-            .map(|l| {
-                l.spans
-                    .iter()
-                    .map(|s| s.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
     }
 
@@ -1579,16 +1585,7 @@ mod tests {
         // Small width to force wrapping on both lines
         let width: u16 = 28;
         let lines = cell.display_lines(width);
-        let rendered = lines
-            .iter()
-            .map(|l| {
-                l.spans
-                    .iter()
-                    .map(|s| s.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
     }
 
@@ -1615,16 +1612,7 @@ mod tests {
         );
         // Wide enough that it fits inline
         let lines = cell.display_lines(80);
-        let rendered = lines
-            .iter()
-            .map(|l| {
-                l.spans
-                    .iter()
-                    .map(|s| s.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
     }
 
@@ -1651,16 +1639,7 @@ mod tests {
             Duration::from_millis(1),
         );
         let lines = cell.display_lines(24);
-        let rendered = lines
-            .iter()
-            .map(|l| {
-                l.spans
-                    .iter()
-                    .map(|s| s.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
     }
 
@@ -1687,16 +1666,7 @@ mod tests {
             Duration::from_millis(1),
         );
         let lines = cell.display_lines(80);
-        let rendered = lines
-            .iter()
-            .map(|l| {
-                l.spans
-                    .iter()
-                    .map(|s| s.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
     }
 
@@ -1724,16 +1694,7 @@ mod tests {
             Duration::from_millis(1),
         );
         let lines = cell.display_lines(28);
-        let rendered = lines
-            .iter()
-            .map(|l| {
-                l.spans
-                    .iter()
-                    .map(|s| s.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
     }
 
@@ -1834,17 +1795,7 @@ mod tests {
         // Small width to force wrapping more clearly. Effective wrap width is width-1 due to the ▌ prefix.
         let width: u16 = 12;
         let lines = cell.display_lines(width);
-
-        let rendered = lines
-            .iter()
-            .map(|l| {
-                l.spans
-                    .iter()
-                    .map(|s| s.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let rendered = render_lines(&lines).join("\n");
 
         insta::assert_snapshot!(rendered);
     }
@@ -1876,16 +1827,7 @@ mod tests {
         let cell = new_plan_update(update);
         // Narrow width to force wrapping for both the note and steps
         let lines = cell.display_lines(32);
-        let rendered = lines
-            .iter()
-            .map(|l| {
-                l.spans
-                    .iter()
-                    .map(|s| s.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
     }
 
@@ -1907,16 +1849,91 @@ mod tests {
 
         let cell = new_plan_update(update);
         let lines = cell.display_lines(40);
-        let rendered = lines
-            .iter()
-            .map(|l| {
-                l.spans
-                    .iter()
-                    .map(|s| s.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+        let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
+    }
+
+    #[test]
+    fn reasoning_summary_block_returns_reasoning_cell_when_feature_disabled() {
+        let mut config = test_config();
+        config.use_experimental_reasoning_summary = false;
+
+        let cells =
+            new_reasoning_summary_block("Detailed reasoning goes here.".to_string(), &config);
+
+        assert_eq!(cells.len(), 1);
+        let rendered = render_transcript(cells[0].as_ref());
+        assert_eq!(rendered, vec!["thinking", "Detailed reasoning goes here."]);
+    }
+
+    #[test]
+    fn reasoning_summary_block_falls_back_when_header_is_missing() {
+        let mut config = test_config();
+        config.use_experimental_reasoning_summary = true;
+
+        let cells = new_reasoning_summary_block(
+            "**High level reasoning without closing".to_string(),
+            &config,
+        );
+
+        assert_eq!(cells.len(), 1);
+        let rendered = render_transcript(cells[0].as_ref());
+        assert_eq!(
+            rendered,
+            vec!["thinking", "**High level reasoning without closing"]
+        );
+    }
+
+    #[test]
+    fn reasoning_summary_block_falls_back_when_summary_is_missing() {
+        let mut config = test_config();
+        config.use_experimental_reasoning_summary = true;
+
+        let cells = new_reasoning_summary_block(
+            "**High level reasoning without closing**".to_string(),
+            &config,
+        );
+
+        assert_eq!(cells.len(), 1);
+        let rendered = render_transcript(cells[0].as_ref());
+        assert_eq!(
+            rendered,
+            vec!["thinking", "High level reasoning without closing"]
+        );
+
+        let cells = new_reasoning_summary_block(
+            "**High level reasoning without closing**\n\n  ".to_string(),
+            &config,
+        );
+
+        assert_eq!(cells.len(), 1);
+        let rendered = render_transcript(cells[0].as_ref());
+        assert_eq!(
+            rendered,
+            vec!["thinking", "High level reasoning without closing"]
+        );
+    }
+
+    #[test]
+    fn reasoning_summary_block_splits_header_and_summary_when_present() {
+        let mut config = test_config();
+        config.use_experimental_reasoning_summary = true;
+
+        let cells = new_reasoning_summary_block(
+            "**High level plan**\n\nWe should fix the bug next.".to_string(),
+            &config,
+        );
+
+        assert_eq!(cells.len(), 2);
+
+        let header_lines = render_transcript(cells[0].as_ref());
+        assert_eq!(header_lines, vec!["Thinking", "High level plan"]);
+
+        let summary_lines = render_transcript(cells[1].as_ref());
+
+        assert_eq!(
+            summary_lines,
+            vec!["codex", "Thinking", "We should fix the bug next."]
+        )
     }
 }
