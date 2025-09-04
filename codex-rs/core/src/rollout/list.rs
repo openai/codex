@@ -34,7 +34,8 @@ pub struct ConversationItem {
 }
 
 /// Hard cap to bound worst‑case work per request.
-const MAX_SCAN_FILES: usize = 50_000;
+const MAX_SCAN_FILES: usize = 10_000;
+const HEAD_RECORD_LIMIT: usize = 10;
 
 /// Pagination cursor identifying a file by timestamp and UUID.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -166,7 +167,9 @@ async fn traverse_directories_for_paths(
                     if items.len() == page_size {
                         break 'outer;
                     }
-                    let head = read_first_jsonl_records(&path, 5).await.unwrap_or_default();
+                    let head = read_first_jsonl_records(&path, HEAD_RECORD_LIMIT)
+                        .await
+                        .unwrap_or_default();
                     items.push(ConversationItem { path, head });
                 }
             }

@@ -334,6 +334,8 @@ impl std::ops::Deref for FunctionCallOutputPayload {
     }
 }
 
+// (Moved event mapping logic into codex-core to avoid coupling protocol to UI-facing events.)
+
 /// Generate a timestamp string in the same format as session timestamps.
 /// Format: "YYYY-MM-DDTHH:MM:SS.sssZ" (ISO 8601 with millisecond precision in UTC)
 pub fn generate_timestamp() -> String {
