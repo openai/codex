@@ -116,6 +116,33 @@ fn strip_bash_lc(command: &Vec<String>) -> Option<String> {
     }
 }
 
+fn get_zsh_shell() -> Option<ZshShell> {
+    use libc::getpwuid;
+    use libc::getuid;
+    use std::ffi::CStr;
+
+    unsafe {
+        let uid = getuid();
+        let pw = getpwuid(uid);
+
+        if !pw.is_null() {
+            let shell_path = CStr::from_ptr((*pw).pw_shell)
+                .to_string_lossy()
+                .into_owned();
+
+            if shell_path.contains("zsh") {
+                let home_path = CStr::from_ptr((*pw).pw_dir).to_string_lossy().into_owned();
+
+                return Some(ZshShell {
+                    shell_path,
+                    zshrc_path: format!("{home_path}/.zshrc"),
+                });
+            }
+        }
+    }
+    None
+}
+
 #[cfg(target_os = "macos")]
 pub async fn default_user_shell() -> Shell {
     use tokio::process::Command;
@@ -123,6 +150,11 @@ pub async fn default_user_shell() -> Shell {
 
     let user = whoami::username();
     let home = format!("/Users/{user}");
+
+    if let Some(zsh) = get_zsh_shell() {
+        return Shell::Zsh(zsh);
+    }
+
     let output = Command::new("dscl")
         .args([".", "-read", &home, "UserShell"])
         .output()
@@ -153,6 +185,9 @@ pub async fn default_user_shell() -> Shell {
 
 #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
 pub async fn default_user_shell() -> Shell {
+    if let Some(zsh) = get_zsh_shell() {
+        return Shell::Zsh(zsh);
+    }
     Shell::Unknown
 }
 
