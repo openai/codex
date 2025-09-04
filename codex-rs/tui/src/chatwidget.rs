@@ -984,21 +984,32 @@ impl ChatWidget {
         }
     }
 
+    /// Replay a subset of initial events into the UI to seed the transcript when
+    /// resuming an existing session. This approximates the live event flow and
+    /// is intentionally conservative: only safe-to-replay items are rendered to
+    /// avoid triggering side effects. Event ids are passed as `None` to
+    /// distinguish replayed events from live ones.
     fn replay_initial_messages(&mut self, events: Vec<EventMsg>) {
         for msg in events {
             if matches!(msg, EventMsg::SessionConfigured(_)) {
                 continue;
             }
-            self.dispatch_event_msg(String::new(), msg, true);
+            // `id: None` indicates a synthetic/fake id coming from replay.
+            self.dispatch_event_msg(None, msg, true);
         }
     }
 
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
         let Event { id, msg } = event;
-        self.dispatch_event_msg(id, msg, false);
+        self.dispatch_event_msg(Some(id), msg, false);
     }
 
-    fn dispatch_event_msg(&mut self, id: String, msg: EventMsg, from_replay: bool) {
+    /// Dispatch a protocol `EventMsg` to the appropriate handler.
+    ///
+    /// `id` is `Some` for live events and `None` for replayed events from
+    /// `replay_initial_messages()`. Callers should treat `None` as a "fake" id
+    /// that must not be used to correlate follow-up actions.
+    fn dispatch_event_msg(&mut self, id: Option<String>, msg: EventMsg, from_replay: bool) {
         match msg {
             EventMsg::AgentMessageDelta(_)
             | EventMsg::AgentReasoningDelta(_)
@@ -1036,8 +1047,13 @@ impl ChatWidget {
                 }
             },
             EventMsg::PlanUpdate(update) => self.on_plan_update(update),
-            EventMsg::ExecApprovalRequest(ev) => self.on_exec_approval_request(id, ev),
-            EventMsg::ApplyPatchApprovalRequest(ev) => self.on_apply_patch_approval_request(id, ev),
+            EventMsg::ExecApprovalRequest(ev) => {
+                // For replayed events, synthesize an empty id (these should not occur).
+                self.on_exec_approval_request(id.clone().unwrap_or_default(), ev)
+            }
+            EventMsg::ApplyPatchApprovalRequest(ev) => {
+                self.on_apply_patch_approval_request(id.clone().unwrap_or_default(), ev)
+            }
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::ExecCommandOutputDelta(delta) => self.on_exec_command_output_delta(delta),
             EventMsg::PatchApplyBegin(ev) => self.on_patch_apply_begin(ev),
@@ -1072,14 +1088,15 @@ impl ChatWidget {
         match event.kind {
             Some(InputMessageKind::EnvironmentContext)
             | Some(InputMessageKind::UserInstructions) => {
-                return;
+                // Skip XML‑wrapped context blocks in the transcript.
             }
-            _ => {}
+            Some(InputMessageKind::Plain) | None => {
+                let message = event.message.trim();
+                if !message.is_empty() {
+                    self.add_to_history(history_cell::new_user_prompt(message.to_string()));
+                }
+            }
         }
-        if event.message.trim().is_empty() {
-            return;
-        }
-        self.add_to_history(history_cell::new_user_prompt(event.message));
     }
 
     fn request_redraw(&mut self) {

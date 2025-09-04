@@ -18,11 +18,14 @@ use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::style::Stylize as _;
 use ratatui::text::Line;
+use tokio_stream::StreamExt;
 
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
+
+const PAGE_SIZE: usize = 25;
 
 #[derive(Debug, Clone)]
 pub enum ResumeSelection {
@@ -35,13 +38,12 @@ pub enum ResumeSelection {
 /// search and pagination. Shows the first user input as the preview, relative
 /// time (e.g., "5 seconds ago"), and the absolute path.
 pub async fn run_resume_picker(tui: &mut Tui, codex_home: &Path) -> Result<ResumeSelection> {
-    let _ = tui.enter_alt_screen();
-    let mut state = PickerState::new(codex_home.to_path_buf(), tui.frame_requester());
+    let alt = AltScreenGuard::enter(tui);
+    let mut state = PickerState::new(codex_home.to_path_buf(), alt.tui.frame_requester());
     state.load_page(None).await?;
     state.request_frame();
 
-    let mut events = tui.event_stream();
-    use tokio_stream::StreamExt as _;
+    let mut events = alt.tui.event_stream();
     while let Some(ev) = events.next().await {
         match ev {
             TuiEvent::Key(key) => {
@@ -49,12 +51,11 @@ pub async fn run_resume_picker(tui: &mut Tui, codex_home: &Path) -> Result<Resum
                     continue;
                 }
                 if let Some(sel) = state.handle_key(key).await? {
-                    let _ = tui.leave_alt_screen();
                     return Ok(sel);
                 }
             }
             TuiEvent::Draw => {
-                draw_picker(tui, &state)?;
+                draw_picker(alt.tui, &state)?;
             }
             // Ignore paste and attach-image in picker
             _ => {}
@@ -62,24 +63,46 @@ pub async fn run_resume_picker(tui: &mut Tui, codex_home: &Path) -> Result<Resum
     }
 
     // Fallback – treat as cancel/new
-    let _ = tui.leave_alt_screen();
     Ok(ResumeSelection::StartFresh)
+}
+
+/// RAII guard that ensures we leave the alt-screen on scope exit.
+struct AltScreenGuard<'a> {
+    tui: &'a mut Tui,
+}
+
+impl<'a> AltScreenGuard<'a> {
+    fn enter(tui: &'a mut Tui) -> Self {
+        let _ = tui.enter_alt_screen();
+        Self { tui }
+    }
+}
+
+impl Drop for AltScreenGuard<'_> {
+    fn drop(&mut self) {
+        let _ = self.tui.leave_alt_screen();
+    }
 }
 
 struct PickerState {
     codex_home: PathBuf,
     requester: FrameRequester,
     // pagination
-    current_anchor: Option<Cursor>,
-    backstack: Vec<Option<Cursor>>, // track previous anchors for ←/a
-    next_cursor: Option<Cursor>,
-    page_index: usize,
+    pagination: Pagination,
     // data
     all_rows: Vec<Row>, // unfiltered rows for current page
     filtered_rows: Vec<Row>,
     selected: usize,
     // search
     query: String,
+}
+
+#[derive(Debug, Clone)]
+struct Pagination {
+    current_anchor: Option<Cursor>,
+    backstack: Vec<Option<Cursor>>, // track previous anchors for ←/a
+    next_cursor: Option<Cursor>,
+    page_index: usize,
 }
 
 #[derive(Clone)]
@@ -94,10 +117,12 @@ impl PickerState {
         Self {
             codex_home,
             requester,
-            current_anchor: None,
-            backstack: vec![None],
-            next_cursor: None,
-            page_index: 0,
+            pagination: Pagination {
+                current_anchor: None,
+                backstack: vec![None],
+                next_cursor: None,
+                page_index: 0,
+            },
             all_rows: Vec::new(),
             filtered_rows: Vec::new(),
             selected: 0,
@@ -163,38 +188,43 @@ impl PickerState {
     }
 
     async fn prev_page(&mut self) -> Result<()> {
-        if self.page_index == 0 {
+        if self.pagination.page_index == 0 {
             return Ok(());
         }
         // current_anchor points to the page we just loaded; backstack[page_index-1] is the anchor to reload
-        if self.page_index > 0 {
-            self.page_index -= 1;
-            let anchor = self.backstack.get(self.page_index).cloned().flatten();
-            self.current_anchor = anchor.clone();
+        if self.pagination.page_index > 0 {
+            self.pagination.page_index -= 1;
+            let anchor = self
+                .pagination
+                .backstack
+                .get(self.pagination.page_index)
+                .cloned()
+                .flatten();
+            self.pagination.current_anchor = anchor.clone();
             self.load_page(anchor.as_ref()).await?;
         }
         Ok(())
     }
 
     async fn next_page(&mut self) -> Result<()> {
-        if let Some(next) = self.next_cursor.clone() {
+        if let Some(next) = self.pagination.next_cursor.clone() {
             // Record the anchor for the page we are moving to at index new_index
-            let new_index = self.page_index + 1;
-            if self.backstack.len() <= new_index {
-                self.backstack.resize(new_index + 1, None);
+            let new_index = self.pagination.page_index + 1;
+            if self.pagination.backstack.len() <= new_index {
+                self.pagination.backstack.resize(new_index + 1, None);
             }
-            self.backstack[new_index] = Some(next.clone());
-            self.current_anchor = Some(next.clone());
-            self.page_index = new_index;
-            let anchor = self.current_anchor.clone();
+            self.pagination.backstack[new_index] = Some(next.clone());
+            self.pagination.current_anchor = Some(next.clone());
+            self.pagination.page_index = new_index;
+            let anchor = self.pagination.current_anchor.clone();
             self.load_page(anchor.as_ref()).await?;
         }
         Ok(())
     }
 
     async fn load_page(&mut self, anchor: Option<&Cursor>) -> Result<()> {
-        let page = RolloutRecorder::list_conversations(&self.codex_home, 25, anchor).await?;
-        self.next_cursor = page.next_cursor.clone();
+        let page = RolloutRecorder::list_conversations(&self.codex_home, PAGE_SIZE, anchor).await?;
+        self.pagination.next_cursor = page.next_cursor.clone();
         self.all_rows = to_rows(page);
         self.apply_filter();
         // reset selection on new page
@@ -244,7 +274,8 @@ fn head_to_row(item: &ConversationItem) -> Option<Row> {
     }
 
     let preview = find_first_user_text(&item.head)?;
-    if preview.trim().is_empty() {
+    let preview = preview.trim().to_string();
+    if preview.is_empty() {
         return None;
     }
     Some(Row {
@@ -254,6 +285,12 @@ fn head_to_row(item: &ConversationItem) -> Option<Row> {
     })
 }
 
+/// Return the first plain user text from the JSONL `head` of a rollout.
+///
+/// Strategy: scan for the first `{ type: "message", role: "user" }` entry and
+/// then return the first `content` item where `{ type: "input_text" }` that is
+/// classified as `InputMessageKind::Plain` (i.e., not wrapped in
+/// `<user_instructions>` or `<environment_context>` tags).
 fn find_first_user_text(head: &[serde_json::Value]) -> Option<String> {
     for v in head.iter() {
         let t = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
@@ -401,27 +438,41 @@ mod tests {
     use serde_json::json;
 
     fn head_with_ts_and_user_text(ts: &str, texts: &[&str]) -> Vec<serde_json::Value> {
-        let mut head = vec![json!({"timestamp": ts})];
-        head.push(json!({
-            "type":"message",
-            "role":"user",
-            "content": texts.iter().map(|t| json!({"type":"input_text","text": *t})).collect::<Vec<_>>()
-        }));
-        head
+        vec![
+            json!({ "timestamp": ts }),
+            json!({
+                "type": "message",
+                "role": "user",
+                "content": texts
+                    .iter()
+                    .map(|t| json!({ "type": "input_text", "text": *t }))
+                    .collect::<Vec<_>>()
+            }),
+        ]
     }
 
     #[test]
     fn skips_user_instructions_and_env_context() {
         let head = vec![
-            json!({"timestamp": "2025-01-01T00:00:00Z"}),
+            json!({ "timestamp": "2025-01-01T00:00:00Z" }),
             json!({
-                "type":"message","role":"user","content":[{"type":"input_text","text":"<user_instructions>hi</user_instructions>"}]
+                "type": "message",
+                "role": "user",
+                "content": [
+                    { "type": "input_text", "text": "<user_instructions>hi</user_instructions>" }
+                ]
             }),
             json!({
-                "type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>cwd</environment_context>"}]
+                "type": "message",
+                "role": "user",
+                "content": [
+                    { "type": "input_text", "text": "<environment_context>cwd</environment_context>" }
+                ]
             }),
             json!({
-                "type":"message","role":"user","content":[{"type":"input_text","text":"real question"}]
+                "type": "message",
+                "role": "user",
+                "content": [ { "type": "input_text", "text": "real question" } ]
             }),
         ];
         let first = find_first_user_text(&head);

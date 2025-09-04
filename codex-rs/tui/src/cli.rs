@@ -14,11 +14,11 @@ pub struct Cli {
     pub images: Vec<PathBuf>,
 
     /// Open a picker to resume a previous session recorded on disk instead of starting a new one.
-    #[arg(long = "resume", short = 'r', default_value_t = false)]
+    #[arg(long = "resume", default_value_t = false, conflicts_with = "continue")]
     pub resume: bool,
 
     /// Continue the most recent conversation without showing the picker.
-    #[arg(long = "last", short = 'l', default_value_t = false)]
+    #[arg(long = "continue", default_value_t = false, conflicts_with = "resume")]
     pub last: bool,
 
     /// Model the agent should use.
