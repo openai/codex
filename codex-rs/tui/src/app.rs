@@ -85,6 +85,17 @@ impl App {
                 };
                 ChatWidget::new(init, conversation_manager.clone())
             }
+            ResumeSelection::Exit => {
+                let init = crate::chatwidget::ChatWidgetInit {
+                    config: config.clone(),
+                    frame_requester: tui.frame_requester(),
+                    app_event_tx: app_event_tx.clone(),
+                    initial_prompt: initial_prompt.clone(),
+                    initial_images: initial_images.clone(),
+                    enhanced_keys_supported,
+                };
+                ChatWidget::new(init, conversation_manager.clone())
+            }
             ResumeSelection::Resume(path) => {
                 let resumed = conversation_manager
                     .resume_conversation_from_rollout(

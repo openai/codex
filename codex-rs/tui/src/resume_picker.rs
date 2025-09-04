@@ -27,6 +27,7 @@ use crate::tui::TuiEvent;
 pub enum ResumeSelection {
     StartFresh,
     Resume(PathBuf),
+    Exit,
 }
 
 /// Interactive session picker that lists recorded rollout files with simple
@@ -78,6 +79,8 @@ struct PickerState {
     selected: usize,
     // search
     query: String,
+    // quit hint state (Ctrl+C)
+    ctrl_c_quit_hint_visible: bool,
 }
 
 #[derive(Clone)]
@@ -100,6 +103,7 @@ impl PickerState {
             filtered_rows: Vec::new(),
             selected: 0,
             query: String::new(),
+            ctrl_c_quit_hint_visible: false,
         }
     }
 
@@ -110,6 +114,19 @@ impl PickerState {
     async fn handle_key(&mut self, key: KeyEvent) -> Result<Option<ResumeSelection>> {
         match key.code {
             KeyCode::Esc => return Ok(Some(ResumeSelection::StartFresh)),
+            KeyCode::Char('c')
+                if key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL) =>
+            {
+                if self.ctrl_c_quit_hint_visible {
+                    return Ok(Some(ResumeSelection::Exit));
+                } else {
+                    self.ctrl_c_quit_hint_visible = true;
+                    self.request_frame();
+                    return Ok(None);
+                }
+            }
             KeyCode::Enter => {
                 if let Some(row) = self.filtered_rows.get(self.selected) {
                     return Ok(Some(ResumeSelection::Resume(row.path.clone())));
@@ -169,12 +186,14 @@ impl PickerState {
 
     async fn next_page(&mut self) -> Result<()> {
         if let Some(next) = self.next_cursor.clone() {
-            // push current anchor so we can go back
-            if self.backstack.len() == self.page_index + 1 {
-                self.backstack.push(self.current_anchor.clone());
+            // Record the anchor for the page we are moving to at index new_index
+            let new_index = self.page_index + 1;
+            if self.backstack.len() <= new_index {
+                self.backstack.resize(new_index + 1, None);
             }
+            self.backstack[new_index] = Some(next.clone());
             self.current_anchor = Some(next.clone());
-            self.page_index += 1;
+            self.page_index = new_index;
             let anchor = self.current_anchor.clone();
             self.load_page(anchor.as_ref()).await?;
         }
@@ -300,19 +319,26 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         // List
         render_list(frame, list, state);
 
-        // Hint line with paging keys
-        let hint_line: Line = vec![
-            "Enter".bold(),
-            " to resume  ".into(),
-            "Esc".bold(),
-            " to start new  ".into(),
-            "←/a".into(),
-            " prev page  ".dim(),
-            "→/d".into(),
-            " next page".dim(),
-        ]
-        .into();
-        frame.render_widget_ref(hint_line, hint);
+        // Hint line with paging keys or Ctrl+C quit hint
+        if state.ctrl_c_quit_hint_visible {
+            let line: Line = vec!["Ctrl+C".bold(), " again to quit".into()].into();
+            frame.render_widget_ref(line, hint);
+        } else {
+            let hint_line: Line = vec![
+                "Enter".bold(),
+                " to resume  ".into(),
+                "Esc".bold(),
+                " to start new  ".into(),
+                "Ctrl+C".into(),
+                " to quit  ".dim(),
+                "←/a".into(),
+                " prev  ".dim(),
+                "→/d".into(),
+                " next".dim(),
+            ]
+            .into();
+            frame.render_widget_ref(hint_line, hint);
+        }
     })
 }
 

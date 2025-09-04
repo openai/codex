@@ -7,6 +7,7 @@ use app::App;
 use codex_core::AuthManager;
 use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_core::CodexAuth;
+use codex_core::RolloutRecorder;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
@@ -304,6 +305,7 @@ async fn run_ratatui_app(
         prompt,
         images,
         resume,
+        last,
         ..
     } = cli;
 
@@ -333,8 +335,24 @@ async fn run_ratatui_app(
         }
     }
 
-    let resume_selection = if resume {
-        resume_picker::run_resume_picker(&mut tui, &config.codex_home).await?
+    let resume_selection = if last {
+        match RolloutRecorder::list_conversations(&config.codex_home, 1, None).await {
+            Ok(page) => page
+                .items
+                .first()
+                .map(|it| resume_picker::ResumeSelection::Resume(it.path.clone()))
+                .unwrap_or(resume_picker::ResumeSelection::StartFresh),
+            Err(_) => resume_picker::ResumeSelection::StartFresh,
+        }
+    } else if resume {
+        match resume_picker::run_resume_picker(&mut tui, &config.codex_home).await? {
+            resume_picker::ResumeSelection::Exit => {
+                restore();
+                session_log::log_session_end();
+                return Ok(codex_core::protocol::TokenUsage::default());
+            }
+            other => other,
+        }
     } else {
         resume_picker::ResumeSelection::StartFresh
     };

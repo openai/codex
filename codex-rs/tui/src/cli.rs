@@ -17,6 +17,10 @@ pub struct Cli {
     #[arg(long = "resume", short = 'r', default_value_t = false)]
     pub resume: bool,
 
+    /// Continue the most recent conversation without showing the picker.
+    #[arg(long = "last", short = 'l', default_value_t = false)]
+    pub last: bool,
+
     /// Model the agent should use.
     #[arg(long, short = 'm')]
     pub model: Option<String>,
