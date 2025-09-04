@@ -1382,7 +1382,7 @@ model_verbosity = "high"
         let expected_gpt5_profile_config = Config {
             model: "gpt-5".to_string(),
             model_family: find_family_for_model("gpt-5").expect("known model slug"),
-            model_context_window: Some(400_000),
+            model_context_window: Some(272_000),
             model_max_output_tokens: Some(128_000),
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
