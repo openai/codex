@@ -11,7 +11,6 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
-use ratatui::style::Styled;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -37,6 +36,7 @@ use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
 use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
+use crate::key_hint;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -1259,35 +1259,35 @@ impl WidgetRef for ChatComposer {
             }
             ActivePopup::None => {
                 let bottom_line_rect = popup_rect;
-                let key_hint_style = Style::default().fg(Color::Cyan);
-                let mut hint = if self.ctrl_c_quit_hint {
+                let mut hint: Vec<Span<'static>> = if self.ctrl_c_quit_hint {
                     vec![
                         " ".into(),
-                        "Ctrl+C again".set_style(key_hint_style),
+                        key_hint::ctrl('C'),
+                        " again".into(),
                         " to quit".into(),
                     ]
                 } else {
                     let newline_hint_key = if self.use_shift_enter_hint {
-                        "Shift+⏎"
+                        key_hint::shift('⏎')
                     } else {
-                        "Ctrl+J"
+                        key_hint::ctrl('J')
                     };
                     vec![
                         " ".into(),
-                        "⏎".set_style(key_hint_style),
+                        key_hint::plain('⏎'),
                         " send   ".into(),
-                        newline_hint_key.set_style(key_hint_style),
+                        newline_hint_key,
                         " newline   ".into(),
-                        "Ctrl+T".set_style(key_hint_style),
+                        key_hint::ctrl('T'),
                         " transcript   ".into(),
-                        "Ctrl+C".set_style(key_hint_style),
+                        key_hint::ctrl('C'),
                         " quit".into(),
                     ]
                 };
 
                 if !self.ctrl_c_quit_hint && self.esc_backtrack_hint {
                     hint.push("   ".into());
-                    hint.push("Esc".set_style(key_hint_style));
+                    hint.push(key_hint::plain("Esc"));
                     hint.push(" edit prev".into());
                 }
 
@@ -1635,7 +1635,6 @@ mod tests {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
-        use insta::assert_snapshot;
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
@@ -1687,13 +1686,12 @@ mod tests {
                 .draw(|f| f.render_widget_ref(composer, f.area()))
                 .unwrap_or_else(|e| panic!("Failed to draw {name} composer: {e}"));
 
-            assert_snapshot!(name, terminal.backend());
+            insta::assert_snapshot!(name, terminal.backend());
         }
     }
 
     #[test]
     fn slash_popup_model_first_for_mo_ui() {
-        use insta::assert_snapshot;
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
@@ -1720,7 +1718,7 @@ mod tests {
             .unwrap_or_else(|e| panic!("Failed to draw composer: {e}"));
 
         // Visual snapshot should show the slash popup with /model as the first entry.
-        assert_snapshot!("slash_popup_mo", terminal.backend());
+        insta::assert_snapshot!("slash_popup_mo", terminal.backend());
     }
 
     #[test]
