@@ -42,6 +42,7 @@ use codex_protocol::mcp_protocol::AuthMode;
 use codex_protocol::mcp_protocol::AuthStatusChangeNotification;
 use codex_protocol::mcp_protocol::ClientRequest;
 use codex_protocol::mcp_protocol::ConversationId;
+use codex_protocol::mcp_protocol::ConversationOpenedResponse;
 use codex_protocol::mcp_protocol::ConversationSummary;
 use codex_protocol::mcp_protocol::EXEC_COMMAND_APPROVAL_METHOD;
 use codex_protocol::mcp_protocol::ExecArbitraryCommandResponse;
@@ -58,11 +59,9 @@ use codex_protocol::mcp_protocol::ListConversationsResponse;
 use codex_protocol::mcp_protocol::LoginChatGptCompleteNotification;
 use codex_protocol::mcp_protocol::LoginChatGptResponse;
 use codex_protocol::mcp_protocol::NewConversationParams;
-use codex_protocol::mcp_protocol::NewConversationResponse;
 use codex_protocol::mcp_protocol::RemoveConversationListenerParams;
 use codex_protocol::mcp_protocol::RemoveConversationSubscriptionResponse;
 use codex_protocol::mcp_protocol::ResumeConversationParams;
-use codex_protocol::mcp_protocol::ResumeConversationResponse;
 use codex_protocol::mcp_protocol::SendUserMessageParams;
 use codex_protocol::mcp_protocol::SendUserMessageResponse;
 use codex_protocol::mcp_protocol::SendUserTurnParams;
@@ -531,7 +530,7 @@ impl CodexMessageProcessor {
                     session_configured,
                     ..
                 } = conversation_id;
-                let response = NewConversationResponse {
+                let response = ConversationOpenedResponse {
                     conversation_id: ConversationId(conversation_id),
                     model: session_configured.model,
                 };
@@ -658,7 +657,7 @@ impl CodexMessageProcessor {
                 self.outgoing.send_event_as_notification(&event, None).await;
 
                 // Reply with conversation id + model
-                let response = ResumeConversationResponse {
+                let response = ConversationOpenedResponse {
                     conversation_id: ConversationId(conversation_id),
                     model: session_configured.model,
                 };

@@ -171,7 +171,7 @@ pub struct NewConversationParams {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct NewConversationResponse {
+pub struct ConversationOpenedResponse {
     pub conversation_id: ConversationId,
     pub model: String,
 }
@@ -216,13 +216,6 @@ pub struct ResumeConversationParams {
     /// Optional overrides to apply when spawning the resumed session.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub overrides: Option<NewConversationParams>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
-#[serde(rename_all = "camelCase")]
-pub struct ResumeConversationResponse {
-    pub conversation_id: ConversationId,
-    pub model: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
