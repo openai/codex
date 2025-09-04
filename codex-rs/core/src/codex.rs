@@ -483,6 +483,7 @@ impl Session {
             InitialHistory::New => None,
             InitialHistory::Resumed(items) => Some(sess.build_initial_messages(items)),
         };
+
         let events = std::iter::once(Event {
             id: INITIAL_SUBMIT_ID.to_owned(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {

@@ -24,6 +24,7 @@ pub(crate) fn map_response_item_to_event_messages(
             if role == "system" {
                 return Vec::new();
             }
+
             let events: Vec<EventMsg> = content
                 .iter()
                 .filter_map(|content_item| match content_item {
