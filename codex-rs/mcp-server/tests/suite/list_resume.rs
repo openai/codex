@@ -65,16 +65,10 @@ async fn test_list_and_resume_conversations() {
     .await
     .expect("listConversations timeout")
     .expect("listConversations resp");
-    let ListConversationsResponse {
-        items,
-        next_cursor,
-        num_scanned_files,
-        reached_scan_cap,
-    } = to_response::<ListConversationsResponse>(resp).expect("deserialize response");
+    let ListConversationsResponse { items, next_cursor } =
+        to_response::<ListConversationsResponse>(resp).expect("deserialize response");
 
     assert_eq!(items.len(), 2);
-    assert!(num_scanned_files >= 2);
-    assert!(!reached_scan_cap);
     // Newest first; preview text should match
     assert_eq!(items[0].preview, "Hello A");
     assert_eq!(items[1].preview, "Hello B");

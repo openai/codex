@@ -212,10 +212,9 @@ pub struct ConversationSummary {
 pub struct ListConversationsResponse {
     pub items: Vec<ConversationSummary>,
     /// Opaque cursor to pass to the next call to continue after the last item.
+    /// if None, there are no more items to return.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_cursor: Option<String>,
-    pub num_scanned_files: usize,
-    pub reached_scan_cap: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]

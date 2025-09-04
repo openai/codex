@@ -599,12 +599,7 @@ impl CodexMessageProcessor {
             None => None,
         };
 
-        let response = ListConversationsResponse {
-            items,
-            next_cursor,
-            num_scanned_files: page.num_scanned_files,
-            reached_scan_cap: page.reached_scan_cap,
-        };
+        let response = ListConversationsResponse { items, next_cursor };
         self.outgoing.send_response(request_id, response).await;
     }
 
