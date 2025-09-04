@@ -78,6 +78,7 @@ impl From<usize> for RtOptions<'_> {
     }
 }
 
+#[allow(dead_code)]
 impl<'a> RtOptions<'a> {
     pub fn new(width: usize) -> Self {
         RtOptions {
@@ -234,6 +235,7 @@ pub(crate) fn to_owned_static_line(l: &Line<'_>) -> Line<'static> {
 
 /// Wrap a sequence of lines, applying the initial indent only to the very first
 /// output line, and using the subsequent indent for all later wrapped pieces.
+#[allow(dead_code)]
 pub(crate) fn word_wrap_lines<'a, O>(
     lines: Vec<Line<'a>>,
     width_or_options: O,
@@ -262,10 +264,7 @@ where
     out
 }
 
-/// Borrowing variant: wraps a sequence of borrowed lines and returns borrowed
-/// wrapped lines. Applies the provided initial indent only to the very first
-/// output line across the whole sequence; subsequent pieces use the subsequent
-/// indent.
+#[allow(dead_code)]
 pub(crate) fn word_wrap_lines_borrowed<'a, I, O>(lines: I, width_or_options: O) -> Vec<Line<'a>>
 where
     I: IntoIterator<Item = &'a Line<'a>>,

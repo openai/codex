@@ -11,7 +11,6 @@ use codex_common::create_config_summary_entries;
 use codex_common::elapsed::format_duration;
 use codex_core::auth::get_auth_file;
 use codex_core::auth::try_read_auth_json;
-use codex_core::bash::try_parse_bash;
 use codex_core::config::Config;
 use codex_core::plan_tool::PlanItemArg;
 use codex_core::plan_tool::StepStatus;
@@ -424,10 +423,10 @@ impl ExecCell {
 
         let mut body_lines: Vec<Line<'static>> = Vec::new();
 
-        let highlighted_lines = highlight_bash_to_lines(&cmd_display);
+        let highlighted_lines = crate::render::highlight::highlight_bash_to_lines(&cmd_display);
 
         if highlighted_lines.len() == 1
-            && line_visual_width(&highlighted_lines[0]) < (width as usize).saturating_sub(reserved)
+            && highlighted_lines[0].width() < (width as usize).saturating_sub(reserved)
         {
             let mut spans = vec![bullet, " ".into(), title.bold(), " ".into()];
             spans.extend(highlighted_lines[0].spans.clone());
@@ -464,89 +463,6 @@ impl ExecCell {
     }
 }
 
-/// Convert the full bash script into per-line styled content by first
-/// computing operator-dimmed spans across the entire script, then splitting
-/// by newlines and dimming heredoc body lines. Performs a single parse and
-/// reuses it for both highlighting and heredoc detection.
-fn highlight_bash_to_lines(script: &str) -> Vec<Line<'static>> {
-    // Parse once; use the tree for both highlighting and heredoc body detection.
-    let spans: Vec<Span<'static>> = if let Some(tree) = try_parse_bash(script) {
-        // Single walk: collect operator ranges and heredoc rows.
-        let root = tree.root_node();
-        let mut cursor = root.walk();
-        let mut stack = vec![root];
-        let mut ranges: Vec<(usize, usize)> = Vec::new();
-        while let Some(node) = stack.pop() {
-            if !node.is_named() && !node.is_extra() {
-                let kind = node.kind();
-                let is_quote = matches!(kind, "\"" | "'" | "`");
-                let is_whitespace = kind.trim().is_empty();
-                if !is_quote && !is_whitespace {
-                    ranges.push((node.start_byte(), node.end_byte()));
-                }
-            } else if node.kind() == "heredoc_body" {
-                ranges.push((node.start_byte(), node.end_byte()));
-            }
-            for child in node.children(&mut cursor) {
-                stack.push(child);
-            }
-        }
-        if ranges.is_empty() {
-            ranges.push((script.len(), script.len()));
-        }
-        ranges.sort_by_key(|(st, _)| *st);
-        let mut spans: Vec<Span<'static>> = Vec::new();
-        let mut i = 0usize;
-        for (start, end) in ranges.into_iter() {
-            let dim_start = start.max(i);
-            let dim_end = end;
-            if dim_start < dim_end {
-                if dim_start > i {
-                    spans.push(script[i..dim_start].to_string().into());
-                }
-                spans.push(script[dim_start..dim_end].to_string().dim());
-                i = dim_end;
-            }
-        }
-        if i < script.len() {
-            spans.push(script[i..].to_string().into());
-        }
-        spans
-    } else {
-        vec![script.to_string().into()]
-    };
-    // Split spans into lines preserving style boundaries and highlights across newlines.
-    let mut lines: Vec<Line<'static>> = vec![Line::from("")];
-    for sp in spans {
-        let style = sp.style;
-        let text = sp.content.into_owned();
-        for (i, part) in text.split('\n').enumerate() {
-            if i > 0 {
-                lines.push(Line::from(""));
-            }
-            if part.is_empty() {
-                continue;
-            }
-            let span = Span {
-                style,
-                content: std::borrow::Cow::Owned(part.to_string()),
-            };
-            if let Some(last) = lines.last_mut() {
-                last.spans.push(span);
-            }
-        }
-    }
-    lines
-}
-
-/// Visual width of a Line (sum of span content widths).
-fn line_visual_width(line: &Line<'_>) -> usize {
-    line.spans
-        .iter()
-        .map(|s| unicode_width::UnicodeWidthStr::width(s.content.as_ref()))
-        .sum()
-}
-
 fn prefix_lines(
     lines: Vec<Line<'static>>,
     initial_prefix: Span<'static>,
@@ -566,71 +482,6 @@ fn prefix_lines(
             Line::from(spans)
         })
         .collect()
-}
-
-#[cfg(test)]
-mod syntax_tests {
-    use super::*;
-    use ratatui::style::Modifier;
-
-    #[test]
-    fn dims_expected_bash_operators() {
-        let s = "echo foo && bar || baz | qux & (echo hi)";
-        let lines = highlight_bash_to_lines(s);
-        let reconstructed: String = lines
-            .iter()
-            .map(|l| {
-                l.spans
-                    .iter()
-                    .map(|sp| sp.content.clone())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert_eq!(reconstructed, s);
-
-        fn is_dim(span: &Span<'_>) -> bool {
-            span.style.add_modifier.contains(Modifier::DIM)
-        }
-        let dimmed: Vec<String> = lines
-            .iter()
-            .flat_map(|l| l.spans.iter())
-            .filter(|sp| is_dim(sp))
-            .map(|sp| sp.content.clone().into_owned())
-            .collect();
-        assert_eq!(dimmed, vec!["&&", "||", "|", "&", "(", ")"]);
-    }
-
-    #[test]
-    fn does_not_dim_quotes_but_dims_other_punct() {
-        let s = "echo \"hi\" > out.txt; echo 'ok'";
-        let lines = highlight_bash_to_lines(s);
-        let reconstructed: String = lines
-            .iter()
-            .map(|l| {
-                l.spans
-                    .iter()
-                    .map(|sp| sp.content.clone())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert_eq!(reconstructed, s);
-
-        fn is_dim(span: &Span<'_>) -> bool {
-            span.style.add_modifier.contains(Modifier::DIM)
-        }
-        let dimmed: Vec<String> = lines
-            .iter()
-            .flat_map(|l| l.spans.iter())
-            .filter(|sp| is_dim(sp))
-            .map(|sp| sp.content.clone().into_owned())
-            .collect();
-        assert!(dimmed.contains(&">".to_string()));
-        assert!(dimmed.contains(&";".to_string()));
-        assert!(!dimmed.contains(&"\"".to_string()));
-        assert!(!dimmed.contains(&"'".to_string()));
-    }
 }
 
 impl WidgetRef for &ExecCell {
