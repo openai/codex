@@ -9,6 +9,7 @@ use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use crate::AuthManager;
+use crate::event_mapping::map_response_item_to_event_messages;
 use async_channel::Receiver;
 use async_channel::Sender;
 use codex_apply_patch::ApplyPatchAction;
@@ -75,9 +76,7 @@ use crate::project_doc::get_user_instructions;
 use crate::protocol::AgentMessageDeltaEvent;
 use crate::protocol::AgentMessageEvent;
 use crate::protocol::AgentReasoningDeltaEvent;
-use crate::protocol::AgentReasoningEvent;
 use crate::protocol::AgentReasoningRawContentDeltaEvent;
-use crate::protocol::AgentReasoningRawContentEvent;
 use crate::protocol::AgentReasoningSectionBreakEvent;
 use crate::protocol::ApplyPatchApprovalRequestEvent;
 use crate::protocol::AskForApproval;
@@ -102,13 +101,13 @@ use crate::protocol::Submission;
 use crate::protocol::TaskCompleteEvent;
 use crate::protocol::TurnDiffEvent;
 use crate::protocol::WebSearchBeginEvent;
-use crate::protocol::WebSearchEndEvent;
 use crate::rollout::RolloutRecorder;
 use crate::safety::SafetyCheck;
 use crate::safety::assess_command_safety;
 use crate::safety::assess_safety_for_untrusted_command;
 use crate::shell;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
@@ -117,12 +116,9 @@ use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::LocalShellAction;
-use codex_protocol::models::ReasoningItemContent;
-use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::models::ShellToolCallParams;
-use codex_protocol::models::WebSearchAction;
 
 // A convenience extension trait for acquiring mutex locks where poisoning is
 // unrecoverable and should abort the program. This avoids scattered `.unwrap()`
@@ -199,6 +195,7 @@ impl Codex {
             config.clone(),
             auth_manager.clone(),
             tx_event.clone(),
+            conversation_history.clone(),
         )
         .await
         .map_err(|e| {
@@ -361,6 +358,7 @@ impl Session {
         config: Arc<Config>,
         auth_manager: Arc<AuthManager>,
         tx_event: Sender<Event>,
+        initial_history: InitialHistory,
     ) -> anyhow::Result<(Arc<Self>, TurnContext)> {
         let session_id = Uuid::new_v4();
         let ConfigureSession {
@@ -480,6 +478,12 @@ impl Session {
         });
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
+        // If resuming, include converted initial messages in the payload so UIs can render them immediately.
+        let initial_messages = match &initial_history {
+            InitialHistory::New => None,
+            InitialHistory::Resumed(items) => Some(sess.build_initial_messages(items)),
+        };
+
         let events = std::iter::once(Event {
             id: INITIAL_SUBMIT_ID.to_owned(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
@@ -487,6 +491,7 @@ impl Session {
                 model,
                 history_log_id,
                 history_entry_count,
+                initial_messages,
             }),
         })
         .chain(post_session_configured_error_events.into_iter());
@@ -537,7 +542,7 @@ impl Session {
         // TODO: Those items shouldn't be "user messages" IMO. Maybe developer messages.
         let mut conversation_items = Vec::<ResponseItem>::with_capacity(2);
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
-            conversation_items.push(Prompt::format_user_instructions_message(user_instructions));
+            conversation_items.push(UserInstructions::new(user_instructions.to_string()).into());
         }
         conversation_items.push(ResponseItem::from(EnvironmentContext::new(
             Some(turn_context.cwd.clone()),
@@ -550,6 +555,17 @@ impl Session {
 
     async fn record_initial_history_resumed(&self, items: Vec<ResponseItem>) {
         self.record_conversation_items(&items).await;
+    }
+
+    /// build the initial messages vector for SessionConfigured by converting
+    /// ResponseItems into EventMsg.
+    fn build_initial_messages(&self, items: &[ResponseItem]) -> Vec<EventMsg> {
+        items
+            .iter()
+            .flat_map(|item| {
+                map_response_item_to_event_messages(item, self.show_raw_agent_reasoning)
+            })
+            .collect()
     }
 
     /// Sends the given event to the client and swallows the send event, if
@@ -568,9 +584,19 @@ impl Session {
         cwd: PathBuf,
         reason: Option<String>,
     ) -> oneshot::Receiver<ReviewDecision> {
+        // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
+        let event_id = sub_id.clone();
+        let prev_entry = {
+            let mut state = self.state.lock_unchecked();
+            state.pending_approvals.insert(sub_id, tx_approve)
+        };
+        if prev_entry.is_some() {
+            warn!("Overwriting existing pending approval for sub_id: {event_id}");
+        }
+
         let event = Event {
-            id: sub_id.clone(),
+            id: event_id,
             msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
                 call_id,
                 command,
@@ -579,10 +605,6 @@ impl Session {
             }),
         };
         let _ = self.tx_event.send(event).await;
-        {
-            let mut state = self.state.lock_unchecked();
-            state.pending_approvals.insert(sub_id, tx_approve);
-        }
         rx_approve
     }
 
@@ -594,9 +616,19 @@ impl Session {
         reason: Option<String>,
         grant_root: Option<PathBuf>,
     ) -> oneshot::Receiver<ReviewDecision> {
+        // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
+        let event_id = sub_id.clone();
+        let prev_entry = {
+            let mut state = self.state.lock_unchecked();
+            state.pending_approvals.insert(sub_id, tx_approve)
+        };
+        if prev_entry.is_some() {
+            warn!("Overwriting existing pending approval for sub_id: {event_id}");
+        }
+
         let event = Event {
-            id: sub_id.clone(),
+            id: event_id,
             msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
                 call_id,
                 changes: convert_apply_patch_to_protocol(action),
@@ -605,10 +637,6 @@ impl Session {
             }),
         };
         let _ = self.tx_event.send(event).await;
-        {
-            let mut state = self.state.lock_unchecked();
-            state.pending_approvals.insert(sub_id, tx_approve);
-        }
         rx_approve
     }
 
@@ -1903,53 +1931,6 @@ async fn handle_response_item(
 ) -> CodexResult<Option<ResponseInputItem>> {
     debug!(?item, "Output item");
     let output = match item {
-        ResponseItem::Message { content, .. } => {
-            for item in content {
-                if let ContentItem::OutputText { text } = item {
-                    let event = Event {
-                        id: sub_id.to_string(),
-                        msg: EventMsg::AgentMessage(AgentMessageEvent { message: text }),
-                    };
-                    sess.tx_event.send(event).await.ok();
-                }
-            }
-            None
-        }
-        ResponseItem::Reasoning {
-            id: _,
-            summary,
-            content,
-            encrypted_content: _,
-        } => {
-            for item in summary {
-                let text = match item {
-                    ReasoningItemReasoningSummary::SummaryText { text } => text,
-                };
-                let event = Event {
-                    id: sub_id.to_string(),
-                    msg: EventMsg::AgentReasoning(AgentReasoningEvent { text }),
-                };
-                sess.tx_event.send(event).await.ok();
-            }
-            if sess.show_raw_agent_reasoning
-                && let Some(content) = content
-            {
-                for item in content {
-                    let text = match item {
-                        ReasoningItemContent::ReasoningText { text } => text,
-                        ReasoningItemContent::Text { text } => text,
-                    };
-                    let event = Event {
-                        id: sub_id.to_string(),
-                        msg: EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent {
-                            text,
-                        }),
-                    };
-                    sess.tx_event.send(event).await.ok();
-                }
-            }
-            None
-        }
         ResponseItem::FunctionCall {
             name,
             arguments,
@@ -2039,12 +2020,14 @@ async fn handle_response_item(
             debug!("unexpected CustomToolCallOutput from stream");
             None
         }
-        ResponseItem::WebSearchCall { id, action, .. } => {
-            if let WebSearchAction::Search { query } = action {
-                let call_id = id.unwrap_or_else(|| "".to_string());
+        ResponseItem::Message { .. }
+        | ResponseItem::Reasoning { .. }
+        | ResponseItem::WebSearchCall { .. } => {
+            let msgs = map_response_item_to_event_messages(&item, sess.show_raw_agent_reasoning);
+            for msg in msgs {
                 let event = Event {
                     id: sub_id.to_string(),
-                    msg: EventMsg::WebSearchEnd(WebSearchEndEvent { call_id, query }),
+                    msg,
                 };
                 sess.tx_event.send(event).await.ok();
             }
