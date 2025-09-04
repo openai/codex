@@ -89,6 +89,16 @@ impl StatusIndicatorWidget {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn alt_modifier_prefix() -> &'static str {
+    "⌥"
+}
+
+#[cfg(not(target_os = "macos"))]
+fn alt_modifier_prefix() -> &'static str {
+    "Alt+"
+}
+
 impl WidgetRef for StatusIndicatorWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         if area.is_empty() {
@@ -130,12 +140,23 @@ impl WidgetRef for StatusIndicatorWidget {
             }
         }
         if !self.queued_messages.is_empty() {
-            lines.push(Line::from(vec!["   ".into(), "Alt+↑".cyan(), " edit".into()]).dim());
+            let alt_prefix = alt_modifier_prefix();
+            let shortcut = format!("{alt_prefix}↑");
+            lines.push(Line::from(vec!["   ".into(), shortcut.cyan(), " edit".into()]).dim());
         }
 
         let paragraph = Paragraph::new(lines);
         paragraph.render_ref(area, buf);
     }
+}
+
+#[cfg(test)]
+fn snapshot_settings() -> insta::Settings {
+    let mut settings = insta::Settings::clone_current();
+    if cfg!(target_os = "macos") {
+        settings.set_snapshot_suffix("macos");
+    }
+    settings
 }
 
 #[cfg(test)]
@@ -159,7 +180,9 @@ mod tests {
         terminal
             .draw(|f| w.render_ref(f.area(), f.buffer_mut()))
             .expect("draw");
-        assert_snapshot!(terminal.backend());
+        snapshot_settings().bind(|| {
+            assert_snapshot!(terminal.backend());
+        });
     }
 
     #[test]
@@ -173,7 +196,9 @@ mod tests {
         terminal
             .draw(|f| w.render_ref(f.area(), f.buffer_mut()))
             .expect("draw");
-        assert_snapshot!(terminal.backend());
+        snapshot_settings().bind(|| {
+            assert_snapshot!(terminal.backend());
+        });
     }
 
     #[test]
@@ -188,6 +213,8 @@ mod tests {
         terminal
             .draw(|f| w.render_ref(f.area(), f.buffer_mut()))
             .expect("draw");
-        assert_snapshot!(terminal.backend());
+        snapshot_settings().bind(|| {
+            assert_snapshot!(terminal.backend());
+        });
     }
 }
