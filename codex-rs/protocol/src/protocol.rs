@@ -774,22 +774,22 @@ pub struct ExecCommandEndEvent {
     pub formatted_output: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecOutputStream {
     Stdout,
     Stderr,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde_as]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ExecCommandOutputDeltaEvent {
     /// Identifier for the ExecCommandBegin that produced this chunk.
     pub call_id: String,
     /// Which stream produced this chunk.
     pub stream: ExecOutputStream,
     /// Raw bytes from the stream (may not be valid UTF-8).
-    #[serde_as(as = "Base64")]
+    #[serde_as(as = "serde_with::base64::Base64")]
     pub chunk: Vec<u8>,
 }
 
@@ -979,5 +979,22 @@ mod tests {
             serialized,
             r#"{"id":"1234","msg":{"type":"session_configured","session_id":"67e55044-10b1-426f-9247-bb680e5fe0c8","model":"codex-mini-latest","history_log_id":0,"history_entry_count":0}}"#
         );
+    }
+
+    #[test]
+    fn vec_u8_as_base64_serialization_and_deserialization() {
+        let event = ExecCommandOutputDeltaEvent {
+            call_id: "call21".to_string(),
+            stream: ExecOutputStream::Stdout,
+            chunk: vec![1, 2, 3, 4, 5],
+        };
+        let serialized = serde_json::to_string(&event).unwrap();
+        assert_eq!(
+            r#"{"call_id":"call21","stream":"stdout","chunk":"AQIDBAU="}"#,
+            serialized,
+        );
+
+        let deserialized: ExecCommandOutputDeltaEvent = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized, event);
     }
 }

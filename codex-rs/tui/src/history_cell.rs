@@ -11,6 +11,7 @@ use codex_common::elapsed::format_duration;
 use codex_core::auth::get_auth_file;
 use codex_core::auth::try_read_auth_json;
 use codex_core::config::Config;
+use codex_core::config_types::ReasoningSummaryFormat;
 use codex_core::plan_tool::PlanItemArg;
 use codex_core::plan_tool::StepStatus;
 use codex_core::plan_tool::UpdatePlanArgs;
@@ -1244,7 +1245,7 @@ pub(crate) fn new_reasoning_summary_block(
     full_reasoning_buffer: String,
     config: &Config,
 ) -> Vec<Box<dyn HistoryCell>> {
-    if config.use_experimental_reasoning_summary {
+    if config.model_family.reasoning_summary_format == ReasoningSummaryFormat::Experimental {
         // Experimental format is following:
         // ** header **
         //
@@ -1856,7 +1857,7 @@ mod tests {
     #[test]
     fn reasoning_summary_block_returns_reasoning_cell_when_feature_disabled() {
         let mut config = test_config();
-        config.use_experimental_reasoning_summary = false;
+        config.model_family.reasoning_summary_format = ReasoningSummaryFormat::Experimental;
 
         let cells =
             new_reasoning_summary_block("Detailed reasoning goes here.".to_string(), &config);
@@ -1869,7 +1870,7 @@ mod tests {
     #[test]
     fn reasoning_summary_block_falls_back_when_header_is_missing() {
         let mut config = test_config();
-        config.use_experimental_reasoning_summary = true;
+        config.model_family.reasoning_summary_format = ReasoningSummaryFormat::Experimental;
 
         let cells = new_reasoning_summary_block(
             "**High level reasoning without closing".to_string(),
@@ -1887,7 +1888,7 @@ mod tests {
     #[test]
     fn reasoning_summary_block_falls_back_when_summary_is_missing() {
         let mut config = test_config();
-        config.use_experimental_reasoning_summary = true;
+        config.model_family.reasoning_summary_format = ReasoningSummaryFormat::Experimental;
 
         let cells = new_reasoning_summary_block(
             "**High level reasoning without closing**".to_string(),
@@ -1917,7 +1918,7 @@ mod tests {
     #[test]
     fn reasoning_summary_block_splits_header_and_summary_when_present() {
         let mut config = test_config();
-        config.use_experimental_reasoning_summary = true;
+        config.model_family.reasoning_summary_format = ReasoningSummaryFormat::Experimental;
 
         let cells = new_reasoning_summary_block(
             "**High level plan**\n\nWe should fix the bug next.".to_string(),
