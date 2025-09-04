@@ -73,6 +73,52 @@ pub async fn discover_prompts_in_excluding(
     out
 }
 
+/// Parse a slash-style invocation like "/name args..." and, if a matching
+/// `CustomPrompt` exists in `prompts`, return the prompt content with
+/// occurrences of `$ARGUMENTS` replaced by the raw text after the command
+/// token. If the prompt is unknown, returns `None`.
+pub fn expand_prompt_invocation_for_tests(text: &str, prompts: &[CustomPrompt]) -> Option<String> {
+    // Accept only slash-prefixed commands, e.g. "/hello world".
+    let trimmed_leading = text.trim_start_matches(' ');
+    let rest = trimmed_leading.strip_prefix('/')?;
+
+    // Split into command name and the raw arguments; preserve args verbatim
+    // (including leading/trailing spaces after the command token).
+    let rest_bytes = rest.as_bytes();
+    let mut name_len = 0usize;
+    for &b in rest_bytes.iter() {
+        if b.is_ascii_whitespace() {
+            break;
+        }
+        name_len += 1;
+    }
+    let name = &rest[..name_len];
+    let raw_args = if name_len >= rest.len() {
+        ""
+    } else {
+        // Drop exactly one leading ASCII whitespace separating the command name
+        // from its arguments; preserve any additional whitespace verbatim.
+        let s = &rest[name_len..];
+        if let Some(first) = s.as_bytes().first()
+            && first.is_ascii_whitespace()
+        {
+            &s[1..]
+        } else {
+            s
+        }
+    };
+
+    // Find matching prompt.
+    let prompt = prompts.iter().find(|p| p.name == name)?;
+
+    // Replace all occurrences of "$ARGUMENTS" with the raw args.
+    if prompt.content.contains("$ARGUMENTS") {
+        Some(prompt.content.replace("$ARGUMENTS", raw_args))
+    } else {
+        Some(prompt.content.clone())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,5 +169,39 @@ mod tests {
         let found = discover_prompts_in(dir).await;
         let names: Vec<String> = found.into_iter().map(|e| e.name).collect();
         assert_eq!(names, vec!["good"]);
+    }
+
+    // --- Argument substitution behavior: tests define desired contract ---
+    fn p(name: &str, content: &str) -> CustomPrompt {
+        CustomPrompt {
+            name: name.to_string(),
+            path: PathBuf::from(format!("/tmp/{name}.md")),
+            content: content.to_string(),
+        }
+    }
+
+    #[test]
+    fn arg_substitution_basic_fails_until_implemented() {
+        let prompts = vec![p("hello", "Hi $ARGUMENTS!")];
+        let out = expand_prompt_invocation_for_tests("/hello world", &prompts)
+            .expect("should match prompt");
+        // Expected: "Hi world!"; current stub returns content unchanged, so this will fail.
+        assert_eq!(out, "Hi world!");
+    }
+
+    #[test]
+    fn arg_substitution_multiple_occurrences_fails_until_implemented() {
+        let prompts = vec![p("echo", "A:$ARGUMENTS B:$ARGUMENTS")];
+        let out = expand_prompt_invocation_for_tests("/echo foo bar", &prompts)
+            .expect("should match prompt");
+        assert_eq!(out, "A:foo bar B:foo bar");
+    }
+
+    #[test]
+    fn arg_substitution_empty_args_fails_until_implemented() {
+        let prompts = vec![p("hello", "<$ARGUMENTS>")];
+        let out =
+            expand_prompt_invocation_for_tests("/hello", &prompts).expect("should match prompt");
+        assert_eq!(out, "<>");
     }
 }

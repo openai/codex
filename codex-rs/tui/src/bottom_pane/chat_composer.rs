@@ -29,6 +29,7 @@ use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
 use crate::bottom_pane::paste_burst::FlushResult;
 use crate::slash_command::SlashCommand;
+use codex_core::custom_prompts::expand_prompt_invocation_for_tests;
 use codex_protocol::custom_prompts::CustomPrompt;
 
 use crate::app_event::AppEvent;
@@ -431,14 +432,29 @@ impl ChatComposer {
             } => {
                 if let Some(sel) = popup.selected_item() {
                     // Clear textarea so no residual text remains.
+                    let first_line = self
+                        .textarea
+                        .text()
+                        .lines()
+                        .next()
+                        .unwrap_or("")
+                        .to_string();
                     self.textarea.set_text("");
-                    // Capture any needed data from popup before clearing it.
+                    // For user prompts, expand $ARGUMENTS using the raw text after the slash command.
                     let prompt_content = match sel {
+                        CommandItem::UserPrompt(_idx) => {
+                            // Prefer expansion based on the composer text so arguments are preserved.
+                            expand_prompt_invocation_for_tests(&first_line, &self.custom_prompts)
+                        }
+                        _ => None,
+                    }
+                    // Fallback to the stored prompt content if expansion is not applicable.
+                    .or_else(|| match sel {
                         CommandItem::UserPrompt(idx) => {
                             popup.prompt_content(idx).map(|s| s.to_string())
                         }
                         _ => None,
-                    };
+                    });
                     // Hide popup since an action has been dispatched.
                     self.active_popup = ActivePopup::None;
 
@@ -826,6 +842,14 @@ impl ChatComposer {
                 }
                 let mut text = self.textarea.text().to_string();
                 self.textarea.set_text("");
+
+                // If this is a custom prompt invocation like "/name args",
+                // expand $ARGUMENTS before proceeding.
+                if let Some(expanded) =
+                    expand_prompt_invocation_for_tests(&text, &self.custom_prompts)
+                {
+                    text = expanded;
+                }
 
                 // Replace all pending pastes in the text
                 for (placeholder, actual) in &self.pending_pastes {
@@ -1688,6 +1712,43 @@ mod tests {
                 .unwrap_or_else(|e| panic!("Failed to draw {name} composer: {e}"));
 
             assert_snapshot!(name, terminal.backend());
+        }
+    }
+
+    #[test]
+    fn slash_prompt_arguments_substituted_on_submit() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+        use tokio::sync::mpsc::unbounded_channel;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "hello".to_string(),
+            path: "/tmp/hello.md".to_string().into(),
+            content: "Hi $ARGUMENTS!".to_string(),
+        }]);
+
+        // Type "/hello world" humanlike to avoid paste-burst suppression.
+        type_chars_humanlike(
+            &mut composer,
+            &['/', 'h', 'e', 'l', 'l', 'o', ' ', 'w', 'o', 'r', 'l', 'd'],
+        );
+
+        let (result, _redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::Submitted(s) => assert_eq!(s, "Hi world!"),
+            other => panic!("expected Submitted, got {other:?}"),
         }
     }
 
