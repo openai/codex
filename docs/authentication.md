@@ -18,36 +18,6 @@ If you've used the Codex CLI before with usage-based billing via an API key and 
 2. Delete `~/.codex/auth.json` (on Windows: `C:\\Users\\USERNAME\\.codex\\auth.json`)
 3. Run `codex login` again
 
-## Forcing a specific auth method (advanced)
-
-You can explicitly choose which authentication Codex should prefer when both are available.
-
-- To always use your API key (even when ChatGPT auth exists), set:
-
-```toml
-# ~/.codex/config.toml
-preferred_auth_method = "apikey"
-```
-
-Or override ad-hoc via CLI:
-
-```bash
-codex --config preferred_auth_method="apikey"
-```
-
-- To prefer ChatGPT auth (default), set:
-
-```toml
-# ~/.codex/config.toml
-preferred_auth_method = "chatgpt"
-```
-
-Notes:
-
-- When `preferred_auth_method = "apikey"` and an API key is available, the login screen is skipped.
-- When `preferred_auth_method = "chatgpt"` (default), Codex prefers ChatGPT auth if present; if only an API key is present, it will use the API key. Certain account types may also require API-key mode.
-- To check which auth method is being used during a session, use the `/status` command in the TUI.
-
 ## Connecting on a "Headless" Machine
 
 Today, the login process entails running a server on `localhost:1455`. If you are on a "headless" server, such as a Docker container or are `ssh`'d into a remote machine, loading `localhost:1455` in the browser on your local machine will not automatically connect to the webserver running on the _headless_ machine, so you must use one of the following workarounds:

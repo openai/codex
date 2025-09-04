@@ -16,6 +16,7 @@ use codex_protocol::mcp_protocol::AddConversationListenerParams;
 use codex_protocol::mcp_protocol::CancelLoginChatGptParams;
 use codex_protocol::mcp_protocol::GetAuthStatusParams;
 use codex_protocol::mcp_protocol::InterruptConversationParams;
+use codex_protocol::mcp_protocol::LoginApiKeyParams;
 use codex_protocol::mcp_protocol::NewConversationParams;
 use codex_protocol::mcp_protocol::RemoveConversationListenerParams;
 use codex_protocol::mcp_protocol::SendUserMessageParams;
@@ -243,6 +244,15 @@ impl McpProcess {
     /// Send a `getConfigToml` JSON-RPC request.
     pub async fn send_get_config_toml_request(&mut self) -> anyhow::Result<i64> {
         self.send_request("getConfigToml", None).await
+    }
+
+    /// Send a `loginApiKey` JSON-RPC request.
+    pub async fn send_login_api_key_request(
+        &mut self,
+        params: LoginApiKeyParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("loginApiKey", params).await
     }
 
     /// Send a `loginChatGpt` JSON-RPC request.

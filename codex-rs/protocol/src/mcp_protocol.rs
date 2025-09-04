@@ -84,6 +84,11 @@ pub enum ClientRequest {
         request_id: RequestId,
         params: GitDiffToRemoteParams,
     },
+    LoginApiKey {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: LoginApiKeyParams,
+    },
     LoginChatGpt {
         #[serde(rename = "id")]
         request_id: RequestId,
@@ -176,6 +181,16 @@ pub struct RemoveConversationSubscriptionResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+pub struct LoginApiKeyParams {
+    pub api_key: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginApiKeyResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct LoginChatGptResponse {
     pub login_id: Uuid,
     /// URL the client should open in a browser to initiate the OAuth flow.
@@ -253,7 +268,6 @@ pub struct ExecArbitraryCommandResponse {
 pub struct GetAuthStatusResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_method: Option<AuthMode>,
-    pub preferred_auth_method: AuthMode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_token: Option<String>,
 }

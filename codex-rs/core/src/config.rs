@@ -19,7 +19,6 @@ use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::Verbosity;
-use codex_protocol::mcp_protocol::AuthMode;
 use dirs::home_dir;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -174,9 +173,6 @@ pub struct Config {
 
     /// The value for the `originator` header included with Responses API requests.
     pub responses_originator_header: String,
-
-    /// If set to `true`, the API key will be signed with the `originator` header.
-    pub preferred_auth_method: AuthMode,
 
     pub use_experimental_streamable_shell_tool: bool,
 
@@ -490,9 +486,6 @@ pub struct ConfigToml {
     pub responses_originator_header_internal_override: Option<String>,
 
     pub projects: Option<HashMap<String, ProjectConfig>>,
-
-    /// If set to `true`, the API key will be signed with the `originator` header.
-    pub preferred_auth_method: Option<AuthMode>,
 
     /// Nested tools section for feature toggles
     pub tools: Option<ToolsToml>,
@@ -809,7 +802,6 @@ impl Config {
             include_apply_patch_tool: include_apply_patch_tool.unwrap_or(false),
             tools_web_search_request,
             responses_originator_header,
-            preferred_auth_method: cfg.preferred_auth_method.unwrap_or(AuthMode::ChatGPT),
             use_experimental_streamable_shell_tool: cfg
                 .experimental_use_exec_command_tool
                 .unwrap_or(false),
@@ -1189,7 +1181,6 @@ model_verbosity = "high"
                 include_apply_patch_tool: false,
                 tools_web_search_request: false,
                 responses_originator_header: "codex_cli_rs".to_string(),
-                preferred_auth_method: AuthMode::ChatGPT,
                 use_experimental_streamable_shell_tool: false,
                 include_view_image_tool: true,
                 disable_paste_burst: false,
@@ -1247,7 +1238,6 @@ model_verbosity = "high"
             include_apply_patch_tool: false,
             tools_web_search_request: false,
             responses_originator_header: "codex_cli_rs".to_string(),
-            preferred_auth_method: AuthMode::ChatGPT,
             use_experimental_streamable_shell_tool: false,
             include_view_image_tool: true,
             disable_paste_burst: false,
@@ -1320,7 +1310,6 @@ model_verbosity = "high"
             include_apply_patch_tool: false,
             tools_web_search_request: false,
             responses_originator_header: "codex_cli_rs".to_string(),
-            preferred_auth_method: AuthMode::ChatGPT,
             use_experimental_streamable_shell_tool: false,
             include_view_image_tool: true,
             disable_paste_burst: false,
@@ -1379,7 +1368,6 @@ model_verbosity = "high"
             include_apply_patch_tool: false,
             tools_web_search_request: false,
             responses_originator_header: "codex_cli_rs".to_string(),
-            preferred_auth_method: AuthMode::ChatGPT,
             use_experimental_streamable_shell_tool: false,
             include_view_image_tool: true,
             disable_paste_burst: false,

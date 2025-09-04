@@ -13,6 +13,7 @@ use codex_core::CodexConversation;
 use codex_core::ConversationManager;
 use codex_core::NewConversation;
 use codex_core::auth::CLIENT_ID;
+use codex_core::auth::login_with_api_key;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
@@ -36,7 +37,6 @@ use codex_protocol::mcp_protocol::AddConversationListenerParams;
 use codex_protocol::mcp_protocol::AddConversationSubscriptionResponse;
 use codex_protocol::mcp_protocol::ApplyPatchApprovalParams;
 use codex_protocol::mcp_protocol::ApplyPatchApprovalResponse;
-use codex_protocol::mcp_protocol::AuthMode;
 use codex_protocol::mcp_protocol::AuthStatusChangeNotification;
 use codex_protocol::mcp_protocol::ClientRequest;
 use codex_protocol::mcp_protocol::ConversationId;
@@ -50,6 +50,8 @@ use codex_protocol::mcp_protocol::GitDiffToRemoteResponse;
 use codex_protocol::mcp_protocol::InputItem as WireInputItem;
 use codex_protocol::mcp_protocol::InterruptConversationParams;
 use codex_protocol::mcp_protocol::InterruptConversationResponse;
+use codex_protocol::mcp_protocol::LoginApiKeyParams;
+use codex_protocol::mcp_protocol::LoginApiKeyResponse;
 use codex_protocol::mcp_protocol::LoginChatGptCompleteNotification;
 use codex_protocol::mcp_protocol::LoginChatGptResponse;
 use codex_protocol::mcp_protocol::NewConversationParams;
@@ -141,6 +143,9 @@ impl CodexMessageProcessor {
             ClientRequest::GitDiffToRemote { request_id, params } => {
                 self.git_diff_to_origin(request_id, params.cwd).await;
             }
+            ClientRequest::LoginApiKey { request_id, params } => {
+                self.login_api_key(request_id, params).await;
+            }
             ClientRequest::LoginChatGpt { request_id } => {
                 self.login_chatgpt(request_id).await;
             }
@@ -158,6 +163,39 @@ impl CodexMessageProcessor {
             }
             ClientRequest::ExecOneOffCommand { request_id, params } => {
                 self.exec_one_off_command(request_id, params).await;
+            }
+        }
+    }
+
+    async fn login_api_key(&mut self, request_id: RequestId, params: LoginApiKeyParams) {
+        {
+            let mut guard = self.active_login.lock().await;
+            if let Some(active) = guard.take() {
+                active.drop();
+            }
+        }
+
+        match login_with_api_key(&self.config.codex_home, &params.api_key) {
+            Ok(()) => {
+                self.auth_manager.reload();
+                self.outgoing
+                    .send_response(request_id, LoginApiKeyResponse {})
+                    .await;
+
+                let payload = AuthStatusChangeNotification {
+                    auth_method: self.auth_manager.auth().map(|auth| auth.mode),
+                };
+                self.outgoing
+                    .send_server_notification(ServerNotification::AuthStatusChange(payload))
+                    .await;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to save api key: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
             }
         }
     }
@@ -334,7 +372,6 @@ impl CodexMessageProcessor {
         request_id: RequestId,
         params: codex_protocol::mcp_protocol::GetAuthStatusParams,
     ) {
-        let preferred_auth_method: AuthMode = self.auth_manager.preferred_auth_method();
         let include_token = params.include_token.unwrap_or(false);
         let do_refresh = params.refresh_token.unwrap_or(false);
 
@@ -357,13 +394,11 @@ impl CodexMessageProcessor {
                 };
                 codex_protocol::mcp_protocol::GetAuthStatusResponse {
                     auth_method: reported_auth_method,
-                    preferred_auth_method,
                     auth_token: token_opt,
                 }
             }
             None => codex_protocol::mcp_protocol::GetAuthStatusResponse {
                 auth_method: None,
-                preferred_auth_method,
                 auth_token: None,
             },
         };

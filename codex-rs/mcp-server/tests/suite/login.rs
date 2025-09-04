@@ -1,11 +1,12 @@
 use std::path::Path;
 use std::time::Duration;
 
-use codex_core::auth::login_with_api_key;
 use codex_protocol::mcp_protocol::CancelLoginChatGptParams;
 use codex_protocol::mcp_protocol::CancelLoginChatGptResponse;
 use codex_protocol::mcp_protocol::GetAuthStatusParams;
 use codex_protocol::mcp_protocol::GetAuthStatusResponse;
+use codex_protocol::mcp_protocol::LoginApiKeyParams;
+use codex_protocol::mcp_protocol::LoginApiKeyResponse;
 use codex_protocol::mcp_protocol::LoginChatGptResponse;
 use codex_protocol::mcp_protocol::LogoutChatGptResponse;
 use mcp_test_support::McpProcess;
@@ -16,6 +17,10 @@ use tempfile::TempDir;
 use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+fn unwrap_result<T, E: std::fmt::Display>(result: Result<T, E>, context: &str) -> T {
+    result.unwrap_or_else(|err| panic!("{context}: {err}"))
+}
 
 // Helper to create a config.toml; mirrors create_conversation.rs
 fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {
@@ -39,33 +44,66 @@ stream_max_retries = 0
     )
 }
 
+async fn login_with_api_key_via_request(mcp: &mut McpProcess, api_key: &str) {
+    let request_id = unwrap_result(
+        mcp.send_login_api_key_request(LoginApiKeyParams {
+            api_key: api_key.to_string(),
+        })
+        .await,
+        "send loginApiKey",
+    );
+
+    let resp: JSONRPCResponse = unwrap_result(
+        unwrap_result(
+            timeout(
+                DEFAULT_READ_TIMEOUT,
+                mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+            )
+            .await,
+            "loginApiKey timeout",
+        ),
+        "loginApiKey response",
+    );
+    let _: LoginApiKeyResponse = unwrap_result(to_response(resp), "deserialize login response");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn logout_chatgpt_removes_auth() {
     let codex_home = TempDir::new().unwrap_or_else(|e| panic!("create tempdir: {e}"));
-    create_config_toml(codex_home.path()).expect("write config.toml");
-    login_with_api_key(codex_home.path(), "sk-test-key").expect("seed api key");
+    create_config_toml(codex_home.path()).unwrap_or_else(|err| panic!("write config.toml: {err}"));
+
+    let mut mcp = unwrap_result(
+        McpProcess::new(codex_home.path()).await,
+        "spawn mcp process",
+    );
+    unwrap_result(
+        unwrap_result(
+            timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await,
+            "init timeout",
+        ),
+        "init failed",
+    );
+
+    login_with_api_key_via_request(&mut mcp, "sk-test-key").await;
     assert!(codex_home.path().join("auth.json").exists());
 
-    let mut mcp = McpProcess::new(codex_home.path())
-        .await
-        .expect("spawn mcp process");
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize())
-        .await
-        .expect("init timeout")
-        .expect("init failed");
-
-    let id = mcp
-        .send_logout_chat_gpt_request()
-        .await
-        .expect("send logoutChatGpt");
-    let resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(id)),
-    )
-    .await
-    .expect("logoutChatGpt timeout")
-    .expect("logoutChatGpt response");
-    let _ok: LogoutChatGptResponse = to_response(resp).expect("deserialize logout response");
+    let id = unwrap_result(
+        mcp.send_logout_chat_gpt_request().await,
+        "send logoutChatGpt",
+    );
+    let resp: JSONRPCResponse = unwrap_result(
+        unwrap_result(
+            timeout(
+                DEFAULT_READ_TIMEOUT,
+                mcp.read_stream_until_response_message(RequestId::Integer(id)),
+            )
+            .await,
+            "logoutChatGpt timeout",
+        ),
+        "logoutChatGpt response",
+    );
+    let _ok: LogoutChatGptResponse =
+        unwrap_result(to_response(resp), "deserialize logout response");
 
     assert!(
         !codex_home.path().join("auth.json").exists(),
@@ -73,21 +111,27 @@ async fn logout_chatgpt_removes_auth() {
     );
 
     // Verify status reflects signed-out state.
-    let status_id = mcp
-        .send_get_auth_status_request(GetAuthStatusParams {
+    let status_id = unwrap_result(
+        mcp.send_get_auth_status_request(GetAuthStatusParams {
             include_token: Some(true),
             refresh_token: Some(false),
         })
-        .await
-        .expect("send getAuthStatus");
-    let status_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(status_id)),
-    )
-    .await
-    .expect("getAuthStatus timeout")
-    .expect("getAuthStatus response");
-    let status: GetAuthStatusResponse = to_response(status_resp).expect("deserialize status");
+        .await,
+        "send getAuthStatus",
+    );
+    let status_resp: JSONRPCResponse = unwrap_result(
+        unwrap_result(
+            timeout(
+                DEFAULT_READ_TIMEOUT,
+                mcp.read_stream_until_response_message(RequestId::Integer(status_id)),
+            )
+            .await,
+            "getAuthStatus timeout",
+        ),
+        "getAuthStatus response",
+    );
+    let status: GetAuthStatusResponse =
+        unwrap_result(to_response(status_resp), "deserialize status");
     assert_eq!(status.auth_method, None);
     assert_eq!(status.auth_token, None);
 }
@@ -95,44 +139,55 @@ async fn logout_chatgpt_removes_auth() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn login_and_cancel_chatgpt() {
     let codex_home = TempDir::new().unwrap_or_else(|e| panic!("create tempdir: {e}"));
-    create_config_toml(codex_home.path()).expect("write config.toml");
+    create_config_toml(codex_home.path()).unwrap_or_else(|err| panic!("write config.toml: {err}"));
 
-    let mut mcp = McpProcess::new(codex_home.path())
-        .await
-        .expect("spawn mcp process");
-    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize())
-        .await
-        .expect("init timeout")
-        .expect("init failed");
+    let mut mcp = unwrap_result(
+        McpProcess::new(codex_home.path()).await,
+        "spawn mcp process",
+    );
+    unwrap_result(
+        unwrap_result(
+            timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await,
+            "init timeout",
+        ),
+        "init failed",
+    );
 
-    let login_id = mcp
-        .send_login_chat_gpt_request()
-        .await
-        .expect("send loginChatGpt");
-    let login_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(login_id)),
-    )
-    .await
-    .expect("loginChatGpt timeout")
-    .expect("loginChatGpt response");
-    let login: LoginChatGptResponse = to_response(login_resp).expect("deserialize login resp");
+    let login_id = unwrap_result(mcp.send_login_chat_gpt_request().await, "send loginChatGpt");
+    let login_resp: JSONRPCResponse = unwrap_result(
+        unwrap_result(
+            timeout(
+                DEFAULT_READ_TIMEOUT,
+                mcp.read_stream_until_response_message(RequestId::Integer(login_id)),
+            )
+            .await,
+            "loginChatGpt timeout",
+        ),
+        "loginChatGpt response",
+    );
+    let login: LoginChatGptResponse =
+        unwrap_result(to_response(login_resp), "deserialize login resp");
 
-    let cancel_id = mcp
-        .send_cancel_login_chat_gpt_request(CancelLoginChatGptParams {
+    let cancel_id = unwrap_result(
+        mcp.send_cancel_login_chat_gpt_request(CancelLoginChatGptParams {
             login_id: login.login_id,
         })
-        .await
-        .expect("send cancelLoginChatGpt");
-    let cancel_resp: JSONRPCResponse = timeout(
-        DEFAULT_READ_TIMEOUT,
-        mcp.read_stream_until_response_message(RequestId::Integer(cancel_id)),
-    )
-    .await
-    .expect("cancelLoginChatGpt timeout")
-    .expect("cancelLoginChatGpt response");
+        .await,
+        "send cancelLoginChatGpt",
+    );
+    let cancel_resp: JSONRPCResponse = unwrap_result(
+        unwrap_result(
+            timeout(
+                DEFAULT_READ_TIMEOUT,
+                mcp.read_stream_until_response_message(RequestId::Integer(cancel_id)),
+            )
+            .await,
+            "cancelLoginChatGpt timeout",
+        ),
+        "cancelLoginChatGpt response",
+    );
     let _ok: CancelLoginChatGptResponse =
-        to_response(cancel_resp).expect("deserialize cancel response");
+        unwrap_result(to_response(cancel_resp), "deserialize cancel response");
 
     // Optionally observe the completion notification; do not fail if it races.
     let maybe_note = timeout(
