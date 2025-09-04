@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use crate::config_types::ReasoningEffort;
 use crate::config_types::ReasoningSummary;
 use crate::config_types::SandboxMode;
-use crate::config_types::UserSavedConfig;
+use crate::config_types::Verbosity;
 use crate::protocol::AskForApproval;
 use crate::protocol::FileChange;
 use crate::protocol::ReviewDecision;
@@ -262,6 +262,82 @@ pub struct GetAuthStatusResponse {
 #[serde(rename_all = "camelCase")]
 pub struct GetUserSavedConfigResponse {
     pub config: UserSavedConfig,
+}
+
+/// UserSavedConfig contains a subset of the config. It is meant to expose mcp
+/// client-configurable settings that can be specified in the NewConversation
+/// and SendUserTurn requests.
+#[derive(Deserialize, Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UserSavedConfig {
+    /// Approvals
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approval_policy: Option<AskForApproval>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sandbox_mode: Option<SandboxMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
+
+    /// Model-specific configuration
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_reasoning_effort: Option<ReasoningEffort>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_reasoning_summary: Option<ReasoningSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_verbosity: Option<Verbosity>,
+
+    /// Tools
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools: Option<Tools>,
+
+    // Auth
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub preferred_auth_method: Option<AuthMode>,
+
+    /// Profiles
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    #[serde(default)]
+    pub profiles: HashMap<String, Profile>,
+}
+
+/// MCP representation of a [`codex_core::config_profile::ConfigProfile`].
+#[derive(Deserialize, Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct Profile {
+    pub model: Option<String>,
+    /// The key in the `model_providers` map identifying the
+    /// [`ModelProviderInfo`] to use.
+    pub model_provider: Option<String>,
+    pub approval_policy: Option<AskForApproval>,
+    pub disable_response_storage: Option<bool>,
+    pub model_reasoning_effort: Option<ReasoningEffort>,
+    pub model_reasoning_summary: Option<ReasoningSummary>,
+    pub model_verbosity: Option<Verbosity>,
+    pub chatgpt_base_url: Option<String>,
+}
+/// MCP representation of a [`codex_core::config::ToolsToml`].
+#[derive(Deserialize, Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct Tools {
+    pub web_search: Option<bool>,
+    pub view_image: Option<bool>,
+}
+
+/// MCP representation of a [`codex_core::config_types::SandboxWorkspaceWrite`].
+#[derive(Deserialize, Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SandboxWorkspaceWrite {
+    #[serde(default)]
+    pub writable_roots: Vec<PathBuf>,
+    #[serde(default)]
+    pub network_access: bool,
+    #[serde(default)]
+    pub exclude_tmpdir_env_var: bool,
+    #[serde(default)]
+    pub exclude_slash_tmp: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]

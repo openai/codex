@@ -3,15 +3,15 @@ use std::path::Path;
 
 use codex_core::protocol::AskForApproval;
 use codex_login::AuthMode;
-use codex_protocol::config_types::ConfigProfile;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
-use codex_protocol::config_types::SandboxWorkspaceWrite;
-use codex_protocol::config_types::Tools;
-use codex_protocol::config_types::UserSavedConfig;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::mcp_protocol::GetUserSavedConfigResponse;
+use codex_protocol::mcp_protocol::Profile;
+use codex_protocol::mcp_protocol::SandboxWorkspaceWrite;
+use codex_protocol::mcp_protocol::Tools;
+use codex_protocol::mcp_protocol::UserSavedConfig;
 use mcp_test_support::McpProcess;
 use mcp_test_support::to_response;
 use mcp_types::JSONRPCResponse;
@@ -107,7 +107,7 @@ async fn get_config_toml_parses_all_fields() {
             profile: Some("test".to_string()),
             profiles: HashMap::from([(
                 "test".into(),
-                ConfigProfile {
+                Profile {
                     model: Some("gpt-4o".into()),
                     approval_policy: Some(AskForApproval::OnRequest),
                     model_reasoning_effort: Some(ReasoningEffort::High),

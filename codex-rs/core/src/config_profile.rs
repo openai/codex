@@ -23,7 +23,7 @@ pub struct ConfigProfile {
     pub experimental_instructions_file: Option<PathBuf>,
 }
 
-impl From<ConfigProfile> for codex_protocol::config_types::ConfigProfile {
+impl From<ConfigProfile> for codex_protocol::mcp_protocol::Profile {
     fn from(config_profile: ConfigProfile) -> Self {
         Self {
             model: config_profile.model,

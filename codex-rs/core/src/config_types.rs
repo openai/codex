@@ -88,7 +88,7 @@ pub struct SandboxWorkspaceWrite {
     pub exclude_slash_tmp: bool,
 }
 
-impl From<SandboxWorkspaceWrite> for codex_protocol::config_types::SandboxWorkspaceWrite {
+impl From<SandboxWorkspaceWrite> for codex_protocol::mcp_protocol::SandboxWorkspaceWrite {
     fn from(sandbox_workspace_write: SandboxWorkspaceWrite) -> Self {
         Self {
             writable_roots: sandbox_workspace_write.writable_roots,
