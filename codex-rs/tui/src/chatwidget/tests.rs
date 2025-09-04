@@ -19,6 +19,7 @@ use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::FileChange;
+use codex_core::protocol::InputMessageKind;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::StreamErrorEvent;
@@ -34,6 +35,7 @@ use std::io::BufRead;
 use std::io::BufReader;
 use std::path::PathBuf;
 use tokio::sync::mpsc::unbounded_channel;
+use uuid::Uuid;
 
 fn test_config() -> Config {
     // Use base defaults to avoid depending on host state.
@@ -126,6 +128,53 @@ fn final_answer_without_newline_is_flushed_immediately() {
     );
 }
 
+#[test]
+fn resumed_initial_messages_render_history() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual();
+
+    let configured = codex_core::protocol::SessionConfiguredEvent {
+        session_id: Uuid::nil(),
+        model: "test-model".to_string(),
+        history_log_id: 0,
+        history_entry_count: 0,
+        initial_messages: Some(vec![
+            EventMsg::UserMessage(codex_core::protocol::UserMessageEvent {
+                message: "hello from user".to_string(),
+                kind: Some(InputMessageKind::Plain),
+            }),
+            EventMsg::AgentMessage(AgentMessageEvent {
+                message: "assistant reply".to_string(),
+            }),
+        ]),
+    };
+
+    chat.handle_codex_event(Event {
+        id: "initial".into(),
+        msg: EventMsg::SessionConfigured(configured),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let mut merged_lines = Vec::new();
+    for lines in cells {
+        let text = lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.clone())
+            .collect::<String>();
+        merged_lines.push(text);
+    }
+
+    let text_blob = merged_lines.join("\n");
+    assert!(
+        text_blob.contains("hello from user"),
+        "expected replayed user message",
+    );
+    assert!(
+        text_blob.contains("assistant reply"),
+        "expected replayed agent message",
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn helpers_are_available_and_do_not_panic() {
     let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
@@ -134,15 +183,15 @@ async fn helpers_are_available_and_do_not_panic() {
     let conversation_manager = Arc::new(ConversationManager::with_auth(CodexAuth::from_api_key(
         "test",
     )));
-    let mut w = ChatWidget::new(
-        cfg,
-        conversation_manager,
-        crate::tui::FrameRequester::test_dummy(),
-        tx,
-        None,
-        Vec::new(),
-        false,
-    );
+    let init = ChatWidgetInit {
+        config: cfg,
+        frame_requester: crate::tui::FrameRequester::test_dummy(),
+        app_event_tx: tx,
+        initial_prompt: None,
+        initial_images: Vec::new(),
+        enhanced_keys_supported: false,
+    };
+    let mut w = ChatWidget::new(init, conversation_manager);
     // Basic construction sanity.
     let _ = &mut w;
 }
@@ -184,6 +233,7 @@ fn make_chatwidget_manual() -> (
         frame_requester: crate::tui::FrameRequester::test_dummy(),
         show_welcome_banner: true,
         queued_user_messages: std::collections::VecDeque::new(),
+        suppress_session_configured_redraw: false,
     };
     (widget, rx, op_rx)
 }
