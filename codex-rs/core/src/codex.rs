@@ -9,6 +9,7 @@ use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use crate::AuthManager;
+use crate::event_mapping::map_response_item_to_event_messages;
 use async_channel::Receiver;
 use async_channel::Sender;
 use codex_apply_patch::ApplyPatchAction;
@@ -2008,14 +2009,10 @@ async fn handle_response_item(
             debug!("unexpected CustomToolCallOutput from stream");
             None
         }
-        // Display-only items → convert to EventMsg explicitly
         ResponseItem::Message { .. }
         | ResponseItem::Reasoning { .. }
         | ResponseItem::WebSearchCall { .. } => {
-            let msgs = crate::event_mapping::map_response_item_to_event_messages(
-                &item,
-                sess.show_raw_agent_reasoning,
-            );
+            let msgs = map_response_item_to_event_messages(&item, sess.show_raw_agent_reasoning);
             for msg in msgs {
                 let event = Event {
                     id: sub_id.to_string(),
