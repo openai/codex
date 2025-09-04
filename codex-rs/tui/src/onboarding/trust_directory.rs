@@ -153,3 +153,142 @@ impl TrustDirectoryWidget {
         self.selection = Some(TrustDirectorySelection::DontTrust);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    fn create_test_widget(cwd: PathBuf, is_git_repo: bool) -> TrustDirectoryWidget {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        TrustDirectoryWidget {
+            codex_home: temp_dir.path().to_path_buf(),
+            cwd,
+            is_git_repo,
+            selection: None,
+            highlighted: TrustDirectorySelection::Trust,
+            error: None,
+        }
+    }
+
+    async fn create_test_git_repo(temp_dir: &TempDir) -> PathBuf {
+        let repo_path = temp_dir.path().join("repo");
+        fs::create_dir(&repo_path).expect("Failed to create repo dir");
+
+        let envs = vec![
+            ("GIT_CONFIG_GLOBAL", "/dev/null"),
+            ("GIT_CONFIG_NOSYSTEM", "1"),
+        ];
+
+        // Initialize git repo
+        tokio::process::Command::new("git")
+            .envs(envs.clone())
+            .args(["init"])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("Failed to init git repo");
+
+        // Configure git user (required for commits)
+        tokio::process::Command::new("git")
+            .envs(envs.clone())
+            .args(["config", "user.name", "Test User"])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("Failed to set git user name");
+
+        tokio::process::Command::new("git")
+            .envs(envs.clone())
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("Failed to set git user email");
+
+        // Create a test file and commit it
+        let test_file = repo_path.join("test.txt");
+        fs::write(&test_file, "test content").expect("Failed to write test file");
+
+        tokio::process::Command::new("git")
+            .envs(envs.clone())
+            .args(["add", "."])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("Failed to add files");
+
+        tokio::process::Command::new("git")
+            .envs(envs.clone())
+            .args(["commit", "-m", "Initial commit"])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("Failed to commit");
+
+        repo_path
+    }
+
+    #[test]
+    fn test_handle_trust_non_git_directory() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let non_git_path = temp_dir.path().join("not_git");
+        fs::create_dir(&non_git_path).expect("Failed to create non-git dir");
+
+        let mut widget = create_test_widget(non_git_path.clone(), false);
+
+        widget.handle_trust();
+
+        // Should complete without error and set selection to Trust
+        assert_eq!(widget.selection, Some(TrustDirectorySelection::Trust));
+        assert!(widget.error.is_none());
+    }
+
+    #[test]
+    fn test_handle_trust_non_git_repo() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let non_git_path = temp_dir.path().join("not_git");
+        fs::create_dir(&non_git_path).expect("Failed to create non-git dir");
+        let sapling_dir = non_git_path.join(".sl");
+        fs::create_dir(&sapling_dir).expect("Failed to create test cwd");
+
+        let mut widget = create_test_widget(non_git_path.clone(), false);
+
+        widget.handle_trust();
+
+        // Should complete without error and set selection to Trust
+        assert_eq!(widget.selection, Some(TrustDirectorySelection::Trust));
+        assert!(widget.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_handle_trust_git_directory() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let git_repo_path = create_test_git_repo(&temp_dir).await;
+
+        let mut widget = create_test_widget(git_repo_path.clone(), true);
+
+        widget.handle_trust();
+
+        // Should complete without error and set selection to Trust
+        assert_eq!(widget.selection, Some(TrustDirectorySelection::Trust));
+        assert!(widget.error.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_handle_trust_git_subdirectory() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let git_repo_path = create_test_git_repo(&temp_dir).await;
+        let subdir = git_repo_path.join("subdir");
+        fs::create_dir(&subdir).expect("Failed to create subdir");
+
+        let mut widget = create_test_widget(subdir.clone(), true);
+
+        widget.handle_trust();
+
+        // Should complete without error and set selection to Trust
+        assert_eq!(widget.selection, Some(TrustDirectorySelection::Trust));
+        assert!(widget.error.is_none());
+    }
+}
