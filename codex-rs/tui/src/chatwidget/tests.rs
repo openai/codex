@@ -27,13 +27,20 @@ use codex_core::protocol::TaskStartedEvent;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
-use insta::assert_snapshot;
 use pretty_assertions::assert_eq;
 use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::path::PathBuf;
 use tokio::sync::mpsc::unbounded_channel;
+
+macro_rules! assert_snapshot {
+    ($($tt:tt)*) => {
+        crate::test_snapshots::with_snapshot_settings(|| {
+            insta::assert_snapshot!($($tt)*);
+        });
+    };
+}
 
 fn test_config() -> Config {
     // Use base defaults to avoid depending on host state.
@@ -1025,8 +1032,6 @@ fn apply_patch_manual_approval_adjusts_header() {
 
 #[test]
 fn apply_patch_manual_flow_snapshot() {
-    use insta::assert_snapshot;
-
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
     let mut proposed_changes = HashMap::new();
@@ -1597,5 +1602,5 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     }
 
     let visual = vt_lines.join("\n");
-    insta::assert_snapshot!(visual);
+    assert_snapshot!(visual);
 }

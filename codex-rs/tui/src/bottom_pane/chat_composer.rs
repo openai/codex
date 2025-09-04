@@ -37,6 +37,7 @@ use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
 use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
+use crate::key_labels;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -1260,27 +1261,32 @@ impl WidgetRef for ChatComposer {
             ActivePopup::None => {
                 let bottom_line_rect = popup_rect;
                 let key_hint_style = Style::default().fg(Color::Cyan);
+                let ctrl_prefix = key_labels::ctrl_prefix();
+                let shift_prefix = key_labels::shift_prefix();
+                let ctrl_c_hint = key_labels::shortcut(ctrl_prefix, "C");
                 let mut hint = if self.ctrl_c_quit_hint {
+                    let ctrl_c_again_hint = format!("{ctrl_c_hint} again");
                     vec![
                         " ".into(),
-                        "Ctrl+C again".set_style(key_hint_style),
+                        Span::from(ctrl_c_again_hint).set_style(key_hint_style),
                         " to quit".into(),
                     ]
                 } else {
                     let newline_hint_key = if self.use_shift_enter_hint {
-                        "Shift+⏎"
+                        key_labels::shortcut(shift_prefix, "⏎")
                     } else {
-                        "Ctrl+J"
+                        key_labels::shortcut(ctrl_prefix, "J")
                     };
+                    let ctrl_t_hint = key_labels::shortcut(ctrl_prefix, "T");
                     vec![
                         " ".into(),
                         "⏎".set_style(key_hint_style),
                         " send   ".into(),
-                        newline_hint_key.set_style(key_hint_style),
+                        Span::from(newline_hint_key).set_style(key_hint_style),
                         " newline   ".into(),
-                        "Ctrl+T".set_style(key_hint_style),
+                        Span::from(ctrl_t_hint).set_style(key_hint_style),
                         " transcript   ".into(),
-                        "Ctrl+C".set_style(key_hint_style),
+                        Span::from(ctrl_c_hint).set_style(key_hint_style),
                         " quit".into(),
                     ]
                 };
@@ -1365,6 +1371,14 @@ mod tests {
     use crate::bottom_pane::chat_composer::LARGE_PASTE_CHAR_THRESHOLD;
     use crate::bottom_pane::textarea::TextArea;
     use tokio::sync::mpsc::unbounded_channel;
+
+    macro_rules! assert_snapshot {
+        ($($tt:tt)*) => {
+            crate::test_snapshots::with_snapshot_settings(|| {
+                insta::assert_snapshot!($($tt)*);
+            });
+        };
+    }
 
     #[test]
     fn test_current_at_token_basic_cases() {
@@ -1635,7 +1649,6 @@ mod tests {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
-        use insta::assert_snapshot;
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
@@ -1693,7 +1706,6 @@ mod tests {
 
     #[test]
     fn slash_popup_model_first_for_mo_ui() {
-        use insta::assert_snapshot;
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 

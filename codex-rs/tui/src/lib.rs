@@ -41,6 +41,7 @@ mod file_search;
 mod get_git_diff;
 mod history_cell;
 pub mod insert_history;
+mod key_labels;
 pub mod live_wrap;
 mod markdown;
 mod markdown_stream;
@@ -52,6 +53,8 @@ mod shimmer;
 mod slash_command;
 mod status_indicator_widget;
 mod streaming;
+#[cfg(test)]
+mod test_snapshots;
 mod text_formatting;
 mod tui;
 mod user_approval_widget;

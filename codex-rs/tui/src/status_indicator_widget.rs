@@ -14,6 +14,7 @@ use ratatui::widgets::WidgetRef;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::key_labels;
 use crate::shimmer::shimmer_spans;
 use crate::tui::FrameRequester;
 use textwrap::Options as TwOptions;
@@ -89,16 +90,6 @@ impl StatusIndicatorWidget {
     }
 }
 
-#[cfg(target_os = "macos")]
-fn alt_modifier_prefix() -> &'static str {
-    "⌥"
-}
-
-#[cfg(not(target_os = "macos"))]
-fn alt_modifier_prefix() -> &'static str {
-    "Alt+"
-}
-
 impl WidgetRef for StatusIndicatorWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         if area.is_empty() {
@@ -140,8 +131,7 @@ impl WidgetRef for StatusIndicatorWidget {
             }
         }
         if !self.queued_messages.is_empty() {
-            let alt_prefix = alt_modifier_prefix();
-            let shortcut = format!("{alt_prefix}↑");
+            let shortcut = key_labels::shortcut(key_labels::alt_prefix(), "↑");
             lines.push(Line::from(vec!["   ".into(), shortcut.cyan(), " edit".into()]).dim());
         }
 
@@ -151,23 +141,21 @@ impl WidgetRef for StatusIndicatorWidget {
 }
 
 #[cfg(test)]
-fn snapshot_settings() -> insta::Settings {
-    let mut settings = insta::Settings::clone_current();
-    if cfg!(target_os = "macos") {
-        settings.set_snapshot_suffix("macos");
-    }
-    settings
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use crate::app_event_sender::AppEventSender;
-    use insta::assert_snapshot;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use tokio::sync::mpsc::unbounded_channel;
+
+    macro_rules! assert_snapshot {
+        ($($tt:tt)*) => {
+            crate::test_snapshots::with_snapshot_settings(|| {
+                insta::assert_snapshot!($($tt)*);
+            });
+        };
+    }
 
     #[test]
     fn renders_with_working_header() {
@@ -180,9 +168,7 @@ mod tests {
         terminal
             .draw(|f| w.render_ref(f.area(), f.buffer_mut()))
             .expect("draw");
-        snapshot_settings().bind(|| {
-            assert_snapshot!(terminal.backend());
-        });
+        assert_snapshot!(terminal.backend());
     }
 
     #[test]
@@ -196,9 +182,7 @@ mod tests {
         terminal
             .draw(|f| w.render_ref(f.area(), f.buffer_mut()))
             .expect("draw");
-        snapshot_settings().bind(|| {
-            assert_snapshot!(terminal.backend());
-        });
+        assert_snapshot!(terminal.backend());
     }
 
     #[test]
@@ -213,8 +197,6 @@ mod tests {
         terminal
             .draw(|f| w.render_ref(f.area(), f.buffer_mut()))
             .expect("draw");
-        snapshot_settings().bind(|| {
-            assert_snapshot!(terminal.backend());
-        });
+        assert_snapshot!(terminal.backend());
     }
 }
