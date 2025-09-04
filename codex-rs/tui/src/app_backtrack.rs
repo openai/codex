@@ -319,14 +319,16 @@ impl App {
     ) {
         let conv = new_conv.conversation;
         let session_configured = new_conv.session_configured;
-        self.chat_widget = crate::chatwidget::ChatWidget::new_from_existing(
-            cfg,
-            conv,
-            session_configured,
-            tui.frame_requester(),
-            self.app_event_tx.clone(),
-            self.enhanced_keys_supported,
-        );
+        let init = crate::chatwidget::ChatWidgetInit {
+            config: cfg,
+            frame_requester: tui.frame_requester(),
+            app_event_tx: self.app_event_tx.clone(),
+            initial_prompt: None,
+            initial_images: Vec::new(),
+            enhanced_keys_supported: self.enhanced_keys_supported,
+        };
+        self.chat_widget =
+            crate::chatwidget::ChatWidget::new_from_existing(init, conv, session_configured);
         // Trim transcript up to the selected user message and re-render it.
         self.trim_transcript_for_backtrack(drop_count);
         self.render_transcript_once(tui);

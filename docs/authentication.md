@@ -8,6 +8,8 @@ If you prefer to pay-as-you-go, you can still authenticate with your OpenAI API 
 export OPENAI_API_KEY="your-api-key-here"
 ```
 
+This key must, at minimum, have write access to the Responses API.
+
 ## Migrating to ChatGPT login from API key
 
 If you've used the Codex CLI before with usage-based billing via an API key and want to switch to using your ChatGPT plan, follow these steps:

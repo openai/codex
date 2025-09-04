@@ -9,7 +9,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use codex_core::config::Config;
-use codex_core::user_agent::get_codex_user_agent;
+use codex_core::default_client::create_client;
 
 pub fn get_upgrade_version(config: &Config) -> Option<String> {
     let version_file = version_filepath(config);
@@ -22,8 +22,9 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
         // Refresh the cached latest version in the background so TUI startup
         // isn’t blocked by a network call. The UI reads the previously cached
         // value (if any) for this run; the next run shows the banner if needed.
+        let originator = config.responses_originator_header.clone();
         tokio::spawn(async move {
-            check_for_update(&version_file)
+            check_for_update(&version_file, &originator)
                 .await
                 .inspect_err(|e| tracing::error!("Failed to update version: {e}"))
         });
@@ -63,12 +64,11 @@ fn read_version_info(version_file: &Path) -> anyhow::Result<VersionInfo> {
     Ok(serde_json::from_str(&contents)?)
 }
 
-async fn check_for_update(version_file: &Path) -> anyhow::Result<()> {
+async fn check_for_update(version_file: &Path, originator: &str) -> anyhow::Result<()> {
     let ReleaseInfo {
         tag_name: latest_tag_name,
-    } = reqwest::Client::new()
+    } = create_client(originator)
         .get(LATEST_RELEASE_URL)
-        .header("User-Agent", get_codex_user_agent(None))
         .send()
         .await?
         .error_for_status()?

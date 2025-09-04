@@ -29,6 +29,7 @@ use ratatui::widgets::Wrap;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::exec_command::strip_bash_lc_and_escape;
+use crate::history_cell;
 
 /// Request coming from the agent that needs user approval.
 pub(crate) enum ApprovalRequest {
@@ -114,10 +115,7 @@ fn to_command_display<'a>(
     cmd: String,
     last_line: Vec<Span<'a>>,
 ) -> Vec<Line<'a>> {
-    let command_lines: Vec<Span> = cmd
-        .lines()
-        .map(|line| Span::from(line.to_string()).style(Style::new().add_modifier(Modifier::DIM)))
-        .collect();
+    let command_lines: Vec<Span> = cmd.lines().map(|line| line.to_string().dim()).collect();
 
     let mut lines: Vec<Line<'a>> = vec![];
 
@@ -127,7 +125,7 @@ fn to_command_display<'a>(
         first_line.extend(last_line);
     } else {
         for line in command_lines {
-            lines.push(Line::from(vec![Span::from("    "), line]));
+            lines.push(vec!["    ".into(), line].into());
         }
         let last_line = last_line.clone();
         lines.push(Line::from(last_line));
@@ -258,12 +256,11 @@ impl UserApprovalWidget {
     }
 
     fn send_decision_with_feedback(&mut self, decision: ReviewDecision, feedback: String) {
-        let mut lines: Vec<Line<'static>> = vec![Line::from("")];
         match &self.approval_request {
             ApprovalRequest::Exec { command, .. } => {
                 let cmd = strip_bash_lc_and_escape(command);
-                let mut cmd_span: Span = cmd.clone().into();
-                cmd_span.style = cmd_span.style.add_modifier(Modifier::DIM);
+                // TODO: move this rendering into history_cell.
+                let mut lines: Vec<Line<'static>> = vec![];
 
                 // Result line based on decision.
                 match decision {
@@ -316,18 +313,22 @@ impl UserApprovalWidget {
                         ));
                     }
                 }
+
+                if !feedback.trim().is_empty() {
+                    lines.push(Line::from("feedback:"));
+                    for l in feedback.lines() {
+                        lines.push(Line::from(l.to_string()));
+                    }
+                }
+
+                self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                    history_cell::new_user_approval_decision(lines),
+                )));
             }
             ApprovalRequest::ApplyPatch { .. } => {
-                lines.push(Line::from(format!("patch approval decision: {decision:?}")));
+                // No history line for patch approval decisions.
             }
         }
-        if !feedback.trim().is_empty() {
-            lines.push(Line::from("feedback:"));
-            for l in feedback.lines() {
-                lines.push(Line::from(l.to_string()));
-            }
-        }
-        self.app_event_tx.send(AppEvent::InsertHistoryLines(lines));
 
         let op = match &self.approval_request {
             ApprovalRequest::Exec { id, .. } => Op::ExecApproval {

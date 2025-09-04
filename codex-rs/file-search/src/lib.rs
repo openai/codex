@@ -151,7 +151,13 @@ pub fn run(
     // Use the same tree-walker library that ripgrep uses. We use it directly so
     // that we can leverage the parallelism it provides.
     let mut walk_builder = WalkBuilder::new(search_directory);
-    walk_builder.threads(num_walk_builder_threads);
+    walk_builder
+        .threads(num_walk_builder_threads)
+        // Allow hidden entries.
+        .hidden(false)
+        // Don't require git to be present to apply to apply git-related ignore rules.
+        .require_git(false);
+
     if !exclude.is_empty() {
         let mut override_builder = OverrideBuilder::new(search_directory);
         for exclude in exclude {

@@ -30,3 +30,7 @@ fix *args:
 install:
     rustup show active-toolchain
     cargo fetch
+
+# Run the MCP server
+mcp-server-run *args:
+    cargo run -p codex-mcp-server -- "$@"

@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use codex_login::login_with_api_key;
+use codex_core::auth::login_with_api_key;
 use codex_protocol::mcp_protocol::AuthMode;
 use codex_protocol::mcp_protocol::GetAuthStatusParams;
 use codex_protocol::mcp_protocol::GetAuthStatusResponse;

@@ -20,22 +20,6 @@ pub enum ParsedCommand {
         query: Option<String>,
         path: Option<String>,
     },
-    Format {
-        cmd: String,
-        tool: Option<String>,
-        targets: Option<Vec<String>>,
-    },
-    Test {
-        cmd: String,
-    },
-    Lint {
-        cmd: String,
-        tool: Option<String>,
-        targets: Option<Vec<String>>,
-    },
-    Noop {
-        cmd: String,
-    },
     Unknown {
         cmd: String,
     },
@@ -50,10 +34,6 @@ impl From<ParsedCommand> for codex_protocol::parse_command::ParsedCommand {
             ParsedCommand::Read { cmd, name } => P::Read { cmd, name },
             ParsedCommand::ListFiles { cmd, path } => P::ListFiles { cmd, path },
             ParsedCommand::Search { cmd, query, path } => P::Search { cmd, query, path },
-            ParsedCommand::Format { cmd, tool, targets } => P::Format { cmd, tool, targets },
-            ParsedCommand::Test { cmd } => P::Test { cmd },
-            ParsedCommand::Lint { cmd, tool, targets } => P::Lint { cmd, tool, targets },
-            ParsedCommand::Noop { cmd } => P::Noop { cmd },
             ParsedCommand::Unknown { cmd } => P::Unknown { cmd },
         }
     }
@@ -122,7 +102,7 @@ mod tests {
         assert_parsed(
             &vec_str(&["bash", "-lc", inner]),
             vec![ParsedCommand::Unknown {
-                cmd: "git status | wc -l".to_string(),
+                cmd: "git status".to_string(),
             }],
         );
     }
@@ -245,6 +225,39 @@ mod tests {
     }
 
     #[test]
+    fn cd_then_cat_is_single_read() {
+        assert_parsed(
+            &shlex_split_safe("cd foo && cat foo.txt"),
+            vec![ParsedCommand::Read {
+                cmd: "cat foo.txt".to_string(),
+                name: "foo.txt".to_string(),
+            }],
+        );
+    }
+
+    #[test]
+    fn bash_cd_then_bar_is_same_as_bar() {
+        // Ensure a leading `cd` inside bash -lc is dropped when followed by another command.
+        assert_parsed(
+            &shlex_split_safe("bash -lc 'cd foo && bar'"),
+            vec![ParsedCommand::Unknown {
+                cmd: "bar".to_string(),
+            }],
+        );
+    }
+
+    #[test]
+    fn bash_cd_then_cat_is_read() {
+        assert_parsed(
+            &shlex_split_safe("bash -lc 'cd foo && cat foo.txt'"),
+            vec![ParsedCommand::Read {
+                cmd: "cat foo.txt".to_string(),
+                name: "foo.txt".to_string(),
+            }],
+        );
+    }
+
+    #[test]
     fn supports_ls_with_pipe() {
         let inner = "ls -la | sed -n '1,120p'";
         assert_parsed(
@@ -316,27 +329,6 @@ mod tests {
     }
 
     #[test]
-    fn supports_npm_run_with_forwarded_args() {
-        assert_parsed(
-            &vec_str(&[
-                "npm",
-                "run",
-                "lint",
-                "--",
-                "--max-warnings",
-                "0",
-                "--format",
-                "json",
-            ]),
-            vec![ParsedCommand::Lint {
-                cmd: "npm run lint -- --max-warnings 0 --format json".to_string(),
-                tool: Some("npm-script:lint".to_string()),
-                targets: None,
-            }],
-        );
-    }
-
-    #[test]
     fn supports_grep_recursive_current_dir() {
         assert_parsed(
             &vec_str(&["grep", "-R", "CODEX_SANDBOX_ENV_VAR", "-n", "."]),
@@ -396,173 +388,10 @@ mod tests {
     fn supports_cd_and_rg_files() {
         assert_parsed(
             &shlex_split_safe("cd codex-rs && rg --files"),
-            vec![
-                ParsedCommand::Unknown {
-                    cmd: "cd codex-rs".to_string(),
-                },
-                ParsedCommand::Search {
-                    cmd: "rg --files".to_string(),
-                    query: None,
-                    path: None,
-                },
-            ],
-        );
-    }
-
-    #[test]
-    fn echo_then_cargo_test_sequence() {
-        assert_parsed(
-            &shlex_split_safe("echo Running tests... && cargo test --all-features --quiet"),
-            vec![ParsedCommand::Test {
-                cmd: "cargo test --all-features --quiet".to_string(),
-            }],
-        );
-    }
-
-    #[test]
-    fn supports_cargo_fmt_and_test_with_config() {
-        assert_parsed(
-            &shlex_split_safe(
-                "cargo fmt -- --config imports_granularity=Item && cargo test -p core --all-features",
-            ),
-            vec![
-                ParsedCommand::Format {
-                    cmd: "cargo fmt -- --config 'imports_granularity=Item'".to_string(),
-                    tool: Some("cargo fmt".to_string()),
-                    targets: None,
-                },
-                ParsedCommand::Test {
-                    cmd: "cargo test -p core --all-features".to_string(),
-                },
-            ],
-        );
-    }
-
-    #[test]
-    fn recognizes_rustfmt_and_clippy() {
-        assert_parsed(
-            &shlex_split_safe("rustfmt src/main.rs"),
-            vec![ParsedCommand::Format {
-                cmd: "rustfmt src/main.rs".to_string(),
-                tool: Some("rustfmt".to_string()),
-                targets: Some(vec!["src/main.rs".to_string()]),
-            }],
-        );
-
-        assert_parsed(
-            &shlex_split_safe("cargo clippy -p core --all-features -- -D warnings"),
-            vec![ParsedCommand::Lint {
-                cmd: "cargo clippy -p core --all-features -- -D warnings".to_string(),
-                tool: Some("cargo clippy".to_string()),
-                targets: None,
-            }],
-        );
-    }
-
-    #[test]
-    fn recognizes_pytest_go_and_tools() {
-        assert_parsed(
-            &shlex_split_safe(
-                "pytest -k 'Login and not slow' tests/test_login.py::TestLogin::test_ok",
-            ),
-            vec![ParsedCommand::Test {
-                cmd: "pytest -k 'Login and not slow' tests/test_login.py::TestLogin::test_ok"
-                    .to_string(),
-            }],
-        );
-
-        assert_parsed(
-            &shlex_split_safe("go fmt ./..."),
-            vec![ParsedCommand::Format {
-                cmd: "go fmt ./...".to_string(),
-                tool: Some("go fmt".to_string()),
-                targets: Some(vec!["./...".to_string()]),
-            }],
-        );
-
-        assert_parsed(
-            &shlex_split_safe("go test ./pkg -run TestThing"),
-            vec![ParsedCommand::Test {
-                cmd: "go test ./pkg -run TestThing".to_string(),
-            }],
-        );
-
-        assert_parsed(
-            &shlex_split_safe("eslint . --max-warnings 0"),
-            vec![ParsedCommand::Lint {
-                cmd: "eslint . --max-warnings 0".to_string(),
-                tool: Some("eslint".to_string()),
-                targets: Some(vec![".".to_string()]),
-            }],
-        );
-
-        assert_parsed(
-            &shlex_split_safe("prettier -w ."),
-            vec![ParsedCommand::Format {
-                cmd: "prettier -w .".to_string(),
-                tool: Some("prettier".to_string()),
-                targets: Some(vec![".".to_string()]),
-            }],
-        );
-    }
-
-    #[test]
-    fn recognizes_jest_and_vitest_filters() {
-        assert_parsed(
-            &shlex_split_safe("jest -t 'should work' src/foo.test.ts"),
-            vec![ParsedCommand::Test {
-                cmd: "jest -t 'should work' src/foo.test.ts".to_string(),
-            }],
-        );
-
-        assert_parsed(
-            &shlex_split_safe("vitest -t 'runs' src/foo.test.tsx"),
-            vec![ParsedCommand::Test {
-                cmd: "vitest -t runs src/foo.test.tsx".to_string(),
-            }],
-        );
-    }
-
-    #[test]
-    fn recognizes_npx_and_scripts() {
-        assert_parsed(
-            &shlex_split_safe("npx eslint src"),
-            vec![ParsedCommand::Lint {
-                cmd: "npx eslint src".to_string(),
-                tool: Some("eslint".to_string()),
-                targets: Some(vec!["src".to_string()]),
-            }],
-        );
-
-        assert_parsed(
-            &shlex_split_safe("npx prettier -c ."),
-            vec![ParsedCommand::Format {
-                cmd: "npx prettier -c .".to_string(),
-                tool: Some("prettier".to_string()),
-                targets: Some(vec![".".to_string()]),
-            }],
-        );
-
-        assert_parsed(
-            &shlex_split_safe("pnpm run lint -- --max-warnings 0"),
-            vec![ParsedCommand::Lint {
-                cmd: "pnpm run lint -- --max-warnings 0".to_string(),
-                tool: Some("pnpm-script:lint".to_string()),
-                targets: None,
-            }],
-        );
-
-        assert_parsed(
-            &shlex_split_safe("npm test"),
-            vec![ParsedCommand::Test {
-                cmd: "npm test".to_string(),
-            }],
-        );
-
-        assert_parsed(
-            &shlex_split_safe("yarn test"),
-            vec![ParsedCommand::Test {
-                cmd: "yarn test".to_string(),
+            vec![ParsedCommand::Search {
+                cmd: "rg --files".to_string(),
+                query: None,
+                path: None,
             }],
         );
     }
@@ -771,6 +600,51 @@ mod tests {
     }
 
     #[test]
+    fn parses_mixed_sequence_with_pipes_semicolons_and_or() {
+        // Provided long command sequence combining sequencing, pipelines, and ORs.
+        let inner = "pwd; ls -la; rg --files -g '!target' | wc -l; rg -n '^\\[workspace\\]' -n Cargo.toml || true; rg -n '^\\[package\\]' -n */Cargo.toml || true; cargo --version; rustc --version; cargo clippy --workspace --all-targets --all-features -q";
+        let args = vec_str(&["bash", "-lc", inner]);
+
+        let expected = vec![
+            ParsedCommand::Unknown {
+                cmd: "pwd".to_string(),
+            },
+            ParsedCommand::ListFiles {
+                cmd: shlex_join(&shlex_split_safe("ls -la")),
+                path: None,
+            },
+            ParsedCommand::Search {
+                cmd: shlex_join(&shlex_split_safe("rg --files -g '!target'")),
+                query: None,
+                path: Some("!target".to_string()),
+            },
+            ParsedCommand::Search {
+                cmd: shlex_join(&shlex_split_safe("rg -n '^\\[workspace\\]' -n Cargo.toml")),
+                query: Some("^\\[workspace\\]".to_string()),
+                path: Some("Cargo.toml".to_string()),
+            },
+            ParsedCommand::Search {
+                cmd: shlex_join(&shlex_split_safe("rg -n '^\\[package\\]' -n */Cargo.toml")),
+                query: Some("^\\[package\\]".to_string()),
+                path: Some("Cargo.toml".to_string()),
+            },
+            ParsedCommand::Unknown {
+                cmd: shlex_join(&shlex_split_safe("cargo --version")),
+            },
+            ParsedCommand::Unknown {
+                cmd: shlex_join(&shlex_split_safe("rustc --version")),
+            },
+            ParsedCommand::Unknown {
+                cmd: shlex_join(&shlex_split_safe(
+                    "cargo clippy --workspace --all-targets --all-features -q",
+                )),
+            },
+        ];
+
+        assert_parsed(&args, expected);
+    }
+
+    #[test]
     fn strips_true_in_sequence() {
         // `true` should be dropped from parsed sequences
         assert_parsed(
@@ -868,159 +742,6 @@ mod tests {
     }
 
     #[test]
-    fn pnpm_test_is_parsed_as_test() {
-        assert_parsed(
-            &shlex_split_safe("pnpm test"),
-            vec![ParsedCommand::Test {
-                cmd: "pnpm test".to_string(),
-            }],
-        );
-    }
-
-    #[test]
-    fn pnpm_exec_vitest_is_unknown() {
-        // From commands_combined: cd codex-cli && pnpm exec vitest run tests/... --threads=false --passWithNoTests
-        let inner = "cd codex-cli && pnpm exec vitest run tests/file-tag-utils.test.ts --threads=false --passWithNoTests";
-        assert_parsed(
-            &shlex_split_safe(inner),
-            vec![
-                ParsedCommand::Unknown {
-                    cmd: "cd codex-cli".to_string(),
-                },
-                ParsedCommand::Unknown {
-                    cmd: "pnpm exec vitest run tests/file-tag-utils.test.ts '--threads=false' --passWithNoTests".to_string(),
-                },
-            ],
-        );
-    }
-
-    #[test]
-    fn cargo_test_with_crate() {
-        assert_parsed(
-            &shlex_split_safe("cargo test -p codex-core parse_command::"),
-            vec![ParsedCommand::Test {
-                cmd: "cargo test -p codex-core parse_command::".to_string(),
-            }],
-        );
-    }
-
-    #[test]
-    fn cargo_test_with_crate_2() {
-        assert_parsed(
-            &shlex_split_safe(
-                "cd core && cargo test -q parse_command::tests::bash_dash_c_pipeline_parsing parse_command::tests::fd_file_finder_variants",
-            ),
-            vec![ParsedCommand::Test {
-                cmd: "cargo test -q parse_command::tests::bash_dash_c_pipeline_parsing parse_command::tests::fd_file_finder_variants".to_string(),
-            }],
-        );
-    }
-
-    #[test]
-    fn cargo_test_with_crate_3() {
-        assert_parsed(
-            &shlex_split_safe("cd core && cargo test -q parse_command::tests"),
-            vec![ParsedCommand::Test {
-                cmd: "cargo test -q parse_command::tests".to_string(),
-            }],
-        );
-    }
-
-    #[test]
-    fn cargo_test_with_crate_4() {
-        assert_parsed(
-            &shlex_split_safe("cd core && cargo test --all-features parse_command -- --nocapture"),
-            vec![ParsedCommand::Test {
-                cmd: "cargo test --all-features parse_command -- --nocapture".to_string(),
-            }],
-        );
-    }
-
-    // Additional coverage for other common tools/frameworks
-    #[test]
-    fn recognizes_black_and_ruff() {
-        // black formats Python code
-        assert_parsed(
-            &shlex_split_safe("black src"),
-            vec![ParsedCommand::Format {
-                cmd: "black src".to_string(),
-                tool: Some("black".to_string()),
-                targets: Some(vec!["src".to_string()]),
-            }],
-        );
-
-        // ruff check is a linter; ensure we collect targets
-        assert_parsed(
-            &shlex_split_safe("ruff check ."),
-            vec![ParsedCommand::Lint {
-                cmd: "ruff check .".to_string(),
-                tool: Some("ruff".to_string()),
-                targets: Some(vec![".".to_string()]),
-            }],
-        );
-
-        // ruff format is a formatter
-        assert_parsed(
-            &shlex_split_safe("ruff format pkg/"),
-            vec![ParsedCommand::Format {
-                cmd: "ruff format pkg/".to_string(),
-                tool: Some("ruff".to_string()),
-                targets: Some(vec!["pkg/".to_string()]),
-            }],
-        );
-    }
-
-    #[test]
-    fn recognizes_pnpm_monorepo_test_and_npm_format_script() {
-        // pnpm -r test in a monorepo should still parse as a test action
-        assert_parsed(
-            &shlex_split_safe("pnpm -r test"),
-            vec![ParsedCommand::Test {
-                cmd: "pnpm -r test".to_string(),
-            }],
-        );
-
-        // npm run format should be recognized as a format action
-        assert_parsed(
-            &shlex_split_safe("npm run format -- -w ."),
-            vec![ParsedCommand::Format {
-                cmd: "npm run format -- -w .".to_string(),
-                tool: Some("npm-script:format".to_string()),
-                targets: None,
-            }],
-        );
-    }
-
-    #[test]
-    fn yarn_test_is_parsed_as_test() {
-        assert_parsed(
-            &shlex_split_safe("yarn test"),
-            vec![ParsedCommand::Test {
-                cmd: "yarn test".to_string(),
-            }],
-        );
-    }
-
-    #[test]
-    fn pytest_file_only_and_go_run_regex() {
-        // pytest invoked with a file path should be captured as a filter
-        assert_parsed(
-            &shlex_split_safe("pytest tests/test_example.py"),
-            vec![ParsedCommand::Test {
-                cmd: "pytest tests/test_example.py".to_string(),
-            }],
-        );
-
-        // go test with -run regex should capture the filter
-        assert_parsed(
-            &shlex_split_safe("go test ./... -run '^TestFoo$'"),
-            vec![ParsedCommand::Test {
-                cmd: "go test ./... -run '^TestFoo$'".to_string(),
-            }],
-        );
-    }
-
-    #[test]
     fn grep_with_query_and_path() {
         assert_parsed(
             &shlex_split_safe("grep -R TODO src"),
@@ -1086,30 +807,6 @@ mod tests {
                 cmd: "ls '--time-style=long-iso' ./dist".to_string(),
                 // short_display_path drops "dist" and shows "." as the last useful segment
                 path: Some(".".to_string()),
-            }],
-        );
-    }
-
-    #[test]
-    fn eslint_with_config_path_and_target() {
-        assert_parsed(
-            &shlex_split_safe("eslint -c .eslintrc.json src"),
-            vec![ParsedCommand::Lint {
-                cmd: "eslint -c .eslintrc.json src".to_string(),
-                tool: Some("eslint".to_string()),
-                targets: Some(vec!["src".to_string()]),
-            }],
-        );
-    }
-
-    #[test]
-    fn npx_eslint_with_config_path_and_target() {
-        assert_parsed(
-            &shlex_split_safe("npx eslint -c .eslintrc src"),
-            vec![ParsedCommand::Lint {
-                cmd: "npx eslint -c .eslintrc src".to_string(),
-                tool: Some("eslint".to_string()),
-                targets: Some(vec!["src".to_string()]),
             }],
         );
     }
@@ -1202,16 +899,13 @@ fn simplify_once(commands: &[ParsedCommand]) -> Option<Vec<ParsedCommand>> {
         return Some(commands[1..].to_vec());
     }
 
-    // cd foo && [any Test command] => [any Test command]
+    // cd foo && [any command] => [any command] (keep non-cd when a cd is followed by something)
     if let Some(idx) = commands.iter().position(|pc| match pc {
         ParsedCommand::Unknown { cmd } => {
             shlex_split(cmd).is_some_and(|t| t.first().map(|s| s.as_str()) == Some("cd"))
         }
         _ => false,
-    }) && commands
-        .iter()
-        .skip(idx + 1)
-        .any(|pc| matches!(pc, ParsedCommand::Test { .. }))
+    }) && commands.len() > idx + 1
     {
         let mut out = Vec::with_capacity(commands.len() - 1);
         out.extend_from_slice(&commands[..idx]);
@@ -1220,10 +914,10 @@ fn simplify_once(commands: &[ParsedCommand]) -> Option<Vec<ParsedCommand>> {
     }
 
     // cmd || true => cmd
-    if let Some(idx) = commands.iter().position(|pc| match pc {
-        ParsedCommand::Noop { cmd } => cmd == "true",
-        _ => false,
-    }) {
+    if let Some(idx) = commands
+        .iter()
+        .position(|pc| matches!(pc, ParsedCommand::Unknown { cmd } if cmd == "true"))
+    {
         let mut out = Vec::with_capacity(commands.len() - 1);
         out.extend_from_slice(&commands[..idx]);
         out.extend_from_slice(&commands[idx + 1..]);
@@ -1377,75 +1071,6 @@ fn skip_flag_values<'a>(args: &'a [String], flags_with_vals: &[&str]) -> Vec<&'a
     out
 }
 
-/// Common flags for ESLint that take a following value and should not be
-/// considered positional targets.
-const ESLINT_FLAGS_WITH_VALUES: &[&str] = &[
-    "-c",
-    "--config",
-    "--parser",
-    "--parser-options",
-    "--rulesdir",
-    "--plugin",
-    "--max-warnings",
-    "--format",
-];
-
-fn collect_non_flag_targets(args: &[String]) -> Option<Vec<String>> {
-    let mut targets = Vec::new();
-    let mut skip_next = false;
-    for (i, a) in args.iter().enumerate() {
-        if a == "--" {
-            break;
-        }
-        if skip_next {
-            skip_next = false;
-            continue;
-        }
-        if a == "-p"
-            || a == "--package"
-            || a == "--features"
-            || a == "-C"
-            || a == "--config"
-            || a == "--config-path"
-            || a == "--out-dir"
-            || a == "-o"
-            || a == "--run"
-            || a == "--max-warnings"
-            || a == "--format"
-        {
-            if i + 1 < args.len() {
-                skip_next = true;
-            }
-            continue;
-        }
-        if a.starts_with('-') {
-            continue;
-        }
-        targets.push(a.clone());
-    }
-    if targets.is_empty() {
-        None
-    } else {
-        Some(targets)
-    }
-}
-
-fn collect_non_flag_targets_with_flags(
-    args: &[String],
-    flags_with_vals: &[&str],
-) -> Option<Vec<String>> {
-    let targets: Vec<String> = skip_flag_values(args, flags_with_vals)
-        .into_iter()
-        .filter(|a| !a.starts_with('-'))
-        .cloned()
-        .collect();
-    if targets.is_empty() {
-        None
-    } else {
-        Some(targets)
-    }
-}
-
 fn is_pathish(s: &str) -> bool {
     s == "."
         || s == ".."
@@ -1514,47 +1139,6 @@ fn parse_find_query_and_path(tail: &[String]) -> (Option<String>, Option<String>
     (query, path)
 }
 
-fn classify_npm_like(tool: &str, tail: &[String], full_cmd: &[String]) -> Option<ParsedCommand> {
-    let mut r = tail;
-    if tool == "pnpm" && r.first().map(|s| s.as_str()) == Some("-r") {
-        r = &r[1..];
-    }
-    let mut script_name: Option<String> = None;
-    if r.first().map(|s| s.as_str()) == Some("run") {
-        script_name = r.get(1).cloned();
-    } else {
-        let is_test_cmd = (tool == "npm" && r.first().map(|s| s.as_str()) == Some("t"))
-            || ((tool == "npm" || tool == "pnpm" || tool == "yarn")
-                && r.first().map(|s| s.as_str()) == Some("test"));
-        if is_test_cmd {
-            script_name = Some("test".to_string());
-        }
-    }
-    if let Some(name) = script_name {
-        let lname = name.to_lowercase();
-        if lname == "test" || lname == "unit" || lname == "jest" || lname == "vitest" {
-            return Some(ParsedCommand::Test {
-                cmd: shlex_join(full_cmd),
-            });
-        }
-        if lname == "lint" || lname == "eslint" {
-            return Some(ParsedCommand::Lint {
-                cmd: shlex_join(full_cmd),
-                tool: Some(format!("{tool}-script:{name}")),
-                targets: None,
-            });
-        }
-        if lname == "format" || lname == "fmt" || lname == "prettier" {
-            return Some(ParsedCommand::Format {
-                cmd: shlex_join(full_cmd),
-                tool: Some(format!("{tool}-script:{name}")),
-                targets: None,
-            });
-        }
-    }
-    None
-}
-
 fn parse_bash_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
     let [bash, flag, script] = original else {
         return None;
@@ -1586,7 +1170,11 @@ fn parse_bash_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
             .map(|tokens| summarize_main_tokens(&tokens))
             .collect();
         if commands.len() > 1 {
-            commands.retain(|pc| !matches!(pc, ParsedCommand::Noop { .. }));
+            commands.retain(|pc| !matches!(pc, ParsedCommand::Unknown { cmd } if cmd == "true"));
+            // Apply the same simplifications used for non-bash parsing, e.g., drop leading `cd`.
+            while let Some(next) = simplify_once(&commands) {
+                commands = next;
+            }
         }
         if commands.len() == 1 {
             // If we reduced to a single command, attribute the full original script
@@ -1655,27 +1243,7 @@ fn parse_bash_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
                             }
                         }
                     }
-                    ParsedCommand::Format {
-                        tool, targets, cmd, ..
-                    } => ParsedCommand::Format {
-                        cmd: cmd.clone(),
-                        tool,
-                        targets,
-                    },
-                    ParsedCommand::Test { cmd, .. } => ParsedCommand::Test { cmd: cmd.clone() },
-                    ParsedCommand::Lint {
-                        tool, targets, cmd, ..
-                    } => ParsedCommand::Lint {
-                        cmd: cmd.clone(),
-                        tool,
-                        targets,
-                    },
-                    ParsedCommand::Unknown { .. } => ParsedCommand::Unknown {
-                        cmd: script.clone(),
-                    },
-                    ParsedCommand::Noop { .. } => ParsedCommand::Noop {
-                        cmd: script.clone(),
-                    },
+                    other => other,
                 })
                 .collect();
         }
@@ -1728,124 +1296,6 @@ fn drop_small_formatting_commands(mut commands: Vec<Vec<String>>) -> Vec<Vec<Str
 
 fn summarize_main_tokens(main_cmd: &[String]) -> ParsedCommand {
     match main_cmd.split_first() {
-        Some((head, tail)) if head == "true" && tail.is_empty() => ParsedCommand::Noop {
-            cmd: shlex_join(main_cmd),
-        },
-        // (sed-specific logic handled below in dedicated arm returning Read)
-        Some((head, tail))
-            if head == "cargo" && tail.first().map(|s| s.as_str()) == Some("fmt") =>
-        {
-            ParsedCommand::Format {
-                cmd: shlex_join(main_cmd),
-                tool: Some("cargo fmt".to_string()),
-                targets: collect_non_flag_targets(&tail[1..]),
-            }
-        }
-        Some((head, tail))
-            if head == "cargo" && tail.first().map(|s| s.as_str()) == Some("clippy") =>
-        {
-            ParsedCommand::Lint {
-                cmd: shlex_join(main_cmd),
-                tool: Some("cargo clippy".to_string()),
-                targets: collect_non_flag_targets(&tail[1..]),
-            }
-        }
-        Some((head, tail))
-            if head == "cargo" && tail.first().map(|s| s.as_str()) == Some("test") =>
-        {
-            ParsedCommand::Test {
-                cmd: shlex_join(main_cmd),
-            }
-        }
-        Some((head, tail)) if head == "rustfmt" => ParsedCommand::Format {
-            cmd: shlex_join(main_cmd),
-            tool: Some("rustfmt".to_string()),
-            targets: collect_non_flag_targets(tail),
-        },
-        Some((head, tail)) if head == "go" && tail.first().map(|s| s.as_str()) == Some("fmt") => {
-            ParsedCommand::Format {
-                cmd: shlex_join(main_cmd),
-                tool: Some("go fmt".to_string()),
-                targets: collect_non_flag_targets(&tail[1..]),
-            }
-        }
-        Some((head, tail)) if head == "go" && tail.first().map(|s| s.as_str()) == Some("test") => {
-            ParsedCommand::Test {
-                cmd: shlex_join(main_cmd),
-            }
-        }
-        Some((head, _)) if head == "pytest" => ParsedCommand::Test {
-            cmd: shlex_join(main_cmd),
-        },
-        Some((head, tail)) if head == "eslint" => {
-            // Treat configuration flags with values (e.g. `-c .eslintrc`) as non-targets.
-            let targets = collect_non_flag_targets_with_flags(tail, ESLINT_FLAGS_WITH_VALUES);
-            ParsedCommand::Lint {
-                cmd: shlex_join(main_cmd),
-                tool: Some("eslint".to_string()),
-                targets,
-            }
-        }
-        Some((head, tail)) if head == "prettier" => ParsedCommand::Format {
-            cmd: shlex_join(main_cmd),
-            tool: Some("prettier".to_string()),
-            targets: collect_non_flag_targets(tail),
-        },
-        Some((head, tail)) if head == "black" => ParsedCommand::Format {
-            cmd: shlex_join(main_cmd),
-            tool: Some("black".to_string()),
-            targets: collect_non_flag_targets(tail),
-        },
-        Some((head, tail))
-            if head == "ruff" && tail.first().map(|s| s.as_str()) == Some("check") =>
-        {
-            ParsedCommand::Lint {
-                cmd: shlex_join(main_cmd),
-                tool: Some("ruff".to_string()),
-                targets: collect_non_flag_targets(&tail[1..]),
-            }
-        }
-        Some((head, tail))
-            if head == "ruff" && tail.first().map(|s| s.as_str()) == Some("format") =>
-        {
-            ParsedCommand::Format {
-                cmd: shlex_join(main_cmd),
-                tool: Some("ruff".to_string()),
-                targets: collect_non_flag_targets(&tail[1..]),
-            }
-        }
-        Some((head, _)) if (head == "jest" || head == "vitest") => ParsedCommand::Test {
-            cmd: shlex_join(main_cmd),
-        },
-        Some((head, tail))
-            if head == "npx" && tail.first().map(|s| s.as_str()) == Some("eslint") =>
-        {
-            let targets = collect_non_flag_targets_with_flags(&tail[1..], ESLINT_FLAGS_WITH_VALUES);
-            ParsedCommand::Lint {
-                cmd: shlex_join(main_cmd),
-                tool: Some("eslint".to_string()),
-                targets,
-            }
-        }
-        Some((head, tail))
-            if head == "npx" && tail.first().map(|s| s.as_str()) == Some("prettier") =>
-        {
-            ParsedCommand::Format {
-                cmd: shlex_join(main_cmd),
-                tool: Some("prettier".to_string()),
-                targets: collect_non_flag_targets(&tail[1..]),
-            }
-        }
-        // NPM-like scripts including yarn
-        Some((tool, tail)) if (tool == "pnpm" || tool == "npm" || tool == "yarn") => {
-            if let Some(cmd) = classify_npm_like(tool, tail, main_cmd) {
-                cmd
-            } else {
-                ParsedCommand::Unknown {
-                    cmd: shlex_join(main_cmd),
-                }
-            }
-        }
         Some((head, tail)) if head == "ls" => {
             // Avoid treating option values as paths (e.g., ls -I "*.test.js").
             let candidates = skip_flag_values(

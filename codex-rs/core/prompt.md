@@ -228,7 +228,6 @@ You are producing plain text that will later be styled by the CLI. Follow these 
 **Bullets**
 
 - Use `-` followed by a space for every bullet.
-- Bold the keyword, then colon + concise description.
 - Merge related points when possible; avoid a bullet for every trivial detail.
 - Keep bullets to one line unless breaking for clarity is unavoidable.
 - Group into short lists (4–6 bullets) ordered by importance.

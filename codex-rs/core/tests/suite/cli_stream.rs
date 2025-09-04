@@ -388,7 +388,7 @@ async fn integration_creates_and_checks_session_file() {
         "No message found in session file containing the marker"
     );
 
-    // Second run: resume and append.
+    // Second run: resume should create a NEW session file that contains both old and new history.
     let orig_len = content.lines().count();
     let marker2 = format!("integration-resume-{}", Uuid::new_v4());
     let prompt2 = format!("echo {marker2}");
@@ -419,31 +419,58 @@ async fn integration_creates_and_checks_session_file() {
     let output2 = cmd2.output().unwrap();
     assert!(output2.status.success(), "resume codex-cli run failed");
 
-    // The rollout writer runs on a background async task; give it a moment to flush.
-    let mut new_len = orig_len;
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut content2 = String::new();
-    while Instant::now() < deadline {
-        if let Ok(c) = std::fs::read_to_string(&path) {
-            let count = c.lines().count();
-            if count > orig_len {
-                content2 = c;
-                new_len = count;
+    // Find the new session file containing the resumed marker.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut resumed_path: Option<std::path::PathBuf> = None;
+    while Instant::now() < deadline && resumed_path.is_none() {
+        for entry in WalkDir::new(&sessions_dir) {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            if !entry.file_name().to_string_lossy().ends_with(".jsonl") {
+                continue;
+            }
+            let p = entry.path();
+            let Ok(c) = std::fs::read_to_string(p) else {
+                continue;
+            };
+            if c.contains(&marker2) {
+                resumed_path = Some(p.to_path_buf());
                 break;
             }
         }
-        std::thread::sleep(Duration::from_millis(50));
+        if resumed_path.is_none() {
+            std::thread::sleep(Duration::from_millis(50));
+        }
     }
-    if content2.is_empty() {
-        // last attempt
-        content2 = std::fs::read_to_string(&path).unwrap();
-        new_len = content2.lines().count();
-    }
-    assert!(new_len > orig_len, "rollout file did not grow after resume");
-    assert!(content2.contains(&marker), "rollout lost original marker");
+
+    let resumed_path = resumed_path.expect("No resumed session file found containing the marker2");
+    // Resume should have written to a new file, not the original one.
+    assert_ne!(
+        resumed_path, path,
+        "resume should create a new session file"
+    );
+
+    let resumed_content = std::fs::read_to_string(&resumed_path).unwrap();
     assert!(
-        content2.contains(&marker2),
-        "rollout missing resumed marker"
+        resumed_content.contains(&marker),
+        "resumed file missing original marker"
+    );
+    assert!(
+        resumed_content.contains(&marker2),
+        "resumed file missing resumed marker"
+    );
+
+    // Original file should remain unchanged.
+    let content_after = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        content_after.lines().count(),
+        orig_len,
+        "original rollout file should not change on resume"
     );
 }
 

@@ -26,7 +26,6 @@ use crate::protocol::SandboxPolicy;
 use crate::seatbelt::spawn_command_under_seatbelt;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
-use serde_bytes::ByteBuf;
 
 const DEFAULT_TIMEOUT_MS: u64 = 10_000;
 
@@ -369,7 +368,7 @@ async fn read_capped<R: AsyncRead + Unpin + Send + 'static>(
                 } else {
                     ExecOutputStream::Stdout
                 },
-                chunk: ByteBuf::from(chunk),
+                chunk,
             });
             let event = Event {
                 id: stream.sub_id.clone(),

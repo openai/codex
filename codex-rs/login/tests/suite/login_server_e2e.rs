@@ -100,6 +100,7 @@ async fn end_to_end_login_flow_persists_auth_json() {
         port: 0,
         open_browser: false,
         force_state: Some(state),
+        originator: "test_originator".to_string(),
     };
     let server = run_login_server(opts).unwrap();
     let login_port = server.actual_port;
@@ -158,6 +159,7 @@ async fn creates_missing_codex_home_dir() {
         port: 0,
         open_browser: false,
         force_state: Some(state),
+        originator: "test_originator".to_string(),
     };
     let server = run_login_server(opts).unwrap();
     let login_port = server.actual_port;

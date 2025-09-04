@@ -3,7 +3,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use thiserror::Error;
 
-use crate::AuthMode;
+use codex_protocol::mcp_protocol::AuthMode;
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Default)]
 pub struct TokenData {
@@ -58,7 +58,7 @@ pub struct IdTokenInfo {
     pub email: Option<String>,
     /// The ChatGPT subscription plan type
     /// (e.g., "free", "plus", "pro", "business", "enterprise", "edu").
-    /// (Note: ae has not verified that those are the exact values.)
+    /// (Note: values may vary by backend.)
     pub(crate) chatgpt_plan_type: Option<PlanType>,
     pub raw_jwt: String,
 }
@@ -137,7 +137,7 @@ pub enum IdTokenInfoError {
     Json(#[from] serde_json::Error),
 }
 
-pub(crate) fn parse_id_token(id_token: &str) -> Result<IdTokenInfo, IdTokenInfoError> {
+pub fn parse_id_token(id_token: &str) -> Result<IdTokenInfo, IdTokenInfoError> {
     // JWT format: header.payload.signature
     let mut parts = id_token.split('.');
     let (_header_b64, payload_b64, _sig_b64) = match (parts.next(), parts.next(), parts.next()) {
@@ -204,9 +204,33 @@ mod tests {
 
         let info = parse_id_token(&fake_jwt).expect("should parse");
         assert_eq!(info.email.as_deref(), Some("user@example.com"));
-        assert_eq!(
-            info.chatgpt_plan_type,
-            Some(PlanType::Known(KnownPlan::Pro))
-        );
+        assert_eq!(info.get_chatgpt_plan_type().as_deref(), Some("Pro"));
+    }
+
+    #[test]
+    fn id_token_info_handles_missing_fields() {
+        #[derive(Serialize)]
+        struct Header {
+            alg: &'static str,
+            typ: &'static str,
+        }
+        let header = Header {
+            alg: "none",
+            typ: "JWT",
+        };
+        let payload = serde_json::json!({ "sub": "123" });
+
+        fn b64url_no_pad(bytes: &[u8]) -> String {
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+        }
+
+        let header_b64 = b64url_no_pad(&serde_json::to_vec(&header).unwrap());
+        let payload_b64 = b64url_no_pad(&serde_json::to_vec(&payload).unwrap());
+        let signature_b64 = b64url_no_pad(b"sig");
+        let fake_jwt = format!("{header_b64}.{payload_b64}.{signature_b64}");
+
+        let info = parse_id_token(&fake_jwt).expect("should parse");
+        assert!(info.email.is_none());
+        assert!(info.get_chatgpt_plan_type().is_none());
     }
 }

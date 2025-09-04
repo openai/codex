@@ -4,6 +4,7 @@ use codex_core::config_types::UriBasedFileOpener;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 
+#[allow(clippy::disallowed_methods)]
 const DEFAULT_CODE_BG: Color = Color::Rgb(40, 44, 52);
 use std::borrow::Cow;
 use std::path::Path;
@@ -15,7 +16,7 @@ mod syntax_highlighting {
     use ratatui::style::{Color, Style};
     use ratatui::text::{Line, Span};
     use syntect::easy::HighlightLines;
-    use syntect::highlighting::{ThemeSet, Color as SyntectColor};
+    use syntect::highlighting::{Color as SyntectColor, ThemeSet};
     use syntect::parsing::SyntaxSet;
 
     pub(super) static SYNTAX_SET: Lazy<SyntaxSet> = Lazy::new(SyntaxSet::load_defaults_newlines);
@@ -23,7 +24,9 @@ mod syntax_highlighting {
 
     /// Get the appropriate syntax definition for a code block language
     /// Always returns a syntax definition, falling back to plain text if needed
-    pub(super) fn get_syntax_definition(language: Option<&str>) -> &'static syntect::parsing::SyntaxReference {
+    pub(super) fn get_syntax_definition(
+        language: Option<&str>,
+    ) -> &'static syntect::parsing::SyntaxReference {
         let raw = language.unwrap_or("txt").trim().to_lowercase();
         // first token; strip `{.lang}`, leading '.', trailing '}', and split on ,/;
         let token = raw
@@ -33,12 +36,17 @@ mod syntax_highlighting {
             .trim_start_matches("{.")
             .trim_start_matches('.')
             .trim_end_matches('}')
-            .split(|c| c == ',' || c == ';')
+            .split(|c| [',', ';'].contains(&c))
             .next()
             .unwrap_or("txt");
 
         // Early return for plain-text tokens
-        if token.is_empty() || matches!(token, "nohighlight" | "text" | "plain" | "plaintext" | "txt") {
+        if token.is_empty()
+            || matches!(
+                token,
+                "nohighlight" | "text" | "plain" | "plaintext" | "txt"
+            )
+        {
             return SYNTAX_SET.find_syntax_plain_text();
         }
 
@@ -49,6 +57,7 @@ mod syntax_highlighting {
     }
 
     /// Convert syntect color to ratatui color
+    #[allow(clippy::disallowed_methods)]
     pub(super) fn syntect_to_ratatui_color(color: SyntectColor) -> Option<Color> {
         if color.a == 0 {
             None
@@ -57,7 +66,11 @@ mod syntax_highlighting {
         }
     }
 
-    pub(super) fn highlight_code(content: &str, language: Option<&str>, lines: &mut Vec<Line<'static>>) {
+    pub(super) fn highlight_code(
+        content: &str,
+        language: Option<&str>,
+        lines: &mut Vec<Line<'static>>,
+    ) {
         let syntax = get_syntax_definition(language);
         // Prefer a stable fallback to avoid nondeterministic iteration
         let theme = match THEME
@@ -73,40 +86,45 @@ mod syntax_highlighting {
             }
         };
         let mut highlighter = HighlightLines::new(syntax, theme);
-        
+
         for line in content.lines() {
-            let ranges: Vec<(syntect::highlighting::Style, &str)> = 
-                highlighter.highlight_line(line, &SYNTAX_SET).unwrap_or_else(|_| {
-                    vec![(syntect::highlighting::Style::default(), line)]
-                });
-            
-            let spans: Vec<Span> = ranges.into_iter().map(|(syn_style, text)| {
-                let fg = syn_style.foreground;
-                let mut style = Style::default()
-                    .fg(syntect_to_ratatui_color(fg).unwrap_or(Color::Reset));
-                
-                // Set background color if available
-                if let Some(bg_color) = syntect_to_ratatui_color(syn_style.background) {
-                    style = style.bg(bg_color);
-                } else {
-                    // Default dark background for code blocks
-                    style = style.bg(DEFAULT_CODE_BG);
-                }
-                
-                Span::styled(text.to_string(), style)
-            }).collect();
-            
+            let ranges: Vec<(syntect::highlighting::Style, &str)> = highlighter
+                .highlight_line(line, &SYNTAX_SET)
+                .unwrap_or_else(|_| vec![(syntect::highlighting::Style::default(), line)]);
+
+            let spans: Vec<Span> = ranges
+                .into_iter()
+                .map(|(syn_style, text)| {
+                    let fg = syn_style.foreground;
+                    let mut style =
+                        Style::default().fg(syntect_to_ratatui_color(fg).unwrap_or(Color::Reset));
+
+                    // Set background color if available
+                    if let Some(bg_color) = syntect_to_ratatui_color(syn_style.background) {
+                        style = style.bg(bg_color);
+                    } else {
+                        // Default dark background for code blocks
+                        style = style.bg(DEFAULT_CODE_BG);
+                    }
+
+                    Span::styled(text.to_string(), style)
+                })
+                .collect();
+
             lines.push(Line::from(spans));
         }
     }
-        
 }
 
 #[cfg(not(feature = "syntax-highlighting"))]
 mod syntax_highlighting {
-    use super::{plain_text_fallback, Line};
-    
-    pub(super) fn highlight_code(content: &str, _language: Option<&str>, lines: &mut Vec<Line<'static>>) {
+    use super::{Line, plain_text_fallback};
+
+    pub(super) fn highlight_code(
+        content: &str,
+        _language: Option<&str>,
+        lines: &mut Vec<Line<'static>>,
+    ) {
         plain_text_fallback(content, lines);
     }
 }
@@ -114,10 +132,7 @@ mod syntax_highlighting {
 /// Fallback to simple rendering without syntax highlighting
 pub(super) fn plain_text_fallback(content: &str, lines: &mut Vec<Line<'static>>) {
     for line in content.lines() {
-        let span = Span::styled(
-            line.to_string(),
-            Style::default().bg(DEFAULT_CODE_BG),
-        );
+        let span = Span::styled(line.to_string(), Style::default().bg(DEFAULT_CODE_BG));
         lines.push(Line::from(span));
     }
 }
@@ -150,7 +165,9 @@ fn append_markdown_with_opener_and_cwd(
                 let rendered = tui_markdown::from_str(&processed);
                 crate::render::line_utils::push_owned_lines(&rendered.lines, lines);
             }
-            Segment::Code { content, language, .. } => {
+            Segment::Code {
+                content, language, ..
+            } => {
                 syntax_highlighting::highlight_code(&content, language.as_deref(), lines);
             }
         }
@@ -367,15 +384,15 @@ fn split_text_and_fences(src: &str) -> Vec<Segment> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pretty_assertions::assert_eq;
     use codex_core::config_types::UriBasedFileOpener;
+    use pretty_assertions::assert_eq;
     use std::path::Path;
-    
+
     #[test]
     #[cfg(feature = "syntax-highlighting")]
     fn test_syntax_highlighting() {
         let cwd = Path::new("/");
-        
+
         let markdown = r#"
 ```rust
 fn main() {
@@ -392,26 +409,28 @@ fn main() {
 }
 ```
 "#;
-        
+
         // Process the markdown
         let mut lines = Vec::new();
         let segments = split_text_and_fences(markdown);
-        
+
         // Convert segments back to markdown text for the test
         let mut reconstructed = String::new();
         for segment in &segments {
             match segment {
                 Segment::Text(s) => reconstructed.push_str(s),
-                Segment::Code { content, language, .. } => {
+                Segment::Code {
+                    content, language, ..
+                } => {
                     if let Some(lang) = language {
-                        reconstructed.push_str(&format!("```{}\n{}\n```\n", lang, content));
+                        reconstructed.push_str(&format!("```{lang}\n{content}\n```\n"));
                     } else {
-                        reconstructed.push_str(&format!("```\n{}\n```\n", content));
+                        reconstructed.push_str(&format!("```\n{content}\n```\n"));
                     }
                 }
             }
         }
-        
+
         // Process the markdown with the public API
         append_markdown_with_opener_and_cwd(
             &reconstructed,
@@ -419,10 +438,10 @@ fn main() {
             UriBasedFileOpener::None,
             cwd,
         );
-        
+
         // Verify we have some lines of output
         assert!(!lines.is_empty(), "Should have generated some output lines");
-        
+
         // Verify at least one non-reset RGB foreground (real highlighting)
         let has_colored_fg = lines.iter().any(|line| {
             line.spans

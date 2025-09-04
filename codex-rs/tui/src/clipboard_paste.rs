@@ -47,6 +47,7 @@ pub struct PastedImageInfo {
 }
 
 /// Capture image from system clipboard, encode to PNG, and return bytes + info.
+#[cfg(not(target_os = "android"))]
 pub fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageError> {
     tracing::debug!("attempting clipboard image read");
     let mut cb = arboard::Clipboard::new()
@@ -70,10 +71,7 @@ pub fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageErro
             .map_err(|e| PasteImageError::EncodeFailed(e.to_string()))?;
     }
 
-    tracing::debug!(
-        "clipboard image encoded to PNG ({len} bytes)",
-        len = png.len()
-    );
+    tracing::debug!("clipboard image encoded to PNG ({}) bytes", png.len());
     Ok((
         png,
         PastedImageInfo {
@@ -84,7 +82,16 @@ pub fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageErro
     ))
 }
 
+/// Android/Termux does not support arboard; return a clear error.
+#[cfg(target_os = "android")]
+pub fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageError> {
+    Err(PasteImageError::ClipboardUnavailable(
+        "clipboard image paste is unsupported on Android".into(),
+    ))
+}
+
 /// Convenience: write to a temp file and return its path + info.
+#[cfg(not(target_os = "android"))]
 pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImageError> {
     let (png, info) = paste_image_as_png()?;
     // Create a unique temporary file with a .png suffix to avoid collisions.
@@ -99,6 +106,14 @@ pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImag
         .keep()
         .map_err(|e| PasteImageError::IoError(e.error.to_string()))?;
     Ok((path, info))
+}
+
+#[cfg(target_os = "android")]
+pub fn paste_image_to_temp_png() -> Result<(PathBuf, PastedImageInfo), PasteImageError> {
+    // Keep error consistent with paste_image_as_png.
+    Err(PasteImageError::ClipboardUnavailable(
+        "clipboard image paste is unsupported on Android".into(),
+    ))
 }
 
 /// Normalize pasted text that may represent a filesystem path.

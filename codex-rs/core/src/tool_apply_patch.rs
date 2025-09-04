@@ -8,6 +8,8 @@ use crate::openai_tools::JsonSchema;
 use crate::openai_tools::OpenAiTool;
 use crate::openai_tools::ResponsesApiTool;
 
+const APPLY_PATCH_LARK_GRAMMAR: &str = include_str!("tool_apply_patch.lark");
+
 #[derive(Serialize, Deserialize)]
 pub(crate) struct ApplyPatchToolArgs {
     pub(crate) input: String,
@@ -29,27 +31,7 @@ pub(crate) fn create_apply_patch_freeform_tool() -> OpenAiTool {
         format: FreeformToolFormat {
             r#type: "grammar".to_string(),
             syntax: "lark".to_string(),
-            definition: r#"start: begin_patch hunk+ end_patch
-begin_patch: "*** Begin Patch" LF
-end_patch: "*** End Patch" LF?
-
-hunk: add_hunk | delete_hunk | update_hunk
-add_hunk: "*** Add File: " filename LF add_line+
-delete_hunk: "*** Delete File: " filename LF
-update_hunk: "*** Update File: " filename LF change_move? change?
-
-filename: /(.+)/
-add_line: "+" /(.+)/ LF -> line
-
-change_move: "*** Move to: " filename LF
-change: (change_context | change_line)+ eof_line?
-change_context: ("@@" | "@@ " /(.+)/) LF
-change_line: ("+" | "-" | " ") /(.+)/ LF
-eof_line: "*** End of File" LF
-
-%import common.LF
-"#
-            .to_string(),
+            definition: APPLY_PATCH_LARK_GRAMMAR.to_string(),
         },
     })
 }

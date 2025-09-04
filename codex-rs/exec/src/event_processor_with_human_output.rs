@@ -404,13 +404,16 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                                 println!("{}", line.style(self.green));
                             }
                         }
-                        FileChange::Delete => {
+                        FileChange::Delete { content } => {
                             let header = format!(
                                 "{} {}",
                                 format_file_change(change),
                                 path.to_string_lossy()
                             );
                             println!("{}", header.style(self.magenta));
+                            for line in content.lines() {
+                                println!("{}", line.style(self.red));
+                            }
                         }
                         FileChange::Update {
                             unified_diff,
@@ -512,6 +515,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     model,
                     history_log_id: _,
                     history_entry_count: _,
+                    initial_messages: _,
                 } = session_configured_event;
 
                 ts_println!(
@@ -548,6 +552,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             },
             EventMsg::ShutdownComplete => return CodexStatus::Shutdown,
             EventMsg::ConversationHistory(_) => {}
+            EventMsg::UserMessage(_) => {}
         }
         CodexStatus::Running
     }
@@ -560,7 +565,7 @@ fn escape_command(command: &[String]) -> String {
 fn format_file_change(change: &FileChange) -> &'static str {
     match change {
         FileChange::Add { .. } => "A",
-        FileChange::Delete => "D",
+        FileChange::Delete { .. } => "D",
         FileChange::Update {
             move_path: Some(_), ..
         } => "R",
