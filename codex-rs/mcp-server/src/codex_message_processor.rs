@@ -42,7 +42,6 @@ use codex_protocol::mcp_protocol::AuthMode;
 use codex_protocol::mcp_protocol::AuthStatusChangeNotification;
 use codex_protocol::mcp_protocol::ClientRequest;
 use codex_protocol::mcp_protocol::ConversationId;
-use codex_protocol::mcp_protocol::ConversationOpenedResponse;
 use codex_protocol::mcp_protocol::ConversationSummary;
 use codex_protocol::mcp_protocol::EXEC_COMMAND_APPROVAL_METHOD;
 use codex_protocol::mcp_protocol::ExecArbitraryCommandResponse;
@@ -59,6 +58,7 @@ use codex_protocol::mcp_protocol::ListConversationsResponse;
 use codex_protocol::mcp_protocol::LoginChatGptCompleteNotification;
 use codex_protocol::mcp_protocol::LoginChatGptResponse;
 use codex_protocol::mcp_protocol::NewConversationParams;
+use codex_protocol::mcp_protocol::NewConversationResponse;
 use codex_protocol::mcp_protocol::RemoveConversationListenerParams;
 use codex_protocol::mcp_protocol::RemoveConversationSubscriptionResponse;
 use codex_protocol::mcp_protocol::ResumeConversationParams;
@@ -530,7 +530,7 @@ impl CodexMessageProcessor {
                     session_configured,
                     ..
                 } = conversation_id;
-                let response = ConversationOpenedResponse {
+                let response = NewConversationResponse {
                     conversation_id: ConversationId(conversation_id),
                     model: session_configured.model,
                 };
@@ -656,10 +656,11 @@ impl CodexMessageProcessor {
                 };
                 self.outgoing.send_event_as_notification(&event, None).await;
 
-                // Reply with conversation id + model
-                let response = ConversationOpenedResponse {
+                // Reply with conversation id + model and initial messages (when present)
+                let response = codex_protocol::mcp_protocol::ResumeConversationResponse {
                     conversation_id: ConversationId(conversation_id),
-                    model: session_configured.model,
+                    model: session_configured.model.clone(),
+                    initial_messages: session_configured.initial_messages.clone(),
                 };
                 self.outgoing.send_response(request_id, response).await;
             }

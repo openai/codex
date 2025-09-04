@@ -7,9 +7,9 @@ use codex_core::protocol_config_types::ReasoningSummary;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_protocol::mcp_protocol::AddConversationListenerParams;
 use codex_protocol::mcp_protocol::AddConversationSubscriptionResponse;
-use codex_protocol::mcp_protocol::ConversationOpenedResponse;
 use codex_protocol::mcp_protocol::EXEC_COMMAND_APPROVAL_METHOD;
 use codex_protocol::mcp_protocol::NewConversationParams;
+use codex_protocol::mcp_protocol::NewConversationResponse;
 use codex_protocol::mcp_protocol::RemoveConversationListenerParams;
 use codex_protocol::mcp_protocol::RemoveConversationSubscriptionResponse;
 use codex_protocol::mcp_protocol::SendUserMessageParams;
@@ -85,9 +85,9 @@ async fn test_codex_jsonrpc_conversation_flow() {
     .await
     .expect("newConversation timeout")
     .expect("newConversation resp");
-    let new_conv_resp = to_response::<ConversationOpenedResponse>(new_conv_resp)
+    let new_conv_resp = to_response::<NewConversationResponse>(new_conv_resp)
         .expect("deserialize newConversation response");
-    let ConversationOpenedResponse {
+    let NewConversationResponse {
         conversation_id,
         model,
     } = new_conv_resp;
@@ -237,9 +237,9 @@ async fn test_send_user_turn_changes_approval_policy_behavior() {
     .await
     .expect("newConversation timeout")
     .expect("newConversation resp");
-    let ConversationOpenedResponse {
+    let NewConversationResponse {
         conversation_id, ..
-    } = to_response::<ConversationOpenedResponse>(new_conv_resp)
+    } = to_response::<NewConversationResponse>(new_conv_resp)
         .expect("deserialize newConversation response");
 
     // 2) addConversationListener

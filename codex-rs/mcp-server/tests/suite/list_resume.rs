@@ -1,11 +1,11 @@
 use std::fs;
 use std::path::Path;
 
-use codex_protocol::mcp_protocol::ConversationOpenedResponse;
 use codex_protocol::mcp_protocol::ListConversationsParams;
 use codex_protocol::mcp_protocol::ListConversationsResponse;
 use codex_protocol::mcp_protocol::NewConversationParams; // reused for overrides shape
 use codex_protocol::mcp_protocol::ResumeConversationParams;
+use codex_protocol::mcp_protocol::ResumeConversationResponse;
 use mcp_test_support::McpProcess;
 use mcp_test_support::to_response;
 use mcp_types::JSONRPCNotification;
@@ -142,9 +142,9 @@ async fn test_list_and_resume_conversations() {
     .await
     .expect("resumeConversation timeout")
     .expect("resumeConversation resp");
-    let ConversationOpenedResponse {
+    let ResumeConversationResponse {
         conversation_id, ..
-    } = to_response::<ConversationOpenedResponse>(resume_resp)
+    } = to_response::<ResumeConversationResponse>(resume_resp)
         .expect("deserialize resumeConversation response");
     // conversation id should be a valid UUID
     let _ = uuid::Uuid::from_bytes(conversation_id.0.into_bytes());

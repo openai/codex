@@ -2,9 +2,9 @@ use std::path::Path;
 
 use codex_protocol::mcp_protocol::AddConversationListenerParams;
 use codex_protocol::mcp_protocol::AddConversationSubscriptionResponse;
-use codex_protocol::mcp_protocol::ConversationOpenedResponse;
 use codex_protocol::mcp_protocol::InputItem;
 use codex_protocol::mcp_protocol::NewConversationParams;
+use codex_protocol::mcp_protocol::NewConversationResponse;
 use codex_protocol::mcp_protocol::SendUserMessageParams;
 use codex_protocol::mcp_protocol::SendUserMessageResponse;
 use mcp_test_support::McpProcess;
@@ -56,10 +56,10 @@ async fn test_conversation_create_and_send_message_ok() {
     .await
     .expect("newConversation timeout")
     .expect("newConversation resp");
-    let ConversationOpenedResponse {
+    let NewConversationResponse {
         conversation_id,
         model,
-    } = to_response::<ConversationOpenedResponse>(new_conv_resp)
+    } = to_response::<NewConversationResponse>(new_conv_resp)
         .expect("deserialize newConversation response");
     assert_eq!(model, "o3");
 

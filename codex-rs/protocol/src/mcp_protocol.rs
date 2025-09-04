@@ -171,9 +171,18 @@ pub struct NewConversationParams {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct ConversationOpenedResponse {
+pub struct NewConversationResponse {
     pub conversation_id: ConversationId,
     pub model: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ResumeConversationResponse {
+    pub conversation_id: ConversationId,
+    pub model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initial_messages: Option<Vec<crate::protocol::EventMsg>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, TS)]

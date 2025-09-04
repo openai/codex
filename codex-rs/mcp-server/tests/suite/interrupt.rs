@@ -6,10 +6,10 @@ use std::path::Path;
 use codex_core::protocol::TurnAbortReason;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_protocol::mcp_protocol::AddConversationListenerParams;
-use codex_protocol::mcp_protocol::ConversationOpenedResponse;
 use codex_protocol::mcp_protocol::InterruptConversationParams;
 use codex_protocol::mcp_protocol::InterruptConversationResponse;
 use codex_protocol::mcp_protocol::NewConversationParams;
+use codex_protocol::mcp_protocol::NewConversationResponse;
 use codex_protocol::mcp_protocol::SendUserMessageParams;
 use codex_protocol::mcp_protocol::SendUserMessageResponse;
 use mcp_types::JSONRPCResponse;
@@ -86,8 +86,8 @@ async fn shell_command_interruption() -> anyhow::Result<()> {
         mcp.read_stream_until_response_message(RequestId::Integer(new_conv_id)),
     )
     .await??;
-    let new_conv_resp = to_response::<ConversationOpenedResponse>(new_conv_resp)?;
-    let ConversationOpenedResponse {
+    let new_conv_resp = to_response::<NewConversationResponse>(new_conv_resp)?;
+    let NewConversationResponse {
         conversation_id, ..
     } = new_conv_resp;
 
