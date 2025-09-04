@@ -839,6 +839,11 @@ pub struct SessionConfiguredEvent {
 
     /// Current number of entries in the history log.
     pub history_entry_count: usize,
+
+    /// Optional initial messages (as events) for resumed sessions.
+    /// When present, UIs can use these to seed the history.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initial_messages: Option<Vec<EventMsg>>,
 }
 
 /// User's decision in response to an ExecApprovalRequest.
@@ -914,6 +919,7 @@ mod tests {
                 model: "codex-mini-latest".to_string(),
                 history_log_id: 0,
                 history_entry_count: 0,
+                initial_messages: None,
             }),
         };
         let serialized = serde_json::to_string(&event).unwrap();
