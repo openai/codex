@@ -583,7 +583,10 @@ impl Session {
         for item in items {
             let msgs = map_response_item_to_event_messages(item, self.show_raw_agent_reasoning);
             for msg in msgs {
-                out.push(Event { id: id.to_string(), msg });
+                out.push(Event {
+                    id: id.to_string(),
+                    msg,
+                });
             }
         }
         out
