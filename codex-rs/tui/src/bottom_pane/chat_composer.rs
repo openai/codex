@@ -1213,6 +1213,8 @@ impl WidgetRef for ChatComposer {
             ActivePopup::None => {
                 let bottom_line_rect = popup_rect;
                 let key_hint_style = Style::default().fg(Color::Cyan);
+                // show '?' when the composer is empty; otherwise show F1
+                let shortcuts_key = if self.is_empty() { "?" } else { "F1" };
                 let mut hint = if self.ctrl_c_quit_hint {
                     vec![
                         Span::from(" "),
@@ -1224,7 +1226,7 @@ impl WidgetRef for ChatComposer {
                         Span::from(" "),
                         "⏎".set_style(key_hint_style),
                         Span::from(" send   "),
-                        "Ctrl+/".set_style(key_hint_style),
+                        Span::from(shortcuts_key).set_style(key_hint_style),
                         Span::from(" shortcuts   "),
                         "Ctrl+C".set_style(key_hint_style),
                         Span::from(" quit"),
