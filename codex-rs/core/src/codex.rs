@@ -568,8 +568,6 @@ impl Session {
             .collect()
     }
 
-    
-
     /// Sends the given event to the client and swallows the send event, if
     /// any, logging it as an error.
     pub(crate) async fn send_event(&self, event: Event) {
