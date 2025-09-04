@@ -6,6 +6,9 @@ use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
 use crate::slash_command::SlashCommand;
 use crate::text_formatting::format_and_truncate_tool_result;
+use crate::wrapping::RtOptions;
+use crate::wrapping::word_wrap_line;
+use crate::wrapping::word_wrap_lines;
 use base64::Engine;
 use codex_ansi_escape::ansi_escape_line;
 use codex_common::create_config_summary_entries;
@@ -131,27 +134,16 @@ impl AgentMessageCell {
 
 impl HistoryCell for AgentMessageCell {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
-        let mut out: Vec<Line<'static>> = Vec::new();
-        // We want:
-        // - First visual line: "> " prefix (collapse with header logic)
-        // - All subsequent visual lines: two-space prefix
-        let mut is_first_visual = true;
-        let wrap_width = width.saturating_sub(2) as usize; // account for prefix
-        for line in &self.lines {
-            let wrapped = crate::insert_history::word_wrap_line(line, wrap_width);
-            for (i, piece) in wrapped.into_iter().enumerate() {
-                let mut spans = Vec::with_capacity(piece.spans.len() + 1);
-                spans.push(if is_first_visual && i == 0 && self.is_first_line {
+        word_wrap_lines(
+            &self.lines,
+            RtOptions::new(width as usize)
+                .initial_indent(if self.is_first_line {
                     "> ".into()
                 } else {
                     "  ".into()
-                });
-                spans.extend(piece.spans.into_iter());
-                out.push(spans.into());
-            }
-            is_first_visual = false;
-        }
-        out
+                })
+                .subsequent_indent("  ".into()),
+        )
     }
 
     fn transcript_lines(&self) -> Vec<Line<'static>> {
@@ -370,31 +362,21 @@ impl ExecCell {
                 lines
             };
             for (title, line) in call_lines {
-                let prefix_len = 4 + title.len() + 1; // "  └ " + title + " "
-                let wrapped = crate::insert_history::word_wrap_line(
-                    &Line::from(line),
-                    (width as usize).saturating_sub(prefix_len),
+                let line = Line::from(line);
+                let initial_indent = Line::from(vec![
+                    if first { "  └ ".dim() } else { "    ".into() },
+                    title.cyan(),
+                    " ".into(),
+                ]);
+                first = false;
+                let subsequent_indent = " ".repeat(initial_indent.width()).into();
+                let wrapped = word_wrap_line(
+                    &line,
+                    RtOptions::new(width as usize)
+                        .initial_indent(initial_indent)
+                        .subsequent_indent(subsequent_indent),
                 );
-                let mut first_sub = true;
-                for mut line in wrapped {
-                    let mut spans = Vec::with_capacity(line.spans.len() + 1);
-                    spans.push(if first {
-                        first = false;
-                        "  └ ".dim()
-                    } else {
-                        "    ".into()
-                    });
-                    if first_sub {
-                        first_sub = false;
-                        spans.push(title.cyan());
-                        spans.push(" ".into());
-                    } else {
-                        spans.push(" ".repeat(title.width() + 1).into());
-                    }
-                    spans.extend(line.spans.into_iter());
-                    line.spans = spans;
-                    lines.push(line);
-                }
+                lines.extend(wrapped.iter().map(|l| line_to_static(l)));
             }
         }
         lines

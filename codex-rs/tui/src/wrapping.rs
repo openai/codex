@@ -223,17 +223,15 @@ where
 /// Wrap a sequence of lines, applying the initial indent only to the very first
 /// output line, and using the subsequent indent for all later wrapped pieces.
 #[allow(dead_code)]
-pub(crate) fn word_wrap_lines<'a, O>(
-    lines: Vec<Line<'a>>,
-    width_or_options: O,
-) -> Vec<Line<'static>>
+pub(crate) fn word_wrap_lines<'a, I, O>(lines: I, width_or_options: O) -> Vec<Line<'static>>
 where
+    I: IntoIterator<Item = &'a Line<'a>>,
     O: Into<RtOptions<'a>>,
 {
     let base_opts: RtOptions<'a> = width_or_options.into();
     let mut out: Vec<Line<'static>> = Vec::new();
 
-    for (idx, line) in lines.iter().enumerate() {
+    for (idx, line) in lines.into_iter().enumerate() {
         let opts = if idx == 0 {
             base_opts.clone()
         } else {
@@ -242,7 +240,7 @@ where
             o = o.initial_indent(sub);
             o
         };
-        let wrapped = word_wrap_line(line, opts);
+        let wrapped = word_wrap_line(&line, opts);
         push_owned_lines(&wrapped, &mut out);
     }
 
@@ -473,7 +471,7 @@ mod tests {
             .subsequent_indent(Line::from("  "));
 
         let lines = vec![Line::from("hello world"), Line::from("foo bar baz")];
-        let out = word_wrap_lines(lines, opts);
+        let out = word_wrap_lines(&lines, opts);
 
         // Expect: first line prefixed with "- ", subsequent wrapped pieces with "  "
         // and for the second input line, there should be no "- " prefix on its first piece
@@ -487,7 +485,7 @@ mod tests {
     #[test]
     fn wrap_lines_without_indents_is_concat_of_single_wraps() {
         let lines = vec![Line::from("hello"), Line::from("world!")];
-        let out = word_wrap_lines(lines, 10);
+        let out = word_wrap_lines(&lines, 10);
         let rendered: Vec<String> = out.iter().map(concat_line).collect();
         assert_eq!(rendered, vec!["hello", "world!"]);
     }
@@ -514,5 +512,40 @@ mod tests {
         let out = word_wrap_lines_borrowed(lines.iter().collect::<Vec<_>>(), 10);
         let rendered: Vec<String> = out.iter().map(concat_line).collect();
         assert_eq!(rendered, vec!["hello", "world!"]);
+    }
+
+    #[test]
+    fn line_height_counts_double_width_emoji() {
+        let line = "😀😀😀".into(); // each emoji ~ width 2
+        assert_eq!(word_wrap_line(&line, 4).len(), 2);
+        assert_eq!(word_wrap_line(&line, 2).len(), 3);
+        assert_eq!(word_wrap_line(&line, 6).len(), 1);
+    }
+
+    #[test]
+    fn word_wrap_does_not_split_words_simple_english() {
+        let sample = "Years passed, and Willowmere thrived in peace and friendship. Mira’s herb garden flourished with both ordinary and enchanted plants, and travelers spoke of the kindness of the woman who tended them.";
+        let line = Line::from(sample);
+        let lines = [line];
+        // Force small width to exercise wrapping at spaces.
+        let wrapped = word_wrap_lines_borrowed(&lines, 40);
+        let joined: String = wrapped
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.clone())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !joined.contains("bo\nth"),
+            "word 'both' should not be split across lines:\n{joined}"
+        );
+        assert!(
+            !joined.contains("Willowm\nere"),
+            "should not split inside words:\n{joined}"
+        );
     }
 }
