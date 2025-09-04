@@ -40,6 +40,7 @@ pub use model_provider_info::WireApi;
 pub use model_provider_info::built_in_model_providers;
 pub use model_provider_info::create_oss_provider_with_base_url;
 mod conversation_manager;
+mod event_mapping;
 pub use conversation_manager::ConversationManager;
 pub use conversation_manager::NewConversation;
 // Re-export common auth types for workspace consumers
