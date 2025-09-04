@@ -11,4 +11,4 @@ expression: terminal.backend()
 "▌                                                                                                   "
 "▌                                                                                                   "
 "▌                                                                                                   "
-" ⏎ send   ? shortcuts   Ctrl+C quit                                                                 "
+" ⏎ send   Ctrl+O shortcuts   Ctrl+C quit                                                            "

@@ -277,13 +277,14 @@ impl App {
 
     async fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
         match key_event {
-            // Shortcuts overlay toggle via F1 as a cross‑terminal fallback
+            // Shortcuts overlay toggle on Ctrl+O
             KeyEvent {
-                code: KeyCode::F(1),
+                code: KeyCode::Char('o'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
                 kind: KeyEventKind::Press,
                 ..
             } if self.overlay.is_none() => {
-                // Enter alternate screen and show a concise, static shortcuts list.
+                // Enter alternate screen and show static shortcuts list
                 use ratatui::style::{Color, Style, Stylize};
                 use ratatui::text::{Line, Span};
                 let key = |s: &str| Span::from(s.to_string()).style(Style::default().fg(Color::Cyan));
@@ -291,12 +292,9 @@ impl App {
                 let mut lines: Vec<Line<'static>> = Vec::new();
                 // Compose
                 lines.push(Line::from("Compose".bold()));
+                lines.push(Line::from(vec![Span::from("⏎").style(Style::default().fg(Color::Cyan)), sep(), Span::from("send")]));
                 lines.push(Line::from(vec![key("Shift+⏎"), sep(), Span::from("newline")]));
-                lines.push(Line::from(vec![
-                    key("Ctrl+J"),
-                    sep(),
-                    Span::from("newline"),
-                ]));
+                lines.push(Line::from(vec![key("Ctrl+J"), sep(), Span::from("newline")]));
                 lines.push(Line::from(vec![key("Ctrl+V"), sep(), Span::from("paste image")]));
                 lines.push(Line::from(""));
                 // Edit
@@ -306,71 +304,19 @@ impl App {
                 lines.push(Line::from(vec![key("Alt+Backspace"), sep(), Span::from("delete word left")]));
                 lines.push(Line::from(vec![key("Ctrl+K"), sep(), Span::from("clear to end of line")]));
                 lines.push(Line::from(""));
-                // Movement
-                lines.push(Line::from("Movement".bold()));
+                // Navigate
+                lines.push(Line::from("Navigate".bold()));
                 lines.push(Line::from(vec![key("Alt+←/→"), sep(), Span::from("word jump")]));
-                lines.push(Line::from(""));
-                // History
-                lines.push(Line::from("History".bold()));
                 lines.push(Line::from(vec![key("↑/↓"), sep(), Span::from("previous/next entry")]));
                 lines.push(Line::from(""));
-                // Transcript
-                lines.push(Line::from("Transcript".bold()));
-                lines.push(Line::from(vec![key("Ctrl+T"), sep(), Span::from("open transcript")]));
+                // Overlays
+                lines.push(Line::from("Overlays".bold()));
+                lines.push(Line::from(vec![key("Ctrl+O"), sep(), Span::from("shortcuts")]));
+                lines.push(Line::from(vec![key("Ctrl+T"), sep(), Span::from("transcript")]));
                 lines.push(Line::from(""));
                 // Backtrack
                 lines.push(Line::from("Backtrack".bold()));
-                lines.push(Line::from(vec![key("Esc Esc"), sep(), Span::from("edit previous")])) ;
-
-                let _ = tui.enter_alt_screen();
-                self.overlay = Some(Overlay::new_static_with_title_minimal_hints(
-                    lines,
-                    "S H O R T C U T S".to_string(),
-                ));
-                tui.frame_requester().schedule_frame();
-            }
-            // Shortcuts overlay toggle: open on '?' (Shift+/) when composer is empty
-            KeyEvent { code: KeyCode::Char('?'), kind: KeyEventKind::Press, .. }
-                if self.overlay.is_none() && self.chat_widget.composer_is_empty() =>
-            {
-                // Enter alternate screen and show a concise, static shortcuts list.
-                use ratatui::style::{Color, Style, Stylize};
-                use ratatui::text::{Line, Span};
-                let key = |s: &str| Span::from(s.to_string()).style(Style::default().fg(Color::Cyan));
-                let sep = || Span::from("  ");
-                let mut lines: Vec<Line<'static>> = Vec::new();
-                // Compose
-                lines.push(Line::from("Compose".bold()));
-                lines.push(Line::from(vec![key("Shift+⏎"), sep(), Span::from("newline")]));
-                lines.push(Line::from(vec![
-                    key("Ctrl+J"),
-                    sep(),
-                    Span::from("newline"),
-                ]));
-                lines.push(Line::from(vec![key("Ctrl+V"), sep(), Span::from("paste image")]));
-                lines.push(Line::from(""));
-                // Edit
-                lines.push(Line::from("Edit".bold()));
-                lines.push(Line::from(vec![key("Ctrl+U"), sep(), Span::from("clear line")]));
-                lines.push(Line::from(vec![key("Ctrl+H"), sep(), Span::from("delete left")]));
-                lines.push(Line::from(vec![key("Alt+Backspace"), sep(), Span::from("delete word left")]));
-                lines.push(Line::from(vec![key("Ctrl+K"), sep(), Span::from("clear to end of line")]));
-                lines.push(Line::from(""));
-                // Movement
-                lines.push(Line::from("Movement".bold()));
-                lines.push(Line::from(vec![key("Alt+←/→"), sep(), Span::from("word jump")]));
-                lines.push(Line::from(""));
-                // History
-                lines.push(Line::from("History".bold()));
-                lines.push(Line::from(vec![key("↑/↓"), sep(), Span::from("previous/next entry")]));
-                lines.push(Line::from(""));
-                // Transcript
-                lines.push(Line::from("Transcript".bold()));
-                lines.push(Line::from(vec![key("Ctrl+T"), sep(), Span::from("open transcript")]));
-                lines.push(Line::from(""));
-                // Backtrack
-                lines.push(Line::from("Backtrack".bold()));
-                lines.push(Line::from(vec![key("Esc Esc"), sep(), Span::from("edit previous")])) ;
+                lines.push(Line::from(vec![key("Esc Esc"), sep(), Span::from("edit previous")]));
 
                 let _ = tui.enter_alt_screen();
                 self.overlay = Some(Overlay::new_static_with_title_minimal_hints(
