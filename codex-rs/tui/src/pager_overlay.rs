@@ -77,6 +77,7 @@ struct PagerView {
     scroll_offset: usize,
     title: String,
     wrap_cache: Option<WrapCache>,
+    last_content_height: Option<usize>,
 }
 
 impl PagerView {
@@ -86,12 +87,14 @@ impl PagerView {
             scroll_offset,
             title,
             wrap_cache: None,
+            last_content_height: None,
         }
     }
 
     fn render(&mut self, area: Rect, buf: &mut Buffer) {
         self.render_header(area, buf);
         let content_area = self.scroll_area(area);
+        self.update_last_content_height(content_area.height);
         self.ensure_wrapped(content_area.width);
         // Compute page bounds without holding an immutable borrow on cache while mutating self
         let wrapped_len = self
@@ -119,6 +122,7 @@ impl PagerView {
     ) {
         self.render_header(area, buf);
         let content_area = self.scroll_area(area);
+        self.update_last_content_height(content_area.height);
         self.ensure_wrapped(content_area.width);
         // Compute page bounds first to avoid borrow conflicts
         let wrapped_len = self
@@ -250,6 +254,10 @@ impl PagerView {
         Ok(())
     }
 
+    fn update_last_content_height(&mut self, height: u16) {
+        self.last_content_height = Some(height as usize);
+    }
+
     fn scroll_area(&self, area: Rect) -> Rect {
         let mut area = area;
         area.y = area.y.saturating_add(1);
@@ -337,6 +345,24 @@ impl PagerView {
         }
         std::borrow::Cow::Owned(out)
     }
+
+    fn is_scrolled_to_bottom(&self) -> bool {
+        if self.scroll_offset == usize::MAX {
+            return true;
+        }
+        let Some(cache) = &self.wrap_cache else {
+            return false;
+        };
+        let Some(height) = self.last_content_height else {
+            return false;
+        };
+        if cache.wrapped.is_empty() {
+            return true;
+        }
+        let visible = height.min(cache.wrapped.len());
+        let max_scroll = cache.wrapped.len().saturating_sub(visible);
+        self.scroll_offset >= max_scroll
+    }
 }
 
 pub(crate) struct TranscriptOverlay {
@@ -359,8 +385,12 @@ impl TranscriptOverlay {
     }
 
     pub(crate) fn insert_lines(&mut self, lines: Vec<Line<'static>>) {
+        let follow_bottom = self.view.is_scrolled_to_bottom();
         self.view.lines.extend(lines);
         self.view.wrap_cache = None;
+        if follow_bottom {
+            self.view.scroll_offset = usize::MAX;
+        }
     }
 
     pub(crate) fn set_highlight_range(&mut self, range: Option<(usize, usize)>) {
@@ -539,6 +569,39 @@ mod tests {
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
             .expect("draw");
         assert_snapshot!(term.backend());
+    }
+
+    #[test]
+    fn transcript_overlay_keeps_scroll_pinned_at_bottom() {
+        let mut overlay =
+            TranscriptOverlay::new((0..20).map(|i| Line::from(format!("line{i}"))).collect());
+        let mut term = Terminal::new(TestBackend::new(40, 12)).expect("term");
+        term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
+            .expect("draw");
+
+        assert!(
+            overlay.view.is_scrolled_to_bottom(),
+            "expected initial render to leave view at bottom"
+        );
+
+        overlay.insert_lines(vec!["tail".into()]);
+
+        assert_eq!(overlay.view.scroll_offset, usize::MAX);
+    }
+
+    #[test]
+    fn transcript_overlay_preserves_manual_scroll_position() {
+        let mut overlay =
+            TranscriptOverlay::new((0..20).map(|i| Line::from(format!("line{i}"))).collect());
+        let mut term = Terminal::new(TestBackend::new(40, 12)).expect("term");
+        term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
+            .expect("draw");
+
+        overlay.view.scroll_offset = 0;
+
+        overlay.insert_lines(vec!["tail".into()]);
+
+        assert_eq!(overlay.view.scroll_offset, 0);
     }
 
     #[test]
