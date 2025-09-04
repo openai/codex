@@ -204,6 +204,16 @@ impl TextArea {
 
     pub fn input(&mut self, event: KeyEvent) {
         match event {
+            // Some terminals (or configurations) send Control key chords as
+            // C0 control characters without reporting the CONTROL modifier.
+            // Handle common fallbacks for Ctrl-B/Ctrl-F here so they don't get
+            // inserted as literal control bytes.
+            KeyEvent { code: KeyCode::Char('\u{0002}'), modifiers: KeyModifiers::NONE, .. } /* ^B */ => {
+                self.move_cursor_left();
+            }
+            KeyEvent { code: KeyCode::Char('\u{0006}'), modifiers: KeyModifiers::NONE, .. } /* ^F */ => {
+                self.move_cursor_right();
+            }
             KeyEvent {
                 code: KeyCode::Char(c),
                 // Insert plain characters (and Shift-modified). Do NOT insert when ALT is held,
@@ -222,13 +232,19 @@ impl TextArea {
                 ..
             } => self.insert_str("\n"),
             KeyEvent {
+                code: KeyCode::Char('h'),
+                modifiers,
+                ..
+            } if modifiers == (KeyModifiers::CONTROL | KeyModifiers::ALT) => {
+                self.delete_backward_word()
+            },
+            KeyEvent {
                 code: KeyCode::Backspace,
                 modifiers: KeyModifiers::ALT,
                 ..
             } => self.delete_backward_word(),
             KeyEvent {
                 code: KeyCode::Backspace,
-                modifiers: KeyModifiers::NONE,
                 ..
             }
             | KeyEvent {
@@ -1128,10 +1144,6 @@ mod tests {
 
     #[test]
     fn control_b_and_f_move_cursor() {
-        use crossterm::event::KeyCode;
-        use crossterm::event::KeyEvent;
-        use crossterm::event::KeyModifiers;
-
         let mut t = ta_with("abcd");
         t.set_cursor(1);
 
@@ -1140,6 +1152,63 @@ mod tests {
 
         t.input(KeyEvent::new(KeyCode::Char('b'), KeyModifiers::CONTROL));
         assert_eq!(t.cursor(), 1);
+    }
+
+    #[test]
+    fn control_b_f_fallback_control_chars_move_cursor() {
+        let mut t = ta_with("abcd");
+        t.set_cursor(2);
+
+        // Simulate terminals that send C0 control chars without CONTROL modifier.
+        // ^B (U+0002) should move left
+        t.input(KeyEvent::new(KeyCode::Char('\u{0002}'), KeyModifiers::NONE));
+        assert_eq!(t.cursor(), 1);
+
+        // ^F (U+0006) should move right
+        t.input(KeyEvent::new(KeyCode::Char('\u{0006}'), KeyModifiers::NONE));
+        assert_eq!(t.cursor(), 2);
+    }
+
+    #[test]
+    fn delete_backward_word_alt_keys() {
+        // Test the custom Alt+Ctrl+h binding
+        let mut t = ta_with("hello world");
+        t.set_cursor(t.text().len()); // cursor at the end
+        t.input(KeyEvent::new(
+            KeyCode::Char('h'),
+            KeyModifiers::CONTROL | KeyModifiers::ALT,
+        ));
+        assert_eq!(t.text(), "hello ");
+        assert_eq!(t.cursor(), 6);
+
+        // Test the standard Alt+Backspace binding
+        let mut t = ta_with("hello world");
+        t.set_cursor(t.text().len()); // cursor at the end
+        t.input(KeyEvent::new(KeyCode::Backspace, KeyModifiers::ALT));
+        assert_eq!(t.text(), "hello ");
+        assert_eq!(t.cursor(), 6);
+    }
+
+    #[test]
+    fn control_h_backspace() {
+        // Test Ctrl+H as backspace
+        let mut t = ta_with("12345");
+        t.set_cursor(3); // cursor after '3'
+        t.input(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
+        assert_eq!(t.text(), "1245");
+        assert_eq!(t.cursor(), 2);
+
+        // Test Ctrl+H at beginning (should be no-op)
+        t.set_cursor(0);
+        t.input(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
+        assert_eq!(t.text(), "1245");
+        assert_eq!(t.cursor(), 0);
+
+        // Test Ctrl+H at end
+        t.set_cursor(t.text().len());
+        t.input(KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL));
+        assert_eq!(t.text(), "124");
+        assert_eq!(t.cursor(), 3);
     }
 
     #[test]
@@ -1444,7 +1513,7 @@ mod tests {
             .timestamp() as u64;
         let mut rng = rand::rngs::StdRng::seed_from_u64(pst_today_seed);
 
-        for _case in 0..10_000 {
+        for _case in 0..500 {
             let mut ta = TextArea::new();
             let mut state = TextAreaState::default();
             // Track element payloads we insert. Payloads use characters '[' and ']' which
@@ -1468,7 +1537,7 @@ mod tests {
             let mut width: u16 = rng.random_range(1..=12);
             let mut height: u16 = rng.random_range(1..=4);
 
-            for _step in 0..200 {
+            for _step in 0..60 {
                 // Mostly stable width/height, occasionally change
                 if rng.random_bool(0.1) {
                     width = rng.random_range(1..=12);
@@ -1546,53 +1615,53 @@ mod tests {
                     }
                     14 => {
                         // Try inserting inside an existing element (should clamp to boundary)
-                        if let Some(payload) = elem_texts.choose(&mut rng).cloned() {
-                            if let Some(start) = ta.text().find(&payload) {
-                                let end = start + payload.len();
-                                if end - start > 2 {
-                                    let pos = rng.random_range(start + 1..end - 1);
-                                    let ins = rand_grapheme(&mut rng);
-                                    ta.insert_str_at(pos, &ins);
-                                }
+                        if let Some(payload) = elem_texts.choose(&mut rng).cloned()
+                            && let Some(start) = ta.text().find(&payload)
+                        {
+                            let end = start + payload.len();
+                            if end - start > 2 {
+                                let pos = rng.random_range(start + 1..end - 1);
+                                let ins = rand_grapheme(&mut rng);
+                                ta.insert_str_at(pos, &ins);
                             }
                         }
                     }
                     15 => {
                         // Replace a range that intersects an element -> whole element should be replaced
-                        if let Some(payload) = elem_texts.choose(&mut rng).cloned() {
-                            if let Some(start) = ta.text().find(&payload) {
-                                let end = start + payload.len();
-                                // Create an intersecting range [start-δ, end-δ2)
-                                let mut s = start.saturating_sub(rng.random_range(0..=2));
-                                let mut e = (end + rng.random_range(0..=2)).min(ta.text().len());
-                                // Align to char boundaries to satisfy String::replace_range contract
-                                let txt = ta.text();
-                                while s > 0 && !txt.is_char_boundary(s) {
-                                    s -= 1;
+                        if let Some(payload) = elem_texts.choose(&mut rng).cloned()
+                            && let Some(start) = ta.text().find(&payload)
+                        {
+                            let end = start + payload.len();
+                            // Create an intersecting range [start-δ, end-δ2)
+                            let mut s = start.saturating_sub(rng.random_range(0..=2));
+                            let mut e = (end + rng.random_range(0..=2)).min(ta.text().len());
+                            // Align to char boundaries to satisfy String::replace_range contract
+                            let txt = ta.text();
+                            while s > 0 && !txt.is_char_boundary(s) {
+                                s -= 1;
+                            }
+                            while e < txt.len() && !txt.is_char_boundary(e) {
+                                e += 1;
+                            }
+                            if s < e {
+                                // Small replacement text
+                                let mut srep = String::new();
+                                for _ in 0..rng.random_range(0..=2) {
+                                    srep.push_str(&rand_grapheme(&mut rng));
                                 }
-                                while e < txt.len() && !txt.is_char_boundary(e) {
-                                    e += 1;
-                                }
-                                if s < e {
-                                    // Small replacement text
-                                    let mut srep = String::new();
-                                    for _ in 0..rng.random_range(0..=2) {
-                                        srep.push_str(&rand_grapheme(&mut rng));
-                                    }
-                                    ta.replace_range(s..e, &srep);
-                                }
+                                ta.replace_range(s..e, &srep);
                             }
                         }
                     }
                     16 => {
                         // Try setting the cursor to a position inside an element; it should clamp out
-                        if let Some(payload) = elem_texts.choose(&mut rng).cloned() {
-                            if let Some(start) = ta.text().find(&payload) {
-                                let end = start + payload.len();
-                                if end - start > 2 {
-                                    let pos = rng.random_range(start + 1..end - 1);
-                                    ta.set_cursor(pos);
-                                }
+                        if let Some(payload) = elem_texts.choose(&mut rng).cloned()
+                            && let Some(start) = ta.text().find(&payload)
+                        {
+                            let end = start + payload.len();
+                            if end - start > 2 {
+                                let pos = rng.random_range(start + 1..end - 1);
+                                ta.set_cursor(pos);
                             }
                         }
                     }

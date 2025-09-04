@@ -12,12 +12,15 @@ use strum_macros::IntoStaticStr;
 pub enum SlashCommand {
     // DO NOT ALPHA-SORT! Enum order is presentation order in the popup, so
     // more frequently used commands should be listed first.
+    Model,
+    Approvals,
     New,
     Init,
     Compact,
     Diff,
     Mention,
     Status,
+    Mcp,
     Logout,
     Quit,
     #[cfg(debug_assertions)]
@@ -35,6 +38,9 @@ impl SlashCommand {
             SlashCommand::Diff => "show git diff (including untracked files)",
             SlashCommand::Mention => "mention a file",
             SlashCommand::Status => "show current session configuration and token usage",
+            SlashCommand::Model => "choose what model and reasoning effort to use",
+            SlashCommand::Approvals => "choose what Codex can do without approval",
+            SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Logout => "log out of Codex",
             #[cfg(debug_assertions)]
             SlashCommand::TestApproval => "test approval request",
@@ -45,6 +51,26 @@ impl SlashCommand {
     /// existing code that expects a method named `command()`.
     pub fn command(self) -> &'static str {
         self.into()
+    }
+
+    /// Whether this command can be run while a task is in progress.
+    pub fn available_during_task(self) -> bool {
+        match self {
+            SlashCommand::New
+            | SlashCommand::Init
+            | SlashCommand::Compact
+            | SlashCommand::Model
+            | SlashCommand::Approvals
+            | SlashCommand::Logout => false,
+            SlashCommand::Diff
+            | SlashCommand::Mention
+            | SlashCommand::Status
+            | SlashCommand::Mcp
+            | SlashCommand::Quit => true,
+
+            #[cfg(debug_assertions)]
+            SlashCommand::TestApproval => true,
+        }
     }
 }
 

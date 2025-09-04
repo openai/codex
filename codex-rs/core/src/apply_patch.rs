@@ -1,13 +1,13 @@
 use crate::codex::Session;
 use crate::codex::TurnContext;
-use crate::models::FunctionCallOutputPayload;
-use crate::models::ResponseInputItem;
 use crate::protocol::FileChange;
 use crate::protocol::ReviewDecision;
 use crate::safety::SafetyCheck;
 use crate::safety::assess_patch_safety;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
+use codex_protocol::models::FunctionCallOutputPayload;
+use codex_protocol::models::ResponseInputItem;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -109,7 +109,9 @@ pub(crate) fn convert_apply_patch_to_protocol(
             ApplyPatchFileChange::Add { content } => FileChange::Add {
                 content: content.clone(),
             },
-            ApplyPatchFileChange::Delete => FileChange::Delete,
+            ApplyPatchFileChange::Delete { content } => FileChange::Delete {
+                content: content.clone(),
+            },
             ApplyPatchFileChange::Update {
                 unified_diff,
                 move_path,

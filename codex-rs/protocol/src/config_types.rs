@@ -1,10 +1,15 @@
 use serde::Deserialize;
 use serde::Serialize;
 use strum_macros::Display;
+use strum_macros::EnumIter;
 use ts_rs::TS;
 
+use crate::protocol::AskForApproval;
+
 /// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning
-#[derive(Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq, Display, TS)]
+#[derive(
+    Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq, Display, TS, EnumIter,
+)]
 #[serde(rename_all = "lowercase")]
 #[strum(serialize_all = "lowercase")]
 pub enum ReasoningEffort {
@@ -13,8 +18,6 @@ pub enum ReasoningEffort {
     #[default]
     Medium,
     High,
-    /// Option to disable reasoning.
-    None,
 }
 
 /// A summary of the reasoning performed by the model. This can be useful for
@@ -45,4 +48,14 @@ pub enum SandboxMode {
 
     #[serde(rename = "danger-full-access")]
     DangerFullAccess,
+}
+
+/// Collection of common configuration options that a user can define as a unit
+/// in `config.toml`. Currently only a subset of the fields are supported.
+#[derive(Deserialize, Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigProfile {
+    pub model: Option<String>,
+    pub approval_policy: Option<AskForApproval>,
+    pub model_reasoning_effort: Option<ReasoningEffort>,
 }

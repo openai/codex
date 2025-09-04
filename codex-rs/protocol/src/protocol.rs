@@ -10,7 +10,9 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
+use crate::custom_prompts::CustomPrompt;
 use mcp_types::CallToolResult;
+use mcp_types::Tool as McpTool;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_bytes::ByteBuf;
@@ -21,6 +23,7 @@ use uuid::Uuid;
 use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::message_history::HistoryEntry;
+use crate::models::ResponseItem;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
 
@@ -135,6 +138,17 @@ pub enum Op {
 
     /// Request a single history entry identified by `log_id` + `offset`.
     GetHistoryEntryRequest { offset: usize, log_id: u64 },
+
+    /// Request the full in-memory conversation transcript for the current session.
+    /// Reply is delivered via `EventMsg::ConversationHistory`.
+    GetHistory,
+
+    /// Request the list of MCP tools available across all configured servers.
+    /// Reply is delivered via `EventMsg::McpListToolsResponse`.
+    ListMcpTools,
+
+    /// Request the list of available custom prompts.
+    ListCustomPrompts,
 
     /// Request the agent to summarize the current conversation context.
     /// The agent will use its existing context (either conversation history or previous response id)
@@ -391,7 +405,7 @@ pub enum EventMsg {
     Error(ErrorEvent),
 
     /// Agent has started a task
-    TaskStarted,
+    TaskStarted(TaskStartedEvent),
 
     /// Agent has completed all actions
     TaskComplete(TaskCompleteEvent),
@@ -427,6 +441,10 @@ pub enum EventMsg {
 
     McpToolCallEnd(McpToolCallEndEvent),
 
+    WebSearchBegin(WebSearchBeginEvent),
+
+    WebSearchEnd(WebSearchEndEvent),
+
     /// Notification that the server is about to execute a command.
     ExecCommandBegin(ExecCommandBeginEvent),
 
@@ -441,6 +459,10 @@ pub enum EventMsg {
 
     BackgroundEvent(BackgroundEventEvent),
 
+    /// Notification that a model stream experienced an error or disconnect
+    /// and the system is handling it (e.g., retrying with backoff).
+    StreamError(StreamErrorEvent),
+
     /// Notification that the agent is about to apply a code patch. Mirrors
     /// `ExecCommandBegin` so front‑ends can show progress indicators.
     PatchApplyBegin(PatchApplyBeginEvent),
@@ -453,12 +475,20 @@ pub enum EventMsg {
     /// Response to GetHistoryEntryRequest.
     GetHistoryEntryResponse(GetHistoryEntryResponseEvent),
 
+    /// List of MCP tools available to the agent.
+    McpListToolsResponse(McpListToolsResponseEvent),
+
+    /// List of custom prompts available to the agent.
+    ListCustomPromptsResponse(ListCustomPromptsResponseEvent),
+
     PlanUpdate(UpdatePlanArgs),
 
     TurnAborted(TurnAbortedEvent),
 
     /// Notification that the agent is shutting down.
     ShutdownComplete,
+
+    ConversationHistory(ConversationHistoryResponseEvent),
 }
 
 // Individual event payload types matching each `EventMsg` variant.
@@ -471,6 +501,11 @@ pub struct ErrorEvent {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TaskCompleteEvent {
     pub last_agent_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TaskStartedEvent {
+    pub model_context_window: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, PartialEq)]
@@ -640,6 +675,25 @@ impl McpToolCallEndEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct WebSearchBeginEvent {
+    pub call_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct WebSearchEndEvent {
+    pub call_id: String,
+    pub query: String,
+}
+
+/// Response payload for `Op::GetHistory` containing the current session's
+/// in-memory transcript.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ConversationHistoryResponseEvent {
+    pub conversation_id: Uuid,
+    pub entries: Vec<ResponseItem>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ExecCommandBeginEvent {
     /// Identifier so this can be paired with the ExecCommandEnd event.
     pub call_id: String,
@@ -658,10 +712,15 @@ pub struct ExecCommandEndEvent {
     pub stdout: String,
     /// Captured stderr
     pub stderr: String,
+    /// Captured aggregated output
+    #[serde(default)]
+    pub aggregated_output: String,
     /// The command's exit code.
     pub exit_code: i32,
     /// The duration of the command execution.
     pub duration: Duration,
+    /// Formatted output from the command, as seen by the model.
+    pub formatted_output: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -714,6 +773,11 @@ pub struct BackgroundEventEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct StreamErrorEvent {
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PatchApplyBeginEvent {
     /// Identifier so this can be paired with the PatchApplyEnd event.
     pub call_id: String,
@@ -747,6 +811,19 @@ pub struct GetHistoryEntryResponseEvent {
     /// The entry at the requested offset, if available and parseable.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entry: Option<HistoryEntry>,
+}
+
+/// Response payload for `Op::ListMcpTools`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct McpListToolsResponseEvent {
+    /// Fully qualified tool name -> tool definition.
+    pub tools: std::collections::HashMap<String, McpTool>,
+}
+
+/// Response payload for `Op::ListCustomPrompts`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ListCustomPromptsResponseEvent {
+    pub custom_prompts: Vec<CustomPrompt>,
 }
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
@@ -792,7 +869,9 @@ pub enum FileChange {
     Add {
         content: String,
     },
-    Delete,
+    Delete {
+        content: String,
+    },
     Update {
         unified_diff: String,
         move_path: Option<PathBuf>,

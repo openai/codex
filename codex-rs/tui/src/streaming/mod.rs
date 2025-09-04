@@ -2,12 +2,6 @@ use crate::markdown_stream::AnimatedLineStreamer;
 use crate::markdown_stream::MarkdownStreamCollector;
 pub(crate) mod controller;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum StreamKind {
-    Answer,
-    Reasoning,
-}
-
 pub(crate) struct StreamState {
     pub(crate) collector: MarkdownStreamCollector,
     pub(crate) streamer: AnimatedLineStreamer,
@@ -42,92 +36,39 @@ impl StreamState {
 }
 
 pub(crate) struct HeaderEmitter {
-    reasoning_emitted_this_turn: bool,
-    answer_emitted_this_turn: bool,
-    reasoning_emitted_in_stream: bool,
-    answer_emitted_in_stream: bool,
+    emitted_this_turn: bool,
+    emitted_in_stream: bool,
 }
 
 impl HeaderEmitter {
     pub(crate) fn new() -> Self {
         Self {
-            reasoning_emitted_this_turn: false,
-            answer_emitted_this_turn: false,
-            reasoning_emitted_in_stream: false,
-            answer_emitted_in_stream: false,
+            emitted_this_turn: false,
+            emitted_in_stream: false,
         }
     }
 
     pub(crate) fn reset_for_new_turn(&mut self) {
-        self.reasoning_emitted_this_turn = false;
-        self.answer_emitted_this_turn = false;
-        self.reasoning_emitted_in_stream = false;
-        self.answer_emitted_in_stream = false;
+        self.emitted_this_turn = false;
+        self.emitted_in_stream = false;
     }
 
-    pub(crate) fn reset_for_stream(&mut self, kind: StreamKind) {
-        match kind {
-            StreamKind::Reasoning => self.reasoning_emitted_in_stream = false,
-            StreamKind::Answer => self.answer_emitted_in_stream = false,
-        }
+    pub(crate) fn reset_for_stream(&mut self) {
+        self.emitted_in_stream = false;
     }
 
-    pub(crate) fn has_emitted_for_stream(&self, kind: StreamKind) -> bool {
-        match kind {
-            StreamKind::Reasoning => self.reasoning_emitted_in_stream,
-            StreamKind::Answer => self.answer_emitted_in_stream,
-        }
+    /// Allow emitting the header again within the current turn after a finalize.
+    pub(crate) fn allow_reemit_in_turn(&mut self) {
+        self.emitted_this_turn = false;
     }
 
-    /// Allow emitting the header again for the same kind within the current turn.
-    ///
-    /// This is used when a stream (e.g., Answer) is finalized and a subsequent
-    /// block of the same kind is started within the same turn. Without this,
-    /// only the first block would render a header.
-    pub(crate) fn allow_reemit_for_same_kind_in_turn(&mut self, kind: StreamKind) {
-        match kind {
-            StreamKind::Reasoning => self.reasoning_emitted_this_turn = false,
-            StreamKind::Answer => self.answer_emitted_this_turn = false,
-        }
-    }
-
-    pub(crate) fn maybe_emit(
-        &mut self,
-        kind: StreamKind,
-        out_lines: &mut Vec<ratatui::text::Line<'static>>,
-    ) -> bool {
-        let already_emitted_this_turn = match kind {
-            StreamKind::Reasoning => self.reasoning_emitted_this_turn,
-            StreamKind::Answer => self.answer_emitted_this_turn,
-        };
-        let already_emitted_in_stream = self.has_emitted_for_stream(kind);
-        if !already_emitted_in_stream && !already_emitted_this_turn {
-            out_lines.push(render_header_line(kind));
-            match kind {
-                StreamKind::Reasoning => {
-                    self.reasoning_emitted_in_stream = true;
-                    self.reasoning_emitted_this_turn = true;
-                    // Reset opposite header so it may be emitted again this turn
-                    self.answer_emitted_this_turn = false;
-                }
-                StreamKind::Answer => {
-                    self.answer_emitted_in_stream = true;
-                    self.answer_emitted_this_turn = true;
-                    // Reset opposite header so it may be emitted again this turn
-                    self.reasoning_emitted_this_turn = false;
-                }
-            }
+    pub(crate) fn maybe_emit_header(&mut self) -> bool {
+        if !self.emitted_in_stream && !self.emitted_this_turn {
+            self.emitted_in_stream = true;
+            self.emitted_this_turn = true;
             true
         } else {
             false
         }
-    }
-}
-
-fn render_header_line(kind: StreamKind) -> ratatui::text::Line<'static> {
-    use ratatui::style::Stylize;
-    match kind {
-        StreamKind::Reasoning => ratatui::text::Line::from("thinking".magenta().italic()),
-        StreamKind::Answer => ratatui::text::Line::from("codex".magenta().bold()),
     }
 }

@@ -12,13 +12,13 @@ use super::BottomPaneView;
 use super::CancellationEvent;
 
 /// Modal overlay asking the user to approve/deny a sequence of requests.
-pub(crate) struct ApprovalModalView<'a> {
-    current: UserApprovalWidget<'a>,
+pub(crate) struct ApprovalModalView {
+    current: UserApprovalWidget,
     queue: Vec<ApprovalRequest>,
     app_event_tx: AppEventSender,
 }
 
-impl ApprovalModalView<'_> {
+impl ApprovalModalView {
     pub fn new(request: ApprovalRequest, app_event_tx: AppEventSender) -> Self {
         Self {
             current: UserApprovalWidget::new(request, app_event_tx.clone()),
@@ -33,21 +33,21 @@ impl ApprovalModalView<'_> {
 
     /// Advance to next request if the current one is finished.
     fn maybe_advance(&mut self) {
-        if self.current.is_complete() {
-            if let Some(req) = self.queue.pop() {
-                self.current = UserApprovalWidget::new(req, self.app_event_tx.clone());
-            }
+        if self.current.is_complete()
+            && let Some(req) = self.queue.pop()
+        {
+            self.current = UserApprovalWidget::new(req, self.app_event_tx.clone());
         }
     }
 }
 
-impl<'a> BottomPaneView<'a> for ApprovalModalView<'a> {
-    fn handle_key_event(&mut self, _pane: &mut BottomPane<'a>, key_event: KeyEvent) {
+impl BottomPaneView for ApprovalModalView {
+    fn handle_key_event(&mut self, _pane: &mut BottomPane, key_event: KeyEvent) {
         self.current.handle_key_event(key_event);
         self.maybe_advance();
     }
 
-    fn on_ctrl_c(&mut self, _pane: &mut BottomPane<'a>) -> CancellationEvent {
+    fn on_ctrl_c(&mut self, _pane: &mut BottomPane) -> CancellationEvent {
         self.current.on_ctrl_c();
         self.queue.clear();
         CancellationEvent::Handled
@@ -75,7 +75,7 @@ impl<'a> BottomPaneView<'a> for ApprovalModalView<'a> {
 mod tests {
     use super::*;
     use crate::app_event::AppEvent;
-    use std::sync::mpsc::channel;
+    use tokio::sync::mpsc::unbounded_channel;
 
     fn make_exec_request() -> ApprovalRequest {
         ApprovalRequest::Exec {
@@ -87,18 +87,20 @@ mod tests {
 
     #[test]
     fn ctrl_c_aborts_and_clears_queue() {
-        let (tx_raw, _rx) = channel::<AppEvent>();
-        let tx = AppEventSender::new(tx_raw);
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx);
         let first = make_exec_request();
         let mut view = ApprovalModalView::new(first, tx);
         view.enqueue_request(make_exec_request());
 
-        let (tx_raw2, _rx2) = channel::<AppEvent>();
+        let (tx2, _rx2) = unbounded_channel::<AppEvent>();
         let mut pane = BottomPane::new(super::super::BottomPaneParams {
-            app_event_tx: AppEventSender::new(tx_raw2),
+            app_event_tx: AppEventSender::new(tx2),
+            frame_requester: crate::tui::FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
+            disable_paste_burst: false,
         });
         assert_eq!(CancellationEvent::Handled, view.on_ctrl_c(&mut pane));
         assert!(view.queue.is_empty());
