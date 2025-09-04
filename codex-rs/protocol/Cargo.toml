@@ -17,6 +17,7 @@ mime_guess = "2.0.5"
 serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
 serde_json = "1"
+serde_with = "3.14.0"
 strum = "0.27.2"
 strum_macros = "0.27.2"
 tracing = "0.1.41"
