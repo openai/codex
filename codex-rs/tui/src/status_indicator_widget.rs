@@ -14,6 +14,7 @@ use ratatui::widgets::WidgetRef;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::key_hint;
 use crate::shimmer::shimmer_spans;
 use crate::tui::FrameRequester;
 use textwrap::Options as TwOptions;
@@ -130,7 +131,8 @@ impl WidgetRef for StatusIndicatorWidget {
             }
         }
         if !self.queued_messages.is_empty() {
-            lines.push(Line::from(vec!["   ".into(), "Alt+↑".cyan(), " edit".into()]).dim());
+            let shortcut = key_hint::alt("↑");
+            lines.push(Line::from(vec!["   ".into(), shortcut, " edit".into()]).dim());
         }
 
         let paragraph = Paragraph::new(lines);
@@ -143,7 +145,6 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use crate::app_event_sender::AppEventSender;
-    use insta::assert_snapshot;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use tokio::sync::mpsc::unbounded_channel;
@@ -159,7 +160,7 @@ mod tests {
         terminal
             .draw(|f| w.render_ref(f.area(), f.buffer_mut()))
             .expect("draw");
-        assert_snapshot!(terminal.backend());
+        insta::assert_snapshot!(terminal.backend());
     }
 
     #[test]
@@ -173,7 +174,7 @@ mod tests {
         terminal
             .draw(|f| w.render_ref(f.area(), f.buffer_mut()))
             .expect("draw");
-        assert_snapshot!(terminal.backend());
+        insta::assert_snapshot!(terminal.backend());
     }
 
     #[test]
@@ -188,6 +189,6 @@ mod tests {
         terminal
             .draw(|f| w.render_ref(f.area(), f.buffer_mut()))
             .expect("draw");
-        assert_snapshot!(terminal.backend());
+        insta::assert_snapshot!(terminal.backend());
     }
 }
