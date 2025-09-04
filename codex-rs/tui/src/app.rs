@@ -74,18 +74,7 @@ impl App {
         let enhanced_keys_supported = supports_keyboard_enhancement().unwrap_or(false);
 
         let chat_widget = match resume_selection {
-            ResumeSelection::StartFresh => {
-                let init = crate::chatwidget::ChatWidgetInit {
-                    config: config.clone(),
-                    frame_requester: tui.frame_requester(),
-                    app_event_tx: app_event_tx.clone(),
-                    initial_prompt: initial_prompt.clone(),
-                    initial_images: initial_images.clone(),
-                    enhanced_keys_supported,
-                };
-                ChatWidget::new(init, conversation_manager.clone())
-            }
-            ResumeSelection::Exit => {
+            ResumeSelection::StartFresh | ResumeSelection::Exit => {
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: config.clone(),
                     frame_requester: tui.frame_requester(),

@@ -19,6 +19,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Stylize as _;
 use ratatui::text::Line;
 
+use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
@@ -79,8 +80,6 @@ struct PickerState {
     selected: usize,
     // search
     query: String,
-    // quit hint state (Ctrl+C)
-    ctrl_c_quit_hint_visible: bool,
 }
 
 #[derive(Clone)]
@@ -103,7 +102,6 @@ impl PickerState {
             filtered_rows: Vec::new(),
             selected: 0,
             query: String::new(),
-            ctrl_c_quit_hint_visible: false,
         }
     }
 
@@ -119,13 +117,7 @@ impl PickerState {
                     .modifiers
                     .contains(crossterm::event::KeyModifiers::CONTROL) =>
             {
-                if self.ctrl_c_quit_hint_visible {
-                    return Ok(Some(ResumeSelection::Exit));
-                } else {
-                    self.ctrl_c_quit_hint_visible = true;
-                    self.request_frame();
-                    return Ok(None);
-                }
+                return Ok(Some(ResumeSelection::Exit));
             }
             KeyCode::Enter => {
                 if let Some(row) = self.filtered_rows.get(self.selected) {
@@ -206,7 +198,7 @@ impl PickerState {
         self.all_rows = to_rows(page);
         self.apply_filter();
         // reset selection on new page
-        self.selected = 0.min(self.filtered_rows.len().saturating_sub(1));
+        self.selected = 0;
         Ok(())
     }
 
@@ -319,26 +311,21 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         // List
         render_list(frame, list, state);
 
-        // Hint line with paging keys or Ctrl+C quit hint
-        if state.ctrl_c_quit_hint_visible {
-            let line: Line = vec!["Ctrl+C".bold(), " again to quit".into()].into();
-            frame.render_widget_ref(line, hint);
-        } else {
-            let hint_line: Line = vec![
-                "Enter".bold(),
-                " to resume  ".into(),
-                "Esc".bold(),
-                " to start new  ".into(),
-                "Ctrl+C".into(),
-                " to quit  ".dim(),
-                "←/a".into(),
-                " prev  ".dim(),
-                "→/d".into(),
-                " next".dim(),
-            ]
-            .into();
-            frame.render_widget_ref(hint_line, hint);
-        }
+        // Hint line
+        let hint_line: Line = vec![
+            "Enter".bold(),
+            " to resume  ".into(),
+            "Esc".bold(),
+            " to start new  ".into(),
+            "Ctrl+C".into(),
+            " to quit  ".dim(),
+            "←/a".into(),
+            " prev  ".dim(),
+            "→/d".into(),
+            " next".dim(),
+        ]
+        .into();
+        frame.render_widget_ref(hint_line, hint);
     })
 }
 
@@ -363,27 +350,14 @@ fn render_list(frame: &mut crate::custom_terminal::Frame, area: Rect, state: &Pi
             .map(human_time_ago)
             .unwrap_or_else(|| "".to_string())
             .dim();
-        let preview = trim_to_width(&row.preview, area.width.saturating_sub(6));
+        let max_cols = area.width.saturating_sub(6) as usize;
+        let preview = truncate_text(&row.preview, max_cols);
 
         let line: Line = vec![marker, ts, "  ".into(), preview.into()].into();
         let rect = Rect::new(area.x, y, area.width, 1);
         frame.render_widget_ref(line, rect);
         y = y.saturating_add(1);
     }
-}
-
-fn trim_to_width(s: &str, max_w: u16) -> String {
-    let mut out = String::new();
-    let mut w = 0u16;
-    for ch in s.chars() {
-        if w >= max_w {
-            out.push('…');
-            break;
-        }
-        out.push(ch);
-        w = w.saturating_add(1);
-    }
-    out
 }
 
 fn human_time_ago(ts: DateTime<Utc>) -> String {
