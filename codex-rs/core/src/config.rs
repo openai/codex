@@ -516,7 +516,7 @@ impl From<ConfigToml> for UserSavedConfig {
         Self {
             approval_policy: config_toml.approval_policy,
             sandbox_mode: config_toml.sandbox_mode,
-            sandbox_workspace_write: config_toml.sandbox_workspace_write.map(From::from),
+            sandbox_settings: config_toml.sandbox_workspace_write.map(From::from),
             model: config_toml.model,
             model_reasoning_effort: config_toml.model_reasoning_effort,
             model_reasoning_summary: config_toml.model_reasoning_summary,

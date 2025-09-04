@@ -276,7 +276,7 @@ pub struct UserSavedConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sandbox_mode: Option<SandboxMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
+    pub sandbox_settings: Option<SandboxSettings>,
 
     /// Model-specific configuration
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -325,7 +325,7 @@ pub struct Tools {
 /// MCP representation of a [`codex_core::config_types::SandboxWorkspaceWrite`].
 #[derive(Deserialize, Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
-pub struct SandboxWorkspaceWrite {
+pub struct SandboxSettings {
     #[serde(default)]
     pub writable_roots: Vec<PathBuf>,
     #[serde(default)]

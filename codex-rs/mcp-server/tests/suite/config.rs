@@ -8,7 +8,7 @@ use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::mcp_protocol::GetUserSavedConfigResponse;
 use codex_protocol::mcp_protocol::Profile;
-use codex_protocol::mcp_protocol::SandboxWorkspaceWrite;
+use codex_protocol::mcp_protocol::SandboxSettings;
 use codex_protocol::mcp_protocol::Tools;
 use codex_protocol::mcp_protocol::UserSavedConfig;
 use mcp_test_support::McpProcess;
@@ -87,7 +87,7 @@ async fn get_config_toml_parses_all_fields() {
         config: UserSavedConfig {
             approval_policy: Some(AskForApproval::OnRequest),
             sandbox_mode: Some(SandboxMode::WorkspaceWrite),
-            sandbox_workspace_write: Some(SandboxWorkspaceWrite {
+            sandbox_settings: Some(SandboxSettings {
                 writable_roots: vec!["/tmp".into()],
                 network_access: true,
                 exclude_tmpdir_env_var: true,
@@ -150,7 +150,7 @@ async fn get_config_toml_empty() {
         config: UserSavedConfig {
             approval_policy: None,
             sandbox_mode: None,
-            sandbox_workspace_write: None,
+            sandbox_settings: None,
             model: None,
             model_reasoning_effort: None,
             model_reasoning_summary: None,
