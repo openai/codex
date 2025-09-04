@@ -524,6 +524,8 @@ impl ChatWidget {
 
     pub(crate) fn handle_exec_approval_now(&mut self, id: String, ev: ExecApprovalRequestEvent) {
         self.flush_answer_stream_with_separator();
+        // Emit the proposed command into history (like proposed patches)
+        self.add_to_history(history_cell::new_proposed_command(&ev.command));
 
         let request = ApprovalRequest::Exec {
             id,
