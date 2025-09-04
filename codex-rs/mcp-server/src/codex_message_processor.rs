@@ -1137,10 +1137,9 @@ fn find_first_user_text(head: &[serde_json::Value]) -> Option<String> {
                 if let (Some("input_text"), Some(txt)) =
                     (c.get("type").and_then(|t| t.as_str()), c.get("text"))
                     && let Some(s) = txt.as_str()
+                    && matches!(InputMessageKind::from(("user", s)), InputMessageKind::Plain)
                 {
-                    if matches!(InputMessageKind::from(("user", s)), InputMessageKind::Plain) {
-                        return Some(s.to_string());
-                    }
+                    return Some(s.to_string());
                 }
             }
         }
