@@ -305,7 +305,7 @@ async fn run_ratatui_app(
         prompt,
         images,
         resume,
-        last,
+        r#continue,
         ..
     } = cli;
 
@@ -335,7 +335,7 @@ async fn run_ratatui_app(
         }
     }
 
-    let resume_selection = if last {
+    let resume_selection = if r#continue {
         match RolloutRecorder::list_conversations(&config.codex_home, 1, None).await {
             Ok(page) => page
                 .items

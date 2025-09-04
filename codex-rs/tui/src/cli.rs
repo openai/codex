@@ -18,8 +18,13 @@ pub struct Cli {
     pub resume: bool,
 
     /// Continue the most recent conversation without showing the picker.
-    #[arg(long = "continue", default_value_t = false, conflicts_with = "resume")]
-    pub last: bool,
+    #[arg(
+        id = "continue",
+        long = "continue",
+        default_value_t = false,
+        conflicts_with = "resume"
+    )]
+    pub r#continue: bool,
 
     /// Model the agent should use.
     #[arg(long, short = 'm')]
