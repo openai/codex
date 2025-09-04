@@ -558,15 +558,12 @@ impl Session {
     /// build the initial messages vector for SessionConfigured by converting
     /// ResponseItems into EventMsg.
     fn build_initial_messages(&self, items: &[ResponseItem]) -> Vec<EventMsg> {
-        let mut out: Vec<EventMsg> = Vec::new();
-        for item in items {
-            let msgs = crate::event_mapping::map_response_item_to_event_messages(
-                item,
-                self.show_raw_agent_reasoning,
-            );
-            out.extend(msgs);
-        }
-        out
+        items
+            .iter()
+            .flat_map(|item| {
+                map_response_item_to_event_messages(item, self.show_raw_agent_reasoning)
+            })
+            .collect()
     }
 
     /// Sends the given event to the client and swallows the send event, if

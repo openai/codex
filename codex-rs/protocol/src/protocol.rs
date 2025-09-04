@@ -841,7 +841,7 @@ pub struct SessionConfiguredEvent {
     pub history_entry_count: usize,
 
     /// Optional initial messages (as events) for resumed sessions.
-    /// When present, UIs can render this seed history.
+    /// When present, UIs can use these to seed the history.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_messages: Option<Vec<EventMsg>>,
 }
