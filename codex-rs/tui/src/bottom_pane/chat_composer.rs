@@ -49,6 +49,9 @@ use std::time::Instant;
 /// placeholder in the UI.
 const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
 
+/// Window for double-Esc to clear input, and for hint visibility.
+const ESC_CLEAR_WINDOW: Duration = Duration::from_secs(2);
+
 /// Result returned when the user interacts with the text area.
 #[derive(Debug, PartialEq)]
 pub enum InputResult {
@@ -99,6 +102,8 @@ pub(crate) struct ChatComposer {
     // When true, disables paste-burst logic and inserts characters immediately.
     disable_paste_burst: bool,
     custom_prompts: Vec<CustomPrompt>,
+    // Double-Esc clear: timestamp when Esc was last pressed to prime clearing.
+    esc_clear_primed_at: Option<Instant>,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -137,6 +142,7 @@ impl ChatComposer {
             paste_burst: PasteBurst::default(),
             disable_paste_burst: false,
             custom_prompts: Vec::new(),
+            esc_clear_primed_at: None,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -308,6 +314,11 @@ impl ChatComposer {
 
     pub(crate) fn recommended_paste_flush_delay() -> Duration {
         PasteBurst::recommended_flush_delay()
+    }
+
+    /// Return the configured window for double‑Esc clear and hint timeout.
+    pub(crate) fn esc_clear_window() -> Duration {
+        ESC_CLEAR_WINDOW
     }
 
     /// Integrate results from an asynchronous file search.
@@ -740,6 +751,28 @@ impl ChatComposer {
     /// Handle key event when no popup is visible.
     fn handle_key_event_without_popup(&mut self, key_event: KeyEvent) -> (InputResult, bool) {
         match key_event {
+            // Double‑Esc to clear input when composer has content.
+            KeyEvent {
+                code: KeyCode::Esc, ..
+            } if !self.textarea.text().is_empty() => {
+                let now = Instant::now();
+                let within_window = self
+                    .esc_clear_primed_at
+                    .is_some_and(|t| now.duration_since(t) <= ESC_CLEAR_WINDOW);
+
+                if within_window {
+                    // Clear all user input: text, pending paste placeholders, and attachments.
+                    self.textarea.set_text("");
+                    self.pending_pastes.clear();
+                    self.attached_images.clear();
+                    self.esc_clear_primed_at = None;
+                    return (InputResult::None, true);
+                }
+
+                // Prime the clear action and show a hint for the same window.
+                self.esc_clear_primed_at = Some(now);
+                (InputResult::None, true)
+            }
             KeyEvent {
                 code: KeyCode::Char('d'),
                 modifiers: crossterm::event::KeyModifiers::CONTROL,
@@ -877,6 +910,10 @@ impl ChatComposer {
 
     /// Handle generic Input events that modify the textarea content.
     fn handle_input_basic(&mut self, input: KeyEvent) -> (InputResult, bool) {
+        // Any non‑Esc key press should cancel a primed Esc‑clear hint immediately.
+        if !matches!(input.code, KeyCode::Esc) && self.esc_clear_primed_at.is_some() {
+            self.esc_clear_primed_at = None;
+        }
         // If we have a buffered non-bracketed paste burst and enough time has
         // elapsed since the last char, flush it before handling a new input.
         let now = Instant::now();
@@ -1291,6 +1328,13 @@ impl WidgetRef for ChatComposer {
                     hint.push(" edit prev".into());
                 }
 
+                // If Esc‑clear is primed, show a short hint: pressing Esc again clears input.
+                if !self.ctrl_c_quit_hint && self.esc_clear_primed_at.is_some() {
+                    hint.push("   ".into());
+                    hint.push("Esc".set_style(key_hint_style));
+                    hint.push(" again clear".into());
+                }
+
                 // Append token/context usage info to the footer hints when available.
                 if let Some(token_usage_info) = &self.token_usage_info {
                     let token_usage = &token_usage_info.total_token_usage;
@@ -1345,6 +1389,29 @@ impl WidgetRef for ChatComposer {
             Line::from(self.placeholder_text.as_str())
                 .style(Style::default().dim())
                 .render_ref(textarea_rect.inner(Margin::new(1, 0)), buf);
+        }
+    }
+}
+
+impl ChatComposer {
+    /// If the Esc‑clear hint has expired, clear it. Returns true if it changed.
+    pub(crate) fn expire_esc_clear_hint_if_due(&mut self, now: Instant) -> bool {
+        if let Some(t) = self.esc_clear_primed_at
+            && now.duration_since(t) > ESC_CLEAR_WINDOW {
+                self.esc_clear_primed_at = None;
+                return true;
+            }
+        false
+    }
+
+    /// If an Esc‑clear hint is active, return time remaining until it expires.
+    pub(crate) fn esc_clear_hint_time_remaining(&self, now: Instant) -> Option<Duration> {
+        let t = self.esc_clear_primed_at?;
+        let elapsed = now.duration_since(t);
+        if elapsed >= ESC_CLEAR_WINDOW {
+            None
+        } else {
+            Some(ESC_CLEAR_WINDOW - elapsed)
         }
     }
 }

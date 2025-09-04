@@ -346,6 +346,61 @@ pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Re
     Ok(())
 }
 
+/// A set of top-level `config.toml` updates that can be applied atomically.
+/// Only non-None fields are updated; others are left unchanged.
+#[derive(Default, Debug, Clone)]
+pub struct TopLevelConfigUpdate {
+    pub model: Option<String>,
+    pub model_reasoning_effort: Option<ReasoningEffort>,
+    pub approval_policy: Option<AskForApproval>,
+    pub sandbox_mode: Option<SandboxMode>,
+}
+
+/// Apply updates to top-level fields in `CODEX_HOME/config.toml`.
+/// Creates the file if it does not exist yet. Writes are done atomically.
+pub fn apply_top_level_config_update(
+    codex_home: &Path,
+    update: TopLevelConfigUpdate,
+) -> anyhow::Result<()> {
+    use std::io;
+
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    // Parse existing config if present; otherwise start a new document.
+    let mut doc = match std::fs::read_to_string(config_path.clone()) {
+        Ok(s) => s.parse::<DocumentMut>()?,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => DocumentMut::new(),
+        Err(e) => return Err(e.into()),
+    };
+
+    // Helper to set a simple string value on the root table.
+    let root = doc.as_table_mut();
+    if let Some(model) = update.model {
+        root["model"] = toml_edit::value(model);
+    }
+    if let Some(effort) = update.model_reasoning_effort {
+        // Serialized as lowercase as per serde on ReasoningEffort
+        root["model_reasoning_effort"] = toml_edit::value(effort.to_string());
+    }
+    if let Some(policy) = update.approval_policy {
+        // kebab-case string per protocol serde
+        root["approval_policy"] = toml_edit::value(policy.to_string());
+    }
+    if let Some(mode) = update.sandbox_mode {
+        // kebab-case string per protocol serde
+        root["sandbox_mode"] = toml_edit::value(mode.to_string());
+    }
+
+    // ensure codex_home exists
+    std::fs::create_dir_all(codex_home)?;
+
+    // create a tmp_file and atomically replace config.toml
+    let tmp_file = NamedTempFile::new_in(codex_home)?;
+    std::fs::write(tmp_file.path(), doc.to_string())?;
+    tmp_file.persist(config_path)?;
+
+    Ok(())
+}
+
 /// Apply a single dotted-path override onto a TOML value.
 fn apply_toml_override(root: &mut TomlValue, path: &str, value: TomlValue) {
     use toml::value::Table;

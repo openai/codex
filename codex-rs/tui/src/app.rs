@@ -11,7 +11,11 @@ use codex_ansi_escape::ansi_escape_line;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
+use codex_core::config::TopLevelConfigUpdate;
+use codex_core::config::apply_top_level_config_update;
+use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::TokenUsage;
+use codex_protocol::config_types::SandboxMode;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
@@ -57,6 +61,13 @@ pub(crate) struct App {
 }
 
 impl App {
+    fn sandbox_policy_to_mode(policy: &SandboxPolicy) -> SandboxMode {
+        match policy {
+            SandboxPolicy::DangerFullAccess => SandboxMode::DangerFullAccess,
+            SandboxPolicy::WorkspaceWrite { .. } => SandboxMode::WorkspaceWrite,
+            _ => SandboxMode::ReadOnly,
+        }
+    }
     pub async fn run(
         tui: &mut tui::Tui,
         auth_manager: Arc<AuthManager>,
@@ -297,16 +308,57 @@ impl App {
                 self.chat_widget.apply_file_search_result(query, matches);
             }
             AppEvent::UpdateReasoningEffort(effort) => {
+                // Update widget + app config
                 self.chat_widget.set_reasoning_effort(effort);
+                self.config.model_reasoning_effort = effort;
+                // Persist to config.toml
+                let _ = apply_top_level_config_update(
+                    &self.config.codex_home,
+                    TopLevelConfigUpdate {
+                        model_reasoning_effort: Some(effort),
+                        ..Default::default()
+                    },
+                );
             }
             AppEvent::UpdateModel(model) => {
-                self.chat_widget.set_model(model);
+                // Update widget + app config
+                self.chat_widget.set_model(model.clone());
+                self.config.model = model.clone();
+                // Persist to config.toml
+                let _ = apply_top_level_config_update(
+                    &self.config.codex_home,
+                    TopLevelConfigUpdate {
+                        model: Some(model),
+                        ..Default::default()
+                    },
+                );
             }
             AppEvent::UpdateAskForApprovalPolicy(policy) => {
+                // Update widget + app config
                 self.chat_widget.set_approval_policy(policy);
+                self.config.approval_policy = policy;
+                // Persist to config.toml
+                let _ = apply_top_level_config_update(
+                    &self.config.codex_home,
+                    TopLevelConfigUpdate {
+                        approval_policy: Some(policy),
+                        ..Default::default()
+                    },
+                );
             }
             AppEvent::UpdateSandboxPolicy(policy) => {
-                self.chat_widget.set_sandbox_policy(policy);
+                // Update widget + app config
+                self.chat_widget.set_sandbox_policy(policy.clone());
+                self.config.sandbox_policy = policy.clone();
+                // Persist the sandbox mode representation
+                let mode = Self::sandbox_policy_to_mode(&policy);
+                let _ = apply_top_level_config_update(
+                    &self.config.codex_home,
+                    TopLevelConfigUpdate {
+                        sandbox_mode: Some(mode),
+                        ..Default::default()
+                    },
+                );
             }
         }
         Ok(true)

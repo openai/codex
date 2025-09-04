@@ -924,6 +924,9 @@ impl ChatWidget {
             );
             true
         } else {
+            // Also expire the Esc‑clear hint right before drawing if its window elapsed.
+            // Unlike paste-burst ticks, we still proceed to draw the frame.
+            let _ = self.bottom_pane.expire_esc_clear_hint_if_due();
             false
         }
     }

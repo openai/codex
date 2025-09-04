@@ -184,6 +184,13 @@ impl BottomPane {
             if self.composer.is_in_paste_burst() {
                 self.request_redraw_in(ChatComposer::recommended_paste_flush_delay());
             }
+            // If Esc‑clear hint is primed, schedule a redraw at its expiry.
+            if let Some(dur) = self
+                .composer
+                .esc_clear_hint_time_remaining(std::time::Instant::now())
+            {
+                self.request_redraw_in(dur);
+            }
             input_result
         }
     }
@@ -392,6 +399,19 @@ impl BottomPane {
 
     pub(crate) fn request_redraw_in(&self, dur: Duration) {
         self.frame_requester.schedule_frame_in(dur);
+    }
+
+    /// Expire any active Esc‑clear hint if its window elapsed. Returns true if updated.
+    pub(crate) fn expire_esc_clear_hint_if_due(&mut self) -> bool {
+        if self
+            .composer
+            .expire_esc_clear_hint_if_due(std::time::Instant::now())
+        {
+            self.request_redraw();
+            true
+        } else {
+            false
+        }
     }
 
     // --- History helpers ---
