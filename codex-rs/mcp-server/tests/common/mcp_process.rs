@@ -240,9 +240,9 @@ impl McpProcess {
         self.send_request("getAuthStatus", params).await
     }
 
-    /// Send a `getConfigToml` JSON-RPC request.
-    pub async fn send_get_config_toml_request(&mut self) -> anyhow::Result<i64> {
-        self.send_request("getConfigToml", None).await
+    /// Send a `getUserSavedConfig` JSON-RPC request.
+    pub async fn send_get_user_saved_config_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request("getUserSavedConfig", None).await
     }
 
     /// Send a `loginChatGpt` JSON-RPC request.

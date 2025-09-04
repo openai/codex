@@ -45,7 +45,7 @@ use codex_protocol::mcp_protocol::ExecArbitraryCommandResponse;
 use codex_protocol::mcp_protocol::ExecCommandApprovalParams;
 use codex_protocol::mcp_protocol::ExecCommandApprovalResponse;
 use codex_protocol::mcp_protocol::ExecOneOffCommandParams;
-use codex_protocol::mcp_protocol::GetConfigTomlResponse;
+use codex_protocol::mcp_protocol::GetUserSavedConfigResponse;
 use codex_protocol::mcp_protocol::GitDiffToRemoteResponse;
 use codex_protocol::mcp_protocol::InputItem as WireInputItem;
 use codex_protocol::mcp_protocol::InterruptConversationParams;
@@ -61,6 +61,7 @@ use codex_protocol::mcp_protocol::SendUserMessageResponse;
 use codex_protocol::mcp_protocol::SendUserTurnParams;
 use codex_protocol::mcp_protocol::SendUserTurnResponse;
 use codex_protocol::mcp_protocol::ServerNotification;
+use codex_protocol::mcp_protocol::UserSavedConfig;
 use mcp_types::JSONRPCErrorError;
 use mcp_types::RequestId;
 use tokio::sync::Mutex;
@@ -153,8 +154,8 @@ impl CodexMessageProcessor {
             ClientRequest::GetAuthStatus { request_id, params } => {
                 self.get_auth_status(request_id, params).await;
             }
-            ClientRequest::GetConfigToml { request_id } => {
-                self.get_config_toml(request_id).await;
+            ClientRequest::GetUserSavedConfig { request_id } => {
+                self.get_user_saved_config(request_id).await;
             }
             ClientRequest::ExecOneOffCommand { request_id, params } => {
                 self.exec_one_off_command(request_id, params).await;
@@ -371,7 +372,7 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
-    async fn get_config_toml(&self, request_id: RequestId) {
+    async fn get_user_saved_config(&self, request_id: RequestId) {
         let toml_value = match load_config_as_toml(&self.config.codex_home) {
             Ok(val) => val,
             Err(err) => {
@@ -398,32 +399,11 @@ impl CodexMessageProcessor {
             }
         };
 
-        let profiles: HashMap<String, codex_protocol::config_types::ConfigProfile> = cfg
-            .profiles
-            .into_iter()
-            .map(|(k, v)| {
-                (
-                    k,
-                    // Define this explicitly here to avoid the need to
-                    // implement `From<codex_core::config_profile::ConfigProfile>`
-                    // for the `ConfigProfile` type and introduce a dependency on codex_core
-                    codex_protocol::config_types::ConfigProfile {
-                        model: v.model,
-                        approval_policy: v.approval_policy,
-                        model_reasoning_effort: v.model_reasoning_effort,
-                    },
-                )
-            })
-            .collect();
+        let user_saved_config: UserSavedConfig = cfg.into();
 
-        let response = GetConfigTomlResponse {
-            approval_policy: cfg.approval_policy,
-            sandbox_mode: cfg.sandbox_mode,
-            model_reasoning_effort: cfg.model_reasoning_effort,
-            profile: cfg.profile,
-            profiles: Some(profiles),
+        let response = GetUserSavedConfigResponse {
+            config: user_saved_config,
         };
-
         self.outgoing.send_response(request_id, response).await;
     }
 
