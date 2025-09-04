@@ -10,6 +10,18 @@
 
 Key flags: `--model/-m`, `--ask-for-approval/-a`.
 
+Resume options:
+
+- `--resume`: open an interactive picker of recent sessions (shows a preview of the first real user message). Conflicts with `--continue`.
+- `--continue`: resume the most recent session without showing the picker (falls back to starting fresh if none exist). Conflicts with `--resume`.
+
+Examples:
+
+```shell
+codex --resume
+codex --continue
+```
+
 ### Running with a prompt as input
 
 You can also run Codex CLI with a prompt as input:
