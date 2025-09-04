@@ -53,12 +53,12 @@ pub(crate) fn format_json_compact(text: &str) -> Option<String> {
             }
             ' ' | '\t' if !in_string => {
                 // Add a space after : and , but only when not in a string
-                if let Some(&next_ch) = chars.peek() {
-                    if let Some(last_ch) = result.chars().last() {
-                        if (last_ch == ':' || last_ch == ',') && !matches!(next_ch, '}' | ']') {
-                            result.push(' ');
-                        }
-                    }
+                if let Some(&next_ch) = chars.peek()
+                    && let Some(last_ch) = result.chars().last()
+                    && (last_ch == ':' || last_ch == ',')
+                    && !matches!(next_ch, '}' | ']')
+                {
+                    result.push(' ');
                 }
             }
             _ => {
@@ -102,7 +102,6 @@ pub(crate) fn truncate_text(text: &str, max_graphemes: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
     use super::*;
     use pretty_assertions::assert_eq;
 

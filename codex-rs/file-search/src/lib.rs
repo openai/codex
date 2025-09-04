@@ -151,7 +151,13 @@ pub fn run(
     // Use the same tree-walker library that ripgrep uses. We use it directly so
     // that we can leverage the parallelism it provides.
     let mut walk_builder = WalkBuilder::new(search_directory);
-    walk_builder.threads(num_walk_builder_threads);
+    walk_builder
+        .threads(num_walk_builder_threads)
+        // Allow hidden entries.
+        .hidden(false)
+        // Don't require git to be present to apply to apply git-related ignore rules.
+        .require_git(false);
+
     if !exclude.is_empty() {
         let mut override_builder = OverrideBuilder::new(search_directory);
         for exclude in exclude {
@@ -228,11 +234,11 @@ pub fn run(
         for &Reverse((score, ref line)) in best_list.binary_heap.iter() {
             if global_heap.len() < limit.get() {
                 global_heap.push(Reverse((score, line.clone())));
-            } else if let Some(min_element) = global_heap.peek() {
-                if score > min_element.0.0 {
-                    global_heap.pop();
-                    global_heap.push(Reverse((score, line.clone())));
-                }
+            } else if let Some(min_element) = global_heap.peek()
+                && score > min_element.0.0
+            {
+                global_heap.pop();
+                global_heap.push(Reverse((score, line.clone())));
             }
         }
     }
@@ -320,11 +326,11 @@ impl BestMatchesList {
 
             if self.binary_heap.len() < self.max_count {
                 self.binary_heap.push(Reverse((score, line.to_string())));
-            } else if let Some(min_element) = self.binary_heap.peek() {
-                if score > min_element.0.0 {
-                    self.binary_heap.pop();
-                    self.binary_heap.push(Reverse((score, line.to_string())));
-                }
+            } else if let Some(min_element) = self.binary_heap.peek()
+                && score > min_element.0.0
+            {
+                self.binary_heap.pop();
+                self.binary_heap.push(Reverse((score, line.to_string())));
             }
         }
     }

@@ -11,7 +11,7 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 codex-common = { path = "../common", features = ["cli"] }
 codex-core = { path = "../core" }
-codex-login = { path = "../login" }
+codex-protocol = { path = "../protocol" }
 reqwest = { version = "0.12", features = ["json", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

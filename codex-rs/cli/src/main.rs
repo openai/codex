@@ -27,7 +27,11 @@ use crate::proto::ProtoCli;
     author,
     version,
     // If a sub‑command is given, ignore requirements of the default args.
-    subcommand_negates_reqs = true
+    subcommand_negates_reqs = true,
+    // The executable is sometimes invoked via a platform‑specific name like
+    // `codex-x86_64-unknown-linux-musl`, but the help output should always use
+    // the generic `codex` command name that users run.
+    bin_name = "codex"
 )]
 struct MultitoolCli {
     #[clap(flatten)]
@@ -68,6 +72,10 @@ enum Subcommand {
     /// Apply the latest diff produced by Codex agent as a `git apply` to your local working tree.
     #[clap(visible_alias = "a")]
     Apply(ApplyCommand),
+
+    /// Internal: generate TypeScript protocol bindings.
+    #[clap(hide = true)]
+    GenerateTs(GenerateTsCommand),
 }
 
 #[derive(Debug, Parser)]
@@ -116,6 +124,17 @@ struct LogoutCommand {
     config_overrides: CliConfigOverrides,
 }
 
+#[derive(Debug, Parser)]
+struct GenerateTsCommand {
+    /// Output directory where .ts files will be written
+    #[arg(short = 'o', long = "out", value_name = "DIR")]
+    out_dir: PathBuf,
+
+    /// Optional path to the Prettier executable to format generated files
+    #[arg(short = 'p', long = "prettier", value_name = "PRETTIER_BIN")]
+    prettier: Option<PathBuf>,
+}
+
 fn main() -> anyhow::Result<()> {
     arg0_dispatch_or_else(|codex_linux_sandbox_exe| async move {
         cli_main(codex_linux_sandbox_exe).await?;
@@ -140,7 +159,7 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             codex_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
         }
         Some(Subcommand::Mcp) => {
-            codex_mcp_server::run_main(codex_linux_sandbox_exe).await?;
+            codex_mcp_server::run_main(codex_linux_sandbox_exe, cli.config_overrides).await?;
         }
         Some(Subcommand::Login(mut login_cli)) => {
             prepend_config_flags(&mut login_cli.config_overrides, cli.config_overrides);
@@ -189,6 +208,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         Some(Subcommand::Apply(mut apply_cli)) => {
             prepend_config_flags(&mut apply_cli.config_overrides, cli.config_overrides);
             run_apply_command(apply_cli, None).await?;
+        }
+        Some(Subcommand::GenerateTs(gen_cli)) => {
+            codex_protocol_ts::generate_ts(&gen_cli.out_dir, gen_cli.prettier.as_deref())?;
         }
     }
 

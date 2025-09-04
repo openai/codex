@@ -13,6 +13,30 @@ pub struct Cli {
     #[arg(long = "image", short = 'i', value_name = "FILE", value_delimiter = ',', num_args = 1..)]
     pub images: Vec<PathBuf>,
 
+    /// Open an interactive picker to resume a previous session recorded on disk
+    /// instead of starting a new one.
+    ///
+    /// Notes:
+    /// - Mutually exclusive with `--continue`.
+    /// - The picker displays recent sessions and a preview of the first real user
+    ///   message to help you select the right one.
+    #[arg(long = "resume", default_value_t = false, conflicts_with = "continue")]
+    pub resume: bool,
+
+    /// Continue the most recent conversation without showing the picker.
+    ///
+    /// Notes:
+    /// - Mutually exclusive with `--resume`.
+    /// - If no recorded sessions are found, this behaves like starting fresh.
+    /// - Equivalent to picking the newest item in the resume picker.
+    #[arg(
+        id = "continue",
+        long = "continue",
+        default_value_t = false,
+        conflicts_with = "resume"
+    )]
+    pub r#continue: bool,
+
     /// Model the agent should use.
     #[arg(long, short = 'm')]
     pub model: Option<String>,
@@ -53,6 +77,10 @@ pub struct Cli {
     /// Tell the agent to use the specified directory as its working root.
     #[clap(long = "cd", short = 'C', value_name = "DIR")]
     pub cwd: Option<PathBuf>,
+
+    /// Enable web search (off by default). When enabled, the native Responses `web_search` tool is available to the model (no per‑call approval).
+    #[arg(long = "search", default_value_t = false)]
+    pub web_search: bool,
 
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,

@@ -6,23 +6,23 @@ mod event_processor_with_json_output;
 use std::io::IsTerminal;
 use std::io::Read;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 pub use cli::Cli;
+use codex_core::AuthManager;
 use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
-use codex_core::codex_wrapper::CodexConversation;
-use codex_core::codex_wrapper::{self};
+use codex_core::ConversationManager;
+use codex_core::NewConversation;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
-use codex_core::config_types::SandboxMode;
+use codex_core::git_info::get_git_repo_root;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::TaskCompleteEvent;
-use codex_core::util::is_inside_git_repo;
 use codex_ollama::DEFAULT_OSS_MODEL;
+use codex_protocol::config_types::SandboxMode;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
 use event_processor_with_json_output::EventProcessorWithJsonOutput;
 use tracing::debug;
@@ -140,8 +140,11 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         codex_linux_sandbox_exe,
         base_instructions: None,
         include_plan_tool: None,
+        include_apply_patch_tool: None,
+        include_view_image_tool: None,
         disable_response_storage: oss.then_some(true),
         show_raw_agent_reasoning: oss.then_some(true),
+        tools_web_search_request: None,
     };
     // Parse `-c` overrides.
     let cli_kv_overrides = match config_overrides.parse_overrides() {
@@ -201,40 +204,39 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     // is using.
     event_processor.print_config_summary(&config, &prompt);
 
-    if !skip_git_repo_check && !is_inside_git_repo(&config.cwd.to_path_buf()) {
+    if !skip_git_repo_check && get_git_repo_root(&config.cwd.to_path_buf()).is_none() {
         eprintln!("Not inside a trusted directory and --skip-git-repo-check was not specified.");
         std::process::exit(1);
     }
 
-    let CodexConversation {
-        codex: codex_wrapper,
+    let conversation_manager = ConversationManager::new(AuthManager::shared(
+        config.codex_home.clone(),
+        config.preferred_auth_method,
+        config.responses_originator_header.clone(),
+    ));
+    let NewConversation {
+        conversation_id: _,
+        conversation,
         session_configured,
-        ctrl_c,
-        ..
-    } = codex_wrapper::init_codex(config).await?;
-    let codex = Arc::new(codex_wrapper);
+    } = conversation_manager.new_conversation(config).await?;
     info!("Codex initialized with event: {session_configured:?}");
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
     {
-        let codex = codex.clone();
+        let conversation = conversation.clone();
         tokio::spawn(async move {
             loop {
-                let interrupted = ctrl_c.notified();
                 tokio::select! {
-                    _ = interrupted => {
-                        // Forward an interrupt to the codex so it can abort any in‑flight task.
-                        let _ = codex
-                            .submit(
-                                Op::Interrupt,
-                            )
-                            .await;
+                    _ = tokio::signal::ctrl_c() => {
+                        tracing::debug!("Keyboard interrupt");
+                        // Immediately notify Codex to abort any in‑flight task.
+                        conversation.submit(Op::Interrupt).await.ok();
 
-                        // Exit the inner loop and return to the main input prompt.  The codex
+                        // Exit the inner loop and return to the main input prompt. The codex
                         // will emit a `TurnInterrupted` (Error) event which is drained later.
                         break;
                     }
-                    res = codex.next_event() => match res {
+                    res = conversation.next_event() => match res {
                         Ok(event) => {
                             debug!("Received event: {event:?}");
 
@@ -264,9 +266,9 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             .into_iter()
             .map(|path| InputItem::LocalImage { path })
             .collect();
-        let initial_images_event_id = codex.submit(Op::UserInput { items }).await?;
+        let initial_images_event_id = conversation.submit(Op::UserInput { items }).await?;
         info!("Sent images with event ID: {initial_images_event_id}");
-        while let Ok(event) = codex.next_event().await {
+        while let Ok(event) = conversation.next_event().await {
             if event.id == initial_images_event_id
                 && matches!(
                     event.msg,
@@ -282,12 +284,12 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     // Send the prompt.
     let items: Vec<InputItem> = vec![InputItem::Text { text: prompt }];
-    let initial_prompt_task_id = codex.submit(Op::UserInput { items }).await?;
+    let initial_prompt_task_id = conversation.submit(Op::UserInput { items }).await?;
     info!("Sent prompt with event ID: {initial_prompt_task_id}");
 
     // If stdin is an interactive TTY, watch for EOF (Ctrl+D) and request a graceful shutdown.
     if std::io::stdin().is_terminal() {
-        let codex_for_eof = codex.clone();
+        let conversation_for_eof = conversation.clone();
         tokio::spawn(async move {
             use tokio::io::AsyncReadExt;
             use tokio::io::stdin;
@@ -296,7 +298,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
             loop {
                 match stdin.read(&mut buf).await {
                     Ok(0) => {
-                        let _ = codex_for_eof.submit(Op::Shutdown).await;
+                        let _ = conversation_for_eof.submit(Op::Shutdown).await;
                         break;
                     }
                     Ok(_) => {
@@ -315,7 +317,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         match shutdown {
             CodexStatus::Running => continue,
             CodexStatus::InitiateShutdown => {
-                codex.submit(Op::Shutdown).await?;
+                conversation.submit(Op::Shutdown).await?;
             }
             CodexStatus::Shutdown => {
                 break;

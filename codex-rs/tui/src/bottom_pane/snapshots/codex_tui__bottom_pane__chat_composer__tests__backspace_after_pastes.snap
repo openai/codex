@@ -11,4 +11,4 @@ expression: terminal.backend()
 "▌                                                                                                   "
 "▌                                                                                                   "
 "▌                                                                                                   "
-" ⏎ send   Ctrl+J newline   Ctrl+C quit                                                              "
+" ⏎ send   Ctrl+J newline   Ctrl+T transcript   Ctrl+C quit                                          "

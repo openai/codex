@@ -1,7 +1,8 @@
-#![allow(clippy::expect_used)]
+#![expect(clippy::expect_used)]
 
 use tempfile::TempDir;
 
+use codex_core::CodexConversation;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
@@ -46,6 +47,26 @@ pub fn load_sse_fixture(path: impl AsRef<std::path::Path>) -> String {
         .collect()
 }
 
+pub fn load_sse_fixture_with_id_from_str(raw: &str, id: &str) -> String {
+    let replaced = raw.replace("__ID__", id);
+    let events: Vec<serde_json::Value> =
+        serde_json::from_str(&replaced).expect("parse JSON fixture");
+    events
+        .into_iter()
+        .map(|e| {
+            let kind = e
+                .get("type")
+                .and_then(|v| v.as_str())
+                .expect("fixture event missing type");
+            if e.as_object().map(|o| o.len() == 1).unwrap_or(false) {
+                format!("event: {kind}\n\n")
+            } else {
+                format!("event: {kind}\ndata: {e}\n\n")
+            }
+        })
+        .collect()
+}
+
 /// Same as [`load_sse_fixture`], but replaces the placeholder `__ID__` in the
 /// fixture template with the supplied identifier before parsing. This lets a
 /// single JSON template be reused by multiple tests that each need a unique
@@ -72,7 +93,7 @@ pub fn load_sse_fixture_with_id(path: impl AsRef<std::path::Path>, id: &str) -> 
 }
 
 pub async fn wait_for_event<F>(
-    codex: &codex_core::Codex,
+    codex: &CodexConversation,
     predicate: F,
 ) -> codex_core::protocol::EventMsg
 where
@@ -83,16 +104,18 @@ where
 }
 
 pub async fn wait_for_event_with_timeout<F>(
-    codex: &codex_core::Codex,
+    codex: &CodexConversation,
     mut predicate: F,
     wait_time: tokio::time::Duration,
 ) -> codex_core::protocol::EventMsg
 where
     F: FnMut(&codex_core::protocol::EventMsg) -> bool,
 {
+    use tokio::time::Duration;
     use tokio::time::timeout;
     loop {
-        let ev = timeout(wait_time, codex.next_event())
+        // Allow a bit more time to accommodate async startup work (e.g. config IO, tool discovery)
+        let ev = timeout(wait_time.max(Duration::from_secs(5)), codex.next_event())
             .await
             .expect("timeout waiting for event")
             .expect("stream ended unexpectedly");

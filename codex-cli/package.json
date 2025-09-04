@@ -16,5 +16,11 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/openai/codex.git"
+  },
+  "dependencies": {
+    "@vscode/ripgrep": "^1.15.14"
+  },
+  "devDependencies": {
+    "prettier": "^3.3.3"
   }
 }

@@ -10,6 +10,8 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::convert::TryFrom;
 
+use ts_rs::TS;
+
 pub const MCP_SCHEMA_VERSION: &str = "2025-06-18";
 pub const JSONRPC_VERSION: &str = "2.0";
 
@@ -31,7 +33,7 @@ fn default_jsonrpc() -> String {
 }
 
 /// Optional annotations for the client. The client can use annotations to inform how objects are used or displayed
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct Annotations {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audience: Option<Vec<Role>>,
@@ -46,7 +48,7 @@ pub struct Annotations {
 }
 
 /// Audio provided to or from an LLM.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct AudioContent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotations: Option<Annotations>,
@@ -57,14 +59,14 @@ pub struct AudioContent {
 }
 
 /// Base interface for metadata with name (identifier) and title (display name) properties.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct BaseMetadata {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct BlobResourceContents {
     pub blob: String,
     #[serde(rename = "mimeType", default, skip_serializing_if = "Option::is_none")]
@@ -72,7 +74,7 @@ pub struct BlobResourceContents {
     pub uri: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct BooleanSchema {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<bool>,
@@ -83,7 +85,7 @@ pub struct BooleanSchema {
     pub r#type: String, // &'static str = "boolean"
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub enum CallToolRequest {}
 
 impl ModelContextProtocolRequest for CallToolRequest {
@@ -92,7 +94,7 @@ impl ModelContextProtocolRequest for CallToolRequest {
     type Result = CallToolResult;
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct CallToolRequestParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arguments: Option<serde_json::Value>,
@@ -100,7 +102,7 @@ pub struct CallToolRequestParams {
 }
 
 /// The server's response to a tool call.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct CallToolResult {
     pub content: Vec<ContentBlock>,
     #[serde(rename = "isError", default, skip_serializing_if = "Option::is_none")]
@@ -121,7 +123,7 @@ impl From<CallToolResult> for serde_json::Value {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub enum CancelledNotification {}
 
 impl ModelContextProtocolNotification for CancelledNotification {
@@ -129,7 +131,7 @@ impl ModelContextProtocolNotification for CancelledNotification {
     type Params = CancelledNotificationParams;
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct CancelledNotificationParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -138,7 +140,7 @@ pub struct CancelledNotificationParams {
 }
 
 /// Capabilities a client may support. Known capabilities are defined here, in this schema, but this is not a closed set: any client can define its own, additional capabilities.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct ClientCapabilities {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elicitation: Option<serde_json::Value>,
@@ -151,7 +153,7 @@ pub struct ClientCapabilities {
 }
 
 /// Present if the client supports listing roots.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct ClientCapabilitiesRoots {
     #[serde(
         rename = "listChanged",
@@ -161,7 +163,7 @@ pub struct ClientCapabilitiesRoots {
     pub list_changed: Option<bool>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 #[serde(untagged)]
 pub enum ClientNotification {
     CancelledNotification(CancelledNotification),
@@ -170,7 +172,7 @@ pub enum ClientNotification {
     RootsListChangedNotification(RootsListChangedNotification),
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 #[serde(tag = "method", content = "params")]
 pub enum ClientRequest {
     #[serde(rename = "initialize")]
@@ -203,7 +205,7 @@ pub enum ClientRequest {
     CompleteRequest(<CompleteRequest as ModelContextProtocolRequest>::Params),
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 #[serde(untagged)]
 pub enum ClientResult {
     Result(Result),
@@ -212,7 +214,7 @@ pub enum ClientResult {
     ElicitResult(ElicitResult),
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub enum CompleteRequest {}
 
 impl ModelContextProtocolRequest for CompleteRequest {
@@ -221,7 +223,7 @@ impl ModelContextProtocolRequest for CompleteRequest {
     type Result = CompleteResult;
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct CompleteRequestParams {
     pub argument: CompleteRequestParamsArgument,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -230,20 +232,20 @@ pub struct CompleteRequestParams {
 }
 
 /// Additional, optional context for completions
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct CompleteRequestParamsContext {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arguments: Option<serde_json::Value>,
 }
 
 /// The argument's information
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct CompleteRequestParamsArgument {
     pub name: String,
     pub value: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 #[serde(untagged)]
 pub enum CompleteRequestParamsRef {
     PromptReference(PromptReference),
@@ -251,12 +253,12 @@ pub enum CompleteRequestParamsRef {
 }
 
 /// The server's response to a completion/complete request
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct CompleteResult {
     pub completion: CompleteResultCompletion,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct CompleteResultCompletion {
     #[serde(rename = "hasMore", default, skip_serializing_if = "Option::is_none")]
     pub has_more: Option<bool>,
@@ -273,7 +275,7 @@ impl From<CompleteResult> for serde_json::Value {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 #[serde(untagged)]
 pub enum ContentBlock {
     TextContent(TextContent),
@@ -283,7 +285,7 @@ pub enum ContentBlock {
     EmbeddedResource(EmbeddedResource),
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub enum CreateMessageRequest {}
 
 impl ModelContextProtocolRequest for CreateMessageRequest {
@@ -292,7 +294,7 @@ impl ModelContextProtocolRequest for CreateMessageRequest {
     type Result = CreateMessageResult;
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct CreateMessageRequestParams {
     #[serde(
         rename = "includeContext",
@@ -328,7 +330,7 @@ pub struct CreateMessageRequestParams {
 }
 
 /// The client's response to a sampling/create_message request from the server. The client should inform the user before returning the sampled message, to allow them to inspect the response (human in the loop) and decide whether to allow the server to see it.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct CreateMessageResult {
     pub content: CreateMessageResultContent,
     pub model: String,
@@ -341,7 +343,7 @@ pub struct CreateMessageResult {
     pub stop_reason: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 #[serde(untagged)]
 pub enum CreateMessageResultContent {
     TextContent(TextContent),
@@ -357,10 +359,10 @@ impl From<CreateMessageResult> for serde_json::Value {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct Cursor(String);
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub enum ElicitRequest {}
 
 impl ModelContextProtocolRequest for ElicitRequest {
@@ -369,7 +371,7 @@ impl ModelContextProtocolRequest for ElicitRequest {
     type Result = ElicitResult;
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct ElicitRequestParams {
     pub message: String,
     #[serde(rename = "requestedSchema")]
@@ -378,7 +380,7 @@ pub struct ElicitRequestParams {
 
 /// A restricted subset of JSON Schema.
 /// Only top-level properties are allowed, without nesting.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct ElicitRequestParamsRequestedSchema {
     pub properties: serde_json::Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -387,7 +389,7 @@ pub struct ElicitRequestParamsRequestedSchema {
 }
 
 /// The client's response to an elicitation request.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct ElicitResult {
     pub action: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -406,7 +408,7 @@ impl From<ElicitResult> for serde_json::Value {
 ///
 /// It is up to the client how best to render embedded resources for the benefit
 /// of the LLM and/or the user.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct EmbeddedResource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotations: Option<Annotations>,
@@ -414,7 +416,7 @@ pub struct EmbeddedResource {
     pub r#type: String, // &'static str = "resource"
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 #[serde(untagged)]
 pub enum EmbeddedResourceResource {
     TextResourceContents(TextResourceContents),
@@ -423,7 +425,7 @@ pub enum EmbeddedResourceResource {
 
 pub type EmptyResult = Result;
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct EnumSchema {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -435,7 +437,7 @@ pub struct EnumSchema {
     pub r#type: String, // &'static str = "string"
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub enum GetPromptRequest {}
 
 impl ModelContextProtocolRequest for GetPromptRequest {
@@ -444,7 +446,7 @@ impl ModelContextProtocolRequest for GetPromptRequest {
     type Result = GetPromptResult;
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct GetPromptRequestParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arguments: Option<serde_json::Value>,
@@ -452,7 +454,7 @@ pub struct GetPromptRequestParams {
 }
 
 /// The server's response to a prompts/get request from the client.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct GetPromptResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -468,7 +470,7 @@ impl From<GetPromptResult> for serde_json::Value {
 }
 
 /// An image provided to or from an LLM.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct ImageContent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotations: Option<Annotations>,
@@ -479,7 +481,7 @@ pub struct ImageContent {
 }
 
 /// Describes the name and version of an MCP implementation, with an optional title for UI representation.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct Implementation {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -487,7 +489,7 @@ pub struct Implementation {
     pub version: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub enum InitializeRequest {}
 
 impl ModelContextProtocolRequest for InitializeRequest {
@@ -496,7 +498,7 @@ impl ModelContextProtocolRequest for InitializeRequest {
     type Result = InitializeResult;
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct InitializeRequestParams {
     pub capabilities: ClientCapabilities,
     #[serde(rename = "clientInfo")]
@@ -506,7 +508,7 @@ pub struct InitializeRequestParams {
 }
 
 /// After receiving an initialize request from the client, the server sends this response.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct InitializeResult {
     pub capabilities: ServerCapabilities,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -525,7 +527,7 @@ impl From<InitializeResult> for serde_json::Value {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub enum InitializedNotification {}
 
 impl ModelContextProtocolNotification for InitializedNotification {
@@ -534,7 +536,7 @@ impl ModelContextProtocolNotification for InitializedNotification {
 }
 
 /// A response to a request that indicates an error occurred.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct JSONRPCError {
     pub error: JSONRPCErrorError,
     pub id: RequestId,
@@ -542,7 +544,7 @@ pub struct JSONRPCError {
     pub jsonrpc: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct JSONRPCErrorError {
     pub code: i64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -551,7 +553,7 @@ pub struct JSONRPCErrorError {
 }
 
 /// Refers to any valid JSON-RPC object that can be decoded off the wire, or encoded to be sent.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 #[serde(untagged)]
 pub enum JSONRPCMessage {
     Request(JSONRPCRequest),
@@ -561,7 +563,7 @@ pub enum JSONRPCMessage {
 }
 
 /// A notification which does not expect a response.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct JSONRPCNotification {
     #[serde(rename = "jsonrpc", default = "default_jsonrpc")]
     pub jsonrpc: String,
@@ -571,7 +573,7 @@ pub struct JSONRPCNotification {
 }
 
 /// A request that expects a response.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct JSONRPCRequest {
     pub id: RequestId,
     #[serde(rename = "jsonrpc", default = "default_jsonrpc")]
@@ -582,7 +584,7 @@ pub struct JSONRPCRequest {
 }
 
 /// A successful (non-error) response to a request.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct JSONRPCResponse {
     pub id: RequestId,
     #[serde(rename = "jsonrpc", default = "default_jsonrpc")]
@@ -590,7 +592,7 @@ pub struct JSONRPCResponse {
     pub result: Result,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub enum ListPromptsRequest {}
 
 impl ModelContextProtocolRequest for ListPromptsRequest {
@@ -599,14 +601,14 @@ impl ModelContextProtocolRequest for ListPromptsRequest {
     type Result = ListPromptsResult;
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct ListPromptsRequestParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
 }
 
 /// The server's response to a prompts/list request from the client.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct ListPromptsResult {
     #[serde(
         rename = "nextCursor",
@@ -625,7 +627,7 @@ impl From<ListPromptsResult> for serde_json::Value {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub enum ListResourceTemplatesRequest {}
 
 impl ModelContextProtocolRequest for ListResourceTemplatesRequest {
@@ -634,14 +636,14 @@ impl ModelContextProtocolRequest for ListResourceTemplatesRequest {
     type Result = ListResourceTemplatesResult;
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct ListResourceTemplatesRequestParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
 }
 
 /// The server's response to a resources/templates/list request from the client.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct ListResourceTemplatesResult {
     #[serde(
         rename = "nextCursor",
@@ -661,7 +663,7 @@ impl From<ListResourceTemplatesResult> for serde_json::Value {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub enum ListResourcesRequest {}
 
 impl ModelContextProtocolRequest for ListResourcesRequest {
@@ -670,14 +672,14 @@ impl ModelContextProtocolRequest for ListResourcesRequest {
     type Result = ListResourcesResult;
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct ListResourcesRequestParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
 }
 
 /// The server's response to a resources/list request from the client.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct ListResourcesResult {
     #[serde(
         rename = "nextCursor",
@@ -696,7 +698,7 @@ impl From<ListResourcesResult> for serde_json::Value {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub enum ListRootsRequest {}
 
 impl ModelContextProtocolRequest for ListRootsRequest {
@@ -708,7 +710,7 @@ impl ModelContextProtocolRequest for ListRootsRequest {
 /// The client's response to a roots/list request from the server.
 /// This result contains an array of Root objects, each representing a root directory
 /// or file that the server can operate on.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct ListRootsResult {
     pub roots: Vec<Root>,
 }
@@ -721,7 +723,7 @@ impl From<ListRootsResult> for serde_json::Value {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub enum ListToolsRequest {}
 
 impl ModelContextProtocolRequest for ListToolsRequest {
@@ -730,14 +732,14 @@ impl ModelContextProtocolRequest for ListToolsRequest {
     type Result = ListToolsResult;
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct ListToolsRequestParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
 }
 
 /// The server's response to a tools/list request from the client.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct ListToolsResult {
     #[serde(
         rename = "nextCursor",
@@ -760,7 +762,7 @@ impl From<ListToolsResult> for serde_json::Value {
 ///
 /// These map to syslog message severities, as specified in RFC-5424:
 /// https://datatracker.ietf.org/doc/html/rfc5424#section-6.2.1
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub enum LoggingLevel {
     #[serde(rename = "alert")]
     Alert,
@@ -780,7 +782,7 @@ pub enum LoggingLevel {
     Warning,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub enum LoggingMessageNotification {}
 
 impl ModelContextProtocolNotification for LoggingMessageNotification {
@@ -788,7 +790,7 @@ impl ModelContextProtocolNotification for LoggingMessageNotification {
     type Params = LoggingMessageNotificationParams;
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct LoggingMessageNotificationParams {
     pub data: serde_json::Value,
     pub level: LoggingLevel,
@@ -800,7 +802,7 @@ pub struct LoggingMessageNotificationParams {
 ///
 /// Keys not declared here are currently left unspecified by the spec and are up
 /// to the client to interpret.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct ModelHint {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -817,7 +819,7 @@ pub struct ModelHint {
 /// These preferences are always advisory. The client MAY ignore them. It is also
 /// up to the client to decide how to interpret these preferences and how to
 /// balance them against other considerations.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct ModelPreferences {
     #[serde(
         rename = "costPriority",
@@ -841,14 +843,14 @@ pub struct ModelPreferences {
     pub speed_priority: Option<f64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct Notification {
     pub method: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub params: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct NumberSchema {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -861,20 +863,20 @@ pub struct NumberSchema {
     pub r#type: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct PaginatedRequest {
     pub method: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub params: Option<PaginatedRequestParams>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct PaginatedRequestParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cursor: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct PaginatedResult {
     #[serde(
         rename = "nextCursor",
@@ -892,7 +894,7 @@ impl From<PaginatedResult> for serde_json::Value {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub enum PingRequest {}
 
 impl ModelContextProtocolRequest for PingRequest {
@@ -903,7 +905,7 @@ impl ModelContextProtocolRequest for PingRequest {
 
 /// Restricted schema definitions that only allow primitive types
 /// without nested objects or arrays.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 #[serde(untagged)]
 pub enum PrimitiveSchemaDefinition {
     StringSchema(StringSchema),
@@ -912,7 +914,7 @@ pub enum PrimitiveSchemaDefinition {
     EnumSchema(EnumSchema),
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub enum ProgressNotification {}
 
 impl ModelContextProtocolNotification for ProgressNotification {
@@ -920,7 +922,7 @@ impl ModelContextProtocolNotification for ProgressNotification {
     type Params = ProgressNotificationParams;
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct ProgressNotificationParams {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
@@ -931,7 +933,7 @@ pub struct ProgressNotificationParams {
     pub total: Option<f64>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Hash, Eq)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Hash, Eq, TS)]
 #[serde(untagged)]
 pub enum ProgressToken {
     String(String),
@@ -939,7 +941,7 @@ pub enum ProgressToken {
 }
 
 /// A prompt or prompt template that the server offers.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct Prompt {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arguments: Option<Vec<PromptArgument>>,
@@ -951,7 +953,7 @@ pub struct Prompt {
 }
 
 /// Describes an argument that a prompt can accept.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct PromptArgument {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -962,7 +964,7 @@ pub struct PromptArgument {
     pub title: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub enum PromptListChangedNotification {}
 
 impl ModelContextProtocolNotification for PromptListChangedNotification {
@@ -974,14 +976,14 @@ impl ModelContextProtocolNotification for PromptListChangedNotification {
 ///
 /// This is similar to `SamplingMessage`, but also supports the embedding of
 /// resources from the MCP server.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct PromptMessage {
     pub content: ContentBlock,
     pub role: Role,
 }
 
 /// Identifies a prompt.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct PromptReference {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -989,7 +991,7 @@ pub struct PromptReference {
     pub r#type: String, // &'static str = "ref/prompt"
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub enum ReadResourceRequest {}
 
 impl ModelContextProtocolRequest for ReadResourceRequest {
@@ -998,18 +1000,18 @@ impl ModelContextProtocolRequest for ReadResourceRequest {
     type Result = ReadResourceResult;
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct ReadResourceRequestParams {
     pub uri: String,
 }
 
 /// The server's response to a resources/read request from the client.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct ReadResourceResult {
     pub contents: Vec<ReadResourceResultContents>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 #[serde(untagged)]
 pub enum ReadResourceResultContents {
     TextResourceContents(TextResourceContents),
@@ -1024,14 +1026,14 @@ impl From<ReadResourceResult> for serde_json::Value {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct Request {
     pub method: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub params: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Hash, Eq)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Hash, Eq, TS)]
 #[serde(untagged)]
 pub enum RequestId {
     String(String),
@@ -1039,7 +1041,7 @@ pub enum RequestId {
 }
 
 /// A known resource that the server is capable of reading.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct Resource {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotations: Option<Annotations>,
@@ -1056,7 +1058,7 @@ pub struct Resource {
 }
 
 /// The contents of a specific resource or sub-resource.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct ResourceContents {
     #[serde(rename = "mimeType", default, skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
@@ -1066,7 +1068,7 @@ pub struct ResourceContents {
 /// A resource that the server is capable of reading, included in a prompt or tool call result.
 ///
 /// Note: resource links returned by tools are not guaranteed to appear in the results of `resources/list` requests.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct ResourceLink {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotations: Option<Annotations>,
@@ -1083,7 +1085,7 @@ pub struct ResourceLink {
     pub uri: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub enum ResourceListChangedNotification {}
 
 impl ModelContextProtocolNotification for ResourceListChangedNotification {
@@ -1092,7 +1094,7 @@ impl ModelContextProtocolNotification for ResourceListChangedNotification {
 }
 
 /// A template description for resources available on the server.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct ResourceTemplate {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotations: Option<Annotations>,
@@ -1108,13 +1110,13 @@ pub struct ResourceTemplate {
 }
 
 /// A reference to a resource or resource template definition.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct ResourceTemplateReference {
     pub r#type: String, // &'static str = "ref/resource"
     pub uri: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub enum ResourceUpdatedNotification {}
 
 impl ModelContextProtocolNotification for ResourceUpdatedNotification {
@@ -1122,7 +1124,7 @@ impl ModelContextProtocolNotification for ResourceUpdatedNotification {
     type Params = ResourceUpdatedNotificationParams;
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct ResourceUpdatedNotificationParams {
     pub uri: String,
 }
@@ -1130,7 +1132,7 @@ pub struct ResourceUpdatedNotificationParams {
 pub type Result = serde_json::Value;
 
 /// The sender or recipient of messages and data in a conversation.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub enum Role {
     #[serde(rename = "assistant")]
     Assistant,
@@ -1139,14 +1141,14 @@ pub enum Role {
 }
 
 /// Represents a root directory or file that the server can operate on.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct Root {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     pub uri: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub enum RootsListChangedNotification {}
 
 impl ModelContextProtocolNotification for RootsListChangedNotification {
@@ -1155,13 +1157,13 @@ impl ModelContextProtocolNotification for RootsListChangedNotification {
 }
 
 /// Describes a message issued to or received from an LLM API.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct SamplingMessage {
     pub content: SamplingMessageContent,
     pub role: Role,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 #[serde(untagged)]
 pub enum SamplingMessageContent {
     TextContent(TextContent),
@@ -1170,7 +1172,7 @@ pub enum SamplingMessageContent {
 }
 
 /// Capabilities that a server may support. Known capabilities are defined here, in this schema, but this is not a closed set: any server can define its own, additional capabilities.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct ServerCapabilities {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completions: Option<serde_json::Value>,
@@ -1187,7 +1189,7 @@ pub struct ServerCapabilities {
 }
 
 /// Present if the server offers any tools to call.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct ServerCapabilitiesTools {
     #[serde(
         rename = "listChanged",
@@ -1198,7 +1200,7 @@ pub struct ServerCapabilitiesTools {
 }
 
 /// Present if the server offers any resources to read.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct ServerCapabilitiesResources {
     #[serde(
         rename = "listChanged",
@@ -1211,7 +1213,7 @@ pub struct ServerCapabilitiesResources {
 }
 
 /// Present if the server offers any prompt templates.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct ServerCapabilitiesPrompts {
     #[serde(
         rename = "listChanged",
@@ -1221,7 +1223,7 @@ pub struct ServerCapabilitiesPrompts {
     pub list_changed: Option<bool>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 #[serde(tag = "method", content = "params")]
 pub enum ServerNotification {
     #[serde(rename = "notifications/cancelled")]
@@ -1250,7 +1252,7 @@ pub enum ServerNotification {
     ),
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 #[serde(untagged)]
 pub enum ServerRequest {
     PingRequest(PingRequest),
@@ -1259,7 +1261,7 @@ pub enum ServerRequest {
     ElicitRequest(ElicitRequest),
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 #[serde(untagged)]
 #[allow(clippy::large_enum_variant)]
 pub enum ServerResult {
@@ -1275,7 +1277,7 @@ pub enum ServerResult {
     CompleteResult(CompleteResult),
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub enum SetLevelRequest {}
 
 impl ModelContextProtocolRequest for SetLevelRequest {
@@ -1284,12 +1286,12 @@ impl ModelContextProtocolRequest for SetLevelRequest {
     type Result = Result;
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct SetLevelRequestParams {
     pub level: LoggingLevel,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct StringSchema {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
@@ -1304,7 +1306,7 @@ pub struct StringSchema {
     pub r#type: String, // &'static str = "string"
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub enum SubscribeRequest {}
 
 impl ModelContextProtocolRequest for SubscribeRequest {
@@ -1313,13 +1315,13 @@ impl ModelContextProtocolRequest for SubscribeRequest {
     type Result = Result;
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct SubscribeRequestParams {
     pub uri: String,
 }
 
 /// Text provided to or from an LLM.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct TextContent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotations: Option<Annotations>,
@@ -1327,7 +1329,7 @@ pub struct TextContent {
     pub r#type: String, // &'static str = "text"
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct TextResourceContents {
     #[serde(rename = "mimeType", default, skip_serializing_if = "Option::is_none")]
     pub mime_type: Option<String>,
@@ -1336,7 +1338,7 @@ pub struct TextResourceContents {
 }
 
 /// Definition for a tool the client can call.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct Tool {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub annotations: Option<ToolAnnotations>,
@@ -1357,7 +1359,7 @@ pub struct Tool {
 
 /// An optional JSON Schema object defining the structure of the tool's output returned in
 /// the structuredContent field of a CallToolResult.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct ToolOutputSchema {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub properties: Option<serde_json::Value>,
@@ -1367,7 +1369,7 @@ pub struct ToolOutputSchema {
 }
 
 /// A JSON Schema object defining the expected parameters for the tool.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct ToolInputSchema {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub properties: Option<serde_json::Value>,
@@ -1384,7 +1386,7 @@ pub struct ToolInputSchema {
 ///
 /// Clients should never make tool use decisions based on ToolAnnotations
 /// received from untrusted servers.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct ToolAnnotations {
     #[serde(
         rename = "destructiveHint",
@@ -1414,7 +1416,7 @@ pub struct ToolAnnotations {
     pub title: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub enum ToolListChangedNotification {}
 
 impl ModelContextProtocolNotification for ToolListChangedNotification {
@@ -1422,7 +1424,7 @@ impl ModelContextProtocolNotification for ToolListChangedNotification {
     type Params = Option<serde_json::Value>;
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub enum UnsubscribeRequest {}
 
 impl ModelContextProtocolRequest for UnsubscribeRequest {
@@ -1431,7 +1433,7 @@ impl ModelContextProtocolRequest for UnsubscribeRequest {
     type Result = Result;
 }
 
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
 pub struct UnsubscribeRequestParams {
     pub uri: String,
 }

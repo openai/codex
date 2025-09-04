@@ -7,16 +7,22 @@ version = { workspace = true }
 name = "codex_apply_patch"
 path = "src/lib.rs"
 
+[[bin]]
+name = "apply_patch"
+path = "src/main.rs"
+
 [lints]
 workspace = true
 
 [dependencies]
 anyhow = "1"
 similar = "2.7.0"
-thiserror = "2.0.12"
+thiserror = "2.0.16"
 tree-sitter = "0.25.8"
 tree-sitter-bash = "0.25.0"
+once_cell = "1"
 
 [dev-dependencies]
+assert_cmd = "2"
 pretty_assertions = "1.4.1"
 tempfile = "3.13.0"

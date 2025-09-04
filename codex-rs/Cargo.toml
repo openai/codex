@@ -15,6 +15,8 @@ members = [
     "mcp-server",
     "mcp-types",
     "ollama",
+    "protocol",
+    "protocol-ts",
     "tui",
     "codex-telemetry",
 ]
@@ -33,6 +35,7 @@ rust = {}
 
 [workspace.lints.clippy]
 expect_used = "deny"
+uninlined_format_args = "deny"
 unwrap_used = "deny"
 
 [profile.release]

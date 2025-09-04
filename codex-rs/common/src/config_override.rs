@@ -142,7 +142,6 @@ fn parse_toml_value(raw: &str) -> Result<Value, toml::de::Error> {
 }
 
 #[cfg(all(test, feature = "cli"))]
-#[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
 

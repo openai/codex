@@ -1,0 +1,16 @@
+[
+  {
+    "type": "response.completed",
+    "response": {
+      "id": "__ID__",
+      "usage": {
+        "input_tokens": 0,
+        "input_tokens_details": null,
+        "output_tokens": 0,
+        "output_tokens_details": null,
+        "total_tokens": 0
+      },
+      "output": []
+    }
+  }
+]
