@@ -313,6 +313,7 @@ fn slice_line_spans<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use itertools::Itertools as _;
     use ratatui::style::Color;
     use ratatui::style::Stylize;
 
@@ -529,23 +530,15 @@ mod tests {
         let lines = [line];
         // Force small width to exercise wrapping at spaces.
         let wrapped = word_wrap_lines_borrowed(&lines, 40);
-        let joined: String = wrapped
-            .iter()
-            .map(|l| {
-                l.spans
-                    .iter()
-                    .map(|s| s.content.clone())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(
-            !joined.contains("bo\nth"),
-            "word 'both' should not be split across lines:\n{joined}"
-        );
-        assert!(
-            !joined.contains("Willowm\nere"),
-            "should not split inside words:\n{joined}"
+        let joined: String = wrapped.iter().map(|l| l.to_string()).join("\n");
+        assert_eq!(
+            joined,
+            r#"Years passed, and Willowmere thrived
+in peace and friendship. Mira’s herb
+garden flourished with both ordinary and
+enchanted plants, and travelers spoke
+of the kindness of the woman who tended
+them."#
         );
     }
 }
