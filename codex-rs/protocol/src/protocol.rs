@@ -15,7 +15,7 @@ use mcp_types::CallToolResult;
 use mcp_types::Tool as McpTool;
 use serde::Deserialize;
 use serde::Serialize;
-use serde_bytes::ByteBuf;
+use serde_with::serde_as;
 use strum_macros::Display;
 use ts_rs::TS;
 use uuid::Uuid;
@@ -26,6 +26,13 @@ use crate::message_history::HistoryEntry;
 use crate::models::ResponseItem;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
+
+/// Open/close tags for special user-input blocks. Used across crates to avoid
+/// duplicated hardcoded strings.
+pub const USER_INSTRUCTIONS_OPEN_TAG: &str = "<user_instructions>";
+pub const USER_INSTRUCTIONS_CLOSE_TAG: &str = "</user_instructions>";
+pub const ENVIRONMENT_CONTEXT_OPEN_TAG: &str = "<environment_context>";
+pub const ENVIRONMENT_CONTEXT_CLOSE_TAG: &str = "</environment_context>";
 
 /// Submission Queue Entry - requests from user
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -417,6 +424,9 @@ pub enum EventMsg {
     /// Agent text output message
     AgentMessage(AgentMessageEvent),
 
+    /// User/system input message (what was sent to the model)
+    UserMessage(UserMessageEvent),
+
     /// Agent text output delta message
     AgentMessageDelta(AgentMessageDeltaEvent),
 
@@ -611,6 +621,47 @@ pub struct AgentMessageEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputMessageKind {
+    /// Plain user text (default)
+    Plain,
+    /// XML-wrapped user instructions (<user_instructions>...)
+    UserInstructions,
+    /// XML-wrapped environment context (<environment_context>...)
+    EnvironmentContext,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct UserMessageEvent {
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<InputMessageKind>,
+}
+
+impl<T, U> From<(T, U)> for InputMessageKind
+where
+    T: AsRef<str>,
+    U: AsRef<str>,
+{
+    fn from(value: (T, U)) -> Self {
+        let (_role, message) = value;
+        let message = message.as_ref();
+        let trimmed = message.trim();
+        if trimmed.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG)
+            && trimmed.ends_with(ENVIRONMENT_CONTEXT_CLOSE_TAG)
+        {
+            InputMessageKind::EnvironmentContext
+        } else if trimmed.starts_with(USER_INSTRUCTIONS_OPEN_TAG)
+            && trimmed.ends_with(USER_INSTRUCTIONS_CLOSE_TAG)
+        {
+            InputMessageKind::UserInstructions
+        } else {
+            InputMessageKind::Plain
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AgentMessageDeltaEvent {
     pub delta: String,
 }
@@ -731,14 +782,15 @@ pub enum ExecOutputStream {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde_as]
 pub struct ExecCommandOutputDeltaEvent {
     /// Identifier for the ExecCommandBegin that produced this chunk.
     pub call_id: String,
     /// Which stream produced this chunk.
     pub stream: ExecOutputStream,
     /// Raw bytes from the stream (may not be valid UTF-8).
-    #[serde(with = "serde_bytes")]
-    pub chunk: ByteBuf,
+    #[serde_as(as = "Base64")]
+    pub chunk: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -839,6 +891,11 @@ pub struct SessionConfiguredEvent {
 
     /// Current number of entries in the history log.
     pub history_entry_count: usize,
+
+    /// Optional initial messages (as events) for resumed sessions.
+    /// When present, UIs can use these to seed the history.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initial_messages: Option<Vec<EventMsg>>,
 }
 
 /// User's decision in response to an ExecApprovalRequest.
@@ -914,6 +971,7 @@ mod tests {
                 model: "codex-mini-latest".to_string(),
                 history_log_id: 0,
                 history_entry_count: 0,
+                initial_messages: None,
             }),
         };
         let serialized = serde_json::to_string(&event).unwrap();

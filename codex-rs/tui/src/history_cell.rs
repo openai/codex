@@ -646,6 +646,7 @@ pub(crate) fn new_session_info(
         session_id: _,
         history_log_id: _,
         history_entry_count: _,
+        initial_messages: _,
     } = event;
     if is_first_event {
         let cwd_str = match relativize_to_home(&config.cwd) {
@@ -1074,14 +1075,6 @@ pub(crate) fn new_mcp_tools_output(
             let cmd_display = format!("{} {}", cfg.command, cfg.args.join(" "));
 
             lines.push(vec!["    • Command: ".into(), cmd_display.into()].into());
-        }
-
-        if let Some(env) = cfg.env.as_ref()
-            && !env.is_empty()
-        {
-            let mut env_pairs: Vec<String> = env.iter().map(|(k, v)| format!("{k}={v}")).collect();
-            env_pairs.sort();
-            lines.push(vec!["    • Env: ".into(), env_pairs.join(" ").into()].into());
         }
 
         if names.is_empty() {

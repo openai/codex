@@ -3,37 +3,31 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use codex_core::AuthManager;
-use codex_core::CodexConversation;
-use codex_core::ConversationManager;
-use codex_core::NewConversation;
-use codex_core::config::Config;
-use codex_core::config::ConfigOverrides;
-use codex_core::config::ConfigToml;
-use codex_core::config::load_config_as_toml;
-use codex_core::git_info::git_diff_to_remote;
-use codex_core::protocol::ApplyPatchApprovalRequestEvent;
-use codex_core::protocol::Event;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecApprovalRequestEvent;
-use codex_core::protocol::ReviewDecision;
-use codex_protocol::mcp_protocol::AuthMode;
-use codex_protocol::mcp_protocol::GitDiffToRemoteResponse;
-use mcp_types::JSONRPCErrorError;
-use mcp_types::RequestId;
-use tokio::sync::Mutex;
-use tokio::sync::oneshot;
-use tracing::error;
-use uuid::Uuid;
-
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::json_to_toml::json_to_toml;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
+use codex_core::AuthManager;
+use codex_core::CodexConversation;
+use codex_core::ConversationManager;
+use codex_core::NewConversation;
 use codex_core::auth::CLIENT_ID;
+use codex_core::config::Config;
+use codex_core::config::ConfigOverrides;
+use codex_core::config::ConfigToml;
+use codex_core::config::load_config_as_toml;
+use codex_core::exec::ExecParams;
+use codex_core::exec_env::create_env;
+use codex_core::get_platform_sandbox;
+use codex_core::git_info::git_diff_to_remote;
+use codex_core::protocol::ApplyPatchApprovalRequestEvent;
+use codex_core::protocol::Event;
+use codex_core::protocol::EventMsg;
+use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::InputItem as CoreInputItem;
 use codex_core::protocol::Op;
+use codex_core::protocol::ReviewDecision;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
@@ -42,13 +36,17 @@ use codex_protocol::mcp_protocol::AddConversationListenerParams;
 use codex_protocol::mcp_protocol::AddConversationSubscriptionResponse;
 use codex_protocol::mcp_protocol::ApplyPatchApprovalParams;
 use codex_protocol::mcp_protocol::ApplyPatchApprovalResponse;
+use codex_protocol::mcp_protocol::AuthMode;
 use codex_protocol::mcp_protocol::AuthStatusChangeNotification;
 use codex_protocol::mcp_protocol::ClientRequest;
 use codex_protocol::mcp_protocol::ConversationId;
 use codex_protocol::mcp_protocol::EXEC_COMMAND_APPROVAL_METHOD;
+use codex_protocol::mcp_protocol::ExecArbitraryCommandResponse;
 use codex_protocol::mcp_protocol::ExecCommandApprovalParams;
 use codex_protocol::mcp_protocol::ExecCommandApprovalResponse;
+use codex_protocol::mcp_protocol::ExecOneOffCommandParams;
 use codex_protocol::mcp_protocol::GetConfigTomlResponse;
+use codex_protocol::mcp_protocol::GitDiffToRemoteResponse;
 use codex_protocol::mcp_protocol::InputItem as WireInputItem;
 use codex_protocol::mcp_protocol::InterruptConversationParams;
 use codex_protocol::mcp_protocol::InterruptConversationResponse;
@@ -63,6 +61,12 @@ use codex_protocol::mcp_protocol::SendUserMessageResponse;
 use codex_protocol::mcp_protocol::SendUserTurnParams;
 use codex_protocol::mcp_protocol::SendUserTurnResponse;
 use codex_protocol::mcp_protocol::ServerNotification;
+use mcp_types::JSONRPCErrorError;
+use mcp_types::RequestId;
+use tokio::sync::Mutex;
+use tokio::sync::oneshot;
+use tracing::error;
+use uuid::Uuid;
 
 // Duration before a ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -152,6 +156,9 @@ impl CodexMessageProcessor {
             ClientRequest::GetConfigToml { request_id } => {
                 self.get_config_toml(request_id).await;
             }
+            ClientRequest::ExecOneOffCommand { request_id, params } => {
+                self.exec_one_off_command(request_id, params).await;
+            }
         }
     }
 
@@ -160,7 +167,11 @@ impl CodexMessageProcessor {
 
         let opts = LoginServerOptions {
             open_browser: false,
-            ..LoginServerOptions::new(config.codex_home.clone(), CLIENT_ID.to_string())
+            ..LoginServerOptions::new(
+                config.codex_home.clone(),
+                CLIENT_ID.to_string(),
+                config.responses_originator_header.clone(),
+            )
         };
 
         enum LoginChatGptReply {
@@ -414,6 +425,76 @@ impl CodexMessageProcessor {
         };
 
         self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn exec_one_off_command(&self, request_id: RequestId, params: ExecOneOffCommandParams) {
+        tracing::debug!("ExecOneOffCommand params: {params:?}");
+
+        if params.command.is_empty() {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "command must not be empty".to_string(),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
+        let cwd = params.cwd.unwrap_or_else(|| self.config.cwd.clone());
+        let env = create_env(&self.config.shell_environment_policy);
+        let timeout_ms = params.timeout_ms;
+        let exec_params = ExecParams {
+            command: params.command,
+            cwd,
+            timeout_ms,
+            env,
+            with_escalated_permissions: None,
+            justification: None,
+        };
+
+        let effective_policy = params
+            .sandbox_policy
+            .unwrap_or_else(|| self.config.sandbox_policy.clone());
+
+        let sandbox_type = match &effective_policy {
+            codex_core::protocol::SandboxPolicy::DangerFullAccess => {
+                codex_core::exec::SandboxType::None
+            }
+            _ => get_platform_sandbox().unwrap_or(codex_core::exec::SandboxType::None),
+        };
+        tracing::debug!("Sandbox type: {sandbox_type:?}");
+        let codex_linux_sandbox_exe = self.config.codex_linux_sandbox_exe.clone();
+        let outgoing = self.outgoing.clone();
+        let req_id = request_id;
+
+        tokio::spawn(async move {
+            match codex_core::exec::process_exec_tool_call(
+                exec_params,
+                sandbox_type,
+                &effective_policy,
+                &codex_linux_sandbox_exe,
+                None,
+            )
+            .await
+            {
+                Ok(output) => {
+                    let response = ExecArbitraryCommandResponse {
+                        exit_code: output.exit_code,
+                        stdout: output.stdout.text,
+                        stderr: output.stderr.text,
+                    };
+                    outgoing.send_response(req_id, response).await;
+                }
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!("exec failed: {err}"),
+                        data: None,
+                    };
+                    outgoing.send_error(req_id, error).await;
+                }
+            }
+        });
     }
 
     async fn process_new_conversation(&self, request_id: RequestId, params: NewConversationParams) {
