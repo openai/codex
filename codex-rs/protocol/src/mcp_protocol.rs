@@ -54,6 +54,18 @@ pub enum ClientRequest {
         request_id: RequestId,
         params: NewConversationParams,
     },
+    /// List recorded Codex conversations (rollouts) with optional pagination and search.
+    ListConversations {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: ListConversationsParams,
+    },
+    /// Resume a recorded Codex conversation from a rollout file.
+    ResumeConversation {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: ResumeConversationParams,
+    },
     SendUserMessage {
         #[serde(rename = "id")]
         request_id: RequestId,
@@ -160,6 +172,55 @@ pub struct NewConversationParams {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct NewConversationResponse {
+    pub conversation_id: ConversationId,
+    pub model: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ListConversationsParams {
+    /// Optional page size; defaults to a reasonable server-side value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_size: Option<usize>,
+    /// Opaque pagination cursor returned by a previous call.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationSummary {
+    pub path: PathBuf,
+    pub preview: String,
+    /// RFC3339 timestamp string for the session start, if available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ListConversationsResponse {
+    pub items: Vec<ConversationSummary>,
+    /// Opaque cursor to pass to the next call to continue after the last item.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<String>,
+    pub num_scanned_files: usize,
+    pub reached_scan_cap: bool,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ResumeConversationParams {
+    /// Absolute path to the rollout JSONL file.
+    pub path: PathBuf,
+    /// Optional overrides to apply when spawning the resumed session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub overrides: Option<NewConversationParams>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ResumeConversationResponse {
     pub conversation_id: ConversationId,
     pub model: String,
 }
