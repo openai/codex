@@ -107,6 +107,7 @@ use crate::safety::assess_command_safety;
 use crate::safety::assess_safety_for_untrusted_command;
 use crate::shell;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
@@ -482,6 +483,7 @@ impl Session {
             InitialHistory::New => None,
             InitialHistory::Resumed(items) => Some(sess.build_initial_messages(items)),
         };
+
         let events = std::iter::once(Event {
             id: INITIAL_SUBMIT_ID.to_owned(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
@@ -540,7 +542,7 @@ impl Session {
         // TODO: Those items shouldn't be "user messages" IMO. Maybe developer messages.
         let mut conversation_items = Vec::<ResponseItem>::with_capacity(2);
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
-            conversation_items.push(Prompt::format_user_instructions_message(user_instructions));
+            conversation_items.push(UserInstructions::new(user_instructions.to_string()).into());
         }
         conversation_items.push(ResponseItem::from(EnvironmentContext::new(
             Some(turn_context.cwd.clone()),
