@@ -2,6 +2,7 @@ use crate::diff_render::create_diff_summary;
 use crate::exec_command::relativize_to_home;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::markdown::append_markdown;
+use crate::render::line_utils::prefix_lines;
 use crate::slash_command::SlashCommand;
 use crate::text_formatting::format_and_truncate_tool_result;
 use base64::Engine;
@@ -43,32 +44,6 @@ use std::time::Instant;
 use tracing::error;
 use unicode_width::UnicodeWidthStr;
 use uuid::Uuid;
-
-/// Prefix each provided line with `initial_prefix` for the first, and
-/// `subsequent_prefix` for all following lines.
-fn prefix_lines(
-    lines: Vec<Line<'static>>,
-    initial_prefix: &Span<'static>,
-    subsequent_prefix: &Span<'static>,
-) -> Vec<Line<'static>> {
-    lines
-        .into_iter()
-        .enumerate()
-        .map(|(i, l)| {
-            Line::from(
-                [
-                    vec![if i == 0 {
-                        initial_prefix.clone()
-                    } else {
-                        subsequent_prefix.clone()
-                    }],
-                    l.spans,
-                ]
-                .concat(),
-            )
-        })
-        .collect()
-}
 
 #[derive(Clone, Debug)]
 pub(crate) struct CommandOutput {
@@ -1172,7 +1147,7 @@ impl HistoryCell for PlanUpdateCell {
                 .into_iter()
                 .map(|s| s.to_string().set_style(step_style).into())
                 .collect();
-            prefix_lines(step_text, &box_str.into(), &"  ".into())
+            prefix_lines(step_text, box_str.into(), "  ".into())
         };
 
         let mut lines: Vec<Line<'static>> = vec![];
@@ -1195,7 +1170,7 @@ impl HistoryCell for PlanUpdateCell {
                 indented_lines.extend(render_step(status, step));
             }
         }
-        lines.extend(prefix_lines(indented_lines, &"  └ ".into(), &"    ".into()));
+        lines.extend(prefix_lines(indented_lines, "  └ ".into(), "    ".into()));
 
         lines
     }
@@ -1246,17 +1221,15 @@ pub(crate) fn new_proposed_command(command: &[String]) -> PlainHistoryCell {
     let cmd = strip_bash_lc_and_escape(command);
 
     let mut lines: Vec<Line<'static>> = Vec::new();
-    // Header: "• Proposed Command"
     lines.push(Line::from(vec!["• ".into(), "Proposed Command".bold()]));
 
-    // Command preview with an indented connector on the first line.
     let cmd_lines: Vec<Line<'static>> = cmd
         .lines()
         .map(|part| Line::from(part.to_string()))
         .collect();
     let initial_prefix: Span<'static> = "  └ ".dim();
     let subsequent_prefix: Span<'static> = "    ".into();
-    lines.extend(prefix_lines(cmd_lines, &initial_prefix, &subsequent_prefix));
+    lines.extend(prefix_lines(cmd_lines, initial_prefix, subsequent_prefix));
 
     PlainHistoryCell { lines }
 }
