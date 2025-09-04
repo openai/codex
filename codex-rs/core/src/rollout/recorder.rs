@@ -107,6 +107,7 @@ impl RolloutRecorder {
             "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"
         );
         let timestamp = timestamp
+            .to_offset(time::UtcOffset::UTC)
             .format(timestamp_format)
             .map_err(|e| IoError::other(format!("failed to format timestamp: {e}")))?;
 
