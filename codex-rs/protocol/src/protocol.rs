@@ -15,7 +15,7 @@ use mcp_types::CallToolResult;
 use mcp_types::Tool as McpTool;
 use serde::Deserialize;
 use serde::Serialize;
-use serde_bytes::ByteBuf;
+use serde_with::serde_as;
 use strum_macros::Display;
 use ts_rs::TS;
 use uuid::Uuid;
@@ -782,14 +782,15 @@ pub enum ExecOutputStream {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde_as]
 pub struct ExecCommandOutputDeltaEvent {
     /// Identifier for the ExecCommandBegin that produced this chunk.
     pub call_id: String,
     /// Which stream produced this chunk.
     pub stream: ExecOutputStream,
     /// Raw bytes from the stream (may not be valid UTF-8).
-    #[serde(with = "serde_bytes")]
-    pub chunk: ByteBuf,
+    #[serde_as(as = "Base64")]
+    pub chunk: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

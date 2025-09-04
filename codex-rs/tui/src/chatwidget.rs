@@ -1371,9 +1371,11 @@ impl WidgetRef for &ChatWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let [active_cell_area, bottom_pane_area] = self.layout_areas(area);
         (&self.bottom_pane).render(bottom_pane_area, buf);
-        if let Some(cell) = &self.active_exec_cell {
+        if !active_cell_area.is_empty()
+            && let Some(cell) = &self.active_exec_cell
+        {
             let mut active_cell_area = active_cell_area;
-            active_cell_area.y += 1;
+            active_cell_area.y = active_cell_area.y.saturating_add(1);
             active_cell_area.height -= 1;
             cell.render_ref(active_cell_area, buf);
         }
