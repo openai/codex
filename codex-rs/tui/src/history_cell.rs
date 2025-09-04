@@ -1076,14 +1076,6 @@ pub(crate) fn new_mcp_tools_output(
             lines.push(vec!["    • Command: ".into(), cmd_display.into()].into());
         }
 
-        if let Some(env) = cfg.env.as_ref()
-            && !env.is_empty()
-        {
-            let mut env_pairs: Vec<String> = env.iter().map(|(k, v)| format!("{k}={v}")).collect();
-            env_pairs.sort();
-            lines.push(vec!["    • Env: ".into(), env_pairs.join(" ").into()].into());
-        }
-
         if names.is_empty() {
             lines.push("    • Tools: (none)".into());
         } else {
