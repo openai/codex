@@ -240,7 +240,7 @@ where
             o = o.initial_indent(sub);
             o
         };
-        let wrapped = word_wrap_line(&line, opts);
+        let wrapped = word_wrap_line(line, opts);
         push_owned_lines(&wrapped, &mut out);
     }
 
