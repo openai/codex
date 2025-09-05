@@ -360,7 +360,8 @@ fn bind_server(port: u16) -> io::Result<Server> {
     let bind_address = format!("127.0.0.1:{port}");
     let mut cancel_attempted = false;
     let mut attempts = 0;
-    const MAX_ATTEMPTS: u32 = 5;
+    const MAX_ATTEMPTS: u32 = 10;
+    const RETRY_DELAY: Duration = Duration::from_millis(200);
 
     loop {
         match Server::http(&bind_address) {
@@ -382,7 +383,7 @@ fn bind_server(port: u16) -> io::Result<Server> {
                         }
                     }
 
-                    thread::sleep(Duration::from_millis(1000));
+                    thread::sleep(RETRY_DELAY);
 
                     if attempts >= MAX_ATTEMPTS {
                         return Err(io::Error::new(
