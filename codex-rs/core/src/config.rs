@@ -78,7 +78,6 @@ pub struct Config {
     /// Defaults to `false`.
     pub show_raw_agent_reasoning: bool,
 
-    // Removed: server-side response storage control. Responses are never stored.
     /// User-provided instructions from AGENTS.md.
     pub user_instructions: Option<String>,
 
