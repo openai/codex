@@ -189,8 +189,14 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 }
                 return CodexStatus::InitiateShutdown;
             }
-            EventMsg::TokenCount(token_usage) => {
-                ts_println!(self, "tokens used: {}", token_usage.blended_total());
+            EventMsg::TokenCount(usage_info_opt) => {
+                if let Some(usage_info) = usage_info_opt {
+                    ts_println!(
+                        self,
+                        "tokens used: {}",
+                        usage_info.total_token_usage.blended_total()
+                    );
+                }
             }
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
                 if !self.answer_started {
