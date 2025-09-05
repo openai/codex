@@ -1202,7 +1202,7 @@ impl ChatWidget {
         );
     }
 
-    /// Open a popup to choose the approval policy only.
+    /// Open a popup to choose the approval policy.
     pub(crate) fn open_approvals_popup(&mut self) {
         let current_approval = self.config.approval_policy;
         let mut items: Vec<SelectionItem> = Vec::new();
