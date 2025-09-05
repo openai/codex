@@ -568,6 +568,7 @@ Options that are specific to the TUI.
 | `sandbox_workspace_write.network_access` | boolean | Allow network in workspace‑write (default: false). |
 | `sandbox_workspace_write.exclude_tmpdir_env_var` | boolean | Exclude `$TMPDIR` from writable roots (default: false). |
 | `sandbox_workspace_write.exclude_slash_tmp` | boolean | Exclude `/tmp` from writable roots (default: false). |
+| `disable_response_storage` | boolean | Required for ZDR orgs. |
 | `notify` | array<string> | External program for notifications. |
 | `instructions` | string | Currently ignored; use `experimental_instructions_file` or `AGENTS.md`. |
 | `mcp_servers.<id>.command` | string | MCP server launcher command. |
