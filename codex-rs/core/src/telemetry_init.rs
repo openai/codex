@@ -53,3 +53,12 @@ pub fn build_otel_layer_from_config(
         codex_home: Some(config.codex_home.clone()),
     })
 }
+
+/// Filter predicate for exporting only Codex-owned spans via OTEL.
+///
+/// Keeps spans that either:
+/// - use our naming convention (names starting with "codex.")
+/// - originate from our crates (targets starting with "codex_")
+pub fn codex_export_filter(meta: &tracing::Metadata<'_>) -> bool {
+    meta.name().starts_with("codex.") || meta.target().starts_with("codex_")
+}
