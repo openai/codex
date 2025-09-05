@@ -12,7 +12,7 @@ pub(crate) fn highlight_range_for_nth_last_user(
 /// Compute the wrapped display-line offset before `header_idx`, for a given width.
 pub(crate) fn wrapped_offset_before(lines: &[Line<'_>], header_idx: usize, width: u16) -> usize {
     let before = &lines[0..header_idx];
-    crate::insert_history::word_wrap_lines(before, width).len()
+    crate::wrapping::word_wrap_lines(before, width as usize).len()
 }
 
 /// Find the header index for the Nth last user message in the transcript.

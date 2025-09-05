@@ -183,15 +183,6 @@ impl App {
                         },
                     )?;
                 }
-                TuiEvent::AttachImage {
-                    path,
-                    width,
-                    height,
-                    format_label,
-                } => {
-                    self.chat_widget
-                        .attach_image(path, width, height, format_label);
-                }
             }
         }
         Ok(true)

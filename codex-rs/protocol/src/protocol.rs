@@ -15,7 +15,7 @@ use mcp_types::CallToolResult;
 use mcp_types::Tool as McpTool;
 use serde::Deserialize;
 use serde::Serialize;
-use serde_bytes::ByteBuf;
+use serde_with::serde_as;
 use strum_macros::Display;
 use ts_rs::TS;
 use uuid::Uuid;
@@ -527,6 +527,9 @@ pub struct TokenUsage {
     pub total_tokens: u64,
 }
 
+// Includes prompts, tools and space to call compact.
+const BASELINE_TOKENS: u64 = 12000;
+
 impl TokenUsage {
     pub fn is_zero(&self) -> bool {
         self.total_tokens == 0
@@ -557,26 +560,22 @@ impl TokenUsage {
     /// Estimate the remaining user-controllable percentage of the model's context window.
     ///
     /// `context_window` is the total size of the model's context window.
-    /// `baseline_used_tokens` should capture tokens that are always present in
+    /// `BASELINE_TOKENS` should capture tokens that are always present in
     /// the context (e.g., system prompt and fixed tool instructions) so that
     /// the percentage reflects the portion the user can influence.
     ///
     /// This normalizes both the numerator and denominator by subtracting the
     /// baseline, so immediately after the first prompt the UI shows 100% left
     /// and trends toward 0% as the user fills the effective window.
-    pub fn percent_of_context_window_remaining(
-        &self,
-        context_window: u64,
-        baseline_used_tokens: u64,
-    ) -> u8 {
-        if context_window <= baseline_used_tokens {
+    pub fn percent_of_context_window_remaining(&self, context_window: u64) -> u8 {
+        if context_window <= BASELINE_TOKENS {
             return 0;
         }
 
-        let effective_window = context_window - baseline_used_tokens;
+        let effective_window = context_window - BASELINE_TOKENS;
         let used = self
             .tokens_in_context_window()
-            .saturating_sub(baseline_used_tokens);
+            .saturating_sub(BASELINE_TOKENS);
         let remaining = effective_window.saturating_sub(used);
         ((remaining as f32 / effective_window as f32) * 100.0).clamp(0.0, 100.0) as u8
     }
@@ -774,22 +773,23 @@ pub struct ExecCommandEndEvent {
     pub formatted_output: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecOutputStream {
     Stdout,
     Stderr,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde_as]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ExecCommandOutputDeltaEvent {
     /// Identifier for the ExecCommandBegin that produced this chunk.
     pub call_id: String,
     /// Which stream produced this chunk.
     pub stream: ExecOutputStream,
     /// Raw bytes from the stream (may not be valid UTF-8).
-    #[serde(with = "serde_bytes")]
-    pub chunk: ByteBuf,
+    #[serde_as(as = "serde_with::base64::Base64")]
+    pub chunk: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -978,5 +978,22 @@ mod tests {
             serialized,
             r#"{"id":"1234","msg":{"type":"session_configured","session_id":"67e55044-10b1-426f-9247-bb680e5fe0c8","model":"codex-mini-latest","history_log_id":0,"history_entry_count":0}}"#
         );
+    }
+
+    #[test]
+    fn vec_u8_as_base64_serialization_and_deserialization() {
+        let event = ExecCommandOutputDeltaEvent {
+            call_id: "call21".to_string(),
+            stream: ExecOutputStream::Stdout,
+            chunk: vec![1, 2, 3, 4, 5],
+        };
+        let serialized = serde_json::to_string(&event).unwrap();
+        assert_eq!(
+            r#"{"call_id":"call21","stream":"stdout","chunk":"AQIDBAU="}"#,
+            serialized,
+        );
+
+        let deserialized: ExecCommandOutputDeltaEvent = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized, event);
     }
 }

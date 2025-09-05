@@ -14,10 +14,9 @@ use ratatui::widgets::WidgetRef;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use crate::key_hint;
 use crate::shimmer::shimmer_spans;
 use crate::tui::FrameRequester;
-use textwrap::Options as TwOptions;
-use textwrap::WordSplitter;
 
 pub(crate) struct StatusIndicatorWidget {
     /// Animated header text (defaults to "Working").
@@ -25,7 +24,9 @@ pub(crate) struct StatusIndicatorWidget {
     /// Queued user messages to display under the status line.
     queued_messages: Vec<String>,
 
-    start_time: Instant,
+    elapsed_running: Duration,
+    last_resume_at: Instant,
+    is_paused: bool,
     app_event_tx: AppEventSender,
     frame_requester: FrameRequester,
 }
@@ -35,7 +36,9 @@ impl StatusIndicatorWidget {
         Self {
             header: String::from("Working"),
             queued_messages: Vec::new(),
-            start_time: Instant::now(),
+            elapsed_running: Duration::ZERO,
+            last_resume_at: Instant::now(),
+            is_paused: false,
 
             app_event_tx,
             frame_requester,
@@ -49,11 +52,8 @@ impl StatusIndicatorWidget {
         let mut total: u16 = 1; // status line
         let text_width = inner_width.saturating_sub(3); // account for " ↳ " prefix
         if text_width > 0 {
-            let opts = TwOptions::new(text_width)
-                .break_words(false)
-                .word_splitter(WordSplitter::NoHyphenation);
             for q in &self.queued_messages {
-                let wrapped = textwrap::wrap(q, &opts);
+                let wrapped = textwrap::wrap(q, text_width);
                 let lines = wrapped.len().min(3) as u16;
                 total = total.saturating_add(lines);
                 if wrapped.len() > 3 {
@@ -87,6 +87,43 @@ impl StatusIndicatorWidget {
         // Ensure a redraw so changes are visible.
         self.frame_requester.schedule_frame();
     }
+
+    pub(crate) fn pause_timer(&mut self) {
+        self.pause_timer_at(Instant::now());
+    }
+
+    pub(crate) fn resume_timer(&mut self) {
+        self.resume_timer_at(Instant::now());
+    }
+
+    pub(crate) fn pause_timer_at(&mut self, now: Instant) {
+        if self.is_paused {
+            return;
+        }
+        self.elapsed_running += now.saturating_duration_since(self.last_resume_at);
+        self.is_paused = true;
+    }
+
+    pub(crate) fn resume_timer_at(&mut self, now: Instant) {
+        if !self.is_paused {
+            return;
+        }
+        self.last_resume_at = now;
+        self.is_paused = false;
+        self.frame_requester.schedule_frame();
+    }
+
+    fn elapsed_seconds_at(&self, now: Instant) -> u64 {
+        let mut elapsed = self.elapsed_running;
+        if !self.is_paused {
+            elapsed += now.saturating_duration_since(self.last_resume_at);
+        }
+        elapsed.as_secs()
+    }
+
+    fn elapsed_seconds(&self) -> u64 {
+        self.elapsed_seconds_at(Instant::now())
+    }
 }
 
 impl WidgetRef for StatusIndicatorWidget {
@@ -98,7 +135,7 @@ impl WidgetRef for StatusIndicatorWidget {
         // Schedule next animation frame.
         self.frame_requester
             .schedule_frame_in(Duration::from_millis(32));
-        let elapsed = self.start_time.elapsed().as_secs();
+        let elapsed = self.elapsed_seconds();
 
         // Plain rendering: no borders or padding so the live cell is visually indistinguishable from terminal scrollback.
         let mut spans = vec![" ".into()];
@@ -115,11 +152,8 @@ impl WidgetRef for StatusIndicatorWidget {
         lines.push(Line::from(spans));
         // Wrap queued messages using textwrap and show up to the first 3 lines per message.
         let text_width = area.width.saturating_sub(3); // " ↳ " prefix
-        let opts = TwOptions::new(text_width as usize)
-            .break_words(false)
-            .word_splitter(WordSplitter::NoHyphenation);
         for q in &self.queued_messages {
-            let wrapped = textwrap::wrap(q, &opts);
+            let wrapped = textwrap::wrap(q, text_width as usize);
             for (i, piece) in wrapped.iter().take(3).enumerate() {
                 let prefix = if i == 0 { " ↳ " } else { "   " };
                 let content = format!("{prefix}{piece}");
@@ -130,7 +164,8 @@ impl WidgetRef for StatusIndicatorWidget {
             }
         }
         if !self.queued_messages.is_empty() {
-            lines.push(Line::from(vec!["   ".into(), "Alt+↑".cyan(), " edit".into()]).dim());
+            let shortcut = key_hint::alt("↑");
+            lines.push(Line::from(vec!["   ".into(), shortcut, " edit".into()]).dim());
         }
 
         let paragraph = Paragraph::new(lines);
@@ -143,9 +178,10 @@ mod tests {
     use super::*;
     use crate::app_event::AppEvent;
     use crate::app_event_sender::AppEventSender;
-    use insta::assert_snapshot;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
+    use std::time::Duration;
+    use std::time::Instant;
     use tokio::sync::mpsc::unbounded_channel;
 
     #[test]
@@ -159,7 +195,7 @@ mod tests {
         terminal
             .draw(|f| w.render_ref(f.area(), f.buffer_mut()))
             .expect("draw");
-        assert_snapshot!(terminal.backend());
+        insta::assert_snapshot!(terminal.backend());
     }
 
     #[test]
@@ -173,7 +209,7 @@ mod tests {
         terminal
             .draw(|f| w.render_ref(f.area(), f.buffer_mut()))
             .expect("draw");
-        assert_snapshot!(terminal.backend());
+        insta::assert_snapshot!(terminal.backend());
     }
 
     #[test]
@@ -188,6 +224,27 @@ mod tests {
         terminal
             .draw(|f| w.render_ref(f.area(), f.buffer_mut()))
             .expect("draw");
-        assert_snapshot!(terminal.backend());
+        insta::assert_snapshot!(terminal.backend());
+    }
+
+    #[test]
+    fn timer_pauses_when_requested() {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let mut widget = StatusIndicatorWidget::new(tx, crate::tui::FrameRequester::test_dummy());
+
+        let baseline = Instant::now();
+        widget.last_resume_at = baseline;
+
+        let before_pause = widget.elapsed_seconds_at(baseline + Duration::from_secs(5));
+        assert_eq!(before_pause, 5);
+
+        widget.pause_timer_at(baseline + Duration::from_secs(5));
+        let paused_elapsed = widget.elapsed_seconds_at(baseline + Duration::from_secs(10));
+        assert_eq!(paused_elapsed, before_pause);
+
+        widget.resume_timer_at(baseline + Duration::from_secs(10));
+        let after_resume = widget.elapsed_seconds_at(baseline + Duration::from_secs(13));
+        assert_eq!(after_resume, before_pause + 3);
     }
 }

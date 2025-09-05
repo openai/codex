@@ -57,6 +57,7 @@ use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
+use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::get_git_diff::get_git_diff;
 use crate::history_cell;
 use crate::history_cell::CommandOutput;
@@ -524,6 +525,8 @@ impl ChatWidget {
 
     pub(crate) fn handle_exec_approval_now(&mut self, id: String, ev: ExecApprovalRequestEvent) {
         self.flush_answer_stream_with_separator();
+        // Emit the proposed command into history (like proposed patches)
+        self.add_to_history(history_cell::new_proposed_command(&ev.command));
 
         let request = ApprovalRequest::Exec {
             id,
@@ -741,6 +744,17 @@ impl ChatWidget {
                 ..
             } => {
                 self.on_ctrl_c();
+                return;
+            }
+            KeyEvent {
+                code: KeyCode::Char('v'),
+                modifiers: KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                if let Ok((path, info)) = paste_image_to_temp_png() {
+                    self.attach_image(path, info.width, info.height, info.encoded_format.label());
+                }
                 return;
             }
             other if other.kind == KeyEventKind::Press => {
@@ -1371,9 +1385,11 @@ impl WidgetRef for &ChatWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let [active_cell_area, bottom_pane_area] = self.layout_areas(area);
         (&self.bottom_pane).render(bottom_pane_area, buf);
-        if let Some(cell) = &self.active_exec_cell {
+        if !active_cell_area.is_empty()
+            && let Some(cell) = &self.active_exec_cell
+        {
             let mut active_cell_area = active_cell_area;
-            active_cell_area.y += 1;
+            active_cell_area.y = active_cell_area.y.saturating_add(1);
             active_cell_area.height -= 1;
             cell.render_ref(active_cell_area, buf);
         }

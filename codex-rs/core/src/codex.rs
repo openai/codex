@@ -592,9 +592,19 @@ impl Session {
         cwd: PathBuf,
         reason: Option<String>,
     ) -> oneshot::Receiver<ReviewDecision> {
+        // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
+        let event_id = sub_id.clone();
+        let prev_entry = {
+            let mut state = self.state.lock_unchecked();
+            state.pending_approvals.insert(sub_id, tx_approve)
+        };
+        if prev_entry.is_some() {
+            warn!("Overwriting existing pending approval for sub_id: {event_id}");
+        }
+
         let event = Event {
-            id: sub_id.clone(),
+            id: event_id,
             msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
                 call_id,
                 command,
@@ -603,10 +613,6 @@ impl Session {
             }),
         };
         let _ = self.tx_event.send(event).await;
-        {
-            let mut state = self.state.lock_unchecked();
-            state.pending_approvals.insert(sub_id, tx_approve);
-        }
         rx_approve
     }
 
@@ -618,9 +624,19 @@ impl Session {
         reason: Option<String>,
         grant_root: Option<PathBuf>,
     ) -> oneshot::Receiver<ReviewDecision> {
+        // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
+        let event_id = sub_id.clone();
+        let prev_entry = {
+            let mut state = self.state.lock_unchecked();
+            state.pending_approvals.insert(sub_id, tx_approve)
+        };
+        if prev_entry.is_some() {
+            warn!("Overwriting existing pending approval for sub_id: {event_id}");
+        }
+
         let event = Event {
-            id: sub_id.clone(),
+            id: event_id,
             msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
                 call_id,
                 changes: convert_apply_patch_to_protocol(action),
@@ -629,10 +645,6 @@ impl Session {
             }),
         };
         let _ = self.tx_event.send(event).await;
-        {
-            let mut state = self.state.lock_unchecked();
-            state.pending_approvals.insert(sub_id, tx_approve);
-        }
         rx_approve
     }
 

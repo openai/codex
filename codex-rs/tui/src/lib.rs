@@ -42,6 +42,7 @@ mod file_search;
 mod get_git_diff;
 mod history_cell;
 pub mod insert_history;
+mod key_hint;
 pub mod live_wrap;
 mod markdown;
 mod markdown_stream;
@@ -57,6 +58,7 @@ mod streaming;
 mod text_formatting;
 mod tui;
 mod user_approval_widget;
+mod wrapping;
 
 // Internal vt100-based replay tests live as a separate source file to keep them
 // close to the widget code. Include them in unit tests.

@@ -1,3 +1,4 @@
+use crate::config_types::ReasoningSummaryFormat;
 use crate::tool_apply_patch::ApplyPatchToolType;
 
 /// A model family is a group of models that share certain characteristics.
@@ -20,6 +21,9 @@ pub struct ModelFamily {
     // `summary` is optional).
     pub supports_reasoning_summaries: bool,
 
+    // Define if we need a special handling of reasoning summary
+    pub reasoning_summary_format: ReasoningSummaryFormat,
+
     // This should be set to true when the model expects a tool named
     // "local_shell" to be provided. Its contract must be understood natively by
     // the model such that its description can be omitted.
@@ -41,6 +45,7 @@ macro_rules! model_family {
             family: $family.to_string(),
             needs_special_apply_patch_instructions: false,
             supports_reasoning_summaries: false,
+            reasoning_summary_format: ReasoningSummaryFormat::None,
             uses_local_shell_tool: false,
             apply_patch_tool_type: None,
         };
@@ -61,6 +66,7 @@ macro_rules! simple_model_family {
             family: $family.to_string(),
             needs_special_apply_patch_instructions: false,
             supports_reasoning_summaries: false,
+            reasoning_summary_format: ReasoningSummaryFormat::None,
             uses_local_shell_tool: false,
             apply_patch_tool_type: None,
         })
@@ -90,6 +96,7 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
         model_family!(
             slug, slug,
             supports_reasoning_summaries: true,
+            reasoning_summary_format: ReasoningSummaryFormat::Experimental,
         )
     } else if slug.starts_with("gpt-4.1") {
         model_family!(
