@@ -265,6 +265,104 @@ fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {
     s
 }
 
+// (removed experimental resize snapshot test)
+
+#[test]
+fn exec_approval_emits_proposed_command_and_decision_history() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    // Trigger an exec approval request with a short, single-line command
+    let ev = ExecApprovalRequestEvent {
+        call_id: "call-short".into(),
+        command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
+        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        reason: Some(
+            "this is a test reason such as one that would be produced by the model".into(),
+        ),
+    };
+    chat.handle_codex_event(Event {
+        id: "sub-short".into(),
+        msg: EventMsg::ExecApprovalRequest(ev),
+    });
+
+    // Snapshot the Proposed Command cell emitted into history
+    let proposed = drain_insert_history(&mut rx)
+        .pop()
+        .expect("expected proposed command cell");
+    assert_snapshot!(
+        "exec_approval_history_proposed_short",
+        lines_to_single_string(&proposed)
+    );
+
+    // Approve via keyboard and verify a concise decision history line is added
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE));
+    let decision = drain_insert_history(&mut rx)
+        .pop()
+        .expect("expected decision cell in history");
+    assert_snapshot!(
+        "exec_approval_history_decision_approved_short",
+        lines_to_single_string(&decision)
+    );
+}
+
+#[test]
+fn exec_approval_decision_truncates_multiline_and_long_commands() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    // Multiline command: should render proposed command fully in history with prefixes
+    let ev_multi = ExecApprovalRequestEvent {
+        call_id: "call-multi".into(),
+        command: vec!["bash".into(), "-lc".into(), "echo line1\necho line2".into()],
+        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        reason: Some(
+            "this is a test reason such as one that would be produced by the model".into(),
+        ),
+    };
+    chat.handle_codex_event(Event {
+        id: "sub-multi".into(),
+        msg: EventMsg::ExecApprovalRequest(ev_multi),
+    });
+    let proposed_multi = drain_insert_history(&mut rx)
+        .pop()
+        .expect("expected proposed multiline command cell");
+    assert_snapshot!(
+        "exec_approval_history_proposed_multiline",
+        lines_to_single_string(&proposed_multi)
+    );
+
+    // Deny via keyboard; decision snippet should be single-line and elided with " ..."
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+    let aborted_multi = drain_insert_history(&mut rx)
+        .pop()
+        .expect("expected aborted decision cell (multiline)");
+    assert_snapshot!(
+        "exec_approval_history_decision_aborted_multiline",
+        lines_to_single_string(&aborted_multi)
+    );
+
+    // Very long single-line command: decision snippet should be truncated <= 80 chars with trailing ...
+    let long = format!("echo {}", "a".repeat(200));
+    let ev_long = ExecApprovalRequestEvent {
+        call_id: "call-long".into(),
+        command: vec!["bash".into(), "-lc".into(), long.clone()],
+        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        reason: None,
+    };
+    chat.handle_codex_event(Event {
+        id: "sub-long".into(),
+        msg: EventMsg::ExecApprovalRequest(ev_long),
+    });
+    drain_insert_history(&mut rx); // proposed cell not needed for this assertion
+    chat.handle_key_event(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE));
+    let aborted_long = drain_insert_history(&mut rx)
+        .pop()
+        .expect("expected aborted decision cell (long)");
+    assert_snapshot!(
+        "exec_approval_history_decision_aborted_long",
+        lines_to_single_string(&aborted_long)
+    );
+}
+
 // --- Small helpers to tersely drive exec begin/end and snapshot active cell ---
 fn begin_exec(chat: &mut ChatWidget, call_id: &str, raw_cmd: &str) {
     // Build the full command vec and parse it using core's parser,
@@ -714,7 +812,9 @@ fn approval_modal_exec_snapshot() {
         call_id: "call-approve-cmd".into(),
         command: vec!["bash".into(), "-lc".into(), "echo hello world".into()],
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-        reason: Some("Model wants to run a command".into()),
+        reason: Some(
+            "this is a test reason such as one that would be produced by the model".into(),
+        ),
     };
     chat.handle_codex_event(Event {
         id: "sub-approve".into(),
@@ -907,7 +1007,9 @@ fn status_widget_and_approval_modal_snapshot() {
         call_id: "call-approve-exec".into(),
         command: vec!["echo".into(), "hello world".into()],
         cwd: std::path::PathBuf::from("/tmp"),
-        reason: Some("Codex wants to run a command".into()),
+        reason: Some(
+            "this is a test reason such as one that would be produced by the model".into(),
+        ),
     };
     chat.handle_codex_event(Event {
         id: "sub-approve-exec".into(),

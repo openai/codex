@@ -527,6 +527,9 @@ pub struct TokenUsage {
     pub total_tokens: u64,
 }
 
+// Includes prompts, tools and space to call compact.
+const BASELINE_TOKENS: u64 = 12000;
+
 impl TokenUsage {
     pub fn is_zero(&self) -> bool {
         self.total_tokens == 0
@@ -557,26 +560,22 @@ impl TokenUsage {
     /// Estimate the remaining user-controllable percentage of the model's context window.
     ///
     /// `context_window` is the total size of the model's context window.
-    /// `baseline_used_tokens` should capture tokens that are always present in
+    /// `BASELINE_TOKENS` should capture tokens that are always present in
     /// the context (e.g., system prompt and fixed tool instructions) so that
     /// the percentage reflects the portion the user can influence.
     ///
     /// This normalizes both the numerator and denominator by subtracting the
     /// baseline, so immediately after the first prompt the UI shows 100% left
     /// and trends toward 0% as the user fills the effective window.
-    pub fn percent_of_context_window_remaining(
-        &self,
-        context_window: u64,
-        baseline_used_tokens: u64,
-    ) -> u8 {
-        if context_window <= baseline_used_tokens {
+    pub fn percent_of_context_window_remaining(&self, context_window: u64) -> u8 {
+        if context_window <= BASELINE_TOKENS {
             return 0;
         }
 
-        let effective_window = context_window - baseline_used_tokens;
+        let effective_window = context_window - BASELINE_TOKENS;
         let used = self
             .tokens_in_context_window()
-            .saturating_sub(baseline_used_tokens);
+            .saturating_sub(BASELINE_TOKENS);
         let remaining = effective_window.saturating_sub(used);
         ((remaining as f32 / effective_window as f32) * 100.0).clamp(0.0, 100.0) as u8
     }
