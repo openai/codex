@@ -1,7 +1,7 @@
 use std::io::Result;
 use std::time::Duration;
 
-use crate::insert_history;
+use crate::render::line_utils::push_owned_lines;
 use crate::tui;
 use crate::tui::TuiEvent;
 use crossterm::event::KeyCode;
@@ -287,9 +287,9 @@ impl PagerView {
         let mut wrapped: Vec<Line<'static>> = Vec::new();
         let mut src_idx: Vec<usize> = Vec::new();
         for (i, line) in self.lines.iter().enumerate() {
-            let ws = insert_history::word_wrap_lines(std::slice::from_ref(line), width);
+            let ws = crate::wrapping::word_wrap_line(line, width as usize);
             src_idx.extend(std::iter::repeat_n(i, ws.len()));
-            wrapped.extend(ws);
+            push_owned_lines(&ws, &mut wrapped);
         }
         self.wrap_cache = Some(WrapCache {
             width,
