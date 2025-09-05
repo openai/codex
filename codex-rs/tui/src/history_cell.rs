@@ -51,6 +51,20 @@ use tracing::error;
 use unicode_width::UnicodeWidthStr;
 use uuid::Uuid;
 
+fn format_with_commas(n: u64) -> String {
+    let s = n.to_string();
+    let len = s.len();
+    let mut out = String::with_capacity(len + len / 3);
+    for (i, ch) in s.chars().enumerate() {
+        out.push(ch);
+        let rem = len - i - 1;
+        if rem > 0 && rem % 3 == 0 {
+            out.push(',');
+        }
+    }
+    out
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct CommandOutput {
     pub(crate) exit_code: i32,
@@ -958,23 +972,23 @@ pub(crate) fn new_status_output(
     // Input: <input> [+ <cached> cached]
     let mut input_line_spans: Vec<Span<'static>> = vec![
         "  • Input: ".into(),
-        usage.non_cached_input().to_string().into(),
+        format_with_commas(usage.non_cached_input()).into(),
     ];
     if let Some(cached) = usage.cached_input_tokens
         && cached > 0
     {
-        input_line_spans.push(format!(" (+ {cached} cached)").into());
+        input_line_spans.push(format!(" (+ {} cached)", format_with_commas(cached)).into());
     }
     lines.push(Line::from(input_line_spans));
     // Output: <output>
     lines.push(Line::from(vec![
         "  • Output: ".into(),
-        usage.output_tokens.to_string().into(),
+        format_with_commas(usage.output_tokens).into(),
     ]));
     // Total: <total>
     lines.push(Line::from(vec![
         "  • Total: ".into(),
-        usage.blended_total().to_string().into(),
+        format_with_commas(usage.blended_total()).into(),
     ]));
 
     PlainHistoryCell { lines }
