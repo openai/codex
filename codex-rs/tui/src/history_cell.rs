@@ -951,7 +951,7 @@ pub(crate) fn new_status_output(
     lines.push("".into());
 
     // 💻 Client
-    let cli_version = env!("CARGO_PKG_VERSION");
+    let cli_version = crate::version::current_version();
     lines.push(vec![padded_emoji("💻").into(), "Client".bold()].into());
     lines.push(vec!["  • CLI Version: ".into(), cli_version.into()].into());
     lines.push("".into());
