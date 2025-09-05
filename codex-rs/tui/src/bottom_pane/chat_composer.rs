@@ -1279,8 +1279,6 @@ impl WidgetRef for ChatComposer {
                         " newline   ".into(),
                         key_hint::ctrl('O'),
                         " shortcuts   ".into(),
-                        key_hint::ctrl('T'),
-                        " transcript   ".into(),
                         key_hint::ctrl('C'),
                         " quit".into(),
                     ]
