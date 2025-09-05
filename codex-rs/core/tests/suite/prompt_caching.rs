@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
+use codex_core::CodexAuth;
 use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
 use codex_core::built_in_model_providers;
@@ -12,7 +13,6 @@ use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort;
 use codex_core::protocol_config_types::ReasoningSummary;
 use codex_core::shell::default_user_shell;
-use codex_login::CodexAuth;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::wait_for_event;
@@ -280,7 +280,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
 {}</environment_context>"#,
         cwd.path().to_string_lossy(),
         match shell.name() {
-            Some(name) => format!("  <shell>{}</shell>\n", name),
+            Some(name) => format!("  <shell>{name}</shell>\n"),
             None => String::new(),
         }
     );

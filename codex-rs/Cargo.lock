@@ -299,17 +299,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "async-trait"
-version = "0.1.88"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e539d3fca749fcee5236ab05e93a52867dd549cc157c8cb7f99595f3cedffdb5"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.104",
-]
-
-[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -636,10 +625,11 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "once_cell",
  "pretty_assertions",
  "similar",
  "tempfile",
- "thiserror 2.0.12",
+ "thiserror 2.0.16",
  "tree-sitter",
  "tree-sitter-bash",
 ]
@@ -665,7 +655,7 @@ dependencies = [
  "clap",
  "codex-common",
  "codex-core",
- "codex-login",
+ "codex-protocol",
  "reqwest",
  "serde",
  "serde_json",
@@ -718,7 +708,6 @@ dependencies = [
  "bytes",
  "chrono",
  "codex-apply-patch",
- "codex-login",
  "codex-mcp-client",
  "codex-protocol",
  "core_test_support",
@@ -748,7 +737,7 @@ dependencies = [
  "similar",
  "strum_macros 0.27.2",
  "tempfile",
- "thiserror 2.0.12",
+ "thiserror 2.0.16",
  "time",
  "tokio",
  "tokio-test",
@@ -847,6 +836,7 @@ version = "0.0.0"
 dependencies = [
  "base64 0.22.1",
  "chrono",
+ "codex-core",
  "codex-protocol",
  "pretty_assertions",
  "rand 0.8.5",
@@ -855,7 +845,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
- "thiserror 2.0.12",
+ "thiserror 2.0.16",
  "tiny_http",
  "tokio",
  "url",
@@ -933,6 +923,7 @@ dependencies = [
  "serde",
  "serde_bytes",
  "serde_json",
+ "serde_with",
  "strum 0.27.2",
  "strum_macros 0.27.2",
  "tracing",
@@ -973,11 +964,13 @@ dependencies = [
  "diffy",
  "image",
  "insta",
+ "itertools 0.14.0",
  "lazy_static",
  "libc",
  "mcp-types",
  "once_cell",
  "path-clean",
+ "pathdiff",
  "pretty_assertions",
  "rand 0.9.2",
  "ratatui",
@@ -1276,12 +1269,12 @@ dependencies = [
 
 [[package]]
 name = "deadpool"
-version = "0.10.0"
+version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb84100978c1c7b37f09ed3ce3e5f843af02c2a2c431bae5b19230dad2c1b490"
+checksum = "0be2b1d1d6ec8d846f05e137292d0b89133caf95ef33695424c09568bdd39b1b"
 dependencies = [
- "async-trait",
  "deadpool-runtime",
+ "lazy_static",
  "num_cpus",
  "tokio",
 ]
@@ -2128,13 +2121,14 @@ checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
 
 [[package]]
 name = "hyper"
-version = "1.6.0"
+version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc2b571658e38e0c01b1fdca3bbbe93c00d3d71693ff2770043f8c29bc7d6f80"
+checksum = "eb3aa54a13a0dfe7fbe3a59e0c76093041720fdc77b110cc0fc260fafb4dc51e"
 dependencies = [
+ "atomic-waker",
  "bytes",
  "futures-channel",
- "futures-util",
+ "futures-core",
  "h2",
  "http",
  "http-body",
@@ -2142,6 +2136,7 @@ dependencies = [
  "httpdate",
  "itoa",
  "pin-project-lite",
+ "pin-utils",
  "smallvec",
  "tokio",
  "want",
@@ -2684,7 +2679,7 @@ checksum = "b3d2ef408b88e913bfc6594f5e693d57676f6463ded7d8bf994175364320c706"
 dependencies = [
  "enumflags2",
  "libc",
- "thiserror 2.0.12",
+ "thiserror 2.0.16",
 ]
 
 [[package]]
@@ -3378,6 +3373,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "pathdiff"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "df94ce210e5bc13cb6651479fa48d14f601d9858cfe0467f43ae157023b938d3"
+
+[[package]]
 name = "percent-encoding"
 version = "2.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3850,7 +3851,7 @@ checksum = "dd6f9d3d47bdd2ad6945c5015a226ec6155d0bcdfd8f7cd29f86b71f8de99d2b"
 dependencies = [
  "getrandom 0.2.16",
  "libredox",
- "thiserror 2.0.12",
+ "thiserror 2.0.16",
 ]
 
 [[package]]
@@ -3907,9 +3908,9 @@ dependencies = [
 
 [[package]]
 name = "regex-lite"
-version = "0.1.6"
+version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53a49587ad06b26609c52e423de037e7f57f20d53535d66e08c695f347df952a"
+checksum = "943f41321c63ef1c92fd763bfe054d2668f7f225a5c29f0105903dc2fc04ba30"
 
 [[package]]
 name = "regex-syntax"
@@ -4935,11 +4936,11 @@ dependencies = [
 
 [[package]]
 name = "thiserror"
-version = "2.0.12"
+version = "2.0.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "567b8a2dae586314f7be2a752ec7474332959c6460e02bde30d702a66d488708"
+checksum = "3467d614147380f2e4e374161426ff399c91084acd2363eaf549172b3d5e60c0"
 dependencies = [
- "thiserror-impl 2.0.12",
+ "thiserror-impl 2.0.16",
 ]
 
 [[package]]
@@ -4955,9 +4956,9 @@ dependencies = [
 
 [[package]]
 name = "thiserror-impl"
-version = "2.0.12"
+version = "2.0.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f7cf42b4507d8ea322120659672cf1b9dbb93f8f2d4ecfd6e51350ff5b17a1d"
+checksum = "6c5e1be1c48b9172ee610da68fd9cd2770e7a4056cb3fc98710ee6906f0c7960"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5394,7 +5395,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ef1b7a6d914a34127ed8e1fa927eb7088903787bcded4fa3eef8f85ee1568be"
 dependencies = [
  "serde_json",
- "thiserror 2.0.12",
+ "thiserror 2.0.16",
  "ts-rs-macros",
  "uuid",
 ]
@@ -5534,9 +5535,9 @@ checksum = "06abde3611657adf66d383f00b093d7faecc7fa57071cce2578660c9f1010821"
 
 [[package]]
 name = "uuid"
-version = "1.17.0"
+version = "1.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3cf4199d1e5d15ddd86a694e4d0dffa9c323ce759fea589f00fef9d81cc1931d"
+checksum = "2f87b8aa10b915a06587d0dec516c282ff295b475d94abf425d62b57710070a2"
 dependencies = [
  "getrandom 0.3.3",
  "js-sys",
@@ -6263,12 +6264,11 @@ checksum = "d135d17ab770252ad95e9a872d365cf3090e3be864a34ab46f48555993efc904"
 
 [[package]]
 name = "wiremock"
-version = "0.6.4"
+version = "0.6.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2b8b99d4cdbf36b239a9532e31fe4fb8acc38d1897c1761e161550a7dc78e6a"
+checksum = "08db1edfb05d9b3c1542e521aea074442088292f00b5f28e435c714a98f85031"
 dependencies = [
  "assert-json-diff",
- "async-trait",
  "base64 0.22.1",
  "deadpool",
  "futures",

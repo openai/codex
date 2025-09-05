@@ -1,7 +1,8 @@
 #![allow(clippy::unwrap_used)]
 
-use codex_login::AuthManager;
-use codex_login::CLIENT_ID;
+use codex_core::AuthManager;
+use codex_core::auth::CLIENT_ID;
+use codex_core::config::Config;
 use codex_login::ServerOptions;
 use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
@@ -15,12 +16,11 @@ use ratatui::style::Modifier;
 use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
-use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
 
-use codex_login::AuthMode;
+use codex_protocol::mcp_protocol::AuthMode;
 use std::sync::RwLock;
 
 use crate::LoginStatus;
@@ -114,26 +114,21 @@ pub(crate) struct AuthModeWidget {
     pub login_status: LoginStatus,
     pub preferred_auth_method: AuthMode,
     pub auth_manager: Arc<AuthManager>,
+    pub config: Config,
 }
 
 impl AuthModeWidget {
     fn render_pick_mode(&self, area: Rect, buf: &mut Buffer) {
         let mut lines: Vec<Line> = vec![
             Line::from(vec![
-                Span::raw("> "),
-                Span::styled(
-                    "Sign in with ChatGPT to use Codex as part of your paid plan",
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
+                "> ".into(),
+                "Sign in with ChatGPT to use Codex as part of your paid plan".bold(),
             ]),
             Line::from(vec![
-                Span::raw("  "),
-                Span::styled(
-                    "or connect an API key for usage-based billing",
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
+                "  ".into(),
+                "or connect an API key for usage-based billing".bold(),
             ]),
-            Line::from(""),
+            "".into(),
         ];
 
         // If the user is already authenticated but the method differs from their
@@ -150,8 +145,8 @@ impl AuthModeWidget {
                 to_label(current),
                 to_label(self.preferred_auth_method)
             );
-            lines.push(Line::from(msg).style(Style::default()));
-            lines.push(Line::from(""));
+            lines.push(msg.into());
+            lines.push("".into());
         }
 
         let create_mode_item = |idx: usize,
@@ -168,7 +163,7 @@ impl AuthModeWidget {
                     text.to_string().cyan(),
                 ])
             } else {
-                Line::from(format!("  {}. {text}", idx + 1))
+                format!("  {}. {text}", idx + 1).into()
             };
 
             let line2 = if is_selected {
@@ -207,19 +202,15 @@ impl AuthModeWidget {
             api_key_label,
             "Pay for what you use",
         ));
-        lines.push(Line::from(""));
+        lines.push("".into());
         lines.push(
             // AE: Following styles.md, this should probably be Cyan because it's a user input tip.
             //     But leaving this for a future cleanup.
-            Line::from("  Press Enter to continue")
-                .style(Style::default().add_modifier(Modifier::DIM)),
+            "  Press Enter to continue".dim().into(),
         );
         if let Some(err) = &self.error {
-            lines.push(Line::from(""));
-            lines.push(Line::from(Span::styled(
-                err.as_str(),
-                Style::default().fg(Color::Red),
-            )));
+            lines.push("".into());
+            lines.push(err.as_str().red().into());
         }
 
         Paragraph::new(lines)
@@ -228,28 +219,23 @@ impl AuthModeWidget {
     }
 
     fn render_continue_in_browser(&self, area: Rect, buf: &mut Buffer) {
-        let mut spans = vec![Span::from("> ")];
+        let mut spans = vec!["> ".into()];
         // Schedule a follow-up frame to keep the shimmer animation going.
         self.request_frame
             .schedule_frame_in(std::time::Duration::from_millis(100));
         spans.extend(shimmer_spans("Finish signing in via your browser"));
-        let mut lines = vec![Line::from(spans), Line::from("")];
+        let mut lines = vec![spans.into(), "".into()];
 
         let sign_in_state = self.sign_in_state.read().unwrap();
         if let SignInState::ChatGptContinueInBrowser(state) = &*sign_in_state
             && !state.auth_url.is_empty()
         {
-            lines.push(Line::from("  If the link doesn't open automatically, open the following link to authenticate:"));
-            lines.push(Line::from(vec![
-                Span::raw("  "),
-                state.auth_url.as_str().cyan().underlined(),
-            ]));
-            lines.push(Line::from(""));
+            lines.push("  If the link doesn't open automatically, open the following link to authenticate:".into());
+            lines.push(vec!["  ".into(), state.auth_url.as_str().cyan().underlined()].into());
+            lines.push("".into());
         }
 
-        lines.push(
-            Line::from("  Press Esc to cancel").style(Style::default().add_modifier(Modifier::DIM)),
-        );
+        lines.push("  Press Esc to cancel".dim().into());
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
             .render(area, buf);
@@ -257,35 +243,28 @@ impl AuthModeWidget {
 
     fn render_chatgpt_success_message(&self, area: Rect, buf: &mut Buffer) {
         let lines = vec![
-            Line::from("✓ Signed in with your ChatGPT account").fg(Color::Green),
-            Line::from(""),
-            Line::from("> Before you start:"),
-            Line::from(""),
-            Line::from("  Decide how much autonomy you want to grant Codex"),
+            "✓ Signed in with your ChatGPT account".fg(Color::Green).into(),
+            "".into(),
+            "> Before you start:".into(),
+            "".into(),
+            "  Decide how much autonomy you want to grant Codex".into(),
             Line::from(vec![
-                Span::raw("  For more details see the "),
-                Span::styled(
-                    "\u{1b}]8;;https://github.com/openai/codex\u{7}Codex docs\u{1b}]8;;\u{7}",
-                    Style::default().add_modifier(Modifier::UNDERLINED),
-                ),
+                "  For more details see the ".into(),
+                "\u{1b}]8;;https://github.com/openai/codex\u{7}Codex docs\u{1b}]8;;\u{7}".underlined(),
             ])
-            .style(Style::default().add_modifier(Modifier::DIM)),
-            Line::from(""),
-            Line::from("  Codex can make mistakes"),
-            Line::from("  Review the code it writes and commands it runs")
-                .style(Style::default().add_modifier(Modifier::DIM)),
-            Line::from(""),
-            Line::from("  Powered by your ChatGPT account"),
+            .dim(),
+            "".into(),
+            "  Codex can make mistakes".into(),
+            "  Review the code it writes and commands it runs".dim().into(),
+            "".into(),
+            "  Powered by your ChatGPT account".into(),
             Line::from(vec![
-                Span::raw("  Uses your plan's rate limits and "),
-                Span::styled(
-                    "\u{1b}]8;;https://chatgpt.com/#settings\u{7}training data preferences\u{1b}]8;;\u{7}",
-                    Style::default().add_modifier(Modifier::UNDERLINED),
-                ),
+                "  Uses your plan's rate limits and ".into(),
+                "\u{1b}]8;;https://chatgpt.com/#settings\u{7}training data preferences\u{1b}]8;;\u{7}".underlined(),
             ])
-            .style(Style::default().add_modifier(Modifier::DIM)),
-            Line::from(""),
-            Line::from("  Press Enter to continue").fg(Color::Cyan),
+            .dim(),
+            "".into(),
+            "  Press Enter to continue".fg(Color::Cyan).into(),
         ];
 
         Paragraph::new(lines)
@@ -294,7 +273,11 @@ impl AuthModeWidget {
     }
 
     fn render_chatgpt_success(&self, area: Rect, buf: &mut Buffer) {
-        let lines = vec![Line::from("✓ Signed in with your ChatGPT account").fg(Color::Green)];
+        let lines = vec![
+            "✓ Signed in with your ChatGPT account"
+                .fg(Color::Green)
+                .into(),
+        ];
 
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
@@ -302,7 +285,7 @@ impl AuthModeWidget {
     }
 
     fn render_env_var_found(&self, area: Rect, buf: &mut Buffer) {
-        let lines = vec![Line::from("✓ Using OPENAI_API_KEY").fg(Color::Green)];
+        let lines = vec!["✓ Using OPENAI_API_KEY".fg(Color::Green).into()];
 
         Paragraph::new(lines)
             .wrap(Wrap { trim: false })
@@ -311,13 +294,11 @@ impl AuthModeWidget {
 
     fn render_env_var_missing(&self, area: Rect, buf: &mut Buffer) {
         let lines = vec![
-            Line::from(
-                "  To use Codex with the OpenAI API, set OPENAI_API_KEY in your environment",
-            )
-            .style(Style::default().fg(Color::Cyan)),
-            Line::from(""),
-            Line::from("  Press Enter to return")
-                .style(Style::default().add_modifier(Modifier::DIM)),
+            "  To use Codex with the OpenAI API, set OPENAI_API_KEY in your environment"
+                .fg(Color::Cyan)
+                .into(),
+            "".into(),
+            "  Press Enter to return".dim().into(),
         ];
 
         Paragraph::new(lines)
@@ -335,7 +316,11 @@ impl AuthModeWidget {
         }
 
         self.error = None;
-        let opts = ServerOptions::new(self.codex_home.clone(), CLIENT_ID.to_string());
+        let opts = ServerOptions::new(
+            self.codex_home.clone(),
+            CLIENT_ID.to_string(),
+            self.config.responses_originator_header.clone(),
+        );
         match run_login_server(opts) {
             Ok(child) => {
                 let sign_in_state = self.sign_in_state.clone();

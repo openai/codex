@@ -5,6 +5,7 @@ mod client;
 mod compact;
 mod exec;
 mod exec_stream_events;
+mod fork_conversation;
 mod live_cli;
 mod prompt_caching;
 mod seatbelt;

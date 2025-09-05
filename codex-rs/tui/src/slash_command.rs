@@ -52,6 +52,26 @@ impl SlashCommand {
     pub fn command(self) -> &'static str {
         self.into()
     }
+
+    /// Whether this command can be run while a task is in progress.
+    pub fn available_during_task(self) -> bool {
+        match self {
+            SlashCommand::New
+            | SlashCommand::Init
+            | SlashCommand::Compact
+            | SlashCommand::Model
+            | SlashCommand::Approvals
+            | SlashCommand::Logout => false,
+            SlashCommand::Diff
+            | SlashCommand::Mention
+            | SlashCommand::Status
+            | SlashCommand::Mcp
+            | SlashCommand::Quit => true,
+
+            #[cfg(debug_assertions)]
+            SlashCommand::TestApproval => true,
+        }
+    }
 }
 
 /// Return all built-in commands in a Vec paired with their command string.
