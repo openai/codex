@@ -2,8 +2,6 @@ use std::path::Path;
 use std::process::Stdio;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
-use std::time::Instant;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
@@ -55,10 +53,6 @@ pub struct McpProcess {
 
 impl McpProcess {
     pub async fn new(codex_home: &Path) -> anyhow::Result<Self> {
-        Self::new_with_args(codex_home, &[]).await
-    }
-
-    pub async fn new_with_args(codex_home: &Path, args: &[&str]) -> anyhow::Result<Self> {
         // Use assert_cmd to locate the binary path and then switch to tokio::process::Command
         let std_cmd = StdCommand::cargo_bin("codex-mcp-server")
             .context("should find binary for codex-mcp-server")?;
@@ -66,11 +60,6 @@ impl McpProcess {
         let program = std_cmd.get_program().to_owned();
 
         let mut cmd = Command::new(program);
-
-        // Add any provided command-line arguments
-        for arg in args {
-            cmd.arg(arg);
-        }
 
         cmd.stdin(Stdio::piped());
         cmd.stdout(Stdio::piped());
@@ -184,23 +173,6 @@ impl McpProcess {
         self.send_request(
             mcp_types::CallToolRequest::METHOD,
             Some(serde_json::to_value(codex_tool_call_params)?),
-        )
-        .await
-    }
-
-    /// Send a generic tool call request.
-    pub async fn send_tool_call(
-        &mut self,
-        tool_name: &str,
-        arguments: Option<serde_json::Value>,
-    ) -> anyhow::Result<i64> {
-        let tool_call_params = CallToolRequestParams {
-            name: tool_name.to_string(),
-            arguments,
-        };
-        self.send_request(
-            mcp_types::CallToolRequest::METHOD,
-            Some(serde_json::to_value(tool_call_params)?),
         )
         .await
     }
@@ -503,77 +475,5 @@ impl McpProcess {
                 }
             }
         }
-    }
-
-    /// Read a response with a timeout, useful for verifying immediate responses in compatibility mode.
-    pub async fn read_immediate_response(
-        &mut self,
-        request_id: RequestId,
-        timeout_ms: u64,
-    ) -> anyhow::Result<JSONRPCResponse> {
-        let start = Instant::now();
-        let result = tokio::time::timeout(
-            Duration::from_millis(timeout_ms),
-            self.read_stream_until_response_message(request_id),
-        )
-        .await;
-
-        let elapsed = start.elapsed();
-        eprintln!("Response received in {:?}", elapsed);
-
-        match result {
-            Ok(Ok(response)) => Ok(response),
-            Ok(Err(e)) => Err(e),
-            Err(_) => anyhow::bail!("Response timeout after {}ms", timeout_ms),
-        }
-    }
-
-    /// Measure the time it takes to receive a response, useful for performance assertions.
-    pub async fn measure_response_time(
-        &mut self,
-        request_id: RequestId,
-    ) -> anyhow::Result<(JSONRPCResponse, Duration)> {
-        let start = Instant::now();
-        let response = self.read_stream_until_response_message(request_id).await?;
-        let elapsed = start.elapsed();
-        Ok((response, elapsed))
-    }
-
-    /// Check if any notifications arrive within a given time window.
-    /// Returns true if notifications were received, false if timeout occurs.
-    pub async fn check_for_notifications(&mut self, timeout_ms: u64) -> bool {
-        let result = tokio::time::timeout(
-            Duration::from_millis(timeout_ms),
-            self.read_jsonrpc_message(),
-        )
-        .await;
-
-        match result {
-            Ok(Ok(JSONRPCMessage::Notification(n))) => {
-                eprintln!("Received notification: {:?}", n);
-                true
-            }
-            Ok(Ok(msg)) => {
-                eprintln!("Received non-notification message: {:?}", msg);
-                true
-            }
-            Ok(Err(_)) | Err(_) => {
-                eprintln!("No notifications received within {}ms", timeout_ms);
-                false
-            }
-        }
-    }
-
-    /// Send a codex-reply tool call with session ID.
-    pub async fn send_codex_reply_tool_call(
-        &mut self,
-        session_id: String,
-        prompt: String,
-    ) -> anyhow::Result<i64> {
-        let params = json!({
-            "sessionId": session_id,
-            "prompt": prompt
-        });
-        self.send_tool_call("codex-reply", Some(params)).await
     }
 }
