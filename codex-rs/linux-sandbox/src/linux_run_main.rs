@@ -26,8 +26,7 @@ pub fn run_main() -> ! {
 
     if let Err(e) = apply_sandbox_policy_to_current_thread(&sandbox_policy, &sandbox_policy_cwd) {
         eprintln!(
-            "error: failed to enable Linux sandbox (Landlock): {}\n\nThis usually means your kernel/container doesn't support Landlock or it is disabled (e.g., older kernel, WSL2, or a restricted container).",
-            e
+            "error: failed to enable Linux sandbox (Landlock): {e}\n\nThis usually means your kernel/container doesn't support Landlock or it is disabled (e.g., older kernel, WSL2, or a restricted container)."
         );
         std::process::exit(1);
     }
@@ -55,10 +54,9 @@ pub fn run_main() -> ! {
 
     // If execvp returns, there was an error.
     let err = std::io::Error::last_os_error();
+    let cmd = command[0].as_str();
     eprintln!(
-        "error: failed to execute {}: {}\n\nHint: ensure the command exists and is on PATH.",
-        command[0].as_str(),
-        err
+        "error: failed to execute {cmd}: {err}\n\nHint: ensure the command exists and is on PATH."
     );
     std::process::exit(127);
 }
