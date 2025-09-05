@@ -175,7 +175,9 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         env!("CARGO_PKG_VERSION"),
     );
     let _telemetry_guard = if let Some((guard, tracer)) = telemetry {
-        let otel_layer = tracing_opentelemetry::OpenTelemetryLayer::new(tracer);
+        let otel_layer = tracing_opentelemetry::OpenTelemetryLayer::new(tracer).with_filter(
+            tracing_subscriber::filter::filter_fn(codex_core::telemetry_init::codex_export_filter),
+        );
         // Build env_filter separately and attach via with_filter.
         let env_filter = EnvFilter::try_from_default_env()
             .or_else(|_| EnvFilter::try_new(default_level))
