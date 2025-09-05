@@ -551,14 +551,23 @@ pub struct AuthStatusChangeNotification {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS, Display)]
-#[serde(tag = "type", content = "data", rename_all = "snake_case")]
-#[strum(serialize_all = "snake_case")]
+#[serde(tag = "method", content = "params", rename_all = "camelCase")]
+#[strum(serialize_all = "camelCase")]
 pub enum ServerNotification {
     /// Authentication status changed
     AuthStatusChange(AuthStatusChangeNotification),
 
     /// ChatGPT login flow completed
     LoginChatGptComplete(LoginChatGptCompleteNotification),
+}
+
+impl ServerNotification {
+    pub fn to_params(self) -> Result<serde_json::Value, serde_json::Error> {
+        match self {
+            ServerNotification::AuthStatusChange(params) => serde_json::to_value(params),
+            ServerNotification::LoginChatGptComplete(params) => serde_json::to_value(params),
+        }
+    }
 }
 
 #[cfg(test)]

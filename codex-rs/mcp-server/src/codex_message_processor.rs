@@ -815,9 +815,9 @@ impl CodexMessageProcessor {
                         };
 
                         // For now, we send a notification for every event,
-                        // JSON-serializing the `Event` as-is, but we will move
-                        // to creating a special enum for notifications with a
-                        // stable wire format.
+                        // JSON-serializing the `Event` as-is, but these should
+                        // be migrated to be variants of `ServerNotification`
+                        // instead.
                         let method = format!("codex/event/{}", event.msg);
                         let mut params = match serde_json::to_value(event.clone()) {
                             Ok(serde_json::Value::Object(map)) => map,
