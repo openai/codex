@@ -58,6 +58,7 @@ mod streaming;
 mod text_formatting;
 mod tui;
 mod user_approval_widget;
+mod version;
 mod wrapping;
 
 // Internal vt100-based replay tests live as a separate source file to keep them

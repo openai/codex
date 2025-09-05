@@ -950,6 +950,12 @@ pub(crate) fn new_status_output(
 
     lines.push("".into());
 
+    // 💻 Client
+    let cli_version = crate::version::CODEX_CLI_VERSION;
+    lines.push(vec![padded_emoji("💻").into(), "Client".bold()].into());
+    lines.push(vec!["  • CLI Version: ".into(), cli_version.into()].into());
+    lines.push("".into());
+
     // 📊 Token Usage
     lines.push(vec!["📊 ".into(), "Token Usage".bold()].into());
     if let Some(session_id) = session_id {
