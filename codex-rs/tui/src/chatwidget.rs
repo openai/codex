@@ -19,6 +19,7 @@ use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::InputItem;
+use codex_core::protocol::InputMessageKind;
 use codex_core::protocol::ListCustomPromptsResponseEvent;
 use codex_core::protocol::McpListToolsResponseEvent;
 use codex_core::protocol::McpToolCallBeginEvent;
@@ -30,6 +31,7 @@ use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TokenUsage;
 use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnDiffEvent;
+use codex_core::protocol::UserMessageEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
 use codex_protocol::parse_command::ParsedCommand;
@@ -89,6 +91,16 @@ struct RunningCommand {
     parsed_cmd: Vec<ParsedCommand>,
 }
 
+/// Common initialization parameters shared by all `ChatWidget` constructors.
+pub(crate) struct ChatWidgetInit {
+    pub(crate) config: Config,
+    pub(crate) frame_requester: FrameRequester,
+    pub(crate) app_event_tx: AppEventSender,
+    pub(crate) initial_prompt: Option<String>,
+    pub(crate) initial_images: Vec<PathBuf>,
+    pub(crate) enhanced_keys_supported: bool,
+}
+
 pub(crate) struct ChatWidget {
     app_event_tx: AppEventSender,
     codex_op_tx: UnboundedSender<Op>,
@@ -112,6 +124,9 @@ pub(crate) struct ChatWidget {
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
+    // When resuming an existing session (selected via resume picker), avoid an
+    // immediate redraw on SessionConfigured to prevent a gratuitous UI flicker.
+    suppress_session_configured_redraw: bool,
     // User messages queued while a turn is in progress
     queued_user_messages: VecDeque<UserMessage>,
 }
@@ -148,6 +163,10 @@ impl ChatWidget {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.session_id = Some(event.session_id);
+        let initial_messages = event.initial_messages.clone();
+        if let Some(messages) = initial_messages {
+            self.replay_initial_messages(messages);
+        }
         self.add_to_history(history_cell::new_session_info(
             &self.config,
             event,
@@ -158,7 +177,9 @@ impl ChatWidget {
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
         }
-        self.request_redraw();
+        if !self.suppress_session_configured_redraw {
+            self.request_redraw();
+        }
     }
 
     fn on_agent_message(&mut self, message: String) {
@@ -503,6 +524,8 @@ impl ChatWidget {
 
     pub(crate) fn handle_exec_approval_now(&mut self, id: String, ev: ExecApprovalRequestEvent) {
         self.flush_answer_stream_with_separator();
+        // Emit the proposed command into history (like proposed patches)
+        self.add_to_history(history_cell::new_proposed_command(&ev.command));
 
         let request = ApprovalRequest::Exec {
             id,
@@ -602,14 +625,17 @@ impl ChatWidget {
     }
 
     pub(crate) fn new(
-        config: Config,
+        common: ChatWidgetInit,
         conversation_manager: Arc<ConversationManager>,
-        frame_requester: FrameRequester,
-        app_event_tx: AppEventSender,
-        initial_prompt: Option<String>,
-        initial_images: Vec<PathBuf>,
-        enhanced_keys_supported: bool,
     ) -> Self {
+        let ChatWidgetInit {
+            config,
+            frame_requester,
+            app_event_tx,
+            initial_prompt,
+            initial_images,
+            enhanced_keys_supported,
+        } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
@@ -643,18 +669,24 @@ impl ChatWidget {
             session_id: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: true,
+            suppress_session_configured_redraw: false,
         }
     }
 
     /// Create a ChatWidget attached to an existing conversation (e.g., a fork).
     pub(crate) fn new_from_existing(
-        config: Config,
+        common: ChatWidgetInit,
         conversation: std::sync::Arc<codex_core::CodexConversation>,
         session_configured: codex_core::protocol::SessionConfiguredEvent,
-        frame_requester: FrameRequester,
-        app_event_tx: AppEventSender,
-        enhanced_keys_supported: bool,
     ) -> Self {
+        let ChatWidgetInit {
+            config,
+            frame_requester,
+            app_event_tx,
+            initial_prompt,
+            initial_images,
+            enhanced_keys_supported,
+        } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
 
@@ -675,7 +707,10 @@ impl ChatWidget {
             }),
             active_exec_cell: None,
             config: config.clone(),
-            initial_user_message: None,
+            initial_user_message: create_initial_user_message(
+                initial_prompt.unwrap_or_default(),
+                initial_images,
+            ),
             total_token_usage: TokenUsage::default(),
             last_token_usage: TokenUsage::default(),
             stream: StreamController::new(config),
@@ -687,6 +722,7 @@ impl ChatWidget {
             session_id: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: false,
+            suppress_session_configured_redraw: true,
         }
     }
 
@@ -950,9 +986,32 @@ impl ChatWidget {
         }
     }
 
+    /// Replay a subset of initial events into the UI to seed the transcript when
+    /// resuming an existing session. This approximates the live event flow and
+    /// is intentionally conservative: only safe-to-replay items are rendered to
+    /// avoid triggering side effects. Event ids are passed as `None` to
+    /// distinguish replayed events from live ones.
+    fn replay_initial_messages(&mut self, events: Vec<EventMsg>) {
+        for msg in events {
+            if matches!(msg, EventMsg::SessionConfigured(_)) {
+                continue;
+            }
+            // `id: None` indicates a synthetic/fake id coming from replay.
+            self.dispatch_event_msg(None, msg, true);
+        }
+    }
+
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
         let Event { id, msg } = event;
+        self.dispatch_event_msg(Some(id), msg, false);
+    }
 
+    /// Dispatch a protocol `EventMsg` to the appropriate handler.
+    ///
+    /// `id` is `Some` for live events and `None` for replayed events from
+    /// `replay_initial_messages()`. Callers should treat `None` as a "fake" id
+    /// that must not be used to correlate follow-up actions.
+    fn dispatch_event_msg(&mut self, id: Option<String>, msg: EventMsg, from_replay: bool) {
         match msg {
             EventMsg::AgentMessageDelta(_)
             | EventMsg::AgentReasoningDelta(_)
@@ -990,8 +1049,13 @@ impl ChatWidget {
                 }
             },
             EventMsg::PlanUpdate(update) => self.on_plan_update(update),
-            EventMsg::ExecApprovalRequest(ev) => self.on_exec_approval_request(id, ev),
-            EventMsg::ApplyPatchApprovalRequest(ev) => self.on_apply_patch_approval_request(id, ev),
+            EventMsg::ExecApprovalRequest(ev) => {
+                // For replayed events, synthesize an empty id (these should not occur).
+                self.on_exec_approval_request(id.clone().unwrap_or_default(), ev)
+            }
+            EventMsg::ApplyPatchApprovalRequest(ev) => {
+                self.on_apply_patch_approval_request(id.clone().unwrap_or_default(), ev)
+            }
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::ExecCommandOutputDelta(delta) => self.on_exec_command_output_delta(delta),
             EventMsg::PatchApplyBegin(ev) => self.on_patch_apply_begin(ev),
@@ -1010,10 +1074,29 @@ impl ChatWidget {
                 self.on_background_event(message)
             }
             EventMsg::StreamError(StreamErrorEvent { message }) => self.on_stream_error(message),
+            EventMsg::UserMessage(ev) => {
+                if from_replay {
+                    self.on_user_message_event(ev);
+                }
+            }
             EventMsg::ConversationHistory(ev) => {
-                // Forward to App so it can process backtrack flows.
                 self.app_event_tx
                     .send(crate::app_event::AppEvent::ConversationHistory(ev));
+            }
+        }
+    }
+
+    fn on_user_message_event(&mut self, event: UserMessageEvent) {
+        match event.kind {
+            Some(InputMessageKind::EnvironmentContext)
+            | Some(InputMessageKind::UserInstructions) => {
+                // Skip XML‑wrapped context blocks in the transcript.
+            }
+            Some(InputMessageKind::Plain) | None => {
+                let message = event.message.trim();
+                if !message.is_empty() {
+                    self.add_to_history(history_cell::new_user_prompt(message.to_string()));
+                }
             }
         }
     }
@@ -1290,9 +1373,11 @@ impl WidgetRef for &ChatWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let [active_cell_area, bottom_pane_area] = self.layout_areas(area);
         (&self.bottom_pane).render(bottom_pane_area, buf);
-        if let Some(cell) = &self.active_exec_cell {
+        if !active_cell_area.is_empty()
+            && let Some(cell) = &self.active_exec_cell
+        {
             let mut active_cell_area = active_cell_area;
-            active_cell_area.y += 1;
+            active_cell_area.y = active_cell_area.y.saturating_add(1);
             active_cell_area.height -= 1;
             cell.render_ref(active_cell_area, buf);
         }

@@ -3,6 +3,7 @@
 pub(crate) const SESSIONS_SUBDIR: &str = "sessions";
 
 pub mod list;
+pub(crate) mod policy;
 pub mod recorder;
 
 pub use recorder::RolloutRecorder;
