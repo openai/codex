@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use codex_core::config::Config;
 use codex_core::default_client::create_client;
 
-use crate::version::current_version;
+use crate::version::CODEX_CLI_VERSION;
 
 pub fn get_upgrade_version(config: &Config) -> Option<String> {
     let version_file = version_filepath(config);
@@ -33,8 +33,7 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
     }
 
     info.and_then(|info| {
-        let current_version = current_version();
-        if is_newer(&info.latest_version, current_version).unwrap_or(false) {
+        if is_newer(&info.latest_version, CODEX_CLI_VERSION).unwrap_or(false) {
             Some(info.latest_version)
         } else {
             None

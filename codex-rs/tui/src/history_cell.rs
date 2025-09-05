@@ -951,7 +951,7 @@ pub(crate) fn new_status_output(
     lines.push("".into());
 
     // 💻 Client
-    let cli_version = crate::version::current_version();
+    let cli_version = crate::version::CODEX_CLI_VERSION;
     lines.push(vec![padded_emoji("💻").into(), "Client".bold()].into());
     lines.push(vec!["  • CLI Version: ".into(), cli_version.into()].into());
     lines.push("".into());
