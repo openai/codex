@@ -1,4 +1,5 @@
 use codex_core::AuthManager;
+use codex_core::config::Config;
 use codex_core::git_info::get_git_repo_root;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -21,7 +22,6 @@ use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
 use color_eyre::eyre::Result;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::RwLock;
 
@@ -53,26 +53,25 @@ pub(crate) struct OnboardingScreen {
 }
 
 pub(crate) struct OnboardingScreenArgs {
-    pub codex_home: PathBuf,
-    pub cwd: PathBuf,
     pub show_trust_screen: bool,
     pub show_login_screen: bool,
     pub login_status: LoginStatus,
-    pub preferred_auth_method: AuthMode,
     pub auth_manager: Arc<AuthManager>,
+    pub config: Config,
 }
 
 impl OnboardingScreen {
     pub(crate) fn new(tui: &mut Tui, args: OnboardingScreenArgs) -> Self {
         let OnboardingScreenArgs {
-            codex_home,
-            cwd,
             show_trust_screen,
             show_login_screen,
             login_status,
-            preferred_auth_method,
             auth_manager,
+            config,
         } = args;
+        let preferred_auth_method = config.preferred_auth_method;
+        let cwd = config.cwd.clone();
+        let codex_home = config.codex_home.clone();
         let mut steps: Vec<Step> = vec![Step::Welcome(WelcomeWidget {
             is_logged_in: !matches!(login_status, LoginStatus::NotAuthenticated),
         })];
@@ -84,8 +83,9 @@ impl OnboardingScreen {
                 sign_in_state: Arc::new(RwLock::new(SignInState::PickMode)),
                 codex_home: codex_home.clone(),
                 login_status,
-                preferred_auth_method,
                 auth_manager,
+                preferred_auth_method,
+                config,
             }))
         }
         let is_git_repo = get_git_repo_root(&cwd).is_some();

@@ -11,7 +11,6 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
-use ratatui::style::Styled;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -37,6 +36,7 @@ use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
 use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
+use crate::key_hint;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -67,15 +67,6 @@ struct TokenUsageInfo {
     total_token_usage: TokenUsage,
     last_token_usage: TokenUsage,
     model_context_window: Option<u64>,
-    /// Baseline token count present in the context before the user's first
-    /// message content is considered. This is used to normalize the
-    /// "context left" percentage so it reflects the portion the user can
-    /// influence rather than fixed prompt overhead (system prompt, tool
-    /// instructions, etc.).
-    ///
-    /// Preferred source is `cached_input_tokens` from the first turn (when
-    /// available), otherwise we fall back to 0.
-    initial_prompt_tokens: u64,
 }
 
 pub(crate) struct ChatComposer {
@@ -181,17 +172,10 @@ impl ChatComposer {
         last_token_usage: TokenUsage,
         model_context_window: Option<u64>,
     ) {
-        let initial_prompt_tokens = self
-            .token_usage_info
-            .as_ref()
-            .map(|info| info.initial_prompt_tokens)
-            .unwrap_or_else(|| last_token_usage.cached_input_tokens.unwrap_or(0));
-
         self.token_usage_info = Some(TokenUsageInfo {
             total_token_usage,
             last_token_usage,
             model_context_window,
-            initial_prompt_tokens,
         });
     }
 
@@ -1259,35 +1243,35 @@ impl WidgetRef for ChatComposer {
             }
             ActivePopup::None => {
                 let bottom_line_rect = popup_rect;
-                let key_hint_style = Style::default().fg(Color::Cyan);
-                let mut hint = if self.ctrl_c_quit_hint {
+                let mut hint: Vec<Span<'static>> = if self.ctrl_c_quit_hint {
                     vec![
                         " ".into(),
-                        "Ctrl+C again".set_style(key_hint_style),
+                        key_hint::ctrl('C'),
+                        " again".into(),
                         " to quit".into(),
                     ]
                 } else {
                     let newline_hint_key = if self.use_shift_enter_hint {
-                        "Shift+⏎"
+                        key_hint::shift('⏎')
                     } else {
-                        "Ctrl+J"
+                        key_hint::ctrl('J')
                     };
                     vec![
                         " ".into(),
-                        "⏎".set_style(key_hint_style),
+                        key_hint::plain('⏎'),
                         " send   ".into(),
-                        newline_hint_key.set_style(key_hint_style),
+                        newline_hint_key,
                         " newline   ".into(),
-                        "Ctrl+T".set_style(key_hint_style),
+                        key_hint::ctrl('T'),
                         " transcript   ".into(),
-                        "Ctrl+C".set_style(key_hint_style),
+                        key_hint::ctrl('C'),
                         " quit".into(),
                     ]
                 };
 
                 if !self.ctrl_c_quit_hint && self.esc_backtrack_hint {
                     hint.push("   ".into());
-                    hint.push("Esc".set_style(key_hint_style));
+                    hint.push(key_hint::plain("Esc"));
                     hint.push(" edit prev".into());
                 }
 
@@ -1302,10 +1286,7 @@ impl WidgetRef for ChatComposer {
                     let last_token_usage = &token_usage_info.last_token_usage;
                     if let Some(context_window) = token_usage_info.model_context_window {
                         let percent_remaining: u8 = if context_window > 0 {
-                            last_token_usage.percent_of_context_window_remaining(
-                                context_window,
-                                token_usage_info.initial_prompt_tokens,
-                            )
+                            last_token_usage.percent_of_context_window_remaining(context_window)
                         } else {
                             100
                         };
@@ -1635,7 +1616,6 @@ mod tests {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
-        use insta::assert_snapshot;
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
@@ -1687,13 +1667,12 @@ mod tests {
                 .draw(|f| f.render_widget_ref(composer, f.area()))
                 .unwrap_or_else(|e| panic!("Failed to draw {name} composer: {e}"));
 
-            assert_snapshot!(name, terminal.backend());
+            insta::assert_snapshot!(name, terminal.backend());
         }
     }
 
     #[test]
     fn slash_popup_model_first_for_mo_ui() {
-        use insta::assert_snapshot;
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
@@ -1720,7 +1699,7 @@ mod tests {
             .unwrap_or_else(|e| panic!("Failed to draw composer: {e}"));
 
         // Visual snapshot should show the slash popup with /model as the first entry.
-        assert_snapshot!("slash_popup_mo", terminal.backend());
+        insta::assert_snapshot!("slash_popup_mo", terminal.backend());
     }
 
     #[test]
