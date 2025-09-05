@@ -10,11 +10,12 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
+use crate::custom_prompts::CustomPrompt;
 use mcp_types::CallToolResult;
 use mcp_types::Tool as McpTool;
 use serde::Deserialize;
 use serde::Serialize;
-use serde_bytes::ByteBuf;
+use serde_with::serde_as;
 use strum_macros::Display;
 use ts_rs::TS;
 use uuid::Uuid;
@@ -25,6 +26,13 @@ use crate::message_history::HistoryEntry;
 use crate::models::ResponseItem;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
+
+/// Open/close tags for special user-input blocks. Used across crates to avoid
+/// duplicated hardcoded strings.
+pub const USER_INSTRUCTIONS_OPEN_TAG: &str = "<user_instructions>";
+pub const USER_INSTRUCTIONS_CLOSE_TAG: &str = "</user_instructions>";
+pub const ENVIRONMENT_CONTEXT_OPEN_TAG: &str = "<environment_context>";
+pub const ENVIRONMENT_CONTEXT_CLOSE_TAG: &str = "</environment_context>";
 
 /// Submission Queue Entry - requests from user
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -145,6 +153,9 @@ pub enum Op {
     /// Request the list of MCP tools available across all configured servers.
     /// Reply is delivered via `EventMsg::McpListToolsResponse`.
     ListMcpTools,
+
+    /// Request the list of available custom prompts.
+    ListCustomPrompts,
 
     /// Request the agent to summarize the current conversation context.
     /// The agent will use its existing context (either conversation history or previous response id)
@@ -401,7 +412,7 @@ pub enum EventMsg {
     Error(ErrorEvent),
 
     /// Agent has started a task
-    TaskStarted,
+    TaskStarted(TaskStartedEvent),
 
     /// Agent has completed all actions
     TaskComplete(TaskCompleteEvent),
@@ -412,6 +423,9 @@ pub enum EventMsg {
 
     /// Agent text output message
     AgentMessage(AgentMessageEvent),
+
+    /// User/system input message (what was sent to the model)
+    UserMessage(UserMessageEvent),
 
     /// Agent text output delta message
     AgentMessageDelta(AgentMessageDeltaEvent),
@@ -438,6 +452,8 @@ pub enum EventMsg {
     McpToolCallEnd(McpToolCallEndEvent),
 
     WebSearchBegin(WebSearchBeginEvent),
+
+    WebSearchEnd(WebSearchEndEvent),
 
     /// Notification that the server is about to execute a command.
     ExecCommandBegin(ExecCommandBeginEvent),
@@ -472,6 +488,9 @@ pub enum EventMsg {
     /// List of MCP tools available to the agent.
     McpListToolsResponse(McpListToolsResponseEvent),
 
+    /// List of custom prompts available to the agent.
+    ListCustomPromptsResponse(ListCustomPromptsResponseEvent),
+
     PlanUpdate(UpdatePlanArgs),
 
     TurnAborted(TurnAbortedEvent),
@@ -492,6 +511,11 @@ pub struct ErrorEvent {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TaskCompleteEvent {
     pub last_agent_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TaskStartedEvent {
+    pub model_context_window: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
@@ -597,6 +621,47 @@ pub struct AgentMessageEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputMessageKind {
+    /// Plain user text (default)
+    Plain,
+    /// XML-wrapped user instructions (<user_instructions>...)
+    UserInstructions,
+    /// XML-wrapped environment context (<environment_context>...)
+    EnvironmentContext,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct UserMessageEvent {
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<InputMessageKind>,
+}
+
+impl<T, U> From<(T, U)> for InputMessageKind
+where
+    T: AsRef<str>,
+    U: AsRef<str>,
+{
+    fn from(value: (T, U)) -> Self {
+        let (_role, message) = value;
+        let message = message.as_ref();
+        let trimmed = message.trim();
+        if trimmed.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG)
+            && trimmed.ends_with(ENVIRONMENT_CONTEXT_CLOSE_TAG)
+        {
+            InputMessageKind::EnvironmentContext
+        } else if trimmed.starts_with(USER_INSTRUCTIONS_OPEN_TAG)
+            && trimmed.ends_with(USER_INSTRUCTIONS_CLOSE_TAG)
+        {
+            InputMessageKind::UserInstructions
+        } else {
+            InputMessageKind::Plain
+        }
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AgentMessageDeltaEvent {
     pub delta: String,
 }
@@ -663,6 +728,11 @@ impl McpToolCallEndEvent {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct WebSearchBeginEvent {
     pub call_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct WebSearchEndEvent {
+    pub call_id: String,
     pub query: String,
 }
 
@@ -704,22 +774,23 @@ pub struct ExecCommandEndEvent {
     pub formatted_output: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecOutputStream {
     Stdout,
     Stderr,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde_as]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ExecCommandOutputDeltaEvent {
     /// Identifier for the ExecCommandBegin that produced this chunk.
     pub call_id: String,
     /// Which stream produced this chunk.
     pub stream: ExecOutputStream,
     /// Raw bytes from the stream (may not be valid UTF-8).
-    #[serde(with = "serde_bytes")]
-    pub chunk: ByteBuf,
+    #[serde_as(as = "serde_with::base64::Base64")]
+    pub chunk: Vec<u8>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -801,6 +872,12 @@ pub struct McpListToolsResponseEvent {
     pub tools: std::collections::HashMap<String, McpTool>,
 }
 
+/// Response payload for `Op::ListCustomPrompts`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ListCustomPromptsResponseEvent {
+    pub custom_prompts: Vec<CustomPrompt>,
+}
+
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct SessionConfiguredEvent {
     /// Unique id for this session.
@@ -814,6 +891,11 @@ pub struct SessionConfiguredEvent {
 
     /// Current number of entries in the history log.
     pub history_entry_count: usize,
+
+    /// Optional initial messages (as events) for resumed sessions.
+    /// When present, UIs can use these to seed the history.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub initial_messages: Option<Vec<EventMsg>>,
 }
 
 /// User's decision in response to an ExecApprovalRequest.
@@ -844,7 +926,9 @@ pub enum FileChange {
     Add {
         content: String,
     },
-    Delete,
+    Delete {
+        content: String,
+    },
     Update {
         unified_diff: String,
         move_path: Option<PathBuf>,
@@ -887,6 +971,7 @@ mod tests {
                 model: "codex-mini-latest".to_string(),
                 history_log_id: 0,
                 history_entry_count: 0,
+                initial_messages: None,
             }),
         };
         let serialized = serde_json::to_string(&event).unwrap();
@@ -894,5 +979,22 @@ mod tests {
             serialized,
             r#"{"id":"1234","msg":{"type":"session_configured","session_id":"67e55044-10b1-426f-9247-bb680e5fe0c8","model":"codex-mini-latest","history_log_id":0,"history_entry_count":0}}"#
         );
+    }
+
+    #[test]
+    fn vec_u8_as_base64_serialization_and_deserialization() {
+        let event = ExecCommandOutputDeltaEvent {
+            call_id: "call21".to_string(),
+            stream: ExecOutputStream::Stdout,
+            chunk: vec![1, 2, 3, 4, 5],
+        };
+        let serialized = serde_json::to_string(&event).unwrap();
+        assert_eq!(
+            r#"{"call_id":"call21","stream":"stdout","chunk":"AQIDBAU="}"#,
+            serialized,
+        );
+
+        let deserialized: ExecCommandOutputDeltaEvent = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized, event);
     }
 }

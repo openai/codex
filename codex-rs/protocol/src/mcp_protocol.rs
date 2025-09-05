@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::path::PathBuf;
 
+use crate::config_types::ConfigProfile;
 use crate::config_types::ReasoningEffort;
 use crate::config_types::ReasoningSummary;
 use crate::config_types::SandboxMode;
@@ -100,6 +101,16 @@ pub enum ClientRequest {
         #[serde(rename = "id")]
         request_id: RequestId,
         params: GetAuthStatusParams,
+    },
+    GetConfigToml {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+    },
+    /// Execute a command (argv vector) under the server's sandbox.
+    ExecOneOffCommand {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: ExecOneOffCommandParams,
     },
 }
 
@@ -215,12 +226,56 @@ pub struct GetAuthStatusParams {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+pub struct ExecOneOffCommandParams {
+    /// Command argv to execute.
+    pub command: Vec<String>,
+    /// Timeout of the command in milliseconds.
+    /// If not specified, a sensible default is used server-side.
+    pub timeout_ms: Option<u64>,
+    /// Optional working directory for the process. Defaults to server config cwd.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<PathBuf>,
+    /// Optional explicit sandbox policy overriding the server default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sandbox_policy: Option<SandboxPolicy>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecArbitraryCommandResponse {
+    pub exit_code: i32,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct GetAuthStatusResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_method: Option<AuthMode>,
     pub preferred_auth_method: AuthMode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_token: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GetConfigTomlResponse {
+    /// Approvals
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub approval_policy: Option<AskForApproval>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sandbox_mode: Option<SandboxMode>,
+
+    /// Relevant model configuration
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model_reasoning_effort: Option<ReasoningEffort>,
+
+    /// Profiles
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub profiles: Option<HashMap<String, ConfigProfile>>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]

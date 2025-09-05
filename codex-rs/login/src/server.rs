@@ -5,12 +5,14 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
 
-use crate::AuthDotJson;
-use crate::get_auth_file;
 use crate::pkce::PkceCodes;
 use crate::pkce::generate_pkce;
 use base64::Engine;
 use chrono::Utc;
+use codex_core::auth::AuthDotJson;
+use codex_core::auth::get_auth_file;
+use codex_core::token_data::TokenData;
+use codex_core::token_data::parse_id_token;
 use rand::RngCore;
 use tiny_http::Header;
 use tiny_http::Request;
@@ -28,10 +30,11 @@ pub struct ServerOptions {
     pub port: u16,
     pub open_browser: bool,
     pub force_state: Option<String>,
+    pub originator: String,
 }
 
 impl ServerOptions {
-    pub fn new(codex_home: PathBuf, client_id: String) -> Self {
+    pub fn new(codex_home: PathBuf, client_id: String, originator: String) -> Self {
         Self {
             codex_home,
             client_id: client_id.to_string(),
@@ -39,6 +42,7 @@ impl ServerOptions {
             port: DEFAULT_PORT,
             open_browser: true,
             force_state: None,
+            originator,
         }
     }
 }
@@ -94,7 +98,14 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
     let server = Arc::new(server);
 
     let redirect_uri = format!("http://localhost:{actual_port}/auth/callback");
-    let auth_url = build_authorize_url(&opts.issuer, &opts.client_id, &redirect_uri, &pkce, &state);
+    let auth_url = build_authorize_url(
+        &opts.issuer,
+        &opts.client_id,
+        &redirect_uri,
+        &pkce,
+        &state,
+        &opts.originator,
+    );
 
     if opts.open_browser {
         let _ = webbrowser::open(&auth_url);
@@ -277,6 +288,7 @@ fn build_authorize_url(
     redirect_uri: &str,
     pkce: &PkceCodes,
     state: &str,
+    originator: &str,
 ) -> String {
     let query = vec![
         ("response_type", "code"),
@@ -288,6 +300,7 @@ fn build_authorize_url(
         ("id_token_add_organizations", "true"),
         ("codex_cli_simplified_flow", "true"),
         ("state", state),
+        ("originator", originator),
     ];
     let qs = query
         .into_iter()
@@ -374,10 +387,8 @@ async fn persist_tokens_async(
         if let Some(key) = api_key {
             auth.openai_api_key = Some(key);
         }
-        let tokens = auth
-            .tokens
-            .get_or_insert_with(crate::token_data::TokenData::default);
-        tokens.id_token = crate::token_data::parse_id_token(&id_token).map_err(io::Error::other)?;
+        let tokens = auth.tokens.get_or_insert_with(TokenData::default);
+        tokens.id_token = parse_id_token(&id_token).map_err(io::Error::other)?;
         // Persist chatgpt_account_id if present in claims
         if let Some(acc) = jwt_auth_claims(&id_token)
             .get("chatgpt_account_id")
@@ -392,14 +403,14 @@ async fn persist_tokens_async(
             tokens.refresh_token = rt;
         }
         auth.last_refresh = Some(Utc::now());
-        super::write_auth_json(&auth_file, &auth)
+        codex_core::auth::write_auth_json(&auth_file, &auth)
     })
     .await
     .map_err(|e| io::Error::other(format!("persist task failed: {e}")))?
 }
 
 fn read_or_default(path: &Path) -> AuthDotJson {
-    match super::try_read_auth_json(path) {
+    match codex_core::auth::try_read_auth_json(path) {
         Ok(auth) => auth,
         Err(_) => AuthDotJson {
             openai_api_key: None,

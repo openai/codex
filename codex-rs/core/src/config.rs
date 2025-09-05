@@ -1,12 +1,12 @@
 use crate::config_profile::ConfigProfile;
 use crate::config_types::History;
 use crate::config_types::McpServerConfig;
+use crate::config_types::ReasoningSummaryFormat;
 use crate::config_types::SandboxWorkspaceWrite;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::config_types::ShellEnvironmentPolicyToml;
 use crate::config_types::Tui;
 use crate::config_types::UriBasedFileOpener;
-use crate::config_types::Verbosity;
 use crate::git_info::resolve_root_git_project_for_trust;
 use crate::model_family::ModelFamily;
 use crate::model_family::find_family_for_model;
@@ -15,10 +15,11 @@ use crate::model_provider_info::built_in_model_providers;
 use crate::openai_model_info::get_model_info;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
-use codex_login::AuthMode;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
+use codex_protocol::config_types::Verbosity;
+use codex_protocol::mcp_protocol::AuthMode;
 use dirs::home_dir;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -178,6 +179,13 @@ pub struct Config {
     pub preferred_auth_method: AuthMode,
 
     pub use_experimental_streamable_shell_tool: bool,
+
+    /// Include the `view_image` tool that lets the agent attach a local image path to context.
+    pub include_view_image_tool: bool,
+    /// When true, disables burst-paste detection for typed input entirely.
+    /// All characters are inserted as they are received, and no buffering
+    /// or placeholder replacement will occur for fast keypress bursts.
+    pub disable_paste_burst: bool,
 }
 
 impl Config {
@@ -464,6 +472,9 @@ pub struct ConfigToml {
     /// Override to force-enable reasoning summaries for the configured model.
     pub model_supports_reasoning_summaries: Option<bool>,
 
+    /// Override to force reasoning summary format for the configured model.
+    pub model_reasoning_summary_format: Option<ReasoningSummaryFormat>,
+
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
 
@@ -485,6 +496,11 @@ pub struct ConfigToml {
 
     /// Nested tools section for feature toggles
     pub tools: Option<ToolsToml>,
+
+    /// When true, disables burst-paste detection for typed input entirely.
+    /// All characters are inserted as they are received, and no buffering
+    /// or placeholder replacement will occur for fast keypress bursts.
+    pub disable_paste_burst: Option<bool>,
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -494,9 +510,12 @@ pub struct ProjectConfig {
 
 #[derive(Deserialize, Debug, Clone, Default)]
 pub struct ToolsToml {
-    // Renamed from `web_search_request`; keep alias for backwards compatibility.
     #[serde(default, alias = "web_search_request")]
     pub web_search: Option<bool>,
+
+    /// Enable the `view_image` tool that lets the agent attach local images.
+    #[serde(default)]
+    pub view_image: Option<bool>,
 }
 
 impl ConfigToml {
@@ -586,6 +605,7 @@ pub struct ConfigOverrides {
     pub base_instructions: Option<String>,
     pub include_plan_tool: Option<bool>,
     pub include_apply_patch_tool: Option<bool>,
+    pub include_view_image_tool: Option<bool>,
     pub disable_response_storage: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
@@ -613,6 +633,7 @@ impl Config {
             base_instructions,
             include_plan_tool,
             include_apply_patch_tool,
+            include_view_image_tool,
             disable_response_storage,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
@@ -654,7 +675,7 @@ impl Config {
             })?
             .clone();
 
-        let shell_environment_policy = cfg.shell_environment_policy.clone().into();
+        let shell_environment_policy = cfg.shell_environment_policy.into();
 
         let resolved_cwd = {
             use std::env;
@@ -675,11 +696,15 @@ impl Config {
             }
         };
 
-        let history = cfg.history.clone().unwrap_or_default();
+        let history = cfg.history.unwrap_or_default();
 
         let tools_web_search_request = override_tools_web_search_request
             .or(cfg.tools.as_ref().and_then(|t| t.web_search))
             .unwrap_or(false);
+
+        let include_view_image_tool = include_view_image_tool
+            .or(cfg.tools.as_ref().and_then(|t| t.view_image))
+            .unwrap_or(true);
 
         let model = model
             .or(config_profile.model)
@@ -688,11 +713,15 @@ impl Config {
         let model_family = find_family_for_model(&model).unwrap_or_else(|| {
             let supports_reasoning_summaries =
                 cfg.model_supports_reasoning_summaries.unwrap_or(false);
+            let reasoning_summary_format = cfg
+                .model_reasoning_summary_format
+                .unwrap_or(ReasoningSummaryFormat::None);
             ModelFamily {
                 slug: model.clone(),
                 family: model.clone(),
                 needs_special_apply_patch_instructions: false,
                 supports_reasoning_summaries,
+                reasoning_summary_format,
                 uses_local_shell_tool: false,
                 apply_patch_tool_type: None,
             }
@@ -753,7 +782,7 @@ impl Config {
             codex_home,
             history,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
-            tui: cfg.tui.clone().unwrap_or_default(),
+            tui: cfg.tui.unwrap_or_default(),
             codex_linux_sandbox_exe,
 
             hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(false),
@@ -772,7 +801,7 @@ impl Config {
             model_verbosity: config_profile.model_verbosity.or(cfg.model_verbosity),
             chatgpt_base_url: config_profile
                 .chatgpt_base_url
-                .or(cfg.chatgpt_base_url.clone())
+                .or(cfg.chatgpt_base_url)
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
 
             experimental_resume,
@@ -784,6 +813,8 @@ impl Config {
             use_experimental_streamable_shell_tool: cfg
                 .experimental_use_exec_command_tool
                 .unwrap_or(false),
+            include_view_image_tool,
+            disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
         };
         Ok(config)
     }
@@ -1037,6 +1068,14 @@ model = "o3"
 model_provider = "openai"
 approval_policy = "on-failure"
 disable_response_storage = true
+
+[profiles.gpt5]
+model = "gpt-5"
+model_provider = "openai"
+approval_policy = "on-failure"
+model_reasoning_effort = "high"
+model_reasoning_summary = "detailed"
+model_verbosity = "high"
 "#;
 
         let cfg: ConfigToml = toml::from_str(toml).expect("TOML deserialization should succeed");
@@ -1152,6 +1191,8 @@ disable_response_storage = true
                 responses_originator_header: "codex_cli_rs".to_string(),
                 preferred_auth_method: AuthMode::ChatGPT,
                 use_experimental_streamable_shell_tool: false,
+                include_view_image_tool: true,
+                disable_paste_burst: false,
             },
             o3_profile_config
         );
@@ -1208,6 +1249,8 @@ disable_response_storage = true
             responses_originator_header: "codex_cli_rs".to_string(),
             preferred_auth_method: AuthMode::ChatGPT,
             use_experimental_streamable_shell_tool: false,
+            include_view_image_tool: true,
+            disable_paste_burst: false,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -1279,9 +1322,70 @@ disable_response_storage = true
             responses_originator_header: "codex_cli_rs".to_string(),
             preferred_auth_method: AuthMode::ChatGPT,
             use_experimental_streamable_shell_tool: false,
+            include_view_image_tool: true,
+            disable_paste_burst: false,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
+        let fixture = create_test_fixture()?;
+
+        let gpt5_profile_overrides = ConfigOverrides {
+            config_profile: Some("gpt5".to_string()),
+            cwd: Some(fixture.cwd()),
+            ..Default::default()
+        };
+        let gpt5_profile_config = Config::load_from_base_config_with_overrides(
+            fixture.cfg.clone(),
+            gpt5_profile_overrides,
+            fixture.codex_home(),
+        )?;
+        let expected_gpt5_profile_config = Config {
+            model: "gpt-5".to_string(),
+            model_family: find_family_for_model("gpt-5").expect("known model slug"),
+            model_context_window: Some(400_000),
+            model_max_output_tokens: Some(128_000),
+            model_provider_id: "openai".to_string(),
+            model_provider: fixture.openai_provider.clone(),
+            approval_policy: AskForApproval::OnFailure,
+            sandbox_policy: SandboxPolicy::new_read_only_policy(),
+            shell_environment_policy: ShellEnvironmentPolicy::default(),
+            disable_response_storage: false,
+            user_instructions: None,
+            notify: None,
+            cwd: fixture.cwd(),
+            mcp_servers: HashMap::new(),
+            model_providers: fixture.model_provider_map.clone(),
+            project_doc_max_bytes: PROJECT_DOC_MAX_BYTES,
+            codex_home: fixture.codex_home(),
+            history: History::default(),
+            file_opener: UriBasedFileOpener::VsCode,
+            tui: Tui::default(),
+            codex_linux_sandbox_exe: None,
+            hide_agent_reasoning: false,
+            show_raw_agent_reasoning: false,
+            model_reasoning_effort: ReasoningEffort::High,
+            model_reasoning_summary: ReasoningSummary::Detailed,
+            model_verbosity: Some(Verbosity::High),
+            chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
+            experimental_resume: None,
+            base_instructions: None,
+            include_plan_tool: false,
+            include_apply_patch_tool: false,
+            tools_web_search_request: false,
+            responses_originator_header: "codex_cli_rs".to_string(),
+            preferred_auth_method: AuthMode::ChatGPT,
+            use_experimental_streamable_shell_tool: false,
+            include_view_image_tool: true,
+            disable_paste_burst: false,
+        };
+
+        assert_eq!(expected_gpt5_profile_config, gpt5_profile_config);
 
         Ok(())
     }
@@ -1300,9 +1404,9 @@ disable_response_storage = true
 
         let raw_path = project_dir.path().to_string_lossy();
         let path_str = if raw_path.contains('\\') {
-            format!("'{}'", raw_path)
+            format!("'{raw_path}'")
         } else {
-            format!("\"{}\"", raw_path)
+            format!("\"{raw_path}\"")
         };
         let expected = format!(
             r#"[projects.{path_str}]
@@ -1323,9 +1427,9 @@ trust_level = "trusted"
         let config_path = codex_home.path().join(CONFIG_TOML_FILE);
         let raw_path = project_dir.path().to_string_lossy();
         let path_str = if raw_path.contains('\\') {
-            format!("'{}'", raw_path)
+            format!("'{raw_path}'")
         } else {
-            format!("\"{}\"", raw_path)
+            format!("\"{raw_path}\"")
         };
         // Use a quoted key so backslashes don't require escaping on Windows
         let initial = format!(
