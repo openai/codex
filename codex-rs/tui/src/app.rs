@@ -318,11 +318,8 @@ impl App {
                 kind: KeyEventKind::Press,
                 ..
             } => {
-                // Enter alternate screen and set viewport to full size.
-                let _ = tui.enter_alt_screen();
-                let (lines, _spans) = self.build_transcript_flattened();
-                self.overlay = Some(Overlay::new_transcript(lines));
-                tui.frame_requester().schedule_frame();
+                // Delegate to helper to open transcript overlay.
+                self.open_transcript_overlay(tui);
             }
             // Esc primes/advances backtracking only in normal (not working) mode
             // with an empty composer. In any other state, forward Esc so the
@@ -368,29 +365,5 @@ impl App {
                 // Ignore Release key events.
             }
         };
-    }
-
-    /// Build flattened transcript lines and absolute user spans on demand.
-    /// This replaces the previous persistent `transcript_lines`/`user_spans` state.
-    pub(crate) fn build_transcript_flattened(&self) -> (Vec<Line<'static>>, Vec<(usize, usize)>) {
-        let mut out: Vec<Line<'static>> = Vec::new();
-        let mut spans: Vec<(usize, usize)> = Vec::new();
-        for cell in &self.transcript_cells {
-            let is_stream = cell.is_stream_continuation();
-            let mut lines = cell.transcript_lines();
-            if !is_stream && !out.is_empty() && !lines.is_empty() {
-                out.push("".into());
-            }
-            let start = out.len();
-            if let Some(span) = cell.message_span()
-                && matches!(cell.kind(), crate::history_cell::MessageKind::User)
-            {
-                let header_abs = start.saturating_add(span.header_offset);
-                let end_abs = header_abs.saturating_add(1).saturating_add(span.body_len);
-                spans.push((header_abs, end_abs));
-            }
-            out.append(&mut lines);
-        }
-        (out, spans)
     }
 }
