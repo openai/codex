@@ -165,7 +165,6 @@ impl ModelClient {
             self.summary,
         );
 
-        // Always request encrypted COT to avoid ID references in reasoning content.
         let include: Vec<String> = if reasoning.is_some() {
             vec!["reasoning.encrypted_content".to_string()]
         } else {

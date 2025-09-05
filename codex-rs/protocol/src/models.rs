@@ -48,7 +48,7 @@ pub enum ResponseItem {
         content: Vec<ContentItem>,
     },
     Reasoning {
-        #[serde(skip_serializing)]
+        #[serde(default)]
         id: String,
         summary: Vec<ReasoningItemReasoningSummary>,
         #[serde(default, skip_serializing_if = "should_serialize_reasoning_content")]

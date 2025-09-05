@@ -574,11 +574,6 @@ async fn prefers_chatgpt_token_when_config_prefers_chatgpt() {
         .unwrap();
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
-
-    // verify request body flags
-    let request = &server.received_requests().await.unwrap()[0];
-    let request_body = request.body_json::<serde_json::Value>().unwrap();
-    // store flag removed; responses are never stored.
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -655,11 +650,6 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
         .unwrap();
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
-
-    // verify request body flags
-    let request = &server.received_requests().await.unwrap()[0];
-    let request_body = request.body_json::<serde_json::Value>().unwrap();
-    // store flag removed; responses are never stored.
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
