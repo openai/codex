@@ -690,6 +690,10 @@ pub(crate) fn new_session_info(
             format!(" - {}", SlashCommand::Approvals.description()).dim(),
         ]));
         lines.push(Line::from(vec![
+            " /sandbox".bold(),
+            format!(" - {}", SlashCommand::Sandbox.description()).dim(),
+        ]));
+        lines.push(Line::from(vec![
             " /model".bold(),
             format!(" - {}", SlashCommand::Model.description()).dim(),
         ]));

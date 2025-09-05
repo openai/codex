@@ -74,8 +74,6 @@ use self::agent::spawn_agent;
 use self::agent::spawn_agent_from_existing;
 use crate::streaming::controller::AppEventHistorySink;
 use crate::streaming::controller::StreamController;
-use codex_common::approval_presets::ApprovalPreset;
-use codex_common::approval_presets::builtin_approval_presets;
 use codex_common::model_presets::ModelPreset;
 use codex_common::model_presets::builtin_model_presets;
 use codex_core::ConversationManager;
@@ -832,6 +830,9 @@ impl ChatWidget {
             SlashCommand::Approvals => {
                 self.open_approvals_popup();
             }
+            SlashCommand::Sandbox => {
+                self.open_sandbox_popup();
+            }
             SlashCommand::Quit => {
                 self.app_event_tx.send(AppEvent::ExitRequest);
             }
@@ -1201,30 +1202,48 @@ impl ChatWidget {
         );
     }
 
-    /// Open a popup to choose the approvals mode (ask for approval policy + sandbox policy).
+    /// Open a popup to choose the approval policy only.
     pub(crate) fn open_approvals_popup(&mut self) {
         let current_approval = self.config.approval_policy;
-        let current_sandbox = self.config.sandbox_policy.clone();
         let mut items: Vec<SelectionItem> = Vec::new();
-        let presets: Vec<ApprovalPreset> = builtin_approval_presets();
-        for preset in presets.into_iter() {
-            let is_current =
-                current_approval == preset.approval && current_sandbox == preset.sandbox;
-            let approval = preset.approval;
-            let sandbox = preset.sandbox.clone();
-            let name = preset.label.to_string();
-            let description = Some(preset.description.to_string());
+
+        let options: Vec<(&str, &str, AskForApproval)> = vec![
+            (
+                "Untrusted",
+                "Only run trusted read-only commands automatically; ask otherwise",
+                AskForApproval::UnlessTrusted,
+            ),
+            (
+                "On Failure",
+                "Auto-approve; ask only when a command fails and needs elevated permissions",
+                AskForApproval::OnFailure,
+            ),
+            (
+                "On Request",
+                "Model decides when to ask for approval",
+                AskForApproval::OnRequest,
+            ),
+            (
+                "Never",
+                "Never ask; failures return immediately",
+                AskForApproval::Never,
+            ),
+        ];
+
+        for (label, desc, approval) in options.into_iter() {
+            let is_current = current_approval == approval;
+            let name = label.to_string();
+            let description = Some(desc.to_string());
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                 tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
                     cwd: None,
                     approval_policy: Some(approval),
-                    sandbox_policy: Some(sandbox.clone()),
+                    sandbox_policy: None,
                     model: None,
                     effort: None,
                     summary: None,
                 }));
                 tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
-                tx.send(AppEvent::UpdateSandboxPolicy(sandbox.clone()));
             })];
             items.push(SelectionItem {
                 name,
@@ -1235,7 +1254,62 @@ impl ChatWidget {
         }
 
         self.bottom_pane.show_selection_view(
-            "Select Approval Mode".to_string(),
+            "Select Approval Policy".to_string(),
+            None,
+            Some("Press Enter to confirm or Esc to go back".to_string()),
+            items,
+        );
+    }
+
+    /// Open a popup to choose the sandbox mode only.
+    pub(crate) fn open_sandbox_popup(&mut self) {
+        let current_sandbox = self.config.sandbox_policy.clone();
+        let mut items: Vec<SelectionItem> = Vec::new();
+
+        let options: Vec<(&str, &str, SandboxPolicy)> = vec![
+            (
+                "Read Only",
+                "Codex can read files and answer questions. Codex requires approval to make edits, run commands, or access network",
+                SandboxPolicy::ReadOnly,
+            ),
+            (
+                "Workspace Write",
+                "Codex can read files, make edits, and run commands in the workspace. Codex requires approval to work outside the workspace or access network",
+                SandboxPolicy::new_workspace_write_policy(),
+            ),
+            (
+                "Full Access",
+                "Codex can read files, make edits, and run commands with network access, without approval. Exercise caution",
+                SandboxPolicy::DangerFullAccess,
+            ),
+        ];
+
+        for (label, desc, sandbox) in options.into_iter() {
+            let is_current = current_sandbox == sandbox;
+            let name = label.to_string();
+            let description = Some(desc.to_string());
+            let sandbox_clone = sandbox.clone();
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                    cwd: None,
+                    approval_policy: None,
+                    sandbox_policy: Some(sandbox_clone.clone()),
+                    model: None,
+                    effort: None,
+                    summary: None,
+                }));
+                tx.send(AppEvent::UpdateSandboxPolicy(sandbox_clone.clone()));
+            })];
+            items.push(SelectionItem {
+                name,
+                description,
+                is_current,
+                actions,
+            });
+        }
+
+        self.bottom_pane.show_selection_view(
+            "Select Sandbox Mode".to_string(),
             None,
             Some("Press Enter to confirm or Esc to go back".to_string()),
             items,
