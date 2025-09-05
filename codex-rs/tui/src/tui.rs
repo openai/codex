@@ -44,6 +44,42 @@ use crate::custom_terminal::Terminal as CustomTerminal;
 use tokio::select;
 use tokio_stream::Stream;
 
+/// Normalize keyboard events so that Control+letter chords are case-insensitive
+/// across platforms/terminal states (e.g., Caps Lock). When CONTROL is held,
+/// we lowercase ASCII letters and drop SHIFT so matches like Ctrl+C work even
+/// if Caps Lock is on or Shift is pressed.
+fn normalize_ctrl_char_key_event(ev: KeyEvent) -> KeyEvent {
+    match ev {
+        KeyEvent {
+            code: KeyCode::Char(c),
+            modifiers,
+            kind,
+            state,
+        } if modifiers.contains(KeyModifiers::CONTROL) => {
+            let mut new_mods = modifiers;
+            // For ASCII alphabetic chars, normalize to lowercase and ignore SHIFT.
+            if c.is_ascii_alphabetic() {
+                new_mods.remove(KeyModifiers::SHIFT);
+                let lc = c.to_ascii_lowercase();
+                return KeyEvent {
+                    code: KeyCode::Char(lc),
+                    modifiers: new_mods,
+                    kind,
+                    state,
+                };
+            }
+            // Non-alphabetic chars: leave as-is
+            KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers,
+                kind,
+                state,
+            }
+        }
+        other => other,
+    }
+}
+
 /// A type alias for the terminal type used in this application
 pub type Terminal = CustomTerminal<CrosstermBackend<Stdout>>;
 
@@ -305,30 +341,36 @@ impl Tui {
                 select! {
                     Some(Ok(event)) = crossterm_events.next() => {
                         match event {
-                            // Detect Ctrl+V to attach an image from the clipboard.
-                            Event::Key(key_event @ KeyEvent {
-                                code: KeyCode::Char('v'),
-                                modifiers: KeyModifiers::CONTROL,
-                                kind: KeyEventKind::Press,
-                                ..
-                            }) => {
-                                match paste_image_to_temp_png() {
-                                    Ok((path, info)) => {
-                                        yield TuiEvent::AttachImage {
-                                            path,
-                                            width: info.width,
-                                            height: info.height,
-                                            format_label: info.encoded_format.label(),
-                                        };
+                            crossterm::event::Event::Key(raw_key_event) => {
+                                // Normalize Control+letter chords to be case-insensitive
+                                // (handles Caps Lock and Shift modifiers consistently).
+                                let key_event = normalize_ctrl_char_key_event(raw_key_event);
+                                // Detect Ctrl+V to attach an image from the clipboard after normalization.
+                                if matches!(
+                                    key_event,
+                                    KeyEvent {
+                                        code: KeyCode::Char('v'),
+                                        modifiers: KeyModifiers::CONTROL,
+                                        kind: KeyEventKind::Press,
+                                        ..
                                     }
-                                    Err(_) => {
-                                        // Fall back to normal key handling if no image is available.
-                                        yield TuiEvent::Key(key_event);
+                                ) {
+                                    match paste_image_to_temp_png() {
+                                        Ok((path, info)) => {
+                                            yield TuiEvent::AttachImage {
+                                                path,
+                                                width: info.width,
+                                                height: info.height,
+                                                format_label: info.encoded_format.label(),
+                                            };
+                                        }
+                                        Err(_) => {
+                                            // Fall back to normal key handling if no image is available.
+                                            yield TuiEvent::Key(key_event);
+                                        }
                                     }
+                                    continue;
                                 }
-                            }
-
-                            crossterm::event::Event::Key(key_event) => {
                                 #[cfg(unix)]
                                 if matches!(
                                     key_event,
