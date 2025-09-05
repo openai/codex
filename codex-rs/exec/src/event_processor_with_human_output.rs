@@ -515,6 +515,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     model,
                     history_log_id: _,
                     history_entry_count: _,
+                    initial_messages: _,
                 } = session_configured_event;
 
                 ts_println!(
@@ -551,6 +552,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             },
             EventMsg::ShutdownComplete => return CodexStatus::Shutdown,
             EventMsg::ConversationHistory(_) => {}
+            EventMsg::UserMessage(_) => {}
         }
         CodexStatus::Running
     }

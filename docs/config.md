@@ -90,7 +90,7 @@ http_headers = { "X-Example-Header" = "example-value" }
 # This will add the HTTP header `X-Example-Features` with the value of the
 # `EXAMPLE_FEATURES` environment variable to each request to the model provider
 # _if_ the environment variable is set and its value is non-empty.
-env_http_headers = { "X-Example-Features": "EXAMPLE_FEATURES" }
+env_http_headers = { "X-Example-Features" = "EXAMPLE_FEATURES" }
 ```
 
 ### Per-provider network tuning
@@ -607,6 +607,7 @@ Options that are specific to the TUI.
 | `model_reasoning_summary` | `auto` \| `concise` \| `detailed` \| `none` | Reasoning summaries. |
 | `model_verbosity` | `low` \| `medium` \| `high` | GPT‑5 text verbosity (Responses API). |
 | `model_supports_reasoning_summaries` | boolean | Force‑enable reasoning summaries. |
+| `model_reasoning_summary_format` | `none` \| `experimental` | Force reasoning summary format. |
 | `chatgpt_base_url` | string | Base URL for ChatGPT auth flow. |
 | `experimental_resume` | string (path) | Resume JSONL path (internal/experimental). |
 | `experimental_instructions_file` | string (path) | Replace built‑in instructions (experimental). |
