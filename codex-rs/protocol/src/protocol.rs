@@ -617,17 +617,6 @@ impl TokenUsage {
         ((remaining as f32 / effective_window as f32) * 100.0).clamp(0.0, 100.0) as u8
     }
 
-    /// Returns a new TokenUsage equal to the element-wise sum of `self` and `other`.
-    pub fn add(&self, other: &TokenUsage) -> TokenUsage {
-        TokenUsage {
-            input_tokens: self.input_tokens + other.input_tokens,
-            cached_input_tokens: self.cached_input_tokens + other.cached_input_tokens,
-            output_tokens: self.output_tokens + other.output_tokens,
-            reasoning_output_tokens: self.reasoning_output_tokens + other.reasoning_output_tokens,
-            total_tokens: self.total_tokens + other.total_tokens,
-        }
-    }
-
     /// In-place element-wise sum of token counts.
     pub fn add_assign(&mut self, other: &TokenUsage) {
         self.input_tokens += other.input_tokens;
