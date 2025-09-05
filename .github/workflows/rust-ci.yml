@@ -100,14 +100,25 @@ jobs:
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
             profile: dev
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            profile: dev
 
           # Also run representative release builds on Mac and Linux because
           # there could be release-only build errors we want to catch.
+          # Hopefully this also pre-populates the build cache to speed up
+          # releases.
           - runner: macos-14
             target: aarch64-apple-darwin
             profile: release
           - runner: ubuntu-24.04
             target: x86_64-unknown-linux-musl
+            profile: release
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            profile: release
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
             profile: release
 
     steps:
@@ -134,7 +145,7 @@ jobs:
 
       - name: cargo clippy
         id: clippy
-        run: cargo clippy --target ${{ matrix.target }} --all-features --tests -- -D warnings
+        run: cargo clippy --target ${{ matrix.target }} --all-features --tests --profile ${{ matrix.profile }} -- -D warnings
 
       # Running `cargo build` from the workspace root builds the workspace using
       # the union of all features from third-party crates. This can mask errors
