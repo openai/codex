@@ -28,6 +28,9 @@ codex-mcp-server = { path = "../mcp-server" }
 codex-protocol = { path = "../protocol" }
 codex-tui = { path = "../tui" }
 serde_json = "1"
+toml = "0.9.5"
+toml_edit = "0.23.4"
+tempfile = "3"
 tokio = { version = "1", features = [
     "io-std",
     "macros",
@@ -38,3 +41,6 @@ tokio = { version = "1", features = [
 tracing = "0.1.41"
 tracing-subscriber = "0.3.19"
 codex-protocol-ts = { path = "../protocol-ts" }
+
+[dev-dependencies]
+assert_cmd = "2"
