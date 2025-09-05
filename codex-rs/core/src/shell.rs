@@ -277,6 +277,100 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_run_with_profile_bash_escaping_and_execution() {
+        let shell_path = "/bin/bash";
+
+        let cases = vec![
+            (
+                vec!["myecho"],
+                vec![shell_path, "-lc", "source BASHRC_PATH && (myecho)"],
+                Some("It works!\n"),
+            ),
+            (
+                vec!["bash", "-lc", "echo 'single' \"double\""],
+                vec![
+                    shell_path,
+                    "-lc",
+                    "source BASHRC_PATH && (echo 'single' \"double\")",
+                ],
+                Some("single double\n"),
+            ),
+        ];
+
+        for (input, expected_cmd, expected_output) in cases {
+            use std::collections::HashMap;
+
+            use crate::exec::ExecParams;
+            use crate::exec::SandboxType;
+            use crate::exec::process_exec_tool_call;
+            use crate::protocol::SandboxPolicy;
+
+            let temp_home = tempfile::tempdir().unwrap();
+            let bashrc_path = temp_home.path().join(".bashrc");
+            std::fs::write(
+                &bashrc_path,
+                r#"
+                    set -x
+                    function myecho {
+                        echo 'It works!'
+                    }
+                    "#,
+            )
+            .unwrap();
+            let shell = Shell::Bash(BashShell {
+                shell_path: shell_path.to_string(),
+                bashrc_path: bashrc_path.to_str().unwrap().to_string(),
+            });
+
+            let actual_cmd = shell
+                .format_default_shell_invocation(input.iter().map(|s| s.to_string()).collect());
+            let expected_cmd = expected_cmd
+                .iter()
+                .map(|s| {
+                    s.replace("BASHRC_PATH", bashrc_path.to_str().unwrap())
+                        .to_string()
+                })
+                .collect();
+
+            assert_eq!(actual_cmd, Some(expected_cmd));
+
+            let output = process_exec_tool_call(
+                ExecParams {
+                    command: actual_cmd.unwrap(),
+                    cwd: PathBuf::from(temp_home.path()),
+                    timeout_ms: None,
+                    env: HashMap::from([(
+                        "HOME".to_string(),
+                        temp_home.path().to_str().unwrap().to_string(),
+                    )]),
+                    with_escalated_permissions: None,
+                    justification: None,
+                },
+                SandboxType::None,
+                &SandboxPolicy::DangerFullAccess,
+                &None,
+                None,
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(output.exit_code, 0, "input: {input:?} output: {output:?}");
+            if let Some(expected) = expected_output {
+                assert_eq!(
+                    output.stdout.text, expected,
+                    "input: {input:?} output: {output:?}"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+#[cfg(target_os = "macos")]
+mod macos_tests {
+    use super::*;
+
+    #[tokio::test]
     async fn test_run_with_profile_escaping_and_execution() {
         let shell_path = "/bin/zsh";
 
@@ -349,94 +443,6 @@ mod tests {
 
             assert_eq!(actual_cmd, Some(expected_cmd));
             // Actually run the command and check output/exit code
-            let output = process_exec_tool_call(
-                ExecParams {
-                    command: actual_cmd.unwrap(),
-                    cwd: PathBuf::from(temp_home.path()),
-                    timeout_ms: None,
-                    env: HashMap::from([(
-                        "HOME".to_string(),
-                        temp_home.path().to_str().unwrap().to_string(),
-                    )]),
-                    with_escalated_permissions: None,
-                    justification: None,
-                },
-                SandboxType::None,
-                &SandboxPolicy::DangerFullAccess,
-                &None,
-                None,
-            )
-            .await
-            .unwrap();
-
-            assert_eq!(output.exit_code, 0, "input: {input:?} output: {output:?}");
-            if let Some(expected) = expected_output {
-                assert_eq!(
-                    output.stdout.text, expected,
-                    "input: {input:?} output: {output:?}"
-                );
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn test_run_with_profile_bash_escaping_and_execution() {
-        let shell_path = "/bin/bash";
-
-        let cases = vec![
-            (
-                vec!["myecho"],
-                vec![shell_path, "-lc", "source BASHRC_PATH && (myecho)"],
-                Some("It works!\n"),
-            ),
-            (
-                vec!["bash", "-lc", "echo 'single' \"double\""],
-                vec![
-                    shell_path,
-                    "-lc",
-                    "source BASHRC_PATH && (echo 'single' \"double\")",
-                ],
-                Some("single double\n"),
-            ),
-        ];
-
-        for (input, expected_cmd, expected_output) in cases {
-            use std::collections::HashMap;
-
-            use crate::exec::ExecParams;
-            use crate::exec::SandboxType;
-            use crate::exec::process_exec_tool_call;
-            use crate::protocol::SandboxPolicy;
-
-            let temp_home = tempfile::tempdir().unwrap();
-            let bashrc_path = temp_home.path().join(".bashrc");
-            std::fs::write(
-                &bashrc_path,
-                r#"
-                    set -x
-                    function myecho {
-                        echo 'It works!'
-                    }
-                    "#,
-            )
-            .unwrap();
-            let shell = Shell::Bash(BashShell {
-                shell_path: shell_path.to_string(),
-                bashrc_path: bashrc_path.to_str().unwrap().to_string(),
-            });
-
-            let actual_cmd = shell
-                .format_default_shell_invocation(input.iter().map(|s| s.to_string()).collect());
-            let expected_cmd = expected_cmd
-                .iter()
-                .map(|s| {
-                    s.replace("BASHRC_PATH", bashrc_path.to_str().unwrap())
-                        .to_string()
-                })
-                .collect();
-
-            assert_eq!(actual_cmd, Some(expected_cmd));
-
             let output = process_exec_tool_call(
                 ExecParams {
                     command: actual_cmd.unwrap(),
