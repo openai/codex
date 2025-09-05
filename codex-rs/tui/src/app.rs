@@ -40,9 +40,9 @@ pub(crate) struct App {
 
     pub(crate) file_search: FileSearchManager,
 
-    pub(crate) transcript_lines: Vec<Line<'static>>,
-    // Absolute [header..end) ranges for user messages within `transcript_lines`.
-    pub(crate) user_spans: Vec<(usize, usize)>,
+    /// Canonical source of truth for transcript content.
+    /// We compute transcript lines/spans on-demand when needed (e.g., opening overlay).
+    pub(crate) transcript_cells: Vec<Box<dyn crate::history_cell::HistoryCell>>,
 
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
@@ -123,8 +123,7 @@ impl App {
             config,
             file_search,
             enhanced_keys_supported,
-            transcript_lines: Vec::new(),
-            user_spans: Vec::new(),
+            transcript_cells: Vec::new(),
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
@@ -206,32 +205,22 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::InsertHistoryCell(cell) => {
-                let mut cell_transcript = cell.transcript_lines();
-                let mut prepend_line_count = 0;
-                if !cell.is_stream_continuation() && !self.transcript_lines.is_empty() {
-                    cell_transcript.insert(0, Line::from(""));
-                    prepend_line_count += 1;
-                }
+                // Compute transcript increment and history display before moving the cell.
+                let is_stream = cell.is_stream_continuation();
+                let cell_transcript = cell.transcript_lines();
+                let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
+                // Persist canonical cells for future on-demand builds.
+                self.transcript_cells.push(cell);
+                // If overlay is showing, append to it with appropriate separation.
                 if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                    t.insert_lines(cell_transcript.clone());
+                    t.insert_transcript_lines_with_sep(cell_transcript, is_stream);
                     tui.frame_requester().schedule_frame();
                 }
-                // Compute absolute indices before extending transcript
-                let start = self.transcript_lines.len() + prepend_line_count;
-                if let Some(span) = cell.message_span()
-                    && matches!(cell.kind(), crate::history_cell::MessageKind::User)
-                {
-                    let header_abs = start.saturating_add(span.header_offset);
-                    let end_abs = header_abs.saturating_add(1).saturating_add(span.body_len);
-                    self.user_spans.push((header_abs, end_abs));
-                }
-                self.transcript_lines.extend(cell_transcript.clone());
-                let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
                 if !display.is_empty() {
                     // Only insert a separating blank line for new cells that are not
                     // part of an ongoing stream. Streaming continuations should not
                     // accrue extra blank lines between chunks.
-                    if !cell.is_stream_continuation() {
+                    if !is_stream {
                         if self.has_emitted_history_lines {
                             display.insert(0, Line::from(""));
                         } else {
@@ -331,7 +320,8 @@ impl App {
             } => {
                 // Enter alternate screen and set viewport to full size.
                 let _ = tui.enter_alt_screen();
-                self.overlay = Some(Overlay::new_transcript(self.transcript_lines.clone()));
+                let (lines, _spans) = self.build_transcript_flattened();
+                self.overlay = Some(Overlay::new_transcript(lines));
                 tui.frame_requester().schedule_frame();
             }
             // Esc primes/advances backtracking only in normal (not working) mode
@@ -378,5 +368,29 @@ impl App {
                 // Ignore Release key events.
             }
         };
+    }
+
+    /// Build flattened transcript lines and absolute user spans on demand.
+    /// This replaces the previous persistent `transcript_lines`/`user_spans` state.
+    pub(crate) fn build_transcript_flattened(&self) -> (Vec<Line<'static>>, Vec<(usize, usize)>) {
+        let mut out: Vec<Line<'static>> = Vec::new();
+        let mut spans: Vec<(usize, usize)> = Vec::new();
+        for cell in &self.transcript_cells {
+            let is_stream = cell.is_stream_continuation();
+            let mut lines = cell.transcript_lines();
+            if !is_stream && !out.is_empty() && !lines.is_empty() {
+                out.push("".into());
+            }
+            let start = out.len();
+            if let Some(span) = cell.message_span()
+                && matches!(cell.kind(), crate::history_cell::MessageKind::User)
+            {
+                let header_abs = start.saturating_add(span.header_offset);
+                let end_abs = header_abs.saturating_add(1).saturating_add(span.body_len);
+                spans.push((header_abs, end_abs));
+            }
+            out.append(&mut lines);
+        }
+        (out, spans)
     }
 }

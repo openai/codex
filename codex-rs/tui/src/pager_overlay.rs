@@ -384,9 +384,26 @@ impl TranscriptOverlay {
         }
     }
 
-    pub(crate) fn insert_lines(&mut self, lines: Vec<Line<'static>>) {
+    /// Insert transcript lines, automatically adding a separating blank line
+    /// when appropriate.
+    /// A blank line is inserted iff:
+    /// - this insertion is not a streaming continuation, and
+    /// - the overlay already contains some content, and
+    /// - there is at least one line to insert.
+    pub(crate) fn insert_transcript_lines_with_sep(
+        &mut self,
+        mut lines: Vec<Line<'static>>,
+        is_stream_continuation: bool,
+    ) {
+        if lines.is_empty() {
+            return;
+        }
         let follow_bottom = self.view.is_scrolled_to_bottom();
-        self.view.lines.extend(lines);
+        let needs_sep = !is_stream_continuation && !self.view.lines.is_empty();
+        if needs_sep {
+            self.view.lines.push("".into());
+        }
+        self.view.lines.append(&mut lines);
         self.view.wrap_cache = None;
         if follow_bottom {
             self.view.scroll_offset = usize::MAX;
@@ -584,7 +601,7 @@ mod tests {
             "expected initial render to leave view at bottom"
         );
 
-        overlay.insert_lines(vec!["tail".into()]);
+        overlay.insert_transcript_lines_with_sep(vec!["tail".into()], false);
 
         assert_eq!(overlay.view.scroll_offset, usize::MAX);
     }
@@ -599,7 +616,7 @@ mod tests {
 
         overlay.view.scroll_offset = 0;
 
-        overlay.insert_lines(vec!["tail".into()]);
+        overlay.insert_transcript_lines_with_sep(vec!["tail".into()], false);
 
         assert_eq!(overlay.view.scroll_offset, 0);
     }
