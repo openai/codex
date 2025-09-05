@@ -259,7 +259,19 @@ pub async fn run_main(
             .map_err(|e| std::io::Error::other(format!("OSS setup failed: {e}")))?;
     }
 
-    let _ = tracing_subscriber::registry().with(file_layer).try_init();
+    let _telemetry_guard = if let Some((guard, tracer)) = telemetry {
+        let otel_layer = tracing_opentelemetry::OpenTelemetryLayer::new(tracer).with_filter(
+            tracing_subscriber::filter::filter_fn(codex_core::telemetry_init::codex_export_filter),
+        );
+        let _ = tracing_subscriber::registry()
+            .with(file_layer)
+            .with(otel_layer)
+            .try_init();
+        Some(guard)
+    } else {
+        let _ = tracing_subscriber::registry().with(file_layer).try_init();
+        None
+    };
 
     run_ratatui_app(cli, config, active_profile, should_show_trust_screen)
         .await
