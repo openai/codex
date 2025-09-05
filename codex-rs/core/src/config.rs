@@ -193,7 +193,6 @@ pub struct Config {
     pub disable_paste_burst: bool,
     /// Telemetry configuration (exporter type, endpoint, headers, etc.).
     pub telemetry: crate::config_types::TelemetryConfig,
-
 }
 
 impl Config {
