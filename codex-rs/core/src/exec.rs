@@ -177,7 +177,18 @@ fn is_likely_sandbox_denied(sandbox_type: SandboxType, exit_code: i32) -> bool {
         return false;
     }
 
-    // Quick rejects: well-known non-sandbox shell exit codes
+    // For Linux sandbox, we need to handle specific exit codes that indicate
+    // sandbox-related failures:
+    // - Exit code 1: Landlock initialization failure or non-Linux platform
+    // - Exit code 2: No command specified to execute
+    // - Exit code 127: Failed to execute command (from linux-sandbox itself)
+    if sandbox_type == SandboxType::LinuxSeccomp {
+        // These exit codes from linux-sandbox should be treated as sandbox errors
+        // to ensure proper error display in TUI
+        return matches!(exit_code, 1 | 2 | 127);
+    }
+
+    // For other sandbox types, reject well-known non-sandbox shell exit codes
     // 127: command not found, 2: misuse of shell builtins
     if exit_code == 127 {
         return false;
