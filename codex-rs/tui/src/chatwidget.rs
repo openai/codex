@@ -1403,8 +1403,6 @@ const EXAMPLE_PROMPTS: [&str; 6] = [
     "Improve documentation in @filename",
 ];
 
-// Note: usage accumulation moved to session level; UI no longer sums locally.
-
 // Extract the first bold (Markdown) element in the form **...** from `s`.
 // Returns the inner text if found; otherwise `None`.
 fn extract_first_bold(s: &str) -> Option<String> {
