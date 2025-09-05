@@ -362,6 +362,24 @@ args = ["-y", "mcp-server"]
 env = { "API_KEY" = "value" }
 ```
 
+### Per-profile MCP servers
+
+You can scope MCP servers to a specific profile and optionally inherit the global set. Profile entries override globals on key conflicts.
+
+```toml
+# Global servers (available to all profiles unless opted out)
+[mcp_servers.some_server]
+command = "some_server"
+
+# Profile-specific MCP server
+[profiles.ops.mcp_servers.analysis]
+command = "ops_mcp"
+
+# You can disable inheriting the global MCP servers in a specific profile
+[profiles.minimal]
+inherit_global_mcp_servers = false  # only profile servers (none defined => none)
+```
+
 ## disable_response_storage
 
 Currently, customers whose accounts are set to use Zero Data Retention (ZDR) must set `disable_response_storage` to `true` so that Codex uses an alternative to the Responses API that works with ZDR:
