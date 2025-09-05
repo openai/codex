@@ -181,7 +181,7 @@ impl App {
                                 frame.set_cursor_position((x, y));
                             }
                         },
-)?;
+                    )?;
                 }
                 TuiEvent::AttachImage {
                     path,

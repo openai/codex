@@ -314,7 +314,6 @@ impl TurnContext {
             .map(PathBuf::from)
             .map_or_else(|| self.cwd.clone(), |p| self.cwd.join(p))
     }
-
 }
 
 /// Configure the model session.
@@ -479,14 +478,12 @@ impl Session {
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             user_shell: default_shell,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
-            session_span: Mutex::new(None),
+            session_span: Mutex::new(Some(codex_telemetry::make_session_span(
+                &session_id.to_string(),
+                &model,
+                &provider.name,
+            ))),
         });
-        // Create a session root span for the lifetime of this session.
-        sess.session_span.lock_unchecked().replace(codex_telemetry::make_session_span(
-            &session_id.to_string(),
-            &model,
-            &provider.name,
-        ));
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
@@ -947,7 +944,6 @@ impl Session {
             drop(span);
         }
     }
-
 }
 
 impl Drop for Session {
