@@ -105,7 +105,8 @@ impl App {
     /// Open transcript overlay (enters alternate screen and shows full transcript).
     pub(crate) fn open_transcript_overlay(&mut self, tui: &mut tui::Tui) {
         let _ = tui.enter_alt_screen();
-        self.overlay = Some(Overlay::new_transcript(self.transcript_lines.clone()));
+        let (lines, _spans) = self.build_transcript_flattened();
+        self.overlay = Some(Overlay::new_transcript(lines));
         tui.frame_requester().schedule_frame();
     }
 
@@ -122,14 +123,6 @@ impl App {
         if was_backtrack {
             // Ensure backtrack state is fully reset when overlay closes (e.g. via 'q').
             self.reset_backtrack_state();
-        }
-    }
-
-    /// Re-render the full transcript into the terminal scrollback in one call.
-    /// Useful when switching sessions to ensure prior history remains visible.
-    pub(crate) fn render_transcript_once(&mut self, tui: &mut tui::Tui) {
-        if !self.transcript_lines.is_empty() {
-            tui.insert_history_lines(self.transcript_lines.clone());
         }
     }
 
@@ -174,16 +167,13 @@ impl App {
         tui: &tui::Tui,
         requested_n: usize,
     ) -> (usize, Option<usize>, Option<(usize, usize)>) {
-        let nth = backtrack_helpers::normalize_backtrack_n(&self.user_spans, requested_n);
-        let header_idx = backtrack_helpers::find_nth_last_user_header_index(&self.user_spans, nth);
+        let (lines, spans) = self.build_transcript_flattened();
+        let nth = backtrack_helpers::normalize_backtrack_n(&spans, requested_n);
+        let header_idx = backtrack_helpers::find_nth_last_user_header_index(&spans, nth);
         let offset = header_idx.map(|idx| {
-            backtrack_helpers::wrapped_offset_before(
-                &self.transcript_lines,
-                idx,
-                tui.terminal.viewport_area.width,
-            )
+            backtrack_helpers::wrapped_offset_before(&lines, idx, tui.terminal.viewport_area.width)
         });
-        let hl = backtrack_helpers::highlight_range_for_nth_last_user(&self.user_spans, nth);
+        let hl = backtrack_helpers::highlight_range_for_nth_last_user(&spans, nth);
         (nth, offset, hl)
     }
 
@@ -218,12 +208,9 @@ impl App {
     fn overlay_confirm_backtrack(&mut self, tui: &mut tui::Tui) {
         if let Some(base_id) = self.backtrack.base_id {
             let drop_last_messages = self.backtrack.count;
-            let prefill = backtrack_helpers::nth_last_user_text(
-                &self.transcript_lines,
-                &self.user_spans,
-                drop_last_messages,
-            )
-            .unwrap_or_default();
+            let (lines, spans) = self.build_transcript_flattened();
+            let prefill = backtrack_helpers::nth_last_user_text(&lines, &spans, drop_last_messages)
+                .unwrap_or_default();
             self.close_transcript_overlay(tui);
             self.request_backtrack(prefill, base_id, drop_last_messages);
         }
@@ -245,12 +232,9 @@ impl App {
     pub(crate) fn confirm_backtrack_from_main(&mut self) {
         if let Some(base_id) = self.backtrack.base_id {
             let drop_last_messages = self.backtrack.count;
-            let prefill = backtrack_helpers::nth_last_user_text(
-                &self.transcript_lines,
-                &self.user_spans,
-                drop_last_messages,
-            )
-            .unwrap_or_default();
+            let (lines, spans) = self.build_transcript_flattened();
+            let prefill = backtrack_helpers::nth_last_user_text(&lines, &spans, drop_last_messages)
+                .unwrap_or_default();
             self.request_backtrack(prefill, base_id, drop_last_messages);
         }
         self.reset_backtrack_state();
@@ -336,26 +320,26 @@ impl App {
         };
         self.chat_widget =
             crate::chatwidget::ChatWidget::new_from_existing(init, conv, session_configured);
-        // Trim transcript up to the selected user message and re-render it.
-        self.trim_transcript_for_backtrack(drop_count);
-        self.render_transcript_once(tui);
+        // Render transcript only up to the selected user message.
+        self.render_transcript_up_to_backtrack(tui, drop_count);
         if !prefill.is_empty() {
             self.chat_widget.insert_str(prefill);
         }
         tui.frame_requester().schedule_frame();
     }
 
-    /// Trim transcript_lines to preserve only content up to the selected user message.
-    fn trim_transcript_for_backtrack(&mut self, drop_count: usize) {
+    /// Render only the prefix of the transcript up to the selected user message.
+    fn render_transcript_up_to_backtrack(&mut self, tui: &mut tui::Tui, drop_count: usize) {
+        let (lines, spans) = self.build_transcript_flattened();
         if let Some(cut_idx) =
-            backtrack_helpers::find_nth_last_user_header_index(&self.user_spans, drop_count)
+            backtrack_helpers::find_nth_last_user_header_index(&spans, drop_count)
         {
-            self.transcript_lines.truncate(cut_idx);
-            // Drop any user spans whose header lies at or beyond the cut index.
-            self.user_spans.retain(|(header, _)| *header < cut_idx);
-        } else {
-            self.transcript_lines.clear();
-            self.user_spans.clear();
+            let prefix = lines.into_iter().take(cut_idx).collect::<Vec<_>>();
+            if !prefix.is_empty() {
+                tui.insert_history_lines(prefix);
+            }
+        } else if !lines.is_empty() {
+            // If no cut index found (e.g., drop_count == 0), render nothing.
         }
     }
 }
