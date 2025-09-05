@@ -14,6 +14,7 @@ use codex_core::ConversationManager;
 use codex_core::NewConversation;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::find_codex_home;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
@@ -25,6 +26,8 @@ use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
 use event_processor_with_json_output::EventProcessorWithJsonOutput;
+use std::fs;
+use std::path::Path;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
@@ -47,6 +50,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         last_message_file,
         json: json_mode,
         sandbox_mode: sandbox_mode_cli_arg,
+        resume_latest,
         prompt,
         config_overrides,
     } = cli;
@@ -154,13 +158,87 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         tools_web_search_request: None,
     };
     // Parse `-c` overrides.
-    let cli_kv_overrides = match config_overrides.parse_overrides() {
+    let mut cli_kv_overrides = match config_overrides.parse_overrides() {
         Ok(v) => v,
         Err(e) => {
             eprintln!("Error parsing -c overrides: {e}");
             std::process::exit(1);
         }
     };
+
+    // If requested, find the most recent rollout and inject as an override.
+    if resume_latest
+        && let Ok(codex_home) = find_codex_home()
+        && let Some(latest) = find_latest_rollout_path(&codex_home)
+    {
+        let path_str = latest.to_string_lossy().to_string();
+        cli_kv_overrides.push((
+            "experimental_resume".to_string(),
+            toml::Value::String(path_str),
+        ));
+    }
+
+    // Local helper to find the newest rollout file under ~/.codex/sessions.
+    fn find_latest_rollout_path(codex_home: &Path) -> Option<PathBuf> {
+        let sessions = codex_home.join("sessions");
+        let mut years: Vec<(u16, PathBuf)> = fs::read_dir(&sessions)
+            .ok()?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                name.parse::<u16>().ok().map(|y| (y, e.path()))
+            })
+            .collect();
+        years.sort_by(|a, b| b.0.cmp(&a.0));
+
+        for (_, ypath) in years {
+            let mut months: Vec<(u8, PathBuf)> = fs::read_dir(&ypath)
+                .ok()?
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
+                .filter_map(|e| {
+                    let name = e.file_name().to_string_lossy().into_owned();
+                    name.parse::<u8>().ok().map(|m| (m, e.path()))
+                })
+                .collect();
+            months.sort_by(|a, b| b.0.cmp(&a.0));
+
+            for (_, mpath) in months {
+                let mut days: Vec<(u8, PathBuf)> = fs::read_dir(&mpath)
+                    .ok()?
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
+                    .filter_map(|e| {
+                        let name = e.file_name().to_string_lossy().into_owned();
+                        name.parse::<u8>().ok().map(|d| (d, e.path()))
+                    })
+                    .collect();
+                days.sort_by(|a, b| b.0.cmp(&a.0));
+
+                for (_, dpath) in days {
+                    let mut files: Vec<PathBuf> = fs::read_dir(&dpath)
+                        .ok()?
+                        .filter_map(|e| e.ok())
+                        .filter(|e| e.file_type().map(|ft| ft.is_file()).unwrap_or(false))
+                        .map(|e| e.path())
+                        .filter(|p| {
+                            if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
+                                name.starts_with("rollout-") && name.ends_with(".jsonl")
+                            } else {
+                                false
+                            }
+                        })
+                        .collect();
+                    files.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+                    if let Some(p) = files.into_iter().next() {
+                        return Some(p);
+                    }
+                }
+            }
+        }
+        None
+    }
 
     let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides)?;
     let mut event_processor: Box<dyn EventProcessor> = if json_mode {

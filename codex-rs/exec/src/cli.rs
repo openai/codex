@@ -63,6 +63,10 @@ pub struct Cli {
     #[arg(long = "output-last-message")]
     pub last_message_file: Option<PathBuf>,
 
+    /// Resume from the most recent recorded session rollout under `~/.codex/sessions`.
+    #[arg(long = "resume-latest", default_value_t = false)]
+    pub resume_latest: bool,
+
     /// Initial instructions for the agent. If not provided as an argument (or
     /// if `-` is used), instructions are read from stdin.
     #[arg(value_name = "PROMPT")]

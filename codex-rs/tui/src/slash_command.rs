@@ -23,6 +23,8 @@ pub enum SlashCommand {
     Mcp,
     Logout,
     Quit,
+    /// Resume from the most recent recorded session rollout.
+    ResumeLatest,
     #[cfg(debug_assertions)]
     TestApproval,
 }
@@ -42,6 +44,7 @@ impl SlashCommand {
             SlashCommand::Approvals => "choose what Codex can do without approval",
             SlashCommand::Mcp => "list configured MCP tools",
             SlashCommand::Logout => "log out of Codex",
+            SlashCommand::ResumeLatest => "resume the most recent conversation session",
             #[cfg(debug_assertions)]
             SlashCommand::TestApproval => "test approval request",
         }
@@ -66,6 +69,7 @@ impl SlashCommand {
             | SlashCommand::Mention
             | SlashCommand::Status
             | SlashCommand::Mcp
+            | SlashCommand::ResumeLatest
             | SlashCommand::Quit => true,
 
             #[cfg(debug_assertions)]

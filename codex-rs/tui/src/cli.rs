@@ -58,6 +58,10 @@ pub struct Cli {
     #[arg(long = "search", default_value_t = false)]
     pub web_search: bool,
 
+    /// Resume from the most recent recorded session rollout under `~/.codex/sessions`.
+    #[arg(long = "resume-latest", default_value_t = false)]
+    pub resume_latest: bool,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 }

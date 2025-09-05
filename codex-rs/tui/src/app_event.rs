@@ -16,6 +16,9 @@ pub(crate) enum AppEvent {
     /// Start a new session.
     NewSession,
 
+    /// Resume from the most recent recorded conversation (rollout file).
+    ResumeLatest,
+
     /// Request to exit the application gracefully.
     ExitRequest,
 

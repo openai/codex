@@ -17,7 +17,9 @@ use codex_core::protocol::SandboxPolicy;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::mcp_protocol::AuthMode;
+use std::fs;
 use std::fs::OpenOptions;
+use std::path::Path;
 use std::path::PathBuf;
 use tracing::error;
 use tracing_appender::non_blocking;
@@ -132,7 +134,7 @@ pub async fn run_main(
     };
     let raw_overrides = cli.config_overrides.raw_overrides.clone();
     let overrides_cli = codex_common::CliConfigOverrides { raw_overrides };
-    let cli_kv_overrides = match overrides_cli.parse_overrides() {
+    let mut cli_kv_overrides = match overrides_cli.parse_overrides() {
         Ok(v) => v,
         #[allow(clippy::print_stderr)]
         Err(e) => {
@@ -140,6 +142,19 @@ pub async fn run_main(
             std::process::exit(1);
         }
     };
+
+    // If resuming latest is requested, discover the newest rollout file and
+    // inject it as an override for `experimental_resume` before loading config.
+    if cli.resume_latest
+        && let Ok(codex_home) = find_codex_home()
+        && let Some(latest) = find_latest_rollout_path(&codex_home)
+    {
+        let path_str = latest.to_string_lossy().to_string();
+        cli_kv_overrides.push((
+            "experimental_resume".to_string(),
+            toml::Value::String(path_str),
+        ));
+    }
 
     let mut config = {
         // Load configuration and support CLI overrides.
@@ -153,6 +168,69 @@ pub async fn run_main(
             }
         }
     };
+
+    // Local helper: find the newest rollout file under ~/.codex/sessions.
+    fn find_latest_rollout_path(codex_home: &Path) -> Option<PathBuf> {
+        let sessions = codex_home.join("sessions");
+        let mut years: Vec<(u16, PathBuf)> = fs::read_dir(&sessions)
+            .ok()?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                name.parse::<u16>().ok().map(|y| (y, e.path()))
+            })
+            .collect();
+        years.sort_by(|a, b| b.0.cmp(&a.0));
+
+        for (_, ypath) in years {
+            let mut months: Vec<(u8, PathBuf)> = fs::read_dir(&ypath)
+                .ok()?
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
+                .filter_map(|e| {
+                    let name = e.file_name().to_string_lossy().into_owned();
+                    name.parse::<u8>().ok().map(|m| (m, e.path()))
+                })
+                .collect();
+            months.sort_by(|a, b| b.0.cmp(&a.0));
+
+            for (_, mpath) in months {
+                let mut days: Vec<(u8, PathBuf)> = fs::read_dir(&mpath)
+                    .ok()?
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
+                    .filter_map(|e| {
+                        let name = e.file_name().to_string_lossy().into_owned();
+                        name.parse::<u8>().ok().map(|d| (d, e.path()))
+                    })
+                    .collect();
+                days.sort_by(|a, b| b.0.cmp(&a.0));
+
+                for (_, dpath) in days {
+                    // Collect rollout files and pick the lexicographically latest filename.
+                    let mut files: Vec<PathBuf> = fs::read_dir(&dpath)
+                        .ok()?
+                        .filter_map(|e| e.ok())
+                        .filter(|e| e.file_type().map(|ft| ft.is_file()).unwrap_or(false))
+                        .map(|e| e.path())
+                        .filter(|p| {
+                            if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
+                                name.starts_with("rollout-") && name.ends_with(".jsonl")
+                            } else {
+                                false
+                            }
+                        })
+                        .collect();
+                    files.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+                    if let Some(p) = files.into_iter().next() {
+                        return Some(p);
+                    }
+                }
+            }
+        }
+        None
+    }
 
     // we load config.toml here to determine project state.
     #[allow(clippy::print_stderr)]

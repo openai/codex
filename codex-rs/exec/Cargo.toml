@@ -40,6 +40,7 @@ tokio = { version = "1", features = [
 ] }
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+toml = "0.9"
 
 [dev-dependencies]
 assert_cmd = "2"

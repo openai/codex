@@ -18,6 +18,7 @@ use crossterm::event::KeyEventKind;
 use crossterm::terminal::supports_keyboard_enhancement;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -178,6 +179,31 @@ impl App {
                     self.enhanced_keys_supported,
                 );
                 tui.frame_requester().schedule_frame();
+            }
+            AppEvent::ResumeLatest => {
+                if let Some(latest) = find_latest_rollout_path(&self.config.codex_home) {
+                    let mut cfg = self.config.clone();
+                    cfg.experimental_resume = Some(latest);
+                    self.chat_widget = ChatWidget::new(
+                        cfg,
+                        self.server.clone(),
+                        tui.frame_requester(),
+                        self.app_event_tx.clone(),
+                        None,
+                        Vec::new(),
+                        self.enhanced_keys_supported,
+                    );
+                    tui.frame_requester().schedule_frame();
+                } else {
+                    // Emit a status line informing the user no sessions were found.
+                    use crate::history_cell;
+                    self.app_event_tx.send(AppEvent::InsertHistoryCell(Box::new(
+                        history_cell::new_error_event(
+                            "No previous sessions found to resume.".to_string(),
+                        ),
+                    )));
+                    tui.frame_requester().schedule_frame();
+                }
             }
             AppEvent::InsertHistoryCell(cell) => {
                 let mut cell_transcript = cell.transcript_lines();
@@ -342,4 +368,66 @@ impl App {
             }
         };
     }
+}
+
+/// Find the newest rollout file under ~/.codex/sessions.
+fn find_latest_rollout_path(codex_home: &std::path::Path) -> Option<std::path::PathBuf> {
+    let sessions = codex_home.join("sessions");
+    let mut years: Vec<(u16, std::path::PathBuf)> = fs::read_dir(&sessions)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().into_owned();
+            name.parse::<u16>().ok().map(|y| (y, e.path()))
+        })
+        .collect();
+    years.sort_by(|a, b| b.0.cmp(&a.0));
+
+    for (_, ypath) in years {
+        let mut months: Vec<(u8, std::path::PathBuf)> = fs::read_dir(&ypath)
+            .ok()?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().into_owned();
+                name.parse::<u8>().ok().map(|m| (m, e.path()))
+            })
+            .collect();
+        months.sort_by(|a, b| b.0.cmp(&a.0));
+
+        for (_, mpath) in months {
+            let mut days: Vec<(u8, std::path::PathBuf)> = fs::read_dir(&mpath)
+                .ok()?
+                .filter_map(|e| e.ok())
+                .filter(|e| e.file_type().map(|ft| ft.is_dir()).unwrap_or(false))
+                .filter_map(|e| {
+                    let name = e.file_name().to_string_lossy().into_owned();
+                    name.parse::<u8>().ok().map(|d| (d, e.path()))
+                })
+                .collect();
+            days.sort_by(|a, b| b.0.cmp(&a.0));
+
+            for (_, dpath) in days {
+                let mut files: Vec<std::path::PathBuf> = fs::read_dir(&dpath)
+                    .ok()?
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.file_type().map(|ft| ft.is_file()).unwrap_or(false))
+                    .map(|e| e.path())
+                    .filter(|p| {
+                        if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
+                            name.starts_with("rollout-") && name.ends_with(".jsonl")
+                        } else {
+                            false
+                        }
+                    })
+                    .collect();
+                files.sort_by(|a, b| b.file_name().cmp(&a.file_name()));
+                if let Some(p) = files.into_iter().next() {
+                    return Some(p);
+                }
+            }
+        }
+    }
+    None
 }
