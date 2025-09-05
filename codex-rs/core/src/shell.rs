@@ -106,19 +106,16 @@ fn format_shell_invocation_with_rc(
     shell_path: &str,
     rc_path: &str,
 ) -> Option<Vec<String>> {
-    if !std::path::Path::new(rc_path).exists() {
-        return None;
-    }
-
-    let mut result = vec![shell_path.to_string()];
-    result.push("-lc".to_string());
-
     let joined = strip_bash_lc(command)
         .or_else(|| shlex::try_join(command.iter().map(|s| s.as_str())).ok())?;
 
-    result.push(format!("source {rc_path} && ({joined})"));
+    let rc_command = if std::path::Path::new(rc_path).exists() {
+        format!("source {rc_path} && ({joined})")
+    } else {
+        joined
+    };
 
-    Some(result)
+    Some(vec![shell_path.to_string(), "-lc".to_string(), rc_command])
 }
 
 fn strip_bash_lc(command: &Vec<String>) -> Option<String> {
@@ -150,14 +147,14 @@ fn detect_default_user_shell() -> Shell {
                 .into_owned();
             let home_path = CStr::from_ptr((*pw).pw_dir).to_string_lossy().into_owned();
 
-            if shell_path.contains("zsh") {
+            if shell_path.ends_with("/zsh") {
                 return Shell::Zsh(ZshShell {
                     shell_path,
                     zshrc_path: format!("{home_path}/.zshrc"),
                 });
             }
 
-            if shell_path.contains("bash") {
+            if shell_path.ends_with("/bash") {
                 return Shell::Bash(BashShell {
                     shell_path,
                     bashrc_path: format!("{home_path}/.bashrc"),
@@ -219,7 +216,7 @@ pub async fn default_user_shell() -> Shell {
 }
 
 #[cfg(test)]
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 mod tests {
     use super::*;
     use std::process::Command;
@@ -252,7 +249,14 @@ mod tests {
             zshrc_path: "/does/not/exist/.zshrc".to_string(),
         });
         let actual_cmd = shell.format_default_shell_invocation(vec!["myecho".to_string()]);
-        assert_eq!(actual_cmd, None);
+        assert_eq!(
+            actual_cmd,
+            Some(vec![
+                "/bin/zsh".to_string(),
+                "-lc".to_string(),
+                "myecho".to_string()
+            ])
+        );
     }
 
     #[tokio::test]
@@ -262,7 +266,14 @@ mod tests {
             bashrc_path: "/does/not/exist/.bashrc".to_string(),
         });
         let actual_cmd = shell.format_default_shell_invocation(vec!["myecho".to_string()]);
-        assert_eq!(actual_cmd, None);
+        assert_eq!(
+            actual_cmd,
+            Some(vec![
+                "/bin/bash".to_string(),
+                "-lc".to_string(),
+                "myecho".to_string()
+            ])
+        );
     }
 
     #[tokio::test]
