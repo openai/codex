@@ -832,25 +832,10 @@ impl TextArea {
                 None => true,
             };
             if needs_recalc {
-                let mut lines: Vec<Range<usize>> = Vec::new();
-                for line in textwrap::wrap(
+                let lines = crate::wrapping::wrap_ranges(
                     &self.text,
                     Options::new(width as usize).wrap_algorithm(textwrap::WrapAlgorithm::FirstFit),
-                )
-                .iter()
-                {
-                    match line {
-                        std::borrow::Cow::Borrowed(slice) => {
-                            let start =
-                                unsafe { slice.as_ptr().offset_from(self.text.as_ptr()) as usize };
-                            let end = start + slice.len();
-                            let trailing_spaces =
-                                self.text[end..].chars().take_while(|c| *c == ' ').count();
-                            lines.push(start..end + trailing_spaces + 1);
-                        }
-                        std::borrow::Cow::Owned(_) => unreachable!(),
-                    }
-                }
+                );
                 *cache = Some(WrapCache { width, lines });
             }
         }

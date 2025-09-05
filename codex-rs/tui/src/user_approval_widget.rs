@@ -30,6 +30,7 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::exec_command::strip_bash_lc_and_escape;
 use crate::history_cell;
+use crate::text_formatting::truncate_text;
 
 /// Request coming from the agent that needs user approval.
 pub(crate) enum ApprovalRequest {
@@ -110,45 +111,11 @@ pub(crate) struct UserApprovalWidget {
     done: bool,
 }
 
-fn to_command_display<'a>(
-    first_line: Vec<Span<'a>>,
-    cmd: String,
-    last_line: Vec<Span<'a>>,
-) -> Vec<Line<'a>> {
-    let command_lines: Vec<Span> = cmd.lines().map(|line| line.to_string().dim()).collect();
-
-    let mut lines: Vec<Line<'a>> = vec![];
-
-    let mut first_line = first_line.clone();
-    if command_lines.len() == 1 {
-        first_line.push(command_lines[0].clone());
-        first_line.extend(last_line);
-    } else {
-        for line in command_lines {
-            lines.push(vec!["    ".into(), line].into());
-        }
-        let last_line = last_line.clone();
-        lines.push(Line::from(last_line));
-    }
-    lines.insert(0, Line::from(first_line));
-
-    lines
-}
-
 impl UserApprovalWidget {
     pub(crate) fn new(approval_request: ApprovalRequest, app_event_tx: AppEventSender) -> Self {
         let confirmation_prompt = match &approval_request {
-            ApprovalRequest::Exec {
-                command, reason, ..
-            } => {
-                let cmd = strip_bash_lc_and_escape(command);
-                let mut contents: Vec<Line> = to_command_display(
-                    vec!["? ".fg(Color::Cyan), "Codex wants to run ".bold()],
-                    cmd,
-                    vec![],
-                );
-
-                contents.push(Line::from(""));
+            ApprovalRequest::Exec { reason, .. } => {
+                let mut contents: Vec<Line> = vec![];
                 if let Some(reason) = reason {
                     contents.push(Line::from(reason.clone().italic()));
                     contents.push(Line::from(""));
@@ -258,61 +225,60 @@ impl UserApprovalWidget {
     fn send_decision_with_feedback(&mut self, decision: ReviewDecision, feedback: String) {
         match &self.approval_request {
             ApprovalRequest::Exec { command, .. } => {
-                let cmd = strip_bash_lc_and_escape(command);
-                // TODO: move this rendering into history_cell.
-                let mut lines: Vec<Line<'static>> = vec![];
+                let full_cmd = strip_bash_lc_and_escape(command);
+                // Construct a concise, single-line summary of the command:
+                // - If multi-line, take the first line and append " ...".
+                // - Truncate to 80 graphemes.
+                let mut snippet = match full_cmd.split_once('\n') {
+                    Some((first, _)) => format!("{first} ..."),
+                    None => full_cmd.clone(),
+                };
+                // Enforce the 80 character length limit.
+                snippet = truncate_text(&snippet, 80);
 
-                // Result line based on decision.
+                let mut result_spans: Vec<Span<'static>> = Vec::new();
                 match decision {
                     ReviewDecision::Approved => {
-                        lines.extend(to_command_display(
-                            vec![
-                                "✔ ".fg(Color::Green),
-                                "You ".into(),
-                                "approved".bold(),
-                                " codex to run ".into(),
-                            ],
-                            cmd,
-                            vec![" this time".bold()],
-                        ));
+                        result_spans.extend(vec![
+                            "✔ ".fg(Color::Green),
+                            "You ".into(),
+                            "approved".bold(),
+                            " codex to run ".into(),
+                            snippet.clone().dim(),
+                            " this time".bold(),
+                        ]);
                     }
                     ReviewDecision::ApprovedForSession => {
-                        lines.extend(to_command_display(
-                            vec![
-                                "✔ ".fg(Color::Green),
-                                "You ".into(),
-                                "approved".bold(),
-                                " codex to run ".into(),
-                            ],
-                            cmd,
-                            vec![" every time this session".bold()],
-                        ));
+                        result_spans.extend(vec![
+                            "✔ ".fg(Color::Green),
+                            "You ".into(),
+                            "approved".bold(),
+                            " codex to run ".into(),
+                            snippet.clone().dim(),
+                            " every time this session".bold(),
+                        ]);
                     }
                     ReviewDecision::Denied => {
-                        lines.extend(to_command_display(
-                            vec![
-                                "✗ ".fg(Color::Red),
-                                "You ".into(),
-                                "did not approve".bold(),
-                                " codex to run ".into(),
-                            ],
-                            cmd,
-                            vec![],
-                        ));
+                        result_spans.extend(vec![
+                            "✗ ".fg(Color::Red),
+                            "You ".into(),
+                            "did not approve".bold(),
+                            " codex to run ".into(),
+                            snippet.clone().dim(),
+                        ]);
                     }
                     ReviewDecision::Abort => {
-                        lines.extend(to_command_display(
-                            vec![
-                                "✗ ".fg(Color::Red),
-                                "You ".into(),
-                                "canceled".bold(),
-                                " the request to run ".into(),
-                            ],
-                            cmd,
-                            vec![],
-                        ));
+                        result_spans.extend(vec![
+                            "✗ ".fg(Color::Red),
+                            "You ".into(),
+                            "canceled".bold(),
+                            " the request to run ".into(),
+                            snippet.clone().dim(),
+                        ]);
                     }
                 }
+
+                let mut lines: Vec<Line<'static>> = vec![Line::from(result_spans)];
 
                 if !feedback.trim().is_empty() {
                     lines.push(Line::from("feedback:"));

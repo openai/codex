@@ -224,19 +224,16 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     let expected_input = serde_json::json!([
         {
             "type": "message",
-            "id": null,
             "role": "user",
             "content": [{ "type": "input_text", "text": "resumed user message" }]
         },
         {
             "type": "message",
-            "id": null,
             "role": "assistant",
             "content": [{ "type": "output_text", "text": "resumed assistant message" }]
         },
         {
             "type": "message",
-            "id": null,
             "role": "user",
             "content": [{ "type": "input_text", "text": "hello" }]
         }
@@ -496,7 +493,6 @@ async fn chatgpt_auth_sends_correct_request() {
         "Bearer Access Token"
     );
     assert_eq!(request_chatgpt_account_id.to_str().unwrap(), "account_id");
-    assert!(!request_body["store"].as_bool().unwrap());
     assert!(request_body["stream"].as_bool().unwrap());
     assert_eq!(
         request_body["include"][0].as_str().unwrap(),
@@ -578,14 +574,6 @@ async fn prefers_chatgpt_token_when_config_prefers_chatgpt() {
         .unwrap();
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
-
-    // verify request body flags
-    let request = &server.received_requests().await.unwrap()[0];
-    let request_body = request.body_json::<serde_json::Value>().unwrap();
-    assert!(
-        !request_body["store"].as_bool().unwrap(),
-        "store should be false for ChatGPT auth"
-    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -662,14 +650,6 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
         .unwrap();
 
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
-
-    // verify request body flags
-    let request = &server.received_requests().await.unwrap()[0];
-    let request_body = request.body_json::<serde_json::Value>().unwrap();
-    assert!(
-        request_body["store"].as_bool().unwrap(),
-        "store should be true for API key auth"
-    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -990,31 +970,26 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     let r3_tail_expected = serde_json::json!([
         {
             "type": "message",
-            "id": null,
             "role": "user",
             "content": [{"type":"input_text","text":"U1"}]
         },
         {
             "type": "message",
-            "id": null,
             "role": "assistant",
             "content": [{"type":"output_text","text":"Hey there!\n"}]
         },
         {
             "type": "message",
-            "id": null,
             "role": "user",
             "content": [{"type":"input_text","text":"U2"}]
         },
         {
             "type": "message",
-            "id": null,
             "role": "assistant",
             "content": [{"type":"output_text","text":"Hey there!\n"}]
         },
         {
             "type": "message",
-            "id": null,
             "role": "user",
             "content": [{"type":"input_text","text":"U3"}]
         }

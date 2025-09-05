@@ -20,6 +20,8 @@ use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::Verbosity;
 use codex_protocol::mcp_protocol::AuthMode;
+use codex_protocol::mcp_protocol::Tools;
+use codex_protocol::mcp_protocol::UserSavedConfig;
 use dirs::home_dir;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -75,11 +77,6 @@ pub struct Config {
     /// When set to `true`, `AgentReasoningRawContentEvent` events will be shown in the UI/output.
     /// Defaults to `false`.
     pub show_raw_agent_reasoning: bool,
-
-    /// Disable server-side response storage (sends the full conversation
-    /// context with every request). Currently necessary for OpenAI customers
-    /// who have opted into Zero Data Retention (ZDR).
-    pub disable_response_storage: bool,
 
     /// User-provided instructions from AGENTS.md.
     pub user_instructions: Option<String>,
@@ -415,11 +412,6 @@ pub struct ConfigToml {
     /// Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`.
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
 
-    /// Disable server-side response storage (sends the full conversation
-    /// context with every request). Currently necessary for OpenAI customers
-    /// who have opted into Zero Data Retention (ZDR).
-    pub disable_response_storage: Option<bool>,
-
     /// Optional external command to spawn for end-user notifications.
     #[serde(default)]
     pub notify: Option<Vec<String>>,
@@ -503,6 +495,29 @@ pub struct ConfigToml {
     pub disable_paste_burst: Option<bool>,
 }
 
+impl From<ConfigToml> for UserSavedConfig {
+    fn from(config_toml: ConfigToml) -> Self {
+        let profiles = config_toml
+            .profiles
+            .into_iter()
+            .map(|(k, v)| (k, v.into()))
+            .collect();
+
+        Self {
+            approval_policy: config_toml.approval_policy,
+            sandbox_mode: config_toml.sandbox_mode,
+            sandbox_settings: config_toml.sandbox_workspace_write.map(From::from),
+            model: config_toml.model,
+            model_reasoning_effort: config_toml.model_reasoning_effort,
+            model_reasoning_summary: config_toml.model_reasoning_summary,
+            model_verbosity: config_toml.model_verbosity,
+            tools: config_toml.tools.map(From::from),
+            profile: config_toml.profile,
+            profiles,
+        }
+    }
+}
+
 #[derive(Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct ProjectConfig {
     pub trust_level: Option<String>,
@@ -516,6 +531,15 @@ pub struct ToolsToml {
     /// Enable the `view_image` tool that lets the agent attach local images.
     #[serde(default)]
     pub view_image: Option<bool>,
+}
+
+impl From<ToolsToml> for Tools {
+    fn from(tools_toml: ToolsToml) -> Self {
+        Self {
+            web_search: tools_toml.web_search,
+            view_image: tools_toml.view_image,
+        }
+    }
 }
 
 impl ConfigToml {
@@ -606,7 +630,6 @@ pub struct ConfigOverrides {
     pub include_plan_tool: Option<bool>,
     pub include_apply_patch_tool: Option<bool>,
     pub include_view_image_tool: Option<bool>,
-    pub disable_response_storage: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
 }
@@ -634,7 +657,6 @@ impl Config {
             include_plan_tool,
             include_apply_patch_tool,
             include_view_image_tool,
-            disable_response_storage,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
         } = overrides;
@@ -768,11 +790,6 @@ impl Config {
                 .unwrap_or_else(AskForApproval::default),
             sandbox_policy,
             shell_environment_policy,
-            disable_response_storage: config_profile
-                .disable_response_storage
-                .or(cfg.disable_response_storage)
-                .or(disable_response_storage)
-                .unwrap_or(false),
             notify: cfg.notify,
             user_instructions,
             base_instructions,
@@ -1037,7 +1054,6 @@ exclude_slash_tmp = true
         let toml = r#"
 model = "o3"
 approval_policy = "untrusted"
-disable_response_storage = false
 
 # Can be used to determine which profile to use if not specified by
 # `ConfigOverrides`.
@@ -1067,7 +1083,6 @@ model_provider = "openai-chat-completions"
 model = "o3"
 model_provider = "openai"
 approval_policy = "on-failure"
-disable_response_storage = true
 
 [profiles.gpt5]
 model = "gpt-5"
@@ -1165,7 +1180,6 @@ model_verbosity = "high"
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
-                disable_response_storage: false,
                 user_instructions: None,
                 notify: None,
                 cwd: fixture.cwd(),
@@ -1223,7 +1237,6 @@ model_verbosity = "high"
             approval_policy: AskForApproval::UnlessTrusted,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             shell_environment_policy: ShellEnvironmentPolicy::default(),
-            disable_response_storage: false,
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -1296,7 +1309,6 @@ model_verbosity = "high"
             approval_policy: AskForApproval::OnFailure,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             shell_environment_policy: ShellEnvironmentPolicy::default(),
-            disable_response_storage: true,
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -1348,14 +1360,13 @@ model_verbosity = "high"
         let expected_gpt5_profile_config = Config {
             model: "gpt-5".to_string(),
             model_family: find_family_for_model("gpt-5").expect("known model slug"),
-            model_context_window: Some(400_000),
+            model_context_window: Some(272_000),
             model_max_output_tokens: Some(128_000),
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
             approval_policy: AskForApproval::OnFailure,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             shell_environment_policy: ShellEnvironmentPolicy::default(),
-            disable_response_storage: false,
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),

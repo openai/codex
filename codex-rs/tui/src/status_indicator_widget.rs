@@ -17,8 +17,6 @@ use crate::app_event_sender::AppEventSender;
 use crate::key_hint;
 use crate::shimmer::shimmer_spans;
 use crate::tui::FrameRequester;
-use textwrap::Options as TwOptions;
-use textwrap::WordSplitter;
 
 pub(crate) struct StatusIndicatorWidget {
     /// Animated header text (defaults to "Working").
@@ -54,11 +52,8 @@ impl StatusIndicatorWidget {
         let mut total: u16 = 1; // status line
         let text_width = inner_width.saturating_sub(3); // account for " ↳ " prefix
         if text_width > 0 {
-            let opts = TwOptions::new(text_width)
-                .break_words(false)
-                .word_splitter(WordSplitter::NoHyphenation);
             for q in &self.queued_messages {
-                let wrapped = textwrap::wrap(q, &opts);
+                let wrapped = textwrap::wrap(q, text_width);
                 let lines = wrapped.len().min(3) as u16;
                 total = total.saturating_add(lines);
                 if wrapped.len() > 3 {
@@ -157,11 +152,8 @@ impl WidgetRef for StatusIndicatorWidget {
         lines.push(Line::from(spans));
         // Wrap queued messages using textwrap and show up to the first 3 lines per message.
         let text_width = area.width.saturating_sub(3); // " ↳ " prefix
-        let opts = TwOptions::new(text_width as usize)
-            .break_words(false)
-            .word_splitter(WordSplitter::NoHyphenation);
         for q in &self.queued_messages {
-            let wrapped = textwrap::wrap(q, &opts);
+            let wrapped = textwrap::wrap(q, text_width as usize);
             for (i, piece) in wrapped.iter().take(3).enumerate() {
                 let prefix = if i == 0 { " ↳ " } else { "   " };
                 let content = format!("{prefix}{piece}");

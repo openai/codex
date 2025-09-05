@@ -157,14 +157,6 @@ impl ModelClient {
 
         let auth_manager = self.auth_manager.clone();
 
-        let auth_mode = auth_manager
-            .as_ref()
-            .and_then(|m| m.auth())
-            .as_ref()
-            .map(|a| a.mode);
-
-        let store = prompt.store && auth_mode != Some(AuthMode::ChatGPT);
-
         let full_instructions = prompt.get_full_instructions(&self.config.model_family);
         let tools_json = create_tools_json_for_responses_api(&prompt.tools)?;
         let reasoning = create_reasoning_param_for_request(
@@ -173,9 +165,7 @@ impl ModelClient {
             self.summary,
         );
 
-        // Request encrypted COT if we are not storing responses,
-        // otherwise reasoning items will be referenced by ID
-        let include: Vec<String> = if !store && reasoning.is_some() {
+        let include: Vec<String> = if reasoning.is_some() {
             vec!["reasoning.encrypted_content".to_string()]
         } else {
             vec![]
@@ -204,7 +194,7 @@ impl ModelClient {
             tool_choice: "auto",
             parallel_tool_calls: false,
             reasoning,
-            store,
+            store: false,
             stream: true,
             include,
             prompt_cache_key: Some(self.session_id.to_string()),

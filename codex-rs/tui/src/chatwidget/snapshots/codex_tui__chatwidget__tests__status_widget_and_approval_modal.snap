@@ -4,9 +4,7 @@ assertion_line: 921
 expression: terminal.backend()
 ---
 "                                                                                "
-"? Codex wants to run echo 'hello world'                                         "
-"                                                                                "
-"Codex wants to run a command                                                    "
+"this is a test reason such as one that would be produced by the model           "
 "                                                                                "
 "▌Allow command?                                                                 "
 "▌ Yes   Always   No, provide feedback                                           "

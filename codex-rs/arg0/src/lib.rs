@@ -21,8 +21,7 @@ const MISSPELLED_APPLY_PATCH_ARG0: &str = "applypatch";
 /// `codex-linux-sandbox` we *directly* execute
 /// [`codex_linux_sandbox::run_main`] (which never returns). Otherwise we:
 ///
-/// 1.  Use [`dotenvy::from_path`] and [`dotenvy::dotenv`] to modify the
-///     environment before creating any threads.
+/// 1.  Load `.env` values from `~/.codex/.env` before creating any threads.
 /// 2.  Construct a Tokio multi-thread runtime.
 /// 3.  Derive the path to the current executable (so children can re-invoke the
 ///     sandbox) when running on Linux.
@@ -106,7 +105,7 @@ where
 
 const ILLEGAL_ENV_VAR_PREFIX: &str = "CODEX_";
 
-/// Load env vars from ~/.codex/.env and `$(pwd)/.env`.
+/// Load env vars from ~/.codex/.env.
 ///
 /// Security: Do not allow `.env` files to create or modify any variables
 /// with names starting with `CODEX_`.
@@ -114,10 +113,6 @@ fn load_dotenv() {
     if let Ok(codex_home) = codex_core::config::find_codex_home()
         && let Ok(iter) = dotenvy::from_path_iter(codex_home.join(".env"))
     {
-        set_filtered(iter);
-    }
-
-    if let Ok(iter) = dotenvy::dotenv_iter() {
         set_filtered(iter);
     }
 }
