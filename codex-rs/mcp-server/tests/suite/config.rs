@@ -51,7 +51,6 @@ model_reasoning_effort = "high"
 model_reasoning_summary = "detailed"
 model_verbosity = "medium"
 model_provider = "openai"
-disable_response_storage = false
 chatgpt_base_url = "https://api.chatgpt.com"
 "#,
     )
@@ -111,7 +110,6 @@ async fn get_config_toml_parses_all_fields() {
                     model_reasoning_summary: Some(ReasoningSummary::Detailed),
                     model_verbosity: Some(Verbosity::Medium),
                     model_provider: Some("openai".into()),
-                    disable_response_storage: Some(false),
                     chatgpt_base_url: Some("https://api.chatgpt.com".into()),
                 },
             )]),

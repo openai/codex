@@ -78,11 +78,6 @@ pub struct Config {
     /// Defaults to `false`.
     pub show_raw_agent_reasoning: bool,
 
-    /// Disable server-side response storage (sends the full conversation
-    /// context with every request). Currently necessary for OpenAI customers
-    /// who have opted into Zero Data Retention (ZDR).
-    pub disable_response_storage: bool,
-
     /// User-provided instructions from AGENTS.md.
     pub user_instructions: Option<String>,
 
@@ -417,11 +412,6 @@ pub struct ConfigToml {
     /// Sandbox configuration to apply if `sandbox` is `WorkspaceWrite`.
     pub sandbox_workspace_write: Option<SandboxWorkspaceWrite>,
 
-    /// Disable server-side response storage (sends the full conversation
-    /// context with every request). Currently necessary for OpenAI customers
-    /// who have opted into Zero Data Retention (ZDR).
-    pub disable_response_storage: Option<bool>,
-
     /// Optional external command to spawn for end-user notifications.
     #[serde(default)]
     pub notify: Option<Vec<String>>,
@@ -640,7 +630,6 @@ pub struct ConfigOverrides {
     pub include_plan_tool: Option<bool>,
     pub include_apply_patch_tool: Option<bool>,
     pub include_view_image_tool: Option<bool>,
-    pub disable_response_storage: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
 }
@@ -668,7 +657,6 @@ impl Config {
             include_plan_tool,
             include_apply_patch_tool,
             include_view_image_tool,
-            disable_response_storage,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
         } = overrides;
@@ -802,11 +790,6 @@ impl Config {
                 .unwrap_or_else(AskForApproval::default),
             sandbox_policy,
             shell_environment_policy,
-            disable_response_storage: config_profile
-                .disable_response_storage
-                .or(cfg.disable_response_storage)
-                .or(disable_response_storage)
-                .unwrap_or(false),
             notify: cfg.notify,
             user_instructions,
             base_instructions,
@@ -1071,7 +1054,6 @@ exclude_slash_tmp = true
         let toml = r#"
 model = "o3"
 approval_policy = "untrusted"
-disable_response_storage = false
 
 # Can be used to determine which profile to use if not specified by
 # `ConfigOverrides`.
@@ -1101,7 +1083,6 @@ model_provider = "openai-chat-completions"
 model = "o3"
 model_provider = "openai"
 approval_policy = "on-failure"
-disable_response_storage = true
 
 [profiles.gpt5]
 model = "gpt-5"
@@ -1199,7 +1180,6 @@ model_verbosity = "high"
                 approval_policy: AskForApproval::Never,
                 sandbox_policy: SandboxPolicy::new_read_only_policy(),
                 shell_environment_policy: ShellEnvironmentPolicy::default(),
-                disable_response_storage: false,
                 user_instructions: None,
                 notify: None,
                 cwd: fixture.cwd(),
@@ -1257,7 +1237,6 @@ model_verbosity = "high"
             approval_policy: AskForApproval::UnlessTrusted,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             shell_environment_policy: ShellEnvironmentPolicy::default(),
-            disable_response_storage: false,
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -1330,7 +1309,6 @@ model_verbosity = "high"
             approval_policy: AskForApproval::OnFailure,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             shell_environment_policy: ShellEnvironmentPolicy::default(),
-            disable_response_storage: true,
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
@@ -1389,7 +1367,6 @@ model_verbosity = "high"
             approval_policy: AskForApproval::OnFailure,
             sandbox_policy: SandboxPolicy::new_read_only_policy(),
             shell_environment_policy: ShellEnvironmentPolicy::default(),
-            disable_response_storage: false,
             user_instructions: None,
             notify: None,
             cwd: fixture.cwd(),
