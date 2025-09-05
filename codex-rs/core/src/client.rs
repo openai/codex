@@ -157,29 +157,8 @@ impl ModelClient {
 
         let auth_manager = self.auth_manager.clone();
 
-        let auth_mode = auth_manager
-            .as_ref()
-            .and_then(|m| m.auth())
-            .as_ref()
-            .map(|a| a.mode);
-
-        let store = prompt.store && auth_mode != Some(AuthMode::ChatGPT);
-
-        let full_instructions = prompt.get_full_instructions(&self.config.model_family);
+        // Build tools JSON once per method call (constant for all attempts).
         let tools_json = create_tools_json_for_responses_api(&prompt.tools)?;
-        let reasoning = create_reasoning_param_for_request(
-            &self.config.model_family,
-            self.effort,
-            self.summary,
-        );
-
-        // Request encrypted COT if we are not storing responses,
-        // otherwise reasoning items will be referenced by ID
-        let include: Vec<String> = if !store && reasoning.is_some() {
-            vec!["reasoning.encrypted_content".to_string()]
-        } else {
-            vec![]
-        };
 
         let input_with_instructions = prompt.get_formatted_input();
 
@@ -196,22 +175,10 @@ impl ModelClient {
             None
         };
 
-        let payload = ResponsesApiRequest {
-            model: &self.config.model,
-            instructions: &full_instructions,
-            input: &input_with_instructions,
-            tools: &tools_json,
-            tool_choice: "auto",
-            parallel_tool_calls: false,
-            reasoning,
-            store,
-            stream: true,
-            include,
-            prompt_cache_key: Some(self.session_id.to_string()),
-            text,
-        };
-
         let mut attempt = 0;
+        // If the server rejects our instructions, retry once with the
+        // built-in BASE_INSTRUCTIONS (ignoring all overrides and extras).
+        let mut force_builtin_instructions: bool = false;
         let max_retries = self.provider.request_max_retries();
 
         loop {
@@ -219,6 +186,47 @@ impl ModelClient {
 
             // Always fetch the latest auth in case a prior attempt refreshed the token.
             let auth = auth_manager.as_ref().and_then(|m| m.auth());
+
+            // Compute per‑attempt params which can vary with auth.
+            let is_chatgpt = auth.as_ref().map(|a| a.mode) == Some(AuthMode::ChatGPT);
+            let store = prompt.store && !is_chatgpt;
+            let reasoning = create_reasoning_param_for_request(
+                &self.config.model_family,
+                self.effort,
+                self.summary,
+            );
+            let include: Vec<String> = if !store && reasoning.is_some() {
+                vec!["reasoning.encrypted_content".to_string()]
+            } else {
+                vec![]
+            };
+
+            // Build instructions per attempt so we can adjust for ChatGPT.
+            let include_apply_patch_instructions = !is_chatgpt && !force_builtin_instructions;
+            // ChatGPT 経路では BASE_INSTRUCTIONS を厳密に使用するため、
+            // オーバーライドは無視する。
+            let full_instructions = prompt.get_full_instructions(
+                &self.config.model_family,
+                include_apply_patch_instructions,
+                is_chatgpt || force_builtin_instructions, /* ignore_override */
+            );
+            // ChatGPT 側の検証を考慮し、短縮は行わずそのまま送る。
+            let effective_instructions = full_instructions.into_owned();
+
+            let payload = ResponsesApiRequest {
+                model: &self.config.model,
+                instructions: &effective_instructions,
+                input: &input_with_instructions,
+                tools: &tools_json,
+                tool_choice: "auto",
+                parallel_tool_calls: false,
+                reasoning,
+                store,
+                stream: true,
+                include,
+                prompt_cache_key: Some(self.session_id.to_string()),
+                text,
+            };
 
             trace!(
                 "POST to {}: {}",
@@ -300,6 +308,14 @@ impl ModelClient {
                     {
                         // Surface the error body to callers. Use `unwrap_or_default` per Clippy.
                         let body = res.text().await.unwrap_or_default();
+                        // Fallback: if the provider complains that instructions are invalid,
+                        // retry once with the built-in instructions only.
+                        if !force_builtin_instructions
+                            && body.to_lowercase().contains("instructions are not valid")
+                        {
+                            force_builtin_instructions = true;
+                            continue;
+                        }
                         return Err(CodexErr::UnexpectedStatus(status, body));
                     }
 

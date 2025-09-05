@@ -38,7 +38,7 @@ pub(crate) async fn stream_chat_completions(
     // Build messages array
     let mut messages = Vec::<serde_json::Value>::new();
 
-    let full_instructions = prompt.get_full_instructions(model_family);
+    let full_instructions = prompt.get_full_instructions(model_family, true, false);
     messages.push(json!({"role": "system", "content": full_instructions}));
 
     let input = prompt.get_formatted_input();

@@ -37,11 +37,19 @@ pub struct Prompt {
 }
 
 impl Prompt {
-    pub(crate) fn get_full_instructions(&self, model: &ModelFamily) -> Cow<'_, str> {
-        let base = self
-            .base_instructions_override
-            .as_deref()
-            .unwrap_or(BASE_INSTRUCTIONS);
+    pub(crate) fn get_full_instructions(
+        &self,
+        model: &ModelFamily,
+        include_apply_patch_instructions: bool,
+        ignore_override: bool,
+    ) -> Cow<'_, str> {
+        let base = if ignore_override {
+            BASE_INSTRUCTIONS
+        } else {
+            self.base_instructions_override
+                .as_deref()
+                .unwrap_or(BASE_INSTRUCTIONS)
+        };
         let mut sections: Vec<&str> = vec![base];
 
         // When there are no custom instructions, add apply_patch_tool_instructions if either:
@@ -52,7 +60,8 @@ impl Prompt {
             OpenAiTool::Freeform(f) => f.name == "apply_patch",
             _ => false,
         });
-        if self.base_instructions_override.is_none()
+        if include_apply_patch_instructions
+            && self.base_instructions_override.is_none()
             && (model.needs_special_apply_patch_instructions || !is_apply_patch_tool_present)
         {
             sections.push(APPLY_PATCH_TOOL_INSTRUCTIONS);
@@ -183,7 +192,7 @@ mod tests {
         };
         let expected = format!("{BASE_INSTRUCTIONS}\n{APPLY_PATCH_TOOL_INSTRUCTIONS}");
         let model_family = find_family_for_model("gpt-4.1").expect("known model slug");
-        let full = prompt.get_full_instructions(&model_family);
+        let full = prompt.get_full_instructions(&model_family, true, false);
         assert_eq!(full, expected);
     }
 
