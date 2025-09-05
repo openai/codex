@@ -189,8 +189,8 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 }
                 return CodexStatus::InitiateShutdown;
             }
-            EventMsg::TokenCount(usage_info_opt) => {
-                if let Some(usage_info) = usage_info_opt {
+            EventMsg::TokenCount(ev) => {
+                if let Some(usage_info) = ev.info {
                     ts_println!(
                         self,
                         "tokens used: {}",

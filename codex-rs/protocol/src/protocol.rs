@@ -419,7 +419,7 @@ pub enum EventMsg {
 
     /// Usage update for the current session, including totals and last turn.
     /// Optional means unknown — UIs should not display when `None`.
-    TokenCount(Option<TokenUsageInfo>),
+    TokenCount(TokenCountEvent),
 
     /// Agent text output message
     AgentMessage(AgentMessageEvent),
@@ -562,6 +562,11 @@ impl TokenUsageInfo {
         self.total_token_usage.add_assign(last);
         self.last_token_usage = last.clone();
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TokenCountEvent {
+    pub info: Option<TokenUsageInfo>,
 }
 
 // Includes prompts, tools and space to call compact.

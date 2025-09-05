@@ -85,7 +85,6 @@ Codex CLI supports a rich set of configuration options, with preferences stored 
   - [Non-interactive / CI mode](./docs/advanced.md#non-interactive--ci-mode)
   - [Tracing / verbose logging](./docs/advanced.md#tracing--verbose-logging)
   - [Model Context Protocol (MCP)](./docs/advanced.md#model-context-protocol-mcp)
-- [**Zero data retention (ZDR)**](./docs/zdr.md)
 - [**Contributing**](./docs/contributing.md)
 - [**Install & build**](./docs/install.md)
   - [System Requirements](./docs/install.md#system-requirements)
