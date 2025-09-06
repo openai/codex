@@ -1,0 +1,31 @@
+[package]
+name = "codex-cloud-tasks-client"
+version = { workspace = true }
+edition = "2024"
+
+[lib]
+name = "codex_cloud_tasks_client"
+path = "src/lib.rs"
+
+[lints]
+workspace = true
+
+[features]
+default = ["online"]
+online = ["dep:reqwest", "dep:tokio", "dep:codex-backend-client"]
+mock = []
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+diffy = "0.4.2"
+reqwest = { version = "0.12", features = ["json"], optional = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2.0.12"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"], optional = true }
+codex-backend-client = { path = "../backend-client", optional = true }
+regex = "1"
+tempfile = "3"
+once_cell = "1"

@@ -1,8 +1,12 @@
 [workspace]
 members = [
+    "backend-client",
     "ansi-escape",
     "apply-patch",
     "arg0",
+    "codex-backend-openapi-models",
+    "cloud-tasks",
+    "cloud-tasks-client",
     "cli",
     "common",
     "core",
