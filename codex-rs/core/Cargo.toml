@@ -58,6 +58,7 @@ tree-sitter-bash = "0.25.0"
 uuid = { version = "1", features = ["serde", "v4"] }
 whoami = "1.6.1"
 wildmatch = "2.4.0"
+rust-embed = { version = "8.5.0", features = ["include-exclude"] }
 
 
 [target.'cfg(target_os = "linux")'.dependencies]

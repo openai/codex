@@ -42,6 +42,9 @@ use crate::client::ModelClient;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::config::Config;
+use crate::config_edit_tool::handle_get_config;
+use crate::config_edit_tool::handle_set_config;
+use crate::config_edit_tool::handle_show_codex_docs;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::conversation_history::ConversationHistory;
 use crate::conversation_manager::InitialHistory;
@@ -2127,6 +2130,9 @@ async fn handle_function_call(
             .await
         }
         "update_plan" => handle_update_plan(sess, arguments, sub_id, call_id).await,
+        "get_config" => handle_get_config(sess, arguments, sub_id, call_id).await,
+        "set_config" => handle_set_config(sess, arguments, sub_id, call_id).await,
+        "show_codex_docs" => handle_show_codex_docs(sess, arguments, sub_id, call_id).await,
         EXEC_COMMAND_TOOL_NAME => {
             // TODO(mbolin): Sandbox check.
             let exec_params = match serde_json::from_str::<ExecCommandParams>(&arguments) {
