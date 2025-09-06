@@ -14,6 +14,18 @@ use textwrap::Options;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+#[cfg(windows)]
+#[inline]
+fn is_altgr(mods: KeyModifiers) -> bool {
+    mods.contains(KeyModifiers::ALT) && mods.contains(KeyModifiers::CONTROL)
+}
+
+#[cfg(not(windows))]
+#[inline]
+fn is_altgr(_mods: KeyModifiers) -> bool {
+    false
+}
+
 #[derive(Debug, Clone)]
 struct TextElement {
     range: Range<usize>,
@@ -222,6 +234,12 @@ impl TextArea {
                 modifiers: KeyModifiers::NONE | KeyModifiers::SHIFT,
                 ..
             } => self.insert_str(&c.to_string()),
+            // Windows AltGr generates ALT|CONTROL; treat as a plain character input
+            KeyEvent {
+                code: KeyCode::Char(c),
+                modifiers,
+                ..
+            } if is_altgr(modifiers) => self.insert_str(&c.to_string()),
             KeyEvent {
                 code: KeyCode::Char('j' | 'm'),
                 modifiers: KeyModifiers::CONTROL,
