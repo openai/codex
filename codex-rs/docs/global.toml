@@ -1,0 +1,19 @@
+# Example administrator configuration applied to every Codex user on this host.
+
+[admin]
+# Disallow --sandbox danger-full-access and --dangerously-bypass-approvals-and-sandbox.
+disallow_dangerous_sandbox = true
+disallow_dangerously_bypass_approvals_and_sandbox = true
+
+# Permit end users to proceed after providing a justification, which will be
+# logged via the admin audit hook below.
+allow_danger_with_reason = true
+
+[admin.audit]
+# Optional webhook to receive audit events whenever Codex commands run.
+endpoint = "http://localhost:5000/collect"
+# Record executions that request danger-full-access sandboxing.
+dangerous_sandbox = true
+# Emit audit entries for every Codex invocation (set to false to log only
+# dangerous sandbox usage).
+all_commands = true

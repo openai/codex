@@ -41,7 +41,9 @@ use crate::apply_patch::convert_apply_patch_to_protocol;
 use crate::client::ModelClient;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
+use crate::config::AdminAuditContext;
 use crate::config::Config;
+use crate::config::maybe_post_admin_audit_events;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::conversation_history::ConversationHistory;
 use crate::conversation_manager::InitialHistory;
@@ -271,6 +273,7 @@ struct State {
 pub(crate) struct Session {
     session_id: Uuid,
     tx_event: Sender<Event>,
+    config: Arc<Config>,
 
     /// Manager for external MCP servers/tools.
     mcp_connection_manager: McpConnectionManager,
@@ -463,6 +466,7 @@ impl Session {
         let sess = Arc::new(Session {
             session_id,
             tx_event: tx_event.clone(),
+            config: config.clone(),
             mcp_connection_manager,
             session_manager: ExecSessionManager::default(),
             notify,
@@ -802,12 +806,38 @@ impl Session {
         self.on_exec_command_begin(turn_diff_tracker, begin_ctx.clone())
             .await;
 
+        let ExecInvokeArgs {
+            params,
+            sandbox_type,
+            sandbox_policy,
+            approval_policy,
+            codex_linux_sandbox_exe,
+            stdout_stream,
+            record_admin_command_event,
+        } = exec_args;
+
+        if record_admin_command_event {
+            maybe_post_admin_audit_events(
+                &self.config,
+                AdminAuditContext {
+                    sandbox_policy,
+                    approval_policy,
+                    cwd: &params.cwd,
+                    command: Some(params.command.as_slice()),
+                    dangerously_bypass_requested: matches!(approval_policy, AskForApproval::Never),
+                    dangerous_mode_justification: None,
+                    record_command_event: true,
+                },
+            )
+            .await;
+        }
+
         let result = process_exec_tool_call(
-            exec_args.params,
-            exec_args.sandbox_type,
-            exec_args.sandbox_policy,
-            exec_args.codex_linux_sandbox_exe,
-            exec_args.stdout_stream,
+            params,
+            sandbox_type,
+            sandbox_policy,
+            codex_linux_sandbox_exe,
+            stdout_stream,
         )
         .await;
 
@@ -2289,8 +2319,10 @@ pub struct ExecInvokeArgs<'a> {
     pub params: ExecParams,
     pub sandbox_type: SandboxType,
     pub sandbox_policy: &'a SandboxPolicy,
+    pub approval_policy: &'a AskForApproval,
     pub codex_linux_sandbox_exe: &'a Option<PathBuf>,
     pub stdout_stream: Option<StdoutStream>,
+    pub record_admin_command_event: bool,
 }
 
 fn maybe_translate_shell_command(
@@ -2480,6 +2512,7 @@ async fn handle_container_exec_with_params(
                 params: params.clone(),
                 sandbox_type,
                 sandbox_policy: &turn_context.sandbox_policy,
+                approval_policy: &turn_context.approval_policy,
                 codex_linux_sandbox_exe: &sess.codex_linux_sandbox_exe,
                 stdout_stream: if exec_command_context.apply_patch.is_some() {
                     None
@@ -2490,6 +2523,7 @@ async fn handle_container_exec_with_params(
                         tx_event: sess.tx_event.clone(),
                     })
                 },
+                record_admin_command_event: true,
             },
         )
         .await;
@@ -2617,6 +2651,7 @@ async fn handle_sandbox_error(
                         params,
                         sandbox_type: SandboxType::None,
                         sandbox_policy: &turn_context.sandbox_policy,
+                        approval_policy: &turn_context.approval_policy,
                         codex_linux_sandbox_exe: &sess.codex_linux_sandbox_exe,
                         stdout_stream: if exec_command_context.apply_patch.is_some() {
                             None
@@ -2627,6 +2662,7 @@ async fn handle_sandbox_error(
                                 tx_event: sess.tx_event.clone(),
                             })
                         },
+                        record_admin_command_event: true,
                     },
                 )
                 .await;

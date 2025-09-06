@@ -710,6 +710,7 @@ dependencies = [
  "codex-apply-patch",
  "codex-mcp-client",
  "codex-protocol",
+ "core-foundation 0.9.4",
  "core_test_support",
  "dirs",
  "env-flags",

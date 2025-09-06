@@ -6,6 +6,8 @@ use codex_core::auth::login_with_api_key;
 use codex_core::auth::logout;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::audit_admin_run_with_prompt;
+use codex_core::config::prompt_for_admin_danger_reason;
 use codex_login::ServerOptions;
 use codex_login::run_login_server;
 use codex_protocol::mcp_protocol::AuthMode;
@@ -25,7 +27,7 @@ pub async fn login_with_chatgpt(codex_home: PathBuf, originator: String) -> std:
 }
 
 pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) -> ! {
-    let config = load_config_or_exit(cli_config_overrides);
+    let config = load_config_or_exit(cli_config_overrides).await;
 
     match login_with_chatgpt(
         config.codex_home,
@@ -48,7 +50,7 @@ pub async fn run_login_with_api_key(
     cli_config_overrides: CliConfigOverrides,
     api_key: String,
 ) -> ! {
-    let config = load_config_or_exit(cli_config_overrides);
+    let config = load_config_or_exit(cli_config_overrides).await;
 
     match login_with_api_key(&config.codex_home, &api_key) {
         Ok(_) => {
@@ -63,7 +65,7 @@ pub async fn run_login_with_api_key(
 }
 
 pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
-    let config = load_config_or_exit(cli_config_overrides);
+    let config = load_config_or_exit(cli_config_overrides).await;
 
     match CodexAuth::from_codex_home(
         &config.codex_home,
@@ -106,7 +108,7 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
 }
 
 pub async fn run_logout(cli_config_overrides: CliConfigOverrides) -> ! {
-    let config = load_config_or_exit(cli_config_overrides);
+    let config = load_config_or_exit(cli_config_overrides).await;
 
     match logout(&config.codex_home) {
         Ok(true) => {
@@ -124,7 +126,7 @@ pub async fn run_logout(cli_config_overrides: CliConfigOverrides) -> ! {
     }
 }
 
-fn load_config_or_exit(cli_config_overrides: CliConfigOverrides) -> Config {
+async fn load_config_or_exit(cli_config_overrides: CliConfigOverrides) -> Config {
     let cli_overrides = match cli_config_overrides.parse_overrides() {
         Ok(v) => v,
         Err(e) => {
@@ -134,10 +136,27 @@ fn load_config_or_exit(cli_config_overrides: CliConfigOverrides) -> Config {
     };
 
     let config_overrides = ConfigOverrides::default();
-    match Config::load_with_cli_overrides(cli_overrides, config_overrides) {
+    let config = match Config::load_with_cli_overrides(cli_overrides, config_overrides) {
         Ok(config) => config,
         Err(e) => {
             eprintln!("Error loading configuration: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    let _admin_override_reason = match prompt_for_admin_danger_reason(&config) {
+        Ok(reason) => reason,
+        Err(err) => {
+            eprintln!("{err}");
+            std::process::exit(1);
+        }
+    };
+
+    let prompt_result = prompt_for_admin_danger_reason(&config);
+    match audit_admin_run_with_prompt(&config, prompt_result, false).await {
+        Ok(_) => config,
+        Err(err) => {
+            eprintln!("{err}");
             std::process::exit(1);
         }
     }

@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use codex_common::CliConfigOverrides;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::audit_admin_run_with_prompt;
+use codex_core::config::prompt_for_admin_danger_reason;
 use codex_core::exec_env::create_env;
 use codex_core::landlock::spawn_command_under_linux_sandbox;
 use codex_core::seatbelt::spawn_command_under_seatbelt;
@@ -75,6 +77,7 @@ async fn run_command_under_sandbox(
             ..Default::default()
         },
     )?;
+    audit_admin_run_with_prompt(&config, prompt_for_admin_danger_reason(&config), false).await?;
     let stdio_policy = StdioPolicy::Inherit;
     let env = create_env(&config.shell_environment_policy);
 

@@ -4,6 +4,8 @@ use clap::Parser;
 use codex_common::CliConfigOverrides;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::audit_admin_run_with_prompt;
+use codex_core::config::prompt_for_admin_danger_reason;
 
 use crate::chatgpt_token::init_chatgpt_token_from_auth;
 use crate::get_task::GetTaskResponse;
@@ -30,6 +32,7 @@ pub async fn run_apply_command(
             .map_err(anyhow::Error::msg)?,
         ConfigOverrides::default(),
     )?;
+    audit_admin_run_with_prompt(&config, prompt_for_admin_danger_reason(&config), false).await?;
 
     init_chatgpt_token_from_auth(&config.codex_home, &config.responses_originator_header).await?;
 

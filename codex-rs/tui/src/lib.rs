@@ -11,8 +11,10 @@ use codex_core::RolloutRecorder;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
+use codex_core::config::audit_admin_run_with_prompt;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
+use codex_core::config::prompt_for_admin_danger_reason;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_ollama::DEFAULT_OSS_MODEL;
@@ -157,6 +159,14 @@ pub async fn run_main(
             }
         }
     };
+
+    let _admin_override_reason = audit_admin_run_with_prompt(
+        &config,
+        prompt_for_admin_danger_reason(&config),
+        cli.dangerously_bypass_approvals_and_sandbox,
+    )
+    .await
+    .map_err(|err| std::io::Error::other(err.to_string()))?;
 
     // we load config.toml here to determine project state.
     #[allow(clippy::print_stderr)]

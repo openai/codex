@@ -8,6 +8,8 @@ use std::path::PathBuf;
 use codex_common::CliConfigOverrides;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::audit_admin_run_with_prompt;
+use codex_core::config::prompt_for_admin_danger_reason;
 
 use mcp_types::JSONRPCMessage;
 use tokio::io::AsyncBufReadExt;
@@ -96,6 +98,7 @@ pub async fn run_main(
         .map_err(|e| {
             std::io::Error::new(ErrorKind::InvalidData, format!("error loading config: {e}"))
         })?;
+    audit_admin_run_with_prompt(&config, prompt_for_admin_danger_reason(&config), false).await?;
 
     // Task: process incoming messages.
     let processor_handle = tokio::spawn({

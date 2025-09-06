@@ -15,6 +15,9 @@ use crate::model_provider_info::built_in_model_providers;
 use crate::openai_model_info::get_model_info;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
+use base64::prelude::BASE64_STANDARD;
+use base64::Engine;
+use chrono::Utc;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
@@ -23,10 +26,14 @@ use codex_protocol::mcp_protocol::AuthMode;
 use codex_protocol::mcp_protocol::Tools;
 use codex_protocol::mcp_protocol::UserSavedConfig;
 use dirs::home_dir;
+use reqwest::Client;
 use serde::Deserialize;
+use serde::Serialize;
 use std::collections::HashMap;
+use std::io::{self, IsTerminal, Write};
 use std::path::Path;
 use std::path::PathBuf;
+use std::thread;
 use tempfile::NamedTempFile;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
@@ -41,6 +48,19 @@ pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 const CONFIG_TOML_FILE: &str = "config.toml";
 
 const DEFAULT_RESPONSES_ORIGINATOR_HEADER: &str = "codex_cli_rs";
+
+const ADMIN_DANGEROUS_SANDBOX_DISABLED_MESSAGE: &str = "Running Codex with --dangerously-bypass-approvals-and-sandbox or --sandbox danger-full-access has been disabled by your administrator. Please contact your system administrator or try: codex --full-auto";
+
+const ADMIN_DANGEROUS_SANDBOX_DISABLED_PROMPT_LINES: &[&str] = &[
+    "Running Codex with --dangerously-bypass-approvals-and-sandbox or",
+    "--sandbox danger-full-access has been disabled by your administrator.",
+    "\nPlease contact your system administrator or try: codex --full-auto",
+];
+
+#[cfg(target_os = "macos")]
+const MANAGED_PREFERENCES_APPLICATION_ID: &str = "com.openai.codex";
+#[cfg(target_os = "macos")]
+const MANAGED_PREFERENCES_CONFIG_KEY: &str = "config_toml_base64";
 
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
@@ -183,6 +203,10 @@ pub struct Config {
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: bool,
+
+    pub admin_controls: AdminControls,
+
+    pub admin_danger_prompt: Option<AdminDangerPrompt>,
 }
 
 impl Config {
@@ -239,27 +263,390 @@ pub fn load_config_as_toml_with_cli_overrides(
     Ok(cfg)
 }
 
-/// Read `CODEX_HOME/config.toml` and return it as a generic TOML value. Returns
-/// an empty TOML table when the file does not exist.
+/// Read `CODEX_HOME/config.toml` and merge administrator overrides from
+/// `~/.codex/global.toml`, `/etc/opt/codex/config.toml`, and (on macOS) the
+/// managed preferences domain. Administrator-provided settings override the
+/// user's local configuration. Returns an empty TOML table when no configuration
+/// sources are found.
 pub fn load_config_as_toml(codex_home: &Path) -> std::io::Result<TomlValue> {
-    let config_path = codex_home.join(CONFIG_TOML_FILE);
-    match std::fs::read_to_string(&config_path) {
-        Ok(contents) => match toml::from_str::<TomlValue>(&contents) {
-            Ok(val) => Ok(val),
-            Err(e) => {
-                tracing::error!("Failed to parse config.toml: {e}");
-                Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-            }
-        },
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            tracing::info!("config.toml not found, using defaults");
-            Ok(TomlValue::Table(Default::default()))
+    let user_config_path = codex_home.join(CONFIG_TOML_FILE);
+    let global_config_path = home_dir().map(|mut path| {
+        path.push(".codex");
+        path.push("global.toml");
+        path
+    });
+    let system_config_path = PathBuf::from("/etc/opt/codex/config.toml");
+
+    thread::scope(|scope| {
+        let user_handle = scope.spawn(|| read_config_from_path(&user_config_path, true));
+        let global_handle = scope.spawn(move || match global_config_path {
+            Some(path) => read_config_from_path(&path, false),
+            None => Ok(None),
+        });
+        let system_handle = scope.spawn(move || read_config_from_path(&system_config_path, false));
+        let managed_handle = scope.spawn(load_managed_admin_config);
+
+        let user_config = join_config_result(user_handle, "user config.toml")?;
+        let global_config = join_config_result(global_handle, "~/.codex/global.toml")?;
+        let system_config = join_config_result(system_handle, "/etc/opt/codex/config.toml")?;
+        let managed_config = join_config_result(managed_handle, "managed preferences")?;
+
+        let mut merged = user_config.unwrap_or_else(default_empty_table);
+
+        for overlay in [global_config, system_config, managed_config]
+            .into_iter()
+            .flatten()
+        {
+            merge_toml_values(&mut merged, &overlay);
         }
-        Err(e) => {
-            tracing::error!("Failed to read config.toml: {e}");
-            Err(e)
+
+        Ok(merged)
+    })
+}
+
+fn default_empty_table() -> TomlValue {
+    TomlValue::Table(Default::default())
+}
+
+fn join_config_result(
+    handle: thread::ScopedJoinHandle<'_, std::io::Result<Option<TomlValue>>>,
+    label: &str,
+) -> std::io::Result<Option<TomlValue>> {
+    match handle.join() {
+        Ok(result) => result,
+        Err(panic) => {
+            if let Some(msg) = panic.downcast_ref::<&str>() {
+                tracing::error!("Configuration loader for {label} panicked: {msg}");
+            } else if let Some(msg) = panic.downcast_ref::<String>() {
+                tracing::error!("Configuration loader for {label} panicked: {msg}");
+            } else {
+                tracing::error!("Configuration loader for {label} panicked");
+            }
+            Err(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                format!("Failed to load {label} configuration"),
+            ))
         }
     }
+}
+
+fn read_config_from_path(path: &Path, log_missing_as_info: bool) -> std::io::Result<Option<TomlValue>> {
+    match std::fs::read_to_string(path) {
+        Ok(contents) => match toml::from_str::<TomlValue>(&contents) {
+            Ok(value) => Ok(Some(value)),
+            Err(err) => {
+                tracing::error!("Failed to parse {}: {err}", path.display());
+                Err(std::io::Error::new(std::io::ErrorKind::InvalidData, err))
+            }
+        },
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            if log_missing_as_info {
+                tracing::info!("{} not found, using defaults", path.display());
+            } else {
+                tracing::debug!("{} not found", path.display());
+            }
+            Ok(None)
+        }
+        Err(err) => {
+            tracing::error!("Failed to read {}: {err}", path.display());
+            Err(err)
+        }
+    }
+}
+
+fn merge_toml_values(base: &mut TomlValue, overlay: &TomlValue) {
+    if let TomlValue::Table(overlay_table) = overlay {
+        if let TomlValue::Table(base_table) = base {
+            for (key, value) in overlay_table {
+                if let Some(existing) = base_table.get_mut(key) {
+                    merge_toml_values(existing, value);
+                } else {
+                    base_table.insert(key.clone(), value.clone());
+                }
+            }
+            return;
+        }
+    }
+
+    *base = overlay.clone();
+}
+
+fn load_managed_admin_config() -> std::io::Result<Option<TomlValue>> {
+    load_managed_admin_config_impl()
+}
+
+#[cfg(target_os = "macos")]
+fn load_managed_admin_config_impl() -> std::io::Result<Option<TomlValue>> {
+    use core_foundation::base::TCFType;
+    use core_foundation::string::CFString;
+    use core_foundation::string::CFStringRef;
+    use std::ffi::c_void;
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFPreferencesCopyAppValue(key: CFStringRef, application_id: CFStringRef) -> *mut c_void;
+    }
+
+    let application_id = CFString::new(MANAGED_PREFERENCES_APPLICATION_ID);
+    let key = CFString::new(MANAGED_PREFERENCES_CONFIG_KEY);
+
+    let value_ref = unsafe {
+        CFPreferencesCopyAppValue(
+            key.as_concrete_TypeRef(),
+            application_id.as_concrete_TypeRef(),
+        )
+    };
+
+    if value_ref.is_null() {
+        tracing::debug!(
+            "Managed preferences for {} key {} not found",
+            MANAGED_PREFERENCES_APPLICATION_ID,
+            MANAGED_PREFERENCES_CONFIG_KEY
+        );
+        return Ok(None);
+    }
+
+    let value = unsafe { CFString::wrap_under_create_rule(value_ref as _) };
+    let contents = value.to_string();
+    let trimmed = contents.trim();
+
+    let decoded = BASE64_STANDARD
+        .decode(trimmed.as_bytes())
+        .map_err(|err| {
+            tracing::error!("Failed to decode managed preferences as base64: {err}");
+            std::io::Error::new(std::io::ErrorKind::InvalidData, err)
+        })?;
+
+    let decoded_str = String::from_utf8(decoded).map_err(|err| {
+        tracing::error!("Managed preferences base64 contents were not valid UTF-8: {err}");
+        std::io::Error::new(std::io::ErrorKind::InvalidData, err)
+    })?;
+
+    match toml::from_str::<TomlValue>(&decoded_str) {
+        Ok(parsed) => Ok(Some(parsed)),
+        Err(err) => {
+            tracing::error!("Failed to parse managed preferences TOML: {err}");
+            Err(std::io::Error::new(std::io::ErrorKind::InvalidData, err))
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn load_managed_admin_config_impl() -> std::io::Result<Option<TomlValue>> {
+    Ok(None)
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AdminAuditContext<'a> {
+    pub sandbox_policy: &'a SandboxPolicy,
+    pub approval_policy: &'a AskForApproval,
+    pub cwd: &'a Path,
+    pub command: Option<&'a [String]>,
+    pub dangerously_bypass_requested: bool,
+    pub dangerous_mode_justification: Option<&'a str>,
+    pub record_command_event: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum AdminAuditEventKind {
+    CommandInvoked,
+    DangerousSandbox,
+}
+
+impl AdminAuditEventKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::CommandInvoked => "command-invoked",
+            Self::DangerousSandbox => "dangerous-sandbox",
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct AdminAuditPayload<'a> {
+    event: &'a str,
+    sandbox_mode: &'a str,
+    username: String,
+    dangerously_bypass_requested: bool,
+    timestamp: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    justification: Option<&'a str>,
+    approval_policy: &'a str,
+    cwd: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    command: Option<&'a [String]>,
+}
+
+pub async fn maybe_post_admin_audit_events(config: &Config, context: AdminAuditContext<'_>) {
+    let Some(audit) = config.admin_controls.audit.as_ref() else {
+        return;
+    };
+
+    if !audit.events.all_commands && !audit.events.dangerous_sandbox {
+        return;
+    }
+
+    let sandbox_mode = context.sandbox_policy.to_string();
+    let approval_policy_display = context.approval_policy.to_string();
+    let cwd_display = context.cwd.display().to_string();
+    let command_args = context.command;
+    let client = Client::new();
+
+    if audit.events.all_commands && context.record_command_event {
+        post_admin_audit_event(
+            &client,
+            &audit.endpoint,
+            AdminAuditEventKind::CommandInvoked,
+            &sandbox_mode,
+            context.dangerously_bypass_requested,
+            context.dangerous_mode_justification,
+            &approval_policy_display,
+            &cwd_display,
+            command_args,
+        )
+        .await;
+    }
+
+    let dangerous_requested = context.dangerously_bypass_requested
+        || matches!(context.sandbox_policy, SandboxPolicy::DangerFullAccess);
+
+    if dangerous_requested && audit.events.dangerous_sandbox {
+        post_admin_audit_event(
+            &client,
+            &audit.endpoint,
+            AdminAuditEventKind::DangerousSandbox,
+            &sandbox_mode,
+            context.dangerously_bypass_requested,
+            context.dangerous_mode_justification,
+            &approval_policy_display,
+            &cwd_display,
+            command_args,
+        )
+        .await;
+    }
+}
+
+pub async fn audit_admin_run_with_prompt(
+    config: &Config,
+    prompt_result: Result<Option<String>, std::io::Error>,
+    dangerously_bypass_requested: bool,
+) -> Result<Option<String>, std::io::Error> {
+    let (justification, prompt_error) = match prompt_result {
+        Ok(reason) => (reason, None),
+        Err(err) => (None, Some(err)),
+    };
+
+    maybe_post_admin_audit_events(
+        config,
+        AdminAuditContext {
+            sandbox_policy: &config.sandbox_policy,
+            approval_policy: &config.approval_policy,
+            cwd: &config.cwd,
+            command: None,
+            dangerously_bypass_requested,
+            dangerous_mode_justification: justification.as_deref(),
+            record_command_event: false,
+        },
+    )
+    .await;
+
+    if let Some(err) = prompt_error {
+        Err(err)
+    } else {
+        Ok(justification)
+    }
+}
+
+async fn post_admin_audit_event(
+    client: &Client,
+    endpoint: &str,
+    kind: AdminAuditEventKind,
+    sandbox_mode: &str,
+    dangerously_bypass_requested: bool,
+    justification: Option<&str>,
+    approval_policy: &str,
+    cwd: &str,
+    command: Option<&[String]>,
+) {
+    let username = whoami::username();
+    let timestamp_string;
+    let payload = {
+        timestamp_string = Utc::now().to_rfc3339();
+        AdminAuditPayload {
+            event: kind.label(),
+            sandbox_mode,
+            username,
+            dangerously_bypass_requested,
+            timestamp: &timestamp_string,
+            justification,
+            approval_policy,
+            cwd,
+            command,
+        }
+    };
+
+    if let Err(err) = client.post(endpoint).json(&payload).send().await {
+        tracing::warn!("Failed to POST admin audit event {}: {err}", kind.label());
+    }
+}
+
+pub fn prompt_for_admin_danger_reason(config: &Config) -> std::io::Result<Option<String>> {
+    let Some(prompt) = config.admin_danger_prompt.as_ref() else {
+        return Ok(None);
+    };
+
+    if !prompt.needs_prompt() {
+        return Ok(None);
+    }
+
+    if !io::stdin().is_terminal() {
+        return Err(io::Error::new(
+            io::ErrorKind::Other,
+            "Administrator requires a justification for dangerous sandbox usage, but stdin is not interactive.",
+        ));
+    }
+
+    let red = "\x1b[31m";
+    let reset = "\x1b[0m";
+    let blue = "\x1b[34m";
+    let mut stderr = io::stderr();
+    writeln!(stderr)?;
+    writeln!(
+        stderr,
+        "{red}╔══════════════════════════════════════════════════════════════╗{reset}"
+    )?;
+    writeln!(
+        stderr,
+        "{red}║  DANGEROUS USAGE WARNING                                     ║{reset}"
+    )?;
+    writeln!(
+        stderr,
+        "{red}╚══════════════════════════════════════════════════════════════╝{reset}"
+    )?;
+    for line in ADMIN_DANGEROUS_SANDBOX_DISABLED_PROMPT_LINES {
+        writeln!(stderr, "{red}{line}{reset}")?;
+    }
+    writeln!(stderr)?;
+    write!(stderr, "{red}?{reset} {blue}Or provide a justification to continue anyway:{reset} ")?;
+    stderr.flush()?;
+
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    let justification = input.trim();
+    if justification.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Justification is required by your administrator to proceed with dangerous usage.",
+        ));
+    }
+    if justification.len() < 4 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Justification must be at least 4 characters long and is required by your administrator to proceed with dangerous usage.",
+        ));
+    }
+
+    Ok(Some(justification.to_string()))
 }
 
 /// Patch `CODEX_HOME/config.toml` project state.
@@ -385,6 +772,115 @@ fn apply_toml_override(root: &mut TomlValue, path: &str, value: TomlValue) {
     }
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct AdminConfigToml {
+    #[serde(default)]
+    pub disallow_dangerous_sandbox: Option<bool>,
+
+    #[serde(default)]
+    pub disallow_dangerously_bypass_approvals_and_sandbox: Option<bool>,
+
+    #[serde(default)]
+    pub allow_danger_with_reason: Option<bool>,
+
+    #[serde(default)]
+    pub audit: Option<AdminAuditToml>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct AdminAuditToml {
+    pub endpoint: Option<String>,
+
+    #[serde(default)]
+    pub dangerous_sandbox: Option<bool>,
+
+    #[serde(default)]
+    pub all_commands: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdminControls {
+    pub disallow_dangerous_sandbox: bool,
+    pub disallow_dangerously_bypass_approvals_and_sandbox: bool,
+    pub allow_danger_with_reason: bool,
+    pub audit: Option<AdminAudit>,
+}
+
+impl Default for AdminControls {
+    fn default() -> Self {
+        Self {
+            disallow_dangerous_sandbox: false,
+            disallow_dangerously_bypass_approvals_and_sandbox: false,
+            allow_danger_with_reason: false,
+            audit: None,
+        }
+    }
+}
+
+impl AdminControls {
+    fn from_toml(admin: Option<AdminConfigToml>) -> Self {
+        let mut controls = AdminControls::default();
+
+        if let Some(section) = admin {
+            if let Some(value) = section.disallow_dangerous_sandbox {
+                controls.disallow_dangerous_sandbox = value;
+            }
+
+            if let Some(value) = section.disallow_dangerously_bypass_approvals_and_sandbox {
+                controls.disallow_dangerously_bypass_approvals_and_sandbox = value;
+            }
+
+            if let Some(value) = section.allow_danger_with_reason {
+                controls.allow_danger_with_reason = value;
+            }
+
+            controls.audit = section.audit.and_then(AdminAudit::from_toml);
+        }
+
+        controls
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdminAudit {
+    pub endpoint: String,
+    pub events: AdminAuditEvents,
+}
+
+impl AdminAudit {
+    fn from_toml(config: AdminAuditToml) -> Option<Self> {
+        let endpoint = config.endpoint?.trim().to_string();
+        if endpoint.is_empty() {
+            return None;
+        }
+
+        let events = AdminAuditEvents {
+            dangerous_sandbox: config.dangerous_sandbox.unwrap_or(false),
+            all_commands: config.all_commands.unwrap_or(false),
+        };
+
+        Some(Self { endpoint, events })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AdminAuditEvents {
+    pub dangerous_sandbox: bool,
+    pub all_commands: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AdminDangerPrompt {
+    pub sandbox: bool,
+    pub dangerously_bypass: bool,
+}
+
+impl AdminDangerPrompt {
+    fn needs_prompt(&self) -> bool {
+        self.sandbox || self.dangerously_bypass
+    }
+}
+
 /// Base config deserialized from ~/.codex/config.toml.
 #[derive(Deserialize, Debug, Clone, Default)]
 pub struct ConfigToml {
@@ -493,6 +989,9 @@ pub struct ConfigToml {
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: Option<bool>,
+
+    /// Administrative controls configured by the enterprise administrator.
+    pub admin: Option<AdminConfigToml>,
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -677,6 +1176,40 @@ impl Config {
 
         let sandbox_policy = cfg.derive_sandbox_policy(sandbox_mode);
 
+        let admin_controls = AdminControls::from_toml(cfg.admin.clone());
+
+        let resolved_approval_policy = approval_policy
+            .or(config_profile.approval_policy)
+            .or(cfg.approval_policy)
+            .unwrap_or_else(AskForApproval::default);
+
+        let sandbox_is_dangerfull = matches!(sandbox_policy, SandboxPolicy::DangerFullAccess);
+        let approval_is_yolo = resolved_approval_policy == AskForApproval::Never;
+
+        let mut admin_danger_prompt = AdminDangerPrompt::default();
+
+        if sandbox_is_dangerfull && admin_controls.disallow_dangerous_sandbox {
+            if admin_controls.allow_danger_with_reason {
+                admin_danger_prompt.sandbox = true;
+            } else {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    ADMIN_DANGEROUS_SANDBOX_DISABLED_MESSAGE,
+                ));
+            }
+        }
+
+        if approval_is_yolo && admin_controls.disallow_dangerously_bypass_approvals_and_sandbox {
+            if admin_controls.allow_danger_with_reason {
+                admin_danger_prompt.dangerously_bypass = true;
+            } else {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    ADMIN_DANGEROUS_SANDBOX_DISABLED_MESSAGE,
+                ));
+            }
+        }
+
         let mut model_providers = built_in_model_providers();
         // Merge user-defined providers into the built-in list.
         for (key, provider) in cfg.model_providers.into_iter() {
@@ -785,10 +1318,7 @@ impl Config {
             model_provider_id,
             model_provider,
             cwd: resolved_cwd,
-            approval_policy: approval_policy
-                .or(config_profile.approval_policy)
-                .or(cfg.approval_policy)
-                .unwrap_or_else(AskForApproval::default),
+            approval_policy: resolved_approval_policy,
             sandbox_policy,
             shell_environment_policy,
             notify: cfg.notify,
@@ -833,6 +1363,10 @@ impl Config {
                 .unwrap_or(false),
             include_view_image_tool,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
+            admin_controls,
+            admin_danger_prompt: admin_danger_prompt
+                .needs_prompt()
+                .then_some(admin_danger_prompt),
         };
         Ok(config)
     }
@@ -1208,6 +1742,8 @@ model_verbosity = "high"
                 use_experimental_streamable_shell_tool: false,
                 include_view_image_tool: true,
                 disable_paste_burst: false,
+                admin_controls: AdminControls::default(),
+                admin_danger_prompt: None,
             },
             o3_profile_config
         );
@@ -1265,6 +1801,8 @@ model_verbosity = "high"
             use_experimental_streamable_shell_tool: false,
             include_view_image_tool: true,
             disable_paste_burst: false,
+            admin_controls: AdminControls::default(),
+            admin_danger_prompt: None,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -1337,6 +1875,8 @@ model_verbosity = "high"
             use_experimental_streamable_shell_tool: false,
             include_view_image_tool: true,
             disable_paste_burst: false,
+            admin_controls: AdminControls::default(),
+            admin_danger_prompt: None,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
@@ -1395,6 +1935,8 @@ model_verbosity = "high"
             use_experimental_streamable_shell_tool: false,
             include_view_image_tool: true,
             disable_paste_burst: false,
+            admin_controls: AdminControls::default(),
+            admin_danger_prompt: None,
         };
 
         assert_eq!(expected_gpt5_profile_config, gpt5_profile_config);
