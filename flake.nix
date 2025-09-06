@@ -10,48 +10,70 @@
     };
   };
 
-  outputs = { nixpkgs, flake-utils, rust-overlay, ... }: 
-    flake-utils.lib.eachDefaultSystem (system:
-      let
-        pkgs = import nixpkgs {
-          inherit system;
-        };
-        pkgsWithRust = import nixpkgs {
-          inherit system;
-          overlays = [ rust-overlay.overlays.default ];
-        };
-        monorepo-deps = with pkgs; [
-          # for precommit hook
-          pnpm
-          husky
+  outputs = {
+    self,
+    nixpkgs,
+    flake-utils,
+    rust-overlay,
+    ...
+  }:
+    flake-utils.lib.eachDefaultSystem (system: let
+      # Base pkgs with the Rust overlay
+      pkgsBase = import nixpkgs {
+        inherit system;
+        overlays = [rust-overlay.overlays.default];
+      };
+
+      # Use toolchain pinned in ./codex-rs/rust-toolchain.toml, fallback to stable 1.89.0
+      rustToolchain =
+        if builtins.pathExists ./codex-rs/rust-toolchain.toml
+        then pkgsBase.rust-bin.fromRustupToolchainFile ./codex-rs/rust-toolchain.toml
+        else pkgsBase.rust-bin.stable."1.89.0".default;
+
+      # Reimport pkgs and override rustPlatform to use that toolchain for builds
+      pkgs = import nixpkgs {
+        inherit system;
+        overlays = [
+          rust-overlay.overlays.default
+          (final: prev: {
+            rustPlatform = prev.makeRustPlatform {
+              cargo = rustToolchain;
+              rustc = rustToolchain;
+            };
+          })
         ];
-        codex-cli = import ./codex-cli {
-          inherit pkgs monorepo-deps;
-        };
-        codex-rs = import ./codex-rs {
-          pkgs = pkgsWithRust;
-          inherit monorepo-deps;
-        };
-      in
-      rec {
-        packages = {
-          codex-cli = codex-cli.package;
-          codex-rs = codex-rs.package;
-        };
+      };
 
-        devShells = {
-          codex-cli = codex-cli.devShell;
-          codex-rs = codex-rs.devShell;
-        };
+      monorepo-deps = with pkgs; [
+        pnpm
+        husky
+      ];
 
-        apps = {
-          codex-cli = codex-cli.app;
-          codex-rs = codex-rs.app;
-        };
+      codex-rs = import ./codex-rs {
+        inherit pkgs monorepo-deps;
+      };
+    in rec {
+      packages = {
+        codex-rs = codex-rs.package;
+        default = codex-rs.package;
+      };
 
-        defaultPackage = packages.codex-cli;
-        defaultApp = apps.codex-cli;
-        defaultDevShell = devShells.codex-cli;
-      }
-    );
+      apps = {
+        codex-rs = codex-rs.app;
+        default = codex-rs.app;
+      };
+
+      devShells = {
+        # Dev shell includes the pinned toolchain on PATH
+        codex-rs = pkgs.mkShell {
+          packages = monorepo-deps ++ [rustToolchain codex-rs.package];
+        };
+        default = devShells.codex-rs;
+      };
+
+      # Optional CI hook to ensure the package builds
+      checks = {
+        codex-rs-build = packages.codex-rs;
+      };
+    });
 }
