@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+
+import argparse
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+CARGO_TOML = ROOT_DIR / "Cargo.toml"
+
+
+def parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Create a tagged Codex release.")
+    parser.add_argument(
+        "version",
+        help="Version string used for Cargo.toml and the Git tag (e.g. 0.1.0-alpha.4).",
+    )
+    return parser.parse_args(argv[1:])
+
+
+def main(argv: list[str]) -> int:
+    os.chdir(ROOT_DIR)
+    args = parse_args(argv)
+    try:
+        ensure_clean_worktree()
+        branch = current_branch()
+        ensure_on_main(branch)
+        ensure_on_origin_main()
+        create_release(args.version, branch)
+    except ReleaseError as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+def ensure_clean_worktree() -> None:
+    commands = [
+        ["diff", "--quiet"],
+        ["diff", "--cached", "--quiet"],
+    ]
+    for command in commands:
+        result = run_git(command, check=False)
+        if result.returncode != 0:
+            raise ReleaseError("You have uncommitted changes.")
+
+    untracked = run_git(["ls-files", "--others", "--exclude-standard"], capture_output=True)
+    if untracked.stdout.strip():
+        raise ReleaseError("You have untracked files.")
+
+
+def ensure_on_main(branch: str) -> None:
+    if branch != "main":
+        raise ReleaseError(
+            f"Releases must be created from the 'main' branch (current: '{branch}')."
+        )
+
+
+def ensure_on_origin_main() -> None:
+    try:
+        run_git(["fetch", "--quiet", "origin", "main"])
+    except ReleaseError as error:
+        raise ReleaseError(
+            "Failed to fetch 'origin/main'. Ensure the 'origin' remote is configured and reachable."
+        ) from error
+
+    result = run_git(["merge-base", "--is-ancestor", "HEAD", "origin/main"], check=False)
+    if result.returncode != 0:
+        raise ReleaseError(
+            "Your local 'main' HEAD commit is not present on 'origin/main'. "
+            "Please push first (git push origin main) or check out a commit on 'origin/main'."
+        )
+
+
+def current_branch() -> str:
+    result = run_git(["symbolic-ref", "--short", "-q", "HEAD"], capture_output=True, check=False)
+    branch = result.stdout.strip()
+    if result.returncode != 0 or not branch:
+        raise ReleaseError("Could not determine the current branch (detached HEAD?).")
+    return branch
+
+
+def update_version(version: str) -> None:
+    content = CARGO_TOML.read_text(encoding="utf-8")
+    new_content, matches = re.subn(
+        r'^version = "[^"]+"', f'version = "{version}"', content, count=1, flags=re.MULTILINE
+    )
+    if matches != 1:
+        raise ReleaseError("Unable to update version in Cargo.toml.")
+    CARGO_TOML.write_text(new_content, encoding="utf-8")
+
+
+def create_release(version: str, branch: str) -> None:
+    tag = f"rust-v{version}"
+    run_git(["checkout", "-b", tag])
+    try:
+        update_version(version)
+        run_git(["add", "Cargo.toml"])
+        run_git(["commit", "-m", f"Release {version}"])
+        run_git(["tag", "-a", tag, "-m", f"Release {version}"])
+        run_git(["push", "origin", f"refs/tags/{tag}"])
+    finally:
+        run_git(["checkout", branch])
+
+
+class ReleaseError(RuntimeError):
+    pass
+
+
+def run_git(
+    args: list[str], *, capture_output: bool = False, check: bool = True
+) -> subprocess.CompletedProcess:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=ROOT_DIR,
+        text=True,
+        capture_output=capture_output,
+    )
+    if check and result.returncode != 0:
+        stderr = result.stderr.strip() if result.stderr else ""
+        stdout = result.stdout.strip() if result.stdout else ""
+        message = stderr if stderr else stdout
+        raise ReleaseError(message or f"git {' '.join(args)} failed")
+    return result
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
