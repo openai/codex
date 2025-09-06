@@ -28,6 +28,7 @@ pub fn create_client(originator: &str) -> reqwest::Client {
         // Set UA via dedicated helper to avoid header validation pitfalls
         .user_agent(ua)
         .default_headers(headers)
+        .pool_max_idle_per_host(0)
         .build()
     {
         Ok(client) => client,
