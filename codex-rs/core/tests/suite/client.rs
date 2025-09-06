@@ -4,6 +4,7 @@ use codex_core::ModelProviderInfo;
 use codex_core::NewConversation;
 use codex_core::WireApi;
 use codex_core::built_in_model_providers;
+use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
@@ -159,6 +160,15 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         }],
     };
     writeln!(f, "{}", serde_json::to_string(&prior_item).unwrap()).unwrap();
+    let prior_item_event = EventMsg::AgentMessage(AgentMessageEvent {
+        message: "resumed assistant message".to_string(),
+    });
+    let prior_event_line = serde_json::json!({
+        "record_type": "event",
+        "id": "resume-1",
+        "msg": prior_item_event,
+    });
+    writeln!(f, "{prior_event_line}").unwrap();
     drop(f);
 
     // Mock server that will receive the resumed request

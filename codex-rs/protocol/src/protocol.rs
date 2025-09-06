@@ -23,7 +23,6 @@ use uuid::Uuid;
 use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::message_history::HistoryEntry;
-use crate::models::ResponseItem;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
 
@@ -148,7 +147,7 @@ pub enum Op {
 
     /// Request the full in-memory conversation transcript for the current session.
     /// Reply is delivered via `EventMsg::ConversationHistory`.
-    GetHistory,
+    GetConversationPath,
 
     /// Request the list of MCP tools available across all configured servers.
     /// Reply is delivered via `EventMsg::McpListToolsResponse`.
@@ -498,7 +497,7 @@ pub enum EventMsg {
     /// Notification that the agent is shutting down.
     ShutdownComplete,
 
-    ConversationHistory(ConversationHistoryResponseEvent),
+    ConversationHistory(ConversationPathResponseEvent),
 }
 
 // Individual event payload types matching each `EventMsg` variant.
@@ -738,9 +737,9 @@ pub struct WebSearchEndEvent {
 /// Response payload for `Op::GetHistory` containing the current session's
 /// in-memory transcript.
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct ConversationHistoryResponseEvent {
+pub struct ConversationPathResponseEvent {
     pub conversation_id: Uuid,
-    pub entries: Vec<ResponseItem>,
+    pub path: PathBuf,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

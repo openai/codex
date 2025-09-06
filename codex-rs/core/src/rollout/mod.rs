@@ -6,8 +6,8 @@ pub mod list;
 pub(crate) mod policy;
 pub mod recorder;
 
+pub use recorder::RolloutItem;
 pub use recorder::RolloutRecorder;
-pub use recorder::SessionStateSnapshot;
 
 #[cfg(test)]
 pub mod tests;

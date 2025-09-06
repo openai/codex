@@ -41,8 +41,13 @@ fn write_session_file(
     let mut file = File::create(file_path)?;
 
     let meta = serde_json::json!({
+        "record_type": "session_meta",
         "timestamp": ts_str,
-        "id": uuid.to_string()
+        "id": uuid.to_string(),
+        "cwd": "/",
+        "originator": "test",
+        "cli_version": "0.0.0",
+        "instructions": null
     });
     writeln!(file, "{meta}")?;
 
@@ -54,6 +59,18 @@ fn write_session_file(
         writeln!(file, "{rec}")?;
     }
     Ok((dt, uuid))
+}
+
+fn expected_session_meta(ts: &str, uuid: Uuid) -> serde_json::Value {
+    serde_json::json!({
+        "record_type": "session_meta",
+        "timestamp": ts,
+        "id": uuid.to_string(),
+        "cwd": "/",
+        "originator": "test",
+        "cli_version": "0.0.0",
+        "instructions": null
+    })
 }
 
 #[tokio::test]
@@ -94,19 +111,19 @@ async fn test_list_conversations_latest_first() {
         .join(format!("rollout-2025-01-01T12-00-00-{u1}.jsonl"));
 
     let head_3 = vec![
-        serde_json::json!({"timestamp": "2025-01-03T12-00-00", "id": u3.to_string()}),
+        expected_session_meta("2025-01-03T12-00-00", u3),
         serde_json::json!({"record_type": "response", "index": 0}),
         serde_json::json!({"record_type": "response", "index": 1}),
         serde_json::json!({"record_type": "response", "index": 2}),
     ];
     let head_2 = vec![
-        serde_json::json!({"timestamp": "2025-01-02T12-00-00", "id": u2.to_string()}),
+        expected_session_meta("2025-01-02T12-00-00", u2),
         serde_json::json!({"record_type": "response", "index": 0}),
         serde_json::json!({"record_type": "response", "index": 1}),
         serde_json::json!({"record_type": "response", "index": 2}),
     ];
     let head_1 = vec![
-        serde_json::json!({"timestamp": "2025-01-01T12-00-00", "id": u1.to_string()}),
+        expected_session_meta("2025-01-01T12-00-00", u1),
         serde_json::json!({"record_type": "response", "index": 0}),
         serde_json::json!({"record_type": "response", "index": 1}),
         serde_json::json!({"record_type": "response", "index": 2}),
@@ -171,11 +188,11 @@ async fn test_pagination_cursor() {
         .join("04")
         .join(format!("rollout-2025-03-04T09-00-00-{u4}.jsonl"));
     let head_5 = vec![
-        serde_json::json!({"timestamp": "2025-03-05T09-00-00", "id": u5.to_string()}),
+        expected_session_meta("2025-03-05T09-00-00", u5),
         serde_json::json!({"record_type": "response", "index": 0}),
     ];
     let head_4 = vec![
-        serde_json::json!({"timestamp": "2025-03-04T09-00-00", "id": u4.to_string()}),
+        expected_session_meta("2025-03-04T09-00-00", u4),
         serde_json::json!({"record_type": "response", "index": 0}),
     ];
     let expected_cursor1: Cursor =
@@ -213,11 +230,11 @@ async fn test_pagination_cursor() {
         .join("02")
         .join(format!("rollout-2025-03-02T09-00-00-{u2}.jsonl"));
     let head_3 = vec![
-        serde_json::json!({"timestamp": "2025-03-03T09-00-00", "id": u3.to_string()}),
+        expected_session_meta("2025-03-03T09-00-00", u3),
         serde_json::json!({"record_type": "response", "index": 0}),
     ];
     let head_2 = vec![
-        serde_json::json!({"timestamp": "2025-03-02T09-00-00", "id": u2.to_string()}),
+        expected_session_meta("2025-03-02T09-00-00", u2),
         serde_json::json!({"record_type": "response", "index": 0}),
     ];
     let expected_cursor2: Cursor =
@@ -249,7 +266,7 @@ async fn test_pagination_cursor() {
         .join("01")
         .join(format!("rollout-2025-03-01T09-00-00-{u1}.jsonl"));
     let head_1 = vec![
-        serde_json::json!({"timestamp": "2025-03-01T09-00-00", "id": u1.to_string()}),
+        expected_session_meta("2025-03-01T09-00-00", u1),
         serde_json::json!({"record_type": "response", "index": 0}),
     ];
     let expected_cursor3: Cursor =
@@ -288,7 +305,7 @@ async fn test_get_conversation_contents() {
         .join("01")
         .join(format!("rollout-2025-04-01T10-30-00-{uuid}.jsonl"));
     let expected_head = vec![
-        serde_json::json!({"timestamp": ts, "id": uuid.to_string()}),
+        expected_session_meta(ts, uuid),
         serde_json::json!({"record_type": "response", "index": 0}),
         serde_json::json!({"record_type": "response", "index": 1}),
     ];
@@ -305,7 +322,7 @@ async fn test_get_conversation_contents() {
     assert_eq!(page, expected_page);
 
     // Entire file contents equality
-    let meta = serde_json::json!({"timestamp": ts, "id": uuid.to_string()});
+    let meta = expected_session_meta(ts, uuid);
     let rec0 = serde_json::json!({"record_type": "response", "index": 0});
     let rec1 = serde_json::json!({"record_type": "response", "index": 1});
     let expected_content = format!("{meta}\n{rec0}\n{rec1}\n");
@@ -340,9 +357,7 @@ async fn test_stable_ordering_same_second_pagination() {
         .join("07")
         .join("01")
         .join(format!("rollout-2025-07-01T00-00-00-{u2}.jsonl"));
-    let head = |u: Uuid| -> Vec<serde_json::Value> {
-        vec![serde_json::json!({"timestamp": ts, "id": u.to_string()})]
-    };
+    let head = |u: Uuid| -> Vec<serde_json::Value> { vec![expected_session_meta(ts, u)] };
     let expected_cursor1: Cursor = serde_json::from_str(&format!("\"{ts}|{u2}\"")).unwrap();
     let expected_page1 = ConversationsPage {
         items: vec![

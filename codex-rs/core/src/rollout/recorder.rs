@@ -4,7 +4,9 @@ use std::fs::File;
 use std::fs::{self};
 use std::io::Error as IoError;
 use std::path::Path;
+use std::path::PathBuf;
 
+use codex_protocol::protocol::Event;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -28,24 +30,28 @@ use crate::config::Config;
 use crate::conversation_manager::InitialHistory;
 use crate::git_info::GitInfo;
 use crate::git_info::collect_git_info;
+use crate::rollout::policy::is_persisted_event;
 use codex_protocol::models::ResponseItem;
 
-#[derive(Serialize, Deserialize, Clone, Default)]
+#[derive(Serialize, Deserialize, Clone, Default, Debug)]
 pub struct SessionMeta {
     pub id: Uuid,
     pub timestamp: String,
+    pub cwd: String,
+    pub originator: String,
+    pub cli_version: String,
     pub instructions: Option<String>,
 }
 
-#[derive(Serialize)]
-struct SessionMetaWithGit {
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SessionMetaWithGit {
     #[serde(flatten)]
     meta: SessionMeta,
     #[serde(skip_serializing_if = "Option::is_none")]
     git: Option<GitInfo>,
 }
 
-#[derive(Serialize, Deserialize, Default, Clone)]
+#[derive(Serialize, Deserialize, Default, Clone, Debug)]
 pub struct SessionStateSnapshot {}
 
 #[derive(Serialize, Deserialize, Default, Clone)]
@@ -70,11 +76,39 @@ pub struct SavedSession {
 #[derive(Clone)]
 pub struct RolloutRecorder {
     tx: Sender<RolloutCmd>,
+    path: PathBuf,
+}
+
+#[derive(Serialize)]
+struct SessionMetaLine<'a> {
+    record_type: &'static str,
+    #[serde(flatten)]
+    meta: &'a SessionMetaWithGit,
+}
+
+#[derive(Debug, Clone)]
+pub enum RolloutItem {
+    ResponseItem(ResponseItem),
+    Event(Event),
+    SessionMeta(SessionMetaWithGit),
+}
+
+impl From<ResponseItem> for RolloutItem {
+    fn from(item: ResponseItem) -> Self {
+        RolloutItem::ResponseItem(item)
+    }
+}
+
+impl From<Event> for RolloutItem {
+    fn from(event: Event) -> Self {
+        RolloutItem::Event(event)
+    }
 }
 
 enum RolloutCmd {
-    AddItems(Vec<ResponseItem>),
-    UpdateState(SessionStateSnapshot),
+    AddResponseItems(Vec<ResponseItem>),
+    AddEvents(Vec<Event>),
+    AddSessionMeta(SessionMetaWithGit),
     Shutdown { ack: oneshot::Sender<()> },
 }
 
@@ -101,6 +135,7 @@ impl RolloutRecorder {
             file,
             session_id,
             timestamp,
+            path,
         } = create_log_file(config, uuid)?;
 
         let timestamp_format: &[FormatItem] = format_description!(
@@ -128,48 +163,60 @@ impl RolloutRecorder {
             Some(SessionMeta {
                 timestamp,
                 id: session_id,
+                cwd: config.cwd.to_string_lossy().to_string(),
+                originator: config.responses_originator_header.clone(),
+                cli_version: env!("CARGO_PKG_VERSION").to_string(),
                 instructions,
             }),
             cwd,
         ));
 
-        Ok(Self { tx })
+        Ok(Self { tx, path })
     }
 
-    pub(crate) async fn record_items(&self, items: &[ResponseItem]) -> std::io::Result<()> {
-        let mut filtered = Vec::new();
-        for item in items {
-            // Note that function calls may look a bit strange if they are
-            // "fully qualified MCP tool calls," so we could consider
-            // reformatting them in that case.
-            if is_persisted_response_item(item) {
-                filtered.push(item.clone());
-            }
+    pub(crate) async fn record_items(&self, item: RolloutItem) -> std::io::Result<()> {
+        match item {
+            RolloutItem::ResponseItem(item) => self.record_response_item(&item).await,
+            RolloutItem::Event(event) => self.record_event(&event).await,
+            RolloutItem::SessionMeta(meta) => self.record_session_meta(&meta).await,
         }
-        if filtered.is_empty() {
+    }
+
+    async fn record_response_item(&self, item: &ResponseItem) -> std::io::Result<()> {
+        // Note that function calls may look a bit strange if they are
+        // "fully qualified MCP tool calls," so we could consider
+        // reformatting them in that case.
+        if !is_persisted_response_item(item) {
             return Ok(());
         }
         self.tx
-            .send(RolloutCmd::AddItems(filtered))
+            .send(RolloutCmd::AddResponseItems(vec![item.clone()]))
             .await
             .map_err(|e| IoError::other(format!("failed to queue rollout items: {e}")))
     }
 
-    pub(crate) async fn record_state(&self, state: SessionStateSnapshot) -> std::io::Result<()> {
+    async fn record_event(&self, event: &Event) -> std::io::Result<()> {
+        if !is_persisted_event(event) {
+            return Ok(());
+        }
         self.tx
-            .send(RolloutCmd::UpdateState(state))
+            .send(RolloutCmd::AddEvents(vec![event.clone()]))
             .await
-            .map_err(|e| IoError::other(format!("failed to queue rollout state: {e}")))
+            .map_err(|e| IoError::other(format!("failed to queue rollout event: {e}")))
+    }
+
+    async fn record_session_meta(&self, meta: &SessionMetaWithGit) -> std::io::Result<()> {
+        self.tx
+            .send(RolloutCmd::AddSessionMeta(meta.clone()))
+            .await
+            .map_err(|e| IoError::other(format!("failed to queue rollout session meta: {e}")))
     }
 
     pub async fn get_rollout_history(path: &Path) -> std::io::Result<InitialHistory> {
         info!("Resuming rollout from {path:?}");
         let text = tokio::fs::read_to_string(path).await?;
-        let mut lines = text.lines();
-        let _ = lines
-            .next()
-            .ok_or_else(|| IoError::other("empty session file"))?;
-        let mut items = Vec::new();
+        let lines = text.lines();
+        let mut items: Vec<RolloutItem> = Vec::new();
 
         for line in lines {
             if line.trim().is_empty() {
@@ -179,21 +226,42 @@ impl RolloutRecorder {
                 Ok(v) => v,
                 Err(_) => continue,
             };
-            if v.get("record_type")
-                .and_then(|rt| rt.as_str())
-                .map(|s| s == "state")
-                .unwrap_or(false)
-            {
-                continue;
-            }
-            match serde_json::from_value::<ResponseItem>(v.clone()) {
-                Ok(item) => {
-                    if is_persisted_response_item(&item) {
-                        items.push(item);
+            match v.get("record_type").and_then(|rt| rt.as_str()) {
+                Some("state") => continue,
+                Some("event") => {
+                    let mut ev_val = v.clone();
+                    if let Some(obj) = ev_val.as_object_mut() {
+                        obj.remove("record_type");
+                    }
+                    match serde_json::from_value::<Event>(ev_val) {
+                        Ok(ev) => items.push(RolloutItem::Event(ev)),
+                        Err(e) => warn!("failed to parse event: {v:?}, error: {e}"),
                     }
                 }
-                Err(e) => {
-                    warn!("failed to parse item: {v:?}, error: {e}");
+                Some("prev_session_meta") | Some("session_meta") => {
+                    let mut meta_val = v.clone();
+                    if let Some(obj) = meta_val.as_object_mut() {
+                        obj.remove("record_type");
+                    }
+                    match serde_json::from_value::<SessionMetaWithGit>(meta_val) {
+                        Ok(meta) => items.push(RolloutItem::SessionMeta(meta)),
+                        Err(e) => warn!("failed to parse prev_session_meta: {v:?}, error: {e}"),
+                    }
+                }
+                Some("response") | None => {
+                    match serde_json::from_value::<ResponseItem>(v.clone()) {
+                        Ok(item) => {
+                            if is_persisted_response_item(&item) {
+                                items.push(RolloutItem::ResponseItem(item));
+                            }
+                        }
+                        Err(e) => {
+                            warn!("failed to parse response item: {v:?}, error: {e}");
+                        }
+                    }
+                }
+                Some(other) => {
+                    warn!("unknown record_type in rollout: {other}");
                 }
             }
         }
@@ -204,6 +272,10 @@ impl RolloutRecorder {
         } else {
             Ok(InitialHistory::Resumed(items))
         }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
     pub async fn shutdown(&self) -> std::io::Result<()> {
@@ -231,6 +303,9 @@ struct LogFileInfo {
 
     /// Timestamp for the start of the session.
     timestamp: OffsetDateTime,
+
+    /// Full filesystem path to the rollout file.
+    path: PathBuf,
 }
 
 fn create_log_file(config: &Config, session_id: Uuid) -> std::io::Result<LogFileInfo> {
@@ -264,6 +339,7 @@ fn create_log_file(config: &Config, session_id: Uuid) -> std::io::Result<LogFile
         file,
         session_id,
         timestamp,
+        path,
     })
 }
 
@@ -282,32 +358,46 @@ async fn rollout_writer(
             meta: session_meta,
             git: git_info,
         };
-
         // Write the SessionMeta as the first item in the file
-        writer.write_line(&session_meta_with_git).await?;
+        writer
+            .write_line(&SessionMetaLine {
+                record_type: "session_meta",
+                meta: &session_meta_with_git,
+            })
+            .await?;
     }
 
     // Process rollout commands
     while let Some(cmd) = rx.recv().await {
         match cmd {
-            RolloutCmd::AddItems(items) => {
+            RolloutCmd::AddResponseItems(items) => {
                 for item in items {
                     if is_persisted_response_item(&item) {
                         writer.write_line(&item).await?;
                     }
                 }
             }
-            RolloutCmd::UpdateState(state) => {
-                #[derive(Serialize)]
-                struct StateLine<'a> {
-                    record_type: &'static str,
-                    #[serde(flatten)]
-                    state: &'a SessionStateSnapshot,
+            RolloutCmd::AddEvents(events) => {
+                for event in events {
+                    #[derive(Serialize)]
+                    struct EventLine<'a> {
+                        record_type: &'static str,
+                        #[serde(flatten)]
+                        event: &'a Event,
+                    }
+                    writer
+                        .write_line(&EventLine {
+                            record_type: "event",
+                            event: &event,
+                        })
+                        .await?;
                 }
+            }
+            RolloutCmd::AddSessionMeta(meta) => {
                 writer
-                    .write_line(&StateLine {
-                        record_type: "state",
-                        state: &state,
+                    .write_line(&SessionMetaLine {
+                        record_type: "prev_session_meta",
+                        meta: &meta,
                     })
                     .await?;
             }

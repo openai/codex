@@ -10,6 +10,7 @@ use time::macros::format_description;
 use uuid::Uuid;
 
 use super::SESSIONS_SUBDIR;
+use super::recorder::SessionMetaWithGit;
 
 /// Returned page of conversation summaries.
 #[derive(Debug, Default, PartialEq)]
@@ -170,7 +171,9 @@ async fn traverse_directories_for_paths(
                     let head = read_first_jsonl_records(&path, HEAD_RECORD_LIMIT)
                         .await
                         .unwrap_or_default();
-                    items.push(ConversationItem { path, head });
+                    if should_include_session(&head) {
+                        items.push(ConversationItem { path, head });
+                    }
                 }
             }
         }
@@ -295,4 +298,38 @@ async fn read_first_jsonl_records(
         }
     }
     Ok(head)
+}
+
+/// Return true if this conversation should be included in the listing.
+///
+/// Current rule: include only when the first JSON object is a session meta record
+/// (i.e., has `{"record_type": "session_meta", ...}`), which is how rollout
+/// files are written. Empty or malformed heads are excluded.
+fn should_include_session(head: &[serde_json::Value]) -> bool {
+    let Some(first) = head.first() else {
+        return false;
+    };
+    passes_session_meta_filter(first)
+}
+
+/// Validate that the first record is a fully‑formed session meta line.
+///
+/// Requirements:
+/// - `record_type == "session_meta"`
+/// - Remaining fields (after removing `record_type`) deserialize into
+///   `SessionMetaWithGit`.
+fn passes_session_meta_filter(first: &serde_json::Value) -> bool {
+    let Some(obj) = first.as_object() else {
+        return false;
+    };
+    let record_type = obj.get("record_type").and_then(|v| v.as_str());
+    if record_type != Some("session_meta") {
+        return false;
+    }
+
+    // Remove the marker field and validate the remainder matches SessionMetaWithGit
+    let mut cleaned = obj.clone();
+    cleaned.remove("record_type");
+    let val = serde_json::Value::Object(cleaned);
+    serde_json::from_value::<SessionMetaWithGit>(val).is_ok()
 }

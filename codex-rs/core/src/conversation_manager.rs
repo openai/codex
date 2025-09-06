@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::AuthManager;
 use crate::CodexAuth;
+use crate::rollout::RolloutItem;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
@@ -20,10 +21,10 @@ use crate::protocol::SessionConfiguredEvent;
 use crate::rollout::RolloutRecorder;
 use codex_protocol::models::ResponseItem;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum InitialHistory {
     New,
-    Resumed(Vec<ResponseItem>),
+    Resumed(Vec<RolloutItem>),
 }
 
 /// Represents a newly created Codex conversation, including the first event
@@ -149,11 +150,17 @@ impl ConversationManager {
     /// caller's `config`). The new conversation will have a fresh id.
     pub async fn fork_conversation(
         &self,
-        conversation_history: Vec<ResponseItem>,
+        conversation_path: PathBuf,
+        conversation_id: Uuid,
         num_messages_to_drop: usize,
         config: Config,
     ) -> CodexResult<NewConversation> {
         // Compute the prefix up to the cut point.
+        let initial_history = RolloutRecorder::get_rollout_history(&conversation_path).await?;
+        let conversation_history = match initial_history {
+            InitialHistory::Resumed(items) => items,
+            InitialHistory::New => return Err(CodexErr::ConversationNotFound(conversation_id)),
+        };
         let history =
             truncate_after_dropping_last_messages(conversation_history, num_messages_to_drop);
 
@@ -170,7 +177,7 @@ impl ConversationManager {
 
 /// Return a prefix of `items` obtained by dropping the last `n` user messages
 /// and all items that follow them.
-fn truncate_after_dropping_last_messages(items: Vec<ResponseItem>, n: usize) -> InitialHistory {
+fn truncate_after_dropping_last_messages(items: Vec<RolloutItem>, n: usize) -> InitialHistory {
     if n == 0 {
         return InitialHistory::Resumed(items);
     }
@@ -179,7 +186,8 @@ fn truncate_after_dropping_last_messages(items: Vec<ResponseItem>, n: usize) -> 
     let mut count = 0usize;
     let mut cut_index = 0usize;
     for (idx, item) in items.iter().enumerate().rev() {
-        if let ResponseItem::Message { role, .. } = item
+        if let RolloutItem::ResponseItem(response_item) = item
+            && let ResponseItem::Message { role, .. } = response_item
             && role == "user"
         {
             count += 1;
@@ -249,13 +257,37 @@ mod tests {
             assistant_msg("a4"),
         ];
 
+        let items: Vec<RolloutItem> = items.into_iter().map(RolloutItem::from).collect();
+
         let truncated = truncate_after_dropping_last_messages(items.clone(), 1);
-        assert_eq!(
-            truncated,
-            InitialHistory::Resumed(vec![items[0].clone(), items[1].clone(), items[2].clone(),])
-        );
+        if let InitialHistory::Resumed(resumed) = truncated {
+            let get_text = |ri: &ResponseItem| -> Option<String> {
+                if let ResponseItem::Message { content, .. } = ri {
+                    for c in content {
+                        if let ContentItem::OutputText { text } = c {
+                            return Some(text.clone());
+                        }
+                    }
+                }
+                None
+            };
+
+            let texts: Vec<String> = resumed
+                .iter()
+                .filter_map(|it| match it {
+                    RolloutItem::ResponseItem(ri) => get_text(ri),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                texts,
+                vec!["u1".to_string(), "a1".to_string(), "a2".to_string()]
+            );
+        } else {
+            panic!("expected Resumed history");
+        }
 
         let truncated2 = truncate_after_dropping_last_messages(items, 2);
-        assert_eq!(truncated2, InitialHistory::New);
+        assert!(matches!(truncated2, InitialHistory::New));
     }
 }
