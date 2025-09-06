@@ -111,9 +111,23 @@ impl McpConnectionManager {
             return Ok((Self::default(), ClientStartErrors::default()));
         }
 
+        // Validate MCP server configurations
+        for (server_name, cfg) in &mcp_servers {
+            if let Err(e) = cfg.validate() {
+                return Err(anyhow::anyhow!(
+                    "MCP server '{}' configuration error: {}",
+                    server_name,
+                    e
+                ));
+            }
+        }
+
         // Launch all configured servers concurrently.
         let mut join_set = JoinSet::new();
         let mut errors = ClientStartErrors::new();
+
+        // Clone mcp_servers for use in list_all_tools later
+        let mcp_servers_for_filtering = mcp_servers.clone();
 
         for (server_name, cfg) in mcp_servers {
             // Validate server name before spawning
@@ -127,7 +141,9 @@ impl McpConnectionManager {
             }
 
             join_set.spawn(async move {
-                let McpServerConfig { command, args, env } = cfg;
+                let McpServerConfig {
+                    command, args, env, ..
+                } = cfg;
                 let client_res = McpClient::new_stdio_client(
                     command.into(),
                     args.into_iter().map(OsString::from).collect(),
@@ -184,7 +200,7 @@ impl McpConnectionManager {
             }
         }
 
-        let all_tools = list_all_tools(&clients).await?;
+        let all_tools = list_all_tools(&clients, &mcp_servers_for_filtering).await?;
 
         let tools = qualify_tools(all_tools);
 
@@ -231,6 +247,7 @@ impl McpConnectionManager {
 /// contains **all** tools. Each key is the fully-qualified name for the tool.
 async fn list_all_tools(
     clients: &HashMap<String, std::sync::Arc<McpClient>>,
+    mcp_servers: &HashMap<String, McpServerConfig>,
 ) -> Result<Vec<ToolInfo>> {
     let mut join_set = JoinSet::new();
 
@@ -254,13 +271,19 @@ async fn list_all_tools(
         let (server_name, list_result) = join_res?;
         let list_result = list_result?;
 
+        // Get the server configuration for filtering
+        let server_config = mcp_servers.get(&server_name);
+
         for tool in list_result.tools {
-            let tool_info = ToolInfo {
-                server_name: server_name.clone(),
-                tool_name: tool.name.clone(),
-                tool,
-            };
-            aggregated.push(tool_info);
+            // Apply tool filtering based on server configuration
+            if should_include_tool(&tool.name, server_config) {
+                let tool_info = ToolInfo {
+                    server_name: server_name.clone(),
+                    tool_name: tool.name.clone(),
+                    tool,
+                };
+                aggregated.push(tool_info);
+            }
         }
     }
 
@@ -271,6 +294,27 @@ async fn list_all_tools(
     );
 
     Ok(aggregated)
+}
+
+/// Determines whether a tool should be included based on the server configuration.
+fn should_include_tool(tool_name: &str, server_config: Option<&McpServerConfig>) -> bool {
+    let Some(config) = server_config else {
+        // No configuration means include all tools
+        return true;
+    };
+
+    // If include_tools is specified, only include tools in that list
+    if let Some(include_tools) = &config.include_tools {
+        return include_tools.contains(&tool_name.to_string());
+    }
+
+    // If exclude_tools is specified, exclude tools in that list
+    if let Some(exclude_tools) = &config.exclude_tools {
+        return !exclude_tools.contains(&tool_name.to_string());
+    }
+
+    // No filtering specified, include the tool
+    true
 }
 
 fn is_valid_mcp_server_name(server_name: &str) -> bool {
@@ -365,5 +409,64 @@ mod tests {
             keys[1],
             "my_server__yet_another_e1c3987bd9c50b826cbe1687966f79f0c602d19ca"
         );
+    }
+
+    #[test]
+    fn test_should_include_tool_no_config() {
+        // No configuration means include all tools
+        assert!(should_include_tool("any_tool", None));
+    }
+
+    #[test]
+    fn test_should_include_tool_exclude_tools() {
+        let config = McpServerConfig {
+            command: "test".to_string(),
+            args: vec![],
+            env: None,
+            exclude_tools: Some(vec!["bad_tool".to_string(), "dangerous_tool".to_string()]),
+            include_tools: None,
+        };
+
+        // Should include tools not in exclude list
+        assert!(should_include_tool("good_tool", Some(&config)));
+        assert!(should_include_tool("safe_tool", Some(&config)));
+
+        // Should exclude tools in exclude list
+        assert!(!should_include_tool("bad_tool", Some(&config)));
+        assert!(!should_include_tool("dangerous_tool", Some(&config)));
+    }
+
+    #[test]
+    fn test_should_include_tool_include_tools() {
+        let config = McpServerConfig {
+            command: "test".to_string(),
+            args: vec![],
+            env: None,
+            exclude_tools: None,
+            include_tools: Some(vec!["allowed_tool".to_string(), "safe_tool".to_string()]),
+        };
+
+        // Should include only tools in include list
+        assert!(should_include_tool("allowed_tool", Some(&config)));
+        assert!(should_include_tool("safe_tool", Some(&config)));
+
+        // Should exclude tools not in include list
+        assert!(!should_include_tool("other_tool", Some(&config)));
+        assert!(!should_include_tool("bad_tool", Some(&config)));
+    }
+
+    #[test]
+    fn test_should_include_tool_no_filtering() {
+        let config = McpServerConfig {
+            command: "test".to_string(),
+            args: vec![],
+            env: None,
+            exclude_tools: None,
+            include_tools: None,
+        };
+
+        // No filtering specified, include all tools
+        assert!(should_include_tool("any_tool", Some(&config)));
+        assert!(should_include_tool("another_tool", Some(&config)));
     }
 }

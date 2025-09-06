@@ -8,8 +8,9 @@ use std::path::PathBuf;
 use wildmatch::WildMatchPattern;
 
 use serde::Deserialize;
+use serde::Serialize;
 
-#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
     pub command: String,
 
@@ -18,6 +19,77 @@ pub struct McpServerConfig {
 
     #[serde(default)]
     pub env: Option<HashMap<String, String>>,
+
+    /// Tools to exclude from this MCP server. These tools will be completely
+    /// removed from the context, not just blocked from execution.
+    #[serde(default)]
+    pub exclude_tools: Option<Vec<String>>,
+
+    /// Tools to include from this MCP server. If specified, only these tools
+    /// will be available. Mutually exclusive with exclude_tools.
+    #[serde(default)]
+    pub include_tools: Option<Vec<String>>,
+}
+
+impl McpServerConfig {
+    /// Validates that exclude_tools and include_tools are not both specified.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.exclude_tools.is_some() && self.include_tools.is_some() {
+            return Err("exclude_tools and include_tools cannot both be specified".to_string());
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mcp_server_config_validation_success() {
+        let config = McpServerConfig {
+            command: "test".to_string(),
+            args: vec![],
+            env: None,
+            exclude_tools: Some(vec!["bad_tool".to_string()]),
+            include_tools: None,
+        };
+        assert!(config.validate().is_ok());
+
+        let config = McpServerConfig {
+            command: "test".to_string(),
+            args: vec![],
+            env: None,
+            exclude_tools: None,
+            include_tools: Some(vec!["good_tool".to_string()]),
+        };
+        assert!(config.validate().is_ok());
+
+        let config = McpServerConfig {
+            command: "test".to_string(),
+            args: vec![],
+            env: None,
+            exclude_tools: None,
+            include_tools: None,
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_mcp_server_config_validation_failure() {
+        let config = McpServerConfig {
+            command: "test".to_string(),
+            args: vec![],
+            env: None,
+            exclude_tools: Some(vec!["bad_tool".to_string()]),
+            include_tools: Some(vec!["good_tool".to_string()]),
+        };
+        assert!(config.validate().is_err());
+        assert_eq!(
+            config.validate().unwrap_err(),
+            "exclude_tools and include_tools cannot both be specified"
+        );
+    }
 }
 
 #[derive(Deserialize, Debug, Copy, Clone, PartialEq)]

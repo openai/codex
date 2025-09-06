@@ -358,7 +358,26 @@ Should be represented as follows in `~/.codex/config.toml`:
 command = "npx"
 args = ["-y", "mcp-server"]
 env = { "API_KEY" = "value" }
+
+# Optional: Exclude specific tools from this server
+exclude_tools = ["apply_migration", "create_migration"]
+
+# Optional: Include only specific tools (mutually exclusive with exclude_tools)
+# include_tools = ["list_tables", "describe_schema"]
 ```
+
+### Tool Filtering
+
+You can control which tools are available from each MCP server:
+
+- **`exclude_tools`**: Completely removes the specified tools from the context. These tools will not be available to the AI model.
+- **`include_tools`**: Only makes the specified tools available. All other tools from the server will be excluded.
+- **Mutually exclusive**: You cannot specify both `exclude_tools` and `include_tools` for the same server.
+
+Example use cases:
+- **Supabase MCP**: Exclude migration tools to handle them locally with version control
+- **Database MCP**: Include only read-only operations for security
+- **File MCP**: Exclude dangerous operations like `delete_file`
 
 ## shell_environment_policy
 

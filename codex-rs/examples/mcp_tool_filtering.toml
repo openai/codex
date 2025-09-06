@@ -1,0 +1,52 @@
+# Example configuration demonstrating MCP tool filtering
+# This file shows how to use the new exclude_tools and include_tools features
+
+# Example 1: Supabase MCP with migration tools excluded
+[mcp_servers.supabase]
+args = ["-y", "@supabase/mcp-server"]
+command = "npx"
+env = { "SUPABASE_URL" = "your-supabase-url", "SUPABASE_ANON_KEY" = "your-anon-key" }
+# Exclude migration tools to handle them locally with version control
+exclude_tools = ["apply_migration", "create_migration", "rollback_migration"]
+
+# Example 2: Database MCP with only read-only operations
+[mcp_servers.database]
+args = ["-y", "@database/mcp-server"]
+command = "npx"
+env = { "DATABASE_URL" = "your-database-url" }
+# Include only safe read-only operations
+include_tools = [
+    "list_tables",
+    "describe_schema",
+    "query_data",
+    "get_table_info",
+]
+
+# Example 3: File system MCP with dangerous operations excluded
+[mcp_servers.filesystem]
+args = ["-y", "@filesystem/mcp-server"]
+command = "npx"
+env = { "BASE_PATH" = "/safe/workspace" }
+# Exclude dangerous file operations
+exclude_tools = ["delete_file", "delete_directory", "move_file", "chmod"]
+
+# Example 4: Git MCP with write operations excluded
+[mcp_servers.git]
+args = ["-y", "@git/mcp-server"]
+command = "npx"
+env = { "REPO_PATH" = "." }
+# Exclude git write operations for safety
+exclude_tools = ["commit", "push", "reset", "checkout", "merge", "rebase"]
+
+# Example 5: API MCP with only specific endpoints
+[mcp_servers.api]
+args = ["-y", "@api/mcp-server"]
+command = "npx"
+env = { "API_BASE_URL" = "https://api.example.com", "API_KEY" = "your-api-key" }
+# Include only safe GET operations
+include_tools = [
+    "get_user_info",
+    "list_projects",
+    "get_project_details",
+    "search_documents",
+]
