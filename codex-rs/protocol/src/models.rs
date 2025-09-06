@@ -42,11 +42,13 @@ pub enum ContentItem {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseItem {
     Message {
+        #[serde(skip_serializing)]
         id: Option<String>,
         role: String,
         content: Vec<ContentItem>,
     },
     Reasoning {
+        #[serde(default)]
         id: String,
         summary: Vec<ReasoningItemReasoningSummary>,
         #[serde(default, skip_serializing_if = "should_serialize_reasoning_content")]
@@ -55,6 +57,7 @@ pub enum ResponseItem {
     },
     LocalShellCall {
         /// Set when using the chat completions API.
+        #[serde(skip_serializing)]
         id: Option<String>,
         /// Set when using the Responses API.
         call_id: Option<String>,
@@ -62,6 +65,7 @@ pub enum ResponseItem {
         action: LocalShellAction,
     },
     FunctionCall {
+        #[serde(skip_serializing)]
         id: Option<String>,
         name: String,
         // The Responses API returns the function call arguments as a *string* that contains
@@ -82,7 +86,7 @@ pub enum ResponseItem {
         output: FunctionCallOutputPayload,
     },
     CustomToolCall {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing)]
         id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         status: Option<String>,
@@ -104,7 +108,7 @@ pub enum ResponseItem {
     //   "action": {"type":"search","query":"weather: San Francisco, CA"}
     // }
     WebSearchCall {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing)]
         id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         status: Option<String>,
