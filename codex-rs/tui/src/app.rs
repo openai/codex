@@ -40,7 +40,9 @@ pub(crate) struct App {
 
     pub(crate) file_search: FileSearchManager,
 
-    pub(crate) transcript_lines: Vec<Line<'static>>,
+    /// Canonical source of truth for transcript content.
+    /// We compute transcript lines/spans on-demand when needed (e.g., opening overlay).
+    pub(crate) transcript_cells: Vec<Box<dyn crate::history_cell::HistoryCell>>,
 
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
@@ -121,7 +123,7 @@ impl App {
             config,
             file_search,
             enhanced_keys_supported,
-            transcript_lines: Vec::new(),
+            transcript_cells: Vec::new(),
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
@@ -203,21 +205,22 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::InsertHistoryCell(cell) => {
-                let mut cell_transcript = cell.transcript_lines();
-                if !cell.is_stream_continuation() && !self.transcript_lines.is_empty() {
-                    cell_transcript.insert(0, Line::from(""));
-                }
+                // Compute transcript increment and history display before moving the cell.
+                let is_stream = cell.is_stream_continuation();
+                let cell_transcript = cell.transcript_lines();
+                let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
+                // Persist canonical cells for future on-demand builds.
+                self.transcript_cells.push(cell);
+                // If overlay is showing, append to it with appropriate separation.
                 if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                    t.insert_lines(cell_transcript.clone());
+                    t.insert_transcript_lines_with_sep(cell_transcript, is_stream);
                     tui.frame_requester().schedule_frame();
                 }
-                self.transcript_lines.extend(cell_transcript.clone());
-                let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
                 if !display.is_empty() {
                     // Only insert a separating blank line for new cells that are not
                     // part of an ongoing stream. Streaming continuations should not
                     // accrue extra blank lines between chunks.
-                    if !cell.is_stream_continuation() {
+                    if !is_stream {
                         if self.has_emitted_history_lines {
                             display.insert(0, Line::from(""));
                         } else {
@@ -315,10 +318,8 @@ impl App {
                 kind: KeyEventKind::Press,
                 ..
             } => {
-                // Enter alternate screen and set viewport to full size.
-                let _ = tui.enter_alt_screen();
-                self.overlay = Some(Overlay::new_transcript(self.transcript_lines.clone()));
-                tui.frame_requester().schedule_frame();
+                // Delegate to helper to open transcript overlay.
+                self.open_transcript_overlay(tui);
             }
             // Esc primes/advances backtracking only in normal (not working) mode
             // with an empty composer. In any other state, forward Esc so the
