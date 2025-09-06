@@ -107,6 +107,36 @@ impl ModelClient {
     /// the provider config.  Public callers always invoke `stream()` – the
     /// specialised helpers are private to avoid accidental misuse.
     pub async fn stream(&self, prompt: &Prompt) -> Result<ResponseStream> {
+        // If this provider requires OpenAI-style auth, ensure we have credentials before
+        // attempting any network calls. This prevents long retries and surfaces a clear
+        // error immediately when the user is not logged in or has no API key configured.
+        if self.provider.requires_openai_auth {
+            // Check for an API key provided via provider-specific env var, if any.
+            let api_key_available = match self.provider.api_key() {
+                Ok(Some(_)) => true,
+                Ok(None) => false,
+                // If the provider declares an env var but it's missing, we still allow
+                // proceeding when a ChatGPT-style auth is available; otherwise, bubble
+                // the env-var guidance up to the caller.
+                Err(err) => {
+                    let has_auth = self.auth_manager.as_ref().and_then(|m| m.auth()).is_some();
+                    if has_auth {
+                        false
+                    } else {
+                        return Err(err);
+                    }
+                }
+            };
+
+            // Otherwise, check whether the session has an auth token (ChatGPT/API key via AuthManager).
+            let has_auth =
+                api_key_available || self.auth_manager.as_ref().and_then(|m| m.auth()).is_some();
+
+            if !has_auth {
+                return Err(crate::error::CodexErr::NotAuthenticated);
+            }
+        }
+
         match self.provider.wire_api {
             WireApi::Responses => self.stream_responses(prompt).await,
             WireApi::Chat => {

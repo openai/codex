@@ -1608,6 +1608,7 @@ async fn run_turn(
             Ok(output) => return Ok(output),
             Err(CodexErr::Interrupted) => return Err(CodexErr::Interrupted),
             Err(CodexErr::EnvVar(var)) => return Err(CodexErr::EnvVar(var)),
+            Err(CodexErr::NotAuthenticated) => return Err(CodexErr::NotAuthenticated),
             Err(e @ (CodexErr::UsageLimitReached(_) | CodexErr::UsageNotIncluded)) => {
                 return Err(e);
             }
