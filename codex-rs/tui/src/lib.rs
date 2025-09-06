@@ -158,6 +158,13 @@ pub async fn run_main(
         }
     };
 
+    // Build OTEL layer and compose into subscriber.
+    let telemetry = codex_core::telemetry_init::build_otel_layer_from_config(
+        &config,
+        "codex",
+        env!("CARGO_PKG_VERSION"),
+    );
+
     // we load config.toml here to determine project state.
     #[allow(clippy::print_stderr)]
     let config_toml = {
@@ -225,7 +232,19 @@ pub async fn run_main(
             .map_err(|e| std::io::Error::other(format!("OSS setup failed: {e}")))?;
     }
 
-    let _ = tracing_subscriber::registry().with(file_layer).try_init();
+    let _telemetry_guard = if let Some((guard, tracer)) = telemetry {
+        let otel_layer = tracing_opentelemetry::OpenTelemetryLayer::new(tracer).with_filter(
+            tracing_subscriber::filter::filter_fn(codex_core::telemetry_init::codex_export_filter),
+        );
+        let _ = tracing_subscriber::registry()
+            .with(file_layer)
+            .with(otel_layer)
+            .try_init();
+        Some(guard)
+    } else {
+        let _ = tracing_subscriber::registry().with(file_layer).try_init();
+        None
+    };
 
     run_ratatui_app(cli, config, should_show_trust_screen)
         .await

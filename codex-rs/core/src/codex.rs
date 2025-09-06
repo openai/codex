@@ -272,6 +272,9 @@ pub(crate) struct Session {
     session_id: Uuid,
     tx_event: Sender<Event>,
 
+    /// OpenTelemetry span for the lifetime of this session
+    session_span: Mutex<Option<tracing::Span>>,
+
     /// Manager for external MCP servers/tools.
     mcp_connection_manager: McpConnectionManager,
     session_manager: ExecSessionManager,
@@ -471,6 +474,11 @@ impl Session {
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             user_shell: default_shell,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+            session_span: Mutex::new(Some(codex_telemetry::make_session_span(
+                &session_id.to_string(),
+                &model,
+                &provider.name,
+            ))),
         });
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
@@ -938,6 +946,12 @@ impl Session {
             warn!("failed to spawn notifier '{}': {e}", notify_command[0]);
         }
     }
+
+    pub fn end_session_span(&self) {
+        if let Some(span) = self.session_span.lock_unchecked().take() {
+            drop(span);
+        }
+    }
 }
 
 impl Drop for Session {
@@ -1317,6 +1331,9 @@ async fn submission_loop(
             }
             Op::Shutdown => {
                 info!("Shutting down Codex instance");
+
+                // End the session root span so it is exported before shutdown.
+                sess.as_ref().end_session_span();
 
                 // Gracefully flush and shutdown rollout recorder on session end so tests
                 // that inspect the rollout file do not race with the background writer.

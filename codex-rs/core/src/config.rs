@@ -40,6 +40,9 @@ pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 
 const CONFIG_TOML_FILE: &str = "config.toml";
 
+/// Default rotation size for telemetry file exporter, in MiB.
+pub(crate) const DEFAULT_TELEMETRY_ROTATE_MB: u64 = 100;
+/// Default value for the Responses API `originator` header when unspecified.
 const DEFAULT_RESPONSES_ORIGINATOR_HEADER: &str = "codex_cli_rs";
 
 /// Application configuration loaded from disk and merged with overrides.
@@ -183,6 +186,8 @@ pub struct Config {
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: bool,
+    /// Telemetry configuration (exporter type, endpoint, headers, etc.).
+    pub telemetry: crate::config_types::TelemetryConfig,
 }
 
 impl Config {
@@ -482,6 +487,9 @@ pub struct ConfigToml {
     pub responses_originator_header_internal_override: Option<String>,
 
     pub projects: Option<HashMap<String, ProjectConfig>>,
+
+    /// Telemetry configuration.
+    pub telemetry: Option<crate::config_types::TelemetryConfigToml>,
 
     /// If set to `true`, the API key will be signed with the `originator` header.
     pub preferred_auth_method: Option<AuthMode>,
@@ -833,6 +841,24 @@ impl Config {
                 .unwrap_or(false),
             include_view_image_tool,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
+            telemetry: {
+                use crate::config_types::TelemetryConfig;
+                use crate::config_types::TelemetryConfigToml;
+                use crate::config_types::TelemetryExporterKind;
+                let t: TelemetryConfigToml = cfg.telemetry.unwrap_or_default();
+                let enabled = t.enabled.unwrap_or(true);
+                let exporter = t.exporter.unwrap_or(TelemetryExporterKind::OtlpFile);
+                let endpoint = t.endpoint;
+                let headers = t.headers.unwrap_or_default();
+                let rotate_mb = t.rotate_mb.or(Some(DEFAULT_TELEMETRY_ROTATE_MB));
+                TelemetryConfig {
+                    enabled,
+                    exporter,
+                    endpoint,
+                    headers,
+                    rotate_mb,
+                }
+            },
         };
         Ok(config)
     }
@@ -1208,6 +1234,13 @@ model_verbosity = "high"
                 use_experimental_streamable_shell_tool: false,
                 include_view_image_tool: true,
                 disable_paste_burst: false,
+                telemetry: crate::config_types::TelemetryConfig {
+                    enabled: true,
+                    exporter: crate::config_types::TelemetryExporterKind::OtlpFile,
+                    endpoint: None,
+                    headers: HashMap::new(),
+                    rotate_mb: Some(100),
+                },
             },
             o3_profile_config
         );
@@ -1265,6 +1298,13 @@ model_verbosity = "high"
             use_experimental_streamable_shell_tool: false,
             include_view_image_tool: true,
             disable_paste_burst: false,
+            telemetry: crate::config_types::TelemetryConfig {
+                enabled: true,
+                exporter: crate::config_types::TelemetryExporterKind::OtlpFile,
+                endpoint: None,
+                headers: HashMap::new(),
+                rotate_mb: Some(100),
+            },
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -1337,6 +1377,13 @@ model_verbosity = "high"
             use_experimental_streamable_shell_tool: false,
             include_view_image_tool: true,
             disable_paste_burst: false,
+            telemetry: crate::config_types::TelemetryConfig {
+                enabled: true,
+                exporter: crate::config_types::TelemetryExporterKind::OtlpFile,
+                endpoint: None,
+                headers: HashMap::new(),
+                rotate_mb: Some(100),
+            },
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
@@ -1395,6 +1442,13 @@ model_verbosity = "high"
             use_experimental_streamable_shell_tool: false,
             include_view_image_tool: true,
             disable_paste_burst: false,
+            telemetry: crate::config_types::TelemetryConfig {
+                enabled: true,
+                exporter: crate::config_types::TelemetryExporterKind::OtlpFile,
+                endpoint: None,
+                headers: HashMap::new(),
+                rotate_mb: Some(100),
+            },
         };
 
         assert_eq!(expected_gpt5_profile_config, gpt5_profile_config);
