@@ -9,6 +9,10 @@ use wildmatch::WildMatchPattern;
 
 use serde::Deserialize;
 
+fn default_init_timeout_ms() -> u64 {
+    10_000
+}
+
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
     pub command: String,
@@ -18,6 +22,10 @@ pub struct McpServerConfig {
 
     #[serde(default)]
     pub env: Option<HashMap<String, String>>,
+    
+    /// Initialization timeout in milliseconds. Defaults to 10 seconds if not specified.
+    #[serde(default = "default_init_timeout_ms")]
+    pub init_timeout_ms: u64,
 }
 
 #[derive(Deserialize, Debug, Copy, Clone, PartialEq)]
