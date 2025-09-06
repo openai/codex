@@ -562,12 +562,15 @@ impl CodexMessageProcessor {
         // Build summaries
         let mut items: Vec<ConversationSummary> = Vec::new();
         for it in page.items.into_iter() {
-            let (timestamp, preview) = extract_ts_and_preview(&it.head);
-            items.push(ConversationSummary {
-                path: it.path,
-                preview,
-                timestamp,
-            });
+            let (id, timestamp, preview) = extract_ts_and_preview(&it.head);
+            if let Some(id) = id {
+                items.push(ConversationSummary {
+                    id,
+                    path: it.path,
+                    preview,
+                    timestamp,
+                });
+            }
         }
 
         // Encode next_cursor as a plain string
@@ -1085,14 +1088,18 @@ async fn on_exec_approval_response(
     }
 }
 
-fn extract_ts_and_preview(head: &[serde_json::Value]) -> (Option<String>, String) {
-    let ts = head
-        .first()
+fn extract_ts_and_preview(head: &[serde_json::Value]) -> (Option<String>, Option<String>, String) {
+    let first = head.first();
+    let ts = first
         .and_then(|v| v.get("timestamp"))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
+    let id = first
+        .and_then(|v| v.get("id"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
     let preview = find_first_user_text(head).unwrap_or_default();
-    (ts, preview)
+    (id, ts, preview)
 }
 
 fn find_first_user_text(head: &[serde_json::Value]) -> Option<String> {
