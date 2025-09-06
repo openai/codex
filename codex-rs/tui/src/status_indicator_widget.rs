@@ -17,8 +17,6 @@ use crate::app_event_sender::AppEventSender;
 use crate::key_hint;
 use crate::shimmer::shimmer_spans;
 use crate::tui::FrameRequester;
-use textwrap::Options as TwOptions;
-use textwrap::WordSplitter;
 
 pub(crate) struct StatusIndicatorWidget {
     /// Animated header text (defaults to "Working").
@@ -31,6 +29,23 @@ pub(crate) struct StatusIndicatorWidget {
     is_paused: bool,
     app_event_tx: AppEventSender,
     frame_requester: FrameRequester,
+}
+
+// Format elapsed seconds into a compact human-friendly form used by the status line.
+// Examples: 0s, 59s, 1m00s, 59m59s, 1h00m00s, 2h03m09s
+fn fmt_elapsed_compact(elapsed_secs: u64) -> String {
+    if elapsed_secs < 60 {
+        return format!("{elapsed_secs}s");
+    }
+    if elapsed_secs < 3600 {
+        let minutes = elapsed_secs / 60;
+        let seconds = elapsed_secs % 60;
+        return format!("{minutes}m{seconds:02}s");
+    }
+    let hours = elapsed_secs / 3600;
+    let minutes = (elapsed_secs % 3600) / 60;
+    let seconds = elapsed_secs % 60;
+    format!("{hours}h{minutes:02}m{seconds:02}s")
 }
 
 impl StatusIndicatorWidget {
@@ -54,11 +69,8 @@ impl StatusIndicatorWidget {
         let mut total: u16 = 1; // status line
         let text_width = inner_width.saturating_sub(3); // account for " ↳ " prefix
         if text_width > 0 {
-            let opts = TwOptions::new(text_width)
-                .break_words(false)
-                .word_splitter(WordSplitter::NoHyphenation);
             for q in &self.queued_messages {
-                let wrapped = textwrap::wrap(q, &opts);
+                let wrapped = textwrap::wrap(q, text_width);
                 let lines = wrapped.len().min(3) as u16;
                 total = total.saturating_add(lines);
                 if wrapped.len() > 3 {
@@ -141,13 +153,14 @@ impl WidgetRef for StatusIndicatorWidget {
         self.frame_requester
             .schedule_frame_in(Duration::from_millis(32));
         let elapsed = self.elapsed_seconds();
+        let pretty_elapsed = fmt_elapsed_compact(elapsed);
 
         // Plain rendering: no borders or padding so the live cell is visually indistinguishable from terminal scrollback.
         let mut spans = vec![" ".into()];
         spans.extend(shimmer_spans(&self.header));
         spans.extend(vec![
             " ".into(),
-            format!("({elapsed}s • ").dim(),
+            format!("({pretty_elapsed} • ").dim(),
             "Esc".dim().bold(),
             " to interrupt)".dim(),
         ]);
@@ -157,11 +170,8 @@ impl WidgetRef for StatusIndicatorWidget {
         lines.push(Line::from(spans));
         // Wrap queued messages using textwrap and show up to the first 3 lines per message.
         let text_width = area.width.saturating_sub(3); // " ↳ " prefix
-        let opts = TwOptions::new(text_width as usize)
-            .break_words(false)
-            .word_splitter(WordSplitter::NoHyphenation);
         for q in &self.queued_messages {
-            let wrapped = textwrap::wrap(q, &opts);
+            let wrapped = textwrap::wrap(q, text_width as usize);
             for (i, piece) in wrapped.iter().take(3).enumerate() {
                 let prefix = if i == 0 { " ↳ " } else { "   " };
                 let content = format!("{prefix}{piece}");
@@ -191,6 +201,22 @@ mod tests {
     use std::time::Duration;
     use std::time::Instant;
     use tokio::sync::mpsc::unbounded_channel;
+
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn fmt_elapsed_compact_formats_seconds_minutes_hours() {
+        assert_eq!(fmt_elapsed_compact(0), "0s");
+        assert_eq!(fmt_elapsed_compact(1), "1s");
+        assert_eq!(fmt_elapsed_compact(59), "59s");
+        assert_eq!(fmt_elapsed_compact(60), "1m00s");
+        assert_eq!(fmt_elapsed_compact(61), "1m01s");
+        assert_eq!(fmt_elapsed_compact(3 * 60 + 5), "3m05s");
+        assert_eq!(fmt_elapsed_compact(59 * 60 + 59), "59m59s");
+        assert_eq!(fmt_elapsed_compact(3600), "1h00m00s");
+        assert_eq!(fmt_elapsed_compact(3600 + 60 + 1), "1h01m01s");
+        assert_eq!(fmt_elapsed_compact(25 * 3600 + 2 * 60 + 3), "25h02m03s");
+    }
 
     #[test]
     fn renders_with_working_header() {

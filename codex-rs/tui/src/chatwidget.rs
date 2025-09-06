@@ -57,6 +57,7 @@ use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
+use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::get_git_diff::get_git_diff;
 use crate::history_cell;
 use crate::history_cell::CommandOutput;
@@ -743,6 +744,17 @@ impl ChatWidget {
                 ..
             } => {
                 self.on_ctrl_c();
+                return;
+            }
+            KeyEvent {
+                code: KeyCode::Char('v'),
+                modifiers: KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                if let Ok((path, info)) = paste_image_to_temp_png() {
+                    self.attach_image(path, info.width, info.height, info.encoded_format.label());
+                }
                 return;
             }
             other if other.kind == KeyEventKind::Press => {
