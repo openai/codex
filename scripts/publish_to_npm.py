@@ -6,7 +6,8 @@ Download a release artifact for the npm package and publish it.
 Given a release version like `0.20.0`, this script:
   - Downloads the `codex-npm-<version>.tgz` asset from the GitHub release
     tagged `rust-v<version>` in the `openai/codex` repository using `gh`.
-  - Runs `npm publish` on the downloaded tarball to publish `@openai/codex`.
+  - Runs `npm publish` on the downloaded tarball to publish `@jojoyo/codex`.
+  - Also supports downloading `codeu-npm-<version>.tgz` if present.
 
 Flags:
   - `--dry-run` delegates to `npm publish --dry-run`. The artifact is still
@@ -15,7 +16,7 @@ Flags:
 Requirements:
   - GitHub CLI (`gh`) must be installed and authenticated to access the repo.
   - npm must be logged in with an account authorized to publish
-    `@openai/codex`. This may trigger a browser for 2FA.
+    `@jojoyo/codex`. This may trigger a browser for 2FA.
 """
 
 import argparse
@@ -24,6 +25,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from subprocess import CalledProcessError
 
 
 def run_checked(cmd: list[str], cwd: Path | None = None) -> None:
@@ -43,6 +45,11 @@ def main() -> int:
         help="Release version to publish, e.g. 0.20.0 (without the 'v' prefix)",
     )
     parser.add_argument(
+        "--repo",
+        default="yoyooyooo/codex",
+        help="GitHub repo owner/name to download from (default: yoyooyooo/codex)",
+    )
+    parser.add_argument(
         "--dir",
         type=Path,
         help=(
@@ -59,7 +66,12 @@ def main() -> int:
 
     version: str = args.version.lstrip("v")
     tag = f"rust-v{version}"
-    asset_name = f"codex-npm-{version}.tgz"
+    # Prefer the legacy asset name kept by our release workflow for stability,
+    # but also support the new name in case a run produced it.
+    candidate_assets = [
+        f"codex-npm-{version}.tgz",
+        f"codeu-npm-{version}.tgz",
+    ]
 
     download_dir_context_manager = (
         tempfile.TemporaryDirectory() if args.dir is None else None
@@ -69,24 +81,46 @@ def main() -> int:
     download_dir.mkdir(parents=True, exist_ok=True)
 
     # 1) Download the artifact using gh
-    repo = "openai/codex"
-    gh_cmd = [
-        "gh",
-        "release",
-        "download",
-        tag,
-        "--repo",
-        repo,
-        "--pattern",
-        asset_name,
-        "--dir",
-        str(download_dir),
-    ]
-    print(f"Downloading {asset_name} from {repo}@{tag} into {download_dir}...")
-    # Even in --dry-run we download so npm can inspect the tarball.
-    run_checked(gh_cmd)
+    repo = args.repo
+    downloaded_name: str | None = None
+    for asset_name in candidate_assets:
+        gh_cmd = [
+            "gh",
+            "release",
+            "download",
+            tag,
+            "--repo",
+            repo,
+            "--pattern",
+            asset_name,
+            "--dir",
+            str(download_dir),
+        ]
+        print(
+            f"Attempting to download {asset_name} from {repo}@{tag} into {download_dir}..."
+        )
+        try:
+            # Even in --dry-run we download so npm can inspect the tarball.
+            run_checked(gh_cmd)
+            downloaded_name = asset_name
+            break
+        except CalledProcessError:
+            continue
 
-    artifact_path = download_dir / asset_name
+    if downloaded_name is None:
+        print(
+            "Error: no matching npm artifact found. Tried: "
+            + ", ".join(candidate_assets),
+            file=sys.stderr,
+        )
+        print(
+            "Hint: this can happen if the release was built before the package rename. "
+            "Re-run the release workflow, or publish manually by downloading the tgz and running `npm publish`.",
+            file=sys.stderr,
+        )
+        return 1
+
+    artifact_path = download_dir / downloaded_name
     if not args.dry_run and not artifact_path.is_file():
         print(
             f"Error: expected artifact not found after download: {artifact_path}",
@@ -95,7 +129,14 @@ def main() -> int:
         return 1
 
     # 2) Publish to npm
-    npm_cmd = ["npm", "publish"]
+    npm_cmd = [
+        "npm",
+        "publish",
+        "--access",
+        "public",
+        "--registry",
+        "https://registry.npmjs.org/",
+    ]
     if args.dry_run:
         npm_cmd.append("--dry-run")
     npm_cmd.append(str(artifact_path))

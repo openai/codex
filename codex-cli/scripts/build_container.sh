@@ -10,7 +10,7 @@ pushd "$SCRIPT_DIR/.." >> /dev/null || {
 }
 pnpm install
 pnpm run build
-rm -rf ./dist/openai-codex-*.tgz
+rm -rf ./dist/jojoyo-codex-*.tgz
 pnpm pack --pack-destination ./dist
-mv ./dist/openai-codex-*.tgz ./dist/codex.tgz
+mv ./dist/jojoyo-codex-*.tgz ./dist/codex.tgz
 docker build -t codex -f "./Dockerfile" .

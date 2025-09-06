@@ -77,6 +77,9 @@ pub(crate) struct ChatComposer {
     history: ChatComposerHistory,
     ctrl_c_quit_hint: bool,
     esc_backtrack_hint: bool,
+    // !Modify: 清空提示的截止时间（用于 1s 窗口内二次 Esc 清空）
+    // 当第一次按 Esc 且输入框非空时，短暂显示清空提示；截至时间到达后自动隐藏。
+    esc_clear_hint_deadline: Option<Instant>,
     use_shift_enter_hint: bool,
     dismissed_file_popup_token: Option<String>,
     current_file_query: Option<String>,
@@ -117,6 +120,8 @@ impl ChatComposer {
             history: ChatComposerHistory::new(),
             ctrl_c_quit_hint: false,
             esc_backtrack_hint: false,
+            // !Modify: 初始化清空提示为 None
+            esc_clear_hint_deadline: None,
             use_shift_enter_hint,
             dismissed_file_popup_token: None,
             current_file_query: None,
@@ -134,20 +139,38 @@ impl ChatComposer {
         this
     }
 
+    // ===== !Modify Start: 计算高度时为清空提示预留一行 =====
+    // !Desc: 当清空提示处于显示窗口内时，底部多预留一行用于提示展示。
+    // !AI_GUIDANCE: 若上游将提示并入统一 footer，请合并高度计算逻辑，保持同等视觉空间。
     pub fn desired_height(&self, width: u16) -> u16 {
-        self.textarea.desired_height(width - 1)
-            + match &self.active_popup {
-                ActivePopup::None => 1u16,
-                ActivePopup::Command(c) => c.calculate_required_height(),
-                ActivePopup::File(c) => c.calculate_required_height(),
+        let base = self.textarea.desired_height(width - 1);
+        let extra = match &self.active_popup {
+            ActivePopup::None => {
+                let show_clear = self
+                    .esc_clear_hint_deadline
+                    .map(|dl| Instant::now() < dl)
+                    .unwrap_or(false);
+                if show_clear { 2 } else { 1 }
             }
+            ActivePopup::Command(c) => c.calculate_required_height(),
+            ActivePopup::File(c) => c.calculate_required_height(),
+        };
+        base + extra
     }
+    // ===== !Modify End: 计算高度时为清空提示预留一行 =====
 
+    // !Modify: 光标位置计算沿用 popup 高度（含清空提示额外一行）
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         let popup_height = match &self.active_popup {
             ActivePopup::Command(popup) => popup.calculate_required_height(),
             ActivePopup::File(popup) => popup.calculate_required_height(),
-            ActivePopup::None => 1,
+            ActivePopup::None => {
+                let show_clear = self
+                    .esc_clear_hint_deadline
+                    .map(|dl| Instant::now() < dl)
+                    .unwrap_or(false);
+                if show_clear { 2 } else { 1 }
+            }
         };
         let [textarea_rect, _] =
             Layout::vertical([Constraint::Min(1), Constraint::Max(popup_height)]).areas(area);
@@ -314,6 +337,18 @@ impl ChatComposer {
     pub fn set_ctrl_c_quit_hint(&mut self, show: bool, has_focus: bool) {
         self.ctrl_c_quit_hint = show;
         self.set_has_focus(has_focus);
+    }
+
+    pub(crate) fn set_esc_clear_hint_deadline(&mut self, until: Option<Instant>) {
+        self.esc_clear_hint_deadline = until;
+    }
+
+    /// 若清空提示仍有效，返回剩余时长；否则返回 None。
+    pub(crate) fn esc_clear_hint_remaining(&self) -> Option<Duration> {
+        self.esc_clear_hint_deadline.and_then(|dl| {
+            let now = Instant::now();
+            if now < dl { Some(dl - now) } else { None }
+        })
     }
 
     pub(crate) fn insert_str(&mut self, text: &str) {
@@ -1227,10 +1262,20 @@ impl ChatComposer {
 
 impl WidgetRef for ChatComposer {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
+        let show_clear = self
+            .esc_clear_hint_deadline
+            .map(|dl| Instant::now() < dl)
+            .unwrap_or(false);
         let popup_height = match &self.active_popup {
             ActivePopup::Command(popup) => popup.calculate_required_height(),
             ActivePopup::File(popup) => popup.calculate_required_height(),
-            ActivePopup::None => 1,
+            ActivePopup::None => {
+                if show_clear {
+                    2
+                } else {
+                    1
+                }
+            }
         };
         let [textarea_rect, popup_rect] =
             Layout::vertical([Constraint::Min(1), Constraint::Max(popup_height)]).areas(area);
@@ -1242,7 +1287,19 @@ impl WidgetRef for ChatComposer {
                 popup.render_ref(popup_rect, buf);
             }
             ActivePopup::None => {
-                let bottom_line_rect = popup_rect;
+                // ===== !Modify Start: 底部提示 - 分两行渲染默认提示与清空提示 =====
+                // !Desc: 在清空窗口激活（show_clear）时，底部区域拆分为两行：
+                //        第一行渲染原有 hint；第二行渲染“Please Escape again to clear”。
+                //        同时在第一行尾部追加“Esc clear”指示当前 Esc 行为。
+                // !AI_GUIDANCE: 若上游合并底部文案，请在末尾保留“Esc clear”的可见性。
+                // 若需要显示清空提示，将下方区域拆为两行：第一行渲染默认 hint，第二行渲染清空提示。
+                let (bottom_line_rect, clear_line_rect) = if show_clear && popup_rect.height >= 2 {
+                    let [r1, r2] = Layout::vertical([Constraint::Length(1), Constraint::Length(1)])
+                        .areas(popup_rect);
+                    (r1, Some(r2))
+                } else {
+                    (popup_rect, None)
+                };
                 let mut hint: Vec<Span<'static>> = if self.ctrl_c_quit_hint {
                     vec![
                         " ".into(),
@@ -1298,9 +1355,23 @@ impl WidgetRef for ChatComposer {
                     }
                 }
 
+                // 若当前处于清空提示窗口内，在末尾追加 Esc 提示以体现清空效果。
+                if show_clear && !self.ctrl_c_quit_hint {
+                    hint.push("   ".into());
+                    // !Modify: 弱化“Esc clear”样式，避免过度强调（相对整行再降低可见度）
+                    let weak = Style::default().fg(Color::DarkGray);
+                    hint.push(Span::from("Esc").style(weak));
+                    hint.push(Span::from(" clear").style(weak));
+                }
+
                 Line::from(hint)
                     .style(Style::default().dim())
                     .render_ref(bottom_line_rect, buf);
+
+                if let Some(r2) = clear_line_rect {
+                    Line::from(" Please Escape again to clear").render_ref(r2, buf);
+                }
+                // ===== !Modify End: 底部提示 - 分两行渲染默认提示与清空提示 =====
             }
         }
         let border_style = if self.has_focus {

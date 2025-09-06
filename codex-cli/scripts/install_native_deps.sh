@@ -18,9 +18,11 @@ set -euo pipefail
 CODEX_CLI_ROOT=""
 
 # Until we start publishing stable GitHub releases, we have to grab the binaries
-# from the GitHub Action that created them. Update the URL below to point to the
-# appropriate workflow run:
-WORKFLOW_URL="https://github.com/openai/codex/actions/runs/17417194663" # rust-v0.28.0
+# from the GitHub Action that created them. The calling workflow passes the
+# rust-release run URL via --workflow-url. Fallback shown below is only a
+# placeholder and not used in CI.
+WORKFLOW_URL="https://github.com/openai/codex/actions/runs/17417194663" # placeholder
+REPO_OVERRIDE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -28,6 +30,12 @@ while [[ $# -gt 0 ]]; do
       shift || { echo "--workflow-url requires an argument"; exit 1; }
       if [ -n "$1" ]; then
         WORKFLOW_URL="$1"
+      fi
+      ;;
+    --repo)
+      shift || { echo "--repo requires an argument"; exit 1; }
+      if [ -n "$1" ]; then
+        REPO_OVERRIDE="$1"
       fi
       ;;
     *)
@@ -66,11 +74,29 @@ mkdir -p "$BIN_DIR"
 
 WORKFLOW_ID="${WORKFLOW_URL##*/}"
 
+# Derive owner/repo from the workflow URL if not explicitly provided.
+# Expected formats:
+#   https://github.com/<owner>/<repo>/actions/runs/<id>
+REPO="$REPO_OVERRIDE"
+if [ -z "$REPO" ]; then
+  # Strip protocol and domain
+  # shellcheck disable=SC2001
+  PATH_PARTS="$(echo "$WORKFLOW_URL" | sed -E 's#https?://github.com/##')"
+  # Extract first two path segments as owner/repo
+  OWNER="$(echo "$PATH_PARTS" | cut -d'/' -f1)"
+  NAME="$(echo "$PATH_PARTS" | cut -d'/' -f2)"
+  if [ -n "$OWNER" ] && [ -n "$NAME" ]; then
+    REPO="$OWNER/$NAME"
+  else
+    REPO="openai/codex"
+  fi
+fi
+
 ARTIFACTS_DIR="$(mktemp -d)"
 trap 'rm -rf "$ARTIFACTS_DIR"' EXIT
 
 # NB: The GitHub CLI `gh` must be installed and authenticated.
-gh run download --dir "$ARTIFACTS_DIR" --repo openai/codex "$WORKFLOW_ID"
+gh run download --dir "$ARTIFACTS_DIR" --repo "$REPO" "$WORKFLOW_ID"
 
 # x64 Linux
 zstd -d "$ARTIFACTS_DIR/x86_64-unknown-linux-musl/codex-x86_64-unknown-linux-musl.zst" \

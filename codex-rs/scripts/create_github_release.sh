@@ -62,3 +62,7 @@ git tag -a "$TAG" -m "Release $VERSION"
 git push origin "refs/tags/$TAG"
 
 git checkout "$CURRENT_BRANCH"
+
+# Clean up the temporary release branch to avoid ambiguous refs between
+# refs/heads/$TAG and refs/tags/$TAG which can confuse tools like git-cliff.
+git branch -D "$TAG" >/dev/null 2>&1 || true

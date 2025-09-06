@@ -9,7 +9,7 @@ name: rust-release
 on:
   push:
     tags:
-      - "rust-v*.*.*"
+      - "rust-v*"
 
 concurrency:
   group: ${{ github.workflow }}
@@ -30,7 +30,8 @@ jobs:
           # 1. Must be a tag and match the regex
           [[ "${GITHUB_REF_TYPE}" == "tag" ]] \
             || { echo "❌  Not a tag push"; exit 1; }
-          [[ "${GITHUB_REF_NAME}" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$ ]] \
+          # Accept plain semver and generic pre-release identifiers (e.g. -fork.1, -rc.1, -alpha, -beta)
+          [[ "${GITHUB_REF_NAME}" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] \
             || { echo "❌  Tag '${GITHUB_REF_NAME}' doesn't match expected format"; exit 1; }
 
           # 2. Extract versions
@@ -171,6 +172,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - uses: actions/download-artifact@v4
         with:
@@ -186,6 +189,18 @@ jobs:
           # "rust-v0.1.0".
           version="${GITHUB_REF_NAME#rust-v}"
           echo "name=${version}" >> $GITHUB_OUTPUT
+
+      - name: Compute prerelease flag
+        id: pre
+        env:
+          VERSION: ${{ steps.release_name.outputs.name }}
+        run: |
+          # Treat only -alpha/-beta/-rc as prerelease. Fork variants like -fork.N are published as normal releases.
+          if [[ "${VERSION}" =~ -(alpha|beta|rc) ]]; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Stage npm package
         env:
@@ -203,15 +218,37 @@ jobs:
           mv "${GITHUB_WORKSPACE}"/dist/npm/*.tgz \
              "${GITHUB_WORKSPACE}/dist/npm/codex-npm-${{ steps.release_name.outputs.name }}.tgz"
 
+      - name: Install git-cliff
+        uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff
+
+      - name: Generate release notes
+        id: gen_notes
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+          current_tag="${{ github.ref_name }}"
+          # Previous rust-v* tag by creation time (newest before current, not equal to current)
+          prev_tag=$(git for-each-ref --sort=-creatordate --format='%(refname:short)' refs/tags \
+            | awk -v cur="$current_tag" '/^rust-v[0-9]/{ if ($0!=cur) { print $0; exit } }')
+          if [[ -n "${prev_tag}" ]]; then
+            echo "Using ancestor range: ${prev_tag}..${current_tag}"
+            git cliff --config ./cliff-release.toml "${prev_tag}..${current_tag}" --output RELEASE_NOTES.md
+          else
+            echo "No previous rust-v ancestor tag found; generating notes for ${current_tag} only"
+            git cliff --config ./cliff-release.toml --tag "${current_tag}" --output RELEASE_NOTES.md
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ steps.release_name.outputs.name }}
           tag_name: ${{ github.ref_name }}
           files: dist/**
-          # Mark as prerelease only when the version has a suffix after x.y.z
-          # (e.g. -alpha, -beta). Otherwise publish a normal release.
-          prerelease: ${{ contains(steps.release_name.outputs.name, '-') }}
+          body_path: RELEASE_NOTES.md
+          # Mark as prerelease only for -alpha/-beta/-rc. Publish -fork.* as normal releases.
+          prerelease: ${{ steps.pre.outputs.is_prerelease == 'true' }}
 
       - uses: facebook/dotslash-publish-release@v2
         env:
