@@ -1928,6 +1928,7 @@ async fn run_turn(
                 return Err(CodexErr::UsageLimitReached(e));
             }
             Err(CodexErr::UsageNotIncluded) => return Err(CodexErr::UsageNotIncluded),
+            Err(CodexErr::NotAuthenticated) => return Err(CodexErr::NotAuthenticated),
             Err(e) => {
                 // Use the configured provider-specific stream retry budget.
                 let max_retries = turn_context.client.get_provider().stream_max_retries();
