@@ -1782,9 +1782,7 @@ async fn try_run_turn(
                 sess.tx_event
                     .send(Event {
                         id: sub_id.to_string(),
-                        msg: EventMsg::TokenCount(crate::protocol::TokenCountEvent {
-                            info: info.clone(),
-                        }),
+                        msg: EventMsg::TokenCount(crate::protocol::TokenCountEvent { info }),
                     })
                     .await
                     .ok();
