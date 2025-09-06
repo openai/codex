@@ -1,15 +1,11 @@
 #!/usr/bin/env python3
 
 import argparse
-import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
-
-
-ROOT_DIR = Path(__file__).resolve().parent.parent
-CARGO_TOML = ROOT_DIR / "Cargo.toml"
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -22,87 +18,62 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 
 def main(argv: list[str]) -> int:
-    os.chdir(ROOT_DIR)
     args = parse_args(argv)
     try:
-        ensure_clean_worktree()
-        branch = current_branch()
-        ensure_on_main(branch)
-        ensure_on_origin_main()
-        create_release(args.version, branch)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo_dir = Path(temp_dir) / "codex"
+            clone_repository(repo_dir)
+            branch = current_branch(repo_dir)
+            create_release(args.version, branch, repo_dir)
     except ReleaseError as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 1
     return 0
 
 
-def ensure_clean_worktree() -> None:
-    commands = [
-        ["diff", "--quiet"],
-        ["diff", "--cached", "--quiet"],
-    ]
-    for command in commands:
-        result = run_git(command, check=False)
-        if result.returncode != 0:
-            raise ReleaseError("You have uncommitted changes.")
-
-    untracked = run_git(["ls-files", "--others", "--exclude-standard"], capture_output=True)
-    if untracked.stdout.strip():
-        raise ReleaseError("You have untracked files.")
-
-
-def ensure_on_main(branch: str) -> None:
-    if branch != "main":
-        raise ReleaseError(
-            f"Releases must be created from the 'main' branch (current: '{branch}')."
-        )
-
-
-def ensure_on_origin_main() -> None:
-    try:
-        run_git(["fetch", "--quiet", "origin", "main"])
-    except ReleaseError as error:
-        raise ReleaseError(
-            "Failed to fetch 'origin/main'. Ensure the 'origin' remote is configured and reachable."
-        ) from error
-
-    result = run_git(["merge-base", "--is-ancestor", "HEAD", "origin/main"], check=False)
-    if result.returncode != 0:
-        raise ReleaseError(
-            "Your local 'main' HEAD commit is not present on 'origin/main'. "
-            "Please push first (git push origin main) or check out a commit on 'origin/main'."
-        )
-
-
-def current_branch() -> str:
-    result = run_git(["symbolic-ref", "--short", "-q", "HEAD"], capture_output=True, check=False)
+def current_branch(repo_dir: Path) -> str:
+    result = run_git(
+        repo_dir,
+        ["symbolic-ref", "--short", "-q", "HEAD"],
+        capture_output=True,
+        check=False,
+    )
     branch = result.stdout.strip()
     if result.returncode != 0 or not branch:
         raise ReleaseError("Could not determine the current branch (detached HEAD?).")
     return branch
 
 
-def update_version(version: str) -> None:
-    content = CARGO_TOML.read_text(encoding="utf-8")
+def update_version(version: str, cargo_toml: Path) -> None:
+    content = cargo_toml.read_text(encoding="utf-8")
     new_content, matches = re.subn(
         r'^version = "[^"]+"', f'version = "{version}"', content, count=1, flags=re.MULTILINE
     )
     if matches != 1:
         raise ReleaseError("Unable to update version in Cargo.toml.")
-    CARGO_TOML.write_text(new_content, encoding="utf-8")
+    cargo_toml.write_text(new_content, encoding="utf-8")
 
 
-def create_release(version: str, branch: str) -> None:
+def create_release(version: str, branch: str, repo_dir: Path) -> None:
     tag = f"rust-v{version}"
-    run_git(["checkout", "-b", tag])
+    run_git(repo_dir, ["checkout", "-b", tag])
     try:
-        update_version(version)
-        run_git(["add", "Cargo.toml"])
-        run_git(["commit", "-m", f"Release {version}"])
-        run_git(["tag", "-a", tag, "-m", f"Release {version}"])
-        run_git(["push", "origin", f"refs/tags/{tag}"])
+        update_version(version, repo_dir / "codex-rs" / "Cargo.toml")
+        run_git(repo_dir, ["add", "codex-rs/Cargo.toml"])
+        run_git(repo_dir, ["commit", "-m", f"Release {version}"])
+        run_git(repo_dir, ["tag", "-a", tag, "-m", f"Release {version}"])
+        run_git(repo_dir, ["push", "origin", f"refs/tags/{tag}"])
     finally:
-        run_git(["checkout", branch])
+        run_git(repo_dir, ["checkout", branch])
+
+
+def clone_repository(destination: Path) -> None:
+    result = subprocess.run(
+        ["gh", "repo", "clone", "openai/codex", str(destination), "--", "--depth", "1"],
+        text=True,
+    )
+    if result.returncode != 0:
+        raise ReleaseError("Failed to clone openai/codex using gh.")
 
 
 class ReleaseError(RuntimeError):
@@ -110,11 +81,15 @@ class ReleaseError(RuntimeError):
 
 
 def run_git(
-    args: list[str], *, capture_output: bool = False, check: bool = True
+    repo_dir: Path,
+    args: list[str],
+    *,
+    capture_output: bool = False,
+    check: bool = True,
 ) -> subprocess.CompletedProcess:
     result = subprocess.run(
         ["git", *args],
-        cwd=ROOT_DIR,
+        cwd=repo_dir,
         text=True,
         capture_output=capture_output,
     )
