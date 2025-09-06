@@ -966,9 +966,8 @@ pub(crate) fn new_status_output(
         "  • Input: ".into(),
         usage.non_cached_input().to_string().into(),
     ];
-    if let Some(cached) = usage.cached_input_tokens
-        && cached > 0
-    {
+    if usage.cached_input_tokens > 0 {
+        let cached = usage.cached_input_tokens;
         input_line_spans.push(format!(" (+ {cached} cached)").into());
     }
     lines.push(Line::from(input_line_spans));

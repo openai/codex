@@ -1,4 +1,4 @@
-use codex_core::protocol::TokenUsage;
+use codex_core::protocol::TokenUsageInfo;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -61,12 +61,6 @@ pub enum InputResult {
 struct AttachedImage {
     placeholder: String,
     path: PathBuf,
-}
-
-struct TokenUsageInfo {
-    total_token_usage: TokenUsage,
-    last_token_usage: TokenUsage,
-    model_context_window: Option<u64>,
 }
 
 pub(crate) struct ChatComposer {
@@ -166,17 +160,8 @@ impl ChatComposer {
     /// Update the cached *context-left* percentage and refresh the placeholder
     /// text. The UI relies on the placeholder to convey the remaining
     /// context when the composer is empty.
-    pub(crate) fn set_token_usage(
-        &mut self,
-        total_token_usage: TokenUsage,
-        last_token_usage: TokenUsage,
-        model_context_window: Option<u64>,
-    ) {
-        self.token_usage_info = Some(TokenUsageInfo {
-            total_token_usage,
-            last_token_usage,
-            model_context_window,
-        });
+    pub(crate) fn set_token_usage(&mut self, token_info: Option<TokenUsageInfo>) {
+        self.token_usage_info = token_info;
     }
 
     /// Record the history metadata advertised by `SessionConfiguredEvent` so
@@ -1290,11 +1275,16 @@ impl WidgetRef for ChatComposer {
                         } else {
                             100
                         };
+                        let context_style = if percent_remaining < 20 {
+                            Style::default().fg(Color::Yellow)
+                        } else {
+                            Style::default().add_modifier(Modifier::DIM)
+                        };
                         hint.push("   ".into());
-                        hint.push(
-                            Span::from(format!("{percent_remaining}% context left"))
-                                .style(Style::default().add_modifier(Modifier::DIM)),
-                        );
+                        hint.push(Span::styled(
+                            format!("{percent_remaining}% context left"),
+                            context_style,
+                        ));
                     }
                 }
 
