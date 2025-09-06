@@ -106,6 +106,7 @@ impl ChatComposer {
         enhanced_keys_supported: bool,
         placeholder_text: String,
         disable_paste_burst: bool,
+        vim_mode_enabled: bool,
     ) -> Self {
         let use_shift_enter_hint = enhanced_keys_supported;
 
@@ -131,6 +132,7 @@ impl ChatComposer {
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
+        this.textarea.set_vim_mode_enabled(vim_mode_enabled);
         this
     }
 
@@ -215,9 +217,9 @@ impl ChatComposer {
         }
         // Explicit paste events should not trigger Enter suppression.
         self.paste_burst.clear_after_explicit_paste();
-        // Keep popup sync consistent with key handling: prefer slash popup; only
-        // sync file popup when slash popup is NOT active.
-        self.sync_command_popup();
+            // Keep popup sync consistent with key handling: prefer slash popup; only
+            // sync file popup when slash popup is NOT active.
+            self.sync_command_popup();
         if matches!(self.active_popup, ActivePopup::Command(_)) {
             self.dismissed_file_popup_token = None;
         } else {
@@ -881,8 +883,22 @@ impl ChatComposer {
             ..
         } = input
         {
+            // If Vim Normal mode is active, bypass paste-burst and forward to TextArea so
+            // it can interpret movement/edit commands (h/j/k/l, x, etc.).
             let has_ctrl_or_alt =
                 modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::ALT);
+            if self.textarea.vim_is_normal_mode() && !has_ctrl_or_alt {
+                if let Some(pasted) = self.paste_burst.flush_before_modified_input() {
+                    self.handle_paste(pasted);
+                }
+                self.textarea.input(input);
+                let text_after = self.textarea.text();
+                self.pending_pastes
+                    .retain(|(placeholder, _)| text_after.contains(placeholder));
+                // Do not update paste-burst window for vi-normal commands; treat as non-char
+                self.paste_burst.clear_window_after_non_char();
+                return (InputResult::None, true);
+            }
             if !has_ctrl_or_alt {
                 // Non-ASCII characters (e.g., from IMEs) can arrive in quick bursts and be
                 // misclassified by paste heuristics. Flush any active burst buffer and insert
@@ -1223,6 +1239,12 @@ impl ChatComposer {
     pub(crate) fn set_esc_backtrack_hint(&mut self, show: bool) {
         self.esc_backtrack_hint = show;
     }
+
+    pub(crate) fn toggle_vim_mode(&mut self) -> bool {
+        let enabled_now = self.textarea.vim_mode_enabled();
+        self.textarea.set_vim_mode_enabled(!enabled_now);
+        !enabled_now
+    }
 }
 
 impl WidgetRef for ChatComposer {
@@ -1268,6 +1290,18 @@ impl WidgetRef for ChatComposer {
                         " quit".into(),
                     ]
                 };
+
+                // When Vim keymap is enabled, show the current mode on the footer.
+                if let Some(mode_label) = self.textarea.vim_mode_state_label() {
+                    let mode_style = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
+                    // Prepend: [MODE]  before the other hints
+                    let mut with_mode = Vec::with_capacity(hint.len() + 3);
+                    with_mode.push(Span::from(" "));
+                    with_mode.push(mode_label.set_style(mode_style));
+                    with_mode.push(Span::from("  "));
+                    with_mode.extend(hint.into_iter());
+                    hint = with_mode;
+                }
 
                 if !self.ctrl_c_quit_hint && self.esc_backtrack_hint {
                     hint.push("   ".into());
@@ -1510,6 +1544,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            false,
         );
 
         let needs_redraw = composer.handle_paste("hello".to_string());
@@ -1566,6 +1601,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            false,
         );
 
         let large = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 10);
@@ -1600,6 +1636,7 @@ mod tests {
             sender,
             false,
             "Ask Codex to do anything".to_string(),
+            false,
             false,
         );
 
@@ -1641,6 +1678,7 @@ mod tests {
                 sender.clone(),
                 false,
                 "Ask Codex to do anything".to_string(),
+                false,
                 false,
             );
 
@@ -1756,6 +1794,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            false,
         );
 
         // Type the slash command.
@@ -1793,6 +1832,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            false,
         );
 
         type_chars_humanlike(&mut composer, &['/', 'c']);
@@ -1817,6 +1857,7 @@ mod tests {
             sender,
             false,
             "Ask Codex to do anything".to_string(),
+            false,
             false,
         );
 
@@ -1852,6 +1893,7 @@ mod tests {
             sender,
             false,
             "Ask Codex to do anything".to_string(),
+            false,
             false,
         );
 
@@ -1932,6 +1974,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            false,
         );
 
         // Define test cases: (content, is_large)
@@ -2004,6 +2047,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            false,
         );
 
         // Define test cases: (cursor_position_from_end, expected_pending_count)
@@ -2052,6 +2096,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            false,
         );
         let path = PathBuf::from("/tmp/image1.png");
         composer.attach_image(path.clone(), 32, 16, "PNG");
@@ -2075,6 +2120,7 @@ mod tests {
             sender,
             false,
             "Ask Codex to do anything".to_string(),
+            false,
             false,
         );
         let path = PathBuf::from("/tmp/image2.png");
@@ -2100,6 +2146,7 @@ mod tests {
             sender,
             false,
             "Ask Codex to do anything".to_string(),
+            false,
             false,
         );
         let path = PathBuf::from("/tmp/image3.png");
@@ -2142,6 +2189,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            false,
         );
 
         // Insert an image placeholder at the start
@@ -2167,6 +2215,7 @@ mod tests {
             sender,
             false,
             "Ask Codex to do anything".to_string(),
+            false,
             false,
         );
 
@@ -2215,6 +2264,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            false,
         );
 
         let needs_redraw = composer.handle_paste(tmp_path.to_string_lossy().to_string());
@@ -2236,6 +2286,7 @@ mod tests {
             sender,
             false,
             "Ask Codex to do anything".to_string(),
+            false,
             false,
         );
 
@@ -2270,6 +2321,7 @@ mod tests {
             sender,
             false,
             "Ask Codex to do anything".to_string(),
+            false,
             false,
         );
 
@@ -2315,6 +2367,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            false,
         );
 
         let count = LARGE_PASTE_CHAR_THRESHOLD + 1; // > threshold to trigger placeholder
@@ -2346,6 +2399,7 @@ mod tests {
             sender,
             false,
             "Ask Codex to do anything".to_string(),
+            false,
             false,
         );
 

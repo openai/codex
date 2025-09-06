@@ -73,6 +73,8 @@ pub(crate) struct BottomPaneParams {
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) placeholder_text: String,
     pub(crate) disable_paste_burst: bool,
+    /// Enable Vim key bindings in the composer textarea.
+    pub(crate) vim_mode_enabled: bool,
 }
 
 impl BottomPane {
@@ -86,6 +88,7 @@ impl BottomPane {
                 enhanced_keys_supported,
                 params.placeholder_text,
                 params.disable_paste_burst,
+                params.vim_mode_enabled,
             ),
             active_view: None,
             app_event_tx: params.app_event_tx,
@@ -154,6 +157,12 @@ impl BottomPane {
             let [_, content] = self.layout(area);
             self.composer.cursor_pos(content)
         }
+    }
+
+    pub(crate) fn toggle_vim_mode(&mut self) -> bool {
+        let enabled = self.composer.toggle_vim_mode();
+        self.request_redraw();
+        enabled
     }
 
     /// Forward a key event to the active view or the composer.
@@ -515,6 +524,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            vim_mode_enabled: false,
         });
         pane.push_approval_request(exec_request());
         assert_eq!(CancellationEvent::Handled, pane.on_ctrl_c());
@@ -535,6 +545,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            vim_mode_enabled: false,
         });
 
         // Create an approval modal (active view).
@@ -566,6 +577,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            vim_mode_enabled: false,
         });
 
         // Start a running task so the status indicator is active above the composer.
@@ -634,6 +646,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            vim_mode_enabled: false,
         });
 
         // Begin a task: show initial status.
@@ -665,6 +678,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            vim_mode_enabled: false,
         });
 
         // Activate spinner (status view replaces composer) with no live ring.
@@ -716,6 +730,7 @@ mod tests {
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
             disable_paste_burst: false,
+            vim_mode_enabled: false,
         });
 
         pane.set_task_running(true);
