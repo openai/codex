@@ -83,6 +83,9 @@ pub enum CodexErr {
     #[error("We're currently experiencing high demand, which may cause temporary errors.")]
     InternalServerError,
 
+    #[error("The API key is invalid or has expired. Please check your API key and try again.")]
+    UnauthorizedError,
+
     /// Retry limit exceeded.
     #[error("exceeded retry limit, last status: {0}")]
     RetryLimit(StatusCode),
