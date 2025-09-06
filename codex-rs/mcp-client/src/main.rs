@@ -68,14 +68,14 @@ async fn main() -> Result<()> {
         protocol_version: MCP_SCHEMA_VERSION.to_owned(),
     };
     let initialize_notification_params = None;
-    let timeout = Some(Duration::from_secs(10));
+    let timeout = Some(Duration::from_secs(60));
     let response = client
         .initialize(params, initialize_notification_params, timeout)
         .await?;
     eprintln!("initialize response: {response:?}");
 
     // Issue `tools/list` request (no params).
-    let timeout = None;
+    let timeout = Some(Duration::from_secs(60));
     let tools = client
         .list_tools(None::<ListToolsRequestParams>, timeout)
         .await

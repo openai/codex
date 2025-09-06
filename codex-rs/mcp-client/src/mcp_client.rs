@@ -93,7 +93,8 @@ impl McpClient {
             .envs(create_env_for_mcp_server(env))
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::null())
+            // Capture stderr for diagnostics (logged at debug level below).
+            .stderr(std::process::Stdio::piped())
             // As noted in the `kill_on_drop` documentation, the Tokio runtime makes
             // a "best effort" to reap-after-exit to avoid zombie processes, but it
             // is not a guarantee.
@@ -108,6 +109,10 @@ impl McpClient {
             .stdout
             .take()
             .ok_or_else(|| std::io::Error::other("failed to capture child stdout"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| std::io::Error::other("failed to capture child stderr"))?;
 
         let (outgoing_tx, mut outgoing_rx) = mpsc::channel::<JSONRPCMessage>(CHANNEL_CAPACITY);
         let pending: Arc<Mutex<HashMap<i64, PendingSender>>> = Arc::new(Mutex::new(HashMap::new()));
@@ -170,11 +175,21 @@ impl McpClient {
             })
         };
 
+        // Spawn stderr logger task. Useful for diagnosing server startup issues.
+        let stderr_handle = {
+            let mut lines = BufReader::new(stderr).lines();
+            tokio::spawn(async move {
+                while let Ok(Some(line)) = lines.next_line().await {
+                    debug!("MCP server stderr: {line}");
+                }
+            })
+        };
+
         // We intentionally *detach* the tasks. They will keep running in the
         // background as long as their respective resources (channels/stdin/
         // stdout) are alive. Dropping `McpClient` cancels the tasks due to
         // dropped resources.
-        let _ = (writer_handle, reader_handle);
+        let _ = (writer_handle, reader_handle, stderr_handle);
 
         Ok(Self {
             child,
@@ -436,11 +451,24 @@ const DEFAULT_ENV_VARS: &[&str] = &[
 #[cfg(windows)]
 const DEFAULT_ENV_VARS: &[&str] = &[
     // TODO: More research is necessary to curate this list.
+    // Core path resolution and shell integration
     "PATH",
     "PATHEXT",
+    // Command processor and system roots commonly relied on by .cmd
+    // launchers and their child processes.
+    "COMSPEC",
+    "SystemRoot",
+    "WINDIR",
+    // User identity and profile locations
     "USERNAME",
     "USERDOMAIN",
     "USERPROFILE",
+    // Common Unix-style home used by some tools on Windows
+    "HOME",
+    // App data directories used by Node/npm/npx
+    "APPDATA",
+    "LOCALAPPDATA",
+    // Temp locations
     "TEMP",
     "TMP",
 ];

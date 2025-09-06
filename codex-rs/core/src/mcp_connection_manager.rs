@@ -37,7 +37,7 @@ const MCP_TOOL_NAME_DELIMITER: &str = "__";
 const MAX_TOOL_NAME_LENGTH: usize = 64;
 
 /// Timeout for the `tools/list` request.
-const LIST_TOOLS_TIMEOUT: Duration = Duration::from_secs(10);
+const LIST_TOOLS_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Map that holds a startup error for every MCP server that could **not** be
 /// spawned successfully.
@@ -154,7 +154,7 @@ impl McpConnectionManager {
                             protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_owned(),
                         };
                         let initialize_notification_params = None;
-                        let timeout = Some(Duration::from_secs(10));
+                        let timeout = Some(Duration::from_secs(60));
                         match client
                             .initialize(params, initialize_notification_params, timeout)
                             .await
