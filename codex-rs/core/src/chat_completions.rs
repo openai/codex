@@ -469,10 +469,12 @@ async fn process_chat_sse<S>(
                     total_tokens,
                     cached_input_tokens: prompt_details
                         .get("cached_tokens")
-                        .and_then(|v| v.as_u64()),
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0),
                     reasoning_output_tokens: completion_details
                         .get("reasoning_tokens")
-                        .and_then(|v| v.as_u64()),
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0),
                 });
             }
         }
@@ -997,8 +999,8 @@ mod tests {
         assert_eq!(usage.input_tokens, 100);
         assert_eq!(usage.output_tokens, 50);
         assert_eq!(usage.total_tokens, 150);
-        assert_eq!(usage.cached_input_tokens, Some(25));
-        assert_eq!(usage.reasoning_output_tokens, Some(10));
+        assert_eq!(usage.cached_input_tokens, 25);
+        assert_eq!(usage.reasoning_output_tokens, 10);
     }
 
     #[tokio::test]
@@ -1050,8 +1052,8 @@ mod tests {
         assert_eq!(usage.input_tokens, 75);
         assert_eq!(usage.output_tokens, 25);
         assert_eq!(usage.total_tokens, 100);
-        assert_eq!(usage.cached_input_tokens, None);
-        assert_eq!(usage.reasoning_output_tokens, None);
+        assert_eq!(usage.cached_input_tokens, 0);
+        assert_eq!(usage.reasoning_output_tokens, 0);
     }
 
     #[tokio::test]

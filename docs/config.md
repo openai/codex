@@ -182,7 +182,6 @@ Here is an example of a `config.toml` that defines multiple profiles:
 ```toml
 model = "o3"
 approval_policy = "untrusted"
-disable_response_storage = false
 
 # Setting `profile` is equivalent to specifying `--profile o3` on the command
 # line, though the `--profile` flag can still be used to override this value.
@@ -209,7 +208,6 @@ model_provider = "openai-chat-completions"
 model = "o3"
 model_provider = "openai"
 approval_policy = "on-failure"
-disable_response_storage = true
 ```
 
 Users can specify config values at multiple levels. Order of precedence is as follows:
@@ -360,14 +358,6 @@ Should be represented as follows in `~/.codex/config.toml`:
 command = "npx"
 args = ["-y", "mcp-server"]
 env = { "API_KEY" = "value" }
-```
-
-## disable_response_storage
-
-Currently, customers whose accounts are set to use Zero Data Retention (ZDR) must set `disable_response_storage` to `true` so that Codex uses an alternative to the Responses API that works with ZDR:
-
-```toml
-disable_response_storage = true
 ```
 
 ## shell_environment_policy
@@ -607,11 +597,11 @@ Options that are specific to the TUI.
 | `model_reasoning_summary` | `auto` \| `concise` \| `detailed` \| `none` | Reasoning summaries. |
 | `model_verbosity` | `low` \| `medium` \| `high` | GPT‑5 text verbosity (Responses API). |
 | `model_supports_reasoning_summaries` | boolean | Force‑enable reasoning summaries. |
+| `model_reasoning_summary_format` | `none` \| `experimental` | Force reasoning summary format. |
 | `chatgpt_base_url` | string | Base URL for ChatGPT auth flow. |
 | `experimental_resume` | string (path) | Resume JSONL path (internal/experimental). |
 | `experimental_instructions_file` | string (path) | Replace built‑in instructions (experimental). |
 | `experimental_use_exec_command_tool` | boolean | Use experimental exec command tool. |
-| `use_experimental_reasoning_summary` | boolean | Use experimental summary for reasoning chain. |
 | `responses_originator_header_internal_override` | string | Override `originator` header value. |
 | `projects.<path>.trust_level` | string | Mark project/worktree as trusted (only `"trusted"` is recognized). |
 | `preferred_auth_method` | `chatgpt` \| `apikey` | Select default auth method (default: `chatgpt`). |

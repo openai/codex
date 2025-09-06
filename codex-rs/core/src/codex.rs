@@ -100,6 +100,7 @@ use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
 use crate::protocol::TaskCompleteEvent;
 use crate::protocol::TokenUsage;
+use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnDiffEvent;
 use crate::protocol::WebSearchBeginEvent;
 use crate::rollout::RolloutRecorder;
@@ -185,7 +186,6 @@ impl Codex {
             base_instructions: config.base_instructions.clone(),
             approval_policy: config.approval_policy,
             sandbox_policy: config.sandbox_policy.clone(),
-            disable_response_storage: config.disable_response_storage,
             notify: config.notify.clone(),
             cwd: config.cwd.clone(),
         };
@@ -263,6 +263,7 @@ struct State {
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
     pending_input: Vec<ResponseInputItem>,
     history: ConversationHistory,
+    token_info: Option<TokenUsageInfo>,
 }
 
 /// Context for an initialized model agent
@@ -302,7 +303,6 @@ pub(crate) struct TurnContext {
     pub(crate) approval_policy: AskForApproval,
     pub(crate) sandbox_policy: SandboxPolicy,
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
-    pub(crate) disable_response_storage: bool,
     pub(crate) tools_config: ToolsConfig,
 }
 
@@ -335,8 +335,6 @@ struct ConfigureSession {
     approval_policy: AskForApproval,
     /// How to sandbox commands executed in the system
     sandbox_policy: SandboxPolicy,
-    /// Disable server-side response storage (send full context each request)
-    disable_response_storage: bool,
 
     /// Optional external notifier command tokens. Present only when the
     /// client wants the agent to spawn a program after each completed
@@ -371,7 +369,6 @@ impl Session {
             base_instructions,
             approval_policy,
             sandbox_policy,
-            disable_response_storage,
             notify,
             cwd,
         } = configure_session;
@@ -463,7 +460,6 @@ impl Session {
             sandbox_policy,
             shell_environment_policy: config.shell_environment_policy.clone(),
             cwd,
-            disable_response_storage,
         };
         let sess = Arc::new(Session {
             session_id,
@@ -585,9 +581,19 @@ impl Session {
         cwd: PathBuf,
         reason: Option<String>,
     ) -> oneshot::Receiver<ReviewDecision> {
+        // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
+        let event_id = sub_id.clone();
+        let prev_entry = {
+            let mut state = self.state.lock_unchecked();
+            state.pending_approvals.insert(sub_id, tx_approve)
+        };
+        if prev_entry.is_some() {
+            warn!("Overwriting existing pending approval for sub_id: {event_id}");
+        }
+
         let event = Event {
-            id: sub_id.clone(),
+            id: event_id,
             msg: EventMsg::ExecApprovalRequest(ExecApprovalRequestEvent {
                 call_id,
                 command,
@@ -596,10 +602,6 @@ impl Session {
             }),
         };
         let _ = self.tx_event.send(event).await;
-        {
-            let mut state = self.state.lock_unchecked();
-            state.pending_approvals.insert(sub_id, tx_approve);
-        }
         rx_approve
     }
 
@@ -611,9 +613,19 @@ impl Session {
         reason: Option<String>,
         grant_root: Option<PathBuf>,
     ) -> oneshot::Receiver<ReviewDecision> {
+        // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
+        let event_id = sub_id.clone();
+        let prev_entry = {
+            let mut state = self.state.lock_unchecked();
+            state.pending_approvals.insert(sub_id, tx_approve)
+        };
+        if prev_entry.is_some() {
+            warn!("Overwriting existing pending approval for sub_id: {event_id}");
+        }
+
         let event = Event {
-            id: sub_id.clone(),
+            id: event_id,
             msg: EventMsg::ApplyPatchApprovalRequest(ApplyPatchApprovalRequestEvent {
                 call_id,
                 changes: convert_apply_patch_to_protocol(action),
@@ -622,10 +634,6 @@ impl Session {
             }),
         };
         let _ = self.tx_event.send(event).await;
-        {
-            let mut state = self.state.lock_unchecked();
-            state.pending_approvals.insert(sub_id, tx_approve);
-        }
         rx_approve
     }
 
@@ -1106,7 +1114,6 @@ async fn submission_loop(
                     sandbox_policy: new_sandbox_policy.clone(),
                     shell_environment_policy: prev.shell_environment_policy.clone(),
                     cwd: new_cwd.clone(),
-                    disable_response_storage: prev.disable_response_storage,
                 };
 
                 // Install the new persistent context for subsequent tasks/turns.
@@ -1188,7 +1195,6 @@ async fn submission_loop(
                         sandbox_policy,
                         shell_environment_policy: turn_context.shell_environment_policy.clone(),
                         cwd,
-                        disable_response_storage: turn_context.disable_response_storage,
                     };
                     // TODO: record the new environment context in the conversation history
                     // no current task, spawn a new one with the per‑turn context
@@ -1597,7 +1603,6 @@ async fn run_turn(
 
     let prompt = Prompt {
         input,
-        store: !turn_context.disable_response_storage,
         tools,
         base_instructions_override: turn_context.base_instructions.clone(),
     };
@@ -1770,22 +1775,32 @@ async fn try_run_turn(
                 token_usage,
                 timestamp,
             } => {
-                if let (Some(token_usage), Some(timestamp)) = (token_usage, timestamp) {
+                if let (Some(token_usage), Some(timestamp)) = (token_usage.clone(), timestamp) {
                     // Attach token usage to the last assistant message in this turn
                     attach_info_to_last_assistant_message(
                         &mut output,
                         token_usage.clone(),
                         timestamp.clone(),
                     );
-
-                    sess.tx_event
-                        .send(Event {
-                            id: sub_id.to_string(),
-                            msg: EventMsg::TokenCount(token_usage),
-                        })
-                        .await
-                        .ok();
                 }
+
+                let info = {
+                    let mut st = sess.state.lock_unchecked();
+                    let info = TokenUsageInfo::new_or_append(
+                        &st.token_info,
+                        &token_usage,
+                        turn_context.client.get_model_context_window(),
+                    );
+                    st.token_info = info.clone();
+                    info
+                };
+                sess.tx_event
+                    .send(Event {
+                        id: sub_id.to_string(),
+                        msg: EventMsg::TokenCount(crate::protocol::TokenCountEvent { info }),
+                    })
+                    .await
+                    .ok();
 
                 let unified_diff = turn_diff_tracker.get_unified_diff();
                 if let Ok(Some(unified_diff)) = unified_diff {
@@ -1859,7 +1874,6 @@ async fn run_compact_task(
 
     let prompt = Prompt {
         input: turn_input,
-        store: !turn_context.disable_response_storage,
         tools: Vec::new(),
         base_instructions_override: Some(compact_instructions.clone()),
     };
@@ -2853,13 +2867,21 @@ async fn drain_to_completed(
                 token_usage,
                 ..
             }) => {
-                // some providers don't return token usage, so we default
-                // TODO: consider approximate token usage
-                let token_usage = token_usage.unwrap_or_default();
+                let info = {
+                    let mut st = sess.state.lock_unchecked();
+                    let info = TokenUsageInfo::new_or_append(
+                        &st.token_info,
+                        &token_usage,
+                        turn_context.client.get_model_context_window(),
+                    );
+                    st.token_info = info.clone();
+                    info
+                };
+
                 sess.tx_event
                     .send(Event {
                         id: sub_id.to_string(),
-                        msg: EventMsg::TokenCount(token_usage),
+                        msg: EventMsg::TokenCount(crate::protocol::TokenCountEvent { info }),
                     })
                     .await
                     .ok();
@@ -3118,9 +3140,9 @@ mod tests {
     fn test_attach_info_to_last_assistant_message_function_call() {
         let token_usage = TokenUsage {
             input_tokens: 100,
-            cached_input_tokens: None,
+            cached_input_tokens: 0,
             output_tokens: 50,
-            reasoning_output_tokens: None,
+            reasoning_output_tokens: 0,
             total_tokens: 150,
         };
         let timestamp = "2023-01-01T00:00:00Z".to_string();
@@ -3158,9 +3180,9 @@ mod tests {
     fn test_attach_info_to_last_assistant_message_reasoning() {
         let token_usage = TokenUsage {
             input_tokens: 75,
-            cached_input_tokens: None,
+            cached_input_tokens: 0,
             output_tokens: 25,
-            reasoning_output_tokens: None,
+            reasoning_output_tokens: 0,
             total_tokens: 100,
         };
         let timestamp = "2023-02-01T00:00:00Z".to_string();
@@ -3200,9 +3222,9 @@ mod tests {
     fn test_attach_info_to_last_assistant_message_multiple_items() {
         let token_usage = TokenUsage {
             input_tokens: 200,
-            cached_input_tokens: None,
+            cached_input_tokens: 0,
             output_tokens: 100,
-            reasoning_output_tokens: None,
+            reasoning_output_tokens: 0,
             total_tokens: 300,
         };
         let timestamp = "2023-03-01T00:00:00Z".to_string();
@@ -3281,9 +3303,9 @@ mod tests {
     fn test_attach_info_to_last_assistant_message_preserves_existing_message_logic() {
         let token_usage = TokenUsage {
             input_tokens: 50,
-            cached_input_tokens: None,
+            cached_input_tokens: 0,
             output_tokens: 30,
-            reasoning_output_tokens: None,
+            reasoning_output_tokens: 0,
             total_tokens: 80,
         };
         let timestamp = "2023-04-01T00:00:00Z".to_string();

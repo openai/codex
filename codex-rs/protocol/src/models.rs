@@ -48,6 +48,7 @@ pub enum ContentItem {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseItem {
     Message {
+        #[serde(skip_serializing)]
         id: Option<String>,
         role: String,
         content: Vec<ContentItem>,
@@ -57,6 +58,7 @@ pub enum ResponseItem {
         timestamp: Option<String>,
     },
     Reasoning {
+        #[serde(default)]
         id: String,
         summary: Vec<ReasoningItemReasoningSummary>,
         #[serde(default, skip_serializing_if = "should_serialize_reasoning_content")]
@@ -69,6 +71,7 @@ pub enum ResponseItem {
     },
     LocalShellCall {
         /// Set when using the chat completions API.
+        #[serde(skip_serializing)]
         id: Option<String>,
         /// Set when using the Responses API.
         call_id: Option<String>,
@@ -76,6 +79,7 @@ pub enum ResponseItem {
         action: LocalShellAction,
     },
     FunctionCall {
+        #[serde(skip_serializing)]
         id: Option<String>,
         name: String,
         // The Responses API returns the function call arguments as a *string* that contains
@@ -100,7 +104,7 @@ pub enum ResponseItem {
         output: FunctionCallOutputPayload,
     },
     CustomToolCall {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing)]
         id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         status: Option<String>,
@@ -122,7 +126,7 @@ pub enum ResponseItem {
     //   "action": {"type":"search","query":"weather: San Francisco, CA"}
     // }
     WebSearchCall {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing)]
         id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         status: Option<String>,
@@ -389,8 +393,8 @@ mod tests {
             input_tokens: 100,
             output_tokens: 50,
             total_tokens: 150,
-            cached_input_tokens: Some(25),
-            reasoning_output_tokens: None,
+            cached_input_tokens: 25,
+            reasoning_output_tokens: 0,
         };
 
         let timestamp = "2025-07-15T10:30:45.123Z".to_string();

@@ -158,14 +158,6 @@ impl ModelClient {
 
         let auth_manager = self.auth_manager.clone();
 
-        let auth_mode = auth_manager
-            .as_ref()
-            .and_then(|m| m.auth())
-            .as_ref()
-            .map(|a| a.mode);
-
-        let store = prompt.store && auth_mode != Some(AuthMode::ChatGPT);
-
         let full_instructions = prompt.get_full_instructions(&self.config.model_family);
         let tools_json = create_tools_json_for_responses_api(&prompt.tools)?;
         let reasoning = create_reasoning_param_for_request(
@@ -174,9 +166,7 @@ impl ModelClient {
             self.summary,
         );
 
-        // Request encrypted COT if we are not storing responses,
-        // otherwise reasoning items will be referenced by ID
-        let include: Vec<String> = if !store && reasoning.is_some() {
+        let include: Vec<String> = if reasoning.is_some() {
             vec!["reasoning.encrypted_content".to_string()]
         } else {
             vec![]
@@ -248,7 +238,7 @@ impl ModelClient {
             tool_choice: "auto",
             parallel_tool_calls: false,
             reasoning,
-            store,
+            store: false,
             stream: true,
             include,
             prompt_cache_key: Some(self.session_id.to_string()),
@@ -451,9 +441,15 @@ impl From<ResponseCompletedUsage> for TokenUsage {
     fn from(val: ResponseCompletedUsage) -> Self {
         TokenUsage {
             input_tokens: val.input_tokens,
-            cached_input_tokens: val.input_tokens_details.map(|d| d.cached_tokens),
+            cached_input_tokens: val
+                .input_tokens_details
+                .map(|d| d.cached_tokens)
+                .unwrap_or(0),
             output_tokens: val.output_tokens,
-            reasoning_output_tokens: val.output_tokens_details.map(|d| d.reasoning_tokens),
+            reasoning_output_tokens: val
+                .output_tokens_details
+                .map(|d| d.reasoning_tokens)
+                .unwrap_or(0),
             total_tokens: val.total_tokens,
         }
     }
@@ -1096,9 +1092,9 @@ mod tests {
         // Create sample token usage and timestamp
         let token_usage = Some(TokenUsage {
             input_tokens: 100,
-            cached_input_tokens: None,
+            cached_input_tokens: 0,
             output_tokens: 50,
-            reasoning_output_tokens: None,
+            reasoning_output_tokens: 0,
             total_tokens: 150,
         });
         let timestamp = Some("2023-01-01T00:00:00Z".to_string());

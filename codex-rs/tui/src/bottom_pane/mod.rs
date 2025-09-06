@@ -5,7 +5,7 @@ use crate::app_event_sender::AppEventSender;
 use crate::tui::FrameRequester;
 use crate::user_approval_widget::ApprovalRequest;
 use bottom_pane_view::BottomPaneView;
-use codex_core::protocol::TokenUsage;
+use codex_core::protocol::TokenUsageInfo;
 use codex_file_search::FileMatch;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
@@ -162,6 +162,8 @@ impl BottomPane {
             view.handle_key_event(self, key_event);
             if !view.is_complete() {
                 self.active_view = Some(view);
+            } else {
+                self.on_active_view_complete();
             }
             self.request_redraw();
             InputResult::None
@@ -201,6 +203,8 @@ impl BottomPane {
             CancellationEvent::Handled => {
                 if !view.is_complete() {
                     self.active_view = Some(view);
+                } else {
+                    self.on_active_view_complete();
                 }
                 self.show_ctrl_c_quit_hint();
             }
@@ -354,14 +358,8 @@ impl BottomPane {
 
     /// Update the *context-window remaining* indicator in the composer. This
     /// is forwarded directly to the underlying `ChatComposer`.
-    pub(crate) fn set_token_usage(
-        &mut self,
-        total_token_usage: TokenUsage,
-        last_token_usage: TokenUsage,
-        model_context_window: Option<u64>,
-    ) {
-        self.composer
-            .set_token_usage(total_token_usage, last_token_usage, model_context_window);
+    pub(crate) fn set_token_usage(&mut self, token_info: Option<TokenUsageInfo>) {
+        self.composer.set_token_usage(token_info);
         self.request_redraw();
     }
 
@@ -381,8 +379,25 @@ impl BottomPane {
 
         // Otherwise create a new approval modal overlay.
         let modal = ApprovalModalView::new(request, self.app_event_tx.clone());
+        self.pause_status_timer_for_modal();
         self.active_view = Some(Box::new(modal));
         self.request_redraw()
+    }
+
+    fn on_active_view_complete(&mut self) {
+        self.resume_status_timer_after_modal();
+    }
+
+    fn pause_status_timer_for_modal(&mut self) {
+        if let Some(status) = self.status.as_mut() {
+            status.pause_timer();
+        }
+    }
+
+    fn resume_status_timer_after_modal(&mut self) {
+        if let Some(status) = self.status.as_mut() {
+            status.resume_timer();
+        }
     }
 
     /// Height (terminal rows) required by the current bottom pane.
