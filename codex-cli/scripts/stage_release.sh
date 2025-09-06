@@ -105,12 +105,18 @@ cp ../README.md "$TMPDIR" || true # README is one level up - ignore if missing
 NPM_PACKAGE_NAME="@jojoyo/codex"
 
 jq --arg version "$VERSION" --arg name "$NPM_PACKAGE_NAME" \
-    '.name = $name | .version = $version' \
+    '.name = $name | .version = $version | del(.scripts.prepack)' \
     package.json > "$TMPDIR/package.json"
 
 # 2. Native runtime deps (sandbox plus optional Rust binaries)
 
 ./scripts/install_native_deps.sh --workflow-url "$WORKFLOW_URL" "$TMPDIR"
+
+# 3. Include license and notices in the staged package so npm pack includes them
+cp ../LICENSE "$TMPDIR/" || true
+cp ../NOTICE "$TMPDIR/" || true
+cp ../THIRD-PARTY-NOTICES.md "$TMPDIR/" || true
+cp ../codex-rs/THIRD-PARTY-LICENSES.txt "$TMPDIR/" || true
 
 popd >/dev/null
 

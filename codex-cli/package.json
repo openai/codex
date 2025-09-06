@@ -9,9 +9,16 @@
   "engines": {
     "node": ">=20"
   },
+  "scripts": {
+    "prepack": "node scripts/copy_notices.js"
+  },
   "files": [
     "bin",
-    "dist"
+    "dist",
+    "LICENSE",
+    "NOTICE",
+    "THIRD-PARTY-NOTICES.md",
+    "THIRD-PARTY-LICENSES.txt"
   ],
   "repository": {
     "type": "git",
