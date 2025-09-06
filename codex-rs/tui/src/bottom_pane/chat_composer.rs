@@ -71,7 +71,6 @@ pub(crate) struct ChatComposer {
     history: ChatComposerHistory,
     ctrl_c_quit_hint: bool,
     esc_backtrack_hint: bool,
-    use_shift_enter_hint: bool,
     dismissed_file_popup_token: Option<String>,
     current_file_query: Option<String>,
     pending_pastes: Vec<(String, String)>,
@@ -79,6 +78,8 @@ pub(crate) struct ChatComposer {
     has_focus: bool,
     attached_images: Vec<AttachedImage>,
     placeholder_text: String,
+    // If true, show Shift+Enter for newline in footer hints; otherwise Ctrl+J.
+    use_shift_enter_hint: bool,
     // Non-bracketed paste burst tracker.
     paste_burst: PasteBurst,
     // When true, disables paste-burst logic and inserts characters immediately.
@@ -101,8 +102,6 @@ impl ChatComposer {
         placeholder_text: String,
         disable_paste_burst: bool,
     ) -> Self {
-        let use_shift_enter_hint = enhanced_keys_supported;
-
         let mut this = Self {
             textarea: TextArea::new(),
             textarea_state: RefCell::new(TextAreaState::default()),
@@ -111,7 +110,6 @@ impl ChatComposer {
             history: ChatComposerHistory::new(),
             ctrl_c_quit_hint: false,
             esc_backtrack_hint: false,
-            use_shift_enter_hint,
             dismissed_file_popup_token: None,
             current_file_query: None,
             pending_pastes: Vec::new(),
@@ -119,6 +117,7 @@ impl ChatComposer {
             has_focus: has_input_focus,
             attached_images: Vec::new(),
             placeholder_text,
+            use_shift_enter_hint: enhanced_keys_supported,
             paste_burst: PasteBurst::default(),
             disable_paste_burst: false,
             custom_prompts: Vec::new(),
@@ -1247,8 +1246,8 @@ impl WidgetRef for ChatComposer {
                         " send   ".into(),
                         newline_hint_key,
                         " newline   ".into(),
-                        key_hint::ctrl('T'),
-                        " transcript   ".into(),
+                        key_hint::ctrl('O'),
+                        " shortcuts   ".into(),
                         key_hint::ctrl('C'),
                         " quit".into(),
                     ]

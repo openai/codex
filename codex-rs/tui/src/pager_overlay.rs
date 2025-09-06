@@ -32,6 +32,14 @@ impl Overlay {
         Self::Static(StaticOverlay::with_title(lines, title))
     }
 
+    /// Create a static overlay that uses a minimal footer hint set.
+    pub(crate) fn new_static_with_title_minimal_hints(
+        lines: Vec<Line<'static>>,
+        title: String,
+    ) -> Self {
+        Self::Static(StaticOverlay::with_title_minimal_hints(lines, title))
+    }
+
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         match self {
             Overlay::Transcript(o) => o.handle_event(tui, event),
@@ -424,17 +432,17 @@ impl TranscriptOverlay {
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         match event {
             TuiEvent::Key(key_event) => match key_event {
+                // Close transcript overlay with Ctrl+O
+                KeyEvent { code: KeyCode::Char('o'), modifiers: crossterm::event::KeyModifiers::CONTROL, kind: KeyEventKind::Press, .. } => {
+                    self.is_done = true;
+                    Ok(())
+                }
                 KeyEvent {
                     code: KeyCode::Char('q'),
                     kind: KeyEventKind::Press,
                     ..
                 }
-                | KeyEvent {
-                    code: KeyCode::Char('t'),
-                    modifiers: crossterm::event::KeyModifiers::CONTROL,
-                    kind: KeyEventKind::Press,
-                    ..
-                }
+                | KeyEvent { code: KeyCode::Char('t'), modifiers: crossterm::event::KeyModifiers::CONTROL, kind: KeyEventKind::Press, .. }
                 | KeyEvent {
                     code: KeyCode::Char('c'),
                     modifiers: crossterm::event::KeyModifiers::CONTROL,
@@ -466,6 +474,7 @@ impl TranscriptOverlay {
 pub(crate) struct StaticOverlay {
     view: PagerView,
     is_done: bool,
+    minimal_hints: bool,
 }
 
 impl StaticOverlay {
@@ -473,13 +482,27 @@ impl StaticOverlay {
         Self {
             view: PagerView::new(lines, title, 0),
             is_done: false,
+            minimal_hints: false,
+        }
+    }
+
+    pub(crate) fn with_title_minimal_hints(lines: Vec<Line<'static>>, title: String) -> Self {
+        Self {
+            view: PagerView::new(lines, title, 0),
+            is_done: false,
+            minimal_hints: true,
         }
     }
 
     fn render_hints(&self, area: Rect, buf: &mut Buffer) {
         let line1 = Rect::new(area.x, area.y, area.width, 1);
         let line2 = Rect::new(area.x, area.y.saturating_add(1), area.width, 1);
-        render_key_hints(line1, buf, PAGER_KEY_HINTS);
+        if self.minimal_hints {
+            let first_line: [(&str, &str); 2] = [("↑/↓", "scroll"), ("Ctrl+O", "close")];
+            render_key_hints(line1, buf, &first_line);
+        } else {
+            render_key_hints(line1, buf, PAGER_KEY_HINTS);
+        }
         let pairs = [("q", "quit")];
         render_key_hints(line2, buf, &pairs);
     }
@@ -497,12 +520,16 @@ impl StaticOverlay {
     pub(crate) fn handle_event(&mut self, tui: &mut tui::Tui, event: TuiEvent) -> Result<()> {
         match event {
             TuiEvent::Key(key_event) => match key_event {
-                KeyEvent {
-                    code: KeyCode::Char('q'),
-                    kind: KeyEventKind::Press,
-                    ..
+                // Close static overlay with Ctrl+O (toggle)
+                KeyEvent { code: KeyCode::Char('o'), modifiers: crossterm::event::KeyModifiers::CONTROL, kind: KeyEventKind::Press, .. } => {
+                    self.is_done = true;
+                    Ok(())
                 }
-                | KeyEvent {
+                KeyEvent { code: KeyCode::Char('q'), kind: KeyEventKind::Press, .. } => {
+                    self.is_done = true;
+                    Ok(())
+                }
+                KeyEvent {
                     code: KeyCode::Char('c'),
                     modifiers: crossterm::event::KeyModifiers::CONTROL,
                     kind: KeyEventKind::Press,
@@ -511,6 +538,11 @@ impl StaticOverlay {
                     self.is_done = true;
                     Ok(())
                 }
+                KeyEvent { code: KeyCode::Esc, kind: KeyEventKind::Press, .. } => {
+                    self.is_done = true;
+                    Ok(())
+                }
+                // No '?' toggle; close with Esc/q/F1/Ctrl+C (handled above)
                 other => self.view.handle_key_event(tui, other),
             },
             TuiEvent::Draw => {
