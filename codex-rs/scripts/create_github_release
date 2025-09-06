@@ -14,10 +14,24 @@ CARGO_TOML_PATH = "codex-rs/Cargo.toml"
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Create a tagged Codex release.")
+    parser = argparse.ArgumentParser(description="Publish a tagged Codex release.")
     parser.add_argument(
-        "version",
-        help="Version string used for Cargo.toml and the Git tag (e.g. 0.1.0-alpha.4).",
+        "-n",
+        "--dry-run",
+        action="store_true",
+        help="Print the version that would be used and exit before making changes.",
+    )
+
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        "--publish-alpha",
+        action="store_true",
+        help="Publish the next alpha release for the upcoming minor version.",
+    )
+    group.add_argument(
+        "--publish-release",
+        action="store_true",
+        help="Publish the next stable release by bumping the minor version.",
     )
     return parser.parse_args(argv[1:])
 
@@ -25,6 +39,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
     try:
+        version = determine_version(args)
+        print(f"Publishing version {version}")
+        if args.dry_run:
+            return 0
+
         print("Fetching branch head...")
         base_commit = get_branch_head()
         print(f"Base commit: {base_commit}")
@@ -34,7 +53,7 @@ def main(argv: list[str]) -> int:
         print("Fetching Cargo.toml...")
         current_contents = fetch_file_contents(base_commit)
         print("Updating version...")
-        updated_contents = replace_version(current_contents, args.version)
+        updated_contents = replace_version(current_contents, version)
         print("Creating blob...")
         blob_sha = create_blob(updated_contents)
         print(f"Blob SHA: {blob_sha}")
@@ -42,13 +61,13 @@ def main(argv: list[str]) -> int:
         tree_sha = create_tree(base_tree, blob_sha)
         print(f"Tree SHA: {tree_sha}")
         print("Creating commit...")
-        commit_sha = create_commit(args.version, tree_sha, base_commit)
+        commit_sha = create_commit(version, tree_sha, base_commit)
         print(f"Commit SHA: {commit_sha}")
         print("Creating tag...")
-        tag_sha = create_tag(args.version, commit_sha)
+        tag_sha = create_tag(version, commit_sha)
         print(f"Tag SHA: {tag_sha}")
         print("Creating tag ref...")
-        create_tag_ref(args.version, tag_sha)
+        create_tag_ref(version, tag_sha)
         print("Done.")
     except ReleaseError as error:
         print(f"ERROR: {error}", file=sys.stderr)
@@ -58,6 +77,7 @@ def main(argv: list[str]) -> int:
 
 class ReleaseError(RuntimeError):
     pass
+
 
 def run_gh_api(endpoint: str, *, method: str = "GET", payload: dict | None = None) -> dict:
     print(f"Running gh api {method} {endpoint}")
@@ -202,6 +222,74 @@ def create_tag_ref(version: str, tag_sha: str) -> None:
         method="POST",
         payload={"ref": tag_ref, "sha": tag_sha},
     )
+
+
+def determine_version(args: argparse.Namespace) -> str:
+    latest_version = get_latest_release_version()
+    major, minor, patch = parse_semver(latest_version)
+    next_minor_version = format_version(major, minor + 1, patch)
+
+    if args.publish_release:
+        return next_minor_version
+
+    alpha_prefix = f"{next_minor_version}-alpha."
+    releases = list_releases()
+    highest_alpha = 0
+    found_alpha = False
+    for release in releases:
+        tag = release.get("tag_name", "")
+        candidate = strip_tag_prefix(tag)
+        if candidate and candidate.startswith(alpha_prefix):
+            suffix = candidate[len(alpha_prefix) :]
+            try:
+                alpha_number = int(suffix)
+            except ValueError:
+                continue
+            highest_alpha = max(highest_alpha, alpha_number)
+            found_alpha = True
+
+    if found_alpha:
+        return f"{alpha_prefix}{highest_alpha + 1}"
+    return f"{alpha_prefix}1"
+
+
+def get_latest_release_version() -> str:
+    response = run_gh_api(f"/repos/{REPO}/releases/latest")
+    tag = response.get("tag_name")
+    version = strip_tag_prefix(tag)
+    if not version:
+        raise ReleaseError("Latest release tag has unexpected format.")
+    return version
+
+
+def list_releases() -> list[dict]:
+    response = run_gh_api(f"/repos/{REPO}/releases?per_page=100")
+    if not isinstance(response, list):
+        raise ReleaseError("Unexpected response when listing releases.")
+    return response
+
+
+def strip_tag_prefix(tag: str | None) -> str | None:
+    if not tag:
+        return None
+    prefix = "rust-v"
+    if not tag.startswith(prefix):
+        return None
+    return tag[len(prefix) :]
+
+
+def parse_semver(version: str) -> tuple[int, int, int]:
+    parts = version.split(".")
+    if len(parts) != 3:
+        raise ReleaseError(f"Unexpected version format: {version}")
+    try:
+        return int(parts[0]), int(parts[1]), int(parts[2])
+    except ValueError as error:
+        raise ReleaseError(f"Version components must be integers: {version}") from error
+
+
+def format_version(major: int, minor: int, patch: int) -> str:
+    return f"{major}.{minor}.{patch}"
 
 
 if __name__ == "__main__":
