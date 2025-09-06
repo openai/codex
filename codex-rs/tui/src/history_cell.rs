@@ -950,6 +950,12 @@ pub(crate) fn new_status_output(
 
     lines.push("".into());
 
+    // 💻 Client
+    let cli_version = crate::version::CODEX_CLI_VERSION;
+    lines.push(vec![padded_emoji("💻").into(), "Client".bold()].into());
+    lines.push(vec!["  • CLI Version: ".into(), cli_version.into()].into());
+    lines.push("".into());
+
     // 📊 Token Usage
     lines.push(vec!["📊 ".into(), "Token Usage".bold()].into());
     if let Some(session_id) = session_id {
@@ -960,9 +966,8 @@ pub(crate) fn new_status_output(
         "  • Input: ".into(),
         usage.non_cached_input().to_string().into(),
     ];
-    if let Some(cached) = usage.cached_input_tokens
-        && cached > 0
-    {
+    if usage.cached_input_tokens > 0 {
+        let cached = usage.cached_input_tokens;
         input_line_spans.push(format!(" (+ {cached} cached)").into());
     }
     lines.push(Line::from(input_line_spans));

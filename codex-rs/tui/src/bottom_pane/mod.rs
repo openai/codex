@@ -5,7 +5,7 @@ use crate::app_event_sender::AppEventSender;
 use crate::tui::FrameRequester;
 use crate::user_approval_widget::ApprovalRequest;
 use bottom_pane_view::BottomPaneView;
-use codex_core::protocol::TokenUsage;
+use codex_core::protocol::TokenUsageInfo;
 use codex_file_search::FileMatch;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
@@ -358,14 +358,8 @@ impl BottomPane {
 
     /// Update the *context-window remaining* indicator in the composer. This
     /// is forwarded directly to the underlying `ChatComposer`.
-    pub(crate) fn set_token_usage(
-        &mut self,
-        total_token_usage: TokenUsage,
-        last_token_usage: TokenUsage,
-        model_context_window: Option<u64>,
-    ) {
-        self.composer
-            .set_token_usage(total_token_usage, last_token_usage, model_context_window);
+    pub(crate) fn set_token_usage(&mut self, token_info: Option<TokenUsageInfo>) {
+        self.composer.set_token_usage(token_info);
         self.request_redraw();
     }
 

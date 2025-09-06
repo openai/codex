@@ -732,22 +732,23 @@ impl Config {
             .or(config_profile.model)
             .or(cfg.model)
             .unwrap_or_else(default_model);
-        let model_family = find_family_for_model(&model).unwrap_or_else(|| {
-            let supports_reasoning_summaries =
-                cfg.model_supports_reasoning_summaries.unwrap_or(false);
-            let reasoning_summary_format = cfg
-                .model_reasoning_summary_format
-                .unwrap_or(ReasoningSummaryFormat::None);
-            ModelFamily {
-                slug: model.clone(),
-                family: model.clone(),
-                needs_special_apply_patch_instructions: false,
-                supports_reasoning_summaries,
-                reasoning_summary_format,
-                uses_local_shell_tool: false,
-                apply_patch_tool_type: None,
-            }
+
+        let mut model_family = find_family_for_model(&model).unwrap_or_else(|| ModelFamily {
+            slug: model.clone(),
+            family: model.clone(),
+            needs_special_apply_patch_instructions: false,
+            supports_reasoning_summaries: false,
+            reasoning_summary_format: ReasoningSummaryFormat::None,
+            uses_local_shell_tool: false,
+            apply_patch_tool_type: None,
         });
+
+        if let Some(supports_reasoning_summaries) = cfg.model_supports_reasoning_summaries {
+            model_family.supports_reasoning_summaries = supports_reasoning_summaries;
+        }
+        if let Some(model_reasoning_summary_format) = cfg.model_reasoning_summary_format {
+            model_family.reasoning_summary_format = model_reasoning_summary_format;
+        }
 
         let openai_model_info = get_model_info(&model_family);
         let model_context_window = cfg

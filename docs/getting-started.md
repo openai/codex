@@ -10,6 +10,7 @@
 
 Key flags: `--model/-m`, `--ask-for-approval/-a`.
 
+<!--
 Resume options:
 
 - `--resume`: open an interactive picker of recent sessions (shows a preview of the first real user message). Conflicts with `--continue`.
@@ -21,6 +22,7 @@ Examples:
 codex --resume
 codex --continue
 ```
+-->
 
 ### Running with a prompt as input
 

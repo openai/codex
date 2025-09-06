@@ -20,7 +20,12 @@ pub struct Cli {
     /// - Mutually exclusive with `--continue`.
     /// - The picker displays recent sessions and a preview of the first real user
     ///   message to help you select the right one.
-    #[arg(long = "resume", default_value_t = false, conflicts_with = "continue")]
+    #[arg(
+        long = "resume",
+        default_value_t = false,
+        conflicts_with = "continue",
+        hide = true
+    )]
     pub resume: bool,
 
     /// Continue the most recent conversation without showing the picker.
@@ -33,7 +38,8 @@ pub struct Cli {
         id = "continue",
         long = "continue",
         default_value_t = false,
-        conflicts_with = "resume"
+        conflicts_with = "resume",
+        hide = true
     )]
     pub r#continue: bool,
 
