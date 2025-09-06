@@ -4,12 +4,12 @@
 header = """
 # Changelog
 
-You can install any of these versions: `npm install -g codex@version`
+You can install any of these versions: `npm install -g @jojoyo/codex@version`
 """
 
 body = """
 {% if version -%}
-## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+## [{{ version | replace(from="rust-v", to="") | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
 {%- else %}
 ## [unreleased]
 {% endif %}
@@ -27,18 +27,24 @@ footer = """
 <!-- generated - do not edit -->
 """
 
-trim = true
 postprocessors = []
+trim = true
 
 [git]
 conventional_commits = true
+tag_pattern = "^rust-v.*$"
 
 commit_parsers = [
   { message = "^feat", group = "<!-- 0 -->🚀 Features" },
-  { message = "^fix",  group = "<!-- 1 -->🪲 Bug Fixes" },
+  { message = "^fix", group = "<!-- 1 -->🪲 Bug Fixes" },
+  { message = "^docs", group = "<!-- 2 -->📚 Docs" },
+  { message = "^refactor", group = "<!-- 3 -->♻️ Refactor" },
+  { message = "^perf", group = "<!-- 4 -->⚡ Performance" },
+  { message = "^test", group = "<!-- 5 -->🧪 Tests" },
+  { message = "^ci", group = "<!-- 7 -->🔧 CI" },
   { message = "^bump", group = "<!-- 6 -->🛳️ Release" },
   # Fallback – skip anything that didn't match the above rules.
-  { message = ".*",  group = "<!-- 10 -->💼 Other" },
+  { message = ".*", group = "<!-- 10 -->💼 Other" },
 ]
 
 filter_unconventional = false

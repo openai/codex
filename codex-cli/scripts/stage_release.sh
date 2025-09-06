@@ -2,7 +2,7 @@
 # -----------------------------------------------------------------------------
 # stage_release.sh
 # -----------------------------------------------------------------------------
-# Stages an npm release for @openai/codex.
+# Stages an npm release for @jojoyo/codex.
 #
 # Usage:
 #
@@ -97,16 +97,26 @@ mkdir -p "$TMPDIR/bin"
 cp -r bin/codex.js "$TMPDIR/bin/codex.js"
 cp ../README.md "$TMPDIR" || true # README is one level up - ignore if missing
 
-# Modify package.json - bump version and optionally add the native directory to
-# the files array so that the binaries are published to npm.
+# Modify package.json for npm publish:
+# - set the package name to the scoped npm package (@jojoyo/codex)
+# - bump version to the release version
+# We intentionally only change the npm name; the GitHub Release asset name remains codex-npm-*.tgz
 
-jq --arg version "$VERSION" \
-    '.version = $version' \
+NPM_PACKAGE_NAME="@jojoyo/codex"
+
+jq --arg version "$VERSION" --arg name "$NPM_PACKAGE_NAME" \
+    '.name = $name | .version = $version | del(.scripts.prepack)' \
     package.json > "$TMPDIR/package.json"
 
 # 2. Native runtime deps (sandbox plus optional Rust binaries)
 
 ./scripts/install_native_deps.sh --workflow-url "$WORKFLOW_URL" "$TMPDIR"
+
+# 3. Include license and notices in the staged package so npm pack includes them
+cp ../LICENSE "$TMPDIR/" || true
+cp ../NOTICE "$TMPDIR/" || true
+cp ../THIRD-PARTY-NOTICES.md "$TMPDIR/" || true
+cp ../codex-rs/THIRD-PARTY-LICENSES.txt "$TMPDIR/" || true
 
 popd >/dev/null
 

@@ -942,6 +942,20 @@ impl ChatWidget {
         }
     }
 
+    // ===== !Modify Start: 清空提示 - 定时心跳 =====
+    // !Desc: 若“再次按 Esc 清空”的提示处于激活计时中，则安排下一次刷新，
+    //        确保超时后自动消失（避免因合并/丢帧延迟而滞留显示）。
+    // !AI_GUIDANCE: 若上游有统一的定时刷新机制，请在相同节拍处触发以保持体验一致。
+    /// 若“再次按 Esc 清空”的提示处于激活计时中，则安排下一次刷新以保证超时后能自动消失。
+    pub(crate) fn handle_esc_clear_hint_tick(&mut self, frame_requester: FrameRequester) {
+        if let Some(rem) = self.bottom_pane.esc_clear_hint_remaining() {
+            // 为避免丢帧，采用较短的节拍刷新，直至到期。
+            let next = rem.min(std::time::Duration::from_millis(120));
+            frame_requester.schedule_frame_in(next);
+        }
+    }
+    // ===== !Modify End: 清空提示 - 定时心跳 =====
+
     fn flush_active_exec_cell(&mut self) {
         if let Some(active) = self.active_exec_cell.take() {
             self.app_event_tx
@@ -1254,6 +1268,24 @@ impl ChatWidget {
         );
     }
 
+    // ===== !Modify Start: 用户提问节点选择器 - 弹窗入口 =====
+    // !Modify[owner=yoyooyooo]: 打开“用户提问节点选择器”弹窗。仅显示用户的提问节点（首行作为预览），
+    // 选择项在 Enter 时发送 AppEvent::BacktrackTo(n)；Esc 取消。
+    // 作为“双击 Esc”的默认入口，Ctrl+T 仍可打开 Transcript，不冲突。
+    // !AI_GUIDANCE: 若上游在相同快捷键上增加新功能，请优先考虑共存（例如改键或提供配置开关）；
+    // 不能共存时请先询问用户是否保留本自定义逻辑。
+    pub(crate) fn open_backtrack_picker(&mut self, items: Vec<SelectionItem>) {
+        self.bottom_pane.show_selection_view(
+            // !Modify: Title 改为英文
+            "Backtrack to User Messages".to_string(),
+            // !Modify: Subtitle 改为英文
+            Some("Only list user messages; selecting one will revert to that node (dropping subsequent context)".to_string()),
+            Some("↑/↓ 选择 · Enter 回退并编辑 · Esc 取消".to_string()),
+            items,
+        );
+    }
+    // ===== !Modify End: 用户提问节点选择器 - 弹窗入口 =====
+
     /// Set the approval policy in the widget's config copy.
     pub(crate) fn set_approval_policy(&mut self, policy: AskForApproval) {
         self.config.approval_policy = policy;
@@ -1314,6 +1346,27 @@ impl ChatWidget {
     pub(crate) fn insert_str(&mut self, text: &str) {
         self.bottom_pane.insert_str(text);
     }
+
+    // !Modify: 新增 API：清空输入框文本（不影响附件/占位符）
+    /// 清空输入框内容（不影响附件/待展开占位符）。
+    pub(crate) fn clear_composer_text(&mut self) {
+        self.bottom_pane.set_composer_text(String::new());
+    }
+
+    // ===== !Modify Start: 清空提示 - 显示与清除 =====
+    // !Desc: 提供 ChatWidget 级别的封装，控制底层 BottomPane 的清空提示显示/隐藏，
+    //        以便上层（Esc 逻辑）简洁调用并保持职责分离。
+    // !AI_GUIDANCE: 若上游将提示控制上移/下移，请用等价调用替换，保持 1s 窗口行为。
+    /// 显示“Please Escape again to clear”提示指定时长。
+    pub(crate) fn show_esc_clear_hint_for(&mut self, dur: std::time::Duration) {
+        self.bottom_pane.show_esc_clear_hint_for(dur);
+    }
+
+    /// 立即隐藏“Please Escape again to clear”提示。
+    pub(crate) fn clear_esc_clear_hint(&mut self) {
+        self.bottom_pane.clear_esc_clear_hint();
+    }
+    // ===== !Modify End: 清空提示 - 显示与清除 =====
 
     pub(crate) fn show_esc_backtrack_hint(&mut self) {
         self.bottom_pane.show_esc_backtrack_hint();

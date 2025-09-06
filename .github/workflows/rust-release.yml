@@ -9,7 +9,7 @@ name: rust-release
 on:
   push:
     tags:
-      - "rust-v*.*.*"
+      - "rust-v*"
 
 concurrency:
   group: ${{ github.workflow }}
@@ -30,7 +30,8 @@ jobs:
           # 1. Must be a tag and match the regex
           [[ "${GITHUB_REF_TYPE}" == "tag" ]] \
             || { echo "❌  Not a tag push"; exit 1; }
-          [[ "${GITHUB_REF_NAME}" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+(-(alpha|beta)(\.[0-9]+)?)?$ ]] \
+          # Accept plain semver and generic pre-release identifiers (e.g. -fork.1, -rc.1, -alpha, -beta)
+          [[ "${GITHUB_REF_NAME}" =~ ^rust-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$ ]] \
             || { echo "❌  Tag '${GITHUB_REF_NAME}' doesn't match expected format"; exit 1; }
 
           # 2. Extract versions
@@ -99,6 +100,12 @@ jobs:
       - name: Cargo build
         run: cargo build --target ${{ matrix.target }} --release --bin codex
 
+      - name: Generate third-party license texts (Rust)
+        shell: bash
+        run: |
+          # Working dir is codex-rs; the script lives one level up
+          python3 ../scripts/gen_rust_third_party_licenses.py || true
+
       - name: Stage artifacts
         shell: bash
         run: |
@@ -116,7 +123,7 @@ jobs:
         shell: powershell
         run: choco install -y zstandard
 
-      - name: Compress artifacts
+      - name: Compress artifacts (add notices)
         shell: bash
         run: |
           # Path that contains the uncompressed binaries for the current
@@ -130,30 +137,34 @@ jobs:
           #   codex-<target>.tar.gz       (new)
           #   codex-<target>.zip          (only for Windows)
 
-          # 1. Produce a .tar.gz for every file in the directory *before* we
-          #    run `zstd --rm`, because that flag deletes the original files.
-          for f in "$dest"/*; do
-            base="$(basename "$f")"
-            # Skip files that are already archives (shouldn't happen, but be
-            # safe).
-            if [[ "$base" == *.tar.gz || "$base" == *.zip ]]; then
-              continue
-            fi
+          # Determine the produced binary name
+          if [[ "${{ matrix.runner }}" == windows* ]]; then
+            base="codex-${{ matrix.target }}.exe"
+          else
+            base="codex-${{ matrix.target }}"
+          fi
 
-            # Create per-binary tar.gz
-            tar -C "$dest" -czf "$dest/${base}.tar.gz" "$base"
+          # Copy license/notice files next to the binary for packaging
+          # Working directory is codex-rs; root-level files are one directory up.
+          cp ../LICENSE "$dest/" || true
+          cp ../NOTICE "$dest/" || true
+          cp ../THIRD-PARTY-NOTICES.md "$dest/" || true
+          cp THIRD-PARTY-LICENSES.txt "$dest/" || true
 
-            # Create zip archive for Windows binaries
-            # Must run from inside the dest dir so 7z won't
-            # embed the directory path inside the zip.
-            if [[ "${{ matrix.runner }}" == windows* ]]; then
-              (cd "$dest" && 7z a "${base}.zip" "$base")
-            fi
+          # 1. Create tar.gz with binary + notices
+          tar -C "$dest" -czf "$dest/${base}.tar.gz" \
+            "$base" LICENSE NOTICE THIRD-PARTY-NOTICES.md THIRD-PARTY-LICENSES.txt 2>/dev/null || \
+          tar -C "$dest" -czf "$dest/${base}.tar.gz" "$base"
 
-            # Also create .zst (existing behaviour) *and* remove the original
-            # uncompressed binary to keep the directory small.
-            zstd -T0 -19 --rm "$dest/$base"
-          done
+          # 2. Create zip archive for Windows binaries (include notices when present)
+          # Must run from inside the dest dir so 7z won't embed the directory path inside the zip.
+          if [[ "${{ matrix.runner }}" == windows* ]]; then
+            (cd "$dest" && 7z a "${base}.zip" "$base" LICENSE NOTICE THIRD-PARTY-NOTICES.md THIRD-PARTY-LICENSES.txt) || \
+            (cd "$dest" && 7z a "${base}.zip" "$base")
+          fi
+
+          # 3. Also create .zst (existing behaviour) and remove the original binary
+          zstd -T0 -19 --rm "$dest/$base"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -171,6 +182,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - uses: actions/download-artifact@v4
         with:
@@ -186,6 +199,18 @@ jobs:
           # "rust-v0.1.0".
           version="${GITHUB_REF_NAME#rust-v}"
           echo "name=${version}" >> $GITHUB_OUTPUT
+
+      - name: Compute prerelease flag
+        id: pre
+        env:
+          VERSION: ${{ steps.release_name.outputs.name }}
+        run: |
+          # Treat only -alpha/-beta/-rc as prerelease. Fork variants like -fork.N are published as normal releases.
+          if [[ "${VERSION}" =~ -(alpha|beta|rc) ]]; then
+            echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Stage npm package
         env:
@@ -203,15 +228,37 @@ jobs:
           mv "${GITHUB_WORKSPACE}"/dist/npm/*.tgz \
              "${GITHUB_WORKSPACE}/dist/npm/codex-npm-${{ steps.release_name.outputs.name }}.tgz"
 
+      - name: Install git-cliff
+        uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff
+
+      - name: Generate release notes
+        id: gen_notes
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+          current_tag="${{ github.ref_name }}"
+          # Previous rust-v* tag by creation time (newest before current, not equal to current)
+          prev_tag=$(git for-each-ref --sort=-creatordate --format='%(refname:short)' refs/tags \
+            | awk -v cur="$current_tag" '/^rust-v[0-9]/{ if ($0!=cur) { print $0; exit } }')
+          if [[ -n "${prev_tag}" ]]; then
+            echo "Using ancestor range: ${prev_tag}..${current_tag}"
+            git cliff --config ./cliff-release.toml "${prev_tag}..${current_tag}" --output RELEASE_NOTES.md
+          else
+            echo "No previous rust-v ancestor tag found; generating notes for ${current_tag} only"
+            git cliff --config ./cliff-release.toml --tag "${current_tag}" --output RELEASE_NOTES.md
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ steps.release_name.outputs.name }}
           tag_name: ${{ github.ref_name }}
           files: dist/**
-          # Mark as prerelease only when the version has a suffix after x.y.z
-          # (e.g. -alpha, -beta). Otherwise publish a normal release.
-          prerelease: ${{ contains(steps.release_name.outputs.name, '-') }}
+          body_path: RELEASE_NOTES.md
+          # Mark as prerelease only for -alpha/-beta/-rc. Publish -fork.* as normal releases.
+          prerelease: ${{ steps.pre.outputs.is_prerelease == 'true' }}
 
       - uses: facebook/dotslash-publish-release@v2
         env:

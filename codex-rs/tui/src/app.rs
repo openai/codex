@@ -173,6 +173,14 @@ impl App {
                     {
                         return Ok(true);
                     }
+                    // ===== !Modify Start: Esc 清空提示定时刷新 =====
+                    // !Desc: 当第一次 Esc（有输入）后启动 1s 清空提示窗口时，
+                    //        通过在 Draw 周期内安排下一次帧，确保超时即刻隐藏提示。
+                    // !AI_GUIDANCE: 若上游对绘制节奏有统一调度，请在合适位置调用该心跳，
+                    //        以保证提示到期后能自动撤场，不影响其他渲染节拍。
+                    self.chat_widget
+                        .handle_esc_clear_hint_tick(tui.frame_requester());
+                    // ===== !Modify End: Esc 清空提示定时刷新 =====
                     tui.draw(
                         self.chat_widget.desired_height(tui.terminal.size()?.width),
                         |frame| {
@@ -259,6 +267,13 @@ impl App {
             AppEvent::ConversationHistory(ev) => {
                 self.on_conversation_history_for_backtrack(tui, ev).await?;
             }
+            // ===== !Modify Start: 用户提问节点选择器 - 回退确认处理 =====
+            AppEvent::BacktrackTo(n) => {
+                // !Modify[owner=yoyooyooo]: 来自“用户节点选择器”的确认；按所选 N（1=最近）执行回退。
+                // !AI_GUIDANCE: 行为与 overlay 确认并行；若需变更，请评估共存可能，否则询问用户。
+                self.confirm_backtrack_from_picker(n);
+            }
+            // ===== !Modify End: 用户提问节点选择器 - 回退确认处理 =====
             AppEvent::ExitRequest => {
                 return Ok(false);
             }
@@ -320,22 +335,29 @@ impl App {
                 self.overlay = Some(Overlay::new_transcript(self.transcript_lines.clone()));
                 tui.frame_requester().schedule_frame();
             }
-            // Esc primes/advances backtracking only in normal (not working) mode
-            // with an empty composer. In any other state, forward Esc so the
-            // active UI (e.g. status indicator, modals, popups) handles it.
+            // ===== !Modify Start: Esc 双击统一拦截与分派 =====
+            // !Desc: 将 Esc 的分派条件调整为仅在“正常编辑模式”统一拦截，由后续逻辑区分：
+            //        1) 输入框为空 → 回退 prime/选择器；2) 输入框非空 → 清空提示与二次确认。
+            //        避免在有输入时直接走回退，满足“Esc 再按一次清空”的新需求。
+            // !AI_GUIDANCE: 若上游调整了 Esc 的模式判断（例如状态机或统一入口），
+            //        请优先与此逻辑合并，保留 is_normal_backtrack_mode 下的统一入口，
+            //        并继续在下游按“空/非空”区分行为；无法共存时先与作者确认取舍。
+            // Esc 在“正常编辑模式”下用于双击逻辑：
+            // - 第一次 Esc 进入 primed 状态；
+            // - 第二次 Esc：若输入框非空则清空；若为空则打开“用户节点下拉”。
+            // 其余状态（任务运行、弹窗/覆盖层活动、popup 活动）仍交由下层处理。
             KeyEvent {
                 code: KeyCode::Esc,
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
                 ..
             } => {
-                if self.chat_widget.is_normal_backtrack_mode()
-                    && self.chat_widget.composer_is_empty()
-                {
+                if self.chat_widget.is_normal_backtrack_mode() {
                     self.handle_backtrack_esc_key(tui);
                 } else {
                     self.chat_widget.handle_key_event(key_event);
                 }
             }
+            // ===== !Modify End: Esc 双击统一拦截与分派 =====
             // Enter confirms backtrack when primed + count > 0. Otherwise pass to widget.
             KeyEvent {
                 code: KeyCode::Enter,
@@ -352,13 +374,19 @@ impl App {
                 kind: KeyEventKind::Press | KeyEventKind::Repeat,
                 ..
             } => {
-                // Any non-Esc key press should cancel a primed backtrack.
-                // This avoids stale "Esc-primed" state after the user starts typing
-                // (even if they later backspace to empty).
-                if key_event.code != KeyCode::Esc && self.backtrack.primed {
+                // ===== !Modify Start: 非 Esc 键取消清空/回退 prime =====
+                // !Desc: 在非 Esc 按键时，统一取消两类 primed 状态：
+                //        1) 回退 prime；2) 清空提示窗口（1s 内二次 Esc 清空）。
+                //        防止用户开始输入后仍残留“Esc 清空/回退”的误触发窗口。
+                // !AI_GUIDANCE: 若上游有更细粒度的状态机，请在保持语义等价的前提下
+                //        合并此分支；确认任何非 Esc 键都清除此两类 primed 状态。
+                if key_event.code != KeyCode::Esc
+                    && (self.backtrack.primed || self.backtrack.clear_primed_until.is_some())
+                {
                     self.reset_backtrack_state();
                 }
                 self.chat_widget.handle_key_event(key_event);
+                // ===== !Modify End: 非 Esc 键取消清空/回退 prime =====
             }
             _ => {
                 // Ignore Release key events.
