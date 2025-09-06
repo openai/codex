@@ -137,6 +137,8 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         content: vec![codex_protocol::models::ContentItem::InputText {
             text: "resumed user message".to_string(),
         }],
+        token_usage: None,
+        timestamp: None,
     };
     writeln!(f, "{}", serde_json::to_string(&prior_user).unwrap()).unwrap();
 
@@ -147,6 +149,8 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         content: vec![codex_protocol::models::ContentItem::OutputText {
             text: "resumed system instruction".to_string(),
         }],
+        token_usage: None,
+        timestamp: None,
     };
     writeln!(f, "{}", serde_json::to_string(&prior_system).unwrap()).unwrap();
 
@@ -157,6 +161,8 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         content: vec![codex_protocol::models::ContentItem::OutputText {
             text: "resumed assistant message".to_string(),
         }],
+        token_usage: None,
+        timestamp: None,
     };
     writeln!(f, "{}", serde_json::to_string(&prior_item).unwrap()).unwrap();
     drop(f);

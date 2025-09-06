@@ -35,6 +35,7 @@ pub struct SessionMeta {
     pub id: Uuid,
     pub timestamp: String,
     pub instructions: Option<String>,
+    pub model: String,
 }
 
 #[derive(Serialize)]
@@ -129,6 +130,7 @@ impl RolloutRecorder {
                 timestamp,
                 id: session_id,
                 instructions,
+                model: config.model.to_string(),
             }),
             cwd,
         ));
@@ -235,8 +237,7 @@ struct LogFileInfo {
 
 fn create_log_file(config: &Config, session_id: Uuid) -> std::io::Result<LogFileInfo> {
     // Resolve ~/.codex/sessions/YYYY/MM/DD and create it if missing.
-    let timestamp = OffsetDateTime::now_local()
-        .map_err(|e| IoError::other(format!("failed to get local time: {e}")))?;
+    let timestamp = OffsetDateTime::now_utc();
     let mut dir = config.codex_home.clone();
     dir.push(SESSIONS_SUBDIR);
     dir.push(timestamp.year().to_string());
@@ -313,6 +314,7 @@ async fn rollout_writer(
             }
             RolloutCmd::Shutdown { ack } => {
                 let _ = ack.send(());
+                break;
             }
         }
     }
@@ -329,7 +331,7 @@ impl JsonlWriter {
         let mut json = serde_json::to_string(item)?;
         json.push('\n');
         let _ = self.file.write_all(json.as_bytes()).await;
-        self.file.flush().await?;
+        self.file.sync_all().await?;
         Ok(())
     }
 }

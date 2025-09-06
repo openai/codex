@@ -20,6 +20,7 @@ serde_json = "1"
 serde_with = { version = "3.14.0", features = ["macros", "base64"] }
 strum = "0.27.2"
 strum_macros = "0.27.2"
+time = { version = "0.3", features = ["formatting", "macros"] }
 tracing = "0.1.41"
 ts-rs = { version = "11", features = ["uuid-impl", "serde-json-impl"] }
 uuid = { version = "1", features = ["serde", "v4"] }
