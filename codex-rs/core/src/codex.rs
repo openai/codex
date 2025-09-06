@@ -42,6 +42,8 @@ use crate::client::ModelClient;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::config::Config;
+use crate::config::set_default_effort_for_profile;
+use crate::config::set_default_model_for_profile;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::conversation_history::ConversationHistory;
 use crate::conversation_manager::InitialHistory;
@@ -1056,10 +1058,10 @@ async fn submission_loop(
                 let provider = prev.client.get_provider();
 
                 // Effective model + family
-                let (effective_model, effective_family) = if let Some(m) = model {
+                let (effective_model, effective_family) = if let Some(ref m) = model {
                     let fam =
-                        find_family_for_model(&m).unwrap_or_else(|| config.model_family.clone());
-                    (m, fam)
+                        find_family_for_model(m).unwrap_or_else(|| config.model_family.clone());
+                    (m.clone(), fam)
                 } else {
                     (prev.client.get_model(), prev.client.get_model_family())
                 };
@@ -1117,6 +1119,42 @@ async fn submission_loop(
 
                 // Install the new persistent context for subsequent tasks/turns.
                 turn_context = Arc::new(new_turn_context);
+
+                // Persist model across sessions
+                if model.is_some() {
+                    let codex_home = config.codex_home.clone();
+                    let profile = config.active_profile.clone();
+                    let model_to_persist = effective_model.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = set_default_model_for_profile(
+                            &codex_home,
+                            profile.as_deref(),
+                            &model_to_persist,
+                        )
+                        .await
+                        {
+                            warn!("failed to persist default model: {e:#}");
+                        }
+                    });
+                }
+
+                // Persist effort across sessions
+                if effort.is_some() {
+                    let codex_home = config.codex_home.clone();
+                    let profile = config.active_profile.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = set_default_effort_for_profile(
+                            &codex_home,
+                            profile.as_deref(),
+                            effective_effort,
+                        )
+                        .await
+                        {
+                            warn!("failed to persist default effort: {e:#}");
+                        }
+                    });
+                }
+
                 if cwd.is_some() || approval_policy.is_some() || sandbox_policy.is_some() {
                     sess.record_conversation_items(&[ResponseItem::from(EnvironmentContext::new(
                         cwd,
