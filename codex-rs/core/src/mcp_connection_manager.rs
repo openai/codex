@@ -172,7 +172,13 @@ impl McpConnectionManager {
             HashMap::with_capacity(join_set.len());
 
         while let Some(res) = join_set.join_next().await {
-            let (server_name, client_res) = res?; // JoinError propagation
+            let (server_name, client_res) = match res {
+                Ok((server_name, client_res)) => (server_name, client_res),
+                Err(e) => {
+                    warn!("Task panic when starting MCP server: {e:#}");
+                    continue;
+                }
+            };
 
             match client_res {
                 Ok(client) => {
@@ -184,7 +190,13 @@ impl McpConnectionManager {
             }
         }
 
-        let all_tools = list_all_tools(&clients).await?;
+        let all_tools = match list_all_tools(&clients).await {
+            Ok(tools) => tools,
+            Err(e) => {
+                warn!("Failed to list tools from some MCP servers: {e:#}");
+                Vec::new()
+            }
+        };
 
         let tools = qualify_tools(all_tools);
 
@@ -251,8 +263,21 @@ async fn list_all_tools(
     let mut aggregated: Vec<ToolInfo> = Vec::with_capacity(join_set.len());
 
     while let Some(join_res) = join_set.join_next().await {
-        let (server_name, list_result) = join_res?;
-        let list_result = list_result?;
+        let (server_name, list_result) = match join_res {
+            Ok((server_name, list_result)) => (server_name, list_result),
+            Err(e) => {
+                warn!("Task panic when listing tools for MCP server: {e:#}");
+                continue;
+            }
+        };
+
+        let list_result = match list_result {
+            Ok(result) => result,
+            Err(e) => {
+                warn!("Failed to list tools for MCP server '{server_name}': {e:#}");
+                continue;
+            }
+        };
 
         for tool in list_result.tools {
             let tool_info = ToolInfo {
