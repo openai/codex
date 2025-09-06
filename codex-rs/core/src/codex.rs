@@ -186,6 +186,7 @@ impl Codex {
             approval_policy: config.approval_policy,
             sandbox_policy: config.sandbox_policy.clone(),
             notify: config.notify.clone(),
+            hooks: config.hooks.clone(),
             cwd: config.cwd.clone(),
         };
 
@@ -279,6 +280,8 @@ pub(crate) struct Session {
     /// External notifier command (will be passed as args to exec()). When
     /// `None` this feature is disabled.
     notify: Option<Vec<String>>,
+    /// Event hooks configuration
+    hooks: crate::user_notification::EventHooks,
 
     /// Optional rollout recorder for persisting the conversation transcript so
     /// sessions can be replayed or inspected later.
@@ -339,6 +342,8 @@ struct ConfigureSession {
     /// client wants the agent to spawn a program after each completed
     /// turn.
     notify: Option<Vec<String>>,
+    /// Event hooks configuration for different events
+    hooks: crate::user_notification::EventHooks,
 
     /// Working directory that should be treated as the *root* of the
     /// session. All relative paths supplied by the model as well as the
@@ -369,6 +374,7 @@ impl Session {
             approval_policy,
             sandbox_policy,
             notify,
+            hooks,
             cwd,
         } = configure_session;
         debug!("Configuring session: model={model}; provider={provider:?}");
@@ -466,6 +472,7 @@ impl Session {
             mcp_connection_manager,
             session_manager: ExecSessionManager::default(),
             notify,
+            hooks,
             state: Mutex::new(state),
             rollout: Mutex::new(Some(rollout_recorder)),
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
@@ -491,6 +498,12 @@ impl Session {
             }),
         })
         .chain(post_session_configured_error_events.into_iter());
+
+        // Trigger session started hook
+        sess.maybe_notify(UserNotification::SessionStarted {
+            session_id: session_id.to_string(),
+            cwd: turn_context.cwd.to_string_lossy().to_string(),
+        });
         for event in events {
             if let Err(e) = tx_event.send(event).await {
                 error!("failed to send event: {e:?}");
@@ -580,6 +593,13 @@ impl Session {
         cwd: PathBuf,
         reason: Option<String>,
     ) -> oneshot::Receiver<ReviewDecision> {
+        // Trigger user input required hook.
+        self.maybe_notify(UserNotification::UserInputRequired {
+            turn_id: sub_id.clone(),
+            reason: "approval".to_string(),
+            message: reason.clone(),
+        });
+
         // Add the tx_approve callback to the map before sending the request.
         let (tx_approve, rx_approve) = oneshot::channel();
         let event_id = sub_id.clone();
@@ -695,6 +715,16 @@ impl Session {
             cwd,
             apply_patch,
         } = exec_command_context;
+
+        // Trigger tool execution started hook
+        self.maybe_notify(UserNotification::ToolExecutionStarted {
+            turn_id: sub_id.clone(),
+            tool_name: "bash".to_string(), // Most exec commands are bash
+            tool_args: Some(serde_json::json!({
+                "command": command_for_display.join(" "),
+                "cwd": cwd.to_string_lossy().to_string()
+            })),
+        });
         let msg = match apply_patch {
             Some(ApplyPatchCommandContext {
                 user_explicitly_approved_this_action,
@@ -733,6 +763,23 @@ impl Session {
         output: &ExecToolCallOutput,
         is_apply_patch: bool,
     ) {
+        // Trigger tool execution completed hook
+        let success = output.exit_code == 0;
+        let error_message = if success {
+            None
+        } else {
+            Some(format!(
+                "Command failed with exit code {}",
+                output.exit_code
+            ))
+        };
+
+        self.maybe_notify(UserNotification::ToolExecutionCompleted {
+            turn_id: sub_id.to_string(),
+            tool_name: "bash".to_string(), // Most exec commands are bash
+            success,
+            error_message,
+        });
         let ExecToolCallOutput {
             stdout,
             stderr,
@@ -914,34 +961,65 @@ impl Session {
     /// the last argument. Failures are logged but otherwise ignored so that
     /// notification issues do not interfere with the main workflow.
     fn maybe_notify(&self, notification: UserNotification) {
-        let Some(notify_command) = &self.notify else {
-            return;
-        };
+        // Execute legacy notify command for backward compatibility
+        if let Some(notify_command) = &self.notify {
+            if !notify_command.is_empty() {
+                self.execute_hook_command(notify_command, &notification);
+            }
+        }
 
-        if notify_command.is_empty() {
+        // Execute event-specific hooks
+        if let Some(hooks) = self.hooks.get_hooks_for_notification(&notification) {
+            for hook_command in hooks {
+                self.execute_hook_command_from_string(hook_command, &notification);
+            }
+        }
+    }
+
+    /// Execute a single hook command with the given notification
+    fn execute_hook_command(&self, command_args: &[String], notification: &UserNotification) {
+        if command_args.is_empty() {
             return;
         }
 
-        let Ok(json) = serde_json::to_string(&notification) else {
+        let Ok(json) = serde_json::to_string(notification) else {
             error!("failed to serialise notification payload");
             return;
         };
 
-        let mut command = std::process::Command::new(&notify_command[0]);
-        if notify_command.len() > 1 {
-            command.args(&notify_command[1..]);
+        let mut command = std::process::Command::new(&command_args[0]);
+        if command_args.len() > 1 {
+            command.args(&command_args[1..]);
         }
         command.arg(json);
 
         // Fire-and-forget – we do not wait for completion.
         if let Err(e) = command.spawn() {
-            warn!("failed to spawn notifier '{}': {e}", notify_command[0]);
+            warn!("failed to spawn hook '{}': {e}", command_args[0]);
+        }
+    }
+
+    /// Execute a hook command from a string (space-separated arguments)
+    fn execute_hook_command_from_string(&self, command_str: &str, notification: &UserNotification) {
+        // Use shell-like parsing that respects quotes
+        match shlex::split(command_str) {
+            Some(command_args) => {
+                self.execute_hook_command(&command_args, notification);
+            }
+            None => {
+                error!("Failed to parse hook command '{}'", command_str);
+            }
         }
     }
 }
 
 impl Drop for Session {
     fn drop(&mut self) {
+        // Trigger session ended hook
+        self.maybe_notify(UserNotification::SessionEnded {
+            session_id: self.session_id.to_string(),
+        });
+
         self.interrupt_task();
     }
 }
