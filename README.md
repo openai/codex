@@ -1,102 +1,63 @@
-<h1 align="center">OpenAI Codex CLI</h1>
+<h1 align="center">Codex CLI (Fork)</h1>
 
-<p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install codex</code></p>
-
-<p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.</br>If you are looking for the <em>cloud-based agent</em> from OpenAI, <strong>Codex Web</strong>, see <a href="https://chatgpt.com/codex">chatgpt.com/codex</a>.</p>
+<p align="center">Languages: <a href="README.md">English</a> | <a href="README.zh-CN.md">Chinese (zh-CN)</a></p>
 
 <p align="center">
-  <img src="./.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
-  </p>
+  <a href="https://github.com/openai/codex/releases/tag/rust-v0.30.0">
+    <img alt="Upstream" src="https://img.shields.io/badge/upstream-0.30.0-blue" />
+  </a>
+  &nbsp;
+  <a href="https://github.com/openai/codex/releases">
+    <img alt="Upstream Releases" src="https://img.shields.io/badge/upstream-releases-555" />
+  </a>
+  &nbsp;
+  <a href="https://github.com/openai/codex">
+    <img alt="Upstream Repo" src="https://img.shields.io/badge/source-openai%2Fcodex-555" />
+  </a>
 
----
+</p>
 
-## Quickstart
+This repository is a maintained fork of the upstream project at:
+https://github.com/openai/codex
 
-### Installing and running Codex CLI
+For product docs, installation, and general usage, please refer to the
+upstream README and documentation. This fork focuses on a small set of
+exclusive features and a separate sync/release workflow while staying close to upstream.
 
-Install globally with your preferred package manager. If you use npm:
+> Upstream baseline: **0.30.0** - based on upstream tag
+> [`rust-v0.30.0`](https://github.com/openai/codex/releases/tag/rust-v0.30.0)
 
-```shell
-npm install -g @openai/codex
-```
+## Fork-Specific Features
 
-Alternatively, if you use Homebrew:
+- TUI: Esc behavior optimized for fast editing/backtracking - see details in [TUI - Esc](#tui--esc-clear-input-or-backtrack)
 
-```shell
-brew install codex
-```
+### TUI - Esc: clear input or backtrack
 
-Then simply run `codex` to get started:
+In the TUI composer, Esc adapts to context:
 
-```shell
-codex
-```
+- When the composer has text: press Esc once to show a one-second window to clear. The footer adds a subtle `Esc clear` indicator and a second line "Please Escape again to clear"; press Esc again within 1s to clear. If you don't, the hint hides automatically.
+- When the composer is empty: press Esc to prime backtrack; press Esc again to open "Backtrack to User Messages" and pick an earlier user message to fork from (Up/Down, Enter). The transcript overlay (`Ctrl+T`) remains available and continues to support Esc-to-step, Enter-to-confirm.
 
-<details>
-<summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
+## Install & CLI Name (Fork)
 
-Each GitHub Release contains many executables, but in practice, you likely want one of these:
+- npm package: `@jojoyo/codex`
+- global binary: `jcodex` (renamed to avoid conflicts with the upstream `codex`)
+  - install: `npm i -g @jojoyo/codex`
+  - run: `jcodex`
 
-- macOS
-  - Apple Silicon/arm64: `codex-aarch64-apple-darwin.tar.gz`
-  - x86_64 (older Mac hardware): `codex-x86_64-apple-darwin.tar.gz`
-- Linux
-  - x86_64: `codex-x86_64-unknown-linux-musl.tar.gz`
-  - arm64: `codex-aarch64-unknown-linux-musl.tar.gz`
+## Sync and Release Workflow
 
-Each archive contains a single entry with the platform baked into the name (e.g., `codex-x86_64-unknown-linux-musl`), so you likely want to rename it to `codex` after extracting it.
+- Versioning: releases follow upstream versions with a "-fork.N" suffix, e.g. "0.21.0-fork.1".
+- Tags: publishing is triggered by tags named "rust-v<version>", including fork suffixes (e.g., "rust-v0.21.0-fork.1").
+- Release pipeline: only "-alpha/-beta/-rc" are marked as pre-release; "-fork.*" are published as normal releases.
+- Upstream sync tooling: local helper script at "scripts/sync_upstream.sh" and a scheduled/hand-run GitHub Action to open PRs that sync from upstream.
+- Tag selection for sync: by default only stable tags ("rust-vX.Y.Z"). Use `--include-pre` to include pre-release tags (e.g., `-alpha/-beta/-rc`) or `--pre-only` for pre-releases only.
 
-</details>
+Getting started with this fork:
 
-### Using Codex with your ChatGPT plan
+- Download builds from this fork's GitHub Releases page.
+- See CONTRIBUTING.md for the fork-specific contribution and release guide.
 
-<p align="center">
-  <img src="./.github/codex-cli-login.png" alt="Codex CLI login" width="80%" />
-  </p>
+License:
 
-Run `codex` and select **Sign in with ChatGPT**. We recommend signing into your ChatGPT account to use Codex as part of your Plus, Pro, Team, Edu, or Enterprise plan. [Learn more about what's included in your ChatGPT plan](https://help.openai.com/en/articles/11369540-codex-in-chatgpt).
-
-You can also use Codex with an API key, but this requires [additional setup](./docs/authentication.md#usage-based-billing-alternative-use-an-openai-api-key). If you previously used an API key for usage-based billing, see the [migration steps](./docs/authentication.md#migrating-from-usage-based-billing-api-key). If you're having trouble with login, please comment on [this issue](https://github.com/openai/codex/issues/1243).
-
-### Model Context Protocol (MCP)
-
-Codex CLI supports [MCP servers](./docs/advanced.md#model-context-protocol-mcp). Enable by adding an `mcp_servers` section to your `~/.codex/config.toml`.
-
-
-### Configuration
-
-Codex CLI supports a rich set of configuration options, with preferences stored in `~/.codex/config.toml`. For full configuration options, see [Configuration](./docs/config.md).
-
----
-
-### Docs & FAQ
-
-- [**Getting started**](./docs/getting-started.md)
-  - [CLI usage](./docs/getting-started.md#cli-usage)
-  - [Running with a prompt as input](./docs/getting-started.md#running-with-a-prompt-as-input)
-  - [Example prompts](./docs/getting-started.md#example-prompts)
-  - [Memory with AGENTS.md](./docs/getting-started.md#memory--project-docs)
-  - [Configuration](./docs/config.md)
-- [**Sandbox & approvals**](./docs/sandbox.md)
-- [**Authentication**](./docs/authentication.md)
-  - [Auth methods](./docs/authentication.md#forcing-a-specific-auth-method-advanced)
-  - [Login on a "Headless" machine](./docs/authentication.md#connecting-on-a-headless-machine)
-- [**Advanced**](./docs/advanced.md)
-  - [Non-interactive / CI mode](./docs/advanced.md#non-interactive--ci-mode)
-  - [Tracing / verbose logging](./docs/advanced.md#tracing--verbose-logging)
-  - [Model Context Protocol (MCP)](./docs/advanced.md#model-context-protocol-mcp)
-- [**Zero data retention (ZDR)**](./docs/zdr.md)
-- [**Contributing**](./docs/contributing.md)
-- [**Install & build**](./docs/install.md)
-  - [System Requirements](./docs/install.md#system-requirements)
-  - [DotSlash](./docs/install.md#dotslash)
-  - [Build from source](./docs/install.md#build-from-source)
-- [**FAQ**](./docs/faq.md)
-- [**Open source fund**](./docs/open-source-fund.md)
-
----
-
-## License
-
-This repository is licensed under the [Apache-2.0 License](LICENSE).
-
+Apache-2.0, same as upstream (see LICENSE).

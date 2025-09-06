@@ -1,0 +1,117 @@
+name: upstream-sync
+
+on:
+  schedule:
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+    inputs:
+      upstream_repo:
+        description: 'Upstream repo in owner/name form (default: openai/codex)'
+        required: false
+      ref:
+        description: 'Branch or tag to sync (e.g., upstream/main or rust-v0.21.0). Empty uses latest tag (or upstream/main when manual)'
+        required: false
+      mode:
+        description: 'merge or rebase (default: merge)'
+        required: false
+        default: 'merge'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    env:
+      UPSTREAM_REPO: ${{ github.event.inputs.upstream_repo || 'openai/codex' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Add upstream and fetch tags
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git" || true
+          git fetch upstream --tags --prune
+
+      - name: Determine ref to sync
+        id: pick
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          input_ref='${{ github.event.inputs.ref }}'
+          if [[ -n "$input_ref" ]]; then
+            ref="$input_ref"
+          else
+            if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+              # Manual run defaults to upstream/main for fast-forwarding dev
+              ref="upstream/main"
+            else
+              # Scheduled run: pick latest stable rust-v* tag (no pre-release suffix) by creation date
+              ref=$(git for-each-ref refs/tags --sort=-creatordate --format '%(refname:short)' \
+                    | grep -E '^rust-v[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 || true)
+            fi
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          if [[ -z "$ref" ]]; then
+            echo "No upstream ref found to sync. Exiting."
+          fi
+
+      - name: Prepare update branch
+        id: prep
+        if: ${{ steps.pick.outputs.ref != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ref='${{ steps.pick.outputs.ref }}'
+          base='main'
+
+          # Resolve full ref name (tag or branch)
+          if git rev-parse -q --verify "refs/tags/$ref" >/dev/null; then
+            upstream_ref="refs/tags/$ref"
+          else
+            # allow things like 'upstream/main' when manually triggered
+            upstream_ref="$ref"
+          fi
+
+          # Skip if already merged into origin/main
+          if git merge-base --is-ancestor "$upstream_ref" "origin/$base"; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Create branch and merge/rebase
+          ts=$(date +%Y%m%d-%H%M%S)
+          branch="sync/$(echo "$ref" | tr '/' '-')-$ts"
+          git checkout -B "$branch" "origin/$base"
+
+          mode='${{ github.event.inputs.mode }}'
+          if [[ "$mode" == "rebase" ]]; then
+            git rebase "$upstream_ref"
+          else
+            git merge --no-ff -m "Merge upstream $ref" "$upstream_ref"
+          fi
+
+          git push -u origin "$branch"
+          echo "already=false" >> "$GITHUB_OUTPUT"
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+
+      - name: Create Pull Request
+        if: ${{ steps.prep.outputs.already == 'false' }}
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ steps.prep.outputs.branch }}
+          base: main
+          title: Sync upstream ${{ steps.pick.outputs.ref }}
+          body: |
+            This PR syncs upstream `${{ steps.pick.outputs.ref }}` into `main`.
+            - Mode: `${{ github.event.inputs.mode || 'merge' }}`
+            - Upstream: `${{ env.UPSTREAM_REPO }}`
+            - Trigger: `${{ github.event_name }}`

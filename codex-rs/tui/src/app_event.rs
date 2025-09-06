@@ -59,4 +59,12 @@ pub(crate) enum AppEvent {
 
     /// Forwarded conversation history snapshot from the current conversation.
     ConversationHistory(ConversationHistoryResponseEvent),
+    // ===== !Modify Start: 用户提问节点选择器 事件扩展 =====
+    // !Modify[owner=yoyooyooo]: 自定义事件，用于从“用户提问节点选择器”中确认回退目标。
+    // !Purpose: 允许用户回到较早的某条“用户提问”节点并丢弃其后的上下文（不传给 API）。
+    // !Semantics: 回退到“从最近起第 N 条用户消息”（N=1 表示最近的用户提问）。
+    // !Trigger: 选择器弹窗中按 Enter 后发送。
+    // !AI_GUIDANCE: 若与上游实现冲突，优先考虑共存；若无法共存，请先询问用户再变更该自定义逻辑。
+    BacktrackTo(usize),
+    // ===== !Modify End: 用户提问节点选择器 事件扩展 =====
 }

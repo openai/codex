@@ -1,5 +1,9 @@
 //! Bottom pane: shows the ChatComposer or a BottomPaneView, if one is active.
 use std::path::PathBuf;
+// !Modify: 引入计时类型（清空提示的 1s 窗口）
+use std::time::Duration;
+// !Modify: 引入 Instant 以计算截止时间与刷新安排
+use std::time::Instant;
 
 use crate::app_event_sender::AppEventSender;
 use crate::tui::FrameRequester;
@@ -13,7 +17,6 @@ use ratatui::layout::Constraint;
 use ratatui::layout::Layout;
 use ratatui::layout::Rect;
 use ratatui::widgets::WidgetRef;
-use std::time::Duration;
 
 mod approval_modal_view;
 mod bottom_pane_view;
@@ -305,6 +308,30 @@ impl BottomPane {
             // Hide the status indicator when a task completes, but keep other modal views.
             self.status = None;
         }
+    }
+
+    /// 在工具条下方显示“再次按 Esc 清空”的提示，持续给定时长。
+    pub(crate) fn show_esc_clear_hint_for(&mut self, dur: Duration) {
+        // ===== !Modify Start: 清空提示 - 显示并安排过期重绘 =====
+        // !Desc: 设置 1s 内“再次按 Esc 清空”的提示窗口，并安排到期时的重绘。
+        // !AI_GUIDANCE: 若上游有统一的提示队列/计时，请合并至上游系统调用。
+        let until = Instant::now() + dur;
+        self.composer.set_esc_clear_hint_deadline(Some(until));
+        self.request_redraw();
+        self.request_redraw_in(dur);
+        // ===== !Modify End: 清空提示 - 显示并安排过期重绘 =====
+    }
+
+    /// 立即清除“再次按 Esc 清空”的提示。
+    pub(crate) fn clear_esc_clear_hint(&mut self) {
+        // !Modify: 清除清空提示
+        self.composer.set_esc_clear_hint_deadline(None);
+        self.request_redraw();
+    }
+
+    /// 若清空提示仍有效，返回剩余时长；否则返回 None。
+    pub(crate) fn esc_clear_hint_remaining(&self) -> Option<Duration> {
+        self.composer.esc_clear_hint_remaining()
     }
 
     /// Show a generic list selection view with the provided items.

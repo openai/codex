@@ -2,7 +2,7 @@
 # -----------------------------------------------------------------------------
 # stage_release.sh
 # -----------------------------------------------------------------------------
-# Stages an npm release for @openai/codex.
+# Stages an npm release for @jojoyo/codex.
 #
 # Usage:
 #
@@ -97,11 +97,15 @@ mkdir -p "$TMPDIR/bin"
 cp -r bin/codex.js "$TMPDIR/bin/codex.js"
 cp ../README.md "$TMPDIR" || true # README is one level up - ignore if missing
 
-# Modify package.json - bump version and optionally add the native directory to
-# the files array so that the binaries are published to npm.
+# Modify package.json for npm publish:
+# - set the package name to the scoped npm package (@jojoyo/codex)
+# - bump version to the release version
+# We intentionally only change the npm name; the GitHub Release asset name remains codex-npm-*.tgz
 
-jq --arg version "$VERSION" \
-    '.version = $version' \
+NPM_PACKAGE_NAME="@jojoyo/codex"
+
+jq --arg version "$VERSION" --arg name "$NPM_PACKAGE_NAME" \
+    '.name = $name | .version = $version' \
     package.json > "$TMPDIR/package.json"
 
 # 2. Native runtime deps (sandbox plus optional Rust binaries)
