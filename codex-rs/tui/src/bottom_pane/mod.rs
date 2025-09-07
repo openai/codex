@@ -200,7 +200,7 @@ impl BottomPane {
                     CancellationEvent::NotHandled
                 } else {
                     self.set_composer_text(String::new());
-                    self.clear_ctrl_c_quit_hint();
+                    self.show_ctrl_c_quit_hint();
                     CancellationEvent::Handled
                 }
             },
