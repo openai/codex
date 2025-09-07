@@ -202,8 +202,8 @@ impl BottomPane {
                     self.set_composer_text(String::new());
                     self.show_ctrl_c_quit_hint();
                     CancellationEvent::Handled
-                }
-            },
+                };
+            }
         };
 
         let event = view.on_ctrl_c(self);
@@ -298,6 +298,7 @@ impl BottomPane {
 
     pub fn set_task_running(&mut self, running: bool) {
         self.is_task_running = running;
+        self.composer.set_task_running(running);
 
         if running {
             if self.status.is_none() {
