@@ -785,7 +785,7 @@ impl CodexMessageProcessor {
         else {
             let error = JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("conversation not found: {}", conversation_id),
+                message: format!("conversation not found: {conversation_id}"),
                 data: None,
             };
             self.outgoing.send_error(request_id, error).await;
