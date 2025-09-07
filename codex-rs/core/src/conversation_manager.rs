@@ -122,7 +122,7 @@ impl ConversationManager {
         conversations
             .get(&conversation_id)
             .cloned()
-            .ok_or_else(|| CodexErr::ConversationNotFound(conversation_id.into()))
+            .ok_or_else(|| CodexErr::ConversationNotFound(conversation_id))
     }
 
     pub async fn resume_conversation_from_rollout(

@@ -77,7 +77,7 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
         provider,
         effort,
         summary,
-        ConversationId(Uuid::new_v4()),
+        ConversationId::new(),
     );
 
     let mut prompt = Prompt::default();

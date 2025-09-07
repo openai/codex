@@ -44,7 +44,7 @@ const RETRY_SLEEP: Duration = Duration::from_millis(100);
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct HistoryEntry {
-    pub conversation_id: String,
+    pub session_id: String,
     pub ts: u64,
     pub text: String,
 }
@@ -89,7 +89,7 @@ pub(crate) async fn append_entry(
 
     // Construct the JSON line first so we can write it in a single syscall.
     let entry = HistoryEntry {
-        conversation_id: conversation_id.to_string(),
+        session_id: conversation_id.to_string(),
         ts,
         text: text.to_string(),
     };

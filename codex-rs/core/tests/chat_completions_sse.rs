@@ -70,7 +70,7 @@ async fn run_stream(sse_body: &str) -> Vec<ResponseEvent> {
         provider,
         effort,
         summary,
-        ConversationId(Uuid::new_v4()),
+        ConversationId::new(),
     );
 
     let mut prompt = Prompt::default();

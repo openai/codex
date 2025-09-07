@@ -487,6 +487,7 @@ impl Session {
         let events = std::iter::once(Event {
             id: INITIAL_SUBMIT_ID.to_owned(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: conversation_id.0,
                 conversation_id,
                 model,
                 history_log_id,
@@ -1250,7 +1251,7 @@ async fn submission_loop(
                                 log_id,
                                 entry: entry_opt.map(|e| {
                                     codex_protocol::message_history::HistoryEntry {
-                                        conversation_id: e.conversation_id,
+                                        conversation_id: e.session_id,
                                         ts: e.ts,
                                         text: e.text,
                                     }

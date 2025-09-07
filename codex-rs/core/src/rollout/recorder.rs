@@ -265,7 +265,7 @@ fn create_log_file(
 
     Ok(LogFileInfo {
         file,
-        conversation_id,
+        conversation_id: conversation_id,
         timestamp,
     })
 }

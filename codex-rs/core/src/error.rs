@@ -5,6 +5,7 @@ use std::time::Duration;
 use thiserror::Error;
 use tokio::task::JoinError;
 use uuid::Uuid;
+use codex_protocol::mcp_protocol::ConversationId;
 
 pub type Result<T> = std::result::Result<T, CodexErr>;
 
@@ -49,7 +50,7 @@ pub enum CodexErr {
     Stream(String, Option<Duration>),
 
     #[error("no conversation with id: {0}")]
-    ConversationNotFound(Uuid),
+    ConversationNotFound(ConversationId),
 
     #[error("session configured event was not the first event in the stream")]
     SessionConfiguredNotFirstEvent,

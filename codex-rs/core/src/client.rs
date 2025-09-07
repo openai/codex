@@ -223,7 +223,9 @@ impl ModelClient {
 
             req_builder = req_builder
                 .header("OpenAI-Beta", "responses=experimental")
+                // Send session_id for compatibility.
                 .header("conversation_id", self.conversation_id.to_string())
+                .header("session_id", self.conversation_id.to_string())
                 .header(reqwest::header::ACCEPT, "text/event-stream")
                 .json(&payload);
 

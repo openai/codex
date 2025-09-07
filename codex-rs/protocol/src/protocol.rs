@@ -19,7 +19,7 @@ use serde::Serialize;
 use serde_with::serde_as;
 use strum_macros::Display;
 use ts_rs::TS;
-
+use uuid::Uuid;
 use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
 use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::message_history::HistoryEntry;
@@ -931,6 +931,9 @@ pub struct ListCustomPromptsResponseEvent {
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct SessionConfiguredEvent {
+    /// For backwards compatibility.
+    pub session_id: Uuid,
+
     /// Unique id for this conversation.
     pub conversation_id: ConversationId,
 
@@ -1018,6 +1021,7 @@ mod tests {
         let event = Event {
             id: "1234".to_string(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
+                session_id: conversation_id.0,
                 conversation_id,
                 model: "codex-mini-latest".to_string(),
                 history_log_id: 0,
@@ -1028,7 +1032,7 @@ mod tests {
         let serialized = serde_json::to_string(&event).unwrap();
         assert_eq!(
             serialized,
-            r#"{"id":"1234","msg":{"type":"session_configured","conversation_id":"67e55044-10b1-426f-9247-bb680e5fe0c8","model":"codex-mini-latest","history_log_id":0,"history_entry_count":0}}"#
+            r#"{"id":"1234","msg":{"type":"session_configured","session_id":"67e55044-10b1-426f-9247-bb680e5fe0c8","conversation_id":"67e55044-10b1-426f-9247-bb680e5fe0c8","model":"codex-mini-latest","history_log_id":0,"history_entry_count":0}}"#
         );
     }
 

@@ -133,8 +133,11 @@ fn final_answer_without_newline_is_flushed_immediately() {
 fn resumed_initial_messages_render_history() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual();
 
+    let conversation_id = ConversationId::new();
+
     let configured = codex_core::protocol::SessionConfiguredEvent {
-        conversation_id: ConversationId(Uuid::nil()),
+        session_id: conversation_id.0,
+        conversation_id,
         model: "test-model".to_string(),
         history_log_id: 0,
         history_entry_count: 0,
