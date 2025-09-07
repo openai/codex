@@ -36,7 +36,6 @@ use std::io::BufRead;
 use std::io::BufReader;
 use std::path::PathBuf;
 use tokio::sync::mpsc::unbounded_channel;
-use uuid::Uuid;
 
 fn test_config() -> Config {
     // Use base defaults to avoid depending on host state.
@@ -136,8 +135,7 @@ fn resumed_initial_messages_render_history() {
     let conversation_id = ConversationId::new();
 
     let configured = codex_core::protocol::SessionConfiguredEvent {
-        session_id: conversation_id.0,
-        conversation_id,
+        session_id: conversation_id,
         model: "test-model".to_string(),
         history_log_id: 0,
         history_entry_count: 0,
@@ -371,11 +369,10 @@ fn begin_exec(chat: &mut ChatWidget, call_id: &str, raw_cmd: &str) {
     // Build the full command vec and parse it using core's parser,
     // then convert to protocol variants for the event payload.
     let command = vec!["bash".to_string(), "-lc".to_string(), raw_cmd.to_string()];
-    let parsed_cmd: Vec<ParsedCommand> =
-        codex_core::parse_command::parse_command(&command)
-            .into_iter()
-            .map(Into::into)
-            .collect();
+    let parsed_cmd: Vec<ParsedCommand> = codex_core::parse_command::parse_command(&command)
+        .into_iter()
+        .map(Into::into)
+        .collect();
     chat.handle_codex_event(Event {
         id: call_id.to_string(),
         msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {

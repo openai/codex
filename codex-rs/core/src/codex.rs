@@ -487,8 +487,7 @@ impl Session {
         let events = std::iter::once(Event {
             id: INITIAL_SUBMIT_ID.to_owned(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                session_id: conversation_id.0,
-                conversation_id,
+                session_id: conversation_id,
                 model,
                 history_log_id,
                 history_entry_count,

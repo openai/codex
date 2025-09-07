@@ -517,7 +517,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             }
             EventMsg::SessionConfigured(session_configured_event) => {
                 let SessionConfiguredEvent {
-                    conversation_id,
+                    session_id: conversation_id,
                     model,
                     history_log_id: _,
                     history_entry_count: _,

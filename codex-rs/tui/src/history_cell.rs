@@ -600,7 +600,7 @@ pub(crate) fn new_session_info(
 ) -> PlainHistoryCell {
     let SessionConfiguredEvent {
         model,
-        conversation_id: _,
+        session_id: _,
         history_log_id: _,
         history_entry_count: _,
         initial_messages: _,

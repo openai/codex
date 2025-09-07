@@ -275,8 +275,7 @@ mod tests {
         let event = Event {
             id: "1".to_string(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                session_id: conversation_id.0,
-                conversation_id,
+                session_id: conversation_id,
                 model: "gpt-4o".to_string(),
                 history_log_id: 1,
                 history_entry_count: 1000,
@@ -307,8 +306,7 @@ mod tests {
 
         let conversation_id = ConversationId::new();
         let session_configured_event = SessionConfiguredEvent {
-            session_id: conversation_id.0,
-            conversation_id,
+            session_id: conversation_id,
             model: "gpt-4o".to_string(),
             history_log_id: 1,
             history_entry_count: 1000,
@@ -337,7 +335,7 @@ mod tests {
             },
             "id": "1",
             "msg": {
-                "conversation_id": session_configured_event.conversation_id,
+                "session_id": session_configured_event.session_id,
                 "model": session_configured_event.model,
                 "history_log_id": session_configured_event.history_log_id,
                 "history_entry_count": session_configured_event.history_entry_count,

@@ -163,7 +163,7 @@ impl ChatWidget {
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
-        self.conversation_id = Some(event.conversation_id);
+        self.conversation_id = Some(event.session_id);
         let initial_messages = event.initial_messages.clone();
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);

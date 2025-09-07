@@ -10,8 +10,14 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
+use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
+use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::custom_prompts::CustomPrompt;
 use crate::mcp_protocol::ConversationId;
+use crate::message_history::HistoryEntry;
+use crate::models::ResponseItem;
+use crate::parse_command::ParsedCommand;
+use crate::plan_tool::UpdatePlanArgs;
 use mcp_types::CallToolResult;
 use mcp_types::Tool as McpTool;
 use serde::Deserialize;
@@ -19,13 +25,6 @@ use serde::Serialize;
 use serde_with::serde_as;
 use strum_macros::Display;
 use ts_rs::TS;
-use uuid::Uuid;
-use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
-use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use crate::message_history::HistoryEntry;
-use crate::models::ResponseItem;
-use crate::parse_command::ParsedCommand;
-use crate::plan_tool::UpdatePlanArgs;
 
 /// Open/close tags for special user-input blocks. Used across crates to avoid
 /// duplicated hardcoded strings.
@@ -931,11 +930,8 @@ pub struct ListCustomPromptsResponseEvent {
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct SessionConfiguredEvent {
-    /// For backwards compatibility.
-    pub session_id: Uuid,
-
-    /// Unique id for this conversation.
-    pub conversation_id: ConversationId,
+    /// Name left as session_id instead of conversation_id for backwards compatibility.
+    pub session_id: ConversationId,
 
     /// Tell the client what model is being queried.
     pub model: String,
@@ -1021,8 +1017,7 @@ mod tests {
         let event = Event {
             id: "1234".to_string(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                session_id: conversation_id.0,
-                conversation_id,
+                session_id: conversation_id,
                 model: "codex-mini-latest".to_string(),
                 history_log_id: 0,
                 history_entry_count: 0,
@@ -1032,7 +1027,7 @@ mod tests {
         let serialized = serde_json::to_string(&event).unwrap();
         assert_eq!(
             serialized,
-            r#"{"id":"1234","msg":{"type":"session_configured","session_id":"67e55044-10b1-426f-9247-bb680e5fe0c8","conversation_id":"67e55044-10b1-426f-9247-bb680e5fe0c8","model":"codex-mini-latest","history_log_id":0,"history_entry_count":0}}"#
+            r#"{"id":"1234","msg":{"type":"session_configured","session_id":"67e55044-10b1-426f-9247-bb680e5fe0c8","model":"codex-mini-latest","history_log_id":0,"history_entry_count":0}}"#
         );
     }
 
