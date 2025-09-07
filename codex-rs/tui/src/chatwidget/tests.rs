@@ -25,6 +25,7 @@ use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TaskStartedEvent;
+use codex_protocol::mcp_protocol::ConversationId;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -133,7 +134,7 @@ fn resumed_initial_messages_render_history() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual();
 
     let configured = codex_core::protocol::SessionConfiguredEvent {
-        session_id: Uuid::nil(),
+        conversation_id: ConversationId(Uuid::nil()),
         model: "test-model".to_string(),
         history_log_id: 0,
         history_entry_count: 0,
@@ -228,7 +229,7 @@ fn make_chatwidget_manual() -> (
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
-        session_id: None,
+        conversation_id: None,
         frame_requester: crate::tui::FrameRequester::test_dummy(),
         show_welcome_banner: true,
         queued_user_messages: std::collections::VecDeque::new(),

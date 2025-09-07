@@ -8,6 +8,7 @@ use codex_core::ResponseEvent;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_protocol::mcp_protocol::ConversationId;
 use core_test_support::load_default_config_for_test;
 use futures::StreamExt;
 use tempfile::TempDir;
@@ -69,7 +70,7 @@ async fn run_stream(sse_body: &str) -> Vec<ResponseEvent> {
         provider,
         effort,
         summary,
-        Uuid::new_v4(),
+        ConversationId(Uuid::new_v4()),
     );
 
     let mut prompt = Prompt::default();
