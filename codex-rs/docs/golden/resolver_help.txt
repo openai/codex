@@ -1,0 +1,9 @@
+resolve_safe_sync.sh — choose canonical safe_sync_merge paths
+Usage:
+  resolve_safe_sync.sh [--root <repo_root>] [--emit-gh-env]
+  resolve_safe_sync.sh [<repo_root>] [--emit-gh-env]   # DEPRECATED compat mode; prefer --root
+  resolve_safe_sync.sh --help
+Outputs (shell assignments):
+  SAFE_SYNC, TEST_SCRIPT, HAS_CODEX_RS, WORKSPACE_PRESENT
+Exit codes:
+  0 ok • 2 not-found • 3 invalid-root

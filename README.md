@@ -99,4 +99,4 @@ Codex CLI supports a rich set of configuration options, with preferences stored 
 ## License
 
 This repository is licensed under the [Apache-2.0 License](LICENSE).
-
+- PatchGate (safety & governance): see `docs/howto/patchgate.md` for the patch-first flow, envelope-only Builder output, worktree policy, trailers/artifacts, config, and CI examples.

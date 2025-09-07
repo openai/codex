@@ -64,6 +64,15 @@ pub(crate) struct BottomPane {
     status: Option<StatusIndicatorWidget>,
     /// Queued user messages to show under the status indicator.
     queued_user_messages: Vec<String>,
+
+    // Feature indicators shown in the bottom hint line
+    judge_enabled: bool,
+    autopilot_enabled: bool,
+    yes_man_enabled: bool,
+    reviewer_enabled: bool,
+    // PatchGate toggles (UI-only flags; used by Reviewer integration)
+    patchgate_enabled: bool,
+    patchgate_permissive: bool,
 }
 
 pub(crate) struct BottomPaneParams {
@@ -96,6 +105,12 @@ impl BottomPane {
             status: None,
             queued_user_messages: Vec::new(),
             esc_backtrack_hint: false,
+            judge_enabled: false,
+            autopilot_enabled: false,
+            yes_man_enabled: false,
+            reviewer_enabled: false,
+            patchgate_enabled: crate::autopilot_prefs::patchgate_enabled(),
+            patchgate_permissive: crate::autopilot_prefs::patchgate_permissive(),
         }
     }
 
@@ -153,6 +168,15 @@ impl BottomPane {
         } else {
             let [_, content] = self.layout(area);
             self.composer.cursor_pos(content)
+        }
+    }
+
+    /// Dismiss any active modal/selection view immediately.
+    pub(crate) fn dismiss_active_view(&mut self) {
+        if self.active_view.is_some() {
+            self.active_view = None;
+            self.on_active_view_complete();
+            self.request_redraw();
         }
     }
 
@@ -227,6 +251,65 @@ impl BottomPane {
     pub(crate) fn insert_str(&mut self, text: &str) {
         self.composer.insert_str(text);
         self.request_redraw();
+    }
+
+    // Feature flag setters – update composer so it can render badges in hints.
+    pub(crate) fn set_judge_enabled(&mut self, on: bool) {
+        self.judge_enabled = on;
+        self.composer.set_judge_enabled(on);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_autopilot_enabled(&mut self, on: bool) {
+        self.autopilot_enabled = on;
+        self.composer.set_autopilot_enabled(on);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_yes_man_enabled(&mut self, on: bool) {
+        self.yes_man_enabled = on;
+        self.composer.set_yes_man_enabled(on);
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_reviewer_enabled(&mut self, on: bool) {
+        self.reviewer_enabled = on;
+        self.judge_enabled = !on && self.judge_enabled; // reviewer supersedes judge in footer
+        self.composer.set_reviewer_enabled(on);
+        self.request_redraw();
+    }
+
+    // PatchGate toggles
+    pub(crate) fn set_patchgate_enabled(&mut self, on: bool) {
+        self.patchgate_enabled = on;
+        // no composer badge for now; record-only
+        self.request_redraw();
+    }
+
+    pub(crate) fn set_patchgate_permissive(&mut self, on: bool) {
+        self.patchgate_permissive = on;
+        // no composer badge for now; record-only
+        self.request_redraw();
+    }
+
+    // Simple getters for current flags (used to render selection views)
+    pub(crate) fn judge_enabled(&self) -> bool {
+        self.judge_enabled
+    }
+    pub(crate) fn autopilot_enabled(&self) -> bool {
+        self.autopilot_enabled
+    }
+    pub(crate) fn yes_man_enabled(&self) -> bool {
+        self.yes_man_enabled
+    }
+    pub(crate) fn reviewer_enabled(&self) -> bool {
+        self.reviewer_enabled
+    }
+    pub(crate) fn patchgate_enabled(&self) -> bool {
+        self.patchgate_enabled
+    }
+    pub(crate) fn patchgate_permissive(&self) -> bool {
+        self.patchgate_permissive
     }
 
     /// Replace the composer text with `text`.

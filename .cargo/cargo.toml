@@ -1,0 +1,3 @@
+[build]
+# Define o número de jobs. Se não definido, usa o número de núcleos lógicos.
+jobs = 16

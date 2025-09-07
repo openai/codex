@@ -27,6 +27,8 @@ pub(crate) struct SelectionItem {
     pub description: Option<String>,
     pub is_current: bool,
     pub actions: Vec<SelectionAction>,
+    /// When true, the selection view will close after activating this item.
+    pub close_on_select: bool,
 }
 
 pub(crate) struct ListSelectionView {
@@ -91,7 +93,7 @@ impl ListSelectionView {
                 for act in &item.actions {
                     act(&self.app_event_tx);
                 }
-                self.complete = true;
+                self.complete = item.close_on_select;
             }
         } else {
             self.complete = true;

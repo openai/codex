@@ -14,6 +14,9 @@ pub enum SlashCommand {
     // more frequently used commands should be listed first.
     Model,
     Approvals,
+    Autopilot,
+    Resume,
+    Prompt,
     New,
     Init,
     Compact,
@@ -41,6 +44,9 @@ impl SlashCommand {
             SlashCommand::Model => "choose what model and reasoning effort to use",
             SlashCommand::Approvals => "choose what Codex can do without approval",
             SlashCommand::Mcp => "list configured MCP tools",
+            SlashCommand::Resume => "resume a previous session in this workspace",
+            SlashCommand::Prompt => "show effective system instructions (prompt)",
+            SlashCommand::Autopilot => "toggle post-turn judge and auto-continue",
             SlashCommand::Logout => "log out of Codex",
             #[cfg(debug_assertions)]
             SlashCommand::TestApproval => "test approval request",
@@ -61,6 +67,9 @@ impl SlashCommand {
             | SlashCommand::Compact
             | SlashCommand::Model
             | SlashCommand::Approvals
+            | SlashCommand::Resume
+            | SlashCommand::Autopilot
+            | SlashCommand::Prompt
             | SlashCommand::Logout => false,
             SlashCommand::Diff
             | SlashCommand::Mention

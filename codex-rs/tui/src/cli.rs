@@ -88,6 +88,21 @@ pub struct Cli {
     #[arg(long = "search", default_value_t = false)]
     pub web_search: bool,
 
+    /// Enable a post-turn evaluator that reviews the assistant's last reply
+    /// and decides whether to follow the current plan.
+    #[arg(long = "turn-judge", default_value_t = false, hide = true)]
+    pub turn_judge: bool,
+
+    /// Path to a prompt file used by the post-turn evaluator. If omitted, a
+    /// conservative built-in prompt is used.
+    #[arg(long = "turn-judge-prompt", value_name = "FILE", hide = true)]
+    pub turn_judge_prompt: Option<std::path::PathBuf>,
+
+    /// Inline prompt text for the post-turn evaluator. Takes precedence over
+    /// --turn-judge-prompt when both are provided.
+    #[arg(long = "turn-judge-inline", hide = true)]
+    pub turn_judge_inline: Option<String>,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 }

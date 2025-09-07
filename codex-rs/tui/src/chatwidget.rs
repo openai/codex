@@ -130,6 +130,10 @@ pub(crate) struct ChatWidget {
     suppress_session_configured_redraw: bool,
     // User messages queued while a turn is in progress
     queued_user_messages: VecDeque<UserMessage>,
+    // Reviewer context captures
+    last_user_prompt_text: Option<String>,
+    last_plan_update: Option<codex_core::plan_tool::UpdatePlanArgs>,
+    last_unified_diff: Option<String>,
 }
 
 struct UserMessage {
@@ -158,6 +162,20 @@ impl ChatWidget {
     fn flush_answer_stream_with_separator(&mut self) {
         let sink = AppEventHistorySink(self.app_event_tx.clone());
         let _ = self.stream.finalize(true, &sink);
+    }
+
+    fn critical_turn_directive() -> &'static str {
+        r#"<directive_principal>
+LEMBRETE CRÍTICO: Após concluir uma etapa, ATUALIZE o arquivo `PRD.md` marcando a tarefa correspondente como concluída. O `PRD.md` é a fonte de verdade do progresso.
+
+Quando houver "Next actions (from reviewer)", SIGA-AS literalmente, etapa por etapa, sem replanejar. Comece pelo item 1 e execute com o menor churn possível.
+</directive_principal>"#
+    }
+
+    /// Dismiss any active bottom pane modal/selection view to avoid UI conflicts
+    /// before switching contexts (e.g., opening resume picker).
+    pub(crate) fn dismiss_active_view(&mut self) {
+        self.bottom_pane.dismiss_active_view();
     }
     // --- Small event handlers ---
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
@@ -309,6 +327,7 @@ impl ChatWidget {
     }
 
     fn on_plan_update(&mut self, update: codex_core::plan_tool::UpdatePlanArgs) {
+        self.last_plan_update = Some(update.clone());
         self.add_to_history(history_cell::new_plan_update(update));
     }
 
@@ -406,6 +425,7 @@ impl ChatWidget {
     }
 
     fn on_turn_diff(&mut self, unified_diff: String) {
+        self.last_unified_diff = Some(unified_diff.clone());
         debug!("TurnDiffEvent: {unified_diff}");
     }
 
@@ -664,6 +684,9 @@ impl ChatWidget {
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: true,
             suppress_session_configured_redraw: false,
+            last_user_prompt_text: None,
+            last_plan_update: None,
+            last_unified_diff: None,
         }
     }
 
@@ -716,6 +739,9 @@ impl ChatWidget {
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: false,
             suppress_session_configured_redraw: true,
+            last_user_prompt_text: None,
+            last_plan_update: None,
+            last_unified_diff: None,
         }
     }
 
@@ -836,6 +862,57 @@ impl ChatWidget {
             SlashCommand::Approvals => {
                 self.open_approvals_popup();
             }
+            SlashCommand::Resume => {
+                self.app_event_tx.send(AppEvent::OpenResumePicker);
+            }
+            SlashCommand::Prompt => {
+                // Build an approximate effective prompt view and show in an overlay.
+                let mut text = String::new();
+                text.push_str(&format!(
+                    "Effective Model: {} / {}\n\n",
+                    self.config.model, self.config.model_reasoning_effort
+                ));
+
+                match &self.config.base_instructions {
+                    Some(s) => {
+                        text.push_str("Base Instructions (override):\n");
+                        text.push_str(s);
+                        text.push_str("\n\n");
+                    }
+                    None => {
+                        text.push_str(
+                            "Base Instructions: built-in (see codex core prompt; not displayed here)\n\n",
+                        );
+                    }
+                }
+
+                // Decide whether to include apply_patch tool instructions, approximating core logic.
+                let needs_special = self
+                    .config
+                    .model_family
+                    .needs_special_apply_patch_instructions;
+                let apply_patch_present = self.config.include_apply_patch_tool;
+                if self.config.base_instructions.is_none()
+                    && (needs_special || !apply_patch_present)
+                {
+                    text.push_str("Apply Patch Tool Instructions:\n");
+                    text.push_str(codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS);
+                    text.push_str("\n\n");
+                }
+
+                if let Some(u) = &self.config.user_instructions {
+                    text.push_str("User Instructions (AGENTS.md):\n");
+                    text.push_str(u);
+                    text.push('\n');
+                }
+                self.app_event_tx.send(AppEvent::ShowTextOverlay {
+                    title: "P R O M P T".to_string(),
+                    text,
+                });
+            }
+            SlashCommand::Autopilot => {
+                self.open_autopilot_popup();
+            }
             SlashCommand::Quit => {
                 self.app_event_tx.send(AppEvent::ExitRequest);
             }
@@ -912,6 +989,267 @@ impl ChatWidget {
         }
     }
 
+    /// Open a popup to toggle post-turn judge and autopilot and to reset prompt.
+    pub(crate) fn open_autopilot_popup(&mut self) {
+        let mut items: Vec<SelectionItem> = Vec::new();
+
+        // Judge toggle
+        {
+            let on = self.bottom_pane.judge_enabled();
+            let name = if on { "Judge: On" } else { "Judge: Off" };
+            let desc = if on {
+                "Run a brief GPT-5 check after each turn"
+            } else {
+                "Do not evaluate after TaskComplete"
+            };
+            items.push(SelectionItem {
+                name: name.to_string(),
+                description: Some(desc.to_string()),
+                is_current: on,
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::UpdateTurnJudgeEnabled(!on));
+                    tx.send(AppEvent::OpenAutopilotPopup);
+                })],
+                // Keep menu open to allow multiple toggles.
+                close_on_select: false,
+            });
+        }
+
+        // Autopilot toggle
+        {
+            let on = self.bottom_pane.autopilot_enabled();
+            let name = if on {
+                "Autopilot: On"
+            } else {
+                "Autopilot: Off"
+            };
+            let desc = if on {
+                "Auto-continue when reviewer/judge approves"
+            } else {
+                "Require manual next step"
+            };
+            items.push(SelectionItem {
+                name: name.to_string(),
+                description: Some(desc.to_string()),
+                is_current: on,
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::UpdateAutopilotEnabled(!on));
+                    tx.send(AppEvent::OpenAutopilotPopup);
+                })],
+                close_on_select: false,
+            });
+        }
+
+        // PatchGate: enable/disable
+        {
+            let on = self.bottom_pane.patchgate_enabled();
+            let name = if on { "PatchGate: On" } else { "PatchGate: Off" };
+            let desc = if on {
+                "Use PatchGate after Reviewer follow/adjust"
+            } else {
+                "Do not run PatchGate automatically"
+            };
+            items.push(SelectionItem {
+                name: name.to_string(),
+                description: Some(desc.to_string()),
+                is_current: on,
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::UpdatePatchGateEnabled(!on));
+                    tx.send(AppEvent::OpenAutopilotPopup);
+                })],
+                close_on_select: false,
+            });
+        }
+
+        // PatchGate: permissive mode (record-only)
+        {
+            let on = self.bottom_pane.patchgate_permissive();
+            let name = if on {
+                "PatchGate Permissive: On"
+            } else {
+                "PatchGate Permissive: Off"
+            };
+            let desc = if on {
+                "Record permissive mode (no strict enforcement)"
+            } else {
+                "Record strict mode"
+            };
+            items.push(SelectionItem {
+                name: name.to_string(),
+                description: Some(desc.to_string()),
+                is_current: on,
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::UpdatePatchGatePermissive(!on));
+                    tx.send(AppEvent::OpenAutopilotPopup);
+                })],
+                close_on_select: false,
+            });
+        }
+
+        // Yes‑Man toggle
+        {
+            let on = self.bottom_pane.yes_man_enabled();
+            let name = if on {
+                "Yes‑Man: On"
+            } else {
+                "Yes‑Man: Off"
+            };
+            let desc = if on {
+                "Always continue; skip judge"
+            } else {
+                "Use judge/autopilot settings"
+            };
+            items.push(SelectionItem {
+                name: name.to_string(),
+                description: Some(desc.to_string()),
+                is_current: on,
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::UpdateYesManEnabled(!on));
+                    tx.send(AppEvent::OpenAutopilotPopup);
+                })],
+                close_on_select: false,
+            });
+        }
+
+        // Reviewer toggle
+        {
+            let on = self.bottom_pane.reviewer_enabled();
+            let name = if on { "Reviewer: On" } else { "Reviewer: Off" };
+            let desc = if on {
+                "Use PRD-aware reviewer session (enabled)"
+            } else {
+                "Use PRD-aware reviewer session (disabled)"
+            };
+            items.push(SelectionItem {
+                name: name.to_string(),
+                description: Some(desc.to_string()),
+                is_current: on,
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::UpdateReviewerEnabled(!on));
+                    tx.send(AppEvent::OpenAutopilotPopup);
+                })],
+                close_on_select: false,
+            });
+        }
+
+        // Reviewer model sub-menu
+        items.push(SelectionItem {
+            name: "Reviewer Model…".to_string(),
+            description: Some("Choose which model the Reviewer uses".to_string()),
+            is_current: false,
+            actions: vec![Box::new(|tx| {
+                tx.send(AppEvent::OpenReviewerModelPopup);
+            })],
+            close_on_select: true,
+        });
+
+        // Reset prompt to default
+        items.push(SelectionItem {
+            name: "Reset Judge Prompt".to_string(),
+            description: Some("Use the default concise JSON prompt".to_string()),
+            is_current: false,
+            actions: vec![Box::new(|tx| {
+                tx.send(AppEvent::UpdateTurnJudgePrompt(None));
+                tx.send(AppEvent::OpenAutopilotPopup);
+            })],
+            close_on_select: false,
+        });
+
+        // Open last Judge session for this workspace
+        items.push(SelectionItem {
+            name: "Open last Judge session".to_string(),
+            description: Some("Switch to the most recent Judge session".to_string()),
+            is_current: false,
+            actions: vec![Box::new(|tx| {
+                tx.send(AppEvent::OpenLastJudgeSession);
+            })],
+            close_on_select: true,
+        });
+
+        // Open last Reviewer session for this workspace
+        items.push(SelectionItem {
+            name: "Open last Reviewer session".to_string(),
+            description: Some("Switch to the most recent Reviewer session".to_string()),
+            is_current: false,
+            actions: vec![Box::new(|tx| {
+                tx.send(AppEvent::OpenLastReviewerSession);
+            })],
+            close_on_select: true,
+        });
+
+        self.bottom_pane.show_selection_view(
+            "Autopilot & Review".to_string(),
+            Some("Post-turn evaluation and auto-continue".to_string()),
+            Some("Press Enter to confirm or Esc to go back".to_string()),
+            items,
+        );
+    }
+
+    /// Open a sub-menu to choose the Reviewer model (and reasoning effort).
+    pub(crate) fn open_reviewer_model_popup(&mut self) {
+        let mut items: Vec<SelectionItem> = Vec::new();
+        // Build choices from the same presets used by /model. Each preset pairs a
+        // model slug with a reasoning effort. Selecting one updates both.
+        let presets: &[ModelPreset] = builtin_model_presets();
+        for preset in presets.iter() {
+            let model_slug = preset.model.to_string();
+            let effort = preset.effort;
+            let description = Some(preset.description.to_string());
+            items.push(SelectionItem {
+                name: format!("Reviewer: {}", preset.label),
+                description,
+                is_current: false,
+                actions: vec![Box::new(move |tx| {
+                    tx.send(AppEvent::UpdateReviewerModel(model_slug.clone()));
+                    tx.send(AppEvent::UpdateReviewerEffort(effort));
+                    // After selecting, return to the Autopilot menu.
+                    tx.send(AppEvent::OpenAutopilotPopup);
+                })],
+                close_on_select: true,
+            });
+        }
+
+        // Back item
+        items.push(SelectionItem {
+            name: "Back to Autopilot menu".to_string(),
+            description: None,
+            is_current: false,
+            actions: vec![Box::new(|tx| tx.send(AppEvent::OpenAutopilotPopup))],
+            close_on_select: true,
+        });
+
+        self.bottom_pane.show_selection_view(
+            "Reviewer Model".to_string(),
+            Some("Select the model used in Reviewer sessions".to_string()),
+            Some("Press Enter to confirm or Esc to go back".to_string()),
+            items,
+        );
+    }
+
+    pub(crate) fn set_judge_enabled(&mut self, on: bool) {
+        self.bottom_pane.set_judge_enabled(on);
+    }
+
+    pub(crate) fn set_autopilot_enabled(&mut self, on: bool) {
+        self.bottom_pane.set_autopilot_enabled(on);
+    }
+
+    pub(crate) fn set_yes_man_enabled(&mut self, on: bool) {
+        self.bottom_pane.set_yes_man_enabled(on);
+    }
+
+    pub(crate) fn set_reviewer_enabled(&mut self, on: bool) {
+        self.bottom_pane.set_reviewer_enabled(on);
+    }
+
+    pub(crate) fn set_patchgate_enabled(&mut self, on: bool) {
+        self.bottom_pane.set_patchgate_enabled(on);
+    }
+
+    pub(crate) fn set_patchgate_permissive(&mut self, on: bool) {
+        self.bottom_pane.set_patchgate_permissive(on);
+    }
+
     pub(crate) fn handle_paste(&mut self, text: String) {
         self.bottom_pane.handle_paste(text);
     }
@@ -958,7 +1296,12 @@ impl ChatWidget {
         let mut items: Vec<InputItem> = Vec::new();
 
         if !text.is_empty() {
-            items.push(InputItem::Text { text: text.clone() });
+            // Append a critical directive to the effective prompt sent to the Builder,
+            // but keep the transcript and history with the user's original text.
+            let effective_text = format!("{text}\n\n{}", Self::critical_turn_directive());
+            items.push(InputItem::Text {
+                text: effective_text,
+            });
         }
 
         for path in image_paths {
@@ -1201,6 +1544,7 @@ impl ChatWidget {
                 description,
                 is_current,
                 actions,
+                close_on_select: true,
             });
         }
 
@@ -1242,6 +1586,7 @@ impl ChatWidget {
                 description,
                 is_current,
                 actions,
+                close_on_select: true,
             });
         }
 
@@ -1348,6 +1693,7 @@ impl ChatWidget {
         if text.is_empty() {
             return;
         }
+        self.last_user_prompt_text = Some(text.clone());
         self.submit_user_message(text.into());
     }
 
@@ -1356,6 +1702,28 @@ impl ChatWidget {
             .as_ref()
             .map(|ti| ti.total_token_usage.clone())
             .unwrap_or_default()
+    }
+
+    pub(crate) fn last_user_prompt(&self) -> Option<&str> {
+        self.last_user_prompt_text.as_deref()
+    }
+
+    pub(crate) fn last_plan_text(&self) -> Option<String> {
+        self.last_plan_update.as_ref().map(|u| {
+            let mut s = String::new();
+            for item in &u.plan {
+                s.push_str(&format!("- {} [{:?}]\n", item.step, item.status));
+            }
+            if let Some(expl) = &u.explanation {
+                s.push('\n');
+                s.push_str(expl);
+            }
+            s
+        })
+    }
+
+    pub(crate) fn last_unified_diff(&self) -> Option<&str> {
+        self.last_unified_diff.as_deref()
     }
 
     pub(crate) fn session_id(&self) -> Option<Uuid> {

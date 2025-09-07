@@ -42,14 +42,22 @@ mod file_search;
 mod get_git_diff;
 mod history_cell;
 pub mod insert_history;
+pub mod git_guard;
+pub mod change_contract;
+pub mod patch_gate_integration;
+pub mod patch_mode;
+pub mod metrics;
 mod key_hint;
 pub mod live_wrap;
 mod markdown;
 mod markdown_stream;
 pub mod onboarding;
 mod pager_overlay;
+mod post_turn_eval;
 mod render;
 mod resume_picker;
+mod reviewer;
+mod autopilot_prefs;
 mod session_log;
 mod shimmer;
 mod slash_command;
@@ -254,50 +262,52 @@ async fn run_ratatui_app(
 
     let mut tui = Tui::new(terminal);
 
-    // Show update banner in terminal history (instead of stderr) so it is visible
-    // within the TUI scrollback. Building spans keeps styling consistent.
+    // Update banner is disabled by default. To enable, set CODEX_TUI_ENABLE_UPDATE_CHECK
+    // in the environment. This avoids network checks and noise for most users.
     #[cfg(not(debug_assertions))]
-    if let Some(latest_version) = updates::get_upgrade_version(&config) {
-        use ratatui::style::Stylize as _;
-        use ratatui::text::Line;
+    if std::env::var_os("CODEX_TUI_ENABLE_UPDATE_CHECK").is_some() {
+        if let Some(latest_version) = updates::get_upgrade_version(&config) {
+            use ratatui::style::Stylize as _;
+            use ratatui::text::Line;
 
-        let current_version = env!("CARGO_PKG_VERSION");
-        let exe = std::env::current_exe()?;
-        let managed_by_npm = std::env::var_os("CODEX_MANAGED_BY_NPM").is_some();
+            let current_version = env!("CARGO_PKG_VERSION");
+            let exe = std::env::current_exe()?;
+            let managed_by_npm = std::env::var_os("CODEX_MANAGED_BY_NPM").is_some();
 
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(Line::from(vec![
-            "✨⬆️ Update available!".bold().cyan(),
-            " ".into(),
-            format!("{current_version} -> {latest_version}.").into(),
-        ]));
+            let mut lines: Vec<Line<'static>> = Vec::new();
+            lines.push(Line::from(vec![
+                "✨⬆️ Update available!".bold().cyan(),
+                " ".into(),
+                format!("{current_version} -> {latest_version}.").into(),
+            ]));
 
-        if managed_by_npm {
-            let npm_cmd = "npm install -g @openai/codex@latest";
-            lines.push(Line::from(vec![
-                "Run ".into(),
-                npm_cmd.cyan(),
-                " to update.".into(),
-            ]));
-        } else if cfg!(target_os = "macos")
-            && (exe.starts_with("/opt/homebrew") || exe.starts_with("/usr/local"))
-        {
-            let brew_cmd = "brew upgrade codex";
-            lines.push(Line::from(vec![
-                "Run ".into(),
-                brew_cmd.cyan(),
-                " to update.".into(),
-            ]));
-        } else {
-            lines.push(Line::from(vec![
-                "See ".into(),
-                "https://github.com/openai/codex/releases/latest".cyan(),
-                " for the latest releases and installation options.".into(),
-            ]));
+            if managed_by_npm {
+                let npm_cmd = "npm install -g @openai/codex@latest";
+                lines.push(Line::from(vec![
+                    "Run ".into(),
+                    npm_cmd.cyan(),
+                    " to update.".into(),
+                ]));
+            } else if cfg!(target_os = "macos")
+                && (exe.starts_with("/opt/homebrew") || exe.starts_with("/usr/local"))
+            {
+                let brew_cmd = "brew upgrade codex";
+                lines.push(Line::from(vec![
+                    "Run ".into(),
+                    brew_cmd.cyan(),
+                    " to update.".into(),
+                ]));
+            } else {
+                lines.push(Line::from(vec![
+                    "See ".into(),
+                    "https://github.com/openai/codex/releases/latest".cyan(),
+                    " for the latest releases and installation options.".into(),
+                ]));
+            }
+
+            lines.push("".into());
+            tui.insert_history_lines(lines);
         }
-
-        lines.push("".into());
-        tui.insert_history_lines(lines);
     }
 
     // Initialize high-fidelity session event logging if enabled.
@@ -308,6 +318,9 @@ async fn run_ratatui_app(
         images,
         resume,
         r#continue,
+        turn_judge,
+        turn_judge_prompt,
+        turn_judge_inline,
         ..
     } = cli;
 
@@ -347,7 +360,7 @@ async fn run_ratatui_app(
             Err(_) => resume_picker::ResumeSelection::StartFresh,
         }
     } else if resume {
-        match resume_picker::run_resume_picker(&mut tui, &config.codex_home).await? {
+        match resume_picker::run_resume_picker(&mut tui, &config.codex_home, &config.cwd).await? {
             resume_picker::ResumeSelection::Exit => {
                 restore();
                 session_log::log_session_end();
@@ -359,6 +372,22 @@ async fn run_ratatui_app(
         resume_picker::ResumeSelection::StartFresh
     };
 
+    // Resolve judge prompt preference: inline text takes precedence over file.
+    let judge_prompt_text = if let Some(inline) = turn_judge_inline {
+        Some(inline)
+    } else if let Some(path) = turn_judge_prompt {
+        match std::fs::read_to_string(&path) {
+            Ok(s) => Some(s),
+            Err(e) => Some(format!(
+                "Falha ao ler prompt do avaliador ({}): {}",
+                path.display(),
+                e
+            )),
+        }
+    } else {
+        None
+    };
+
     let app_result = App::run(
         &mut tui,
         auth_manager,
@@ -366,6 +395,8 @@ async fn run_ratatui_app(
         prompt,
         images,
         resume_selection,
+        turn_judge,
+        judge_prompt_text,
     )
     .await;
 

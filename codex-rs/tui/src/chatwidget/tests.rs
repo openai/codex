@@ -233,6 +233,9 @@ fn make_chatwidget_manual() -> (
         show_welcome_banner: true,
         queued_user_messages: std::collections::VecDeque::new(),
         suppress_session_configured_redraw: false,
+        last_user_prompt_text: None,
+        last_plan_update: None,
+        last_unified_diff: None,
     };
     (widget, rx, op_rx)
 }

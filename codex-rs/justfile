@@ -34,3 +34,15 @@ install:
 # Run the MCP server
 mcp-server-run *args:
     cargo run -p codex-mcp-server -- "$@"
+
+# Safe sync & merge from upstream without history rewrites.
+# Usage:
+#   just sync                       # default
+#   just sync -- --dry-run          # pass-through flags to script
+#   just sync -- --help             # show script help
+sync *args:
+    scripts/safe_sync_merge.sh "$@"
+
+# Update the resolver help golden snapshot (normalized for CRLF/blank lines)
+update-resolver-golden:
+    LC_ALL=C LANG=C bash scripts/resolve_safe_sync.sh --help | tr -d '\r' | awk 'NF{print $0}' ORS='\n' > docs/golden/resolver_help.txt

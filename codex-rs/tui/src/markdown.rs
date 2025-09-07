@@ -13,6 +13,18 @@ pub(crate) fn append_markdown(
     append_markdown_with_opener_and_cwd(markdown_source, lines, config.file_opener, &config.cwd);
 }
 
+/// Return only the prose text from `markdown_source`, removing fenced and
+/// indented code blocks. Inline formatting is preserved as-is in the text.
+pub(crate) fn extract_text_without_code(markdown_source: &str) -> String {
+    let mut out = String::new();
+    for seg in split_text_and_fences(markdown_source) {
+        if let Segment::Text(s) = seg {
+            out.push_str(&s);
+        }
+    }
+    out
+}
+
 fn append_markdown_with_opener_and_cwd(
     markdown_source: &str,
     lines: &mut Vec<Line<'static>>,

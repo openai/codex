@@ -59,4 +59,52 @@ pub(crate) enum AppEvent {
 
     /// Forwarded conversation history snapshot from the current conversation.
     ConversationHistory(ConversationHistoryResponseEvent),
+
+    /// Toggle post-turn judge on/off.
+    UpdateTurnJudgeEnabled(bool),
+    /// Update judge prompt (None → default).
+    UpdateTurnJudgePrompt(Option<String>),
+    /// Toggle autopilot (auto-continue when judge approves).
+    UpdateAutopilotEnabled(bool),
+
+    /// Toggle Yes‑Man mode: always continue without running judge.
+    UpdateYesManEnabled(bool),
+
+    /// Open the resume picker UI.
+    OpenResumePicker,
+
+    /// Open the most recent Judge session for this workspace.
+    OpenLastJudgeSession,
+
+    /// Resume from a specific rollout path.
+    ResumeFromPath(std::path::PathBuf),
+
+    /// Toggle Reviewer mode (PRD-aware specialist).
+    UpdateReviewerEnabled(bool),
+
+    /// Open the most recent Reviewer session for this workspace.
+    OpenLastReviewerSession,
+
+    /// Update the model used by the Reviewer session.
+    UpdateReviewerModel(String),
+
+    /// Update the reasoning effort used by the Reviewer session.
+    UpdateReviewerEffort(ReasoningEffort),
+
+    /// Open the Autopilot & Review popup (rebuild in-place).
+    OpenAutopilotPopup,
+
+    /// Toggle PatchGate integration (TUI-level; record intent and drive Reviewer integration).
+    UpdatePatchGateEnabled(bool),
+    /// Toggle PatchGate "permissive" mode (record-only; informational badge/logging).
+    UpdatePatchGatePermissive(bool),
+
+    /// Open the Reviewer Model selection sub-menu.
+    OpenReviewerModelPopup,
+
+    /// Show a simple text overlay with a title.
+    ShowTextOverlay {
+        title: String,
+        text: String,
+    },
 }

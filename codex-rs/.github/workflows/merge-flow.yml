@@ -1,0 +1,135 @@
+name: merge-flow
+
+on:
+  pull_request:
+  push:
+
+jobs:
+  merge-flow:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -l {0}
+    env:
+      LC_ALL: C
+      LANG: C
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Which bash and git
+        run: |
+          set -euo pipefail
+          which bash
+          git --version
+
+      - name: Detect workspace root and paths (via resolver)
+        run: |
+          set -euo pipefail
+          ROOT="$GITHUB_WORKSPACE"
+          echo "ROOT=$ROOT" >> "$GITHUB_ENV"
+          bash "$ROOT/codex-rs/scripts/resolve_safe_sync.sh" --root "$ROOT" --emit-gh-env >> "$GITHUB_ENV"
+          echo "Resolved SAFE_SYNC=$SAFE_SYNC"
+          echo "Resolved TEST_SCRIPT=$TEST_SCRIPT"
+          echo "HAS_CODEX_RS=$HAS_CODEX_RS WORKSPACE_PRESENT=$WORKSPACE_PRESENT"
+          if [ "${RUNNER_OS:-Linux}" != "Windows" ]; then
+            test -x "$SAFE_SYNC" || { echo "::error::Resolved SAFE_SYNC not executable: $SAFE_SYNC"; exit 1; }
+          fi
+
+      - name: Dry-run safe sync & merge and capture logs
+        run: |
+          set -euo pipefail
+          bash "$SAFE_SYNC" --dry-run --no-tui | tee safe_sync.log
+
+      - name: Fail if SKIP_WORKSPACE marker appears (workspace expected)
+        if: env.WORKSPACE_PRESENT == '1'
+        run: |
+          if grep -q "\[safe-sync] SKIP_WORKSPACE" safe_sync.log; then
+            echo "::error::SKIP_WORKSPACE detected but this repo contains a Rust workspace.";
+            exit 1;
+          fi
+
+      - name: Upload safe-sync logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: safe-sync-logs
+          path: safe_sync.log
+
+      - name: Run lightweight merge-flow tests
+        env:
+          DRY_RUN: "1"
+        run: |
+          set -euo pipefail
+          bash "$TEST_SCRIPT" all
+          bash "$TEST_SCRIPT" golden
+
+      - name: Resolver help self-check and golden regen diff
+        run: |
+          set -euo pipefail
+          export LC_ALL=C LANG=C
+          # Self-test help formatting guarantees
+          bash scripts/resolve_safe_sync.sh --self-test-help
+          # Regenerate golden (use just if available) and ensure no diff
+          if command -v just >/dev/null 2>&1; then
+            just update-resolver-golden
+          else
+            bash scripts/resolve_safe_sync.sh --help | { if command -v tr >/dev/null 2>&1 && command -v awk >/dev/null 2>&1; then tr -d '\r' | awk 'NF{print $0}' ORS='\n'; else sed -e 's/\r$//' -e :a -e '/^[[:space:]]*$/{$d;N;ba' -e '}'; fi; } > codex-rs/docs/golden/resolver_help.txt
+          fi
+          git diff --exit-code codex-rs/docs/golden/resolver_help.txt
+
+      - name: Setup Rust 1.89.0
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.89.0
+          components: rustfmt
+
+      - name: Real smoke - cargo fmt check (codex-rs)
+        if: env.HAS_CODEX_RS == '1'
+        run: |
+          cargo -C codex-rs fmt -- --check
+
+  windows-check:
+    runs-on: windows-latest
+    env:
+      LC_ALL: C
+      LANG: C
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Rust 1.89.0
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.89.0
+
+      - name: Resolver help on Windows
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config --global core.autocrlf false
+          bash codex-rs/scripts/resolve_safe_sync.sh --help | tee resolver_help_win.txt
+          # Normalize CRLF if present to avoid grep issues
+          if command -v dos2unix >/dev/null 2>&1; then dos2unix resolver_help_win.txt || true; else sed -i 's/\r$//' resolver_help_win.txt; fi
+          rg -n "0 ok|2 not-found|3 invalid-root" resolver_help_win.txt
+      - name: Resolver self-test-help on Windows
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash codex-rs/scripts/resolve_safe_sync.sh --self-test-help
+
+      - name: Build workspace (detect codex-rs)
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$GITHUB_WORKSPACE"
+          if [ -f "$ROOT/codex-rs/Cargo.toml" ]; then
+            cargo -C codex-rs build --workspace
+            cargo -C codex-rs test --workspace --no-run
+          else
+            cargo build --workspace
+            cargo test --workspace --no-run
+          fi

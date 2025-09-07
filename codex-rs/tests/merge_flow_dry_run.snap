@@ -1,0 +1,22 @@
+# Golden dry-run snapshot for safe_sync_merge.sh
+# Invariant: expects exactly 4 YYYYmmdd-HHMMSS placeholders.
+[safe-sync] Detected repo root: /path/to/your/repo
+[safe-sync] Changing directory to repo root for consistent behavior
+[safe-sync] Repository OK. Root: /path/to/your/repo. Current branch: main (abcdef123456)
+[safe-sync] Upstream to merge: @{u}
+[safe-sync] Dry run enabled: no changes will be made.
+[safe-sync] Creating safety backup branch: backup/sync-YYYYmmdd-HHMMSS-main-abcdef123456
+[dry-run] git branch backup/sync-YYYYmmdd-HHMMSS-main-abcdef123456
+[safe-sync] Stashing local changes before merge
+[dry-run] git stash push -u -m safe-sync:YYYYmmdd-HHMMSS
+[safe-sync] Fetching from all remotes (with prune)
+[dry-run] git fetch --all --prune
+[safe-sync] Merging @{u} into main (no rebase, no ff)
+[dry-run] git merge --no-ff --no-edit @\{u\}
+[safe-sync] Merge completed successfully.
+[safe-sync] Running post-merge checks in 'codex-rs' (fmt/clippy/tests)
+[dry-run] cargo -C codex-rs fmt -- --check
+[dry-run] cargo -C codex-rs clippy --workspace -- -D warnings
+[dry-run] cargo -C codex-rs test --workspace
+[safe-sync] Done. A safety backup was created at: backup/sync-YYYYmmdd-HHMMSS-main-abcdef123456
+[safe-sync] Tip: if anything went wrong, you can inspect or reset to that branch.

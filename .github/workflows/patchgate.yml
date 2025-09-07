@@ -1,0 +1,29 @@
+name: PatchGate CI
+on:
+  pull_request:
+  push:
+concurrency:
+  group: patchgate-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.89.0
+          components: clippy,rustfmt
+      - name: Clippy (workspace)
+        run: cargo clippy --workspace -- -D warnings
+      - name: Test (run 1)
+        run: cargo test --workspace -- --nocapture
+      - name: Test (run 2)
+        run: cargo test --workspace -- --nocapture
+      - name: Upload .autopilot artifacts (best-effort)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: autopilot-rollouts
+          path: .autopilot/rollouts/**
+          if-no-files-found: ignore

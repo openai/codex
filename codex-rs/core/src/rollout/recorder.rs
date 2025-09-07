@@ -35,6 +35,16 @@ pub struct SessionMeta {
     pub id: Uuid,
     pub timestamp: String,
     pub instructions: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -126,9 +136,14 @@ impl RolloutRecorder {
             tokio::fs::File::from_std(file),
             rx,
             Some(SessionMeta {
-                timestamp,
                 id: session_id,
+                timestamp,
                 instructions,
+                cwd: Some(config.cwd.display().to_string()),
+                model: Some(config.model.clone()),
+                reasoning_effort: Some(format!("{}", config.model_reasoning_effort)),
+                reasoning_summary: Some(format!("{}", config.model_reasoning_summary)),
+                version: Some(env!("CARGO_PKG_VERSION").to_string()),
             }),
             cwd,
         ));

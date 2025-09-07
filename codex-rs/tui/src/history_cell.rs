@@ -173,6 +173,11 @@ impl HistoryCell for PlainHistoryCell {
     }
 }
 
+/// Construct a simple informational history cell from pre-built lines.
+pub(crate) fn new_info_note(lines: Vec<Line<'static>>) -> PlainHistoryCell {
+    PlainHistoryCell { lines }
+}
+
 #[derive(Debug)]
 pub(crate) struct TranscriptOnlyHistoryCell {
     lines: Vec<Line<'static>>,
@@ -186,6 +191,24 @@ impl HistoryCell for TranscriptOnlyHistoryCell {
     fn transcript_lines(&self) -> Vec<Line<'static>> {
         self.lines.clone()
     }
+}
+
+/// Create a compact post-turn evaluation result cell.
+pub(crate) fn new_turn_judge_result(follow_plan: bool, reason: Option<String>) -> PlainHistoryCell {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let status = if follow_plan {
+        "seguir o plano".green().bold()
+    } else {
+        "não seguir o plano".red().bold()
+    };
+    let mut header: Line<'static> =
+        vec!["◎".into(), " ".into(), "Avaliação:".bold(), " ".into()].into();
+    header.push_span(status);
+    lines.push(header);
+    if let Some(r) = reason.filter(|s| !s.trim().is_empty()) {
+        lines.push(r.dim().into());
+    }
+    PlainHistoryCell { lines }
 }
 
 #[derive(Debug)]

@@ -84,6 +84,12 @@ pub(crate) struct ChatComposer {
     // When true, disables paste-burst logic and inserts characters immediately.
     disable_paste_burst: bool,
     custom_prompts: Vec<CustomPrompt>,
+
+    // Feature flags for badges in the footer
+    judge_enabled: bool,
+    reviewer_enabled: bool,
+    autopilot_enabled: bool,
+    yes_man_enabled: bool,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -122,6 +128,10 @@ impl ChatComposer {
             paste_burst: PasteBurst::default(),
             disable_paste_burst: false,
             custom_prompts: Vec::new(),
+            judge_enabled: false,
+            reviewer_enabled: false,
+            autopilot_enabled: false,
+            yes_man_enabled: false,
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -244,6 +254,22 @@ impl ChatComposer {
         self.textarea.set_cursor(0);
         self.sync_command_popup();
         self.sync_file_search_popup();
+    }
+
+    pub(crate) fn set_judge_enabled(&mut self, on: bool) {
+        self.judge_enabled = on;
+    }
+
+    pub(crate) fn set_autopilot_enabled(&mut self, on: bool) {
+        self.autopilot_enabled = on;
+    }
+
+    pub(crate) fn set_yes_man_enabled(&mut self, on: bool) {
+        self.yes_man_enabled = on;
+    }
+
+    pub(crate) fn set_reviewer_enabled(&mut self, on: bool) {
+        self.reviewer_enabled = on;
     }
 
     /// Get the current composer text.
@@ -1286,6 +1312,36 @@ impl WidgetRef for ChatComposer {
                             context_style,
                         ));
                     }
+                }
+
+                // Feature badges: Yes‑Man / Judge / Autopilot
+                if self.yes_man_enabled
+                    || self.judge_enabled
+                    || self.reviewer_enabled
+                    || self.autopilot_enabled
+                {
+                    hint.push("   ".into());
+                }
+                if self.yes_man_enabled {
+                    hint.push("yes-man".magenta().bold());
+                }
+                if self.reviewer_enabled {
+                    if self.yes_man_enabled {
+                        hint.push(" ".into());
+                    }
+                    hint.push("reviewer".cyan());
+                }
+                if self.judge_enabled {
+                    if self.yes_man_enabled || self.reviewer_enabled {
+                        hint.push(" ".into());
+                    }
+                    hint.push("judge".cyan());
+                }
+                if self.autopilot_enabled {
+                    if self.yes_man_enabled || self.judge_enabled || self.reviewer_enabled {
+                        hint.push(" ".into());
+                    }
+                    hint.push("autopilot".green());
                 }
 
                 Line::from(hint)
