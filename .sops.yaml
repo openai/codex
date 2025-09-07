@@ -1,0 +1,4 @@
+creation_rules:
+  - path_regex: \.secrets\/.*\.env\.enc$
+    encrypted_regex: '^(.*)$'
+    age: "age133smdkygqrhj7w7rfmwq8fvt6da6xk5gec2lksshx3zr775k5vvqhflzt8"
