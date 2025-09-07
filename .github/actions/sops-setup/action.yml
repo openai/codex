@@ -1,0 +1,54 @@
+name: SOPS Setup
+inputs:
+  sops_age_key:
+    description: Age private key contents
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Write age key
+      shell: bash
+      run: |
+        mkdir -p ~/.config/age
+        echo "$SOPS_AGE_KEY" > ~/.config/age/key.txt
+        chmod 600 ~/.config/age/key.txt
+      env:
+        SOPS_AGE_KEY: ${{ inputs.sops_age_key }}
+    - name: Install sops
+      shell: bash
+      run: |
+        if command -v sops >/dev/null 2>&1; then exit 0; fi
+        if [ "$(uname -s)" = "Linux" ]; then
+          if command -v sudo >/dev/null 2>&1 && command -v apt-get >/dev/null 2>&1; then
+            sudo apt-get update -y && sudo apt-get install -y -q sops || true
+          fi
+          if ! command -v sops >/dev/null 2>&1; then
+            VER="v3.10.2"
+            curl -fsSL -o sops.tgz "https://github.com/getsops/sops/releases/download/${VER}/sops-${VER}.linux.amd64.tar.gz" || {
+              curl -fsSL -o sops "https://github.com/getsops/sops/releases/download/${VER}/sops-${VER}.linux.amd64" && chmod +x sops && sudo mv sops /usr/local/bin/sops && exit 0
+            }
+            tar -xzf sops.tgz || true
+            if [ -f sops ]; then chmod +x sops && sudo mv sops /usr/local/bin/sops; fi
+            rm -f sops.tgz || true
+          fi
+        else
+          if command -v brew >/dev/null 2>&1; then brew install sops; fi
+        fi
+        command -v sops && sops --version
+    - name: Decrypt repo vault to .env.local
+      shell: bash
+      run: |
+        if [ -f .secrets/dev.env.enc ]; then
+          sops -d --input-type dotenv --output-type dotenv .secrets/dev.env.enc > .env.local
+        else
+          : > .env.local
+        fi
+    - name: Export env to GITHUB_ENV
+      shell: bash
+      run: |
+        if [ -s .env.local ]; then
+          while IFS= read -r line; do
+            [[ "$line" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]] || continue
+            echo "$line" >> "$GITHUB_ENV"
+          done < <(grep -v '^#' .env.local | sed '/^$/d')
+        fi

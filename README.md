@@ -100,3 +100,17 @@ Codex CLI supports a rich set of configuration options, with preferences stored 
 
 This repository is licensed under the [Apache-2.0 License](LICENSE).
 
+
+## Secrets (SOPS + age)
+- Repo vault: `.secrets/dev.env.enc` (encrypted dotenv)
+- Helper: `scripts/secrets` — `pull|edit|import|doctor`
+- Global defaults (optional): `Smarty-Pants-Inc/secrets/global/workstation.env.enc` → `~/.config/smarty/global.env`
+
+Local
+- Edit repo vault: `scripts/secrets edit dev`
+- Merge + write `.env.local`: `make secrets.pull && make secrets.doctor`
+
+CI
+- Add repo Actions secret `SOPS_AGE_KEY` (age private key)
+- Use composite action: `uses: ./.github/actions/sops-setup` with `sops_age_key: ${{ secrets.SOPS_AGE_KEY }}`
+- This writes `~/.config/age/key.txt`, installs `sops`, decrypts `.secrets/dev.env.enc` → `.env.local`, and exports keys to `GITHUB_ENV` for subsequent steps.
