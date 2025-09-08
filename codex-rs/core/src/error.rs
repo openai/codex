@@ -1,10 +1,10 @@
+use codex_protocol::mcp_protocol::ConversationId;
 use reqwest::StatusCode;
 use serde_json;
 use std::io;
 use std::time::Duration;
 use thiserror::Error;
 use tokio::task::JoinError;
-use uuid::Uuid;
 
 pub type Result<T> = std::result::Result<T, CodexErr>;
 
@@ -49,7 +49,7 @@ pub enum CodexErr {
     Stream(String, Option<Duration>),
 
     #[error("no conversation with id: {0}")]
-    ConversationNotFound(Uuid),
+    ConversationNotFound(ConversationId),
 
     #[error("session configured event was not the first event in the stream")]
     SessionConfiguredNotFirstEvent,
@@ -170,15 +170,15 @@ fn format_reset_duration(total_secs: u64) -> String {
     let mut parts: Vec<String> = Vec::new();
     if days > 0 {
         let unit = if days == 1 { "day" } else { "days" };
-        parts.push(format!("{} {}", days, unit));
+        parts.push(format!("{days} {unit}"));
     }
     if hours > 0 {
         let unit = if hours == 1 { "hour" } else { "hours" };
-        parts.push(format!("{} {}", hours, unit));
+        parts.push(format!("{hours} {unit}"));
     }
     if minutes > 0 {
         let unit = if minutes == 1 { "minute" } else { "minutes" };
-        parts.push(format!("{} {}", minutes, unit));
+        parts.push(format!("{minutes} {unit}"));
     }
 
     if parts.is_empty() {

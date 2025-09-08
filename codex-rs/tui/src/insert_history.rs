@@ -3,6 +3,7 @@ use std::io;
 use std::io::Write;
 
 use crate::tui;
+use crate::wrapping::word_wrap_lines_borrowed;
 use crossterm::Command;
 use crossterm::cursor::MoveTo;
 use crossterm::queue;
@@ -18,10 +19,9 @@ use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::text::Line;
 use ratatui::text::Span;
-use textwrap::Options as TwOptions;
-use textwrap::WordSplitter;
 
-/// Insert `lines` above the viewport.
+/// Insert `lines` above the viewport using the terminal's backend writer
+/// (avoids direct stdout references).
 pub(crate) fn insert_history_lines(terminal: &mut tui::Terminal, lines: Vec<Line>) {
     let mut out = std::io::stdout();
     insert_history_lines_to_writer(terminal, &mut out, lines);
@@ -43,7 +43,7 @@ pub fn insert_history_lines_to_writer<B, W>(
 
     // Pre-wrap lines using word-aware wrapping so terminal scrollback sees the same
     // formatting as the TUI. This avoids character-level hard wrapping by the terminal.
-    let wrapped = word_wrap_lines(&lines, area.width.max(1));
+    let wrapped = word_wrap_lines_borrowed(&lines, area.width.max(1) as usize);
     let wrapped_lines = wrapped.len() as u16;
     let cursor_top = if area.bottom() < screen_size.height {
         // If the viewport is not at the bottom of the screen, scroll it down to make room.
@@ -97,7 +97,7 @@ pub fn insert_history_lines_to_writer<B, W>(
 
     for line in wrapped {
         queue!(writer, Print("\r\n")).ok();
-        write_spans(writer, line.iter()).ok();
+        write_spans(writer, &line).ok();
     }
 
     queue!(writer, ResetScrollRegion).ok();
@@ -222,7 +222,7 @@ impl ModifierDiff {
 
 fn write_spans<'a, I>(mut writer: &mut impl Write, content: I) -> io::Result<()>
 where
-    I: Iterator<Item = &'a Span<'a>>,
+    I: IntoIterator<Item = &'a Span<'a>>,
 {
     let mut fg = Color::Reset;
     let mut bg = Color::Reset;
@@ -261,126 +261,6 @@ where
     )
 }
 
-/// Word-aware wrapping for a list of `Line`s preserving styles.
-pub(crate) fn word_wrap_lines(lines: &[Line], width: u16) -> Vec<Line<'static>> {
-    let mut out = Vec::new();
-    let w = width.max(1) as usize;
-    for line in lines {
-        out.extend(word_wrap_line(line, w));
-    }
-    out
-}
-
-fn word_wrap_line(line: &Line, width: usize) -> Vec<Line<'static>> {
-    if width == 0 {
-        return vec![to_owned_line(line)];
-    }
-    // Concatenate content and keep span boundaries for later re-slicing.
-    let mut flat = String::new();
-    let mut span_bounds = Vec::new(); // (start_byte, end_byte, style)
-    let mut cursor = 0usize;
-    for s in &line.spans {
-        let text = s.content.as_ref();
-        let start = cursor;
-        flat.push_str(text);
-        cursor += text.len();
-        span_bounds.push((start, cursor, s.style));
-    }
-
-    // Use textwrap for robust word-aware wrapping; no hyphenation, no breaking words.
-    let opts = TwOptions::new(width)
-        .break_words(false)
-        .word_splitter(WordSplitter::NoHyphenation);
-    let wrapped = textwrap::wrap(&flat, &opts);
-
-    if wrapped.len() <= 1 {
-        return vec![to_owned_line(line)];
-    }
-
-    // Map wrapped pieces back to byte ranges in `flat` sequentially.
-    let mut start_cursor = 0usize;
-    let mut out: Vec<Line<'static>> = Vec::with_capacity(wrapped.len());
-    for piece in wrapped {
-        let piece_str: &str = &piece;
-        if piece_str.is_empty() {
-            out.push(Line {
-                style: line.style,
-                alignment: line.alignment,
-                spans: Vec::new(),
-            });
-            continue;
-        }
-        // Find the next occurrence of piece_str at or after start_cursor.
-        // textwrap preserves order, so a linear scan is sufficient.
-        if let Some(rel) = flat[start_cursor..].find(piece_str) {
-            let s = start_cursor + rel;
-            let e = s + piece_str.len();
-            out.push(slice_line_spans(line, &span_bounds, s, e));
-            start_cursor = e;
-        } else {
-            // Fallback: slice by length from cursor.
-            let s = start_cursor;
-            let e = (start_cursor + piece_str.len()).min(flat.len());
-            out.push(slice_line_spans(line, &span_bounds, s, e));
-            start_cursor = e;
-        }
-    }
-
-    out
-}
-
-fn to_owned_line(l: &Line<'_>) -> Line<'static> {
-    Line {
-        style: l.style,
-        alignment: l.alignment,
-        spans: l
-            .spans
-            .iter()
-            .map(|s| Span {
-                style: s.style,
-                content: std::borrow::Cow::Owned(s.content.to_string()),
-            })
-            .collect(),
-    }
-}
-
-fn slice_line_spans(
-    original: &Line<'_>,
-    span_bounds: &[(usize, usize, ratatui::style::Style)],
-    start_byte: usize,
-    end_byte: usize,
-) -> Line<'static> {
-    let mut acc: Vec<Span<'static>> = Vec::new();
-    for (i, (s, e, style)) in span_bounds.iter().enumerate() {
-        if *e <= start_byte {
-            continue;
-        }
-        if *s >= end_byte {
-            break;
-        }
-        let seg_start = start_byte.max(*s);
-        let seg_end = end_byte.min(*e);
-        if seg_end > seg_start {
-            let local_start = seg_start - *s;
-            let local_end = seg_end - *s;
-            let content = original.spans[i].content.as_ref();
-            let slice = &content[local_start..local_end];
-            acc.push(Span {
-                style: *style,
-                content: std::borrow::Cow::Owned(slice.to_string()),
-            });
-        }
-        if *e >= end_byte {
-            break;
-        }
-    }
-    Line {
-        style: original.style,
-        alignment: original.alignment,
-        spans: acc,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -410,40 +290,6 @@ mod tests {
         assert_eq!(
             String::from_utf8(actual).unwrap(),
             String::from_utf8(expected).unwrap()
-        );
-    }
-
-    #[test]
-    fn line_height_counts_double_width_emoji() {
-        let line = Line::from("😀😀😀"); // each emoji ~ width 2
-        assert_eq!(word_wrap_line(&line, 4).len(), 2);
-        assert_eq!(word_wrap_line(&line, 2).len(), 3);
-        assert_eq!(word_wrap_line(&line, 6).len(), 1);
-    }
-
-    #[test]
-    fn word_wrap_does_not_split_words_simple_english() {
-        let sample = "Years passed, and Willowmere thrived in peace and friendship. Mira’s herb garden flourished with both ordinary and enchanted plants, and travelers spoke of the kindness of the woman who tended them.";
-        let line = Line::from(sample);
-        // Force small width to exercise wrapping at spaces.
-        let wrapped = word_wrap_lines(&[line], 40);
-        let joined: String = wrapped
-            .iter()
-            .map(|l| {
-                l.spans
-                    .iter()
-                    .map(|s| s.content.clone())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(
-            !joined.contains("bo\nth"),
-            "word 'both' should not be split across lines:\n{joined}"
-        );
-        assert!(
-            !joined.contains("Willowm\nere"),
-            "should not split inside words:\n{joined}"
         );
     }
 }

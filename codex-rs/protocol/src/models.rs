@@ -42,11 +42,13 @@ pub enum ContentItem {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ResponseItem {
     Message {
+        #[serde(skip_serializing)]
         id: Option<String>,
         role: String,
         content: Vec<ContentItem>,
     },
     Reasoning {
+        #[serde(default)]
         id: String,
         summary: Vec<ReasoningItemReasoningSummary>,
         #[serde(default, skip_serializing_if = "should_serialize_reasoning_content")]
@@ -55,6 +57,7 @@ pub enum ResponseItem {
     },
     LocalShellCall {
         /// Set when using the chat completions API.
+        #[serde(skip_serializing)]
         id: Option<String>,
         /// Set when using the Responses API.
         call_id: Option<String>,
@@ -62,6 +65,7 @@ pub enum ResponseItem {
         action: LocalShellAction,
     },
     FunctionCall {
+        #[serde(skip_serializing)]
         id: Option<String>,
         name: String,
         // The Responses API returns the function call arguments as a *string* that contains
@@ -82,7 +86,7 @@ pub enum ResponseItem {
         output: FunctionCallOutputPayload,
     },
     CustomToolCall {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(skip_serializing)]
         id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         status: Option<String>,
@@ -95,6 +99,22 @@ pub enum ResponseItem {
         call_id: String,
         output: String,
     },
+    // Emitted by the Responses API when the agent triggers a web search.
+    // Example payload (from SSE `response.output_item.done`):
+    // {
+    //   "id":"ws_...",
+    //   "type":"web_search_call",
+    //   "status":"completed",
+    //   "action": {"type":"search","query":"weather: San Francisco, CA"}
+    // }
+    WebSearchCall {
+        #[serde(skip_serializing)]
+        id: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<String>,
+        action: WebSearchAction,
+    },
+
     #[serde(other)]
     Other,
 }
@@ -160,6 +180,16 @@ pub struct LocalShellExecAction {
     pub working_directory: Option<String>,
     pub env: Option<HashMap<String, String>>,
     pub user: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum WebSearchAction {
+    Search {
+        query: String,
+    },
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -282,6 +312,8 @@ impl std::ops::Deref for FunctionCallOutputPayload {
         &self.content
     }
 }
+
+// (Moved event mapping logic into codex-core to avoid coupling protocol to UI-facing events.)
 
 #[cfg(test)]
 mod tests {

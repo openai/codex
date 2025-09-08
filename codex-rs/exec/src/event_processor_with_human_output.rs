@@ -25,6 +25,7 @@ use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnDiffEvent;
 use codex_core::protocol::WebSearchBeginEvent;
+use codex_core::protocol::WebSearchEndEvent;
 use owo_colors::OwoColorize;
 use owo_colors::Style;
 use shlex::try_join;
@@ -188,8 +189,14 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 }
                 return CodexStatus::InitiateShutdown;
             }
-            EventMsg::TokenCount(token_usage) => {
-                ts_println!(self, "tokens used: {}", token_usage.blended_total());
+            EventMsg::TokenCount(ev) => {
+                if let Some(usage_info) = ev.info {
+                    ts_println!(
+                        self,
+                        "tokens used: {}",
+                        usage_info.total_token_usage.blended_total()
+                    );
+                }
             }
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
                 if !self.answer_started {
@@ -362,8 +369,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     }
                 }
             }
-            EventMsg::WebSearchBegin(WebSearchBeginEvent { call_id: _, query }) => {
-                ts_println!(self, "🌐 {query}");
+            EventMsg::WebSearchBegin(WebSearchBeginEvent { call_id: _ }) => {}
+            EventMsg::WebSearchEnd(WebSearchEndEvent { call_id: _, query }) => {
+                ts_println!(self, "🌐 Searched: {query}");
             }
             EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
                 call_id,
@@ -402,13 +410,16 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                                 println!("{}", line.style(self.green));
                             }
                         }
-                        FileChange::Delete => {
+                        FileChange::Delete { content } => {
                             let header = format!(
                                 "{} {}",
                                 format_file_change(change),
                                 path.to_string_lossy()
                             );
                             println!("{}", header.style(self.magenta));
+                            for line in content.lines() {
+                                println!("{}", line.style(self.red));
+                            }
                         }
                         FileChange::Update {
                             unified_diff,
@@ -506,17 +517,18 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             }
             EventMsg::SessionConfigured(session_configured_event) => {
                 let SessionConfiguredEvent {
-                    session_id,
+                    session_id: conversation_id,
                     model,
                     history_log_id: _,
                     history_entry_count: _,
+                    initial_messages: _,
                 } = session_configured_event;
 
                 ts_println!(
                     self,
                     "{} {}",
                     "codex session".style(self.magenta).style(self.bold),
-                    session_id.to_string().style(self.dimmed)
+                    conversation_id.to_string().style(self.dimmed)
                 );
 
                 ts_println!(self, "model: {}", model);
@@ -533,6 +545,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             EventMsg::McpListToolsResponse(_) => {
                 // Currently ignored in exec output.
             }
+            EventMsg::ListCustomPromptsResponse(_) => {
+                // Currently ignored in exec output.
+            }
             EventMsg::TurnAborted(abort_reason) => match abort_reason.reason {
                 TurnAbortReason::Interrupted => {
                     ts_println!(self, "task interrupted");
@@ -543,6 +558,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             },
             EventMsg::ShutdownComplete => return CodexStatus::Shutdown,
             EventMsg::ConversationHistory(_) => {}
+            EventMsg::UserMessage(_) => {}
         }
         CodexStatus::Running
     }
@@ -555,7 +571,7 @@ fn escape_command(command: &[String]) -> String {
 fn format_file_change(change: &FileChange) -> &'static str {
     match change {
         FileChange::Add { .. } => "A",
-        FileChange::Delete => "D",
+        FileChange::Delete { .. } => "D",
         FileChange::Update {
             move_path: Some(_), ..
         } => "R",

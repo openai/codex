@@ -8,8 +8,6 @@ use std::path::PathBuf;
 use wildmatch::WildMatchPattern;
 
 use serde::Deserialize;
-use serde::Serialize;
-use strum_macros::Display;
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
@@ -20,6 +18,10 @@ pub struct McpServerConfig {
 
     #[serde(default)]
     pub env: Option<HashMap<String, String>>,
+
+    /// Startup timeout in milliseconds for initializing MCP server & initially listing tools.
+    #[serde(default)]
+    pub startup_timeout_ms: Option<u64>,
 }
 
 #[derive(Deserialize, Debug, Copy, Clone, PartialEq)]
@@ -88,6 +90,17 @@ pub struct SandboxWorkspaceWrite {
     pub exclude_tmpdir_env_var: bool,
     #[serde(default)]
     pub exclude_slash_tmp: bool,
+}
+
+impl From<SandboxWorkspaceWrite> for codex_protocol::mcp_protocol::SandboxSettings {
+    fn from(sandbox_workspace_write: SandboxWorkspaceWrite) -> Self {
+        Self {
+            writable_roots: sandbox_workspace_write.writable_roots,
+            network_access: Some(sandbox_workspace_write.network_access),
+            exclude_tmpdir_env_var: Some(sandbox_workspace_write.exclude_tmpdir_env_var),
+            exclude_slash_tmp: Some(sandbox_workspace_write.exclude_slash_tmp),
+        }
+    }
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
@@ -186,42 +199,10 @@ impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
     }
 }
 
-/// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning
-#[derive(Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq, Display)]
-#[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase")]
-pub enum ReasoningEffort {
-    Low,
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq, Default, Hash)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReasoningSummaryFormat {
     #[default]
-    Medium,
-    High,
-    /// Option to disable reasoning.
     None,
-}
-
-/// A summary of the reasoning performed by the model. This can be useful for
-/// debugging and understanding the model's reasoning process.
-/// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#reasoning-summaries
-#[derive(Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq, Display)]
-#[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase")]
-pub enum ReasoningSummary {
-    #[default]
-    Auto,
-    Concise,
-    Detailed,
-    /// Option to disable reasoning summaries.
-    None,
-}
-
-/// Controls output length/detail on GPT-5 models via the Responses API.
-/// Serialized with lowercase values to match the OpenAI API.
-#[derive(Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq, Display)]
-#[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase")]
-pub enum Verbosity {
-    Low,
-    #[default]
-    Medium,
-    High,
+    Experimental,
 }

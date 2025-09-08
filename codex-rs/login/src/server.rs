@@ -1,16 +1,23 @@
 use std::io::Cursor;
+use std::io::Read;
+use std::io::Write;
 use std::io::{self};
+use std::net::SocketAddr;
+use std::net::TcpStream;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
-use crate::AuthDotJson;
-use crate::get_auth_file;
 use crate::pkce::PkceCodes;
 use crate::pkce::generate_pkce;
 use base64::Engine;
 use chrono::Utc;
+use codex_core::auth::AuthDotJson;
+use codex_core::auth::get_auth_file;
+use codex_core::token_data::TokenData;
+use codex_core::token_data::parse_id_token;
 use rand::RngCore;
 use tiny_http::Header;
 use tiny_http::Request;
@@ -28,10 +35,11 @@ pub struct ServerOptions {
     pub port: u16,
     pub open_browser: bool,
     pub force_state: Option<String>,
+    pub originator: String,
 }
 
 impl ServerOptions {
-    pub fn new(codex_home: PathBuf, client_id: String) -> Self {
+    pub fn new(codex_home: PathBuf, client_id: String, originator: String) -> Self {
         Self {
             codex_home,
             client_id: client_id.to_string(),
@@ -39,6 +47,7 @@ impl ServerOptions {
             port: DEFAULT_PORT,
             open_browser: true,
             force_state: None,
+            originator,
         }
     }
 }
@@ -81,7 +90,7 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
     let pkce = generate_pkce();
     let state = opts.force_state.clone().unwrap_or_else(generate_state);
 
-    let server = Server::http(format!("127.0.0.1:{}", opts.port)).map_err(io::Error::other)?;
+    let server = bind_server(opts.port)?;
     let actual_port = match server.server_addr().to_ip() {
         Some(addr) => addr.port(),
         None => {
@@ -94,7 +103,14 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
     let server = Arc::new(server);
 
     let redirect_uri = format!("http://localhost:{actual_port}/auth/callback");
-    let auth_url = build_authorize_url(&opts.issuer, &opts.client_id, &redirect_uri, &pkce, &state);
+    let auth_url = build_authorize_url(
+        &opts.issuer,
+        &opts.client_id,
+        &redirect_uri,
+        &pkce,
+        &state,
+        &opts.originator,
+    );
 
     if opts.open_browser {
         let _ = webbrowser::open(&auth_url);
@@ -134,19 +150,24 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
                         let response =
                             process_request(&url_raw, &opts, &redirect_uri, &pkce, actual_port, &state).await;
 
-                        let is_login_complete = matches!(response, HandledRequest::ResponseAndExit(_));
-                        match response {
-                            HandledRequest::Response(r) | HandledRequest::ResponseAndExit(r) => {
-                                let _ = tokio::task::spawn_blocking(move || req.respond(r)).await;
+                        let exit_result = match response {
+                            HandledRequest::Response(response) => {
+                                let _ = tokio::task::spawn_blocking(move || req.respond(response)).await;
+                                None
+                            }
+                            HandledRequest::ResponseAndExit { response, result } => {
+                                let _ = tokio::task::spawn_blocking(move || req.respond(response)).await;
+                                Some(result)
                             }
                             HandledRequest::RedirectWithHeader(header) => {
                                 let redirect = Response::empty(302).with_header(header);
                                 let _ = tokio::task::spawn_blocking(move || req.respond(redirect)).await;
+                                None
                             }
-                        }
+                        };
 
-                        if is_login_complete {
-                            break Ok(());
+                        if let Some(result) = exit_result {
+                            break result;
                         }
                     }
                 }
@@ -170,7 +191,10 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
 enum HandledRequest {
     Response(Response<Cursor<Vec<u8>>>),
     RedirectWithHeader(Header),
-    ResponseAndExit(Response<Cursor<Vec<u8>>>),
+    ResponseAndExit {
+        response: Response<Cursor<Vec<u8>>>,
+        result: io::Result<()>,
+    },
 }
 
 async fn process_request(
@@ -265,8 +289,18 @@ async fn process_request(
             ) {
                 resp.add_header(h);
             }
-            HandledRequest::ResponseAndExit(resp)
+            HandledRequest::ResponseAndExit {
+                response: resp,
+                result: Ok(()),
+            }
         }
+        "/cancel" => HandledRequest::ResponseAndExit {
+            response: Response::from_string("Login cancelled"),
+            result: Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "Login cancelled",
+            )),
+        },
         _ => HandledRequest::Response(Response::from_string("Not Found").with_status_code(404)),
     }
 }
@@ -277,6 +311,7 @@ fn build_authorize_url(
     redirect_uri: &str,
     pkce: &PkceCodes,
     state: &str,
+    originator: &str,
 ) -> String {
     let query = vec![
         ("response_type", "code"),
@@ -288,6 +323,7 @@ fn build_authorize_url(
         ("id_token_add_organizations", "true"),
         ("codex_cli_simplified_flow", "true"),
         ("state", state),
+        ("originator", originator),
     ];
     let qs = query
         .into_iter()
@@ -301,6 +337,68 @@ fn generate_state() -> String {
     let mut bytes = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut bytes);
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn send_cancel_request(port: u16) -> io::Result<()> {
+    let addr: SocketAddr = format!("127.0.0.1:{port}")
+        .parse()
+        .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2))?;
+    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+
+    stream.write_all(b"GET /cancel HTTP/1.1\r\n")?;
+    stream.write_all(format!("Host: 127.0.0.1:{port}\r\n").as_bytes())?;
+    stream.write_all(b"Connection: close\r\n\r\n")?;
+
+    let mut buf = [0u8; 64];
+    let _ = stream.read(&mut buf);
+    Ok(())
+}
+
+fn bind_server(port: u16) -> io::Result<Server> {
+    let bind_address = format!("127.0.0.1:{port}");
+    let mut cancel_attempted = false;
+    let mut attempts = 0;
+    const MAX_ATTEMPTS: u32 = 10;
+    const RETRY_DELAY: Duration = Duration::from_millis(200);
+
+    loop {
+        match Server::http(&bind_address) {
+            Ok(server) => return Ok(server),
+            Err(err) => {
+                attempts += 1;
+                let is_addr_in_use = err
+                    .downcast_ref::<io::Error>()
+                    .map(|io_err| io_err.kind() == io::ErrorKind::AddrInUse)
+                    .unwrap_or(false);
+
+                // If the address is in use, there is probably another instance of the login server
+                // running. Attempt to cancel it and retry.
+                if is_addr_in_use {
+                    if !cancel_attempted {
+                        cancel_attempted = true;
+                        if let Err(cancel_err) = send_cancel_request(port) {
+                            eprintln!("Failed to cancel previous login server: {cancel_err}");
+                        }
+                    }
+
+                    thread::sleep(RETRY_DELAY);
+
+                    if attempts >= MAX_ATTEMPTS {
+                        return Err(io::Error::new(
+                            io::ErrorKind::AddrInUse,
+                            format!("Port {bind_address} is already in use"),
+                        ));
+                    }
+
+                    continue;
+                }
+
+                return Err(io::Error::other(err));
+            }
+        }
+    }
 }
 
 struct ExchangedTokens {
@@ -374,10 +472,8 @@ async fn persist_tokens_async(
         if let Some(key) = api_key {
             auth.openai_api_key = Some(key);
         }
-        let tokens = auth
-            .tokens
-            .get_or_insert_with(crate::token_data::TokenData::default);
-        tokens.id_token = crate::token_data::parse_id_token(&id_token).map_err(io::Error::other)?;
+        let tokens = auth.tokens.get_or_insert_with(TokenData::default);
+        tokens.id_token = parse_id_token(&id_token).map_err(io::Error::other)?;
         // Persist chatgpt_account_id if present in claims
         if let Some(acc) = jwt_auth_claims(&id_token)
             .get("chatgpt_account_id")
@@ -392,14 +488,14 @@ async fn persist_tokens_async(
             tokens.refresh_token = rt;
         }
         auth.last_refresh = Some(Utc::now());
-        super::write_auth_json(&auth_file, &auth)
+        codex_core::auth::write_auth_json(&auth_file, &auth)
     })
     .await
     .map_err(|e| io::Error::other(format!("persist task failed: {e}")))?
 }
 
 fn read_or_default(path: &Path) -> AuthDotJson {
-    match super::try_read_auth_json(path) {
+    match codex_core::auth::try_read_auth_json(path) {
         Ok(auth) => auth,
         Err(_) => AuthDotJson {
             openai_api_key: None,

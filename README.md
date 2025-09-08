@@ -14,10 +14,16 @@
 
 ### Installing and running Codex CLI
 
-Install globally with your preferred package manager:
+Install globally with your preferred package manager. If you use npm:
 
 ```shell
-npm install -g @openai/codex  # Alternatively: `brew install codex`
+npm install -g @openai/codex
+```
+
+Alternatively, if you use Homebrew:
+
+```shell
+brew install codex
 ```
 
 Then simply run `codex` to get started:
@@ -69,7 +75,7 @@ Codex CLI supports a rich set of configuration options, with preferences stored 
   - [CLI usage](./docs/getting-started.md#cli-usage)
   - [Running with a prompt as input](./docs/getting-started.md#running-with-a-prompt-as-input)
   - [Example prompts](./docs/getting-started.md#example-prompts)
-  - [Memory with AGENTS.md](./docs/getting-started.md#memory--project-docs)
+  - [Memory with AGENTS.md](./docs/getting-started.md#memory-with-agentsmd)
   - [Configuration](./docs/config.md)
 - [**Sandbox & approvals**](./docs/sandbox.md)
 - [**Authentication**](./docs/authentication.md)

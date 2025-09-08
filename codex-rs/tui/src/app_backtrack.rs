@@ -4,6 +4,7 @@ use crate::pager_overlay::Overlay;
 use crate::tui;
 use crate::tui::TuiEvent;
 use codex_core::protocol::ConversationHistoryResponseEvent;
+use codex_protocol::mcp_protocol::ConversationId;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -14,13 +15,13 @@ pub(crate) struct BacktrackState {
     /// True when Esc has primed backtrack mode in the main view.
     pub(crate) primed: bool,
     /// Session id of the base conversation to fork from.
-    pub(crate) base_id: Option<uuid::Uuid>,
+    pub(crate) base_id: Option<ConversationId>,
     /// Current step count (Nth last user message).
     pub(crate) count: usize,
     /// True when the transcript overlay is showing a backtrack preview.
     pub(crate) overlay_preview_active: bool,
     /// Pending fork request: (base_id, drop_count, prefill).
-    pub(crate) pending: Option<(uuid::Uuid, usize, String)>,
+    pub(crate) pending: Option<(ConversationId, usize, String)>,
 }
 
 impl App {
@@ -91,7 +92,7 @@ impl App {
     pub(crate) fn request_backtrack(
         &mut self,
         prefill: String,
-        base_id: uuid::Uuid,
+        base_id: ConversationId,
         drop_last_messages: usize,
     ) {
         self.backtrack.pending = Some((base_id, drop_last_messages, prefill));
@@ -135,7 +136,7 @@ impl App {
     fn prime_backtrack(&mut self) {
         self.backtrack.primed = true;
         self.backtrack.count = 0;
-        self.backtrack.base_id = self.chat_widget.session_id();
+        self.backtrack.base_id = self.chat_widget.conversation_id();
         self.chat_widget.show_esc_backtrack_hint();
     }
 
@@ -151,7 +152,7 @@ impl App {
     /// When overlay is already open, begin preview mode and select latest user message.
     fn begin_overlay_backtrack_preview(&mut self, tui: &mut tui::Tui) {
         self.backtrack.primed = true;
-        self.backtrack.base_id = self.chat_widget.session_id();
+        self.backtrack.base_id = self.chat_widget.conversation_id();
         self.backtrack.overlay_preview_active = true;
         let sel = self.compute_backtrack_selection(tui, 1);
         self.apply_backtrack_selection(sel);
@@ -319,14 +320,16 @@ impl App {
     ) {
         let conv = new_conv.conversation;
         let session_configured = new_conv.session_configured;
-        self.chat_widget = crate::chatwidget::ChatWidget::new_from_existing(
-            cfg,
-            conv,
-            session_configured,
-            tui.frame_requester(),
-            self.app_event_tx.clone(),
-            self.enhanced_keys_supported,
-        );
+        let init = crate::chatwidget::ChatWidgetInit {
+            config: cfg,
+            frame_requester: tui.frame_requester(),
+            app_event_tx: self.app_event_tx.clone(),
+            initial_prompt: None,
+            initial_images: Vec::new(),
+            enhanced_keys_supported: self.enhanced_keys_supported,
+        };
+        self.chat_widget =
+            crate::chatwidget::ChatWidget::new_from_existing(init, conv, session_configured);
         // Trim transcript up to the selected user message and re-render it.
         self.trim_transcript_for_backtrack(drop_count);
         self.render_transcript_once(tui);
