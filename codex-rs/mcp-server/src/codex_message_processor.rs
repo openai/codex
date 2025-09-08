@@ -99,7 +99,7 @@ pub(crate) struct CodexMessageProcessor {
     conversation_listeners: HashMap<Uuid, oneshot::Sender<()>>,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     // Queue of pending interrupt requests per conversation. We reply when TurnAborted arrives.
-    pending_interrupts: Arc<Mutex<HashMap<Uuid, Vec<RequestId>>>>,
+    pending_interrupts: Arc<Mutex<HashMap<ConversationId, Vec<RequestId>>>>,
 }
 
 impl CodexMessageProcessor {
@@ -511,7 +511,7 @@ impl CodexMessageProcessor {
                     ..
                 } = conversation_id;
                 let response = NewConversationResponse {
-                    conversation_id: ConversationId(conversation_id),
+                    conversation_id,
                     model: session_configured.model,
                 };
                 self.outgoing.send_response(request_id, response).await;
@@ -632,7 +632,7 @@ impl CodexMessageProcessor {
 
                 // Reply with conversation id + model and initial messages (when present)
                 let response = codex_protocol::mcp_protocol::ResumeConversationResponse {
-                    conversation_id: ConversationId(conversation_id),
+                    conversation_id,
                     model: session_configured.model.clone(),
                     initial_messages: session_configured.initial_messages.clone(),
                 };
@@ -656,7 +656,7 @@ impl CodexMessageProcessor {
         } = params;
         let Ok(conversation) = self
             .conversation_manager
-            .get_conversation(conversation_id.0)
+            .get_conversation(conversation_id)
             .await
         else {
             let error = JSONRPCErrorError {
@@ -704,7 +704,7 @@ impl CodexMessageProcessor {
 
         let Ok(conversation) = self
             .conversation_manager
-            .get_conversation(conversation_id.0)
+            .get_conversation(conversation_id)
             .await
         else {
             let error = JSONRPCErrorError {
@@ -750,7 +750,7 @@ impl CodexMessageProcessor {
         let InterruptConversationParams { conversation_id } = params;
         let Ok(conversation) = self
             .conversation_manager
-            .get_conversation(conversation_id.0)
+            .get_conversation(conversation_id)
             .await
         else {
             let error = JSONRPCErrorError {
@@ -765,7 +765,7 @@ impl CodexMessageProcessor {
         // Record the pending interrupt so we can reply when TurnAborted arrives.
         {
             let mut map = self.pending_interrupts.lock().await;
-            map.entry(conversation_id.0).or_default().push(request_id);
+            map.entry(conversation_id).or_default().push(request_id);
         }
 
         // Submit the interrupt; we'll respond upon TurnAborted.
@@ -780,12 +780,12 @@ impl CodexMessageProcessor {
         let AddConversationListenerParams { conversation_id } = params;
         let Ok(conversation) = self
             .conversation_manager
-            .get_conversation(conversation_id.0)
+            .get_conversation(conversation_id)
             .await
         else {
             let error = JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("conversation not found: {}", conversation_id.0),
+                message: format!("conversation not found: {conversation_id}"),
                 data: None,
             };
             self.outgoing.send_error(request_id, error).await;
@@ -898,7 +898,7 @@ async fn apply_bespoke_event_handling(
     conversation_id: ConversationId,
     conversation: Arc<CodexConversation>,
     outgoing: Arc<OutgoingMessageSender>,
-    pending_interrupts: Arc<Mutex<HashMap<Uuid, Vec<RequestId>>>>,
+    pending_interrupts: Arc<Mutex<HashMap<ConversationId, Vec<RequestId>>>>,
 ) {
     let Event { id: event_id, msg } = event;
     match msg {
@@ -951,7 +951,7 @@ async fn apply_bespoke_event_handling(
         EventMsg::TurnAborted(turn_aborted_event) => {
             let pending = {
                 let mut map = pending_interrupts.lock().await;
-                map.remove(&conversation_id.0).unwrap_or_default()
+                map.remove(&conversation_id).unwrap_or_default()
             };
             if !pending.is_empty() {
                 let response = InterruptConversationResponse {

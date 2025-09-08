@@ -85,7 +85,7 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_file_search::FileMatch;
-use uuid::Uuid;
+use codex_protocol::mcp_protocol::ConversationId;
 
 // Track information about an in-flight exec command.
 struct RunningCommand {
@@ -121,7 +121,7 @@ pub(crate) struct ChatWidget {
     reasoning_buffer: String,
     // Accumulates full reasoning content for transcript-only recording
     full_reasoning_buffer: String,
-    session_id: Option<Uuid>,
+    conversation_id: Option<ConversationId>,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
@@ -163,7 +163,7 @@ impl ChatWidget {
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
-        self.session_id = Some(event.session_id);
+        self.conversation_id = Some(event.session_id);
         let initial_messages = event.initial_messages.clone();
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);
@@ -660,7 +660,7 @@ impl ChatWidget {
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
-            session_id: None,
+            conversation_id: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: true,
             suppress_session_configured_redraw: false,
@@ -712,7 +712,7 @@ impl ChatWidget {
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
-            session_id: None,
+            conversation_id: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: false,
             suppress_session_configured_redraw: true,
@@ -1159,7 +1159,7 @@ impl ChatWidget {
         self.add_to_history(history_cell::new_status_output(
             &self.config,
             usage_ref,
-            &self.session_id,
+            &self.conversation_id,
         ));
     }
 
@@ -1360,8 +1360,8 @@ impl ChatWidget {
             .unwrap_or_default()
     }
 
-    pub(crate) fn session_id(&self) -> Option<Uuid> {
-        self.session_id
+    pub(crate) fn conversation_id(&self) -> Option<ConversationId> {
+        self.conversation_id
     }
 
     /// Return a reference to the widget's current config (includes any

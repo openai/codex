@@ -5,7 +5,7 @@
 //! JSON-Lines tooling. Each record has the following schema:
 //!
 //! ````text
-//! {"session_id":"<uuid>","ts":<unix_seconds>,"text":"<message>"}
+//! {"conversation_id":"<uuid>","ts":<unix_seconds>,"text":"<message>"}
 //! ````
 //!
 //! To minimise the chance of interleaved writes when multiple processes are
@@ -22,10 +22,11 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 use serde::Serialize;
+
+use codex_protocol::mcp_protocol::ConversationId;
 use std::time::Duration;
 use tokio::fs;
 use tokio::io::AsyncReadExt;
-use uuid::Uuid;
 
 use crate::config::Config;
 use crate::config_types::HistoryPersistence;
@@ -54,10 +55,14 @@ fn history_filepath(config: &Config) -> PathBuf {
     path
 }
 
-/// Append a `text` entry associated with `session_id` to the history file. Uses
+/// Append a `text` entry associated with `conversation_id` to the history file. Uses
 /// advisory file locking to ensure that concurrent writes do not interleave,
 /// which entails a small amount of blocking I/O internally.
-pub(crate) async fn append_entry(text: &str, session_id: &Uuid, config: &Config) -> Result<()> {
+pub(crate) async fn append_entry(
+    text: &str,
+    conversation_id: &ConversationId,
+    config: &Config,
+) -> Result<()> {
     match config.history.persistence {
         HistoryPersistence::SaveAll => {
             // Save everything: proceed.
@@ -84,7 +89,7 @@ pub(crate) async fn append_entry(text: &str, session_id: &Uuid, config: &Config)
 
     // Construct the JSON line first so we can write it in a single syscall.
     let entry = HistoryEntry {
-        session_id: session_id.to_string(),
+        session_id: conversation_id.to_string(),
         ts,
         text: text.to_string(),
     };
