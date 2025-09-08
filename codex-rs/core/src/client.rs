@@ -1,12 +1,15 @@
 use std::io::BufRead;
 use std::path::Path;
+use std::sync::OnceLock;
 use std::time::Duration;
 
+use crate::AuthManager;
 use bytes::Bytes;
-use codex_login::AuthManager;
-use codex_login::AuthMode;
+use codex_protocol::mcp_protocol::AuthMode;
+use codex_protocol::mcp_protocol::ConversationId;
 use eventsource_stream::Eventsource;
 use futures::prelude::*;
+use regex_lite::Regex;
 use reqwest::StatusCode;
 use serde::Deserialize;
 use serde::Serialize;
@@ -17,7 +20,6 @@ use tokio_util::io::ReaderStream;
 use tracing::debug;
 use tracing::trace;
 use tracing::warn;
-use uuid::Uuid;
 
 use crate::chat_completions::AggregateStreamExt;
 use crate::chat_completions::stream_chat_completions;
@@ -28,6 +30,7 @@ use crate::client_common::ResponsesApiRequest;
 use crate::client_common::create_reasoning_param_for_request;
 use crate::client_common::create_text_param_for_request;
 use crate::config::Config;
+use crate::default_client::create_client;
 use crate::error::CodexErr;
 use crate::error::Result;
 use crate::error::UsageLimitReachedError;
@@ -38,7 +41,6 @@ use crate::model_provider_info::WireApi;
 use crate::openai_model_info::get_model_info;
 use crate::openai_tools::create_tools_json_for_responses_api;
 use crate::protocol::TokenUsage;
-use crate::user_agent::get_codex_user_agent;
 use crate::util::backoff;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -53,6 +55,8 @@ struct ErrorResponse {
 #[derive(Debug, Deserialize)]
 struct Error {
     r#type: Option<String>,
+    #[allow(dead_code)]
+    code: Option<String>,
     message: Option<String>,
 
     // Optional fields available on "usage_limit_reached" and "usage_not_included" errors
@@ -66,7 +70,7 @@ pub struct ModelClient {
     auth_manager: Option<Arc<AuthManager>>,
     client: reqwest::Client,
     provider: ModelProviderInfo,
-    session_id: Uuid,
+    conversation_id: ConversationId,
     effort: ReasoningEffortConfig,
     summary: ReasoningSummaryConfig,
 }
@@ -78,14 +82,16 @@ impl ModelClient {
         provider: ModelProviderInfo,
         effort: ReasoningEffortConfig,
         summary: ReasoningSummaryConfig,
-        session_id: Uuid,
+        conversation_id: ConversationId,
     ) -> Self {
+        let client = create_client(&config.responses_originator_header);
+
         Self {
             config,
             auth_manager,
-            client: reqwest::Client::new(),
+            client,
             provider,
-            session_id,
+            conversation_id,
             effort,
             summary,
         }
@@ -151,14 +157,6 @@ impl ModelClient {
 
         let auth_manager = self.auth_manager.clone();
 
-        let auth_mode = auth_manager
-            .as_ref()
-            .and_then(|m| m.auth())
-            .as_ref()
-            .map(|a| a.mode);
-
-        let store = prompt.store && auth_mode != Some(AuthMode::ChatGPT);
-
         let full_instructions = prompt.get_full_instructions(&self.config.model_family);
         let tools_json = create_tools_json_for_responses_api(&prompt.tools)?;
         let reasoning = create_reasoning_param_for_request(
@@ -167,9 +165,7 @@ impl ModelClient {
             self.summary,
         );
 
-        // Request encrypted COT if we are not storing responses,
-        // otherwise reasoning items will be referenced by ID
-        let include: Vec<String> = if !store && reasoning.is_some() {
+        let include: Vec<String> = if reasoning.is_some() {
             vec!["reasoning.encrypted_content".to_string()]
         } else {
             vec![]
@@ -198,10 +194,10 @@ impl ModelClient {
             tool_choice: "auto",
             parallel_tool_calls: false,
             reasoning,
-            store,
+            store: false,
             stream: true,
             include,
-            prompt_cache_key: Some(self.session_id.to_string()),
+            prompt_cache_key: Some(self.conversation_id.to_string()),
             text,
         };
 
@@ -227,7 +223,9 @@ impl ModelClient {
 
             req_builder = req_builder
                 .header("OpenAI-Beta", "responses=experimental")
-                .header("session_id", self.session_id.to_string())
+                // Send session_id for compatibility.
+                .header("conversation_id", self.conversation_id.to_string())
+                .header("session_id", self.conversation_id.to_string())
                 .header(reqwest::header::ACCEPT, "text/event-stream")
                 .json(&payload);
 
@@ -237,10 +235,6 @@ impl ModelClient {
             {
                 req_builder = req_builder.header("chatgpt-account-id", account_id);
             }
-
-            let originator = &self.config.responses_originator_header;
-            req_builder = req_builder.header("originator", originator);
-            req_builder = req_builder.header("User-Agent", get_codex_user_agent(Some(originator)));
 
             let res = req_builder.send().await;
             if let Ok(resp) = &res {
@@ -406,9 +400,15 @@ impl From<ResponseCompletedUsage> for TokenUsage {
     fn from(val: ResponseCompletedUsage) -> Self {
         TokenUsage {
             input_tokens: val.input_tokens,
-            cached_input_tokens: val.input_tokens_details.map(|d| d.cached_tokens),
+            cached_input_tokens: val
+                .input_tokens_details
+                .map(|d| d.cached_tokens)
+                .unwrap_or(0),
             output_tokens: val.output_tokens,
-            reasoning_output_tokens: val.output_tokens_details.map(|d| d.reasoning_tokens),
+            reasoning_output_tokens: val
+                .output_tokens_details
+                .map(|d| d.reasoning_tokens)
+                .unwrap_or(0),
             total_tokens: val.total_tokens,
         }
     }
@@ -564,8 +564,9 @@ async fn process_sse<S>(
                     if let Some(error) = error {
                         match serde_json::from_value::<Error>(error.clone()) {
                             Ok(error) => {
+                                let delay = try_parse_retry_after(&error);
                                 let message = error.message.unwrap_or_default();
-                                response_error = Some(CodexErr::Stream(message, None));
+                                response_error = Some(CodexErr::Stream(message, delay));
                             }
                             Err(e) => {
                                 debug!("failed to parse ErrorResponse: {e}");
@@ -649,6 +650,40 @@ async fn stream_from_fixture(
         provider.stream_idle_timeout(),
     ));
     Ok(ResponseStream { rx_event })
+}
+
+fn rate_limit_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+
+    #[expect(clippy::unwrap_used)]
+    RE.get_or_init(|| Regex::new(r"Please try again in (\d+(?:\.\d+)?)(s|ms)").unwrap())
+}
+
+fn try_parse_retry_after(err: &Error) -> Option<Duration> {
+    if err.code != Some("rate_limit_exceeded".to_string()) {
+        return None;
+    }
+
+    // parse the Please try again in 1.898s format using regex
+    let re = rate_limit_regex();
+    if let Some(message) = &err.message
+        && let Some(captures) = re.captures(message)
+    {
+        let seconds = captures.get(1);
+        let unit = captures.get(2);
+
+        if let (Some(value), Some(unit)) = (seconds, unit) {
+            let value = value.as_str().parse::<f64>().ok()?;
+            let unit = unit.as_str();
+
+            if unit == "s" {
+                return Some(Duration::from_secs_f64(value));
+            } else if unit == "ms" {
+                return Some(Duration::from_millis(value as u64));
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -871,7 +906,7 @@ mod tests {
                     msg,
                     "Rate limit reached for gpt-5 in organization org-AAA on tokens per min (TPM): Limit 30000, Used 22999, Requested 12528. Please try again in 11.054s. Visit https://platform.openai.com/account/rate-limits to learn more."
                 );
-                assert_eq!(*delay, None);
+                assert_eq!(*delay, Some(Duration::from_secs_f64(11.054)));
             }
             other => panic!("unexpected second event: {other:?}"),
         }
@@ -974,5 +1009,32 @@ mod tests {
                 case.name
             );
         }
+    }
+
+    #[test]
+    fn test_try_parse_retry_after() {
+        let err = Error {
+            r#type: None,
+            message: Some("Rate limit reached for gpt-5 in organization org- on tokens per min (TPM): Limit 1, Used 1, Requested 19304. Please try again in 28ms. Visit https://platform.openai.com/account/rate-limits to learn more.".to_string()),
+            code: Some("rate_limit_exceeded".to_string()),
+            plan_type: None,
+            resets_in_seconds: None
+        };
+
+        let delay = try_parse_retry_after(&err);
+        assert_eq!(delay, Some(Duration::from_millis(28)));
+    }
+
+    #[test]
+    fn test_try_parse_retry_after_no_delay() {
+        let err = Error {
+            r#type: None,
+            message: Some("Rate limit reached for gpt-5 in organization <ORG> on tokens per min (TPM): Limit 30000, Used 6899, Requested 24050. Please try again in 1.898s. Visit https://platform.openai.com/account/rate-limits to learn more.".to_string()),
+            code: Some("rate_limit_exceeded".to_string()),
+            plan_type: None,
+            resets_in_seconds: None
+        };
+        let delay = try_parse_retry_after(&err);
+        assert_eq!(delay, Some(Duration::from_secs_f64(1.898)));
     }
 }

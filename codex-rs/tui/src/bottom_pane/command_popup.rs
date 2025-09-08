@@ -195,7 +195,15 @@ impl WidgetRef for CommandPopup {
                 })
                 .collect()
         };
-        render_rows(area, buf, &rows_all, &self.state, MAX_POPUP_ROWS, false);
+        render_rows(
+            area,
+            buf,
+            &rows_all,
+            &self.state,
+            MAX_POPUP_ROWS,
+            false,
+            "no matches",
+        );
     }
 }
 
@@ -235,6 +243,20 @@ mod tests {
             Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "init"),
             Some(CommandItem::UserPrompt(_)) => panic!("unexpected prompt selected for '/init'"),
             None => panic!("expected a selected command for exact match"),
+        }
+    }
+
+    #[test]
+    fn model_is_first_suggestion_for_mo() {
+        let mut popup = CommandPopup::new(Vec::new());
+        popup.on_composer_text_change("/mo".to_string());
+        let matches = popup.filtered_items();
+        match matches.first() {
+            Some(CommandItem::Builtin(cmd)) => assert_eq!(cmd.command(), "model"),
+            Some(CommandItem::UserPrompt(_)) => {
+                panic!("unexpected prompt ranked before '/model' for '/mo'")
+            }
+            None => panic!("expected at least one match for '/mo'"),
         }
     }
 

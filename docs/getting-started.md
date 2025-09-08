@@ -10,6 +10,20 @@
 
 Key flags: `--model/-m`, `--ask-for-approval/-a`.
 
+<!--
+Resume options:
+
+- `--resume`: open an interactive picker of recent sessions (shows a preview of the first real user message). Conflicts with `--continue`.
+- `--continue`: resume the most recent session without showing the picker (falls back to starting fresh if none exist). Conflicts with `--resume`.
+
+Examples:
+
+```shell
+codex --resume
+codex --continue
+```
+-->
+
 ### Running with a prompt as input
 
 You can also run Codex CLI with a prompt as input:
@@ -48,7 +62,7 @@ You can give Codex extra instructions and guidance using `AGENTS.md` files. Code
 2. `AGENTS.md` at repo root - shared project notes
 3. `AGENTS.md` in the current working directory - sub-folder/feature specifics
 
-For more information on how to use AGENTS.md, see the [official AGENTS.md documentation](./agents.md).
+For more information on how to use AGENTS.md, see the [official AGENTS.md documentation](https://agents.md/).
 
 ### Tips & shortcuts
 
