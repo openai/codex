@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use crate::AuthManager;
 use crate::CodexAuth;
+use codex_protocol::mcp_protocol::ConversationId;
 use tokio::sync::RwLock;
-use uuid::Uuid;
 
 use crate::codex::Codex;
 use crate::codex::CodexSpawnOk;
@@ -29,7 +29,7 @@ pub enum InitialHistory {
 /// Represents a newly created Codex conversation, including the first event
 /// (which is [`EventMsg::SessionConfigured`]).
 pub struct NewConversation {
-    pub conversation_id: Uuid,
+    pub conversation_id: ConversationId,
     pub conversation: Arc<CodexConversation>,
     pub session_configured: SessionConfiguredEvent,
 }
@@ -37,7 +37,7 @@ pub struct NewConversation {
 /// [`ConversationManager`] is responsible for creating conversations and
 /// maintaining them in memory.
 pub struct ConversationManager {
-    conversations: Arc<RwLock<HashMap<Uuid, Arc<CodexConversation>>>>,
+    conversations: Arc<RwLock<HashMap<ConversationId, Arc<CodexConversation>>>>,
     auth_manager: Arc<AuthManager>,
 }
 
@@ -70,13 +70,13 @@ impl ConversationManager {
             let initial_history = RolloutRecorder::get_rollout_history(resume_path).await?;
             let CodexSpawnOk {
                 codex,
-                session_id: conversation_id,
+                conversation_id,
             } = Codex::spawn(config, auth_manager, initial_history).await?;
             self.finalize_spawn(codex, conversation_id).await
         } else {
             let CodexSpawnOk {
                 codex,
-                session_id: conversation_id,
+                conversation_id,
             } = { Codex::spawn(config, auth_manager, InitialHistory::New).await? };
             self.finalize_spawn(codex, conversation_id).await
         }
@@ -85,7 +85,7 @@ impl ConversationManager {
     async fn finalize_spawn(
         &self,
         codex: Codex,
-        conversation_id: Uuid,
+        conversation_id: ConversationId,
     ) -> CodexResult<NewConversation> {
         // The first event must be `SessionInitialized`. Validate and forward it
         // to the caller so that they can display it in the conversation
@@ -116,7 +116,7 @@ impl ConversationManager {
 
     pub async fn get_conversation(
         &self,
-        conversation_id: Uuid,
+        conversation_id: ConversationId,
     ) -> CodexResult<Arc<CodexConversation>> {
         let conversations = self.conversations.read().await;
         conversations
@@ -134,12 +134,12 @@ impl ConversationManager {
         let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
         let CodexSpawnOk {
             codex,
-            session_id: conversation_id,
+            conversation_id,
         } = Codex::spawn(config, auth_manager, initial_history).await?;
         self.finalize_spawn(codex, conversation_id).await
     }
 
-    pub async fn remove_conversation(&self, conversation_id: Uuid) {
+    pub async fn remove_conversation(&self, conversation_id: ConversationId) {
         self.conversations.write().await.remove(&conversation_id);
     }
 
@@ -161,7 +161,7 @@ impl ConversationManager {
         let auth_manager = self.auth_manager.clone();
         let CodexSpawnOk {
             codex,
-            session_id: conversation_id,
+            conversation_id,
         } = Codex::spawn(config, auth_manager, history).await?;
 
         self.finalize_spawn(codex, conversation_id).await

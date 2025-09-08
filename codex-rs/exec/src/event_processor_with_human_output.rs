@@ -517,7 +517,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             }
             EventMsg::SessionConfigured(session_configured_event) => {
                 let SessionConfiguredEvent {
-                    session_id,
+                    session_id: conversation_id,
                     model,
                     history_log_id: _,
                     history_entry_count: _,
@@ -528,7 +528,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     self,
                     "{} {}",
                     "codex session".style(self.magenta).style(self.bold),
-                    session_id.to_string().style(self.dimmed)
+                    conversation_id.to_string().style(self.dimmed)
                 );
 
                 ts_println!(self, "model: {}", model);

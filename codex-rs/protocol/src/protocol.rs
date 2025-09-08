@@ -10,7 +10,14 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
+use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
+use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::custom_prompts::CustomPrompt;
+use crate::mcp_protocol::ConversationId;
+use crate::message_history::HistoryEntry;
+use crate::models::ResponseItem;
+use crate::parse_command::ParsedCommand;
+use crate::plan_tool::UpdatePlanArgs;
 use mcp_types::CallToolResult;
 use mcp_types::Tool as McpTool;
 use serde::Deserialize;
@@ -18,14 +25,6 @@ use serde::Serialize;
 use serde_with::serde_as;
 use strum_macros::Display;
 use ts_rs::TS;
-use uuid::Uuid;
-
-use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
-use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use crate::message_history::HistoryEntry;
-use crate::models::ResponseItem;
-use crate::parse_command::ParsedCommand;
-use crate::plan_tool::UpdatePlanArgs;
 
 /// Open/close tags for special user-input blocks. Used across crates to avoid
 /// duplicated hardcoded strings.
@@ -791,7 +790,7 @@ pub struct WebSearchEndEvent {
 /// in-memory transcript.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ConversationHistoryResponseEvent {
-    pub conversation_id: Uuid,
+    pub conversation_id: ConversationId,
     pub entries: Vec<ResponseItem>,
 }
 
@@ -931,8 +930,8 @@ pub struct ListCustomPromptsResponseEvent {
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct SessionConfiguredEvent {
-    /// Unique id for this session.
-    pub session_id: Uuid,
+    /// Name left as session_id instead of conversation_id for backwards compatibility.
+    pub session_id: ConversationId,
 
     /// Tell the client what model is being queried.
     pub model: String,
@@ -1014,11 +1013,11 @@ mod tests {
     /// amount of nesting.
     #[test]
     fn serialize_event() {
-        let session_id: Uuid = uuid::uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8");
+        let conversation_id = ConversationId(uuid::uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8"));
         let event = Event {
             id: "1234".to_string(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                session_id,
+                session_id: conversation_id,
                 model: "codex-mini-latest".to_string(),
                 history_log_id: 0,
                 history_entry_count: 0,

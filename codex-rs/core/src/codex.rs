@@ -15,6 +15,7 @@ use async_channel::Sender;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
+use codex_protocol::mcp_protocol::ConversationId;
 use codex_protocol::protocol::ConversationHistoryResponseEvent;
 use codex_protocol::protocol::TaskStartedEvent;
 use codex_protocol::protocol::TurnAbortReason;
@@ -149,7 +150,7 @@ pub struct Codex {
 /// unique session id.
 pub struct CodexSpawnOk {
     pub codex: Codex,
-    pub session_id: Uuid,
+    pub conversation_id: ConversationId,
 }
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
@@ -205,7 +206,7 @@ impl Codex {
         session
             .record_initial_history(&turn_context, conversation_history)
             .await;
-        let session_id = session.session_id;
+        let conversation_id = session.conversation_id;
 
         // This task will run until Op::Shutdown is received.
         tokio::spawn(submission_loop(
@@ -220,7 +221,10 @@ impl Codex {
             rx_event,
         };
 
-        Ok(CodexSpawnOk { codex, session_id })
+        Ok(CodexSpawnOk {
+            codex,
+            conversation_id,
+        })
     }
 
     /// Submit the `op` wrapped in a `Submission` with a unique ID.
@@ -269,7 +273,7 @@ struct State {
 ///
 /// A session has at most 1 running task at a time, and can be interrupted by user input.
 pub(crate) struct Session {
-    session_id: Uuid,
+    conversation_id: ConversationId,
     tx_event: Sender<Event>,
 
     /// Manager for external MCP servers/tools.
@@ -358,7 +362,7 @@ impl Session {
         tx_event: Sender<Event>,
         initial_history: InitialHistory,
     ) -> anyhow::Result<(Arc<Self>, TurnContext)> {
-        let session_id = Uuid::new_v4();
+        let conversation_id = ConversationId::from(Uuid::new_v4());
         let ConfigureSession {
             provider,
             model,
@@ -385,7 +389,7 @@ impl Session {
         // - spin up MCP connection manager
         // - perform default shell discovery
         // - load history metadata
-        let rollout_fut = RolloutRecorder::new(&config, session_id, user_instructions.clone());
+        let rollout_fut = RolloutRecorder::new(&config, conversation_id, user_instructions.clone());
 
         let mcp_fut = McpConnectionManager::new(config.mcp_servers.clone());
         let default_shell_fut = shell::default_user_shell();
@@ -431,7 +435,7 @@ impl Session {
             }
         }
 
-        // Now that `session_id` is final (may have been updated by resume),
+        // Now that the conversation id is final (may have been updated by resume),
         // construct the model client.
         let client = ModelClient::new(
             config.clone(),
@@ -439,7 +443,7 @@ impl Session {
             provider.clone(),
             model_reasoning_effort,
             model_reasoning_summary,
-            session_id,
+            conversation_id,
         );
         let turn_context = TurnContext {
             client,
@@ -461,7 +465,7 @@ impl Session {
             cwd,
         };
         let sess = Arc::new(Session {
-            session_id,
+            conversation_id,
             tx_event: tx_event.clone(),
             mcp_connection_manager,
             session_manager: ExecSessionManager::default(),
@@ -483,7 +487,7 @@ impl Session {
         let events = std::iter::once(Event {
             id: INITIAL_SUBMIT_ID.to_owned(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                session_id,
+                session_id: conversation_id,
                 model,
                 history_log_id,
                 history_entry_count,
@@ -1084,7 +1088,7 @@ async fn submission_loop(
                     provider,
                     effective_effort,
                     effective_summary,
-                    sess.session_id,
+                    sess.conversation_id,
                 );
 
                 let new_approval_policy = approval_policy.unwrap_or(prev.approval_policy);
@@ -1172,7 +1176,7 @@ async fn submission_loop(
                         provider,
                         effort,
                         summary,
-                        sess.session_id,
+                        sess.conversation_id,
                     );
 
                     let fresh_turn_context = TurnContext {
@@ -1215,7 +1219,7 @@ async fn submission_loop(
                 other => sess.notify_approval(&id, other),
             },
             Op::AddToHistory { text } => {
-                let id = sess.session_id;
+                let id = sess.conversation_id;
                 let config = config.clone();
                 tokio::spawn(async move {
                     if let Err(e) = crate::message_history::append_entry(&text, &id, &config).await
@@ -1246,7 +1250,7 @@ async fn submission_loop(
                                 log_id,
                                 entry: entry_opt.map(|e| {
                                     codex_protocol::message_history::HistoryEntry {
-                                        session_id: e.session_id,
+                                        conversation_id: e.session_id,
                                         ts: e.ts,
                                         text: e.text,
                                     }
@@ -1352,7 +1356,7 @@ async fn submission_loop(
                 let event = Event {
                     id: sub_id.clone(),
                     msg: EventMsg::ConversationHistory(ConversationHistoryResponseEvent {
-                        conversation_id: sess.session_id,
+                        conversation_id: sess.conversation_id,
                         entries: sess.state.lock_unchecked().history.contents(),
                     }),
                 };
