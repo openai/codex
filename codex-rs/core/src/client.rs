@@ -6,6 +6,7 @@ use std::time::Duration;
 use crate::AuthManager;
 use bytes::Bytes;
 use codex_protocol::mcp_protocol::AuthMode;
+use codex_protocol::mcp_protocol::ConversationId;
 use eventsource_stream::Eventsource;
 use futures::prelude::*;
 use regex_lite::Regex;
@@ -19,7 +20,6 @@ use tokio_util::io::ReaderStream;
 use tracing::debug;
 use tracing::trace;
 use tracing::warn;
-use uuid::Uuid;
 
 use crate::chat_completions::AggregateStreamExt;
 use crate::chat_completions::stream_chat_completions;
@@ -70,7 +70,7 @@ pub struct ModelClient {
     auth_manager: Option<Arc<AuthManager>>,
     client: reqwest::Client,
     provider: ModelProviderInfo,
-    session_id: Uuid,
+    conversation_id: ConversationId,
     effort: ReasoningEffortConfig,
     summary: ReasoningSummaryConfig,
 }
@@ -82,7 +82,7 @@ impl ModelClient {
         provider: ModelProviderInfo,
         effort: ReasoningEffortConfig,
         summary: ReasoningSummaryConfig,
-        session_id: Uuid,
+        conversation_id: ConversationId,
     ) -> Self {
         let client = create_client(&config.responses_originator_header);
 
@@ -91,7 +91,7 @@ impl ModelClient {
             auth_manager,
             client,
             provider,
-            session_id,
+            conversation_id,
             effort,
             summary,
         }
@@ -157,14 +157,6 @@ impl ModelClient {
 
         let auth_manager = self.auth_manager.clone();
 
-        let auth_mode = auth_manager
-            .as_ref()
-            .and_then(|m| m.auth())
-            .as_ref()
-            .map(|a| a.mode);
-
-        let store = prompt.store && auth_mode != Some(AuthMode::ChatGPT);
-
         let full_instructions = prompt.get_full_instructions(&self.config.model_family);
         let tools_json = create_tools_json_for_responses_api(&prompt.tools)?;
         let reasoning = create_reasoning_param_for_request(
@@ -173,9 +165,7 @@ impl ModelClient {
             self.summary,
         );
 
-        // Request encrypted COT if we are not storing responses,
-        // otherwise reasoning items will be referenced by ID
-        let include: Vec<String> = if !store && reasoning.is_some() {
+        let include: Vec<String> = if reasoning.is_some() {
             vec!["reasoning.encrypted_content".to_string()]
         } else {
             vec![]
@@ -204,10 +194,10 @@ impl ModelClient {
             tool_choice: "auto",
             parallel_tool_calls: false,
             reasoning,
-            store,
+            store: false,
             stream: true,
             include,
-            prompt_cache_key: Some(self.session_id.to_string()),
+            prompt_cache_key: Some(self.conversation_id.to_string()),
             text,
         };
 
@@ -233,7 +223,9 @@ impl ModelClient {
 
             req_builder = req_builder
                 .header("OpenAI-Beta", "responses=experimental")
-                .header("session_id", self.session_id.to_string())
+                // Send session_id for compatibility.
+                .header("conversation_id", self.conversation_id.to_string())
+                .header("session_id", self.conversation_id.to_string())
                 .header(reqwest::header::ACCEPT, "text/event-stream")
                 .json(&payload);
 
@@ -408,9 +400,15 @@ impl From<ResponseCompletedUsage> for TokenUsage {
     fn from(val: ResponseCompletedUsage) -> Self {
         TokenUsage {
             input_tokens: val.input_tokens,
-            cached_input_tokens: val.input_tokens_details.map(|d| d.cached_tokens),
+            cached_input_tokens: val
+                .input_tokens_details
+                .map(|d| d.cached_tokens)
+                .unwrap_or(0),
             output_tokens: val.output_tokens,
-            reasoning_output_tokens: val.output_tokens_details.map(|d| d.reasoning_tokens),
+            reasoning_output_tokens: val
+                .output_tokens_details
+                .map(|d| d.reasoning_tokens)
+                .unwrap_or(0),
             total_tokens: val.total_tokens,
         }
     }
