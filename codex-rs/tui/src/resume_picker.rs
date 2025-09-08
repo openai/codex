@@ -25,7 +25,7 @@ use crate::tui::Tui;
 use crate::tui::TuiEvent;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::InputMessageKind;
+use codex_protocol::protocol::{InputMessageKind, USER_MESSAGE_BEGIN};
 
 const PAGE_SIZE: usize = 25;
 
@@ -302,6 +302,11 @@ fn preview_from_head(head: &[serde_json::Value]) -> Option<String> {
                                 InputMessageKind::Plain
                             ) =>
                         {
+                            // Strip ide context.
+                            let text = match text.find(USER_MESSAGE_BEGIN) {
+                                Some(idx) => text[idx + USER_MESSAGE_BEGIN.len()..].trim().to_string(),
+                                None => text,
+                            };
                             Some(text)
                         }
                         _ => None,
