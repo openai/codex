@@ -72,8 +72,8 @@ impl ConversationManager {
         auth_manager: Arc<AuthManager>,
     ) -> CodexResult<NewConversation> {
         // TO BE REFACTORED: use the config experimental_resume field until we have a mainstream way.
-        if let Some(resume_path) = config.experimental_resume.clone() {
-            let initial_history = RolloutRecorder::get_rollout_history(&resume_path).await?;
+        if let Some(resume_path) = config.experimental_resume.as_ref() {
+            let initial_history = RolloutRecorder::get_rollout_history(resume_path).await?;
             let CodexSpawnOk {
                 codex,
                 conversation_id,
