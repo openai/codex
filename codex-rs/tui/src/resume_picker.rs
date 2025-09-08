@@ -25,6 +25,7 @@ use crate::tui::Tui;
 use crate::tui::TuiEvent;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::InputMessageKind;
 
 const PAGE_SIZE: usize = 25;
 
@@ -290,15 +291,29 @@ fn preview_from_head(head: &[serde_json::Value]) -> Option<String> {
     head.iter()
         .filter_map(|value| serde_json::from_value::<ResponseItem>(value.clone()).ok())
         .find_map(|item| match item {
-            ResponseItem::Message { content, .. } => Some(
-                content
+            ResponseItem::Message { content, .. } => {
+                // Find the actual user message (as opposed to user instructions or ide context)
+                let preview = content
                     .into_iter()
                     .filter_map(|content| match content {
-                        ContentItem::InputText { text } => Some(text),
+                        ContentItem::InputText { text }
+                            if matches!(
+                                InputMessageKind::from(("user", text.as_str())),
+                                InputMessageKind::Plain
+                            ) =>
+                        {
+                            Some(text)
+                        }
                         _ => None,
                     })
-                    .collect::<String>(),
-            ),
+                    .collect::<String>();
+
+                if preview.is_empty() {
+                    None
+                } else {
+                    Some(preview)
+                }
+            }
             _ => None,
         })
 }
@@ -456,10 +471,7 @@ mod tests {
             }),
         ];
         let preview = preview_from_head(&head);
-        assert_eq!(
-            preview.as_deref(),
-            Some("<user_instructions>hi</user_instructions>real question")
-        );
+        assert_eq!(preview.as_deref(), Some("real question"));
     }
 
     #[test]
