@@ -29,6 +29,7 @@ use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TokenUsage;
+use codex_core::protocol::TokenUsageInfo;
 use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnDiffEvent;
 use codex_core::protocol::UserMessageEvent;
@@ -57,6 +58,7 @@ use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
+use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::get_git_diff::get_git_diff;
 use crate::history_cell;
 use crate::history_cell::CommandOutput;
@@ -83,7 +85,7 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_file_search::FileMatch;
-use uuid::Uuid;
+use codex_protocol::mcp_protocol::ConversationId;
 
 // Track information about an in-flight exec command.
 struct RunningCommand {
@@ -108,8 +110,7 @@ pub(crate) struct ChatWidget {
     active_exec_cell: Option<ExecCell>,
     config: Config,
     initial_user_message: Option<UserMessage>,
-    total_token_usage: TokenUsage,
-    last_token_usage: TokenUsage,
+    token_info: Option<TokenUsageInfo>,
     // Stream lifecycle controller
     stream: StreamController,
     running_commands: HashMap<String, RunningCommand>,
@@ -120,7 +121,7 @@ pub(crate) struct ChatWidget {
     reasoning_buffer: String,
     // Accumulates full reasoning content for transcript-only recording
     full_reasoning_buffer: String,
-    session_id: Option<Uuid>,
+    conversation_id: Option<ConversationId>,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
@@ -162,7 +163,7 @@ impl ChatWidget {
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
-        self.session_id = Some(event.session_id);
+        self.conversation_id = Some(event.session_id);
         let initial_messages = event.initial_messages.clone();
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);
@@ -258,16 +259,10 @@ impl ChatWidget {
         self.maybe_send_next_queued_input();
     }
 
-    fn on_token_count(&mut self, token_usage: TokenUsage) {
-        self.total_token_usage = add_token_usage(&self.total_token_usage, &token_usage);
-        self.last_token_usage = token_usage;
-        self.bottom_pane.set_token_usage(
-            self.total_token_usage.clone(),
-            self.last_token_usage.clone(),
-            self.config.model_context_window,
-        );
+    pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
+        self.bottom_pane.set_token_usage(info.clone());
+        self.token_info = info;
     }
-
     /// Finalize any active exec as failed, push an error message into history,
     /// and stop/clear running UI state.
     fn finalize_turn_with_error_message(&mut self, message: String) {
@@ -524,6 +519,8 @@ impl ChatWidget {
 
     pub(crate) fn handle_exec_approval_now(&mut self, id: String, ev: ExecApprovalRequestEvent) {
         self.flush_answer_stream_with_separator();
+        // Emit the proposed command into history (like proposed patches)
+        self.add_to_history(history_cell::new_proposed_command(&ev.command));
 
         let request = ApprovalRequest::Exec {
             id,
@@ -656,15 +653,14 @@ impl ChatWidget {
                 initial_prompt.unwrap_or_default(),
                 initial_images,
             ),
-            total_token_usage: TokenUsage::default(),
-            last_token_usage: TokenUsage::default(),
+            token_info: None,
             stream: StreamController::new(config),
             running_commands: HashMap::new(),
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
-            session_id: None,
+            conversation_id: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: true,
             suppress_session_configured_redraw: false,
@@ -709,15 +705,14 @@ impl ChatWidget {
                 initial_prompt.unwrap_or_default(),
                 initial_images,
             ),
-            total_token_usage: TokenUsage::default(),
-            last_token_usage: TokenUsage::default(),
+            token_info: None,
             stream: StreamController::new(config),
             running_commands: HashMap::new(),
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
-            session_id: None,
+            conversation_id: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: false,
             suppress_session_configured_redraw: true,
@@ -741,6 +736,17 @@ impl ChatWidget {
                 ..
             } => {
                 self.on_ctrl_c();
+                return;
+            }
+            KeyEvent {
+                code: KeyCode::Char('v'),
+                modifiers: KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                if let Ok((path, info)) = paste_image_to_temp_png() {
+                    self.attach_image(path, info.width, info.height, info.encoded_format.label());
+                }
                 return;
             }
             other if other.kind == KeyEventKind::Press => {
@@ -1036,7 +1042,7 @@ impl ChatWidget {
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
             EventMsg::TaskStarted(_) => self.on_task_started(),
             EventMsg::TaskComplete(TaskCompleteEvent { .. }) => self.on_task_complete(),
-            EventMsg::TokenCount(token_usage) => self.on_token_count(token_usage),
+            EventMsg::TokenCount(ev) => self.set_token_info(ev.info),
             EventMsg::Error(ErrorEvent { message }) => self.on_error(message),
             EventMsg::TurnAborted(ev) => match ev.reason {
                 TurnAbortReason::Interrupted => {
@@ -1143,10 +1149,17 @@ impl ChatWidget {
     }
 
     pub(crate) fn add_status_output(&mut self) {
+        let default_usage;
+        let usage_ref = if let Some(ti) = &self.token_info {
+            &ti.total_token_usage
+        } else {
+            default_usage = TokenUsage::default();
+            &default_usage
+        };
         self.add_to_history(history_cell::new_status_output(
             &self.config,
-            &self.total_token_usage,
-            &self.session_id,
+            usage_ref,
+            &self.conversation_id,
         ));
     }
 
@@ -1275,15 +1288,17 @@ impl ChatWidget {
 
     /// Handle Ctrl-C key press.
     fn on_ctrl_c(&mut self) {
-        if self.bottom_pane.on_ctrl_c() == CancellationEvent::Ignored {
-            if self.bottom_pane.is_task_running() {
-                self.submit_op(Op::Interrupt);
-            } else if self.bottom_pane.ctrl_c_quit_hint_visible() {
-                self.submit_op(Op::Shutdown);
-            } else {
-                self.bottom_pane.show_ctrl_c_quit_hint();
-            }
+        if self.bottom_pane.on_ctrl_c() == CancellationEvent::Handled {
+            return;
         }
+
+        if self.bottom_pane.is_task_running() {
+            self.bottom_pane.show_ctrl_c_quit_hint();
+            self.submit_op(Op::Interrupt);
+            return;
+        }
+
+        self.submit_op(Op::Shutdown);
     }
 
     pub(crate) fn composer_is_empty(&self) -> bool {
@@ -1338,12 +1353,15 @@ impl ChatWidget {
         self.submit_user_message(text.into());
     }
 
-    pub(crate) fn token_usage(&self) -> &TokenUsage {
-        &self.total_token_usage
+    pub(crate) fn token_usage(&self) -> TokenUsage {
+        self.token_info
+            .as_ref()
+            .map(|ti| ti.total_token_usage.clone())
+            .unwrap_or_default()
     }
 
-    pub(crate) fn session_id(&self) -> Option<Uuid> {
-        self.session_id
+    pub(crate) fn conversation_id(&self) -> Option<ConversationId> {
+        self.conversation_id
     }
 
     /// Return a reference to the widget's current config (includes any
@@ -1353,12 +1371,8 @@ impl ChatWidget {
     }
 
     pub(crate) fn clear_token_usage(&mut self) {
-        self.total_token_usage = TokenUsage::default();
-        self.bottom_pane.set_token_usage(
-            self.total_token_usage.clone(),
-            self.last_token_usage.clone(),
-            self.config.model_context_window,
-        );
+        self.token_info = None;
+        self.bottom_pane.set_token_usage(None);
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
@@ -1390,34 +1404,6 @@ const EXAMPLE_PROMPTS: [&str; 6] = [
     "Write tests for @filename",
     "Improve documentation in @filename",
 ];
-
-fn add_token_usage(current_usage: &TokenUsage, new_usage: &TokenUsage) -> TokenUsage {
-    let cached_input_tokens = match (
-        current_usage.cached_input_tokens,
-        new_usage.cached_input_tokens,
-    ) {
-        (Some(current), Some(new)) => Some(current + new),
-        (Some(current), None) => Some(current),
-        (None, Some(new)) => Some(new),
-        (None, None) => None,
-    };
-    let reasoning_output_tokens = match (
-        current_usage.reasoning_output_tokens,
-        new_usage.reasoning_output_tokens,
-    ) {
-        (Some(current), Some(new)) => Some(current + new),
-        (Some(current), None) => Some(current),
-        (None, Some(new)) => Some(new),
-        (None, None) => None,
-    };
-    TokenUsage {
-        input_tokens: current_usage.input_tokens + new_usage.input_tokens,
-        cached_input_tokens,
-        output_tokens: current_usage.output_tokens + new_usage.output_tokens,
-        reasoning_output_tokens,
-        total_tokens: current_usage.total_tokens + new_usage.total_tokens,
-    }
-}
 
 // Extract the first bold (Markdown) element in the form **...** from `s`.
 // Returns the inner text if found; otherwise `None`.

@@ -10,7 +10,14 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
+use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
+use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::custom_prompts::CustomPrompt;
+use crate::mcp_protocol::ConversationId;
+use crate::message_history::HistoryEntry;
+use crate::models::ResponseItem;
+use crate::parse_command::ParsedCommand;
+use crate::plan_tool::UpdatePlanArgs;
 use mcp_types::CallToolResult;
 use mcp_types::Tool as McpTool;
 use serde::Deserialize;
@@ -18,14 +25,6 @@ use serde::Serialize;
 use serde_with::serde_as;
 use strum_macros::Display;
 use ts_rs::TS;
-use uuid::Uuid;
-
-use crate::config_types::ReasoningEffort as ReasoningEffortConfig;
-use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use crate::message_history::HistoryEntry;
-use crate::models::ResponseItem;
-use crate::parse_command::ParsedCommand;
-use crate::plan_tool::UpdatePlanArgs;
 
 /// Open/close tags for special user-input blocks. Used across crates to avoid
 /// duplicated hardcoded strings.
@@ -417,9 +416,9 @@ pub enum EventMsg {
     /// Agent has completed all actions
     TaskComplete(TaskCompleteEvent),
 
-    /// Token count event, sent periodically to report the number of tokens
-    /// used in the current session.
-    TokenCount(TokenUsage),
+    /// Usage update for the current session, including totals and last turn.
+    /// Optional means unknown — UIs should not display when `None`.
+    TokenCount(TokenCountEvent),
 
     /// Agent text output message
     AgentMessage(AgentMessageEvent),
@@ -521,11 +520,56 @@ pub struct TaskStartedEvent {
 #[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct TokenUsage {
     pub input_tokens: u64,
-    pub cached_input_tokens: Option<u64>,
+    pub cached_input_tokens: u64,
     pub output_tokens: u64,
-    pub reasoning_output_tokens: Option<u64>,
+    pub reasoning_output_tokens: u64,
     pub total_tokens: u64,
 }
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TokenUsageInfo {
+    pub total_token_usage: TokenUsage,
+    pub last_token_usage: TokenUsage,
+    pub model_context_window: Option<u64>,
+}
+
+impl TokenUsageInfo {
+    pub fn new_or_append(
+        info: &Option<TokenUsageInfo>,
+        last: &Option<TokenUsage>,
+        model_context_window: Option<u64>,
+    ) -> Option<Self> {
+        if info.is_none() && last.is_none() {
+            return None;
+        }
+
+        let mut info = match info {
+            Some(info) => info.clone(),
+            None => Self {
+                total_token_usage: TokenUsage::default(),
+                last_token_usage: TokenUsage::default(),
+                model_context_window,
+            },
+        };
+        if let Some(last) = last {
+            info.append_last_usage(last);
+        }
+        Some(info)
+    }
+
+    pub fn append_last_usage(&mut self, last: &TokenUsage) {
+        self.total_token_usage.add_assign(last);
+        self.last_token_usage = last.clone();
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TokenCountEvent {
+    pub info: Option<TokenUsageInfo>,
+}
+
+// Includes prompts, tools and space to call compact.
+const BASELINE_TOKENS: u64 = 12000;
 
 impl TokenUsage {
     pub fn is_zero(&self) -> bool {
@@ -533,7 +577,7 @@ impl TokenUsage {
     }
 
     pub fn cached_input(&self) -> u64 {
-        self.cached_input_tokens.unwrap_or(0)
+        self.cached_input_tokens
     }
 
     pub fn non_cached_input(&self) -> u64 {
@@ -551,34 +595,39 @@ impl TokenUsage {
     /// This will be off for the current turn and pending function calls.
     pub fn tokens_in_context_window(&self) -> u64 {
         self.total_tokens
-            .saturating_sub(self.reasoning_output_tokens.unwrap_or(0))
+            .saturating_sub(self.reasoning_output_tokens)
     }
 
     /// Estimate the remaining user-controllable percentage of the model's context window.
     ///
     /// `context_window` is the total size of the model's context window.
-    /// `baseline_used_tokens` should capture tokens that are always present in
+    /// `BASELINE_TOKENS` should capture tokens that are always present in
     /// the context (e.g., system prompt and fixed tool instructions) so that
     /// the percentage reflects the portion the user can influence.
     ///
     /// This normalizes both the numerator and denominator by subtracting the
     /// baseline, so immediately after the first prompt the UI shows 100% left
     /// and trends toward 0% as the user fills the effective window.
-    pub fn percent_of_context_window_remaining(
-        &self,
-        context_window: u64,
-        baseline_used_tokens: u64,
-    ) -> u8 {
-        if context_window <= baseline_used_tokens {
+    pub fn percent_of_context_window_remaining(&self, context_window: u64) -> u8 {
+        if context_window <= BASELINE_TOKENS {
             return 0;
         }
 
-        let effective_window = context_window - baseline_used_tokens;
+        let effective_window = context_window - BASELINE_TOKENS;
         let used = self
             .tokens_in_context_window()
-            .saturating_sub(baseline_used_tokens);
+            .saturating_sub(BASELINE_TOKENS);
         let remaining = effective_window.saturating_sub(used);
         ((remaining as f32 / effective_window as f32) * 100.0).clamp(0.0, 100.0) as u8
+    }
+
+    /// In-place element-wise sum of token counts.
+    pub fn add_assign(&mut self, other: &TokenUsage) {
+        self.input_tokens += other.input_tokens;
+        self.cached_input_tokens += other.cached_input_tokens;
+        self.output_tokens += other.output_tokens;
+        self.reasoning_output_tokens += other.reasoning_output_tokens;
+        self.total_tokens += other.total_tokens;
     }
 }
 
@@ -607,10 +656,11 @@ impl fmt::Display for FinalOutput {
                 String::new()
             },
             token_usage.output_tokens,
-            token_usage
-                .reasoning_output_tokens
-                .map(|r| format!(" (reasoning {r})"))
-                .unwrap_or_default()
+            if token_usage.reasoning_output_tokens > 0 {
+                format!(" (reasoning {})", token_usage.reasoning_output_tokens)
+            } else {
+                String::new()
+            }
         )
     }
 }
@@ -740,7 +790,7 @@ pub struct WebSearchEndEvent {
 /// in-memory transcript.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ConversationHistoryResponseEvent {
-    pub conversation_id: Uuid,
+    pub conversation_id: ConversationId,
     pub entries: Vec<ResponseItem>,
 }
 
@@ -880,8 +930,8 @@ pub struct ListCustomPromptsResponseEvent {
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct SessionConfiguredEvent {
-    /// Unique id for this session.
-    pub session_id: Uuid,
+    /// Name left as session_id instead of conversation_id for backwards compatibility.
+    pub session_id: ConversationId,
 
     /// Tell the client what model is being queried.
     pub model: String,
@@ -963,11 +1013,11 @@ mod tests {
     /// amount of nesting.
     #[test]
     fn serialize_event() {
-        let session_id: Uuid = uuid::uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8");
+        let conversation_id = ConversationId(uuid::uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8"));
         let event = Event {
             id: "1234".to_string(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                session_id,
+                session_id: conversation_id,
                 model: "codex-mini-latest".to_string(),
                 history_log_id: 0,
                 history_entry_count: 0,
