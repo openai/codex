@@ -615,8 +615,20 @@ fn determine_repo_trust_state(
     } else if config_toml.is_cwd_trusted(&config.cwd) {
         // if the current cwd project is trusted and no config has been set
         // skip the trust flow and set the approval policy and sandbox mode
+        // Respect any workspace‑write settings from config.toml (e.g.,
+        // writable_roots, exclude_tmpdir_env_var, exclude_slash_tmp,
+        // network_access) instead of always using defaults.
         config.approval_policy = AskForApproval::OnRequest;
-        config.sandbox_policy = SandboxPolicy::new_workspace_write_policy();
+        config.sandbox_policy = if let Some(ws) = &config_toml.sandbox_workspace_write {
+            SandboxPolicy::WorkspaceWrite {
+                writable_roots: ws.writable_roots.clone(),
+                network_access: ws.network_access,
+                exclude_tmpdir_env_var: ws.exclude_tmpdir_env_var,
+                exclude_slash_tmp: ws.exclude_slash_tmp,
+            }
+        } else {
+            SandboxPolicy::new_workspace_write_policy()
+        };
         Ok(false)
     } else {
         // if none of the above conditions are met, show the trust screen
