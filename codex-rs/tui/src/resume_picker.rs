@@ -25,7 +25,8 @@ use crate::tui::Tui;
 use crate::tui::TuiEvent;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
-use codex_protocol::protocol::{InputMessageKind, USER_MESSAGE_BEGIN};
+use codex_protocol::protocol::InputMessageKind;
+use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 
 const PAGE_SIZE: usize = 25;
 
