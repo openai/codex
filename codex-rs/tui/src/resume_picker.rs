@@ -304,7 +304,9 @@ fn preview_from_head(head: &[serde_json::Value]) -> Option<String> {
                         {
                             // Strip ide context.
                             let text = match text.find(USER_MESSAGE_BEGIN) {
-                                Some(idx) => text[idx + USER_MESSAGE_BEGIN.len()..].trim().to_string(),
+                                Some(idx) => {
+                                    text[idx + USER_MESSAGE_BEGIN.len()..].trim().to_string()
+                                }
                                 None => text,
                             };
                             Some(text)
