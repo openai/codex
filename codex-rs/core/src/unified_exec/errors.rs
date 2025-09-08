@@ -13,8 +13,6 @@ pub(crate) enum UnifiedExecError {
     WriteToStdin,
     #[error("missing command line for unified exec request")]
     MissingCommandLine,
-    #[error("invalid command line: {command_line}")]
-    InvalidCommandLine { command_line: String },
     #[error("command not found: {command}")]
     CommandNotFound { command: String },
 }

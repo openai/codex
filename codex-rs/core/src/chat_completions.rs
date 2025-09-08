@@ -56,8 +56,9 @@ pub(crate) async fn stream_chat_completions(
     for item in &input {
         match item {
             ResponseItem::Message { role, .. } => last_emitted_role = Some(role.as_str()),
-            ResponseItem::FunctionCall { .. }
-            | ResponseItem::LocalShellCall { .. } => last_emitted_role = Some("assistant"),
+            ResponseItem::FunctionCall { .. } | ResponseItem::LocalShellCall { .. } => {
+                last_emitted_role = Some("assistant")
+            }
             ResponseItem::FunctionCallOutput { .. } => last_emitted_role = Some("tool"),
             ResponseItem::Reasoning { .. } | ResponseItem::Other => {}
             ResponseItem::CustomToolCall { .. } => {}
@@ -118,8 +119,7 @@ pub(crate) async fn stream_chat_completions(
                 // Otherwise, attach to immediate next assistant anchor (tool-calls or assistant message)
                 if !attached && idx + 1 < input.len() {
                     match &input[idx + 1] {
-                        ResponseItem::FunctionCall { .. }
-                        | ResponseItem::LocalShellCall { .. } => {
+                        ResponseItem::FunctionCall { .. } | ResponseItem::LocalShellCall { .. } => {
                             reasoning_by_anchor_index
                                 .entry(idx + 1)
                                 .and_modify(|v| v.push_str(&text))

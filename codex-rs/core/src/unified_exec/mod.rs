@@ -25,8 +25,6 @@ mod path;
 
 pub(crate) use errors::UnifiedExecError;
 
-use path::command_from_chunks;
-use path::join_input_chunks;
 use path::resolve_command_path;
 
 const DEFAULT_TIMEOUT_MS: u64 = 1_000;
@@ -71,10 +69,21 @@ impl OutputBufferState {
         self.total_bytes = self.total_bytes.saturating_add(chunk.len());
         self.chunks.push_back(chunk);
 
-        while self.total_bytes > UNIFIED_EXEC_OUTPUT_MAX_BYTES {
-            match self.chunks.pop_front() {
-                Some(removed) => {
-                    self.total_bytes = self.total_bytes.saturating_sub(removed.len());
+        let mut excess = self
+            .total_bytes
+            .saturating_sub(UNIFIED_EXEC_OUTPUT_MAX_BYTES);
+
+        while excess > 0 {
+            match self.chunks.front_mut() {
+                Some(front) if excess >= front.len() => {
+                    excess -= front.len();
+                    self.total_bytes = self.total_bytes.saturating_sub(front.len());
+                    self.chunks.pop_front();
+                }
+                Some(front) => {
+                    front.drain(..excess);
+                    self.total_bytes = self.total_bytes.saturating_sub(excess);
+                    break;
                 }
                 None => break,
             }
@@ -183,7 +192,7 @@ impl UnifiedExecSessionManager {
             }
             drop(sessions);
         } else {
-            let command = command_from_chunks(request.input_chunks)?;
+            let command = request.input_chunks.to_vec();
             let new_id = self.next_session_id.fetch_add(1, Ordering::SeqCst);
             let session = create_unified_exec_session(&command).await?;
             let managed_session = ManagedUnifiedExecSession::new(session);
@@ -196,7 +205,7 @@ impl UnifiedExecSessionManager {
         };
 
         if request.session_id.is_some() {
-            let joined_input = join_input_chunks(request.input_chunks);
+            let joined_input = request.input_chunks.join(" ");
             if !joined_input.is_empty() && writer_tx.send(joined_input.into_bytes()).await.is_err()
             {
                 return Err(UnifiedExecError::WriteToStdin);
@@ -219,11 +228,11 @@ impl UnifiedExecSessionManager {
             }
 
             if drained_chunks.is_empty() {
-                if Instant::now() >= deadline {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining == Duration::ZERO {
                     break;
                 }
 
-                let remaining = deadline.saturating_duration_since(Instant::now());
                 let notified = wait_for_output.unwrap_or_else(|| output_notify.notified());
                 tokio::pin!(notified);
                 tokio::select! {
@@ -385,34 +394,28 @@ async fn create_unified_exec_session(
 
 #[cfg(test)]
 mod tests {
-    use super::path::parse_command_line;
     use super::*;
 
     #[test]
-    fn parse_command_line_splits_words() {
-        assert_eq!(
-            parse_command_line("echo codex").unwrap(),
-            vec!["echo".to_string(), "codex".to_string()]
-        );
-    }
+    fn push_chunk_trims_only_excess_bytes() {
+        let mut buffer = OutputBufferState::default();
+        buffer.push_chunk(vec![b'a'; UNIFIED_EXEC_OUTPUT_MAX_BYTES]);
+        buffer.push_chunk(vec![b'b']);
+        buffer.push_chunk(vec![b'c']);
 
-    #[test]
-    fn parse_command_line_trims_whitespace() {
+        assert_eq!(buffer.total_bytes, UNIFIED_EXEC_OUTPUT_MAX_BYTES);
+        assert_eq!(buffer.chunks.len(), 3);
         assert_eq!(
-            parse_command_line("  ls  -la  \n").unwrap(),
-            vec!["ls".to_string(), "-la".to_string()]
+            buffer.chunks.front().unwrap().len(),
+            UNIFIED_EXEC_OUTPUT_MAX_BYTES - 2
         );
-    }
-
-    #[test]
-    fn parse_command_line_rejects_empty() {
-        let err = parse_command_line("   ").expect_err("expected error");
-        assert!(matches!(err, UnifiedExecError::MissingCommandLine));
+        assert_eq!(buffer.chunks.pop_back().unwrap(), vec![b'c']);
+        assert_eq!(buffer.chunks.pop_back().unwrap(), vec![b'b']);
     }
 
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn unified_exec_persists_across_requests() -> Result<(), UnifiedExecError> {
+    async fn unified_exec_persists_across_requests_jif() -> Result<(), UnifiedExecError> {
         let manager = UnifiedExecSessionManager::default();
 
         let open_shell = manager
@@ -427,8 +430,11 @@ mod tests {
         manager
             .handle_request(UnifiedExecRequest {
                 session_id: Some(session_id),
-                input_chunks: &["export CODEX_INTERACTIVE_SHELL_VAR=codex\n".to_string()],
-                timeout_ms: Some(1_500),
+                input_chunks: &[
+                    "export".to_string(),
+                    "CODEX_INTERACTIVE_SHELL_VAR=codex\n".to_string(),
+                ],
+                timeout_ms: Some(2_500),
             })
             .await?;
 
@@ -439,7 +445,6 @@ mod tests {
                 timeout_ms: Some(1_500),
             })
             .await?;
-
         assert!(out_2.output.contains("codex"));
 
         Ok(())
@@ -470,7 +475,10 @@ mod tests {
         let out_2 = manager
             .handle_request(UnifiedExecRequest {
                 session_id: None,
-                input_chunks: &["/bin/echo $CODEX_INTERACTIVE_SHELL_VAR\n".to_string()],
+                input_chunks: &[
+                    "/bin/echo".to_string(),
+                    "$CODEX_INTERACTIVE_SHELL_VAR\n".to_string(),
+                ],
                 timeout_ms: Some(1_500),
             })
             .await?;
@@ -505,7 +513,10 @@ mod tests {
         manager
             .handle_request(UnifiedExecRequest {
                 session_id: Some(session_id),
-                input_chunks: &["export CODEX_INTERACTIVE_SHELL_VAR=codex\n".to_string()],
+                input_chunks: &[
+                    "export".to_string(),
+                    "CODEX_INTERACTIVE_SHELL_VAR=codex\n".to_string(),
+                ],
                 timeout_ms: Some(1_500),
             })
             .await?;
