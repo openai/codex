@@ -98,3 +98,39 @@ codex completion fish
 #### `--cd`/`-C` flag
 
 Sometimes it is not convenient to `cd` to the directory you want Codex to use as the "working root" before running Codex. Fortunately, `codex` supports a `--cd` option so you can specify whatever folder you want. You can confirm that Codex is honoring `--cd` by double-checking the **workdir** it reports in the TUI at the start of a new session.
+
+#### Install ripgrep (`rg`)
+
+Codex default prompt in [prompt.md](../codex-rs/core/prompt.md) often encourage using `rg` (ripgrep) for fast file search. Install it via your platform’s package manager:
+
+- macOS (Homebrew):
+
+```bash
+brew install ripgrep
+```
+
+- Linux:
+
+```bash
+# Debian/Ubuntu
+sudo apt-get update && sudo apt-get install -y ripgrep
+
+# Fedora
+sudo dnf install -y ripgrep
+
+# Arch
+sudo pacman -S ripgrep
+```
+
+- Windows:
+
+```shell
+# Winget
+winget install BurntSushi.ripgrep.MSVC
+
+# Chocolatey
+choco install ripgrep
+
+# Scoop
+scoop install ripgrep
+```
