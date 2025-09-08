@@ -62,6 +62,7 @@ pub mod terminal;
 mod tool_apply_patch;
 pub mod turn_diff_tracker;
 pub use rollout::RolloutRecorder;
+pub use rollout::SessionMeta;
 pub use rollout::list::ConversationItem;
 pub use rollout::list::ConversationsPage;
 pub use rollout::list::Cursor;

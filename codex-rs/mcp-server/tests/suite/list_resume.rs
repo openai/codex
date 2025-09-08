@@ -157,7 +157,7 @@ fn create_fake_rollout(codex_home: &Path, filename_ts: &str, meta_rfc3339: &str,
     let file_path = dir.join(format!("rollout-{filename_ts}-{uuid}.jsonl"));
     let mut lines = Vec::new();
     // Meta line with timestamp
-    lines.push(json!({"timestamp": meta_rfc3339}).to_string());
+    lines.push(json!({"timestamp": meta_rfc3339, "id": uuid}).to_string());
     // Minimal user message entry as a persisted response item
     lines.push(
         json!({

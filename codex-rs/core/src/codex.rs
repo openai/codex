@@ -31,7 +31,6 @@ use tracing::error;
 use tracing::info;
 use tracing::trace;
 use tracing::warn;
-use uuid::Uuid;
 
 use crate::ModelProviderInfo;
 use crate::apply_patch;
@@ -104,6 +103,7 @@ use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnDiffEvent;
 use crate::protocol::WebSearchBeginEvent;
 use crate::rollout::RolloutRecorder;
+use crate::rollout::RolloutRecorderParams;
 use crate::safety::SafetyCheck;
 use crate::safety::assess_command_safety;
 use crate::safety::assess_safety_for_untrusted_command;
@@ -362,7 +362,6 @@ impl Session {
         tx_event: Sender<Event>,
         initial_history: InitialHistory,
     ) -> anyhow::Result<(Arc<Self>, TurnContext)> {
-        let conversation_id = ConversationId::from(Uuid::new_v4());
         let ConfigureSession {
             provider,
             model,
@@ -380,6 +379,20 @@ impl Session {
             return Err(anyhow::anyhow!("cwd is not absolute: {cwd:?}"));
         }
 
+        let (conversation_id, rollout_params) = match &initial_history {
+            InitialHistory::New | InitialHistory::Forked(_) => {
+                let conversation_id = ConversationId::default();
+                (
+                    conversation_id,
+                    RolloutRecorderParams::new(conversation_id, user_instructions.clone()),
+                )
+            }
+            InitialHistory::Resumed(resumed_history) => (
+                resumed_history.conversation_id,
+                RolloutRecorderParams::resume(resumed_history.rollout_path.clone()),
+            ),
+        };
+
         // Error messages to dispatch after SessionConfigured is sent.
         let mut post_session_configured_error_events = Vec::<Event>::new();
 
@@ -389,7 +402,7 @@ impl Session {
         // - spin up MCP connection manager
         // - perform default shell discovery
         // - load history metadata
-        let rollout_fut = RolloutRecorder::new(&config, conversation_id, user_instructions.clone());
+        let rollout_fut = RolloutRecorder::new(&config, rollout_params);
 
         let mcp_fut = McpConnectionManager::new(config.mcp_servers.clone());
         let default_shell_fut = shell::default_user_shell();
@@ -481,7 +494,10 @@ impl Session {
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
         let initial_messages = match &initial_history {
             InitialHistory::New => None,
-            InitialHistory::Resumed(items) => Some(sess.build_initial_messages(items)),
+            InitialHistory::Forked(items) => Some(sess.build_initial_messages(items)),
+            InitialHistory::Resumed(resumed_history) => {
+                Some(sess.build_initial_messages(&resumed_history.history))
+            }
         };
 
         let events = std::iter::once(Event {
@@ -530,8 +546,12 @@ impl Session {
             InitialHistory::New => {
                 self.record_initial_history_new(turn_context).await;
             }
-            InitialHistory::Resumed(items) => {
-                self.record_initial_history_resumed(items).await;
+            InitialHistory::Forked(items) => {
+                self.record_initial_history_from_items(items).await;
+            }
+            InitialHistory::Resumed(resumed_history) => {
+                self.record_initial_history_from_items(resumed_history.history)
+                    .await;
             }
         }
     }
@@ -553,8 +573,8 @@ impl Session {
         self.record_conversation_items(&conversation_items).await;
     }
 
-    async fn record_initial_history_resumed(&self, items: Vec<ResponseItem>) {
-        self.record_conversation_items(&items).await;
+    async fn record_initial_history_from_items(&self, items: Vec<ResponseItem>) {
+        self.record_conversation_items_internal(&items, false).await;
     }
 
     /// build the initial messages vector for SessionConfigured by converting
@@ -663,8 +683,14 @@ impl Session {
     /// Records items to both the rollout and the chat completions/ZDR
     /// transcript, if enabled.
     async fn record_conversation_items(&self, items: &[ResponseItem]) {
+        self.record_conversation_items_internal(items, true).await;
+    }
+
+    async fn record_conversation_items_internal(&self, items: &[ResponseItem], persist: bool) {
         debug!("Recording items for conversation: {items:?}");
-        self.record_state_snapshot(items).await;
+        if persist {
+            self.record_state_snapshot(items).await;
+        }
 
         self.state.lock_unchecked().history.record_items(items);
     }
