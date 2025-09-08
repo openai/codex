@@ -16,7 +16,7 @@ anyhow = "1"
 async-channel = "2.3.1"
 base64 = "0.22"
 bytes = "1.10.1"
-chrono = { version = "0.4", features = ["serde"] }
+chrono = { version = "0.4", features = ["serde", "clock"] }
 codex-apply-patch = { path = "../apply-patch" }
 codex-mcp-client = { path = "../mcp-client" }
 codex-protocol = { path = "../protocol" }

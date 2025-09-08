@@ -7,6 +7,8 @@ use codex_core::ConversationItem;
 use codex_core::ConversationsPage;
 use codex_core::Cursor;
 use codex_core::RolloutRecorder;
+use codex_core::timezone::TimezonePreference;
+use codex_core::timezone::human_time_ago_with_tz;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -39,9 +41,17 @@ pub enum ResumeSelection {
 /// Interactive session picker that lists recorded rollout files with simple
 /// search and pagination. Shows the first user input as the preview, relative
 /// time (e.g., "5 seconds ago"), and the absolute path.
-pub async fn run_resume_picker(tui: &mut Tui, codex_home: &Path) -> Result<ResumeSelection> {
+pub async fn run_resume_picker(
+    tui: &mut Tui,
+    codex_home: &Path,
+    timezone_pref: &TimezonePreference,
+) -> Result<ResumeSelection> {
     let alt = AltScreenGuard::enter(tui);
-    let mut state = PickerState::new(codex_home.to_path_buf(), alt.tui.frame_requester());
+    let mut state = PickerState::new(
+        codex_home.to_path_buf(),
+        alt.tui.frame_requester(),
+        timezone_pref.clone(),
+    );
     state.load_page(None).await?;
     state.request_frame();
 
@@ -89,6 +99,7 @@ impl Drop for AltScreenGuard<'_> {
 struct PickerState {
     codex_home: PathBuf,
     requester: FrameRequester,
+    timezone_pref: TimezonePreference,
     // pagination
     pagination: Pagination,
     // data
@@ -115,10 +126,15 @@ struct Row {
 }
 
 impl PickerState {
-    fn new(codex_home: PathBuf, requester: FrameRequester) -> Self {
+    fn new(
+        codex_home: PathBuf,
+        requester: FrameRequester,
+        timezone_pref: TimezonePreference,
+    ) -> Self {
         Self {
             codex_home,
             requester,
+            timezone_pref,
             pagination: Pagination {
                 current_anchor: None,
                 backstack: vec![None],
@@ -382,7 +398,7 @@ fn render_list(frame: &mut crate::custom_terminal::Frame, area: Rect, state: &Pi
         let marker = if is_sel { "> ".bold() } else { "  ".into() };
         let ts = row
             .ts
-            .map(human_time_ago)
+            .map(|t| human_time_ago_with_tz(t, &state.timezone_pref))
             .unwrap_or_else(|| "".to_string())
             .dim();
         let max_cols = area.width.saturating_sub(6) as usize;
@@ -392,41 +408,6 @@ fn render_list(frame: &mut crate::custom_terminal::Frame, area: Rect, state: &Pi
         let rect = Rect::new(area.x, y, area.width, 1);
         frame.render_widget_ref(line, rect);
         y = y.saturating_add(1);
-    }
-}
-
-fn human_time_ago(ts: DateTime<Utc>) -> String {
-    let now = Utc::now();
-    let delta = now - ts;
-    let secs = delta.num_seconds();
-    if secs < 60 {
-        let n = secs.max(0);
-        if n == 1 {
-            format!("{n} second ago")
-        } else {
-            format!("{n} seconds ago")
-        }
-    } else if secs < 60 * 60 {
-        let m = secs / 60;
-        if m == 1 {
-            format!("{m} minute ago")
-        } else {
-            format!("{m} minutes ago")
-        }
-    } else if secs < 60 * 60 * 24 {
-        let h = secs / 3600;
-        if h == 1 {
-            format!("{h} hour ago")
-        } else {
-            format!("{h} hours ago")
-        }
-    } else {
-        let d = secs / (60 * 60 * 24);
-        if d == 1 {
-            format!("{d} day ago")
-        } else {
-            format!("{d} days ago")
-        }
     }
 }
 

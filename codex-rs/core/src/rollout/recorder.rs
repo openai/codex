@@ -28,6 +28,7 @@ use super::policy::is_persisted_response_item;
 use crate::config::Config;
 use crate::default_client::ORIGINATOR;
 use crate::git_info::collect_git_info;
+use crate::timezone::TimezonePreference;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InitialHistory;
 use codex_protocol::protocol::ResumedHistory;
@@ -113,6 +114,9 @@ impl RolloutRecorder {
     /// cannot be created or the rollout file cannot be opened we return the
     /// error so the caller can decide whether to disable persistence.
     pub async fn new(config: &Config, params: RolloutRecorderParams) -> std::io::Result<Self> {
+        // Parse timezone preference from config
+        let timezone_preference = TimezonePreference::from_config(&config.timezone_preference);
+
         let (file, rollout_path, meta) = match params {
             RolloutRecorderParams::Create {
                 conversation_id,
@@ -123,15 +127,9 @@ impl RolloutRecorder {
                     path,
                     conversation_id: session_id,
                     timestamp,
-                } = create_log_file(config, conversation_id)?;
+                } = create_log_file(config, conversation_id, &timezone_preference)?;
 
-                let timestamp_format: &[FormatItem] = format_description!(
-                    "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"
-                );
-                let timestamp = timestamp
-                    .to_offset(time::UtcOffset::UTC)
-                    .format(timestamp_format)
-                    .map_err(|e| IoError::other(format!("failed to format timestamp: {e}")))?;
+                let timestamp = format_timestamp_with_timezone(timestamp, &timezone_preference)?;
 
                 (
                     tokio::fs::File::from_std(file),
@@ -167,7 +165,7 @@ impl RolloutRecorder {
         // Spawn a Tokio task that owns the file handle and performs async
         // writes. Using `tokio::fs::File` keeps everything on the async I/O
         // driver instead of blocking the runtime.
-        tokio::task::spawn(rollout_writer(file, rx, meta, cwd));
+        tokio::task::spawn(rollout_writer(file, rx, meta, cwd, timezone_preference));
 
         Ok(Self { tx, rollout_path })
     }
@@ -311,10 +309,10 @@ struct LogFileInfo {
 fn create_log_file(
     config: &Config,
     conversation_id: ConversationId,
+    timezone_preference: &TimezonePreference,
 ) -> std::io::Result<LogFileInfo> {
     // Resolve ~/.codex/sessions/YYYY/MM/DD and create it if missing.
-    let timestamp = OffsetDateTime::now_local()
-        .map_err(|e| IoError::other(format!("failed to get local time: {e}")))?;
+    let timestamp = get_current_time_with_timezone(timezone_preference)?;
     let mut dir = config.codex_home.clone();
     dir.push(SESSIONS_SUBDIR);
     dir.push(timestamp.year().to_string());
@@ -351,8 +349,12 @@ async fn rollout_writer(
     mut rx: mpsc::Receiver<RolloutCmd>,
     mut meta: Option<SessionMeta>,
     cwd: std::path::PathBuf,
+    timezone_preference: TimezonePreference,
 ) -> std::io::Result<()> {
-    let mut writer = JsonlWriter { file };
+    let mut writer = JsonlWriter {
+        file,
+        timezone_preference,
+    };
 
     // If we have a meta, collect git info asynchronously and write meta first
     if let Some(session_meta) = meta.take() {
@@ -395,18 +397,51 @@ async fn rollout_writer(
     Ok(())
 }
 
+/// Get current time according to timezone preference
+fn get_current_time_with_timezone(
+    timezone_preference: &TimezonePreference,
+) -> std::io::Result<OffsetDateTime> {
+    match timezone_preference {
+        TimezonePreference::Utc => Ok(OffsetDateTime::now_utc()),
+        TimezonePreference::Local => OffsetDateTime::now_local()
+            .map_err(|e| IoError::other(format!("failed to get local time: {e}"))),
+        TimezonePreference::Offset(offset_seconds) => {
+            // Use a safe range for timezone offsets (-18 to +18 hours)
+            let safe_offset = (*offset_seconds).clamp(-18 * 3600, 18 * 3600);
+            let offset = time::UtcOffset::from_whole_seconds(safe_offset)
+                .map_err(|e| IoError::other(format!("invalid timezone offset: {e}")))?;
+            Ok(OffsetDateTime::now_utc().to_offset(offset))
+        }
+    }
+}
+
+/// Format timestamp according to timezone preference
+fn format_timestamp_with_timezone(
+    time: OffsetDateTime,
+    timezone_preference: &TimezonePreference,
+) -> std::io::Result<String> {
+    let format = match timezone_preference {
+        TimezonePreference::Utc => format_description!(
+            "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"
+        ),
+        TimezonePreference::Local | TimezonePreference::Offset(_) => format_description!(
+            "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3][offset_hour sign:mandatory]:[offset_minute]"
+        ),
+    };
+
+    time.format(format)
+        .map_err(|e| IoError::other(format!("failed to format timestamp: {e}")))
+}
+
 struct JsonlWriter {
     file: tokio::fs::File,
+    timezone_preference: TimezonePreference,
 }
 
 impl JsonlWriter {
     async fn write_rollout_item(&mut self, rollout_item: RolloutItem) -> std::io::Result<()> {
-        let timestamp_format: &[FormatItem] = format_description!(
-            "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"
-        );
-        let timestamp = OffsetDateTime::now_utc()
-            .format(timestamp_format)
-            .map_err(|e| IoError::other(format!("failed to format timestamp: {e}")))?;
+        let now_time = get_current_time_with_timezone(&self.timezone_preference)?;
+        let timestamp = format_timestamp_with_timezone(now_time, &self.timezone_preference)?;
 
         let line = RolloutLine {
             timestamp,
@@ -420,5 +455,56 @@ impl JsonlWriter {
         self.file.write_all(json.as_bytes()).await?;
         self.file.flush().await?;
         Ok(())
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_current_time_with_timezone_utc() {
+        let timezone_pref = TimezonePreference::Utc;
+        let result = get_current_time_with_timezone(&timezone_pref);
+        assert!(result.is_ok());
+
+        let time = result.unwrap();
+        // UTC time should have zero offset
+        assert_eq!(time.offset(), time::UtcOffset::UTC);
+    }
+
+    #[test]
+    fn test_get_current_time_with_timezone_offset() {
+        let timezone_pref = TimezonePreference::Offset(3600); // +1 hour
+        let result = get_current_time_with_timezone(&timezone_pref);
+        assert!(result.is_ok());
+
+        let time = result.unwrap();
+        // Should have +1 hour offset
+        assert_eq!(time.offset().whole_seconds(), 3600);
+    }
+
+    #[test]
+    fn test_format_timestamp_with_timezone_utc() {
+        let timezone_pref = TimezonePreference::Utc;
+        let time = OffsetDateTime::now_utc();
+        let result = format_timestamp_with_timezone(time, &timezone_pref);
+        assert!(result.is_ok());
+
+        let timestamp = result.unwrap();
+        // UTC timestamps should end with 'Z'
+        assert!(timestamp.ends_with('Z'));
+    }
+
+    #[test]
+    fn test_format_timestamp_with_timezone_offset() {
+        let timezone_pref = TimezonePreference::Offset(3600); // +1 hour
+        let offset = time::UtcOffset::from_whole_seconds(3600).unwrap();
+        let time = OffsetDateTime::now_utc().to_offset(offset);
+        let result = format_timestamp_with_timezone(time, &timezone_pref);
+        assert!(result.is_ok());
+
+        let timestamp = result.unwrap();
+        // Offset timestamps should contain the offset
+        assert!(timestamp.contains("+01:00"));
     }
 }

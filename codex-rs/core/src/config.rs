@@ -180,6 +180,10 @@ pub struct Config {
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: bool,
+
+    /// Timezone preference for displaying timestamps in logs and UI.
+    /// Can be "utc", "local", or an offset in seconds from UTC.
+    pub timezone_preference: String,
 }
 
 impl Config {
@@ -597,6 +601,10 @@ pub struct ConfigToml {
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: Option<bool>,
+
+    /// Timezone preference for displaying timestamps in logs and UI.
+    /// Can be "utc", "local", or an offset in seconds from UTC.
+    pub timezone_preference: Option<String>,
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -736,6 +744,7 @@ pub struct ConfigOverrides {
     pub include_view_image_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
+    pub timezone_preference: Option<String>,
 }
 
 impl Config {
@@ -763,6 +772,7 @@ impl Config {
             include_view_image_tool,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
+            timezone_preference: override_timezone_preference,
         } = overrides;
 
         let active_profile_name = config_profile_key
@@ -938,6 +948,9 @@ impl Config {
             include_view_image_tool,
             active_profile: active_profile_name,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
+            timezone_preference: override_timezone_preference
+                .or(cfg.timezone_preference)
+                .unwrap_or_else(|| "utc".to_string()),
         };
         Ok(config)
     }
@@ -1452,6 +1465,7 @@ model_verbosity = "high"
                 include_view_image_tool: true,
                 active_profile: Some("o3".to_string()),
                 disable_paste_burst: false,
+                timezone_preference: "utc".to_string(),
             },
             o3_profile_config
         );
@@ -1508,6 +1522,7 @@ model_verbosity = "high"
             include_view_image_tool: true,
             active_profile: Some("gpt3".to_string()),
             disable_paste_burst: false,
+            timezone_preference: "utc".to_string(),
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -1579,6 +1594,7 @@ model_verbosity = "high"
             include_view_image_tool: true,
             active_profile: Some("zdr".to_string()),
             disable_paste_burst: false,
+            timezone_preference: "utc".to_string(),
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
@@ -1636,6 +1652,7 @@ model_verbosity = "high"
             include_view_image_tool: true,
             active_profile: Some("gpt5".to_string()),
             disable_paste_burst: false,
+            timezone_preference: "utc".to_string(),
         };
 
         assert_eq!(expected_gpt5_profile_config, gpt5_profile_config);

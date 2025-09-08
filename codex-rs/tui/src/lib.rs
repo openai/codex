@@ -65,6 +65,9 @@ mod user_approval_widget;
 mod version;
 mod wrapping;
 
+#[cfg(test)]
+mod timezone_integration_test;
+
 #[cfg(not(debug_assertions))]
 mod updates;
 
@@ -134,6 +137,7 @@ pub async fn run_main(
         include_view_image_tool: None,
         show_raw_agent_reasoning: cli.oss.then_some(true),
         tools_web_search_request: cli.web_search.then_some(true),
+        timezone_preference: None,
     };
     let raw_overrides = cli.config_overrides.raw_overrides.clone();
     let overrides_cli = codex_common::CliConfigOverrides { raw_overrides };
@@ -320,6 +324,10 @@ async fn run_ratatui_app(
     // Initialize high-fidelity session event logging if enabled.
     session_log::maybe_init(&config);
 
+    // Initialize timezone preference from config
+    let timezone_pref =
+        codex_core::timezone::TimezonePreference::from_config(&config.timezone_preference);
+
     let auth_manager = AuthManager::shared(config.codex_home.clone());
     let login_status = get_login_status(&config);
     let should_show_onboarding =
@@ -352,7 +360,8 @@ async fn run_ratatui_app(
             Err(_) => resume_picker::ResumeSelection::StartFresh,
         }
     } else if cli.resume {
-        match resume_picker::run_resume_picker(&mut tui, &config.codex_home).await? {
+        match resume_picker::run_resume_picker(&mut tui, &config.codex_home, &timezone_pref).await?
+        {
             resume_picker::ResumeSelection::Exit => {
                 restore();
                 session_log::log_session_end();
