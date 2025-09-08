@@ -53,6 +53,9 @@ pub fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageErro
     tracing::debug!("attempting clipboard image read");
     let mut cb = arboard::Clipboard::new()
         .map_err(|e| PasteImageError::ClipboardUnavailable(e.to_string()))?;
+    // Sometimes images on the clipboard come as files (e.g. when copy/pasting from
+    // Finder), sometimes they come as image data (e.g. when pasting from Chrome).
+    // Accept both, and prefer files if both are present.
     let files = cb
         .get()
         .file_list()
