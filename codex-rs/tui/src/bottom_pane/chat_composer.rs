@@ -80,6 +80,7 @@ pub(crate) struct ChatComposer {
     has_focus: bool,
     attached_images: Vec<AttachedImage>,
     placeholder_text: String,
+    is_task_running: bool,
     // Non-bracketed paste burst tracker.
     paste_burst: PasteBurst,
     // When true, disables paste-burst logic and inserts characters immediately.
@@ -120,6 +121,7 @@ impl ChatComposer {
             has_focus: has_input_focus,
             attached_images: Vec::new(),
             placeholder_text,
+            is_task_running: false,
             paste_burst: PasteBurst::default(),
             disable_paste_burst: false,
             custom_prompts: Vec::new(),
@@ -1265,6 +1267,10 @@ impl ChatComposer {
         self.has_focus = has_focus;
     }
 
+    pub fn set_task_running(&mut self, running: bool) {
+        self.is_task_running = running;
+    }
+
     pub(crate) fn set_esc_backtrack_hint(&mut self, show: bool) {
         self.esc_backtrack_hint = show;
     }
@@ -1289,11 +1295,16 @@ impl WidgetRef for ChatComposer {
             ActivePopup::None => {
                 let bottom_line_rect = popup_rect;
                 let mut hint: Vec<Span<'static>> = if self.ctrl_c_quit_hint {
+                    let ctrl_c_followup = if self.is_task_running {
+                        " to interrupt"
+                    } else {
+                        " to quit"
+                    };
                     vec![
                         " ".into(),
                         key_hint::ctrl('C'),
                         " again".into(),
-                        " to quit".into(),
+                        ctrl_c_followup.into(),
                     ]
                 } else {
                     let newline_hint_key = if self.use_shift_enter_hint {

@@ -5,6 +5,7 @@ use std::fs::{self};
 use std::io::Error as IoError;
 use std::path::Path;
 
+use codex_protocol::mcp_protocol::ConversationId;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -17,7 +18,6 @@ use tokio::sync::mpsc::{self};
 use tokio::sync::oneshot;
 use tracing::info;
 use tracing::warn;
-use uuid::Uuid;
 
 use super::SESSIONS_SUBDIR;
 use super::list::ConversationsPage;
@@ -32,7 +32,7 @@ use codex_protocol::models::ResponseItem;
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct SessionMeta {
-    pub id: Uuid,
+    pub id: ConversationId,
     pub timestamp: String,
     pub instructions: Option<String>,
 }
@@ -55,7 +55,7 @@ pub struct SavedSession {
     pub items: Vec<ResponseItem>,
     #[serde(default)]
     pub state: SessionStateSnapshot,
-    pub session_id: Uuid,
+    pub session_id: ConversationId,
 }
 
 /// Records all [`ResponseItem`]s for a session and flushes them to disk after
@@ -94,14 +94,14 @@ impl RolloutRecorder {
     /// error so the caller can decide whether to disable persistence.
     pub async fn new(
         config: &Config,
-        uuid: Uuid,
+        conversation_id: ConversationId,
         instructions: Option<String>,
     ) -> std::io::Result<Self> {
         let LogFileInfo {
             file,
-            session_id,
+            conversation_id: session_id,
             timestamp,
-        } = create_log_file(config, uuid)?;
+        } = create_log_file(config, conversation_id)?;
 
         let timestamp_format: &[FormatItem] = format_description!(
             "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z"
@@ -227,13 +227,16 @@ struct LogFileInfo {
     file: File,
 
     /// Session ID (also embedded in filename).
-    session_id: Uuid,
+    conversation_id: ConversationId,
 
     /// Timestamp for the start of the session.
     timestamp: OffsetDateTime,
 }
 
-fn create_log_file(config: &Config, session_id: Uuid) -> std::io::Result<LogFileInfo> {
+fn create_log_file(
+    config: &Config,
+    conversation_id: ConversationId,
+) -> std::io::Result<LogFileInfo> {
     // Resolve ~/.codex/sessions/YYYY/MM/DD and create it if missing.
     let timestamp = OffsetDateTime::now_local()
         .map_err(|e| IoError::other(format!("failed to get local time: {e}")))?;
@@ -252,7 +255,7 @@ fn create_log_file(config: &Config, session_id: Uuid) -> std::io::Result<LogFile
         .format(format)
         .map_err(|e| IoError::other(format!("failed to format timestamp: {e}")))?;
 
-    let filename = format!("rollout-{date_str}-{session_id}.jsonl");
+    let filename = format!("rollout-{date_str}-{conversation_id}.jsonl");
 
     let path = dir.join(filename);
     let file = std::fs::OpenOptions::new()
@@ -262,7 +265,7 @@ fn create_log_file(config: &Config, session_id: Uuid) -> std::io::Result<LogFile
 
     Ok(LogFileInfo {
         file,
-        session_id,
+        conversation_id,
         timestamp,
     })
 }
