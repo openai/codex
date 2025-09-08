@@ -9,6 +9,7 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::ffi::OsString;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
@@ -36,8 +37,8 @@ use crate::config_types::McpServerConfig;
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
 const MAX_TOOL_NAME_LENGTH: usize = 64;
 
-/// Timeout for the `tools/list` request.
-const LIST_TOOLS_TIMEOUT: Duration = Duration::from_secs(10);
+/// Default timeout for initializing MCP server & initially listing tools.
+const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Map that holds a startup error for every MCP server that could **not** be
 /// spawned successfully.
@@ -81,6 +82,11 @@ struct ToolInfo {
     tool: Tool,
 }
 
+struct ManagedClient {
+    client: Arc<McpClient>,
+    startup_timeout: Duration,
+}
+
 /// A thin wrapper around a set of running [`McpClient`] instances.
 #[derive(Default)]
 pub(crate) struct McpConnectionManager {
@@ -88,7 +94,7 @@ pub(crate) struct McpConnectionManager {
     ///
     /// The server name originates from the keys of the `mcp_servers` map in
     /// the user configuration.
-    clients: HashMap<String, std::sync::Arc<McpClient>>,
+    clients: HashMap<String, ManagedClient>,
 
     /// Fully qualified tool name -> tool instance.
     tools: HashMap<String, ToolInfo>,
@@ -126,8 +132,15 @@ impl McpConnectionManager {
                 continue;
             }
 
+            let startup_timeout = cfg
+                .startup_timeout_ms
+                .map(Duration::from_millis)
+                .unwrap_or(DEFAULT_STARTUP_TIMEOUT);
+
             join_set.spawn(async move {
-                let McpServerConfig { command, args, env } = cfg;
+                let McpServerConfig {
+                    command, args, env, ..
+                } = cfg;
                 let client_res = McpClient::new_stdio_client(
                     command.into(),
                     args.into_iter().map(OsString::from).collect(),
@@ -154,12 +167,15 @@ impl McpConnectionManager {
                             protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_owned(),
                         };
                         let initialize_notification_params = None;
-                        let timeout = Some(Duration::from_secs(10));
                         match client
-                            .initialize(params, initialize_notification_params, timeout)
+                            .initialize(
+                                params,
+                                initialize_notification_params,
+                                Some(startup_timeout),
+                            )
                             .await
                         {
-                            Ok(_response) => (server_name, Ok(client)),
+                            Ok(_response) => (server_name, Ok((client, startup_timeout))),
                             Err(e) => (server_name, Err(e)),
                         }
                     }
@@ -168,15 +184,20 @@ impl McpConnectionManager {
             });
         }
 
-        let mut clients: HashMap<String, std::sync::Arc<McpClient>> =
-            HashMap::with_capacity(join_set.len());
+        let mut clients: HashMap<String, ManagedClient> = HashMap::with_capacity(join_set.len());
 
         while let Some(res) = join_set.join_next().await {
             let (server_name, client_res) = res?; // JoinError propagation
 
             match client_res {
-                Ok(client) => {
-                    clients.insert(server_name, std::sync::Arc::new(client));
+                Ok((client, startup_timeout)) => {
+                    clients.insert(
+                        server_name,
+                        ManagedClient {
+                            client: Arc::new(client),
+                            startup_timeout,
+                        },
+                    );
                 }
                 Err(e) => {
                     errors.insert(server_name, e);
@@ -212,6 +233,7 @@ impl McpConnectionManager {
             .clients
             .get(server)
             .ok_or_else(|| anyhow!("unknown MCP server '{server}'"))?
+            .client
             .clone();
 
         client
@@ -229,21 +251,18 @@ impl McpConnectionManager {
 
 /// Query every server for its available tools and return a single map that
 /// contains **all** tools. Each key is the fully-qualified name for the tool.
-async fn list_all_tools(
-    clients: &HashMap<String, std::sync::Arc<McpClient>>,
-) -> Result<Vec<ToolInfo>> {
+async fn list_all_tools(clients: &HashMap<String, ManagedClient>) -> Result<Vec<ToolInfo>> {
     let mut join_set = JoinSet::new();
 
     // Spawn one task per server so we can query them concurrently. This
     // keeps the overall latency roughly at the slowest server instead of
     // the cumulative latency.
-    for (server_name, client) in clients {
+    for (server_name, managed_client) in clients {
         let server_name_cloned = server_name.clone();
-        let client_clone = client.clone();
+        let client_clone = managed_client.client.clone();
+        let startup_timeout = managed_client.startup_timeout;
         join_set.spawn(async move {
-            let res = client_clone
-                .list_tools(None, Some(LIST_TOOLS_TIMEOUT))
-                .await;
+            let res = client_clone.list_tools(None, Some(startup_timeout)).await;
             (server_name_cloned, res)
         });
     }
