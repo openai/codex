@@ -282,20 +282,18 @@ async fn list_all_tools(clients: &HashMap<String, ManagedClient>) -> Result<Vec<
     let mut aggregated: Vec<ToolInfo> = Vec::with_capacity(join_set.len());
 
     while let Some(join_res) = join_set.join_next().await {
-        let (server_name, list_result) = match join_res {
-            Ok((server_name, list_result)) => (server_name, list_result),
-            Err(e) => {
-                warn!("Task panic when listing tools for MCP server: {e:#}");
-                continue;
-            }
+        let (server_name, list_result) = if let Ok(result) = join_res {
+            result
+        } else {
+            warn!("Task panic when listing tools for MCP server: {join_res:#?}");
+            continue;
         };
 
-        let list_result = match list_result {
-            Ok(result) => result,
-            Err(e) => {
-                warn!("Failed to list tools for MCP server '{server_name}': {e:#}");
-                continue;
-            }
+        let list_result = if let Ok(result) = list_result {
+            result
+        } else {
+            warn!("Failed to list tools for MCP server '{server_name}': {list_result:#?}");
+            continue;
         };
 
         for tool in list_result.tools {
