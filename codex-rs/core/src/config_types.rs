@@ -18,6 +18,10 @@ pub struct McpServerConfig {
 
     #[serde(default)]
     pub env: Option<HashMap<String, String>>,
+
+    /// Timeout for MCP initialization handshake, in seconds.
+    #[serde(default)]
+    pub initialize_timeout_s: Option<u64>,
 }
 
 #[derive(Deserialize, Debug, Copy, Clone, PartialEq)]

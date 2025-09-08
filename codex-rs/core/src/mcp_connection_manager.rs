@@ -127,7 +127,12 @@ impl McpConnectionManager {
             }
 
             join_set.spawn(async move {
-                let McpServerConfig { command, args, env } = cfg;
+                let McpServerConfig {
+                    command,
+                    args,
+                    env,
+                    initialize_timeout_s,
+                } = cfg;
                 let client_res = McpClient::new_stdio_client(
                     command.into(),
                     args.into_iter().map(OsString::from).collect(),
@@ -154,7 +159,9 @@ impl McpConnectionManager {
                             protocol_version: mcp_types::MCP_SCHEMA_VERSION.to_owned(),
                         };
                         let initialize_notification_params = None;
-                        let timeout = Some(Duration::from_secs(10));
+                        let timeout = initialize_timeout_s
+                            .map(Duration::from_secs)
+                            .or(Some(Duration::from_secs(10)));
                         match client
                             .initialize(params, initialize_notification_params, timeout)
                             .await
