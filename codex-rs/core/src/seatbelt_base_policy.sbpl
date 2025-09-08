@@ -69,3 +69,8 @@
 ; Added on top of Chrome profile
 ; Needed for python multiprocessing on MacOS for the SemLock
 (allow ipc-posix-sem)
+
+; needed for getpwuid
+(allow mach-lookup
+  (global-name "com.apple.system.opendirectoryd.libinfo")
+)
