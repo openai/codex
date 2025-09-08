@@ -37,7 +37,7 @@ use crate::config_types::McpServerConfig;
 const MCP_TOOL_NAME_DELIMITER: &str = "__";
 const MAX_TOOL_NAME_LENGTH: usize = 64;
 
-/// Default timeout for initializing MCP server & initially listing tools
+/// Default timeout for initializing MCP server & initially listing tools.
 const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Map that holds a startup error for every MCP server that could **not** be
