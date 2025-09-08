@@ -91,7 +91,6 @@ pub(crate) fn map_response_item_to_event_messages(
         ResponseItem::FunctionCall { .. }
         | ResponseItem::FunctionCallOutput { .. }
         | ResponseItem::LocalShellCall { .. }
-        | ResponseItem::UnifiedExec { .. }
         | ResponseItem::CustomToolCall { .. }
         | ResponseItem::CustomToolCallOutput { .. }
         | ResponseItem::Other => Vec::new(),

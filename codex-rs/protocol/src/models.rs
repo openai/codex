@@ -114,20 +114,6 @@ pub enum ResponseItem {
         status: Option<String>,
         action: WebSearchAction,
     },
-    UnifiedExec {
-        #[serde(skip_serializing)]
-        id: Option<String>,
-        /// Identifier for the interactive shell session. When absent, a new
-        /// session should be created.
-        session_id: Option<String>,
-        /// Characters that should be written to the interactive shell's
-        /// standard input.
-        arguments: Vec<String>,
-        /// Maximum amount of time to wait for additional output after writing
-        /// to stdin.
-        timeout_ms: Option<u64>,
-    },
-
     #[serde(other)]
     Other,
 }

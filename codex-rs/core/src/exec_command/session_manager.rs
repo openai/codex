@@ -3,6 +3,7 @@ use std::io::ErrorKind;
 use std::io::Read;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::AtomicU32;
 
 use portable_pty::CommandBuilder;
@@ -328,8 +329,8 @@ async fn create_exec_command_session(
 
     // Keep the child alive until it exits, then signal exit code.
     let (exit_tx, exit_rx) = oneshot::channel::<i32>();
-    let exit_status = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let wait_exit_status = std::sync::Arc::clone(&exit_status);
+    let exit_status = Arc::new(AtomicBool::new(false));
+    let wait_exit_status = exit_status.clone();
     let wait_handle = tokio::task::spawn_blocking(move || {
         let code = match child.wait() {
             Ok(status) => status.exit_code() as i32,

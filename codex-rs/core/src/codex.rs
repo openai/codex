@@ -1988,27 +1988,6 @@ async fn handle_response_item(
                 .await,
             )
         }
-        ResponseItem::UnifiedExec {
-            id,
-            session_id,
-            arguments,
-            timeout_ms,
-        } => {
-            let call_id = id.clone().unwrap_or_else(|| match &session_id {
-                Some(session_id) => format!("unified_exec:{session_id}:{}", Uuid::new_v4()),
-                None => format!("unified_exec:{}", Uuid::new_v4()),
-            });
-            Some(
-                handle_unified_exec_tool_call(
-                    sess,
-                    call_id,
-                    session_id.clone(),
-                    arguments,
-                    timeout_ms,
-                )
-                .await,
-            )
-        }
         ResponseItem::CustomToolCall {
             id: _,
             call_id,

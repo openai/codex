@@ -7,7 +7,6 @@ pub(crate) fn is_persisted_response_item(item: &ResponseItem) -> bool {
         ResponseItem::Message { .. }
         | ResponseItem::Reasoning { .. }
         | ResponseItem::LocalShellCall { .. }
-        | ResponseItem::UnifiedExec { .. }
         | ResponseItem::FunctionCall { .. }
         | ResponseItem::FunctionCallOutput { .. }
         | ResponseItem::CustomToolCall { .. }
