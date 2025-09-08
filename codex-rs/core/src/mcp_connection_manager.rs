@@ -105,6 +105,7 @@ impl McpConnectionManager {
     /// user should be informed about these errors.
     pub async fn new(
         mcp_servers: HashMap<String, McpServerConfig>,
+        global_initialize_timeout_s: Option<u64>,
     ) -> Result<(Self, ClientStartErrors)> {
         // Early exit if no servers are configured.
         if mcp_servers.is_empty() {
@@ -114,6 +115,8 @@ impl McpConnectionManager {
         // Launch all configured servers concurrently.
         let mut join_set = JoinSet::new();
         let mut errors = ClientStartErrors::new();
+
+        let global_init_timeout = global_initialize_timeout_s.map(Duration::from_secs);
 
         for (server_name, cfg) in mcp_servers {
             // Validate server name before spawning
@@ -161,6 +164,7 @@ impl McpConnectionManager {
                         let initialize_notification_params = None;
                         let timeout = initialize_timeout_s
                             .map(Duration::from_secs)
+                            .or(global_init_timeout)
                             .or(Some(Duration::from_secs(10)));
                         match client
                             .initialize(params, initialize_notification_params, timeout)

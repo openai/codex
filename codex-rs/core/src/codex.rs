@@ -391,7 +391,8 @@ impl Session {
         // - load history metadata
         let rollout_fut = RolloutRecorder::new(&config, conversation_id, user_instructions.clone());
 
-        let mcp_fut = McpConnectionManager::new(config.mcp_servers.clone());
+        let mcp_fut =
+            McpConnectionManager::new(config.mcp_servers.clone(), config.mcp_initialize_timeout_s);
         let default_shell_fut = shell::default_user_shell();
         let history_meta_fut = crate::message_history::history_metadata(&config);
 

@@ -360,6 +360,16 @@ args = ["-y", "mcp-server"]
 env = { "API_KEY" = "value" }
 # Optional: override the MCP initialize handshake timeout (seconds)
 # initialize_timeout_s = 15
+
+### MCP initialize timeout precedence
+
+You can set a global default initialize timeout for all MCP servers and still override it per server. Precedence:
+
+1. Per‑server `initialize_timeout_s`
+2. Global `mcp_initialize_timeout_s`
+3. Built‑in default: 10 seconds
+# Optional: override the MCP initialize handshake timeout (seconds)
+# initialize_timeout_s = 15
 ```
 
 ## shell_environment_policy
@@ -577,6 +587,7 @@ Options that are specific to the TUI.
 | `mcp_servers.<id>.args` | array<string> | MCP server args. |
 | `mcp_servers.<id>.env` | map<string,string> | MCP server env vars. |
 | `mcp_servers.<id>.initialize_timeout_s` | number | Timeout for the MCP initialize handshake (seconds). Default: 10. |
+| `mcp_initialize_timeout_s` | number | Global default MCP initialize timeout (seconds) used when a server does not specify `initialize_timeout_s`. |
 | `model_providers.<id>.name` | string | Display name. |
 | `model_providers.<id>.base_url` | string | API base URL. |
 | `model_providers.<id>.env_key` | string | Env var for API key. |

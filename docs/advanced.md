@@ -36,7 +36,10 @@ The Codex CLI can be configured to leverage MCP servers by defining an [`mcp_ser
 command = "npx"
 args = ["-y", "mcp-server"]
 env = { "API_KEY" = "value" }
-# Optional: override the MCP initialize handshake timeout (seconds)
+# Optional timeouts (seconds)
+# Global default for all MCP servers
+# mcp_initialize_timeout_s = 12
+# Per‑server override for the initialize handshake
 # initialize_timeout_s = 15
 ```
 
