@@ -5,7 +5,7 @@ use crate::app_event_sender::AppEventSender;
 use crate::tui::FrameRequester;
 use crate::user_approval_widget::ApprovalRequest;
 use bottom_pane_view::BottomPaneView;
-use codex_core::protocol::TokenUsage;
+use codex_core::protocol::TokenUsageInfo;
 use codex_file_search::FileMatch;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
@@ -30,8 +30,8 @@ mod textarea;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CancellationEvent {
-    Ignored,
     Handled,
+    NotHandled,
 }
 
 pub(crate) use chat_composer::ChatComposer;
@@ -162,6 +162,8 @@ impl BottomPane {
             view.handle_key_event(self, key_event);
             if !view.is_complete() {
                 self.active_view = Some(view);
+            } else {
+                self.on_active_view_complete();
             }
             self.request_redraw();
             InputResult::None
@@ -193,7 +195,15 @@ impl BottomPane {
     pub(crate) fn on_ctrl_c(&mut self) -> CancellationEvent {
         let mut view = match self.active_view.take() {
             Some(view) => view,
-            None => return CancellationEvent::Ignored,
+            None => {
+                return if self.composer_is_empty() {
+                    CancellationEvent::NotHandled
+                } else {
+                    self.set_composer_text(String::new());
+                    self.show_ctrl_c_quit_hint();
+                    CancellationEvent::Handled
+                };
+            }
         };
 
         let event = view.on_ctrl_c(self);
@@ -201,10 +211,12 @@ impl BottomPane {
             CancellationEvent::Handled => {
                 if !view.is_complete() {
                     self.active_view = Some(view);
+                } else {
+                    self.on_active_view_complete();
                 }
                 self.show_ctrl_c_quit_hint();
             }
-            CancellationEvent::Ignored => {
+            CancellationEvent::NotHandled => {
                 self.active_view = Some(view);
             }
         }
@@ -263,6 +275,7 @@ impl BottomPane {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn ctrl_c_quit_hint_visible(&self) -> bool {
         self.ctrl_c_quit_hint
     }
@@ -285,6 +298,7 @@ impl BottomPane {
 
     pub fn set_task_running(&mut self, running: bool) {
         self.is_task_running = running;
+        self.composer.set_task_running(running);
 
         if running {
             if self.status.is_none() {
@@ -354,14 +368,8 @@ impl BottomPane {
 
     /// Update the *context-window remaining* indicator in the composer. This
     /// is forwarded directly to the underlying `ChatComposer`.
-    pub(crate) fn set_token_usage(
-        &mut self,
-        total_token_usage: TokenUsage,
-        last_token_usage: TokenUsage,
-        model_context_window: Option<u64>,
-    ) {
-        self.composer
-            .set_token_usage(total_token_usage, last_token_usage, model_context_window);
+    pub(crate) fn set_token_usage(&mut self, token_info: Option<TokenUsageInfo>) {
+        self.composer.set_token_usage(token_info);
         self.request_redraw();
     }
 
@@ -381,8 +389,25 @@ impl BottomPane {
 
         // Otherwise create a new approval modal overlay.
         let modal = ApprovalModalView::new(request, self.app_event_tx.clone());
+        self.pause_status_timer_for_modal();
         self.active_view = Some(Box::new(modal));
         self.request_redraw()
+    }
+
+    fn on_active_view_complete(&mut self) {
+        self.resume_status_timer_after_modal();
+    }
+
+    fn pause_status_timer_for_modal(&mut self) {
+        if let Some(status) = self.status.as_mut() {
+            status.pause_timer();
+        }
+    }
+
+    fn resume_status_timer_after_modal(&mut self) {
+        if let Some(status) = self.status.as_mut() {
+            status.resume_timer();
+        }
     }
 
     /// Height (terminal rows) required by the current bottom pane.
@@ -489,7 +514,7 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,
-            frame_requester: crate::tui::FrameRequester::test_dummy(),
+            frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
@@ -498,7 +523,7 @@ mod tests {
         pane.push_approval_request(exec_request());
         assert_eq!(CancellationEvent::Handled, pane.on_ctrl_c());
         assert!(pane.ctrl_c_quit_hint_visible());
-        assert_eq!(CancellationEvent::Ignored, pane.on_ctrl_c());
+        assert_eq!(CancellationEvent::NotHandled, pane.on_ctrl_c());
     }
 
     // live ring removed; related tests deleted.
@@ -509,7 +534,7 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,
-            frame_requester: crate::tui::FrameRequester::test_dummy(),
+            frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
@@ -540,7 +565,7 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx.clone(),
-            frame_requester: crate::tui::FrameRequester::test_dummy(),
+            frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
@@ -568,7 +593,7 @@ mod tests {
 
         // Render and ensure the top row includes the Working header and a composer line below.
         // Give the animation thread a moment to tick.
-        std::thread::sleep(std::time::Duration::from_millis(120));
+        std::thread::sleep(Duration::from_millis(120));
         let area = Rect::new(0, 0, 40, 6);
         let mut buf = Buffer::empty(area);
         (&pane).render_ref(area, &mut buf);
@@ -608,7 +633,7 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,
-            frame_requester: crate::tui::FrameRequester::test_dummy(),
+            frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
@@ -639,7 +664,7 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,
-            frame_requester: crate::tui::FrameRequester::test_dummy(),
+            frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
@@ -690,7 +715,7 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,
-            frame_requester: crate::tui::FrameRequester::test_dummy(),
+            frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),

@@ -3,7 +3,7 @@ use serde::Serialize;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct HistoryEntry {
-    pub session_id: String,
+    pub conversation_id: String,
     pub ts: u64,
     pub text: String,
 }
