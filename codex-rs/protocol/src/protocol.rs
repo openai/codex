@@ -16,6 +16,7 @@ use crate::custom_prompts::CustomPrompt;
 use crate::mcp_protocol::ConversationId;
 use crate::message_history::HistoryEntry;
 use crate::models::ResponseItem;
+use crate::num_format::format_with_separators;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
 use mcp_types::CallToolResult;
@@ -645,19 +646,26 @@ impl From<TokenUsage> for FinalOutput {
 impl fmt::Display for FinalOutput {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let token_usage = &self.token_usage;
+
         write!(
             f,
             "Token usage: total={} input={}{} output={}{}",
-            token_usage.blended_total(),
-            token_usage.non_cached_input(),
+            format_with_separators(token_usage.blended_total()),
+            format_with_separators(token_usage.non_cached_input()),
             if token_usage.cached_input() > 0 {
-                format!(" (+ {} cached)", token_usage.cached_input())
+                format!(
+                    " (+ {} cached)",
+                    format_with_separators(token_usage.cached_input())
+                )
             } else {
                 String::new()
             },
-            token_usage.output_tokens,
+            format_with_separators(token_usage.output_tokens),
             if token_usage.reasoning_output_tokens > 0 {
-                format!(" (reasoning {})", token_usage.reasoning_output_tokens)
+                format!(
+                    " (reasoning {})",
+                    format_with_separators(token_usage.reasoning_output_tokens)
+                )
             } else {
                 String::new()
             }

@@ -1,4 +1,5 @@
 use codex_core::protocol::TokenUsageInfo;
+use codex_protocol::num_format::format_si_suffix;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -1276,8 +1277,11 @@ impl WidgetRef for ChatComposer {
                     let token_usage = &token_usage_info.total_token_usage;
                     hint.push("   ".into());
                     hint.push(
-                        Span::from(format!("{} tokens used", token_usage.blended_total()))
-                            .style(Style::default().add_modifier(Modifier::DIM)),
+                        Span::from(format!(
+                            "{} tokens used",
+                            format_si_suffix(token_usage.blended_total())
+                        ))
+                        .style(Style::default().add_modifier(Modifier::DIM)),
                     );
                     let last_token_usage = &token_usage_info.last_token_usage;
                     if let Some(context_window) = token_usage_info.model_context_window {

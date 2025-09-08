@@ -12,6 +12,8 @@ workspace = true
 
 [dependencies]
 base64 = "0.22.1"
+icu_decimal = "2.0.0"
+icu_locale_core = "2.0.0"
 mcp-types = { path = "../mcp-types" }
 mime_guess = "2.0.5"
 serde = { version = "1", features = ["derive"] }
@@ -20,6 +22,7 @@ serde_json = "1"
 serde_with = { version = "3.14.0", features = ["macros", "base64"] }
 strum = "0.27.2"
 strum_macros = "0.27.2"
+sys-locale = "0.3.2"
 tracing = "0.1.41"
 ts-rs = { version = "11", features = ["uuid-impl", "serde-json-impl"] }
 uuid = { version = "1", features = ["serde", "v4"] }
