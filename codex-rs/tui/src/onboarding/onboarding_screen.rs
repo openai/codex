@@ -339,7 +339,6 @@ pub(crate) async fn run_onboarding_app(
                         frame.render_widget_ref(&onboarding_screen, frame.area());
                     });
                 }
-                _ => {}
             }
         }
     }
