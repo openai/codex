@@ -1288,15 +1288,17 @@ impl ChatWidget {
 
     /// Handle Ctrl-C key press.
     fn on_ctrl_c(&mut self) {
-        if self.bottom_pane.on_ctrl_c() == CancellationEvent::Ignored {
-            if self.bottom_pane.is_task_running() {
-                self.submit_op(Op::Interrupt);
-            } else if self.bottom_pane.ctrl_c_quit_hint_visible() {
-                self.submit_op(Op::Shutdown);
-            } else {
-                self.bottom_pane.show_ctrl_c_quit_hint();
-            }
+        if self.bottom_pane.on_ctrl_c() == CancellationEvent::Handled {
+            return;
         }
+
+        if self.bottom_pane.is_task_running() {
+            self.bottom_pane.show_ctrl_c_quit_hint();
+            self.submit_op(Op::Interrupt);
+            return;
+        }
+
+        self.submit_op(Op::Shutdown);
     }
 
     pub(crate) fn composer_is_empty(&self) -> bool {
