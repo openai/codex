@@ -1177,13 +1177,14 @@ pub(crate) fn new_proposed_command(command: &[String]) -> PlainHistoryCell {
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push(Line::from(vec!["• ".into(), "Proposed Command".bold()]));
 
-    let cmd_lines: Vec<Line<'static>> = cmd
-        .lines()
-        .map(|part| Line::from(part.to_string()))
-        .collect();
+    let highlighted_lines = crate::render::highlight::highlight_bash_to_lines(&cmd);
     let initial_prefix: Span<'static> = "  └ ".dim();
     let subsequent_prefix: Span<'static> = "    ".into();
-    lines.extend(prefix_lines(cmd_lines, initial_prefix, subsequent_prefix));
+    lines.extend(prefix_lines(
+        highlighted_lines,
+        initial_prefix,
+        subsequent_prefix,
+    ));
 
     PlainHistoryCell { lines }
 }

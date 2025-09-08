@@ -19,6 +19,7 @@ use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
 use codex_core::config::load_config_as_toml;
+use codex_core::default_client::get_codex_user_agent;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
 use codex_core::get_platform_sandbox;
@@ -48,6 +49,7 @@ use codex_protocol::mcp_protocol::ExecArbitraryCommandResponse;
 use codex_protocol::mcp_protocol::ExecCommandApprovalParams;
 use codex_protocol::mcp_protocol::ExecCommandApprovalResponse;
 use codex_protocol::mcp_protocol::ExecOneOffCommandParams;
+use codex_protocol::mcp_protocol::GetUserAgentResponse;
 use codex_protocol::mcp_protocol::GetUserSavedConfigResponse;
 use codex_protocol::mcp_protocol::GitDiffToRemoteResponse;
 use codex_protocol::mcp_protocol::InputItem as WireInputItem;
@@ -168,6 +170,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::GetUserSavedConfig { request_id } => {
                 self.get_user_saved_config(request_id).await;
+            }
+            ClientRequest::GetUserAgent { request_id } => {
+                self.get_user_agent(request_id).await;
             }
             ClientRequest::ExecOneOffCommand { request_id, params } => {
                 self.exec_one_off_command(request_id, params).await;
@@ -381,6 +386,12 @@ impl CodexMessageProcessor {
             },
         };
 
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn get_user_agent(&self, request_id: RequestId) {
+        let user_agent = get_codex_user_agent(Some(&self.config.responses_originator_header));
+        let response = GetUserAgentResponse { user_agent };
         self.outgoing.send_response(request_id, response).await;
     }
 

@@ -44,7 +44,7 @@ crossterm = { version = "0.28.1", features = [
     "event-stream",
 ] }
 diffy = "0.4.2"
-image = { version = "^0.25.6", default-features = false, features = [
+image = { version = "^0.25.8", default-features = false, features = [
     "jpeg",
     "png",
 ] }
@@ -100,7 +100,7 @@ arboard = "3"
 
 [dev-dependencies]
 chrono = { version = "0.4", features = ["serde"] }
-insta = "1.43.1"
+insta = "1.43.2"
 pretty_assertions = "1"
 rand = "0.9"
 vt100 = "0.16.2"
