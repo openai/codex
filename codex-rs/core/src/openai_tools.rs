@@ -70,6 +70,7 @@ pub(crate) struct ToolsConfig {
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
     pub web_search_request: bool,
     pub include_view_image_tool: bool,
+    pub experimental_unified_exec_tool: bool,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
@@ -81,6 +82,7 @@ pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) include_web_search_request: bool,
     pub(crate) use_streamable_shell_tool: bool,
     pub(crate) include_view_image_tool: bool,
+    pub(crate) experimental_unified_exec_tool: bool,
 }
 
 impl ToolsConfig {
@@ -94,6 +96,7 @@ impl ToolsConfig {
             include_web_search_request,
             use_streamable_shell_tool,
             include_view_image_tool,
+            experimental_unified_exec_tool,
         } = params;
         let mut shell_type = if *use_streamable_shell_tool {
             ConfigShellToolType::StreamableShell
@@ -126,6 +129,7 @@ impl ToolsConfig {
             apply_patch_tool_type,
             web_search_request: *include_web_search_request,
             include_view_image_tool: *include_view_image_tool,
+            experimental_unified_exec_tool: *experimental_unified_exec_tool,
         }
     }
 }
@@ -581,27 +585,29 @@ pub(crate) fn get_openai_tools(
 ) -> Vec<OpenAiTool> {
     let mut tools: Vec<OpenAiTool> = Vec::new();
 
-    match &config.shell_type {
-        ConfigShellToolType::DefaultShell => {
-            tools.push(create_shell_tool());
-        }
-        ConfigShellToolType::ShellWithRequest { sandbox_policy } => {
-            tools.push(create_shell_tool_for_sandbox(sandbox_policy));
-        }
-        ConfigShellToolType::LocalShell => {
-            tools.push(OpenAiTool::LocalShell {});
-        }
-        ConfigShellToolType::StreamableShell => {
-            tools.push(OpenAiTool::Function(
-                crate::exec_command::create_exec_command_tool_for_responses_api(),
-            ));
-            tools.push(OpenAiTool::Function(
-                crate::exec_command::create_write_stdin_tool_for_responses_api(),
-            ));
+    if config.experimental_unified_exec_tool {
+        tools.push(create_unified_exec_tool());
+    } else {
+        match &config.shell_type {
+            ConfigShellToolType::DefaultShell => {
+                tools.push(create_shell_tool());
+            }
+            ConfigShellToolType::ShellWithRequest { sandbox_policy } => {
+                tools.push(create_shell_tool_for_sandbox(sandbox_policy));
+            }
+            ConfigShellToolType::LocalShell => {
+                tools.push(OpenAiTool::LocalShell {});
+            }
+            ConfigShellToolType::StreamableShell => {
+                tools.push(OpenAiTool::Function(
+                    crate::exec_command::create_exec_command_tool_for_responses_api(),
+                ));
+                tools.push(OpenAiTool::Function(
+                    crate::exec_command::create_write_stdin_tool_for_responses_api(),
+                ));
+            }
         }
     }
-
-    tools.push(create_unified_exec_tool());
 
     if config.plan_tool {
         tools.push(PLAN_TOOL.clone());
@@ -688,6 +694,7 @@ mod tests {
             include_web_search_request: true,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
+            experimental_unified_exec_tool: true,
         });
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
@@ -715,6 +722,7 @@ mod tests {
             include_web_search_request: true,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
+            experimental_unified_exec_tool: true,
         });
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
@@ -742,6 +750,7 @@ mod tests {
             include_web_search_request: true,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
+            experimental_unified_exec_tool: true,
         });
         let tools = get_openai_tools(
             &config,
@@ -848,6 +857,7 @@ mod tests {
             include_web_search_request: false,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
+            experimental_unified_exec_tool: true,
         });
 
         // Intentionally construct a map with keys that would sort alphabetically.
@@ -926,6 +936,7 @@ mod tests {
             include_web_search_request: true,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
+            experimental_unified_exec_tool: true,
         });
 
         let tools = get_openai_tools(
@@ -994,6 +1005,7 @@ mod tests {
             include_web_search_request: true,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
+            experimental_unified_exec_tool: true,
         });
 
         let tools = get_openai_tools(
@@ -1057,6 +1069,7 @@ mod tests {
             include_web_search_request: true,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
+            experimental_unified_exec_tool: true,
         });
 
         let tools = get_openai_tools(
@@ -1123,6 +1136,7 @@ mod tests {
             include_web_search_request: true,
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
+            experimental_unified_exec_tool: true,
         });
 
         let tools = get_openai_tools(
