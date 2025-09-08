@@ -247,6 +247,11 @@ impl McpProcess {
         self.send_request("getUserSavedConfig", None).await
     }
 
+    /// Send a `getUserAgent` JSON-RPC request.
+    pub async fn send_get_user_agent_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request("getUserAgent", None).await
+    }
+
     /// Send a `listConversations` JSON-RPC request.
     pub async fn send_list_conversations_request(
         &mut self,
