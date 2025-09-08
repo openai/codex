@@ -1,12 +1,5 @@
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Arc;
-
 use crate::AuthManager;
 use crate::CodexAuth;
-use codex_protocol::mcp_protocol::ConversationId;
-use tokio::sync::RwLock;
-
 use crate::codex::Codex;
 use crate::codex::CodexSpawnOk;
 use crate::codex::INITIAL_SUBMIT_ID;
@@ -18,12 +11,25 @@ use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::SessionConfiguredEvent;
 use crate::rollout::RolloutRecorder;
+use codex_protocol::mcp_protocol::ConversationId;
 use codex_protocol::models::ResponseItem;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::RwLock;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResumedHistory {
+    pub conversation_id: ConversationId,
+    pub history: Vec<ResponseItem>,
+    pub rollout_path: PathBuf,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum InitialHistory {
     New,
-    Resumed(Vec<ResponseItem>),
+    Resumed(ResumedHistory),
+    Forked(Vec<ResponseItem>),
 }
 
 /// Represents a newly created Codex conversation, including the first event
@@ -77,7 +83,7 @@ impl ConversationManager {
             let CodexSpawnOk {
                 codex,
                 conversation_id,
-            } = { Codex::spawn(config, auth_manager, InitialHistory::New).await? };
+            } = Codex::spawn(config, auth_manager, InitialHistory::New).await?;
             self.finalize_spawn(codex, conversation_id).await
         }
     }
@@ -172,7 +178,7 @@ impl ConversationManager {
 /// and all items that follow them.
 fn truncate_after_dropping_last_messages(items: Vec<ResponseItem>, n: usize) -> InitialHistory {
     if n == 0 {
-        return InitialHistory::Resumed(items);
+        return InitialHistory::Forked(items);
     }
 
     // Walk backwards counting only `user` Message items, find cut index.
@@ -194,7 +200,7 @@ fn truncate_after_dropping_last_messages(items: Vec<ResponseItem>, n: usize) -> 
         // No prefix remains after dropping; start a new conversation.
         InitialHistory::New
     } else {
-        InitialHistory::Resumed(items.into_iter().take(cut_index).collect())
+        InitialHistory::Forked(items.into_iter().take(cut_index).collect())
     }
 }
 
@@ -252,7 +258,7 @@ mod tests {
         let truncated = truncate_after_dropping_last_messages(items.clone(), 1);
         assert_eq!(
             truncated,
-            InitialHistory::Resumed(vec![items[0].clone(), items[1].clone(), items[2].clone(),])
+            InitialHistory::Forked(vec![items[0].clone(), items[1].clone(), items[2].clone(),])
         );
 
         let truncated2 = truncate_after_dropping_last_messages(items, 2);

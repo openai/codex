@@ -19,13 +19,19 @@ use strum_macros::Display;
 use ts_rs::TS;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, Hash)]
 #[ts(type = "string")]
 pub struct ConversationId(pub Uuid);
 
 impl ConversationId {
     pub fn new() -> Self {
         Self(Uuid::new_v4())
+    }
+}
+
+impl Default for ConversationId {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -199,7 +205,7 @@ pub struct NewConversationResponse {
     pub model: String,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ResumeConversationResponse {
     pub conversation_id: ConversationId,
@@ -222,6 +228,7 @@ pub struct ListConversationsParams {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationSummary {
+    pub conversation_id: ConversationId,
     pub path: PathBuf,
     pub preview: String,
     /// RFC3339 timestamp string for the session start, if available.
@@ -630,5 +637,11 @@ mod tests {
             }),
             serde_json::to_value(&request).unwrap(),
         );
+    }
+
+    #[test]
+    fn test_conversation_id_default_is_not_zeroes() {
+        let id = ConversationId::default();
+        assert_ne!(id.0, Uuid::nil());
     }
 }

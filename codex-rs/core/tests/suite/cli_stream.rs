@@ -388,8 +388,7 @@ async fn integration_creates_and_checks_session_file() {
         "No message found in session file containing the marker"
     );
 
-    // Second run: resume should create a NEW session file that contains both old and new history.
-    let orig_len = content.lines().count();
+    // Second run: resume should update the existing file.
     let marker2 = format!("integration-resume-{}", Uuid::new_v4());
     let prompt2 = format!("echo {marker2}");
     // Cross‑platform safe resume override.  On Windows, backslashes in a TOML string must be escaped
@@ -449,8 +448,8 @@ async fn integration_creates_and_checks_session_file() {
     }
 
     let resumed_path = resumed_path.expect("No resumed session file found containing the marker2");
-    // Resume should have written to a new file, not the original one.
-    assert_ne!(
+    // Resume should write to the existing log file.
+    assert_eq!(
         resumed_path, path,
         "resume should create a new session file"
     );
@@ -463,14 +462,6 @@ async fn integration_creates_and_checks_session_file() {
     assert!(
         resumed_content.contains(&marker2),
         "resumed file missing resumed marker"
-    );
-
-    // Original file should remain unchanged.
-    let content_after = std::fs::read_to_string(&path).unwrap();
-    assert_eq!(
-        content_after.lines().count(),
-        orig_len,
-        "original rollout file should not change on resume"
     );
 }
 

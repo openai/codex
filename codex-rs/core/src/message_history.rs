@@ -23,7 +23,6 @@ use std::path::PathBuf;
 use serde::Deserialize;
 use serde::Serialize;
 
-use codex_protocol::mcp_protocol::ConversationId;
 use std::time::Duration;
 use tokio::fs;
 use tokio::io::AsyncReadExt;
@@ -31,6 +30,7 @@ use tokio::io::AsyncReadExt;
 use crate::config::Config;
 use crate::config_types::HistoryPersistence;
 
+use codex_protocol::mcp_protocol::ConversationId;
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
 #[cfg(unix)]
