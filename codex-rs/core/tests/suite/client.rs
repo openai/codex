@@ -126,7 +126,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     writeln!(
         f,
         "{}",
-        json!({"meta":"test","instructions":"be nice", "id": Uuid::new_v4()})
+        json!({"meta":"test","instructions":"be nice", "id": Uuid::new_v4(), "timestamp": "2024-01-01T00:00:00Z"})
     )
     .unwrap();
 

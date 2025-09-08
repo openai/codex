@@ -6,17 +6,7 @@ use std::io::Error as IoError;
 use std::path::Path;
 use std::path::PathBuf;
 
-use super::SESSIONS_SUBDIR;
-use super::list::ConversationsPage;
-use super::list::Cursor;
-use super::list::get_conversations;
-use super::policy::is_persisted_response_item;
-use crate::config::Config;
-use crate::conversation_manager::InitialHistory;
-use crate::git_info::GitInfo;
-use crate::git_info::collect_git_info;
 use codex_protocol::mcp_protocol::ConversationId;
-use codex_protocol::models::ResponseItem;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
@@ -29,6 +19,18 @@ use tokio::sync::mpsc::{self};
 use tokio::sync::oneshot;
 use tracing::info;
 use tracing::warn;
+
+use super::SESSIONS_SUBDIR;
+use super::list::ConversationsPage;
+use super::list::Cursor;
+use super::list::get_conversations;
+use super::policy::is_persisted_response_item;
+use crate::config::Config;
+use crate::conversation_manager::InitialHistory;
+use crate::conversation_manager::ResumedHistory;
+use crate::git_info::GitInfo;
+use crate::git_info::collect_git_info;
+use codex_protocol::models::ResponseItem;
 
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct SessionMeta {
@@ -73,12 +75,7 @@ pub struct RolloutRecorder {
 }
 
 #[derive(Clone)]
-pub struct RolloutRecorderParams {
-    kind: RolloutRecorderKind,
-}
-
-#[derive(Clone)]
-enum RolloutRecorderKind {
+pub enum RolloutRecorderParams {
     Create {
         conversation_id: ConversationId,
         instructions: Option<String>,
@@ -96,18 +93,14 @@ enum RolloutCmd {
 
 impl RolloutRecorderParams {
     pub fn new(conversation_id: ConversationId, instructions: Option<String>) -> Self {
-        Self {
-            kind: RolloutRecorderKind::Create {
-                conversation_id,
-                instructions,
-            },
+        Self::Create {
+            conversation_id,
+            instructions,
         }
     }
 
     pub fn resume(path: PathBuf) -> Self {
-        Self {
-            kind: RolloutRecorderKind::Resume { path },
-        }
+        Self::Resume { path }
     }
 }
 
@@ -126,8 +119,8 @@ impl RolloutRecorder {
     /// cannot be created or the rollout file cannot be opened we return the
     /// error so the caller can decide whether to disable persistence.
     pub async fn new(config: &Config, params: RolloutRecorderParams) -> std::io::Result<Self> {
-        let (file, meta) = match params.kind {
-            RolloutRecorderKind::Create {
+        let (file, meta) = match params {
+            RolloutRecorderParams::Create {
                 conversation_id,
                 instructions,
             } => {
@@ -154,7 +147,7 @@ impl RolloutRecorder {
                     }),
                 )
             }
-            RolloutRecorderKind::Resume { path } => (
+            RolloutRecorderParams::Resume { path } => (
                 tokio::fs::OpenOptions::new()
                     .append(true)
                     .open(path)
@@ -205,9 +198,7 @@ impl RolloutRecorder {
             .map_err(|e| IoError::other(format!("failed to queue rollout state: {e}")))
     }
 
-    pub async fn get_rollout_history(
-        path: &Path,
-    ) -> std::io::Result<(Option<ConversationId>, InitialHistory)> {
+    pub async fn get_rollout_history(path: &Path) -> std::io::Result<InitialHistory> {
         info!("Resuming rollout from {path:?}");
         tracing::error!("Resuming rollout from {path:?}");
         let text = tokio::fs::read_to_string(path).await?;
@@ -263,16 +254,19 @@ impl RolloutRecorder {
             items.len(),
             conversation_id
         );
-        if conversation_id.is_none() {
-            Err(IoError::other(
-                "failed to parse conversation ID from rollout file",
-            ))
-        } else if items.is_empty() || conversation_id.is_none() {
-            Ok((None, InitialHistory::New))
-        } else {
-            info!("Resumed rollout successfully from {path:?}");
-            Ok((conversation_id, InitialHistory::Resumed(items)))
+        let conversation_id = conversation_id
+            .ok_or_else(|| IoError::other("failed to parse conversation ID from rollout file"))?;
+
+        if items.is_empty() {
+            return Ok(InitialHistory::New);
         }
+
+        info!("Resumed rollout successfully from {path:?}");
+        Ok(InitialHistory::Resumed(ResumedHistory {
+            conversation_id,
+            history: items,
+            rollout_path: path.to_path_buf(),
+        }))
     }
 
     pub async fn shutdown(&self) -> std::io::Result<()> {

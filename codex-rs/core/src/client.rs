@@ -233,7 +233,7 @@ impl ModelClient {
                 && auth.mode == AuthMode::ChatGPT
                 && let Some(account_id) = auth.get_account_id()
             {
-                req_builder = req_builder.header("chatgpt-account-id", &account_id);
+                req_builder = req_builder.header("chatgpt-account-id", account_id);
             }
 
             let res = req_builder.send().await;

@@ -19,13 +19,19 @@ use strum_macros::Display;
 use ts_rs::TS;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, Hash)]
 #[ts(type = "string")]
 pub struct ConversationId(pub Uuid);
 
 impl ConversationId {
     pub fn new() -> Self {
         Self(Uuid::new_v4())
+    }
+}
+
+impl Default for ConversationId {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -621,5 +627,11 @@ mod tests {
             }),
             serde_json::to_value(&request).unwrap(),
         );
+    }
+
+    #[test]
+    fn test_conversation_id_default_is_not_zeroes() {
+        let id = ConversationId::default();
+        assert_ne!(id.0, Uuid::nil());
     }
 }

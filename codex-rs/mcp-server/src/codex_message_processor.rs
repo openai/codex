@@ -626,12 +626,24 @@ impl CodexMessageProcessor {
                     msg: EventMsg::SessionConfigured(session_configured.clone()),
                 };
                 self.outgoing.send_event_as_notification(&event, None).await;
+                let initial_messages = session_configured.initial_messages.map(|msgs| {
+                    msgs.into_iter()
+                        .filter(|event| {
+                            // Don't send non-plain user messages (like user instructions
+                            // or environment context) back so they don't get rendered.
+                            if let EventMsg::UserMessage(user_message) = event {
+                                return matches!(user_message.kind, Some(InputMessageKind::Plain));
+                            }
+                            true
+                        })
+                        .collect()
+                });
 
                 // Reply with conversation id + model and initial messages (when present)
                 let response = codex_protocol::mcp_protocol::ResumeConversationResponse {
                     conversation_id,
                     model: session_configured.model.clone(),
-                    initial_messages: session_configured.initial_messages.clone(),
+                    initial_messages,
                 };
                 self.outgoing.send_response(request_id, response).await;
             }

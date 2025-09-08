@@ -19,9 +19,17 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct ResumedHistory {
+    pub conversation_id: ConversationId,
+    pub history: Vec<ResponseItem>,
+    pub rollout_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum InitialHistory {
     New,
-    Resumed(Vec<ResponseItem>),
+    Resumed(ResumedHistory),
+    Forked(Vec<ResponseItem>),
 }
 
 /// Represents a newly created Codex conversation, including the first event
@@ -65,25 +73,17 @@ impl ConversationManager {
     ) -> CodexResult<NewConversation> {
         // TO BE REFACTORED: use the config experimental_resume field until we have a mainstream way.
         if let Some(resume_path) = config.experimental_resume.clone() {
-            let (conversation_id, initial_history) =
-                RolloutRecorder::get_rollout_history(&resume_path).await?;
+            let initial_history = RolloutRecorder::get_rollout_history(&resume_path).await?;
             let CodexSpawnOk {
                 codex,
                 conversation_id,
-            } = Codex::spawn(
-                config,
-                auth_manager,
-                conversation_id,
-                initial_history,
-                Some(resume_path.clone()),
-            )
-            .await?;
+            } = Codex::spawn(config, auth_manager, initial_history).await?;
             self.finalize_spawn(codex, conversation_id).await
         } else {
             let CodexSpawnOk {
                 codex,
                 conversation_id,
-            } = Codex::spawn(config, auth_manager, None, InitialHistory::New, None).await?;
+            } = Codex::spawn(config, auth_manager, InitialHistory::New).await?;
             self.finalize_spawn(codex, conversation_id).await
         }
     }
@@ -137,19 +137,11 @@ impl ConversationManager {
         rollout_path: PathBuf,
         auth_manager: Arc<AuthManager>,
     ) -> CodexResult<NewConversation> {
-        let (conversation_id, initial_history) =
-            RolloutRecorder::get_rollout_history(&rollout_path).await?;
+        let initial_history = RolloutRecorder::get_rollout_history(&rollout_path).await?;
         let CodexSpawnOk {
             codex,
             conversation_id,
-        } = Codex::spawn(
-            config,
-            auth_manager,
-            conversation_id,
-            initial_history,
-            Some(rollout_path),
-        )
-        .await?;
+        } = Codex::spawn(config, auth_manager, initial_history).await?;
         self.finalize_spawn(codex, conversation_id).await
     }
 
@@ -176,7 +168,7 @@ impl ConversationManager {
         let CodexSpawnOk {
             codex,
             conversation_id,
-        } = Codex::spawn(config, auth_manager, None, history, None).await?;
+        } = Codex::spawn(config, auth_manager, history).await?;
 
         self.finalize_spawn(codex, conversation_id).await
     }
@@ -186,7 +178,7 @@ impl ConversationManager {
 /// and all items that follow them.
 fn truncate_after_dropping_last_messages(items: Vec<ResponseItem>, n: usize) -> InitialHistory {
     if n == 0 {
-        return InitialHistory::Resumed(items);
+        return InitialHistory::Forked(items);
     }
 
     // Walk backwards counting only `user` Message items, find cut index.
@@ -208,7 +200,7 @@ fn truncate_after_dropping_last_messages(items: Vec<ResponseItem>, n: usize) -> 
         // No prefix remains after dropping; start a new conversation.
         InitialHistory::New
     } else {
-        InitialHistory::Resumed(items.into_iter().take(cut_index).collect())
+        InitialHistory::Forked(items.into_iter().take(cut_index).collect())
     }
 }
 
@@ -266,7 +258,7 @@ mod tests {
         let truncated = truncate_after_dropping_last_messages(items.clone(), 1);
         assert_eq!(
             truncated,
-            InitialHistory::Resumed(vec![items[0].clone(), items[1].clone(), items[2].clone(),])
+            InitialHistory::Forked(vec![items[0].clone(), items[1].clone(), items[2].clone(),])
         );
 
         let truncated2 = truncate_after_dropping_last_messages(items, 2);
