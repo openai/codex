@@ -270,6 +270,12 @@ pub struct GetAuthStatusResponse {
     pub auth_method: Option<AuthMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_token: Option<String>,
+
+    // Indicates that auth method must be valid to use the server.
+    // This can be false if using a custom provider that is configured
+    // with requires_openai_auth == false.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requires_openai_auth: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]

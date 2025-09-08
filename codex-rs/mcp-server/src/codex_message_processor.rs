@@ -357,7 +357,7 @@ impl CodexMessageProcessor {
             .await;
 
         // Send auth status change notification reflecting the current auth mode
-        // after logout (which may fall back to API key via env var).
+        // after logout.
         let current_auth_method = self.auth_manager.auth().map(|auth| auth.mode);
         let payload = AuthStatusChangeNotification {
             auth_method: current_auth_method,
@@ -379,6 +379,11 @@ impl CodexMessageProcessor {
             tracing::warn!("failed to refresh token while getting auth status: {err}");
         }
 
+        // Determine whether auth is required based on the active model provider.
+        // If a custom provider is configured with `requires_openai_auth == false`,
+        // then no auth step is required; otherwise, default to requiring auth.
+        let requires_openai_auth = Some(self.config.model_provider.requires_openai_auth);
+
         let response = match self.auth_manager.auth() {
             Some(auth) => {
                 let (reported_auth_method, token_opt) = match auth.get_token().await {
@@ -395,11 +400,13 @@ impl CodexMessageProcessor {
                 codex_protocol::mcp_protocol::GetAuthStatusResponse {
                     auth_method: reported_auth_method,
                     auth_token: token_opt,
+                    requires_openai_auth,
                 }
             }
             None => codex_protocol::mcp_protocol::GetAuthStatusResponse {
                 auth_method: None,
                 auth_token: None,
+                requires_openai_auth,
             },
         };
 
