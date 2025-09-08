@@ -53,7 +53,7 @@ tokio-util = "0.7.16"
 toml = "0.9.5"
 toml_edit = "0.23.4"
 tracing = { version = "0.1.41", features = ["log"] }
-tree-sitter = "0.25.8"
+tree-sitter = "0.25.9"
 tree-sitter-bash = "0.25.0"
 uuid = { version = "1", features = ["serde", "v4"] }
 whoami = "1.6.1"
