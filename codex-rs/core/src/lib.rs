@@ -6,17 +6,20 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 
 mod apply_patch;
-mod bash;
+pub mod auth;
+pub mod bash;
 mod chat_completions;
 mod client;
 mod client_common;
 pub mod codex;
 mod codex_conversation;
+pub mod token_data;
 pub use codex_conversation::CodexConversation;
 pub mod config;
 pub mod config_profile;
 pub mod config_types;
 mod conversation_history;
+pub mod custom_prompts;
 mod environment_context;
 pub mod error;
 pub mod exec;
@@ -31,14 +34,20 @@ mod mcp_tool_call;
 mod message_history;
 mod model_provider_info;
 pub mod parse_command;
+mod user_instructions;
 pub use model_provider_info::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 pub use model_provider_info::ModelProviderInfo;
 pub use model_provider_info::WireApi;
 pub use model_provider_info::built_in_model_providers;
 pub use model_provider_info::create_oss_provider_with_base_url;
 mod conversation_manager;
+mod event_mapping;
 pub use conversation_manager::ConversationManager;
 pub use conversation_manager::NewConversation;
+// Re-export common auth types for workspace consumers
+pub use auth::AuthManager;
+pub use auth::CodexAuth;
+pub mod default_client;
 pub mod model_family;
 mod openai_model_info;
 mod openai_tools;
@@ -52,7 +61,11 @@ pub mod spawn;
 pub mod terminal;
 mod tool_apply_patch;
 pub mod turn_diff_tracker;
-pub mod user_agent;
+pub use rollout::RolloutRecorder;
+pub use rollout::SessionMeta;
+pub use rollout::list::ConversationItem;
+pub use rollout::list::ConversationsPage;
+pub use rollout::list::Cursor;
 mod user_notification;
 pub mod util;
 pub use apply_patch::CODEX_APPLY_PATCH_ARG1;
@@ -63,3 +76,14 @@ pub use codex_protocol::protocol;
 // Re-export protocol config enums to ensure call sites can use the same types
 // as those in the protocol crate when constructing protocol messages.
 pub use codex_protocol::config_types as protocol_config_types;
+
+pub use client::ModelClient;
+pub use client_common::Prompt;
+pub use client_common::ResponseEvent;
+pub use client_common::ResponseStream;
+pub use codex_protocol::models::ContentItem;
+pub use codex_protocol::models::LocalShellAction;
+pub use codex_protocol::models::LocalShellExecAction;
+pub use codex_protocol::models::LocalShellStatus;
+pub use codex_protocol::models::ReasoningItemContent;
+pub use codex_protocol::models::ResponseItem;

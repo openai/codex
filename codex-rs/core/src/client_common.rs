@@ -1,4 +1,3 @@
-use crate::config_types::Verbosity as VerbosityConfig;
 use crate::error::Result;
 use crate::model_family::ModelFamily;
 use crate::openai_tools::OpenAiTool;
@@ -6,7 +5,7 @@ use crate::protocol::TokenUsage;
 use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
-use codex_protocol::models::ContentItem;
+use codex_protocol::config_types::Verbosity as VerbosityConfig;
 use codex_protocol::models::ResponseItem;
 use futures::Stream;
 use serde::Serialize;
@@ -20,22 +19,15 @@ use tokio::sync::mpsc;
 /// with this content.
 const BASE_INSTRUCTIONS: &str = include_str!("../prompt.md");
 
-/// wraps user instructions message in a tag for the model to parse more easily.
-const USER_INSTRUCTIONS_START: &str = "<user_instructions>\n\n";
-const USER_INSTRUCTIONS_END: &str = "\n\n</user_instructions>";
-
 /// API request payload for a single model turn
 #[derive(Default, Debug, Clone)]
 pub struct Prompt {
     /// Conversation context input items.
     pub input: Vec<ResponseItem>,
 
-    /// Whether to store response on server side (disable_response_storage = !store).
-    pub store: bool,
-
     /// Tools available to the model, including additional tools sourced from
     /// external MCP servers.
-    pub tools: Vec<OpenAiTool>,
+    pub(crate) tools: Vec<OpenAiTool>,
 
     /// Optional override for the built-in BASE_INSTRUCTIONS.
     pub base_instructions_override: Option<String>,
@@ -68,17 +60,6 @@ impl Prompt {
     pub(crate) fn get_formatted_input(&self) -> Vec<ResponseItem> {
         self.input.clone()
     }
-
-    /// Creates a formatted user instructions message from a string
-    pub(crate) fn format_user_instructions_message(ui: &str) -> ResponseItem {
-        ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: format!("{USER_INSTRUCTIONS_START}{ui}{USER_INSTRUCTIONS_END}"),
-            }],
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -95,7 +76,6 @@ pub enum ResponseEvent {
     ReasoningSummaryPartAdded,
     WebSearchCallBegin {
         call_id: String,
-        query: Option<String>,
     },
 }
 
@@ -145,7 +125,6 @@ pub(crate) struct ResponsesApiRequest<'a> {
     pub(crate) tool_choice: &'static str,
     pub(crate) parallel_tool_calls: bool,
     pub(crate) reasoning: Option<Reasoning>,
-    /// true when using the Responses API.
     pub(crate) store: bool,
     pub(crate) stream: bool,
     pub(crate) include: Vec<String>,
@@ -175,7 +154,7 @@ pub(crate) fn create_text_param_for_request(
     })
 }
 
-pub(crate) struct ResponseStream {
+pub struct ResponseStream {
     pub(crate) rx_event: mpsc::Receiver<Result<ResponseEvent>>,
 }
 
@@ -216,7 +195,7 @@ mod tests {
             tool_choice: "auto",
             parallel_tool_calls: false,
             reasoning: None,
-            store: true,
+            store: false,
             stream: true,
             include: vec![],
             prompt_cache_key: None,
@@ -246,7 +225,7 @@ mod tests {
             tool_choice: "auto",
             parallel_tool_calls: false,
             reasoning: None,
-            store: true,
+            store: false,
             stream: true,
             include: vec![],
             prompt_cache_key: None,

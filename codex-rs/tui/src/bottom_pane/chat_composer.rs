@@ -1,4 +1,5 @@
-use codex_core::protocol::TokenUsage;
+use codex_core::protocol::TokenUsageInfo;
+use codex_protocol::num_format::format_si_suffix;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -11,7 +12,6 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::style::Style;
-use ratatui::style::Styled;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
@@ -22,11 +22,14 @@ use ratatui::widgets::StatefulWidgetRef;
 use ratatui::widgets::WidgetRef;
 
 use super::chat_composer_history::ChatComposerHistory;
+use super::command_popup::CommandItem;
 use super::command_popup::CommandPopup;
 use super::file_search_popup::FileSearchPopup;
 use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
+use crate::bottom_pane::paste_burst::FlushResult;
 use crate::slash_command::SlashCommand;
+use codex_protocol::custom_prompts::CustomPrompt;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -34,6 +37,7 @@ use crate::bottom_pane::textarea::TextArea;
 use crate::bottom_pane::textarea::TextAreaState;
 use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
+use crate::key_hint;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -47,6 +51,7 @@ use std::time::Instant;
 const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
 
 /// Result returned when the user interacts with the text area.
+#[derive(Debug, PartialEq)]
 pub enum InputResult {
     Submitted(String),
     Command(SlashCommand),
@@ -57,21 +62,6 @@ pub enum InputResult {
 struct AttachedImage {
     placeholder: String,
     path: PathBuf,
-}
-
-struct TokenUsageInfo {
-    total_token_usage: TokenUsage,
-    last_token_usage: TokenUsage,
-    model_context_window: Option<u64>,
-    /// Baseline token count present in the context before the user's first
-    /// message content is considered. This is used to normalize the
-    /// "context left" percentage so it reflects the portion the user can
-    /// influence rather than fixed prompt overhead (system prompt, tool
-    /// instructions, etc.).
-    ///
-    /// Preferred source is `cached_input_tokens` from the first turn (when
-    /// available), otherwise we fall back to 0.
-    initial_prompt_tokens: u64,
 }
 
 pub(crate) struct ChatComposer {
@@ -90,10 +80,12 @@ pub(crate) struct ChatComposer {
     has_focus: bool,
     attached_images: Vec<AttachedImage>,
     placeholder_text: String,
+    is_task_running: bool,
     // Non-bracketed paste burst tracker.
     paste_burst: PasteBurst,
     // When true, disables paste-burst logic and inserts characters immediately.
     disable_paste_burst: bool,
+    custom_prompts: Vec<CustomPrompt>,
 }
 
 /// Popup state – at most one can be visible at any time.
@@ -129,8 +121,10 @@ impl ChatComposer {
             has_focus: has_input_focus,
             attached_images: Vec::new(),
             placeholder_text,
+            is_task_running: false,
             paste_burst: PasteBurst::default(),
             disable_paste_burst: false,
+            custom_prompts: Vec::new(),
         };
         // Apply configuration via the setter to keep side-effects centralized.
         this.set_disable_paste_burst(disable_paste_burst);
@@ -169,24 +163,8 @@ impl ChatComposer {
     /// Update the cached *context-left* percentage and refresh the placeholder
     /// text. The UI relies on the placeholder to convey the remaining
     /// context when the composer is empty.
-    pub(crate) fn set_token_usage(
-        &mut self,
-        total_token_usage: TokenUsage,
-        last_token_usage: TokenUsage,
-        model_context_window: Option<u64>,
-    ) {
-        let initial_prompt_tokens = self
-            .token_usage_info
-            .as_ref()
-            .map(|info| info.initial_prompt_tokens)
-            .unwrap_or_else(|| last_token_usage.cached_input_tokens.unwrap_or(0));
-
-        self.token_usage_info = Some(TokenUsageInfo {
-            total_token_usage,
-            last_token_usage,
-            model_context_window,
-            initial_prompt_tokens,
-        });
+    pub(crate) fn set_token_usage(&mut self, token_info: Option<TokenUsageInfo>) {
+        self.token_usage_info = token_info;
     }
 
     /// Record the history metadata advertised by `SessionConfiguredEvent` so
@@ -218,7 +196,7 @@ impl ChatComposer {
             let placeholder = format!("[Pasted Content {char_count} chars]");
             self.textarea.insert_element(&placeholder);
             self.pending_pastes.push((placeholder, pasted));
-        } else if self.handle_paste_image_path(pasted.clone()) {
+        } else if char_count > 1 && self.handle_paste_image_path(pasted.clone()) {
             self.textarea.insert_str(" ");
         } else {
             self.textarea.insert_str(&pasted);
@@ -293,12 +271,7 @@ impl ChatComposer {
     }
 
     pub(crate) fn flush_paste_burst_if_due(&mut self) -> bool {
-        let now = Instant::now();
-        if let Some(pasted) = self.paste_burst.flush_if_due(now) {
-            let _ = self.handle_paste(pasted);
-            return true;
-        }
-        false
+        self.handle_paste_burst_flush(Instant::now())
     }
 
     pub(crate) fn is_in_paste_burst(&self) -> bool {
@@ -391,16 +364,29 @@ impl ChatComposer {
             KeyEvent {
                 code: KeyCode::Tab, ..
             } => {
-                if let Some(cmd) = popup.selected_command() {
-                    let first_line = self.textarea.text().lines().next().unwrap_or("");
-
-                    let starts_with_cmd = first_line
-                        .trim_start()
-                        .starts_with(&format!("/{}", cmd.command()));
-
-                    if !starts_with_cmd {
-                        self.textarea.set_text(&format!("/{} ", cmd.command()));
-                        self.textarea.set_cursor(self.textarea.text().len());
+                // Ensure popup filtering/selection reflects the latest composer text
+                // before applying completion.
+                let first_line = self.textarea.text().lines().next().unwrap_or("");
+                popup.on_composer_text_change(first_line.to_string());
+                if let Some(sel) = popup.selected_item() {
+                    match sel {
+                        CommandItem::Builtin(cmd) => {
+                            let starts_with_cmd = first_line
+                                .trim_start()
+                                .starts_with(&format!("/{}", cmd.command()));
+                            if !starts_with_cmd {
+                                self.textarea.set_text(&format!("/{} ", cmd.command()));
+                            }
+                        }
+                        CommandItem::UserPrompt(idx) => {
+                            if let Some(name) = popup.prompt_name(idx) {
+                                let starts_with_cmd =
+                                    first_line.trim_start().starts_with(&format!("/{name}"));
+                                if !starts_with_cmd {
+                                    self.textarea.set_text(&format!("/{name} "));
+                                }
+                            }
+                        }
                     }
                     // After completing the command, move cursor to the end.
                     if !self.textarea.text().is_empty() {
@@ -415,16 +401,30 @@ impl ChatComposer {
                 modifiers: KeyModifiers::NONE,
                 ..
             } => {
-                if let Some(cmd) = popup.selected_command() {
+                if let Some(sel) = popup.selected_item() {
                     // Clear textarea so no residual text remains.
                     self.textarea.set_text("");
-
-                    let result = (InputResult::Command(*cmd), true);
-
-                    // Hide popup since the command has been dispatched.
+                    // Capture any needed data from popup before clearing it.
+                    let prompt_content = match sel {
+                        CommandItem::UserPrompt(idx) => {
+                            popup.prompt_content(idx).map(|s| s.to_string())
+                        }
+                        _ => None,
+                    };
+                    // Hide popup since an action has been dispatched.
                     self.active_popup = ActivePopup::None;
 
-                    return result;
+                    match sel {
+                        CommandItem::Builtin(cmd) => {
+                            return (InputResult::Command(cmd), true);
+                        }
+                        CommandItem::UserPrompt(_) => {
+                            if let Some(contents) = prompt_content {
+                                return (InputResult::Submitted(contents), true);
+                            }
+                            return (InputResult::None, true);
+                        }
+                    }
                 }
                 // Fallback to default newline handling if no command selected.
                 self.handle_key_event_without_popup(key_event)
@@ -807,7 +807,12 @@ impl ChatComposer {
                 }
                 self.pending_pastes.clear();
 
+                // If there is neither text nor attachments, suppress submission entirely.
+                let has_attachments = !self.attached_images.is_empty();
                 text = text.trim().to_string();
+                if text.is_empty() && !has_attachments {
+                    return (InputResult::None, true);
+                }
                 if !text.is_empty() {
                     self.history.record_local_submission(&text);
                 }
@@ -818,15 +823,36 @@ impl ChatComposer {
         }
     }
 
+    fn handle_paste_burst_flush(&mut self, now: Instant) -> bool {
+        match self.paste_burst.flush_if_due(now) {
+            FlushResult::Paste(pasted) => {
+                self.handle_paste(pasted);
+                true
+            }
+            FlushResult::Typed(ch) => {
+                // Mirror insert_str() behavior so popups stay in sync when a
+                // pending fast char flushes as normal typed input.
+                self.textarea.insert_str(ch.to_string().as_str());
+                // Keep popup sync consistent with key handling: prefer slash popup; only
+                // sync file popup when slash popup is NOT active.
+                self.sync_command_popup();
+                if matches!(self.active_popup, ActivePopup::Command(_)) {
+                    self.dismissed_file_popup_token = None;
+                } else {
+                    self.sync_file_search_popup();
+                }
+                true
+            }
+            FlushResult::None => false,
+        }
+    }
+
     /// Handle generic Input events that modify the textarea content.
     fn handle_input_basic(&mut self, input: KeyEvent) -> (InputResult, bool) {
         // If we have a buffered non-bracketed paste burst and enough time has
         // elapsed since the last char, flush it before handling a new input.
         let now = Instant::now();
-        if let Some(pasted) = self.paste_burst.flush_if_due(now) {
-            // Reuse normal paste path (handles large-paste placeholders).
-            self.handle_paste(pasted);
-        }
+        self.handle_paste_burst_flush(now);
 
         // If we're capturing a burst and receive Enter, accumulate it instead of inserting.
         if matches!(input.code, KeyCode::Enter)
@@ -1117,11 +1143,18 @@ impl ChatComposer {
             }
             _ => {
                 if input_starts_with_slash {
-                    let mut command_popup = CommandPopup::new();
+                    let mut command_popup = CommandPopup::new(self.custom_prompts.clone());
                     command_popup.on_composer_text_change(first_line.to_string());
                     self.active_popup = ActivePopup::Command(command_popup);
                 }
             }
+        }
+    }
+
+    pub(crate) fn set_custom_prompts(&mut self, prompts: Vec<CustomPrompt>) {
+        self.custom_prompts = prompts.clone();
+        if let ActivePopup::Command(popup) = &mut self.active_popup {
+            popup.set_prompts(prompts);
         }
     }
 
@@ -1175,6 +1208,10 @@ impl ChatComposer {
         self.has_focus = has_focus;
     }
 
+    pub fn set_task_running(&mut self, running: bool) {
+        self.is_task_running = running;
+    }
+
     pub(crate) fn set_esc_backtrack_hint(&mut self, show: bool) {
         self.esc_backtrack_hint = show;
     }
@@ -1198,61 +1235,71 @@ impl WidgetRef for ChatComposer {
             }
             ActivePopup::None => {
                 let bottom_line_rect = popup_rect;
-                let key_hint_style = Style::default().fg(Color::Cyan);
-                let mut hint = if self.ctrl_c_quit_hint {
+                let mut hint: Vec<Span<'static>> = if self.ctrl_c_quit_hint {
+                    let ctrl_c_followup = if self.is_task_running {
+                        " to interrupt"
+                    } else {
+                        " to quit"
+                    };
                     vec![
-                        Span::from(" "),
-                        "Ctrl+C again".set_style(key_hint_style),
-                        Span::from(" to quit"),
+                        " ".into(),
+                        key_hint::ctrl('C'),
+                        " again".into(),
+                        ctrl_c_followup.into(),
                     ]
                 } else {
                     let newline_hint_key = if self.use_shift_enter_hint {
-                        "Shift+⏎"
+                        key_hint::shift('⏎')
                     } else {
-                        "Ctrl+J"
+                        key_hint::ctrl('J')
                     };
                     vec![
-                        Span::from(" "),
-                        "⏎".set_style(key_hint_style),
-                        Span::from(" send   "),
-                        newline_hint_key.set_style(key_hint_style),
-                        Span::from(" newline   "),
-                        "Ctrl+T".set_style(key_hint_style),
-                        Span::from(" transcript   "),
-                        "Ctrl+C".set_style(key_hint_style),
-                        Span::from(" quit"),
+                        " ".into(),
+                        key_hint::plain('⏎'),
+                        " send   ".into(),
+                        newline_hint_key,
+                        " newline   ".into(),
+                        key_hint::ctrl('T'),
+                        " transcript   ".into(),
+                        key_hint::ctrl('C'),
+                        " quit".into(),
                     ]
                 };
 
                 if !self.ctrl_c_quit_hint && self.esc_backtrack_hint {
-                    hint.push(Span::from("   "));
-                    hint.push("Esc".set_style(key_hint_style));
-                    hint.push(Span::from(" edit prev"));
+                    hint.push("   ".into());
+                    hint.push(key_hint::plain("Esc"));
+                    hint.push(" edit prev".into());
                 }
 
                 // Append token/context usage info to the footer hints when available.
                 if let Some(token_usage_info) = &self.token_usage_info {
                     let token_usage = &token_usage_info.total_token_usage;
-                    hint.push(Span::from("   "));
+                    hint.push("   ".into());
                     hint.push(
-                        Span::from(format!("{} tokens used", token_usage.blended_total()))
-                            .style(Style::default().add_modifier(Modifier::DIM)),
+                        Span::from(format!(
+                            "{} tokens used",
+                            format_si_suffix(token_usage.blended_total())
+                        ))
+                        .style(Style::default().add_modifier(Modifier::DIM)),
                     );
                     let last_token_usage = &token_usage_info.last_token_usage;
                     if let Some(context_window) = token_usage_info.model_context_window {
                         let percent_remaining: u8 = if context_window > 0 {
-                            last_token_usage.percent_of_context_window_remaining(
-                                context_window,
-                                token_usage_info.initial_prompt_tokens,
-                            )
+                            last_token_usage.percent_of_context_window_remaining(context_window)
                         } else {
                             100
                         };
-                        hint.push(Span::from("   "));
-                        hint.push(
-                            Span::from(format!("{percent_remaining}% context left"))
-                                .style(Style::default().add_modifier(Modifier::DIM)),
-                        );
+                        let context_style = if percent_remaining < 20 {
+                            Style::default().fg(Color::Yellow)
+                        } else {
+                            Style::default().add_modifier(Modifier::DIM)
+                        };
+                        hint.push("   ".into());
+                        hint.push(Span::styled(
+                            format!("{percent_remaining}% context left"),
+                            context_style,
+                        ));
                     }
                 }
 
@@ -1484,6 +1531,33 @@ mod tests {
     }
 
     #[test]
+    fn empty_enter_returns_none() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        // Ensure composer is empty and press Enter.
+        assert!(composer.textarea.text().is_empty());
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        match result {
+            InputResult::None => {}
+            other => panic!("expected None for empty enter, got: {other:?}"),
+        }
+    }
+
+    #[test]
     fn handle_paste_large_uses_placeholder_and_replaces_on_submit() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
@@ -1547,7 +1621,6 @@ mod tests {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
         use crossterm::event::KeyModifiers;
-        use insta::assert_snapshot;
         use ratatui::Terminal;
         use ratatui::backend::TestBackend;
 
@@ -1599,7 +1672,66 @@ mod tests {
                 .draw(|f| f.render_widget_ref(composer, f.area()))
                 .unwrap_or_else(|e| panic!("Failed to draw {name} composer: {e}"));
 
-            assert_snapshot!(name, terminal.backend());
+            insta::assert_snapshot!(name, terminal.backend());
+        }
+    }
+
+    #[test]
+    fn slash_popup_model_first_for_mo_ui() {
+        use ratatui::Terminal;
+        use ratatui::backend::TestBackend;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        // Type "/mo" humanlike so paste-burst doesn’t interfere.
+        type_chars_humanlike(&mut composer, &['/', 'm', 'o']);
+
+        let mut terminal = match Terminal::new(TestBackend::new(60, 4)) {
+            Ok(t) => t,
+            Err(e) => panic!("Failed to create terminal: {e}"),
+        };
+        terminal
+            .draw(|f| f.render_widget_ref(composer, f.area()))
+            .unwrap_or_else(|e| panic!("Failed to draw composer: {e}"));
+
+        // Visual snapshot should show the slash popup with /model as the first entry.
+        insta::assert_snapshot!("slash_popup_mo", terminal.backend());
+    }
+
+    #[test]
+    fn slash_popup_model_first_for_mo_logic() {
+        use super::super::command_popup::CommandItem;
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+        type_chars_humanlike(&mut composer, &['/', 'm', 'o']);
+
+        match &composer.active_popup {
+            ActivePopup::Command(popup) => match popup.selected_item() {
+                Some(CommandItem::Builtin(cmd)) => {
+                    assert_eq!(cmd.command(), "model")
+                }
+                Some(CommandItem::UserPrompt(_)) => {
+                    panic!("unexpected prompt selected for '/mo'")
+                }
+                None => panic!("no selected command for '/mo'"),
+            },
+            _ => panic!("slash popup not active after typing '/mo'"),
         }
     }
 
@@ -1894,7 +2026,7 @@ mod tests {
                 composer.handle_paste(paste.clone());
                 composer
                     .textarea
-                    .set_cursor((placeholder.len() - pos_from_end) as usize);
+                    .set_cursor(placeholder.len() - pos_from_end);
                 composer.handle_key_event(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
                 let result = (
                     composer.textarea.text().contains(&placeholder),
@@ -2096,6 +2228,38 @@ mod tests {
 
         let imgs = composer.take_recent_submission_images();
         assert_eq!(imgs, vec![tmp_path.clone()]);
+    }
+
+    #[test]
+    fn selecting_custom_prompt_submits_file_contents() {
+        let prompt_text = "Hello from saved prompt";
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        // Inject prompts as if received via event.
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: prompt_text.to_string(),
+        }]);
+
+        type_chars_humanlike(
+            &mut composer,
+            &['/', 'm', 'y', '-', 'p', 'r', 'o', 'm', 'p', 't'],
+        );
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(InputResult::Submitted(prompt_text.to_string()), result);
     }
 
     #[test]

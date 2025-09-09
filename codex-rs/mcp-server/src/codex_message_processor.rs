@@ -1,39 +1,32 @@
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
-
-use codex_core::CodexConversation;
-use codex_core::ConversationManager;
-use codex_core::NewConversation;
-use codex_core::config::Config;
-use codex_core::config::ConfigOverrides;
-use codex_core::config::ConfigToml;
-use codex_core::config::load_config_as_toml;
-use codex_core::git_info::git_diff_to_remote;
-use codex_core::protocol::ApplyPatchApprovalRequestEvent;
-use codex_core::protocol::Event;
-use codex_core::protocol::EventMsg;
-use codex_core::protocol::ExecApprovalRequestEvent;
-use codex_core::protocol::ReviewDecision;
-use codex_login::AuthManager;
-use codex_protocol::mcp_protocol::AuthMode;
-use codex_protocol::mcp_protocol::GitDiffToRemoteResponse;
-use mcp_types::JSONRPCErrorError;
-use mcp_types::RequestId;
-use tokio::sync::Mutex;
-use tokio::sync::oneshot;
-use tracing::error;
-use uuid::Uuid;
-
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::json_to_toml::json_to_toml;
 use crate::outgoing_message::OutgoingMessageSender;
 use crate::outgoing_message::OutgoingNotification;
+use codex_core::AuthManager;
+use codex_core::CodexConversation;
+use codex_core::ConversationManager;
+use codex_core::Cursor as RolloutCursor;
+use codex_core::NewConversation;
+use codex_core::RolloutRecorder;
+use codex_core::SessionMeta;
+use codex_core::auth::CLIENT_ID;
+use codex_core::config::Config;
+use codex_core::config::ConfigOverrides;
+use codex_core::config::ConfigToml;
+use codex_core::config::load_config_as_toml;
+use codex_core::default_client::get_codex_user_agent;
+use codex_core::exec::ExecParams;
+use codex_core::exec_env::create_env;
+use codex_core::get_platform_sandbox;
+use codex_core::git_info::git_diff_to_remote;
+use codex_core::protocol::ApplyPatchApprovalRequestEvent;
+use codex_core::protocol::Event;
+use codex_core::protocol::EventMsg;
+use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::InputItem as CoreInputItem;
 use codex_core::protocol::Op;
-use codex_login::CLIENT_ID;
+use codex_core::protocol::ReviewDecision;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
@@ -42,27 +35,51 @@ use codex_protocol::mcp_protocol::AddConversationListenerParams;
 use codex_protocol::mcp_protocol::AddConversationSubscriptionResponse;
 use codex_protocol::mcp_protocol::ApplyPatchApprovalParams;
 use codex_protocol::mcp_protocol::ApplyPatchApprovalResponse;
+use codex_protocol::mcp_protocol::AuthMode;
 use codex_protocol::mcp_protocol::AuthStatusChangeNotification;
 use codex_protocol::mcp_protocol::ClientRequest;
 use codex_protocol::mcp_protocol::ConversationId;
+use codex_protocol::mcp_protocol::ConversationSummary;
 use codex_protocol::mcp_protocol::EXEC_COMMAND_APPROVAL_METHOD;
+use codex_protocol::mcp_protocol::ExecArbitraryCommandResponse;
 use codex_protocol::mcp_protocol::ExecCommandApprovalParams;
 use codex_protocol::mcp_protocol::ExecCommandApprovalResponse;
-use codex_protocol::mcp_protocol::GetConfigTomlResponse;
+use codex_protocol::mcp_protocol::ExecOneOffCommandParams;
+use codex_protocol::mcp_protocol::GetUserAgentResponse;
+use codex_protocol::mcp_protocol::GetUserSavedConfigResponse;
+use codex_protocol::mcp_protocol::GitDiffToRemoteResponse;
 use codex_protocol::mcp_protocol::InputItem as WireInputItem;
 use codex_protocol::mcp_protocol::InterruptConversationParams;
 use codex_protocol::mcp_protocol::InterruptConversationResponse;
+use codex_protocol::mcp_protocol::ListConversationsParams;
+use codex_protocol::mcp_protocol::ListConversationsResponse;
 use codex_protocol::mcp_protocol::LoginChatGptCompleteNotification;
 use codex_protocol::mcp_protocol::LoginChatGptResponse;
 use codex_protocol::mcp_protocol::NewConversationParams;
 use codex_protocol::mcp_protocol::NewConversationResponse;
 use codex_protocol::mcp_protocol::RemoveConversationListenerParams;
 use codex_protocol::mcp_protocol::RemoveConversationSubscriptionResponse;
+use codex_protocol::mcp_protocol::ResumeConversationParams;
 use codex_protocol::mcp_protocol::SendUserMessageParams;
 use codex_protocol::mcp_protocol::SendUserMessageResponse;
 use codex_protocol::mcp_protocol::SendUserTurnParams;
 use codex_protocol::mcp_protocol::SendUserTurnResponse;
 use codex_protocol::mcp_protocol::ServerNotification;
+use codex_protocol::mcp_protocol::UserSavedConfig;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::InputMessageKind;
+use codex_protocol::protocol::USER_MESSAGE_BEGIN;
+use mcp_types::JSONRPCErrorError;
+use mcp_types::RequestId;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
+use tokio::sync::Mutex;
+use tokio::sync::oneshot;
+use tracing::error;
+use uuid::Uuid;
 
 // Duration before a ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -88,7 +105,7 @@ pub(crate) struct CodexMessageProcessor {
     conversation_listeners: HashMap<Uuid, oneshot::Sender<()>>,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     // Queue of pending interrupt requests per conversation. We reply when TurnAborted arrives.
-    pending_interrupts: Arc<Mutex<HashMap<Uuid, Vec<RequestId>>>>,
+    pending_interrupts: Arc<Mutex<HashMap<ConversationId, Vec<RequestId>>>>,
 }
 
 impl CodexMessageProcessor {
@@ -118,6 +135,12 @@ impl CodexMessageProcessor {
                 // asynchronously because we need to ensure the conversation is
                 // created before processing any subsequent messages.
                 self.process_new_conversation(request_id, params).await;
+            }
+            ClientRequest::ListConversations { request_id, params } => {
+                self.handle_list_conversations(request_id, params).await;
+            }
+            ClientRequest::ResumeConversation { request_id, params } => {
+                self.handle_resume_conversation(request_id, params).await;
             }
             ClientRequest::SendUserMessage { request_id, params } => {
                 self.send_user_message(request_id, params).await;
@@ -149,8 +172,14 @@ impl CodexMessageProcessor {
             ClientRequest::GetAuthStatus { request_id, params } => {
                 self.get_auth_status(request_id, params).await;
             }
-            ClientRequest::GetConfigToml { request_id } => {
-                self.get_config_toml(request_id).await;
+            ClientRequest::GetUserSavedConfig { request_id } => {
+                self.get_user_saved_config(request_id).await;
+            }
+            ClientRequest::GetUserAgent { request_id } => {
+                self.get_user_agent(request_id).await;
+            }
+            ClientRequest::ExecOneOffCommand { request_id, params } => {
+                self.exec_one_off_command(request_id, params).await;
             }
         }
     }
@@ -160,7 +189,11 @@ impl CodexMessageProcessor {
 
         let opts = LoginServerOptions {
             open_browser: false,
-            ..LoginServerOptions::new(config.codex_home.clone(), CLIENT_ID.to_string())
+            ..LoginServerOptions::new(
+                config.codex_home.clone(),
+                CLIENT_ID.to_string(),
+                config.responses_originator_header.clone(),
+            )
         };
 
         enum LoginChatGptReply {
@@ -360,7 +393,13 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
-    async fn get_config_toml(&self, request_id: RequestId) {
+    async fn get_user_agent(&self, request_id: RequestId) {
+        let user_agent = get_codex_user_agent(Some(&self.config.responses_originator_header));
+        let response = GetUserAgentResponse { user_agent };
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn get_user_saved_config(&self, request_id: RequestId) {
         let toml_value = match load_config_as_toml(&self.config.codex_home) {
             Ok(val) => val,
             Err(err) => {
@@ -387,33 +426,82 @@ impl CodexMessageProcessor {
             }
         };
 
-        let profiles: HashMap<String, codex_protocol::config_types::ConfigProfile> = cfg
-            .profiles
-            .into_iter()
-            .map(|(k, v)| {
-                (
-                    k,
-                    // Define this explicitly here to avoid the need to
-                    // implement `From<codex_core::config_profile::ConfigProfile>`
-                    // for the `ConfigProfile` type and introduce a dependency on codex_core
-                    codex_protocol::config_types::ConfigProfile {
-                        model: v.model,
-                        approval_policy: v.approval_policy,
-                        model_reasoning_effort: v.model_reasoning_effort,
-                    },
-                )
-            })
-            .collect();
+        let user_saved_config: UserSavedConfig = cfg.into();
 
-        let response = GetConfigTomlResponse {
-            approval_policy: cfg.approval_policy,
-            sandbox_mode: cfg.sandbox_mode,
-            model_reasoning_effort: cfg.model_reasoning_effort,
-            profile: cfg.profile,
-            profiles: Some(profiles),
+        let response = GetUserSavedConfigResponse {
+            config: user_saved_config,
+        };
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn exec_one_off_command(&self, request_id: RequestId, params: ExecOneOffCommandParams) {
+        tracing::debug!("ExecOneOffCommand params: {params:?}");
+
+        if params.command.is_empty() {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "command must not be empty".to_string(),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
+        let cwd = params.cwd.unwrap_or_else(|| self.config.cwd.clone());
+        let env = create_env(&self.config.shell_environment_policy);
+        let timeout_ms = params.timeout_ms;
+        let exec_params = ExecParams {
+            command: params.command,
+            cwd,
+            timeout_ms,
+            env,
+            with_escalated_permissions: None,
+            justification: None,
         };
 
-        self.outgoing.send_response(request_id, response).await;
+        let effective_policy = params
+            .sandbox_policy
+            .unwrap_or_else(|| self.config.sandbox_policy.clone());
+
+        let sandbox_type = match &effective_policy {
+            codex_core::protocol::SandboxPolicy::DangerFullAccess => {
+                codex_core::exec::SandboxType::None
+            }
+            _ => get_platform_sandbox().unwrap_or(codex_core::exec::SandboxType::None),
+        };
+        tracing::debug!("Sandbox type: {sandbox_type:?}");
+        let codex_linux_sandbox_exe = self.config.codex_linux_sandbox_exe.clone();
+        let outgoing = self.outgoing.clone();
+        let req_id = request_id;
+
+        tokio::spawn(async move {
+            match codex_core::exec::process_exec_tool_call(
+                exec_params,
+                sandbox_type,
+                &effective_policy,
+                &codex_linux_sandbox_exe,
+                None,
+            )
+            .await
+            {
+                Ok(output) => {
+                    let response = ExecArbitraryCommandResponse {
+                        exit_code: output.exit_code,
+                        stdout: output.stdout.text,
+                        stderr: output.stderr.text,
+                    };
+                    outgoing.send_response(req_id, response).await;
+                }
+                Err(err) => {
+                    let error = JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!("exec failed: {err}"),
+                        data: None,
+                    };
+                    outgoing.send_error(req_id, error).await;
+                }
+            }
+        });
     }
 
     async fn process_new_conversation(&self, request_id: RequestId, params: NewConversationParams) {
@@ -438,7 +526,7 @@ impl CodexMessageProcessor {
                     ..
                 } = conversation_id;
                 let response = NewConversationResponse {
-                    conversation_id: ConversationId(conversation_id),
+                    conversation_id,
                     model: session_configured.model,
                 };
                 self.outgoing.send_response(request_id, response).await;
@@ -454,6 +542,133 @@ impl CodexMessageProcessor {
         }
     }
 
+    async fn handle_list_conversations(
+        &self,
+        request_id: RequestId,
+        params: ListConversationsParams,
+    ) {
+        let page_size = params.page_size.unwrap_or(25);
+        // Decode the optional cursor string to a Cursor via serde (Cursor implements Deserialize from string)
+        let cursor_obj: Option<RolloutCursor> = match params.cursor {
+            Some(s) => serde_json::from_str::<RolloutCursor>(&format!("\"{s}\"")).ok(),
+            None => None,
+        };
+        let cursor_ref = cursor_obj.as_ref();
+
+        let page = match RolloutRecorder::list_conversations(
+            &self.config.codex_home,
+            page_size,
+            cursor_ref,
+        )
+        .await
+        {
+            Ok(p) => p,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to list conversations: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        let items = page
+            .items
+            .into_iter()
+            .filter_map(|it| extract_conversation_summary(it.path, &it.head))
+            .collect();
+
+        // Encode next_cursor as a plain string
+        let next_cursor = match page.next_cursor {
+            Some(c) => match serde_json::to_value(&c) {
+                Ok(serde_json::Value::String(s)) => Some(s),
+                _ => None,
+            },
+            None => None,
+        };
+
+        let response = ListConversationsResponse { items, next_cursor };
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn handle_resume_conversation(
+        &self,
+        request_id: RequestId,
+        params: ResumeConversationParams,
+    ) {
+        // Derive a Config using the same logic as new conversation, honoring overrides if provided.
+        let config = match params.overrides {
+            Some(overrides) => {
+                derive_config_from_params(overrides, self.codex_linux_sandbox_exe.clone())
+            }
+            None => Ok(self.config.as_ref().clone()),
+        };
+        let config = match config {
+            Ok(cfg) => cfg,
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INVALID_REQUEST_ERROR_CODE,
+                    message: format!("error deriving config: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match self
+            .conversation_manager
+            .resume_conversation_from_rollout(
+                config,
+                params.path.clone(),
+                self.auth_manager.clone(),
+            )
+            .await
+        {
+            Ok(NewConversation {
+                conversation_id,
+                session_configured,
+                ..
+            }) => {
+                let event = Event {
+                    id: "".to_string(),
+                    msg: EventMsg::SessionConfigured(session_configured.clone()),
+                };
+                self.outgoing.send_event_as_notification(&event, None).await;
+                let initial_messages = session_configured.initial_messages.map(|msgs| {
+                    msgs.into_iter()
+                        .filter(|event| {
+                            // Don't send non-plain user messages (like user instructions
+                            // or environment context) back so they don't get rendered.
+                            if let EventMsg::UserMessage(user_message) = event {
+                                return matches!(user_message.kind, Some(InputMessageKind::Plain));
+                            }
+                            true
+                        })
+                        .collect()
+                });
+
+                // Reply with conversation id + model and initial messages (when present)
+                let response = codex_protocol::mcp_protocol::ResumeConversationResponse {
+                    conversation_id,
+                    model: session_configured.model.clone(),
+                    initial_messages,
+                };
+                self.outgoing.send_response(request_id, response).await;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("error resuming conversation: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
+    }
+
     async fn send_user_message(&self, request_id: RequestId, params: SendUserMessageParams) {
         let SendUserMessageParams {
             conversation_id,
@@ -461,7 +676,7 @@ impl CodexMessageProcessor {
         } = params;
         let Ok(conversation) = self
             .conversation_manager
-            .get_conversation(conversation_id.0)
+            .get_conversation(conversation_id)
             .await
         else {
             let error = JSONRPCErrorError {
@@ -509,7 +724,7 @@ impl CodexMessageProcessor {
 
         let Ok(conversation) = self
             .conversation_manager
-            .get_conversation(conversation_id.0)
+            .get_conversation(conversation_id)
             .await
         else {
             let error = JSONRPCErrorError {
@@ -555,7 +770,7 @@ impl CodexMessageProcessor {
         let InterruptConversationParams { conversation_id } = params;
         let Ok(conversation) = self
             .conversation_manager
-            .get_conversation(conversation_id.0)
+            .get_conversation(conversation_id)
             .await
         else {
             let error = JSONRPCErrorError {
@@ -570,7 +785,7 @@ impl CodexMessageProcessor {
         // Record the pending interrupt so we can reply when TurnAborted arrives.
         {
             let mut map = self.pending_interrupts.lock().await;
-            map.entry(conversation_id.0).or_default().push(request_id);
+            map.entry(conversation_id).or_default().push(request_id);
         }
 
         // Submit the interrupt; we'll respond upon TurnAborted.
@@ -585,12 +800,12 @@ impl CodexMessageProcessor {
         let AddConversationListenerParams { conversation_id } = params;
         let Ok(conversation) = self
             .conversation_manager
-            .get_conversation(conversation_id.0)
+            .get_conversation(conversation_id)
             .await
         else {
             let error = JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("conversation not found: {}", conversation_id.0),
+                message: format!("conversation not found: {conversation_id}"),
                 data: None,
             };
             self.outgoing.send_error(request_id, error).await;
@@ -620,18 +835,18 @@ impl CodexMessageProcessor {
                         };
 
                         // For now, we send a notification for every event,
-                        // JSON-serializing the `Event` as-is, but we will move
-                        // to creating a special enum for notifications with a
-                        // stable wire format.
+                        // JSON-serializing the `Event` as-is, but these should
+                        // be migrated to be variants of `ServerNotification`
+                        // instead.
                         let method = format!("codex/event/{}", event.msg);
                         let mut params = match serde_json::to_value(event.clone()) {
                             Ok(serde_json::Value::Object(map)) => map,
                             Ok(_) => {
-                                tracing::error!("event did not serialize to an object");
+                                error!("event did not serialize to an object");
                                 continue;
                             }
                             Err(err) => {
-                                tracing::error!("failed to serialize event: {err}");
+                                error!("failed to serialize event: {err}");
                                 continue;
                             }
                         };
@@ -703,7 +918,7 @@ async fn apply_bespoke_event_handling(
     conversation_id: ConversationId,
     conversation: Arc<CodexConversation>,
     outgoing: Arc<OutgoingMessageSender>,
-    pending_interrupts: Arc<Mutex<HashMap<Uuid, Vec<RequestId>>>>,
+    pending_interrupts: Arc<Mutex<HashMap<ConversationId, Vec<RequestId>>>>,
 ) {
     let Event { id: event_id, msg } = event;
     match msg {
@@ -756,7 +971,7 @@ async fn apply_bespoke_event_handling(
         EventMsg::TurnAborted(turn_aborted_event) => {
             let pending = {
                 let mut map = pending_interrupts.lock().await;
-                map.remove(&conversation_id.0).unwrap_or_default()
+                map.remove(&conversation_id).unwrap_or_default()
             };
             if !pending.is_empty() {
                 let response = InterruptConversationResponse {
@@ -799,7 +1014,6 @@ fn derive_config_from_params(
         include_plan_tool,
         include_apply_patch_tool,
         include_view_image_tool: None,
-        disable_response_storage: None,
         show_raw_agent_reasoning: None,
         tools_web_search_request: None,
     };
@@ -815,7 +1029,7 @@ fn derive_config_from_params(
 
 async fn on_patch_approval_response(
     event_id: String,
-    receiver: tokio::sync::oneshot::Receiver<mcp_types::Result>,
+    receiver: oneshot::Receiver<mcp_types::Result>,
     codex: Arc<CodexConversation>,
 ) {
     let response = receiver.await;
@@ -857,14 +1071,14 @@ async fn on_patch_approval_response(
 
 async fn on_exec_approval_response(
     event_id: String,
-    receiver: tokio::sync::oneshot::Receiver<mcp_types::Result>,
+    receiver: oneshot::Receiver<mcp_types::Result>,
     conversation: Arc<CodexConversation>,
 ) {
     let response = receiver.await;
     let value = match response {
         Ok(value) => value,
         Err(err) => {
-            tracing::error!("request failed: {err:?}");
+            error!("request failed: {err:?}");
             return;
         }
     };
@@ -888,5 +1102,102 @@ async fn on_exec_approval_response(
         .await
     {
         error!("failed to submit ExecApproval: {err}");
+    }
+}
+
+fn extract_conversation_summary(
+    path: PathBuf,
+    head: &[serde_json::Value],
+) -> Option<ConversationSummary> {
+    let session_meta = match head.first() {
+        Some(first_line) => match serde_json::from_value::<SessionMeta>(first_line.clone()) {
+            Ok(session_meta) => session_meta,
+            Err(..) => return None,
+        },
+        None => return None,
+    };
+
+    let preview = head
+        .iter()
+        .filter_map(|value| serde_json::from_value::<ResponseItem>(value.clone()).ok())
+        .find_map(|item| match item {
+            ResponseItem::Message { content, .. } => {
+                content.into_iter().find_map(|content| match content {
+                    ContentItem::InputText { text } => {
+                        match InputMessageKind::from(("user", &text)) {
+                            InputMessageKind::Plain => Some(text),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                })
+            }
+            _ => None,
+        })?;
+
+    let preview = match preview.find(USER_MESSAGE_BEGIN) {
+        Some(idx) => preview[idx + USER_MESSAGE_BEGIN.len()..].trim(),
+        None => preview.as_str(),
+    };
+
+    let timestamp = if session_meta.timestamp.is_empty() {
+        None
+    } else {
+        Some(session_meta.timestamp.clone())
+    };
+
+    Some(ConversationSummary {
+        conversation_id: session_meta.id,
+        timestamp,
+        path,
+        preview: preview.to_string(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    #[test]
+    fn extract_conversation_summary_prefers_plain_user_messages() {
+        let conversation_id =
+            ConversationId(Uuid::parse_str("3f941c35-29b3-493b-b0a4-e25800d9aeb0").unwrap());
+        let timestamp = Some("2025-09-05T16:53:11.850Z".to_string());
+        let path = PathBuf::from("rollout.jsonl");
+
+        let head = vec![
+            json!({
+                "id": conversation_id.0,
+                "timestamp": timestamp,
+            }),
+            json!({
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": "<user_instructions>\n<AGENTS.md contents>\n</user_instructions>".to_string(),
+                }],
+            }),
+            json!({
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": format!("<prior context> {USER_MESSAGE_BEGIN}Count to 5"),
+                }],
+            }),
+        ];
+
+        let summary = extract_conversation_summary(path.clone(), &head).expect("summary");
+
+        assert_eq!(summary.conversation_id, conversation_id);
+        assert_eq!(
+            summary.timestamp,
+            Some("2025-09-05T16:53:11.850Z".to_string())
+        );
+        assert_eq!(summary.path, path);
+        assert_eq!(summary.preview, "Count to 5");
     }
 }

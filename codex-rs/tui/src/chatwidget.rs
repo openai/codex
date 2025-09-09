@@ -19,6 +19,8 @@ use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
 use codex_core::protocol::InputItem;
+use codex_core::protocol::InputMessageKind;
+use codex_core::protocol::ListCustomPromptsResponseEvent;
 use codex_core::protocol::McpListToolsResponseEvent;
 use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
@@ -27,9 +29,12 @@ use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TokenUsage;
+use codex_core::protocol::TokenUsageInfo;
 use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnDiffEvent;
+use codex_core::protocol::UserMessageEvent;
 use codex_core::protocol::WebSearchBeginEvent;
+use codex_core::protocol::WebSearchEndEvent;
 use codex_protocol::parse_command::ParsedCommand;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -53,6 +58,7 @@ use crate::bottom_pane::CancellationEvent;
 use crate::bottom_pane::InputResult;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
+use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::get_git_diff::get_git_diff;
 use crate::history_cell;
 use crate::history_cell::CommandOutput;
@@ -79,12 +85,22 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_file_search::FileMatch;
-use uuid::Uuid;
+use codex_protocol::mcp_protocol::ConversationId;
 
 // Track information about an in-flight exec command.
 struct RunningCommand {
     command: Vec<String>,
     parsed_cmd: Vec<ParsedCommand>,
+}
+
+/// Common initialization parameters shared by all `ChatWidget` constructors.
+pub(crate) struct ChatWidgetInit {
+    pub(crate) config: Config,
+    pub(crate) frame_requester: FrameRequester,
+    pub(crate) app_event_tx: AppEventSender,
+    pub(crate) initial_prompt: Option<String>,
+    pub(crate) initial_images: Vec<PathBuf>,
+    pub(crate) enhanced_keys_supported: bool,
 }
 
 pub(crate) struct ChatWidget {
@@ -94,12 +110,10 @@ pub(crate) struct ChatWidget {
     active_exec_cell: Option<ExecCell>,
     config: Config,
     initial_user_message: Option<UserMessage>,
-    total_token_usage: TokenUsage,
-    last_token_usage: TokenUsage,
+    token_info: Option<TokenUsageInfo>,
     // Stream lifecycle controller
     stream: StreamController,
     running_commands: HashMap<String, RunningCommand>,
-    pending_exec_completions: Vec<(Vec<String>, Vec<ParsedCommand>, CommandOutput)>,
     task_complete_pending: bool,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
@@ -107,11 +121,13 @@ pub(crate) struct ChatWidget {
     reasoning_buffer: String,
     // Accumulates full reasoning content for transcript-only recording
     full_reasoning_buffer: String,
-    session_id: Option<Uuid>,
+    conversation_id: Option<ConversationId>,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
-    last_history_was_exec: bool,
+    // When resuming an existing session (selected via resume picker), avoid an
+    // immediate redraw on SessionConfigured to prevent a gratuitous UI flicker.
+    suppress_session_configured_redraw: bool,
     // User messages queued while a turn is in progress
     queued_user_messages: VecDeque<UserMessage>,
 }
@@ -147,16 +163,24 @@ impl ChatWidget {
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
-        self.session_id = Some(event.session_id);
+        self.conversation_id = Some(event.session_id);
+        let initial_messages = event.initial_messages.clone();
+        if let Some(messages) = initial_messages {
+            self.replay_initial_messages(messages);
+        }
         self.add_to_history(history_cell::new_session_info(
             &self.config,
             event,
             self.show_welcome_banner,
         ));
+        // Ask codex-core to enumerate custom prompts for this session.
+        self.submit_op(Op::ListCustomPrompts);
         if let Some(user_message) = self.initial_user_message.take() {
             self.submit_user_message(user_message);
         }
-        self.request_redraw();
+        if !self.suppress_session_configured_redraw {
+            self.request_redraw();
+        }
     }
 
     fn on_agent_message(&mut self, message: String) {
@@ -189,10 +213,12 @@ impl ChatWidget {
         // At the end of a reasoning block, record transcript-only content.
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
         if !self.full_reasoning_buffer.is_empty() {
-            self.add_to_history(history_cell::new_reasoning_block(
+            for cell in history_cell::new_reasoning_summary_block(
                 self.full_reasoning_buffer.clone(),
                 &self.config,
-            ));
+            ) {
+                self.add_boxed_history(cell);
+            }
         }
         self.reasoning_buffer.clear();
         self.full_reasoning_buffer.clear();
@@ -233,16 +259,10 @@ impl ChatWidget {
         self.maybe_send_next_queued_input();
     }
 
-    fn on_token_count(&mut self, token_usage: TokenUsage) {
-        self.total_token_usage = add_token_usage(&self.total_token_usage, &token_usage);
-        self.last_token_usage = token_usage;
-        self.bottom_pane.set_token_usage(
-            self.total_token_usage.clone(),
-            self.last_token_usage.clone(),
-            self.config.model_context_window,
-        );
+    pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
+        self.bottom_pane.set_token_usage(info.clone());
+        self.token_info = info;
     }
-
     /// Finalize any active exec as failed, push an error message into history,
     /// and stop/clear running UI state.
     fn finalize_turn_with_error_message(&mut self, message: String) {
@@ -329,6 +349,7 @@ impl ChatWidget {
                 auto_approved: event.auto_approved,
             },
             event.changes,
+            &self.config.cwd,
         ));
     }
 
@@ -355,9 +376,16 @@ impl ChatWidget {
         self.defer_or_handle(|q| q.push_mcp_end(ev), |s| s.handle_mcp_end_now(ev2));
     }
 
-    fn on_web_search_begin(&mut self, ev: WebSearchBeginEvent) {
+    fn on_web_search_begin(&mut self, _ev: WebSearchBeginEvent) {
         self.flush_answer_stream_with_separator();
-        self.add_to_history(history_cell::new_web_search_call(ev.query));
+    }
+
+    fn on_web_search_end(&mut self, ev: WebSearchEndEvent) {
+        self.flush_answer_stream_with_separator();
+        self.add_to_history(history_cell::new_web_search_call(format!(
+            "Searched: {}",
+            ev.query
+        )));
     }
 
     fn on_get_history_entry_response(
@@ -431,14 +459,14 @@ impl ChatWidget {
                 self.task_complete_pending = false;
             }
             // A completed stream indicates non-exec content was just inserted.
-            // Reset the exec header grouping so the next exec shows its header.
-            self.last_history_was_exec = false;
             self.flush_interrupt_queue();
         }
     }
 
     #[inline]
     fn handle_streaming_delta(&mut self, delta: String) {
+        // Before streaming agent content, flush any active exec cell group.
+        self.flush_active_exec_cell();
         let sink = AppEventHistorySink(self.app_event_tx.clone());
         self.stream.begin(&sink);
         self.stream.push_and_maybe_commit(&delta, &sink);
@@ -451,31 +479,29 @@ impl ChatWidget {
             Some(rc) => (rc.command, rc.parsed_cmd),
             None => (vec![ev.call_id.clone()], Vec::new()),
         };
-        self.pending_exec_completions.push((
-            command,
-            parsed,
-            CommandOutput {
-                exit_code: ev.exit_code,
-                stdout: ev.stdout.clone(),
-                stderr: ev.stderr.clone(),
-                formatted_output: ev.formatted_output.clone(),
-            },
-        ));
 
-        if self.running_commands.is_empty() {
-            self.active_exec_cell = None;
-            let pending = std::mem::take(&mut self.pending_exec_completions);
-            for (command, parsed, output) in pending {
-                let include_header = !self.last_history_was_exec;
-                let cell = history_cell::new_completed_exec_command(
-                    command,
-                    parsed,
-                    output,
-                    include_header,
-                    ev.duration,
-                );
-                self.add_to_history(cell);
-                self.last_history_was_exec = true;
+        if self.active_exec_cell.is_none() {
+            // This should have been created by handle_exec_begin_now, but in case it wasn't,
+            // create it now.
+            self.active_exec_cell = Some(history_cell::new_active_exec_command(
+                ev.call_id.clone(),
+                command,
+                parsed,
+            ));
+        }
+        if let Some(cell) = self.active_exec_cell.as_mut() {
+            cell.complete_call(
+                &ev.call_id,
+                CommandOutput {
+                    exit_code: ev.exit_code,
+                    stdout: ev.stdout.clone(),
+                    stderr: ev.stderr.clone(),
+                    formatted_output: ev.formatted_output.clone(),
+                },
+                ev.duration,
+            );
+            if cell.should_flush() {
+                self.flush_active_exec_cell();
             }
         }
     }
@@ -484,15 +510,17 @@ impl ChatWidget {
         &mut self,
         event: codex_core::protocol::PatchApplyEndEvent,
     ) {
-        if event.success {
-            self.add_to_history(history_cell::new_patch_apply_success(event.stdout));
-        } else {
+        // If the patch was successful, just let the "Edited" block stand.
+        // Otherwise, add a failure block.
+        if !event.success {
             self.add_to_history(history_cell::new_patch_apply_failure(event.stderr));
         }
     }
 
     pub(crate) fn handle_exec_approval_now(&mut self, id: String, ev: ExecApprovalRequestEvent) {
         self.flush_answer_stream_with_separator();
+        // Emit the proposed command into history (like proposed patches)
+        self.add_to_history(history_cell::new_proposed_command(&ev.command));
 
         let request = ApprovalRequest::Exec {
             id,
@@ -512,6 +540,7 @@ impl ChatWidget {
         self.add_to_history(history_cell::new_patch_event(
             PatchEventType::ApprovalRequest,
             ev.changes.clone(),
+            &self.config.cwd,
         ));
 
         let request = ApprovalRequest::ApplyPatch {
@@ -532,19 +561,28 @@ impl ChatWidget {
                 parsed_cmd: ev.parsed_cmd.clone(),
             },
         );
-        // Accumulate parsed commands into a single active Exec cell so they stack
-        match self.active_exec_cell.as_mut() {
-            Some(exec) => {
-                exec.parsed.extend(ev.parsed_cmd);
-            }
-            _ => {
-                let include_header = !self.last_history_was_exec;
+        if let Some(exec) = &self.active_exec_cell {
+            if let Some(new_exec) = exec.with_added_call(
+                ev.call_id.clone(),
+                ev.command.clone(),
+                ev.parsed_cmd.clone(),
+            ) {
+                self.active_exec_cell = Some(new_exec);
+            } else {
+                // Make a new cell.
+                self.flush_active_exec_cell();
                 self.active_exec_cell = Some(history_cell::new_active_exec_command(
-                    ev.command,
-                    ev.parsed_cmd,
-                    include_header,
+                    ev.call_id.clone(),
+                    ev.command.clone(),
+                    ev.parsed_cmd.clone(),
                 ));
             }
+        } else {
+            self.active_exec_cell = Some(history_cell::new_active_exec_command(
+                ev.call_id.clone(),
+                ev.command.clone(),
+                ev.parsed_cmd.clone(),
+            ));
         }
 
         // Request a redraw so the working header and command list are visible immediately.
@@ -574,7 +612,7 @@ impl ChatWidget {
             Constraint::Max(
                 self.active_exec_cell
                     .as_ref()
-                    .map_or(0, |c| c.desired_height(area.width)),
+                    .map_or(0, |c| c.desired_height(area.width) + 1),
             ),
             Constraint::Min(self.bottom_pane.desired_height(area.width)),
         ])
@@ -582,14 +620,17 @@ impl ChatWidget {
     }
 
     pub(crate) fn new(
-        config: Config,
+        common: ChatWidgetInit,
         conversation_manager: Arc<ConversationManager>,
-        frame_requester: FrameRequester,
-        app_event_tx: AppEventSender,
-        initial_prompt: Option<String>,
-        initial_images: Vec<PathBuf>,
-        enhanced_keys_supported: bool,
     ) -> Self {
+        let ChatWidgetInit {
+            config,
+            frame_requester,
+            app_event_tx,
+            initial_prompt,
+            initial_images,
+            enhanced_keys_supported,
+        } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
         let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), conversation_manager);
@@ -612,31 +653,34 @@ impl ChatWidget {
                 initial_prompt.unwrap_or_default(),
                 initial_images,
             ),
-            total_token_usage: TokenUsage::default(),
-            last_token_usage: TokenUsage::default(),
+            token_info: None,
             stream: StreamController::new(config),
             running_commands: HashMap::new(),
-            pending_exec_completions: Vec::new(),
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
-            session_id: None,
-            last_history_was_exec: false,
+            conversation_id: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: true,
+            suppress_session_configured_redraw: false,
         }
     }
 
     /// Create a ChatWidget attached to an existing conversation (e.g., a fork).
     pub(crate) fn new_from_existing(
-        config: Config,
+        common: ChatWidgetInit,
         conversation: std::sync::Arc<codex_core::CodexConversation>,
         session_configured: codex_core::protocol::SessionConfiguredEvent,
-        frame_requester: FrameRequester,
-        app_event_tx: AppEventSender,
-        enhanced_keys_supported: bool,
     ) -> Self {
+        let ChatWidgetInit {
+            config,
+            frame_requester,
+            app_event_tx,
+            initial_prompt,
+            initial_images,
+            enhanced_keys_supported,
+        } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
 
@@ -657,20 +701,21 @@ impl ChatWidget {
             }),
             active_exec_cell: None,
             config: config.clone(),
-            initial_user_message: None,
-            total_token_usage: TokenUsage::default(),
-            last_token_usage: TokenUsage::default(),
+            initial_user_message: create_initial_user_message(
+                initial_prompt.unwrap_or_default(),
+                initial_images,
+            ),
+            token_info: None,
             stream: StreamController::new(config),
             running_commands: HashMap::new(),
-            pending_exec_completions: Vec::new(),
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
-            session_id: None,
-            last_history_was_exec: false,
+            conversation_id: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: false,
+            suppress_session_configured_redraw: true,
         }
     }
 
@@ -679,7 +724,7 @@ impl ChatWidget {
             + self
                 .active_exec_cell
                 .as_ref()
-                .map_or(0, |c| c.desired_height(width))
+                .map_or(0, |c| c.desired_height(width) + 1)
     }
 
     pub(crate) fn handle_key_event(&mut self, key_event: KeyEvent) {
@@ -691,6 +736,17 @@ impl ChatWidget {
                 ..
             } => {
                 self.on_ctrl_c();
+                return;
+            }
+            KeyEvent {
+                code: KeyCode::Char('v'),
+                modifiers: KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                if let Ok((path, info)) = paste_image_to_temp_png() {
+                    self.attach_image(path, info.width, info.height, info.encoded_format.label());
+                }
                 return;
             }
             other if other.kind == KeyEventKind::Press => {
@@ -755,7 +811,7 @@ impl ChatWidget {
     fn dispatch_command(&mut self, cmd: SlashCommand) {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
             let message = format!(
-                "'/'{}' is disabled while a task is in progress.",
+                "'/{}' is disabled while a task is in progress.",
                 cmd.command()
             );
             self.add_to_history(history_cell::new_error_event(message));
@@ -784,7 +840,7 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::ExitRequest);
             }
             SlashCommand::Logout => {
-                if let Err(e) = codex_login::logout(&self.config.codex_home) {
+                if let Err(e) = codex_core::auth::logout(&self.config.codex_home) {
                     tracing::error!("failed to logout: {e}");
                 }
                 self.app_event_tx.send(AppEvent::ExitRequest);
@@ -880,25 +936,20 @@ impl ChatWidget {
 
     fn flush_active_exec_cell(&mut self) {
         if let Some(active) = self.active_exec_cell.take() {
-            self.last_history_was_exec = true;
             self.app_event_tx
                 .send(AppEvent::InsertHistoryCell(Box::new(active)));
         }
     }
 
     fn add_to_history(&mut self, cell: impl HistoryCell + 'static) {
-        // Only break exec grouping if the cell renders visible lines.
-        let has_display_lines = !cell.display_lines().is_empty();
-        self.flush_active_exec_cell();
-        if has_display_lines {
-            self.last_history_was_exec = false;
-        }
-        self.app_event_tx
-            .send(AppEvent::InsertHistoryCell(Box::new(cell)));
+        self.add_boxed_history(Box::new(cell));
     }
 
     fn add_boxed_history(&mut self, cell: Box<dyn HistoryCell>) {
-        self.flush_active_exec_cell();
+        if !cell.display_lines(u16::MAX).is_empty() {
+            // Only break exec grouping if the cell renders visible lines.
+            self.flush_active_exec_cell();
+        }
         self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
     }
 
@@ -939,9 +990,32 @@ impl ChatWidget {
         }
     }
 
+    /// Replay a subset of initial events into the UI to seed the transcript when
+    /// resuming an existing session. This approximates the live event flow and
+    /// is intentionally conservative: only safe-to-replay items are rendered to
+    /// avoid triggering side effects. Event ids are passed as `None` to
+    /// distinguish replayed events from live ones.
+    fn replay_initial_messages(&mut self, events: Vec<EventMsg>) {
+        for msg in events {
+            if matches!(msg, EventMsg::SessionConfigured(_)) {
+                continue;
+            }
+            // `id: None` indicates a synthetic/fake id coming from replay.
+            self.dispatch_event_msg(None, msg, true);
+        }
+    }
+
     pub(crate) fn handle_codex_event(&mut self, event: Event) {
         let Event { id, msg } = event;
+        self.dispatch_event_msg(Some(id), msg, false);
+    }
 
+    /// Dispatch a protocol `EventMsg` to the appropriate handler.
+    ///
+    /// `id` is `Some` for live events and `None` for replayed events from
+    /// `replay_initial_messages()`. Callers should treat `None` as a "fake" id
+    /// that must not be used to correlate follow-up actions.
+    fn dispatch_event_msg(&mut self, id: Option<String>, msg: EventMsg, from_replay: bool) {
         match msg {
             EventMsg::AgentMessageDelta(_)
             | EventMsg::AgentReasoningDelta(_)
@@ -968,7 +1042,7 @@ impl ChatWidget {
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
             EventMsg::TaskStarted(_) => self.on_task_started(),
             EventMsg::TaskComplete(TaskCompleteEvent { .. }) => self.on_task_complete(),
-            EventMsg::TokenCount(token_usage) => self.on_token_count(token_usage),
+            EventMsg::TokenCount(ev) => self.set_token_info(ev.info),
             EventMsg::Error(ErrorEvent { message }) => self.on_error(message),
             EventMsg::TurnAborted(ev) => match ev.reason {
                 TurnAbortReason::Interrupted => {
@@ -979,8 +1053,13 @@ impl ChatWidget {
                 }
             },
             EventMsg::PlanUpdate(update) => self.on_plan_update(update),
-            EventMsg::ExecApprovalRequest(ev) => self.on_exec_approval_request(id, ev),
-            EventMsg::ApplyPatchApprovalRequest(ev) => self.on_apply_patch_approval_request(id, ev),
+            EventMsg::ExecApprovalRequest(ev) => {
+                // For replayed events, synthesize an empty id (these should not occur).
+                self.on_exec_approval_request(id.clone().unwrap_or_default(), ev)
+            }
+            EventMsg::ApplyPatchApprovalRequest(ev) => {
+                self.on_apply_patch_approval_request(id.clone().unwrap_or_default(), ev)
+            }
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::ExecCommandOutputDelta(delta) => self.on_exec_command_output_delta(delta),
             EventMsg::PatchApplyBegin(ev) => self.on_patch_apply_begin(ev),
@@ -989,18 +1068,39 @@ impl ChatWidget {
             EventMsg::McpToolCallBegin(ev) => self.on_mcp_tool_call_begin(ev),
             EventMsg::McpToolCallEnd(ev) => self.on_mcp_tool_call_end(ev),
             EventMsg::WebSearchBegin(ev) => self.on_web_search_begin(ev),
+            EventMsg::WebSearchEnd(ev) => self.on_web_search_end(ev),
             EventMsg::GetHistoryEntryResponse(ev) => self.on_get_history_entry_response(ev),
             EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
+            EventMsg::ListCustomPromptsResponse(ev) => self.on_list_custom_prompts(ev),
             EventMsg::ShutdownComplete => self.on_shutdown_complete(),
             EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) => self.on_turn_diff(unified_diff),
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
                 self.on_background_event(message)
             }
             EventMsg::StreamError(StreamErrorEvent { message }) => self.on_stream_error(message),
+            EventMsg::UserMessage(ev) => {
+                if from_replay {
+                    self.on_user_message_event(ev);
+                }
+            }
             EventMsg::ConversationHistory(ev) => {
-                // Forward to App so it can process backtrack flows.
                 self.app_event_tx
                     .send(crate::app_event::AppEvent::ConversationHistory(ev));
+            }
+        }
+    }
+
+    fn on_user_message_event(&mut self, event: UserMessageEvent) {
+        match event.kind {
+            Some(InputMessageKind::EnvironmentContext)
+            | Some(InputMessageKind::UserInstructions) => {
+                // Skip XML‑wrapped context blocks in the transcript.
+            }
+            Some(InputMessageKind::Plain) | None => {
+                let message = event.message.trim();
+                if !message.is_empty() {
+                    self.add_to_history(history_cell::new_user_prompt(message.to_string()));
+                }
             }
         }
     }
@@ -1015,7 +1115,6 @@ impl ChatWidget {
             let cell = cell.into_failed();
             // Insert finalized exec into history and keep grouping consistent.
             self.add_to_history(cell);
-            self.last_history_was_exec = true;
         }
     }
 
@@ -1050,10 +1149,17 @@ impl ChatWidget {
     }
 
     pub(crate) fn add_status_output(&mut self) {
+        let default_usage;
+        let usage_ref = if let Some(ti) = &self.token_info {
+            &ti.total_token_usage
+        } else {
+            default_usage = TokenUsage::default();
+            &default_usage
+        };
         self.add_to_history(history_cell::new_status_output(
             &self.config,
-            &self.total_token_usage,
-            &self.session_id,
+            usage_ref,
+            &self.conversation_id,
         ));
     }
 
@@ -1070,6 +1176,7 @@ impl ChatWidget {
             let is_current = preset.model == current_model && preset.effort == current_effort;
             let model_slug = preset.model.to_string();
             let effort = preset.effort;
+            let current_model = current_model.clone();
             let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
                 tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
                     cwd: None,
@@ -1081,6 +1188,13 @@ impl ChatWidget {
                 }));
                 tx.send(AppEvent::UpdateModel(model_slug.clone()));
                 tx.send(AppEvent::UpdateReasoningEffort(effort));
+                tracing::info!(
+                    "New model: {}, New effort: {}, Current model: {}, Current effort: {}",
+                    model_slug.clone(),
+                    effort,
+                    current_model,
+                    current_effort
+                );
             })];
             items.push(SelectionItem {
                 name,
@@ -1174,15 +1288,17 @@ impl ChatWidget {
 
     /// Handle Ctrl-C key press.
     fn on_ctrl_c(&mut self) {
-        if self.bottom_pane.on_ctrl_c() == CancellationEvent::Ignored {
-            if self.bottom_pane.is_task_running() {
-                self.submit_op(Op::Interrupt);
-            } else if self.bottom_pane.ctrl_c_quit_hint_visible() {
-                self.submit_op(Op::Shutdown);
-            } else {
-                self.bottom_pane.show_ctrl_c_quit_hint();
-            }
+        if self.bottom_pane.on_ctrl_c() == CancellationEvent::Handled {
+            return;
         }
+
+        if self.bottom_pane.is_task_running() {
+            self.bottom_pane.show_ctrl_c_quit_hint();
+            self.submit_op(Op::Interrupt);
+            return;
+        }
+
+        self.submit_op(Op::Shutdown);
     }
 
     pub(crate) fn composer_is_empty(&self) -> bool {
@@ -1220,6 +1336,13 @@ impl ChatWidget {
         self.add_to_history(history_cell::new_mcp_tools_output(&self.config, ev.tools));
     }
 
+    fn on_list_custom_prompts(&mut self, ev: ListCustomPromptsResponseEvent) {
+        let len = ev.custom_prompts.len();
+        debug!("received {len} custom prompts");
+        // Forward to bottom pane so the slash popup can show them now.
+        self.bottom_pane.set_custom_prompts(ev.custom_prompts);
+    }
+
     /// Programmatically submit a user text message as if typed in the
     /// composer. The text will be added to conversation history and sent to
     /// the agent.
@@ -1230,12 +1353,15 @@ impl ChatWidget {
         self.submit_user_message(text.into());
     }
 
-    pub(crate) fn token_usage(&self) -> &TokenUsage {
-        &self.total_token_usage
+    pub(crate) fn token_usage(&self) -> TokenUsage {
+        self.token_info
+            .as_ref()
+            .map(|ti| ti.total_token_usage.clone())
+            .unwrap_or_default()
     }
 
-    pub(crate) fn session_id(&self) -> Option<Uuid> {
-        self.session_id
+    pub(crate) fn conversation_id(&self) -> Option<ConversationId> {
+        self.conversation_id
     }
 
     /// Return a reference to the widget's current config (includes any
@@ -1245,12 +1371,8 @@ impl ChatWidget {
     }
 
     pub(crate) fn clear_token_usage(&mut self) {
-        self.total_token_usage = TokenUsage::default();
-        self.bottom_pane.set_token_usage(
-            self.total_token_usage.clone(),
-            self.last_token_usage.clone(),
-            self.config.model_context_window,
-        );
+        self.token_info = None;
+        self.bottom_pane.set_token_usage(None);
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
@@ -1263,7 +1385,12 @@ impl WidgetRef for &ChatWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let [active_cell_area, bottom_pane_area] = self.layout_areas(area);
         (&self.bottom_pane).render(bottom_pane_area, buf);
-        if let Some(cell) = &self.active_exec_cell {
+        if !active_cell_area.is_empty()
+            && let Some(cell) = &self.active_exec_cell
+        {
+            let mut active_cell_area = active_cell_area;
+            active_cell_area.y = active_cell_area.y.saturating_add(1);
+            active_cell_area.height -= 1;
             cell.render_ref(active_cell_area, buf);
         }
     }
@@ -1277,34 +1404,6 @@ const EXAMPLE_PROMPTS: [&str; 6] = [
     "Write tests for @filename",
     "Improve documentation in @filename",
 ];
-
-fn add_token_usage(current_usage: &TokenUsage, new_usage: &TokenUsage) -> TokenUsage {
-    let cached_input_tokens = match (
-        current_usage.cached_input_tokens,
-        new_usage.cached_input_tokens,
-    ) {
-        (Some(current), Some(new)) => Some(current + new),
-        (Some(current), None) => Some(current),
-        (None, Some(new)) => Some(new),
-        (None, None) => None,
-    };
-    let reasoning_output_tokens = match (
-        current_usage.reasoning_output_tokens,
-        new_usage.reasoning_output_tokens,
-    ) {
-        (Some(current), Some(new)) => Some(current + new),
-        (Some(current), None) => Some(current),
-        (None, Some(new)) => Some(new),
-        (None, None) => None,
-    };
-    TokenUsage {
-        input_tokens: current_usage.input_tokens + new_usage.input_tokens,
-        cached_input_tokens,
-        output_tokens: current_usage.output_tokens + new_usage.output_tokens,
-        reasoning_output_tokens,
-        total_tokens: current_usage.total_tokens + new_usage.total_tokens,
-    }
-}
 
 // Extract the first bold (Markdown) element in the form **...** from `s`.
 // Returns the inner text if found; otherwise `None`.

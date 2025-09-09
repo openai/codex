@@ -1,5 +1,6 @@
 #![allow(clippy::unwrap_used)]
 
+use codex_core::CodexAuth;
 use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
 use codex_core::built_in_model_providers;
@@ -12,11 +13,11 @@ use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort;
 use codex_core::protocol_config_types::ReasoningSummary;
 use codex_core::shell::default_user_shell;
-use codex_login::CodexAuth;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::wait_for_event;
 use tempfile::TempDir;
+use uuid::Uuid;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -269,7 +270,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
     let requests = server.received_requests().await.unwrap();
     assert_eq!(requests.len(), 2, "expected two POST requests");
 
-    let shell = default_user_shell().await;
+    let shell = default_user_shell(Uuid::new_v4(), codex_home.path()).await;
 
     let expected_env_text = format!(
         r#"<environment_context>
@@ -289,20 +290,17 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
 
     let expected_env_msg = serde_json::json!({
         "type": "message",
-        "id": serde_json::Value::Null,
         "role": "user",
         "content": [ { "type": "input_text", "text": expected_env_text } ]
     });
     let expected_ui_msg = serde_json::json!({
         "type": "message",
-        "id": serde_json::Value::Null,
         "role": "user",
         "content": [ { "type": "input_text", "text": expected_ui_text } ]
     });
 
     let expected_user_message_1 = serde_json::json!({
         "type": "message",
-        "id": serde_json::Value::Null,
         "role": "user",
         "content": [ { "type": "input_text", "text": "hello 1" } ]
     });
@@ -314,7 +312,6 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
 
     let expected_user_message_2 = serde_json::json!({
         "type": "message",
-        "id": serde_json::Value::Null,
         "role": "user",
         "content": [ { "type": "input_text", "text": "hello 2" } ]
     });
@@ -424,7 +421,6 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() {
     // as the prefix of the second request, ensuring cache hit potential.
     let expected_user_message_2 = serde_json::json!({
         "type": "message",
-        "id": serde_json::Value::Null,
         "role": "user",
         "content": [ { "type": "input_text", "text": "hello 2" } ]
     });
@@ -438,7 +434,6 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() {
 </environment_context>"#;
     let expected_env_msg_2 = serde_json::json!({
         "type": "message",
-        "id": serde_json::Value::Null,
         "role": "user",
         "content": [ { "type": "input_text", "text": expected_env_text_2 } ]
     });
@@ -543,7 +538,6 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() {
     // as the prefix of the second request.
     let expected_user_message_2 = serde_json::json!({
         "type": "message",
-        "id": serde_json::Value::Null,
         "role": "user",
         "content": [ { "type": "input_text", "text": "hello 2" } ]
     });

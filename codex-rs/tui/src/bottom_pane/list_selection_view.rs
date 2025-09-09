@@ -3,8 +3,7 @@ use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::style::Modifier;
-use ratatui::style::Style;
+use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
 use ratatui::widgets::Paragraph;
@@ -42,7 +41,7 @@ pub(crate) struct ListSelectionView {
 
 impl ListSelectionView {
     fn dim_prefix_span() -> Span<'static> {
-        Span::styled("▌ ", Style::default().add_modifier(Modifier::DIM))
+        "▌ ".dim()
     }
 
     fn render_dim_prefix_line(area: Rect, buf: &mut Buffer) {
@@ -162,13 +161,8 @@ impl BottomPaneView for ListSelectionView {
             height: 1,
         };
 
-        let title_spans: Vec<Span<'static>> = vec![
-            Self::dim_prefix_span(),
-            Span::styled(
-                self.title.clone(),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
-        ];
+        let title_spans: Vec<Span<'static>> =
+            vec![Self::dim_prefix_span(), self.title.clone().bold()];
         let title_para = Paragraph::new(Line::from(title_spans));
         title_para.render(title_area, buf);
 
@@ -180,10 +174,8 @@ impl BottomPaneView for ListSelectionView {
                 width: area.width,
                 height: 1,
             };
-            let subtitle_spans: Vec<Span<'static>> = vec![
-                Self::dim_prefix_span(),
-                Span::styled(sub.clone(), Style::default().add_modifier(Modifier::DIM)),
-            ];
+            let subtitle_spans: Vec<Span<'static>> =
+                vec![Self::dim_prefix_span(), sub.clone().dim()];
             let subtitle_para = Paragraph::new(Line::from(subtitle_spans));
             subtitle_para.render(subtitle_area, buf);
             // Render the extra spacer line with the dimmed prefix to align with title/subtitle
@@ -230,7 +222,15 @@ impl BottomPaneView for ListSelectionView {
             })
             .collect();
         if rows_area.height > 0 {
-            render_rows(rows_area, buf, &rows, &self.state, MAX_POPUP_ROWS, true);
+            render_rows(
+                rows_area,
+                buf,
+                &rows,
+                &self.state,
+                MAX_POPUP_ROWS,
+                true,
+                "no matches",
+            );
         }
 
         if let Some(hint) = &self.footer_hint {
@@ -240,10 +240,7 @@ impl BottomPaneView for ListSelectionView {
                 width: area.width,
                 height: 1,
             };
-            let footer_para = Paragraph::new(Line::from(Span::styled(
-                hint.clone(),
-                Style::default().add_modifier(Modifier::DIM),
-            )));
+            let footer_para = Paragraph::new(hint.clone().dim());
             footer_para.render(footer_area, buf);
         }
     }

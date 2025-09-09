@@ -5,7 +5,7 @@ use crate::app_event_sender::AppEventSender;
 use crate::tui::FrameRequester;
 use crate::user_approval_widget::ApprovalRequest;
 use bottom_pane_view::BottomPaneView;
-use codex_core::protocol::TokenUsage;
+use codex_core::protocol::TokenUsageInfo;
 use codex_file_search::FileMatch;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
@@ -30,12 +30,13 @@ mod textarea;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CancellationEvent {
-    Ignored,
     Handled,
+    NotHandled,
 }
 
 pub(crate) use chat_composer::ChatComposer;
 pub(crate) use chat_composer::InputResult;
+use codex_protocol::custom_prompts::CustomPrompt;
 
 use crate::status_indicator_widget::StatusIndicatorWidget;
 use approval_modal_view::ApprovalModalView;
@@ -99,53 +100,47 @@ impl BottomPane {
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
-        let top_margin = if self.active_view.is_some() { 0 } else { 1 };
+        // Always reserve one blank row above the pane for visual spacing.
+        let top_margin = 1;
 
         // Base height depends on whether a modal/overlay is active.
-        let mut base = if let Some(view) = self.active_view.as_ref() {
-            view.desired_height(width)
-        } else {
-            self.composer.desired_height(width)
+        let base = match self.active_view.as_ref() {
+            Some(view) => view.desired_height(width),
+            None => self.composer.desired_height(width).saturating_add(
+                self.status
+                    .as_ref()
+                    .map_or(0, |status| status.desired_height(width)),
+            ),
         };
-        // If a status indicator is active and no modal is covering the composer,
-        // include its height above the composer.
-        if self.active_view.is_none()
-            && let Some(status) = self.status.as_ref()
-        {
-            base = base.saturating_add(status.desired_height(width));
-        }
         // Account for bottom padding rows. Top spacing is handled in layout().
         base.saturating_add(Self::BOTTOM_PAD_LINES)
             .saturating_add(top_margin)
     }
 
     fn layout(&self, area: Rect) -> [Rect; 2] {
-        // Prefer showing the status header when space is extremely tight.
-        // Drop the top spacer if there is only one row available.
-        let mut top_margin = if self.active_view.is_some() { 0 } else { 1 };
-        if area.height <= 1 {
-            top_margin = 0;
-        }
-
-        let status_height = if self.active_view.is_none() {
-            if let Some(status) = self.status.as_ref() {
-                status.desired_height(area.width)
-            } else {
-                0
-            }
+        // At small heights, bottom pane takes the entire height.
+        let (top_margin, bottom_margin) = if area.height <= BottomPane::BOTTOM_PAD_LINES + 1 {
+            (0, 0)
         } else {
-            0
+            (1, BottomPane::BOTTOM_PAD_LINES)
         };
 
-        let [_, status, content, _] = Layout::vertical([
-            Constraint::Max(top_margin),
-            Constraint::Max(status_height),
-            Constraint::Min(1),
-            Constraint::Max(BottomPane::BOTTOM_PAD_LINES),
-        ])
-        .areas(area);
-
-        [status, content]
+        let area = Rect {
+            x: area.x,
+            y: area.y + top_margin,
+            width: area.width,
+            height: area.height - top_margin - bottom_margin,
+        };
+        match self.active_view.as_ref() {
+            Some(_) => [Rect::ZERO, area],
+            None => {
+                let status_height = self
+                    .status
+                    .as_ref()
+                    .map_or(0, |status| status.desired_height(area.width));
+                Layout::vertical([Constraint::Max(status_height), Constraint::Min(1)]).areas(area)
+            }
+        }
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
@@ -167,6 +162,8 @@ impl BottomPane {
             view.handle_key_event(self, key_event);
             if !view.is_complete() {
                 self.active_view = Some(view);
+            } else {
+                self.on_active_view_complete();
             }
             self.request_redraw();
             InputResult::None
@@ -198,7 +195,15 @@ impl BottomPane {
     pub(crate) fn on_ctrl_c(&mut self) -> CancellationEvent {
         let mut view = match self.active_view.take() {
             Some(view) => view,
-            None => return CancellationEvent::Ignored,
+            None => {
+                return if self.composer_is_empty() {
+                    CancellationEvent::NotHandled
+                } else {
+                    self.set_composer_text(String::new());
+                    self.show_ctrl_c_quit_hint();
+                    CancellationEvent::Handled
+                };
+            }
         };
 
         let event = view.on_ctrl_c(self);
@@ -206,10 +211,12 @@ impl BottomPane {
             CancellationEvent::Handled => {
                 if !view.is_complete() {
                     self.active_view = Some(view);
+                } else {
+                    self.on_active_view_complete();
                 }
                 self.show_ctrl_c_quit_hint();
             }
-            CancellationEvent::Ignored => {
+            CancellationEvent::NotHandled => {
                 self.active_view = Some(view);
             }
         }
@@ -268,6 +275,7 @@ impl BottomPane {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn ctrl_c_quit_hint_visible(&self) -> bool {
         self.ctrl_c_quit_hint
     }
@@ -290,6 +298,7 @@ impl BottomPane {
 
     pub fn set_task_running(&mut self, running: bool) {
         self.is_task_running = running;
+        self.composer.set_task_running(running);
 
         if running {
             if self.status.is_none() {
@@ -336,6 +345,12 @@ impl BottomPane {
         self.request_redraw();
     }
 
+    /// Update custom prompts available for the slash popup.
+    pub(crate) fn set_custom_prompts(&mut self, prompts: Vec<CustomPrompt>) {
+        self.composer.set_custom_prompts(prompts);
+        self.request_redraw();
+    }
+
     pub(crate) fn composer_is_empty(&self) -> bool {
         self.composer.is_empty()
     }
@@ -353,14 +368,8 @@ impl BottomPane {
 
     /// Update the *context-window remaining* indicator in the composer. This
     /// is forwarded directly to the underlying `ChatComposer`.
-    pub(crate) fn set_token_usage(
-        &mut self,
-        total_token_usage: TokenUsage,
-        last_token_usage: TokenUsage,
-        model_context_window: Option<u64>,
-    ) {
-        self.composer
-            .set_token_usage(total_token_usage, last_token_usage, model_context_window);
+    pub(crate) fn set_token_usage(&mut self, token_info: Option<TokenUsageInfo>) {
+        self.composer.set_token_usage(token_info);
         self.request_redraw();
     }
 
@@ -380,8 +389,25 @@ impl BottomPane {
 
         // Otherwise create a new approval modal overlay.
         let modal = ApprovalModalView::new(request, self.app_event_tx.clone());
+        self.pause_status_timer_for_modal();
         self.active_view = Some(Box::new(modal));
         self.request_redraw()
+    }
+
+    fn on_active_view_complete(&mut self) {
+        self.resume_status_timer_after_modal();
+    }
+
+    fn pause_status_timer_for_modal(&mut self) {
+        if let Some(status) = self.status.as_mut() {
+            status.pause_timer();
+        }
+    }
+
+    fn resume_status_timer_after_modal(&mut self) {
+        if let Some(status) = self.status.as_mut() {
+            status.resume_timer();
+        }
     }
 
     /// Height (terminal rows) required by the current bottom pane.
@@ -488,7 +514,7 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,
-            frame_requester: crate::tui::FrameRequester::test_dummy(),
+            frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
@@ -497,7 +523,7 @@ mod tests {
         pane.push_approval_request(exec_request());
         assert_eq!(CancellationEvent::Handled, pane.on_ctrl_c());
         assert!(pane.ctrl_c_quit_hint_visible());
-        assert_eq!(CancellationEvent::Ignored, pane.on_ctrl_c());
+        assert_eq!(CancellationEvent::NotHandled, pane.on_ctrl_c());
     }
 
     // live ring removed; related tests deleted.
@@ -508,7 +534,7 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,
-            frame_requester: crate::tui::FrameRequester::test_dummy(),
+            frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
@@ -539,7 +565,7 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx.clone(),
-            frame_requester: crate::tui::FrameRequester::test_dummy(),
+            frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
@@ -567,7 +593,7 @@ mod tests {
 
         // Render and ensure the top row includes the Working header and a composer line below.
         // Give the animation thread a moment to tick.
-        std::thread::sleep(std::time::Duration::from_millis(120));
+        std::thread::sleep(Duration::from_millis(120));
         let area = Rect::new(0, 0, 40, 6);
         let mut buf = Buffer::empty(area);
         (&pane).render_ref(area, &mut buf);
@@ -607,7 +633,7 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,
-            frame_requester: crate::tui::FrameRequester::test_dummy(),
+            frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
@@ -638,7 +664,7 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,
-            frame_requester: crate::tui::FrameRequester::test_dummy(),
+            frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
@@ -689,7 +715,7 @@ mod tests {
         let tx = AppEventSender::new(tx_raw);
         let mut pane = BottomPane::new(BottomPaneParams {
             app_event_tx: tx,
-            frame_requester: crate::tui::FrameRequester::test_dummy(),
+            frame_requester: FrameRequester::test_dummy(),
             has_input_focus: true,
             enhanced_keys_supported: false,
             placeholder_text: "Ask Codex to do anything".to_string(),
@@ -698,7 +724,7 @@ mod tests {
 
         pane.set_task_running(true);
 
-        // Height=2 → composer visible; status is hidden to preserve composer. Spacer may collapse.
+        // Height=2 → status on one row, composer on the other.
         let area2 = Rect::new(0, 0, 20, 2);
         let mut buf2 = Buffer::empty(area2);
         (&pane).render_ref(area2, &mut buf2);
@@ -714,8 +740,8 @@ mod tests {
             "expected composer to be visible on one of the rows: row0={row0:?}, row1={row1:?}"
         );
         assert!(
-            !row0.contains("Working") && !row1.contains("Working"),
-            "status header should be hidden when height=2"
+            row0.contains("Working") || row1.contains("Working"),
+            "expected status header to be visible at height=2: row0={row0:?}, row1={row1:?}"
         );
 
         // Height=1 → no padding; single row is the composer (status hidden).
