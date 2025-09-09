@@ -594,6 +594,39 @@ fn padded_emoji(emoji: &str) -> String {
     format!("{emoji}\u{200A}")
 }
 
+/// Format a clickable link with fallback for terminals that don't support hyperlinks
+fn format_link(url: &str, text: &str) -> String {
+    // Check if we're in a terminal that supports hyperlinks
+    if supports_hyperlinks() {
+        format!("\u{1b}]8;;{url}\u{7}{text}\u{1b}]8;;\u{7}")
+    } else {
+        // Fallback: show text with URL in parentheses
+        format!("{text} ({url})")
+    }
+}
+
+/// Detect if the terminal supports clickable hyperlinks
+fn supports_hyperlinks() -> bool {
+    // Check for known terminals that support hyperlinks
+    if let Ok(term) = std::env::var("TERM_PROGRAM") {
+        match term.as_str() {
+            "iTerm.app" | "vscode" | "Hyper" => return true,
+            "WarpTerminal" | "Warp" => return false, // Warp doesn't support clickable links yet
+            _ => {}
+        }
+    }
+
+    // Check TERM environment variable for xterm-like terminals
+    if let Ok(term) = std::env::var("TERM") {
+        if term.contains("xterm") || term.contains("screen") {
+            return true;
+        }
+    }
+
+    // Default to false for better compatibility
+    false
+}
+
 pub(crate) fn new_session_info(
     config: &Config,
     event: SessionConfiguredEvent,
@@ -996,7 +1029,11 @@ pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
         "  • No MCP servers configured.".italic().into(),
         Line::from(vec![
             "    See the ".into(),
-            "\u{1b}]8;;https://github.com/openai/codex/blob/main/docs/config.md#mcp_servers\u{7}MCP docs\u{1b}]8;;\u{7}".underlined(),
+            format_link(
+                "https://github.com/openai/codex/blob/main/docs/config.md#mcp_servers",
+                "MCP docs",
+            )
+            .underlined(),
             " to configure them.".into(),
         ])
         .style(Style::default().add_modifier(Modifier::DIM)),
@@ -1895,5 +1932,36 @@ mod tests {
             summary_lines,
             vec!["codex", "Thinking", "We should fix the bug next."]
         )
+    }
+
+    #[test]
+    fn format_link_with_hyperlink_support() {
+        unsafe {
+            std::env::set_var("TERM_PROGRAM", "iTerm.app");
+        }
+        let result = format_link("https://example.com", "Example");
+        assert_eq!(
+            result,
+            "\u{1b}]8;;https://example.com\u{7}Example\u{1b}]8;;\u{7}"
+        );
+    }
+
+    #[test]
+    fn format_link_fallback_for_warp() {
+        unsafe {
+            std::env::set_var("TERM_PROGRAM", "WarpTerminal");
+        }
+        let result = format_link("https://example.com", "Example");
+        assert_eq!(result, "Example (https://example.com)");
+    }
+
+    #[test]
+    fn format_link_fallback_for_unknown_terminal() {
+        unsafe {
+            std::env::remove_var("TERM_PROGRAM");
+            std::env::remove_var("TERM");
+        }
+        let result = format_link("https://example.com", "Example");
+        assert_eq!(result, "Example (https://example.com)");
     }
 }
