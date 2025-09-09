@@ -166,7 +166,7 @@ pub(crate) const MODEL_FORMAT_HEAD_BYTES: usize = MODEL_FORMAT_MAX_BYTES / 2;
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
-    pub(crate) async fn spawn(
+    pub async fn spawn(
         config: Config,
         auth_manager: Arc<AuthManager>,
         conversation_history: InitialHistory,

@@ -20,14 +20,14 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ResumedHistory {
+pub struct ResumedHistory {
     pub conversation_id: ConversationId,
     pub history: Vec<RolloutItem>,
     pub rollout_path: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) enum InitialHistory {
+pub enum InitialHistory {
     New,
     Resumed(ResumedHistory),
     Forked(Vec<RolloutItem>),

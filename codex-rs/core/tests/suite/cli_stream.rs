@@ -87,14 +87,13 @@ async fn chat_mode_stream_cli() {
         !page.items.is_empty(),
         "expected at least one session to be listed"
     );
-    // First line of head must be the new schema session_meta
-    let head0_type = page.items[0]
-        .head
-        .first()
-        .and_then(|v| v.get("type"))
-        .and_then(|t| t.as_str())
-        .unwrap_or("");
-    assert_eq!(head0_type, "session_meta");
+    // First line of head must be the SessionMeta payload (id/timestamp)
+    let head0 = page.items[0].head.first().expect("missing head record");
+    assert!(head0.get("id").is_some(), "head[0] missing id");
+    assert!(
+        head0.get("timestamp").is_some(),
+        "head[0] missing timestamp"
+    );
 }
 
 /// Verify that passing `-c experimental_instructions_file=...` to the CLI

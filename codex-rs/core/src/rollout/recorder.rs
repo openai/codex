@@ -41,7 +41,7 @@ pub struct SessionMeta {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub(crate) struct SessionMetaLine {
+pub struct SessionMetaLine {
     #[serde(flatten)]
     meta: SessionMeta,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -50,7 +50,7 @@ pub(crate) struct SessionMetaLine {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
-pub(crate) enum RolloutItem {
+pub enum RolloutItem {
     SessionMeta(SessionMetaLine),
     ResponseItem(ResponseItem),
     EventMsg(EventMsg),
