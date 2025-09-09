@@ -542,18 +542,8 @@ impl Session {
     ) {
         match conversation_history {
             InitialHistory::New => {
-                // Build initial items (user instructions + environment context)
-                let mut items = Vec::<ResponseItem>::with_capacity(2);
-                if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
-                    items.push(UserInstructions::new(user_instructions.to_string()).into());
-                }
-                items.push(ResponseItem::from(EnvironmentContext::new(
-                    Some(turn_context.cwd.clone()),
-                    Some(turn_context.approval_policy),
-                    Some(turn_context.sandbox_policy.clone()),
-                    Some(self.user_shell.clone()),
-                )));
-                // Input path: add to history and persist response items
+                // Build and record initial items (user instructions + environment context)
+                let items = self.build_initial_context(turn_context);
                 self.record_conversation_items(&items).await;
             }
             InitialHistory::Resumed(_) | InitialHistory::Forked(_) => {
@@ -561,13 +551,7 @@ impl Session {
                 let persist = matches!(conversation_history, InitialHistory::Forked(_));
 
                 // Always add response items to conversation history
-                let response_items: Vec<ResponseItem> = rollout_items
-                    .iter()
-                    .filter_map(|ri| match ri {
-                        RolloutItem::ResponseItem(item) => Some(item.clone()),
-                        _ => None,
-                    })
-                    .collect();
+                let response_items = Self::extract_response_items_from_rollout(&rollout_items);
                 if !response_items.is_empty() {
                     self.record_into_history(&response_items);
                 }
@@ -696,6 +680,30 @@ impl Session {
             .map(RolloutItem::ResponseItem)
             .collect();
         self.persist_rollout_items(&rollout_items).await;
+    }
+
+    fn build_initial_context(&self, turn_context: &TurnContext) -> Vec<ResponseItem> {
+        let mut items = Vec::<ResponseItem>::with_capacity(2);
+        if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
+            items.push(UserInstructions::new(user_instructions.to_string()).into());
+        }
+        items.push(ResponseItem::from(EnvironmentContext::new(
+            Some(turn_context.cwd.clone()),
+            Some(turn_context.approval_policy),
+            Some(turn_context.sandbox_policy.clone()),
+            Some(self.user_shell.clone()),
+        )));
+        items
+    }
+
+    fn extract_response_items_from_rollout(rollout_items: &[RolloutItem]) -> Vec<ResponseItem> {
+        rollout_items
+            .iter()
+            .filter_map(|ri| match ri {
+                RolloutItem::ResponseItem(item) => Some(item.clone()),
+                _ => None,
+            })
+            .collect()
     }
 
     async fn persist_rollout_items(&self, items: &[RolloutItem]) {

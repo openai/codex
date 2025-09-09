@@ -476,7 +476,7 @@ mod tests {
     }
 
     #[test]
-    fn to_rows_sorts_descending_by_timestamp() {
+    fn to_rows_preserves_backend_order() {
         // Construct two items with different timestamps and real user text.
         let a = ConversationItem {
             path: PathBuf::from("/tmp/a.jsonl"),
@@ -493,8 +493,8 @@ mod tests {
             reached_scan_cap: false,
         });
         assert_eq!(rows.len(), 2);
-        // Expect the newer timestamp (B) first
-        assert!(rows[0].preview.contains('B'));
-        assert!(rows[1].preview.contains('A'));
+        // Preserve the given order; backend already provides newest-first
+        assert!(rows[0].preview.contains('A'));
+        assert!(rows[1].preview.contains('B'));
     }
 }
