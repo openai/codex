@@ -114,23 +114,6 @@ impl MessageProcessor {
             Ok(client_request) => client_request,
             Err(e) => {
                 // Support fork-only helper: getConfigToml
-                if raw_method == "getConfigToml" {
-                    // Provide a minimal, stable JSON reflecting key config fields expected by tests
-                    let cfg = self.config.as_ref();
-                    let approval = serde_json::to_value(cfg.approval_policy)
-                        .unwrap_or_else(|_| json!("on-request"));
-                    let sandbox_mode = match &cfg.sandbox_policy {
-                        codex_core::protocol::SandboxPolicy::DangerFullAccess => "danger-full-access",
-                        codex_core::protocol::SandboxPolicy::ReadOnly => "read-only",
-                        codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. } => "workspace-write",
-                    };
-                    let result = json!({
-                        "approvalPolicy": approval,
-                        "sandboxMode": sandbox_mode,
-                    });
-                    self.outgoing.send_response(request_id, result).await;
-                    return;
-                }
                 tracing::warn!("failed to convert request: {e}");
                 return;
             }
@@ -348,14 +331,19 @@ impl MessageProcessor {
         params: <mcp_types::ListToolsRequest as mcp_types::ModelContextProtocolRequest>::Params,
     ) {
         tracing::trace!("tools/list -> {params:?}");
-        let result = ListToolsResult {
-            tools: vec![
+        let tools = if self.config.mcp.compatibility_mode {
+            vec![
                 create_tool_for_codex_tool_call_param(),
                 create_tool_for_codex_tool_call_reply_param(),
                 create_tool_for_codex_tool_call_get_response_param(),
-            ],
-            next_cursor: None,
+            ]
+        } else {
+            vec![
+                create_tool_for_codex_tool_call_param(),
+                create_tool_for_codex_tool_call_reply_param(),
+            ]
         };
+        let result = ListToolsResult { tools, next_cursor: None };
 
         self.send_response::<mcp_types::ListToolsRequest>(id, result)
             .await;

@@ -198,17 +198,17 @@ async fn get_config_includes_mcp_compatibility_mode() {
         .expect("init failed");
 
     let request_id = mcp
-        .send_get_config_toml_request()
+        .send_get_user_saved_config_request()
         .await
-        .expect("send getConfigToml request");
+        .expect("send getUserSavedConfig request");
 
     let response = timeout(
         DEFAULT_READ_TIMEOUT,
         mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
     )
     .await
-    .expect("getConfigToml response timeout")
-    .expect("getConfigToml response");
+    .expect("getUserSavedConfig response timeout")
+    .expect("getUserSavedConfig response");
 
     // Verify the response includes some expected fields
     let result = &response.result;
