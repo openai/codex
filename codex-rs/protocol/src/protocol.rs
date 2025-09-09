@@ -161,6 +161,10 @@ pub enum Op {
     /// The agent will use its existing context (either conversation history or previous response id)
     /// to generate a summary which will be returned as an AgentMessage event.
     Compact,
+
+    /// Request a code review from the agent.
+    Review { prompt: String },
+
     /// Request to shut down codex instance.
     Shutdown,
 }
@@ -499,6 +503,12 @@ pub enum EventMsg {
     ShutdownComplete,
 
     ConversationHistory(ConversationHistoryResponseEvent),
+
+    /// Entered review mode.
+    EnteredReviewMode,
+
+    /// Exited review mode with an optional final result to apply.
+    ExitedReviewMode(Option<ReviewOutputEvent>),
 }
 
 // Individual event payload types matching each `EventMsg` variant.
@@ -741,6 +751,36 @@ pub struct WebSearchEndEvent {
 pub struct ConversationHistoryResponseEvent {
     pub conversation_id: Uuid,
     pub entries: Vec<ResponseItem>,
+}
+
+/// Structured review result produced by a child review session.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ReviewOutputEvent {
+    pub findings: Vec<ReviewFinding>,
+    pub overall_correctness: String,
+    pub overall_explanation: String,
+    pub overall_confidence_score: f32,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ReviewFinding {
+    pub title: String,
+    pub body: String,
+    pub confidence_score: f32,
+    pub priority: Option<i32>,
+    pub code_location: ReviewCodeLocation,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ReviewCodeLocation {
+    pub absolute_file_path: PathBuf,
+    pub line_range: ReviewLineRange,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ReviewLineRange {
+    pub start: u32,
+    pub end: u32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

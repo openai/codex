@@ -553,6 +553,8 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             EventMsg::ShutdownComplete => return CodexStatus::Shutdown,
             EventMsg::ConversationHistory(_) => {}
             EventMsg::UserMessage(_) => {}
+            EventMsg::EnteredReviewMode => {}
+            EventMsg::ExitedReviewMode(_) => {}
         }
         CodexStatus::Running
     }

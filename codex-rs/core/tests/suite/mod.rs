@@ -8,6 +8,7 @@ mod exec_stream_events;
 mod fork_conversation;
 mod live_cli;
 mod prompt_caching;
+mod review;
 mod seatbelt;
 mod stream_error_allows_next_turn;
 mod stream_no_completed;
