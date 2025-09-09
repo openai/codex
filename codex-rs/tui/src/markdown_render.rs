@@ -18,14 +18,16 @@ use std::path::Path;
 #[derive(Clone, Debug)]
 struct IndentContext {
     prefix: Vec<Span<'static>>,
-    suppress_on_pending_marker: bool,
+    marker: Option<Vec<Span<'static>>>,
+    is_list: bool,
 }
 
 impl IndentContext {
-    fn new(prefix: Vec<Span<'static>>, suppress_on_pending_marker: bool) -> Self {
+    fn new(prefix: Vec<Span<'static>>, marker: Option<Vec<Span<'static>>>, is_list: bool) -> Self {
         Self {
             prefix,
-            suppress_on_pending_marker,
+            marker,
+            is_list,
         }
     }
 }
@@ -156,7 +158,10 @@ where
             TagEnd::BlockQuote => self.end_blockquote(),
             TagEnd::CodeBlock => self.end_codeblock(),
             TagEnd::List(_) => self.end_list(),
-            TagEnd::Item => {}
+            TagEnd::Item => {
+                self.indent_stack.pop();
+                self.pending_marker_line = false;
+            }
             TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough => self.pop_inline_style(),
             TagEnd::Link => self.pop_link(),
             TagEnd::HtmlBlock
@@ -171,14 +176,10 @@ where
     }
 
     fn start_paragraph(&mut self) {
-        let pending_marker_line = self.pending_marker_line;
         if self.needs_newline {
             self.push_blank_line();
-            self.pending_marker_line = false;
         }
-        if !pending_marker_line {
-            self.push_line(Line::default());
-        }
+        self.push_line(Line::default());
         self.needs_newline = false;
         self.in_paragraph = true;
     }
@@ -218,19 +219,8 @@ where
             self.push_blank_line();
             self.needs_newline = false;
         }
-        self.indent_stack.push(IndentContext::new(
-            vec![Span::from(">")],
-            self.pending_marker_line,
-        ));
-
-        if self.pending_marker_line
-            && let Some(last) = self.text.lines.last_mut()
-        {
-            for _ in 0..self.indent_stack.len() {
-                last.push_span(Span::from(">"));
-            }
-            last.push_span(Span::from(" "));
-        }
+        self.indent_stack
+            .push(IndentContext::new(vec![Span::from("> ")], None, false));
     }
 
     fn end_blockquote(&mut self) {
@@ -239,6 +229,9 @@ where
     }
 
     fn text(&mut self, text: CowStr<'a>) {
+        if self.pending_marker_line {
+            self.push_line(Line::default());
+        }
         self.pending_marker_line = false;
         if self.in_code_block
             && !self.needs_newline
@@ -347,18 +340,32 @@ where
 
     fn start_item(&mut self) {
         self.pending_marker_line = true;
-        self.push_line(Line::default());
-        let width = self.list_indices.len() * 4 - 3;
-        if let Some(last_index) = self.list_indices.last_mut() {
-            let span: Span = match last_index {
-                None => Span::from(" ".repeat(width - 1) + "- "),
+        let depth = self.list_indices.len();
+        let is_ordered = self
+            .list_indices
+            .last()
+            .map(|index| index.is_some())
+            .unwrap_or(false);
+        let width = depth * 4 - 3;
+        let marker = if let Some(last_index) = self.list_indices.last_mut() {
+            match last_index {
+                None => Some(vec![Span::from(" ".repeat(width - 1) + "- ")]),
                 Some(index) => {
                     *index += 1;
-                    format!("{:width$}. ", *index - 1).light_blue()
+                    Some(vec![format!("{:width$}. ", *index - 1).light_blue()])
                 }
-            };
-            self.push_span(span);
-        }
+            }
+        } else {
+            None
+        };
+        let indent_prefix = if depth == 0 {
+            Vec::new()
+        } else {
+            let indent_len = if is_ordered { width + 2 } else { width + 1 };
+            vec![Span::from(" ".repeat(indent_len))]
+        };
+        self.indent_stack
+            .push(IndentContext::new(indent_prefix, marker, true));
         self.needs_newline = false;
     }
 
@@ -404,18 +411,23 @@ where
     }
 
     fn push_line(&mut self, line: Line<'static>) {
-        let style = if self
+        let mut line = line;
+        let was_pending = self.pending_marker_line;
+        let mut spans = self.current_prefix_spans();
+        spans.append(&mut line.spans);
+        let blockquote_active = self
             .indent_stack
             .iter()
-            .any(|ctx| ctx.prefix.iter().any(|s| s.content == ">"))
-        {
+            .any(|ctx| ctx.prefix.iter().any(|s| s.content.contains('>')));
+        let style = if blockquote_active {
             Style::new().green()
         } else {
-            Style::default()
+            line.style
         };
-        self.text
-            .lines
-            .push(Line::from_iter([self.current_prefix_spans(), line.spans].concat()).style(style));
+        self.text.lines.push(Line::from_iter(spans).style(style));
+        if was_pending {
+            self.pending_marker_line = false;
+        }
     }
 
     fn push_span(&mut self, span: Span<'static>) {
@@ -427,7 +439,7 @@ where
     }
 
     fn push_blank_line(&mut self) {
-        if self.indent_stack.is_empty() {
+        if self.indent_stack.iter().all(|ctx| ctx.is_list) {
             self.text.lines.push(Line::default());
         } else {
             self.push_line(Line::default());
@@ -436,36 +448,44 @@ where
 
     fn current_prefix_spans(&self) -> Vec<Span<'static>> {
         let mut prefix: Vec<Span<'static>> = Vec::new();
+        let last_marker_index = if self.pending_marker_line {
+            self.indent_stack
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(i, ctx)| {
+                    if ctx.marker.is_some() && !(self.suppress_list_indent && ctx.is_list) {
+                        Some(i)
+                    } else {
+                        None
+                    }
+                })
+        } else {
+            None
+        };
+        let last_list_index = self.indent_stack.iter().rposition(|ctx| ctx.is_list);
 
-        if !self.list_indices.is_empty() && !self.pending_marker_line && !self.suppress_list_indent
-        {
-            let depth = self.list_indices.len();
-            let is_ordered = self.list_indices.last().and_then(|o| *o).is_some();
-            prefix.extend(Self::list_indent_prefix(depth, is_ordered));
-        }
-
-        let mut blockquote_count = 0;
-        for ctx in &self.indent_stack {
-            if self.pending_marker_line && ctx.suppress_on_pending_marker {
+        for (i, ctx) in self.indent_stack.iter().enumerate() {
+            if self.suppress_list_indent && ctx.is_list {
+                continue;
+            }
+            if self.pending_marker_line {
+                if Some(i) == last_marker_index
+                    && let Some(marker) = &ctx.marker
+                {
+                    prefix.extend(marker.iter().cloned());
+                    continue;
+                }
+                if ctx.is_list && last_marker_index.is_some_and(|idx| idx > i) {
+                    continue;
+                }
+            } else if ctx.is_list && Some(i) != last_list_index {
                 continue;
             }
             prefix.extend(ctx.prefix.iter().cloned());
-            blockquote_count += 1;
-        }
-        if blockquote_count > 0 {
-            prefix.push(Span::from(" "));
         }
 
         prefix
-    }
-
-    fn list_indent_prefix(depth: usize, is_ordered: bool) -> Vec<Span<'static>> {
-        if depth == 0 {
-            return Vec::new();
-        }
-        let width = depth * 4 - 3;
-        let indent_len = if is_ordered { width + 2 } else { width + 1 };
-        vec![Span::from(" ".repeat(indent_len))]
     }
 }
 

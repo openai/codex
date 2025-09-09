@@ -1,7 +1,7 @@
 use pretty_assertions::assert_eq;
-use ratatui::style::Style;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
+use ratatui::text::Span;
 use ratatui::text::Text;
 
 use crate::markdown_render::render_markdown_text;
@@ -58,8 +58,7 @@ fn headings() {
 #[test]
 fn blockquote_single() {
     let text = render_markdown_text("> Blockquote");
-    let expected =
-        Text::from(Line::from_iter([">", " ", "Blockquote"]).style(Style::new().green()));
+    let expected = Text::from(Line::from_iter(["> ", "Blockquote"]).green());
     assert_eq!(text, expected);
 }
 
@@ -90,9 +89,9 @@ fn blockquote_soft_break() {
 fn blockquote_multiple_with_break() {
     let text = render_markdown_text("> Blockquote 1\n\n> Blockquote 2\n");
     let expected = Text::from_iter([
-        Line::from_iter([">", " ", "Blockquote 1"]).green(),
+        Line::from_iter(["> ", "Blockquote 1"]).green(),
         Line::default(),
-        Line::from_iter([">", " ", "Blockquote 2"]).green(),
+        Line::from_iter(["> ", "Blockquote 2"]).green(),
     ]);
     assert_eq!(text, expected);
 }
@@ -102,11 +101,11 @@ fn blockquote_three_paragraphs_short_lines() {
     let md = "> one\n>\n> two\n>\n> three\n";
     let text = render_markdown_text(md);
     let expected = Text::from_iter([
-        Line::from_iter([">", " ", "one"]).green(),
-        Line::from_iter([">", " "]).green(),
-        Line::from_iter([">", " ", "two"]).green(),
-        Line::from_iter([">", " "]).green(),
-        Line::from_iter([">", " ", "three"]).green(),
+        Line::from_iter(["> ", "one"]).green(),
+        Line::from_iter(["> "]).green(),
+        Line::from_iter(["> ", "two"]).green(),
+        Line::from_iter(["> "]).green(),
+        Line::from_iter(["> ", "three"]).green(),
     ]);
     assert_eq!(text, expected);
 }
@@ -116,9 +115,9 @@ fn blockquote_nested_two_levels() {
     let md = "> Level 1\n>> Level 2\n";
     let text = render_markdown_text(md);
     let expected = Text::from_iter([
-        Line::from_iter([">", " ", "Level 1"]).green(),
-        Line::from_iter([">", " "]).green(),
-        Line::from_iter([">", ">", " ", "Level 2"]).green(),
+        Line::from_iter(["> ", "Level 1"]).green(),
+        Line::from_iter(["> "]).green(),
+        Line::from_iter(["> ", "> ", "Level 2"]).green(),
     ]);
     assert_eq!(text, expected);
 }
@@ -128,8 +127,8 @@ fn blockquote_with_list_items() {
     let md = "> - item 1\n> - item 2\n";
     let text = render_markdown_text(md);
     let expected = Text::from_iter([
-        Line::from_iter([">", " ", "- ", "item 1"]).green(),
-        Line::from_iter([">", " ", "- ", "item 2"]).green(),
+        Line::from_iter(["> ", "- ", "item 1"]).green(),
+        Line::from_iter(["> ", "- ", "item 2"]).green(),
     ]);
     assert_eq!(text, expected);
 }
@@ -139,18 +138,16 @@ fn blockquote_with_ordered_list() {
     let md = "> 1. first\n> 2. second\n";
     let text = render_markdown_text(md);
     let expected = Text::from_iter([
-        Line::from_iter([
-            ">".into(),
-            " ".into(),
+        Line::from_iter(vec![
+            Span::from("> "),
             "1. ".light_blue(),
-            "first".into(),
+            Span::from("first"),
         ])
         .green(),
-        Line::from_iter([
-            ">".into(),
-            " ".into(),
+        Line::from_iter(vec![
+            Span::from("> "),
             "2. ".light_blue(),
-            "second".into(),
+            Span::from("second"),
         ])
         .green(),
     ]);
@@ -162,8 +159,8 @@ fn blockquote_list_then_nested_blockquote() {
     let md = "> - parent\n>   > child\n";
     let text = render_markdown_text(md);
     let expected = Text::from_iter([
-        Line::from_iter([">", " ", "- ", "parent"]).green(),
-        Line::from_iter([">", " ", "  ", ">", " ", "child"]).green(),
+        Line::from_iter(["> ", "- ", "parent"]).green(),
+        Line::from_iter(["> ", "  ", "> ", "child"]).green(),
     ]);
     assert_eq!(text, expected);
 }
@@ -366,19 +363,17 @@ fn blockquote_with_heading_and_paragraph() {
 fn blockquote_heading_inherits_heading_style() {
     let text = render_markdown_text("> # test header\n> in blockquote\n");
     assert_eq!(
-        text.lines[0],
-        Line::from_iter([
-            ">".into(),
-            " ".into(),
-            "# ".bold().underlined(),
-            "test header".bold().underlined(),
-        ])
-        .green()
-    );
-    assert_eq!(text.lines[1], Line::from_iter([">", " "]).green(),);
-    assert_eq!(
-        text.lines[2],
-        Line::from_iter([">", " ", "in blockquote"]).green(),
+        text.lines,
+        [
+            Line::from_iter([
+                "> ".into(),
+                "# ".bold().underlined(),
+                "test header".bold().underlined(),
+            ])
+            .green(),
+            Line::from_iter(["> "]).green(),
+            Line::from_iter(["> ", "in blockquote"]).green(),
+        ]
     );
 }
 
