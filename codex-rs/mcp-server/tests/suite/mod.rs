@@ -1,4 +1,5 @@
 // Aggregates all former standalone integration tests as modules.
+mod archive_conversation;
 mod auth;
 mod codex_message_processor_flow;
 mod codex_tool;
