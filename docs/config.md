@@ -614,3 +614,4 @@ Options that are specific to the TUI.
 | `projects.<path>.trust_level` | string | Mark project/worktree as trusted (only `"trusted"` is recognized). |
 | `preferred_auth_method` | `chatgpt` \| `apikey` | Select default auth method (default: `chatgpt`). |
 | `tools.web_search` | boolean | Enable web search tool (alias: `web_search_request`) (default: false). |
+| `redact_saved_prompt_body` | boolean | When true (default), transcript shows only the typed command for saved prompts (e.g., `/my-prompt`); when false, shows the full saved prompt body. |
