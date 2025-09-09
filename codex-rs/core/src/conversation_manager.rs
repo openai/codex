@@ -145,8 +145,15 @@ impl ConversationManager {
         self.finalize_spawn(codex, conversation_id).await
     }
 
-    pub async fn remove_conversation(&self, conversation_id: ConversationId) {
-        self.conversations.write().await.remove(&conversation_id);
+    /// Removes the conversation from the manager's internal map, though the
+    /// conversation is stored as `Arc<CodexConversation>`, it is possible that
+    /// other references to it exist elsewhere. Returns the conversation if the
+    /// conversation was found and removed.
+    pub async fn remove_conversation(
+        &self,
+        conversation_id: &ConversationId,
+    ) -> Option<Arc<CodexConversation>> {
+        self.conversations.write().await.remove(conversation_id)
     }
 
     /// Fork an existing conversation by dropping the last `drop_last_messages`

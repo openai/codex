@@ -13,6 +13,7 @@ use anyhow::Context;
 use assert_cmd::prelude::*;
 use codex_mcp_server::CodexToolCallParam;
 use codex_protocol::mcp_protocol::AddConversationListenerParams;
+use codex_protocol::mcp_protocol::ArchiveConversationParams;
 use codex_protocol::mcp_protocol::CancelLoginChatGptParams;
 use codex_protocol::mcp_protocol::GetAuthStatusParams;
 use codex_protocol::mcp_protocol::InterruptConversationParams;
@@ -184,6 +185,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("newConversation", params).await
+    }
+
+    /// Send an `archiveConversation` JSON-RPC request.
+    pub async fn send_archive_conversation_request(
+        &mut self,
+        params: ArchiveConversationParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("archiveConversation", params).await
     }
 
     /// Send an `addConversationListener` JSON-RPC request.
