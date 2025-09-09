@@ -41,13 +41,22 @@ impl ConversationHistory {
         // Collect the last N message items (assistant/user), newest to oldest.
         let mut kept: Vec<ResponseItem> = Vec::with_capacity(n);
         for item in self.items.iter().rev() {
-            if let ResponseItem::Message { role, content, .. } = item {
+            if let ResponseItem::Message {
+                role,
+                content,
+                token_usage,
+                timestamp,
+                ..
+            } = item
+            {
                 kept.push(ResponseItem::Message {
                     // we need to remove the id or the model will complain that messages are sent without
                     // their reasonings
                     id: None,
                     role: role.clone(),
                     content: content.clone(),
+                    token_usage: token_usage.clone(),
+                    timestamp: timestamp.clone(),
                 });
                 if kept.len() == n {
                     break;
@@ -88,6 +97,8 @@ mod tests {
             content: vec![ContentItem::OutputText {
                 text: text.to_string(),
             }],
+            token_usage: None,
+            timestamp: None,
         }
     }
 
@@ -98,6 +109,8 @@ mod tests {
             content: vec![ContentItem::OutputText {
                 text: text.to_string(),
             }],
+            token_usage: None,
+            timestamp: None,
         }
     }
 
@@ -111,6 +124,8 @@ mod tests {
             content: vec![ContentItem::OutputText {
                 text: "ignored".to_string(),
             }],
+            token_usage: None,
+            timestamp: None,
         };
         h.record_items([&system, &ResponseItem::Other]);
 
@@ -128,14 +143,18 @@ mod tests {
                     role: "user".to_string(),
                     content: vec![ContentItem::OutputText {
                         text: "hi".to_string()
-                    }]
+                    }],
+                    token_usage: None,
+                    timestamp: None,
                 },
                 ResponseItem::Message {
                     id: None,
                     role: "assistant".to_string(),
                     content: vec![ContentItem::OutputText {
                         text: "hello".to_string()
-                    }]
+                    }],
+                    token_usage: None,
+                    timestamp: None,
                 }
             ]
         );

@@ -109,6 +109,8 @@ fn user_message(text: &str) -> ResponseItem {
         content: vec![ContentItem::InputText {
             text: text.to_string(),
         }],
+        timestamp: None,
+        token_usage: None,
     }
 }
 
@@ -119,6 +121,8 @@ fn assistant_message(text: &str) -> ResponseItem {
         content: vec![ContentItem::OutputText {
             text: text.to_string(),
         }],
+        timestamp: None,
+        token_usage: None,
     }
 }
 
@@ -130,6 +134,8 @@ fn reasoning_item(text: &str) -> ResponseItem {
             text: text.to_string(),
         }]),
         encrypted_content: None,
+        timestamp: None,
+        token_usage: None,
     }
 }
 
@@ -139,6 +145,8 @@ fn function_call() -> ResponseItem {
         name: "f".to_string(),
         arguments: "{}".to_string(),
         call_id: "c1".to_string(),
+        timestamp: None,
+        token_usage: None,
     }
 }
 

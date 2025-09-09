@@ -1312,6 +1312,7 @@ mod tests {
             json!({
                 "id": conversation_id.0,
                 "timestamp": timestamp,
+                "model": "gpt-5",
             }),
             json!({
                 "type": "message",
