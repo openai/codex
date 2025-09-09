@@ -157,12 +157,23 @@ impl MarkdownStreamCollector {
     /// for rendering. Optionally unwraps ```markdown language fences in
     /// non-test builds.
     pub fn finalize_and_drain(&mut self, config: &Config) -> Vec<Line<'static>> {
-        let mut source: String = self.buffer.clone();
+        let raw_buffer = self.buffer.clone();
+        let mut source: String = raw_buffer.clone();
         if !source.ends_with('\n') {
             source.push('\n');
         }
         let source = unwrap_markdown_language_fence_if_enabled(source);
         let source = strip_empty_fenced_code_blocks(&source);
+
+        // Debug log the raw (unprocessed) buffer and the final render source.
+        // These logs are only emitted when RUST_LOG enables `debug` for codex_tui.
+        tracing::debug!(
+            raw_len = raw_buffer.len(),
+            source_len = source.len(),
+            "markdown finalize: raw buffer ->\n{}\n--- render source ->\n{}",
+            raw_buffer,
+            source
+        );
 
         let mut rendered: Vec<Line<'static>> = Vec::new();
         markdown::append_markdown(&source, &mut rendered, config);
@@ -373,6 +384,7 @@ mod tests {
     use super::*;
     use codex_core::config::Config;
     use codex_core::config::ConfigOverrides;
+    use ratatui::style::Color;
 
     fn test_config() -> Config {
         let overrides = ConfigOverrides {
@@ -404,6 +416,125 @@ mod tests {
         c.push_delta("Line without newline");
         let out = c.finalize_and_drain(&cfg);
         assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn e2e_stream_blockquote_simple_is_green() {
+        let cfg = test_config();
+        let out = super::simulate_stream_markdown_for_tests(&["> Hello\n"], true, &cfg);
+        assert_eq!(out.len(), 1);
+        let l = &out[0];
+        assert_eq!(
+            l.style.fg,
+            Some(Color::Green),
+            "expected blockquote line fg green, got {:?}",
+            l.style.fg
+        );
+    }
+
+    #[test]
+    fn e2e_stream_blockquote_nested_is_green() {
+        let cfg = test_config();
+        let out =
+            super::simulate_stream_markdown_for_tests(&["> Level 1\n>> Level 2\n"], true, &cfg);
+        // Filter out any blank lines that may be inserted at paragraph starts.
+        let non_blank: Vec<_> = out
+            .into_iter()
+            .filter(|l| {
+                let s = l
+                    .spans
+                    .iter()
+                    .map(|sp| sp.content.clone())
+                    .collect::<Vec<_>>()
+                    .join("");
+                let t = s.trim();
+                // Ignore quote-only blank lines like ">" inserted at paragraph boundaries.
+                !(t.is_empty() || t == ">")
+            })
+            .collect();
+        assert_eq!(non_blank.len(), 2);
+        assert_eq!(non_blank[0].style.fg, Some(Color::Green));
+        assert_eq!(non_blank[1].style.fg, Some(Color::Green));
+    }
+
+    #[test]
+    fn e2e_stream_blockquote_with_list_items_is_green() {
+        let cfg = test_config();
+        let out =
+            super::simulate_stream_markdown_for_tests(&["> - item 1\n> - item 2\n"], true, &cfg);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].style.fg, Some(Color::Green));
+        assert_eq!(out[1].style.fg, Some(Color::Green));
+    }
+
+    #[test]
+    fn e2e_stream_nested_mixed_lists_ordered_marker_is_light_blue() {
+        let cfg = test_config();
+        let md = [
+            "1. First\n",
+            "   - Second level\n",
+            "     1. Third level (ordered)\n",
+            "        - Fourth level (bullet)\n",
+            "          - Fifth level to test indent consistency\n",
+        ];
+        let out = super::simulate_stream_markdown_for_tests(&md, true, &cfg);
+        // Find the line that contains the third-level ordered text
+        let find_idx = out.iter().position(|l| {
+            l.spans
+                .iter()
+                .map(|s| s.content.clone())
+                .collect::<String>()
+                .contains("Third level (ordered)")
+        });
+        let idx = find_idx.expect("expected third-level ordered line");
+        let line = &out[idx];
+        // Expect at least one span on this line to be styled light blue
+        let has_light_blue = line
+            .spans
+            .iter()
+            .any(|s| s.style.fg == Some(ratatui::style::Color::LightBlue));
+        assert!(
+            has_light_blue,
+            "expected an ordered-list marker span with light blue fg on: {line:?}"
+        );
+    }
+
+    #[test]
+    fn e2e_stream_blockquote_wrap_preserves_green_style() {
+        let cfg = test_config();
+        let long = "> This is a very long quoted line that should wrap across multiple columns to verify style preservation.";
+        let out = super::simulate_stream_markdown_for_tests(&[long, "\n"], true, &cfg);
+        // Wrap to a narrow width to force multiple output lines.
+        let wrapped = crate::wrapping::word_wrap_lines(
+            out.iter().collect::<Vec<_>>(),
+            crate::wrapping::RtOptions::new(24),
+        );
+        // Filter out purely blank lines
+        let non_blank: Vec<_> = wrapped
+            .into_iter()
+            .filter(|l| {
+                let s = l
+                    .spans
+                    .iter()
+                    .map(|sp| sp.content.clone())
+                    .collect::<Vec<_>>()
+                    .join("");
+                !s.trim().is_empty()
+            })
+            .collect();
+        assert!(
+            non_blank.len() >= 2,
+            "expected wrapped blockquote to span multiple lines"
+        );
+        for (i, l) in non_blank.iter().enumerate() {
+            assert_eq!(
+                l.style.fg,
+                Some(Color::Green),
+                "wrapped line {} should preserve green style, got {:?}",
+                i,
+                l.style.fg
+            );
+        }
     }
 
     #[test]
@@ -623,6 +754,64 @@ mod tests {
     }
 
     #[test]
+    fn e2e_stream_deep_nested_third_level_marker_is_light_blue() {
+        let cfg = test_config();
+        let md = "1. First\n   - Second level\n     1. Third level (ordered)\n        - Fourth level (bullet)\n          - Fifth level to test indent consistency\n";
+        let streamed = super::simulate_stream_markdown_for_tests(&[md], true, &cfg);
+        let streamed_strs = lines_to_plain_strings(&streamed);
+        eprintln!("streamed lines: {streamed_strs:?}");
+
+        // Locate the third-level line in the streamed output; avoid relying on exact indent.
+        let target_suffix = "1. Third level (ordered)";
+        let mut found = None;
+        for line in &streamed {
+            let s: String = line.spans.iter().map(|sp| sp.content.clone()).collect();
+            if s.contains(target_suffix) {
+                found = Some(line.clone());
+                break;
+            }
+        }
+        let line = found.unwrap_or_else(|| {
+            panic!("expected to find the third-level ordered list line; got: {streamed_strs:?}")
+        });
+
+        // The marker (including indent and "1.") is expected to be in the first span
+        // and colored LightBlue; following content should be default color.
+        assert!(
+            !line.spans.is_empty(),
+            "expected non-empty spans for the third-level line"
+        );
+        let marker_span = &line.spans[0];
+        eprintln!(
+            "spans for 3rd-level line: {:?}",
+            line.spans
+                .iter()
+                .map(|sp| (sp.content.clone(), sp.style.fg))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            marker_span.style.fg,
+            Some(Color::LightBlue),
+            "expected LightBlue 3rd-level ordered marker, got {:?}",
+            marker_span.style.fg
+        );
+        // Find the first non-empty non-space content span and verify it is default color.
+        let mut content_fg = None;
+        for sp in &line.spans[1..] {
+            let t = sp.content.trim();
+            if !t.is_empty() {
+                content_fg = Some(sp.style.fg);
+                break;
+            }
+        }
+        assert_eq!(
+            content_fg.flatten(),
+            None,
+            "expected default color for 3rd-level content, got {content_fg:?}"
+        );
+    }
+
+    #[test]
     fn empty_fenced_block_is_dropped_and_separator_preserved_before_heading() {
         let cfg = test_config();
         // An empty fenced code block followed by a heading should not render the fence,
@@ -768,16 +957,12 @@ mod tests {
         let expected = vec![
             "Loose vs. tight list items:".to_string(),
             "".to_string(),
-            "1. ".to_string(),
-            "Tight item".to_string(),
-            "2. ".to_string(),
-            "Another tight item".to_string(),
-            "3. ".to_string(),
-            "Loose item with its own paragraph.".to_string(),
+            "1. Tight item".to_string(),
+            "2. Another tight item".to_string(),
+            "3. Loose item with its own paragraph.".to_string(),
             "".to_string(),
-            "This paragraph belongs to the same list item.".to_string(),
-            "4. ".to_string(),
-            "Second loose item with a nested list after a blank line.".to_string(),
+            "   This paragraph belongs to the same list item.".to_string(),
+            "4. Second loose item with a nested list after a blank line.".to_string(),
             "    - Nested bullet under a loose item".to_string(),
             "    - Another nested bullet".to_string(),
         ];

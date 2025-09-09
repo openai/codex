@@ -45,6 +45,7 @@ pub mod insert_history;
 mod key_hint;
 pub mod live_wrap;
 mod markdown;
+mod markdown_render;
 mod markdown_stream;
 pub mod onboarding;
 mod pager_overlay;
