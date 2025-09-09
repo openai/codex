@@ -40,6 +40,9 @@ pub enum ApplyPatchError {
     /// Error that occurs while computing replacements when applying patch chunks
     #[error("{0}")]
     ComputeReplacements(String),
+    /// A raw patch body was provided without an explicit `apply_patch` invocation.
+    #[error("patch detected without explicit call to apply_patch")]
+    ImplicitInvocation,
 }
 
 impl From<std::io::Error> for ApplyPatchError {
@@ -98,20 +101,8 @@ pub fn maybe_parse_apply_patch(argv: &[String]) -> MaybeApplyPatch {
             Ok(source) => MaybeApplyPatch::Body(source),
             Err(e) => MaybeApplyPatch::PatchParseError(e),
         },
-        // Sometimes the model forgets to include the `apply_patch` command. If we get a single-arg
-        // command body that parses as a patch, assume it's intended to be an apply_patch
-        // invocation.
-        [body] => match parse_patch(body) {
-            Ok(source) => MaybeApplyPatch::Body(source),
-            Err(_) => MaybeApplyPatch::NotApplyPatch,
-        },
         // Bash heredoc form: (optional `cd <path> &&`) apply_patch <<'EOF' ...
         [bash, flag, script] if bash == "bash" && flag == "-lc" => {
-            // If the script itself parses as a patch, assume it's intended to be an apply_patch
-            // invocation.
-            if let Ok(source) = parse_patch(script) {
-                return MaybeApplyPatch::Body(source);
-            }
             match extract_apply_patch_from_bash(script) {
                 Ok((body, workdir)) => match parse_patch(&body) {
                     Ok(mut source) => {
@@ -221,6 +212,26 @@ impl ApplyPatchAction {
 /// cwd must be an absolute path so that we can resolve relative paths in the
 /// patch.
 pub fn maybe_parse_apply_patch_verified(argv: &[String], cwd: &Path) -> MaybeApplyPatchVerified {
+    // Detect a raw patch body passed directly as the command or as the body of a bash -lc
+    // script. In these cases, report an explicit error rather than applying the patch.
+    match argv {
+        [body] => {
+            if parse_patch(body).is_ok() {
+                return MaybeApplyPatchVerified::CorrectnessError(
+                    ApplyPatchError::ImplicitInvocation,
+                );
+            }
+        }
+        [bash, flag, script] if bash == "bash" && flag == "-lc" => {
+            if parse_patch(script).is_ok() {
+                return MaybeApplyPatchVerified::CorrectnessError(
+                    ApplyPatchError::ImplicitInvocation,
+                );
+            }
+        }
+        _ => {}
+    }
+
     match maybe_parse_apply_patch(argv) {
         MaybeApplyPatch::Body(ApplyPatchArgs {
             patch,
@@ -888,28 +899,24 @@ mod tests {
     }
 
     #[test]
-    fn test_raw_patch_as_single_arg() {
+    fn test_implicit_patch_single_arg_is_error() {
         let patch = "*** Begin Patch\n*** Add File: foo\n+hi\n*** End Patch".to_string();
         let args = vec![patch];
-        match maybe_parse_apply_patch(&args) {
-            MaybeApplyPatch::Body(ApplyPatchArgs { hunks, workdir, .. }) => {
-                assert_eq!(workdir, None);
-                assert_eq!(hunks, expected_single_add());
-            }
-            result => panic!("expected MaybeApplyPatch::Body got {result:?}"),
+        let dir = tempdir().unwrap();
+        match maybe_parse_apply_patch_verified(&args, dir.path()) {
+            MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::ImplicitInvocation) => {}
+            other => panic!("expected ImplicitInvocation error, got {other:?}"),
         }
     }
 
     #[test]
-    fn test_raw_patch_as_bash_script() {
+    fn test_implicit_patch_bash_script_is_error() {
         let script = "*** Begin Patch\n*** Add File: foo\n+hi\n*** End Patch";
         let args = args_bash(script);
-        match maybe_parse_apply_patch(&args) {
-            MaybeApplyPatch::Body(ApplyPatchArgs { hunks, workdir, .. }) => {
-                assert_eq!(workdir, None);
-                assert_eq!(hunks, expected_single_add());
-            }
-            result => panic!("expected MaybeApplyPatch::Body got {result:?}"),
+        let dir = tempdir().unwrap();
+        match maybe_parse_apply_patch_verified(&args, dir.path()) {
+            MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::ImplicitInvocation) => {}
+            other => panic!("expected ImplicitInvocation error, got {other:?}"),
         }
     }
 
