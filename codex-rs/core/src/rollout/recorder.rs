@@ -293,6 +293,8 @@ impl RolloutRecorder {
     }
 }
 
+// Note: rollout files are used for resume; do not redact or truncate persisted items here.
+
 struct LogFileInfo {
     /// Opened file handle to the rollout file.
     file: File,

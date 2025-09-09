@@ -93,6 +93,7 @@ use crate::protocol::ExecCommandBeginEvent;
 use crate::protocol::ExecCommandEndEvent;
 use crate::protocol::FileChange;
 use crate::protocol::InputItem;
+use crate::protocol::InputMessageKind;
 use crate::protocol::ListCustomPromptsResponseEvent;
 use crate::protocol::Op;
 use crate::protocol::PatchApplyBeginEvent;
@@ -107,6 +108,7 @@ use crate::protocol::TaskCompleteEvent;
 use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnDiffEvent;
+use crate::protocol::UserMessageEvent;
 use crate::protocol::WebSearchBeginEvent;
 use crate::rollout::RolloutRecorder;
 use crate::rollout::RolloutRecorderParams;
@@ -1184,7 +1186,8 @@ async fn submission_loop(
     let mut turn_context = Arc::new(turn_context);
     // To break out of this loop, send Op::Shutdown.
     while let Ok(sub) = rx_sub.recv().await {
-        debug!(?sub, "Submission");
+        // Avoid logging full submission payloads to prevent leaking prompt or template text.
+        debug!("Submission received: id={}", sub.id);
         match sub.op {
             Op::Interrupt => {
                 sess.interrupt_task();
@@ -1370,12 +1373,23 @@ async fn submission_loop(
             Op::AddToHistory { text } => {
                 let id = sess.conversation_id;
                 let config = config.clone();
+                let text_for_history = text.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = crate::message_history::append_entry(&text, &id, &config).await
+                    if let Err(e) =
+                        crate::message_history::append_entry(&text_for_history, &id, &config).await
                     {
                         warn!("failed to append to message history: {e}");
                     }
                 });
+
+                // Persist a transcript-only user message in rollout so resume displays
+                // exactly what the user saw in the transcript. Do not send to UI to avoid duplicates.
+                let rollout_item = RolloutItem::EventMsg(EventMsg::UserMessage(UserMessageEvent {
+                    message: text,
+                    kind: Some(InputMessageKind::Plain),
+                    images: None,
+                }));
+                sess.persist_rollout_items(&[rollout_item]).await;
             }
 
             Op::GetHistoryEntryRequest { offset, log_id } => {

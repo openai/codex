@@ -1039,22 +1039,24 @@ impl ChatWidget {
                 tracing::error!("failed to send message: {e}");
             });
 
-        // Persist the text to cross-session message history.
         if !text.is_empty() {
-            self.codex_op_tx
-                .send(Op::AddToHistory { text: text.clone() })
-                .unwrap_or_else(|e| {
-                    tracing::error!("failed to send AddHistory op: {e}");
-                });
-        }
-
-        // Only show the text portion in conversation history.
-        if !text.is_empty() {
+            // Compute what we show to the user in transcript.
             let shown = if self.config.redact_saved_prompt_body {
                 display_text.unwrap_or_else(|| text.clone())
             } else {
                 pretty_unredacted.unwrap_or_else(|| text.clone())
             };
+
+            // Persist the display text to cross-session message history (and rollout via core)
+            self.codex_op_tx
+                .send(Op::AddToHistory {
+                    text: shown.clone(),
+                })
+                .unwrap_or_else(|e| {
+                    tracing::error!("failed to send AddHistory op: {e}");
+                });
+
+            // Show in conversation history now.
             self.add_to_history(history_cell::new_user_prompt(shown));
         }
     }

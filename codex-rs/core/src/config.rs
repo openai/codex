@@ -1622,6 +1622,7 @@ model_verbosity = "high"
                 include_view_image_tool: true,
                 active_profile: Some("o3".to_string()),
                 disable_paste_burst: false,
+                redact_saved_prompt_body: true,
             },
             o3_profile_config
         );
