@@ -37,7 +37,7 @@ pub struct ConversationItem {
 }
 
 /// Hard cap to bound worst‑case work per request.
-const MAX_SCAN_FILES: usize = 10_000;
+const MAX_SCAN_FILES: usize = 100;
 const HEAD_RECORD_LIMIT: usize = 10;
 
 /// Pagination cursor identifying a file by timestamp and UUID.
