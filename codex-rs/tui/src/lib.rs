@@ -266,12 +266,45 @@ async fn run_ratatui_app(
         let exe = std::env::current_exe()?;
         let managed_by_npm = std::env::var_os("CODEX_MANAGED_BY_NPM").is_some();
 
+        // Detect if this is a Homebrew --HEAD install by resolving the binary's
+        // canonical path and looking for a Cellar path segment with a HEAD-* version.
+        #[cfg(target_os = "macos")]
+        let is_homebrew_head = {
+            let canonical_exe = exe.canonicalize().unwrap_or(exe.clone());
+            let mut comps = canonical_exe.components();
+            let mut found = false;
+            while let Some(comp) = comps.next() {
+                if comp.as_os_str() == "Cellar" {
+                    if let (Some(formula), Some(version_dir)) = (comps.next(), comps.next()) {
+                        if formula.as_os_str() == "codex" {
+                            let ver = version_dir.as_os_str().to_string_lossy();
+                            if ver.starts_with("HEAD") {
+                                found = true;
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+            found
+        };
+        #[cfg(not(target_os = "macos"))]
+        let is_homebrew_head = false;
+
         let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(Line::from(vec![
-            "✨⬆️ Update available!".bold().cyan(),
-            " ".into(),
-            format!("{current_version} -> {latest_version}.").into(),
-        ]));
+        if is_homebrew_head {
+            lines.push(Line::from(vec![
+                "✨⬆️ Update available!".bold().cyan(),
+                " ".into(),
+                "Homebrew --HEAD build detected.".into(),
+            ]));
+        } else {
+            lines.push(Line::from(vec![
+                "✨⬆️ Update available!".bold().cyan(),
+                " ".into(),
+                format!("{current_version} -> {latest_version}.").into(),
+            ]));
+        }
 
         if managed_by_npm {
             let npm_cmd = "npm install -g @openai/codex@latest";
@@ -283,12 +316,21 @@ async fn run_ratatui_app(
         } else if cfg!(target_os = "macos")
             && (exe.starts_with("/opt/homebrew") || exe.starts_with("/usr/local"))
         {
-            let brew_cmd = "brew upgrade codex";
-            lines.push(Line::from(vec![
-                "Run ".into(),
-                brew_cmd.cyan(),
-                " to update.".into(),
-            ]));
+            if is_homebrew_head {
+                let brew_cmd = "brew upgrade --fetch-HEAD codex";
+                lines.push(Line::from(vec![
+                    "Run ".into(),
+                    brew_cmd.cyan(),
+                    " to update to the latest HEAD.".into(),
+                ]));
+            } else {
+                let brew_cmd = "brew upgrade codex";
+                lines.push(Line::from(vec![
+                    "Run ".into(),
+                    brew_cmd.cyan(),
+                    " to update.".into(),
+                ]));
+            }
         } else {
             lines.push(Line::from(vec![
                 "See ".into(),
