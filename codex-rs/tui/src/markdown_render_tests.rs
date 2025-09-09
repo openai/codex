@@ -40,17 +40,17 @@ fn headings() {
     let md = "# Heading 1\n## Heading 2\n### Heading 3\n#### Heading 4\n##### Heading 5\n###### Heading 6\n";
     let text = render_markdown_text(md);
     let expected = Text::from_iter([
-        Line::from_iter(["# ", "Heading 1"]).style(Style::new().bold().underlined()),
+        Line::from_iter(["# ".bold().underlined(), "Heading 1".bold().underlined()]),
         Line::default(),
-        Line::from_iter(["## ", "Heading 2"]).style(Style::new().bold()),
+        Line::from_iter(["## ".bold(), "Heading 2".bold()]),
         Line::default(),
-        Line::from_iter(["### ", "Heading 3"]).style(Style::new().bold().italic()),
+        Line::from_iter(["### ".bold().italic(), "Heading 3".bold().italic()]),
         Line::default(),
-        Line::from_iter(["#### ", "Heading 4"]).style(Style::new().italic()),
+        Line::from_iter(["#### ".italic(), "Heading 4".italic()]),
         Line::default(),
-        Line::from_iter(["##### ", "Heading 5"]).style(Style::new().italic()),
+        Line::from_iter(["##### ".italic(), "Heading 5".italic()]),
         Line::default(),
-        Line::from_iter(["###### ", "Heading 6"]).style(Style::new().italic()),
+        Line::from_iter(["###### ".italic(), "Heading 6".italic()]),
     ]);
     assert_eq!(text, expected);
 }
@@ -90,9 +90,23 @@ fn blockquote_soft_break() {
 fn blockquote_multiple_with_break() {
     let text = render_markdown_text("> Blockquote 1\n\n> Blockquote 2\n");
     let expected = Text::from_iter([
-        Line::from_iter([">", " ", "Blockquote 1"]).style(Style::new().green()),
+        Line::from_iter([">", " ", "Blockquote 1"]).green(),
         Line::default(),
-        Line::from_iter([">", " ", "Blockquote 2"]).style(Style::new().green()),
+        Line::from_iter([">", " ", "Blockquote 2"]).green(),
+    ]);
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn blockquote_three_paragraphs_short_lines() {
+    let md = "> one\n>\n> two\n>\n> three\n";
+    let text = render_markdown_text(md);
+    let expected = Text::from_iter([
+        Line::from_iter([">", " ", "one"]).green(),
+        Line::from_iter([">", " "]).green(),
+        Line::from_iter([">", " ", "two"]).green(),
+        Line::from_iter([">", " "]).green(),
+        Line::from_iter([">", " ", "three"]).green(),
     ]);
     assert_eq!(text, expected);
 }
@@ -102,11 +116,9 @@ fn blockquote_nested_two_levels() {
     let md = "> Level 1\n>> Level 2\n";
     let text = render_markdown_text(md);
     let expected = Text::from_iter([
-        Line::from_iter([">", " ", "Level 1"])
-            .style(Style::new().green()),
-        Line::from_iter([">", " "]).style(Style::new().green()),
-        Line::from_iter([">", ">", " ", "Level 2"])
-        .style(Style::new().green()),
+        Line::from_iter([">", " ", "Level 1"]).green(),
+        Line::from_iter([">", " "]).green(),
+        Line::from_iter([">", ">", " ", "Level 2"]).green(),
     ]);
     assert_eq!(text, expected);
 }
@@ -116,10 +128,42 @@ fn blockquote_with_list_items() {
     let md = "> - item 1\n> - item 2\n";
     let text = render_markdown_text(md);
     let expected = Text::from_iter([
-        Line::from_iter([">", " ", "- ", "item 1"])
-        .style(Style::new().green()),
-        Line::from_iter([">", " ", "- ", "item 2"])
-        .style(Style::new().green()),
+        Line::from_iter([">", " ", "- ", "item 1"]).green(),
+        Line::from_iter([">", " ", "- ", "item 2"]).green(),
+    ]);
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn blockquote_with_ordered_list() {
+    let md = "> 1. first\n> 2. second\n";
+    let text = render_markdown_text(md);
+    let expected = Text::from_iter([
+        Line::from_iter([
+            ">".into(),
+            " ".into(),
+            "1. ".light_blue(),
+            "first".into(),
+        ])
+        .green(),
+        Line::from_iter([
+            ">".into(),
+            " ".into(),
+            "2. ".light_blue(),
+            "second".into(),
+        ])
+        .green(),
+    ]);
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn blockquote_list_then_nested_blockquote() {
+    let md = "> - parent\n>   > child\n";
+    let text = render_markdown_text(md);
+    let expected = Text::from_iter([
+        Line::from_iter([">", " ", "- ", "parent"]).green(),
+        Line::from_iter([">", " ", "  ", ">", " ", "child"]).green(),
     ]);
     assert_eq!(text, expected);
 }
@@ -315,6 +359,26 @@ fn blockquote_with_heading_and_paragraph() {
             "> ".to_string(),
             "> paragraph text".to_string(),
         ]
+    );
+}
+
+#[test]
+fn blockquote_heading_inherits_heading_style() {
+    let text = render_markdown_text("> # test header\n> in blockquote\n");
+    assert_eq!(
+        text.lines[0],
+        Line::from_iter([
+            ">".into(),
+            " ".into(),
+            "# ".bold().underlined(),
+            "test header".bold().underlined(),
+        ])
+        .green()
+    );
+    assert_eq!(text.lines[1], Line::from_iter([">", " "]).green(),);
+    assert_eq!(
+        text.lines[2],
+        Line::from_iter([">", " ", "in blockquote"]).green(),
     );
 }
 
@@ -657,8 +721,7 @@ fn nested_five_levels_mixed_lists() {
 fn html_inline_is_verbatim() {
     let md = "Hello <span>world</span>!";
     let text = render_markdown_text(md);
-    let expected: Text = Line::from_iter(["Hello ", "<span>", "world", "</span>", "!"])
-    .into();
+    let expected: Text = Line::from_iter(["Hello ", "<span>", "world", "</span>", "!"]).into();
     assert_eq!(text, expected);
 }
 

@@ -759,7 +759,6 @@ mod tests {
         let md = "1. First\n   - Second level\n     1. Third level (ordered)\n        - Fourth level (bullet)\n          - Fifth level to test indent consistency\n";
         let streamed = super::simulate_stream_markdown_for_tests(&[md], true, &cfg);
         let streamed_strs = lines_to_plain_strings(&streamed);
-        eprintln!("streamed lines: {streamed_strs:?}");
 
         // Locate the third-level line in the streamed output; avoid relying on exact indent.
         let target_suffix = "1. Third level (ordered)";
@@ -782,13 +781,6 @@ mod tests {
             "expected non-empty spans for the third-level line"
         );
         let marker_span = &line.spans[0];
-        eprintln!(
-            "spans for 3rd-level line: {:?}",
-            line.spans
-                .iter()
-                .map(|sp| (sp.content.clone(), sp.style.fg))
-                .collect::<Vec<_>>()
-        );
         assert_eq!(
             marker_span.style.fg,
             Some(Color::LightBlue),

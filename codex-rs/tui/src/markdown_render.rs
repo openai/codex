@@ -64,7 +64,6 @@ where
     iter: I,
     text: Text<'static>,
     inline_styles: Vec<Style>,
-    line_styles: Vec<Style>,
     indent_stack: Vec<IndentContext>,
     suppress_list_indent: bool,
     list_indices: Vec<Option<u64>>,
@@ -75,7 +74,6 @@ where
     scheme: Option<String>,
     cwd: Option<std::path::PathBuf>,
     in_code_block: bool,
-    inline_bq_on_marker_line: bool,
 }
 
 impl<'a, I> Writer<'a, I>
@@ -87,7 +85,6 @@ where
             iter,
             text: Text::default(),
             inline_styles: Vec::new(),
-            line_styles: Vec::new(),
             indent_stack: Vec::new(),
             suppress_list_indent: false,
             list_indices: Vec::new(),
@@ -98,7 +95,6 @@ where
             scheme,
             cwd,
             in_code_block: false,
-            inline_bq_on_marker_line: false,
         }
     }
 
@@ -175,18 +171,16 @@ where
     }
 
     fn start_paragraph(&mut self) {
-        let needs_blank = self.needs_newline;
-        if needs_blank {
+        let pending_marker_line = self.pending_marker_line;
+        if self.needs_newline {
             self.push_blank_line();
+            self.pending_marker_line = false;
         }
-        if !self.pending_marker_line {
+        if !pending_marker_line {
             self.push_line(Line::default());
         }
         self.needs_newline = false;
         self.in_paragraph = true;
-        if needs_blank {
-            self.pending_marker_line = false;
-        }
     }
 
     fn end_paragraph(&mut self) {
@@ -198,6 +192,7 @@ where
     fn start_heading(&mut self, level: HeadingLevel) {
         if self.needs_newline {
             self.push_line(Line::default());
+            self.needs_newline = false;
         }
         let heading_style = match level {
             HeadingLevel::H1 => Style::new().bold().underlined(),
@@ -208,18 +203,14 @@ where
             HeadingLevel::H6 => Style::new().italic(),
         };
         let content = format!("{} ", "#".repeat(level as usize));
-        let base_style = self.line_styles.last().copied().unwrap_or_default();
-        let merged_style = base_style.patch(heading_style);
-        self.line_styles.push(merged_style);
-        self.push_line(Line::from(content));
-        self.push_inline_style(Style::default());
+        self.push_line(Line::from(vec![Span::styled(content, heading_style)]));
+        self.push_inline_style(heading_style);
         self.needs_newline = false;
     }
 
     fn end_heading(&mut self) {
         self.needs_newline = true;
         self.pop_inline_style();
-        self.line_styles.pop();
     }
 
     fn start_blockquote(&mut self) {
@@ -227,35 +218,24 @@ where
             self.push_blank_line();
             self.needs_newline = false;
         }
-        let base_style = self.line_styles.last().copied().unwrap_or_default();
-        let merged_style = base_style.patch(Style::new().green());
-        self.line_styles.push(merged_style);
         self.indent_stack.push(IndentContext::new(
             vec![Span::from(">")],
             self.pending_marker_line,
         ));
 
-        if self.pending_marker_line {
-            self.push_inline_style(Style::new().green());
-            self.inline_bq_on_marker_line = true;
-            if let Some(last) = self.text.lines.last_mut() {
-                for _ in 0..self.indent_stack.len() {
-                    last.push_span(Span::from(">"));
-                }
-                last.push_span(Span::from(" "));
+        if self.pending_marker_line
+            && let Some(last) = self.text.lines.last_mut()
+        {
+            for _ in 0..self.indent_stack.len() {
+                last.push_span(Span::from(">"));
             }
+            last.push_span(Span::from(" "));
         }
     }
 
     fn end_blockquote(&mut self) {
-        self.line_styles.pop();
         self.indent_stack.pop();
         self.needs_newline = true;
-        if self.inline_bq_on_marker_line {
-            // Remove the inline green style used for the marker-line inline case.
-            self.pop_inline_style();
-            self.inline_bq_on_marker_line = false;
-        }
     }
 
     fn text(&mut self, text: CowStr<'a>) {
@@ -279,13 +259,6 @@ where
             if i > 0 {
                 self.push_line(Line::default());
             }
-            let mut style = self.inline_styles.last().copied().unwrap_or_default();
-            if self.inline_styles.len() == 1
-                && let Some(line_style) = self.line_styles.last()
-                && style == *line_style
-            {
-                style = Style::default();
-            }
             let mut content = line.to_string();
             if !self.in_code_block
                 && let (Some(scheme), Some(cwd)) = (&self.scheme, &self.cwd)
@@ -295,7 +268,10 @@ where
                     content = s;
                 }
             }
-            let span = Span::styled(content, style);
+            let span = Span::styled(
+                content,
+                self.inline_styles.last().copied().unwrap_or_default(),
+            );
             self.push_span(span);
         }
         self.needs_newline = false;
@@ -390,8 +366,6 @@ where
         if !self.text.lines.is_empty() {
             self.push_blank_line();
         }
-        let base = self.line_styles.last().copied().unwrap_or_default();
-        self.line_styles.push(base);
         self.in_code_block = true;
         let opener = match lang {
             Some(l) if !l.is_empty() => format!("```{l}"),
@@ -404,7 +378,6 @@ where
     fn end_codeblock(&mut self) {
         self.push_line("```".into());
         self.needs_newline = true;
-        self.line_styles.pop();
         self.in_code_block = false;
     }
 
@@ -430,14 +403,19 @@ where
         }
     }
 
-    fn push_line(&mut self, mut line: Line<'static>) {
-        let style = self.line_styles.last().copied().unwrap_or_default();
-        line = line.patch_style(style);
-        let prefix = self.current_prefix_spans();
-        for span in prefix.into_iter().rev() {
-            line.spans.insert(0, span);
-        }
-        self.text.lines.push(line);
+    fn push_line(&mut self, line: Line<'static>) {
+        let style = if self
+            .indent_stack
+            .iter()
+            .any(|ctx| ctx.prefix.iter().any(|s| s.content == ">"))
+        {
+            Style::new().green()
+        } else {
+            Style::default()
+        };
+        self.text.lines.push(
+            Line::from_iter([self.current_prefix_spans(), line.spans].concat()).set_style(style),
+        );
     }
 
     fn push_span(&mut self, span: Span<'static>) {

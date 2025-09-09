@@ -32,13 +32,6 @@ mod tests {
     use pretty_assertions::assert_eq;
 
     #[test]
-    fn fenced_code_blocks_preserve_leading_whitespace() {
-        // This behavior is no longer guaranteed now that we render via pulldown-cmark
-        // without splitting code blocks. Test removed.
-        assert!(true);
-    }
-
-    #[test]
     fn citations_not_rewritten_inside_code_blocks() {
         let src = "Before 【F:/x.rs†L1】\n```\nInside 【F:/x.rs†L2】\n```\nAfter 【F:/x.rs†L3】\n";
         let cwd = Path::new("/");
@@ -165,12 +158,6 @@ mod tests {
             })
             .collect();
         assert_eq!(lines, vec!["1. Tight item".to_string()]);
-    }
-
-    #[test]
-    fn split_text_and_fences_keeps_ordered_list_line_as_text() {
-        // Splitter removed; test no longer applicable.
-        assert!(true);
     }
 
     #[test]
