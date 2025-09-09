@@ -1251,10 +1251,7 @@ fn extract_conversation_summary(
     head: &[serde_json::Value],
 ) -> Option<ConversationSummary> {
     let session_meta = match head.first() {
-        Some(first_line) => match serde_json::from_value::<SessionMeta>(first_line.clone()) {
-            Ok(session_meta) => session_meta,
-            Err(..) => return None,
-        },
+        Some(first_line) => serde_json::from_value::<SessionMeta>(first_line.clone()).ok()?,
         None => return None,
     };
 
@@ -1312,6 +1309,10 @@ mod tests {
             json!({
                 "id": conversation_id.0,
                 "timestamp": timestamp,
+                "cwd": "/",
+                "originator": "codex",
+                "cli_version": "0.0.0",
+                "instructions": null
             }),
             json!({
                 "type": "message",
