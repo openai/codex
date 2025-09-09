@@ -177,7 +177,7 @@ async fn traverse_directories_for_paths(
                             .await
                             .unwrap_or((Vec::new(), false, false));
                     // Apply filters: must have session meta and at least one user message event
-                    if saw_session_meta && (saw_user_event) {
+                    if saw_session_meta && saw_user_event {
                         items.push(ConversationItem { path, head });
                     }
                 }
@@ -319,10 +319,8 @@ async fn read_head_and_flags(
                 }
             }
             RolloutItem::EventMsg(ev) => {
-                // Capture whether an early agent/user message event exists within the head window
-                use EventMsg::*;
-                if let UserMessage(_) = ev {
-                    saw_user_event = true
+                if matches!(ev, EventMsg::UserMessage(_)) {
+                    saw_user_event = true;
                 }
             }
         }

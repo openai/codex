@@ -28,7 +28,7 @@ use super::policy::is_persisted_response_item;
 use crate::config::Config;
 use crate::conversation_manager::InitialHistory;
 use crate::conversation_manager::ResumedHistory;
-use crate::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR;
+use crate::default_client::ORIGINATOR;
 use crate::git_info::GitInfo;
 use crate::git_info::collect_git_info;
 use crate::protocol::EventMsg;
@@ -58,17 +58,6 @@ pub enum RolloutItem {
     SessionMeta(SessionMetaLine),
     ResponseItem(ResponseItem),
     EventMsg(EventMsg),
-}
-
-impl PartialEq for RolloutItem {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (RolloutItem::ResponseItem(a), RolloutItem::ResponseItem(b)) => a == b,
-            (RolloutItem::SessionMeta(_a), RolloutItem::SessionMeta(_b)) => false,
-            (RolloutItem::EventMsg(_), RolloutItem::EventMsg(_)) => false,
-            _ => false,
-        }
-    }
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -177,8 +166,7 @@ impl RolloutRecorder {
                         id: session_id,
                         timestamp,
                         cwd: config.cwd.clone(),
-                        originator: std::env::var(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR)
-                            .unwrap_or_else(|_| "codex_cli_rs".to_string()),
+                        originator: ORIGINATOR.value.clone(),
                         cli_version: env!("CARGO_PKG_VERSION").to_string(),
                         instructions,
                     }),

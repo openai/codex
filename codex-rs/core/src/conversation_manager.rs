@@ -19,21 +19,20 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct ResumedHistory {
     pub conversation_id: ConversationId,
     pub history: Vec<RolloutItem>,
     pub rollout_path: PathBuf,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum InitialHistory {
     New,
     Resumed(ResumedHistory),
     Forked(Vec<RolloutItem>),
 }
 
-// impl get_response_items and get_event_msgs
 impl InitialHistory {
     pub(crate) fn get_rollout_items(&self) -> Vec<RolloutItem> {
         match self {
@@ -42,24 +41,48 @@ impl InitialHistory {
             InitialHistory::Forked(items) => items.clone(),
         }
     }
-    pub fn get_event_msgs(&self) -> Vec<EventMsg> {
+    pub fn get_response_items(&self) -> Vec<ResponseItem> {
         match self {
             InitialHistory::New => Vec::new(),
             InitialHistory::Resumed(resumed) => resumed
                 .history
                 .iter()
                 .filter_map(|ri| match ri {
-                    RolloutItem::EventMsg(ev) => Some(ev.clone()),
+                    RolloutItem::ResponseItem(item) => Some(item.clone()),
                     _ => None,
                 })
                 .collect(),
             InitialHistory::Forked(items) => items
                 .iter()
                 .filter_map(|ri| match ri {
-                    RolloutItem::EventMsg(ev) => Some(ev.clone()),
+                    RolloutItem::ResponseItem(item) => Some(item.clone()),
                     _ => None,
                 })
                 .collect(),
+        }
+    }
+    pub fn get_event_msgs(&self) -> Option<Vec<EventMsg>> {
+        match self {
+            InitialHistory::New => None,
+            InitialHistory::Resumed(resumed) => Some(
+                resumed
+                    .history
+                    .iter()
+                    .filter_map(|ri| match ri {
+                        RolloutItem::EventMsg(ev) => Some(ev.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+            ),
+            InitialHistory::Forked(items) => Some(
+                items
+                    .iter()
+                    .filter_map(|ri| match ri {
+                        RolloutItem::EventMsg(ev) => Some(ev.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+            ),
         }
     }
 }
@@ -301,16 +324,18 @@ mod tests {
         ];
 
         let truncated = truncate_after_dropping_last_messages(items.clone(), 1);
+        let got_items = truncated.get_rollout_items();
+        let expected_items = vec![
+            RolloutItem::ResponseItem(items[0].clone()),
+            RolloutItem::ResponseItem(items[1].clone()),
+            RolloutItem::ResponseItem(items[2].clone()),
+        ];
         assert_eq!(
-            truncated,
-            InitialHistory::Forked(vec![
-                RolloutItem::ResponseItem(items[0].clone()),
-                RolloutItem::ResponseItem(items[1].clone()),
-                RolloutItem::ResponseItem(items[2].clone()),
-            ])
+            serde_json::to_value(&got_items).unwrap(),
+            serde_json::to_value(&expected_items).unwrap()
         );
 
         let truncated2 = truncate_after_dropping_last_messages(items, 2);
-        assert_eq!(truncated2, InitialHistory::New);
+        assert!(matches!(truncated2, InitialHistory::New));
     }
 }

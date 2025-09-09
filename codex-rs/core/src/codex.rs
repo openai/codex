@@ -492,10 +492,7 @@ impl Session {
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
-        let initial_messages = match &initial_history {
-            InitialHistory::New => None,
-            _ => Some(initial_history.get_event_msgs()),
-        };
+        let initial_messages = initial_history.get_event_msgs();
         sess.record_initial_history(&turn_context, initial_history)
             .await;
 
@@ -551,7 +548,7 @@ impl Session {
                 let persist = matches!(conversation_history, InitialHistory::Forked(_));
 
                 // Always add response items to conversation history
-                let response_items = Self::extract_response_items_from_rollout(&rollout_items);
+                let response_items = conversation_history.get_response_items();
                 if !response_items.is_empty() {
                     self.record_into_history(&response_items);
                 }
@@ -694,16 +691,6 @@ impl Session {
             Some(self.user_shell.clone()),
         )));
         items
-    }
-
-    fn extract_response_items_from_rollout(rollout_items: &[RolloutItem]) -> Vec<ResponseItem> {
-        rollout_items
-            .iter()
-            .filter_map(|ri| match ri {
-                RolloutItem::ResponseItem(item) => Some(item.clone()),
-                _ => None,
-            })
-            .collect()
     }
 
     async fn persist_rollout_items(&self, items: &[RolloutItem]) {
