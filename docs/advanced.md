@@ -69,7 +69,7 @@ sandbox            | string   | Sandbox mode: `read-only`, `workspace-write`, or
 Property   | Type   | Description
 -----------|--------|---------------------------------------------------------------
 **prompt** (required)     | string | The next user prompt to continue the Codex conversation.
-**sessionId** (required)  | string | The session id for this conversation.
+**conversationId** (required)  | string | The id of the conversation to continue.
 
 ### Trying it Out
 > [!TIP]
