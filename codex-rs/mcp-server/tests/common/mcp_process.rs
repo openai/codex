@@ -39,6 +39,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::process::Command as StdCommand;
 use tokio::process::Command;
+use tokio::time::{timeout, Duration, Instant};
 
 pub struct McpProcess {
     next_request_id: AtomicI64,
@@ -83,6 +84,50 @@ impl McpProcess {
 
         // Forward child's stderr to our stderr so failures are visible even
         // when stdout/stderr are captured by the test harness.
+        if let Some(stderr) = process.stderr.take() {
+            let mut stderr_reader = BufReader::new(stderr).lines();
+            tokio::spawn(async move {
+                while let Ok(Some(line)) = stderr_reader.next_line().await {
+                    eprintln!("[mcp stderr] {line}");
+                }
+            });
+        }
+        Ok(Self {
+            next_request_id: AtomicI64::new(0),
+            process,
+            stdin,
+            stdout,
+        })
+    }
+
+    /// Like `new`, but allows passing additional CLI arguments to the server
+    /// (e.g., `--compatibility-mode`).
+    pub async fn new_with_args(codex_home: &Path, args: &[&str]) -> anyhow::Result<Self> {
+        let std_cmd = StdCommand::cargo_bin("codex-mcp-server")
+            .context("should find binary for codex-mcp-server")?;
+        let program = std_cmd.get_program().to_owned();
+        let mut cmd = Command::new(program);
+        cmd.args(args);
+        cmd.stdin(Stdio::piped());
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+        cmd.env("CODEX_HOME", codex_home);
+        cmd.env("RUST_LOG", "debug");
+
+        let mut process = cmd
+            .kill_on_drop(true)
+            .spawn()
+            .context("codex-mcp-server proc should start")?;
+        let stdin = process
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow::format_err!("mcp should have stdin fd"))?;
+        let stdout = process
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow::format_err!("mcp should have stdout fd"))?;
+        let stdout = BufReader::new(stdout);
+
         if let Some(stderr) = process.stderr.take() {
             let mut stderr_reader = BufReader::new(stderr).lines();
             tokio::spawn(async move {
@@ -177,6 +222,36 @@ impl McpProcess {
         .await
     }
 
+    /// Send a generic tool call by name with optional JSON arguments.
+    pub async fn send_tool_call(
+        &mut self,
+        name: &str,
+        arguments: Option<serde_json::Value>,
+    ) -> anyhow::Result<i64> {
+        let params = CallToolRequestParams {
+            name: name.to_string(),
+            arguments,
+        };
+        self.send_request(
+            mcp_types::CallToolRequest::METHOD,
+            Some(serde_json::to_value(params)?),
+        )
+        .await
+    }
+
+    /// Convenience helper to call `codex-reply` with a session id and prompt.
+    pub async fn send_codex_reply_tool_call(
+        &mut self,
+        session_id: String,
+        prompt: String,
+    ) -> anyhow::Result<i64> {
+        let args = json!({
+            "conversationId": session_id,
+            "prompt": prompt,
+        });
+        self.send_tool_call("codex-reply", Some(args)).await
+    }
+
     /// Send a `newConversation` JSON-RPC request.
     pub async fn send_new_conversation_request(
         &mut self,
@@ -240,6 +315,11 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("getAuthStatus", params).await
+    }
+
+    /// Send a `getConfigToml` JSON-RPC request to fetch the effective config.
+    pub async fn send_get_config_toml_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request("getConfigToml", None).await
     }
 
     /// Send a `getUserSavedConfig` JSON-RPC request.
@@ -384,6 +464,48 @@ impl McpProcess {
                 }
             }
         }
+    }
+
+    /// Try to read an immediate JSON-RPC response for the given id within the
+    /// specified timeout (milliseconds). Returns an error if no response arrives
+    /// in time.
+    pub async fn read_immediate_response(
+        &mut self,
+        request_id: RequestId,
+        timeout_ms: u64,
+    ) -> anyhow::Result<JSONRPCResponse> {
+        let dur = Duration::from_millis(timeout_ms);
+        let fut = self.read_stream_until_response_message(request_id);
+        let resp = timeout(dur, fut).await??;
+        Ok(resp)
+    }
+
+    /// Measure time to receive a response for the given id.
+    pub async fn measure_response_time(
+        &mut self,
+        request_id: RequestId,
+    ) -> anyhow::Result<(JSONRPCResponse, std::time::Duration)> {
+        let start = Instant::now();
+        let resp = self.read_stream_until_response_message(request_id).await?;
+        Ok((resp, start.elapsed()))
+    }
+
+    /// Return true if any notification arrives within `wait_ms`, false otherwise.
+    pub async fn check_for_notifications(&mut self, wait_ms: u64) -> bool {
+        let deadline = Instant::now() + Duration::from_millis(wait_ms);
+        while Instant::now() < deadline {
+            match timeout(Duration::from_millis(50), self.read_jsonrpc_message()).await {
+                Ok(Ok(JSONRPCMessage::Notification(_))) => return true,
+                Ok(Ok(_other)) => {
+                    // Ignore non-notification messages
+                }
+                Ok(Err(_e)) => return false,
+                Err(_elapsed) => {
+                    // No message in this 50ms window; keep looping
+                }
+            }
+        }
+        false
     }
 
     pub async fn read_stream_until_error_message(

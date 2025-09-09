@@ -1,11 +1,11 @@
-Codex Fork Guidance (custom branch)
+Codex Fork Guidance (fork branch)
 
-This file guides Codex (the coding assistant) when working in this fork. It applies to the Rust workspace under `codex-rs/` and is only present on our `custom` branch. Our `main` mirrors `openai/codex` and should remain pristine.
+This file guides Codex (the coding assistant) when working in this fork. It applies to the Rust workspace under `codex-rs/`. Our `main` mirrors `openai/codex` and should remain pristine.
 
 Branch Model
 - `main`: fast‑forward mirror of `upstream/main` (no direct commits).
-- `custom`: long‑lived fork branch with our small changes. Do all local work here and tag releases from here.
-- Topic work: create short‑lived branches off `custom`; rebase onto `main` regularly, then merge back into `custom`.
+- `fix-mcp-session-id-response`: long‑lived fork branch with our small changes. Do all local work here and tag releases from here.
+- Topic work: create short‑lived branches off `fix-mcp-session-id-response`; rebase onto `main` regularly, then merge back into it.
 
 Build & Test
 - Format: run `just fmt` (or `cargo fmt` fallback) after any Rust edits.
@@ -22,7 +22,7 @@ Local Build (for daily use)
 
 Release From Our Fork
 - We reuse upstream’s release workflow `.github/workflows/rust-release.yml` which triggers on tags `rust-vX.Y.Z`.
-- Steps (on `custom`):
+- Steps (on `fix-mcp-session-id-response`):
   1) Bump `version` in `codex-rs/Cargo.toml` (align with upstream; use your own patch/prerelease if needed, e.g., `0.31.1` or `0.31.0-alpha.1`).
   2) Commit: `Release <version>`.
   3) Tag: `git tag -a rust-v<version> -m "Release <version>" && git push origin rust-v<version>`.
@@ -56,4 +56,3 @@ Daily Update Flow
 Contact / Context
 - This branch incorporates: MCP compatibility mode, `codex-get-response`, increased default get‑response timeout (600s), and session history handling.
 - If a change is broadly useful, consider upstreaming to reduce fork drift.
-

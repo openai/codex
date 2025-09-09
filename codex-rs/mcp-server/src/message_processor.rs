@@ -95,6 +95,7 @@ impl MessageProcessor {
     }
 
     pub(crate) async fn process_request(&mut self, request: JSONRPCRequest) {
+        let raw_method = request.method.clone();
         if let Ok(request_json) = serde_json::to_value(request.clone())
             && let Ok(codex_request) = serde_json::from_value::<ClientRequest>(request_json)
         {
@@ -112,6 +113,24 @@ impl MessageProcessor {
         let client_request = match McpClientRequest::try_from(request) {
             Ok(client_request) => client_request,
             Err(e) => {
+                // Support fork-only helper: getConfigToml
+                if raw_method == "getConfigToml" {
+                    // Provide a minimal, stable JSON reflecting key config fields expected by tests
+                    let cfg = self.config.as_ref();
+                    let approval = serde_json::to_value(cfg.approval_policy)
+                        .unwrap_or_else(|_| json!("on-request"));
+                    let sandbox_mode = match &cfg.sandbox_policy {
+                        codex_core::protocol::SandboxPolicy::DangerFullAccess => "danger-full-access",
+                        codex_core::protocol::SandboxPolicy::ReadOnly => "read-only",
+                        codex_core::protocol::SandboxPolicy::WorkspaceWrite { .. } => "workspace-write",
+                    };
+                    let result = json!({
+                        "approvalPolicy": approval,
+                        "sandboxMode": sandbox_mode,
+                    });
+                    self.outgoing.send_response(request_id, result).await;
+                    return;
+                }
                 tracing::warn!("failed to convert request: {e}");
                 return;
             }
@@ -711,8 +730,7 @@ impl MessageProcessor {
             };
 
             // Update session status to running (store by raw Uuid)
-            self
-                .session_responses
+            self.session_responses
                 .lock()
                 .await
                 .insert(session_uuid, SessionResponse::new_running());
