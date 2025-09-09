@@ -26,6 +26,7 @@ use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TaskStartedEvent;
+use codex_protocol::custom_prompts::CustomPrompt;
 use codex_protocol::mcp_protocol::ConversationId;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -280,6 +281,99 @@ fn drain_insert_history(
         }
     }
     out
+}
+
+#[test]
+fn custom_prompt_shows_command_in_history() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual();
+
+    // Provide a custom prompt to the bottom pane via event flow.
+    chat.handle_codex_event(Event {
+        id: "list-prompts".into(),
+        msg: EventMsg::ListCustomPromptsResponse(
+            codex_core::protocol::ListCustomPromptsResponseEvent {
+                custom_prompts: vec![CustomPrompt {
+                    name: "saved".to_string(),
+                    path: "/tmp/saved.md".into(),
+                    content: "hidden body that should not show".to_string(),
+                }],
+            },
+        ),
+    });
+
+    // Type "/saved" slowly to avoid paste-burst buffering.
+    for ch in ['/', 's', 'a', 'v', 'e', 'd'] {
+        chat.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        std::thread::sleep(crate::bottom_pane::ChatComposer::recommended_paste_flush_delay());
+        let _ = chat.handle_paste_burst_tick(FrameRequester::test_dummy());
+    }
+
+    // Press Enter to submit.
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    // Drain history and verify that the displayed user message shows "/saved" and not the body.
+    let cells = drain_insert_history(&mut rx);
+    let merged = cells
+        .iter()
+        .flat_map(|lines| lines.iter())
+        .flat_map(|l| l.spans.iter())
+        .map(|s| s.content.clone())
+        .collect::<String>();
+    assert!(
+        merged.contains("/saved"),
+        "expected to show the typed command"
+    );
+    assert!(
+        !merged.contains("hidden body that should not show"),
+        "should not display expanded prompt body"
+    );
+}
+
+#[test]
+fn custom_prompt_shows_body_when_redaction_disabled() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual();
+
+    // Disable redaction for this test.
+    chat.config.redact_saved_prompt_body = false;
+
+    let body = "hidden body that should show";
+
+    chat.handle_codex_event(Event {
+        id: "list-prompts".into(),
+        msg: EventMsg::ListCustomPromptsResponse(
+            codex_core::protocol::ListCustomPromptsResponseEvent {
+                custom_prompts: vec![CustomPrompt {
+                    name: "saved".to_string(),
+                    path: "/tmp/saved.md".into(),
+                    content: body.to_string(),
+                }],
+            },
+        ),
+    });
+
+    for ch in ['/', 's', 'a', 'v', 'e', 'd'] {
+        chat.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+        std::thread::sleep(crate::bottom_pane::ChatComposer::recommended_paste_flush_delay());
+        let _ = chat.handle_paste_burst_tick(FrameRequester::test_dummy());
+    }
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let cells = drain_insert_history(&mut rx);
+    let merged = cells
+        .iter()
+        .flat_map(|lines| lines.iter())
+        .flat_map(|l| l.spans.iter())
+        .map(|s| s.content.clone())
+        .collect::<String>();
+    assert!(
+        merged.contains(body),
+        "expected to show the saved prompt body"
+    );
+    assert!(
+        !merged.contains("/saved"),
+        "should not show the typed command when redaction is disabled"
+    );
 }
 
 fn lines_to_single_string(lines: &[ratatui::text::Line<'static>]) -> String {

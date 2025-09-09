@@ -140,6 +140,10 @@ pub(crate) struct ChatWidget {
 
 struct UserMessage {
     text: String,
+    // If set, use this string when rendering the user message in history
+    // instead of `text`. This allows showing "/saved-prompt" while sending expanded
+    // prompt contents to the agent.
+    display_text: Option<String>,
     image_paths: Vec<PathBuf>,
 }
 
@@ -147,6 +151,7 @@ impl From<String> for UserMessage {
     fn from(text: String) -> Self {
         Self {
             text,
+            display_text: None,
             image_paths: Vec::new(),
         }
     }
@@ -156,7 +161,11 @@ fn create_initial_user_message(text: String, image_paths: Vec<PathBuf>) -> Optio
     if text.is_empty() && image_paths.is_empty() {
         None
     } else {
-        Some(UserMessage { text, image_paths })
+        Some(UserMessage {
+            text,
+            display_text: None,
+            image_paths,
+        })
     }
 }
 
@@ -800,6 +809,20 @@ impl ChatWidget {
                         // If a task is running, queue the user input to be sent after the turn completes.
                         let user_message = UserMessage {
                             text,
+                            display_text: None,
+                            image_paths: self.bottom_pane.take_recent_submission_images(),
+                        };
+                        if self.bottom_pane.is_task_running() {
+                            self.queued_user_messages.push_back(user_message);
+                            self.refresh_queued_user_messages();
+                        } else {
+                            self.submit_user_message(user_message);
+                        }
+                    }
+                    InputResult::SubmittedWithDisplay { text, display } => {
+                        let user_message = UserMessage {
+                            text,
+                            display_text: Some(display),
                             image_paths: self.bottom_pane.take_recent_submission_images(),
                         };
                         if self.bottom_pane.is_task_running() {
@@ -979,7 +1002,11 @@ impl ChatWidget {
     }
 
     fn submit_user_message(&mut self, user_message: UserMessage) {
-        let UserMessage { text, image_paths } = user_message;
+        let UserMessage {
+            text,
+            display_text,
+            image_paths,
+        } = user_message;
         let mut items: Vec<InputItem> = Vec::new();
 
         if !text.is_empty() {
@@ -1011,7 +1038,12 @@ impl ChatWidget {
 
         // Only show the text portion in conversation history.
         if !text.is_empty() {
-            self.add_to_history(history_cell::new_user_prompt(text));
+            let shown = if self.config.redact_saved_prompt_body {
+                display_text.unwrap_or_else(|| text.clone())
+            } else {
+                text.clone()
+            };
+            self.add_to_history(history_cell::new_user_prompt(shown));
         }
     }
 
@@ -1163,7 +1195,13 @@ impl ChatWidget {
         let messages: Vec<String> = self
             .queued_user_messages
             .iter()
-            .map(|m| m.text.clone())
+            .map(|m| {
+                if self.config.redact_saved_prompt_body {
+                    m.display_text.clone().unwrap_or_else(|| m.text.clone())
+                } else {
+                    m.text.clone()
+                }
+            })
             .collect();
         self.bottom_pane.set_queued_user_messages(messages);
     }

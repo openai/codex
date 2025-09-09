@@ -55,6 +55,10 @@ const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
 #[derive(Debug, PartialEq)]
 pub enum InputResult {
     Submitted(String),
+    // Submit actual text to the agent but override what is shown in the
+    // transcript UI with `display`. Used for saved prompts so users see the
+    // original command they typed (e.g., "/saved-prompt").
+    SubmittedWithDisplay { text: String, display: String },
     Command(SlashCommand),
     None,
 }
@@ -417,11 +421,12 @@ impl ChatComposer {
                     // Clear textarea so no residual text remains.
                     self.textarea.set_text("");
                     // Capture any needed data from popup before clearing it.
-                    let prompt_content = match sel {
-                        CommandItem::UserPrompt(idx) => {
-                            popup.prompt_content(idx).map(|s| s.to_string())
-                        }
-                        _ => None,
+                    let (prompt_content, prompt_name) = match sel {
+                        CommandItem::UserPrompt(idx) => (
+                            popup.prompt_content(idx).map(|s| s.to_string()),
+                            popup.prompt_name(idx).map(|s| s.to_string()),
+                        ),
+                        _ => (None, None),
                     };
                     // Hide popup since an action has been dispatched.
                     self.active_popup = ActivePopup::None;
@@ -432,6 +437,15 @@ impl ChatComposer {
                         }
                         CommandItem::UserPrompt(_) => {
                             if let Some(contents) = prompt_content {
+                                if let Some(name) = prompt_name {
+                                    return (
+                                        InputResult::SubmittedWithDisplay {
+                                            text: contents,
+                                            display: format!("/{name}"),
+                                        },
+                                        true,
+                                    );
+                                }
                                 return (InputResult::Submitted(contents), true);
                             }
                             return (InputResult::None, true);
@@ -1858,6 +1872,11 @@ mod tests {
             InputResult::Submitted(text) => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
             }
+            InputResult::SubmittedWithDisplay { text, .. } => {
+                panic!(
+                    "expected command dispatch, but composer submitted literal text with display: {text}"
+                )
+            }
             InputResult::None => panic!("expected Command result for '/init'"),
         }
         assert!(composer.textarea.is_empty(), "composer should be cleared");
@@ -1915,6 +1934,11 @@ mod tests {
             }
             InputResult::Submitted(text) => {
                 panic!("expected command dispatch, but composer submitted literal text: {text}")
+            }
+            InputResult::SubmittedWithDisplay { text, .. } => {
+                panic!(
+                    "expected command dispatch, but composer submitted literal text with display: {text}"
+                )
             }
             InputResult::None => panic!("expected Command result for '/mention'"),
         }
@@ -2338,7 +2362,13 @@ mod tests {
         let (result, _needs_redraw) =
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
-        assert_eq!(InputResult::Submitted(prompt_text.to_string()), result);
+        match result {
+            InputResult::Submitted(text) => assert_eq!(prompt_text.to_string(), text),
+            InputResult::SubmittedWithDisplay { text, .. } => {
+                assert_eq!(prompt_text.to_string(), text)
+            }
+            other => panic!("unexpected result variant: {other:?}"),
+        }
     }
 
     #[test]

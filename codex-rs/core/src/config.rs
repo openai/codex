@@ -190,6 +190,9 @@ pub struct Config {
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: bool,
+    /// When true (default), redact saved prompt bodies in transcript and show
+    /// only the typed command (e.g., "/saved-prompt"). When false, show full body.
+    pub redact_saved_prompt_body: bool,
 }
 
 impl Config {
@@ -701,6 +704,10 @@ pub struct ConfigToml {
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: Option<bool>,
+
+    /// When true, the UI transcript will redact the body of saved prompts and
+    /// display only the typed command (e.g., "/mdc"). Defaults to true.
+    pub redact_saved_prompt_body: Option<bool>,
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -841,6 +848,7 @@ pub struct ConfigOverrides {
     pub include_view_image_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
+    pub redact_saved_prompt_body: Option<bool>,
 }
 
 impl Config {
@@ -869,6 +877,7 @@ impl Config {
             include_view_image_tool,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
+            redact_saved_prompt_body: _,
         } = overrides;
 
         let active_profile_name = config_profile_key
@@ -940,6 +949,11 @@ impl Config {
 
         let include_view_image_tool = include_view_image_tool
             .or(cfg.tools.as_ref().and_then(|t| t.view_image))
+            .unwrap_or(true);
+
+        let redact_saved_prompt_body = overrides
+            .redact_saved_prompt_body
+            .or(cfg.redact_saved_prompt_body)
             .unwrap_or(true);
 
         let model = model
@@ -1044,6 +1058,7 @@ impl Config {
             include_view_image_tool,
             active_profile: active_profile_name,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
+            redact_saved_prompt_body,
         };
         Ok(config)
     }
@@ -1664,6 +1679,7 @@ model_verbosity = "high"
             include_view_image_tool: true,
             active_profile: Some("gpt3".to_string()),
             disable_paste_burst: false,
+            redact_saved_prompt_body: true,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -1736,6 +1752,7 @@ model_verbosity = "high"
             include_view_image_tool: true,
             active_profile: Some("zdr".to_string()),
             disable_paste_burst: false,
+            redact_saved_prompt_body: true,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
@@ -1794,6 +1811,7 @@ model_verbosity = "high"
             include_view_image_tool: true,
             active_profile: Some("gpt5".to_string()),
             disable_paste_burst: false,
+            redact_saved_prompt_body: true,
         };
 
         assert_eq!(expected_gpt5_profile_config, gpt5_profile_config);

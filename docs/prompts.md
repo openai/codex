@@ -13,3 +13,16 @@ Save frequently used prompts as Markdown files and reuse them quickly from the s
 - Notes:
   - Files with names that collide with built‑in commands (e.g. `/init`) are ignored and won’t appear.
   - New or changed files are discovered on session start. If you add a new prompt while Codex is running, start a new session to pick it up.
+
+### Transcript redaction of saved prompts
+
+By default, when you submit a saved prompt via the slash popup, Codex sends the prompt file’s body to the model but shows only the typed command in the transcript (for example, `/my-prompt`). This keeps long or sensitive prompt bodies out of the visible chat log while still using their contents.
+
+You can disable this redaction and show the saved prompt body instead:
+
+- CLI flag (interactive TUI):
+  - `--show-saved-prompt` (alias: `--no-redact-saved-prompt`)
+- Config file (config.toml):
+  - `redact_saved_prompt_body = false` (default is `true`)
+
+When redaction is disabled, the transcript will display the full saved prompt body as the user message.

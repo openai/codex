@@ -72,6 +72,15 @@ pub struct Cli {
     #[arg(long = "search", default_value_t = false)]
     pub web_search: bool,
 
+    /// Show saved prompt body in transcript instead of redacted command.
+    /// This disables redaction for saved prompts.
+    #[arg(long = "show-saved-prompt", default_value_t = false)]
+    pub show_saved_prompt: bool,
+
+    /// Alias for --show-saved-prompt.
+    #[arg(long = "no-redact-saved-prompt", default_value_t = false, hide = true)]
+    pub no_redact_saved_prompt: bool,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 }
