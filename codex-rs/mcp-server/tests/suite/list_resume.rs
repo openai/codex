@@ -168,9 +168,12 @@ fn create_fake_rollout(codex_home: &Path, filename_ts: &str, meta_rfc3339: &str,
     // Minimal user message entry as a persisted response item
     lines.push(
         json!({
-            "type":"message",
-            "role":"user",
-            "content":[{"type":"input_text","text": preview}]
+            "type":"response_item",
+            "payload": {
+                "type":"message",
+                "role":"user",
+                "content":[{"type":"input_text","text": preview}]
+            }
         })
         .to_string(),
     );
