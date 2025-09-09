@@ -103,7 +103,7 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             slug, "gpt-4.1",
             needs_special_apply_patch_instructions: true,
         )
-    } else if slug.starts_with("gpt-oss") {
+    } else if slug.starts_with("gpt-oss") || slug.starts_with("openai/gpt-oss") {
         model_family!(slug, "gpt-oss", apply_patch_tool_type: Some(ApplyPatchToolType::Function))
     } else if slug.starts_with("gpt-4o") {
         simple_model_family!(slug, "gpt-4o")
