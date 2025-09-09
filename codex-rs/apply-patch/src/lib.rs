@@ -903,10 +903,10 @@ mod tests {
         let patch = "*** Begin Patch\n*** Add File: foo\n+hi\n*** End Patch".to_string();
         let args = vec![patch];
         let dir = tempdir().unwrap();
-        match maybe_parse_apply_patch_verified(&args, dir.path()) {
-            MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::ImplicitInvocation) => {}
-            other => panic!("expected ImplicitInvocation error, got {other:?}"),
-        }
+        assert!(matches!(
+            maybe_parse_apply_patch_verified(&args, dir.path()),
+            MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::ImplicitInvocation)
+        ));
     }
 
     #[test]
@@ -914,10 +914,10 @@ mod tests {
         let script = "*** Begin Patch\n*** Add File: foo\n+hi\n*** End Patch";
         let args = args_bash(script);
         let dir = tempdir().unwrap();
-        match maybe_parse_apply_patch_verified(&args, dir.path()) {
-            MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::ImplicitInvocation) => {}
-            other => panic!("expected ImplicitInvocation error, got {other:?}"),
-        }
+        assert!(matches!(
+            maybe_parse_apply_patch_verified(&args, dir.path()),
+            MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::ImplicitInvocation)
+        ));
     }
 
     #[test]
