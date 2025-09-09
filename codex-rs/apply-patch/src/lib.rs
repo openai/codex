@@ -93,11 +93,25 @@ pub struct ApplyPatchArgs {
 
 pub fn maybe_parse_apply_patch(argv: &[String]) -> MaybeApplyPatch {
     match argv {
+        // Direct invocation: apply_patch <patch>
         [cmd, body] if APPLY_PATCH_COMMANDS.contains(&cmd.as_str()) => match parse_patch(body) {
             Ok(source) => MaybeApplyPatch::Body(source),
             Err(e) => MaybeApplyPatch::PatchParseError(e),
         },
+        // Sometimes the model forgets to include the `apply_patch` command. If we get a single-arg
+        // command body that parses as a patch, assume it's intended to be an apply_patch
+        // invocation.
+        [body] => match parse_patch(body) {
+            Ok(source) => MaybeApplyPatch::Body(source),
+            Err(_) => MaybeApplyPatch::NotApplyPatch,
+        },
+        // Bash heredoc form: (optional `cd <path> &&`) apply_patch <<'EOF' ...
         [bash, flag, script] if bash == "bash" && flag == "-lc" => {
+            // If the script itself parses as a patch, assume it's intended to be an apply_patch
+            // invocation.
+            if let Ok(source) = parse_patch(script) {
+                return MaybeApplyPatch::Body(source);
+            }
             match extract_apply_patch_from_bash(script) {
                 Ok((body, workdir)) => match parse_patch(&body) {
                     Ok(mut source) => {
@@ -871,6 +885,32 @@ mod tests {
             maybe_parse_apply_patch(&args),
             MaybeApplyPatch::NotApplyPatch
         ));
+    }
+
+    #[test]
+    fn test_raw_patch_as_single_arg() {
+        let patch = "*** Begin Patch\n*** Add File: foo\n+hi\n*** End Patch".to_string();
+        let args = vec![patch];
+        match maybe_parse_apply_patch(&args) {
+            MaybeApplyPatch::Body(ApplyPatchArgs { hunks, workdir, .. }) => {
+                assert_eq!(workdir, None);
+                assert_eq!(hunks, expected_single_add());
+            }
+            result => panic!("expected MaybeApplyPatch::Body got {result:?}"),
+        }
+    }
+
+    #[test]
+    fn test_raw_patch_as_bash_script() {
+        let script = "*** Begin Patch\n*** Add File: foo\n+hi\n*** End Patch";
+        let args = args_bash(script);
+        match maybe_parse_apply_patch(&args) {
+            MaybeApplyPatch::Body(ApplyPatchArgs { hunks, workdir, .. }) => {
+                assert_eq!(workdir, None);
+                assert_eq!(hunks, expected_single_add());
+            }
+            result => panic!("expected MaybeApplyPatch::Body got {result:?}"),
+        }
     }
 
     #[test]
