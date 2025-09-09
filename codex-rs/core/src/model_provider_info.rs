@@ -334,6 +334,7 @@ pub fn create_oss_provider_with_base_url(base_url: &str) -> ModelProviderInfo {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
 
     #[test]
     fn test_deserialize_ollama_model_provider_toml() {
@@ -419,5 +420,32 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
         assert_eq!(expected_provider, provider);
+    }
+
+    #[test]
+    fn no_trailing_qmark_with_empty_query_params() {
+        let provider = ModelProviderInfo {
+            name: "Example".into(),
+            base_url: Some("https://example.com/v1".into()),
+            env_key: None,
+            env_key_instructions: None,
+            wire_api: WireApi::Responses,
+            query_params: Some(HashMap::new()),
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            requires_openai_auth: false,
+        };
+
+        // Empty map should behave like no params at all (no '?').
+        let url = provider.get_full_url(&None);
+        assert_eq!(url, "https://example.com/v1/responses");
+
+        let mut chat_provider = provider.clone();
+        chat_provider.wire_api = WireApi::Chat;
+        let chat_url = chat_provider.get_full_url(&None);
+        assert_eq!(chat_url, "https://example.com/v1/chat/completions");
     }
 }
