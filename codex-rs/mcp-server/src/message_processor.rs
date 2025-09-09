@@ -343,7 +343,10 @@ impl MessageProcessor {
                 create_tool_for_codex_tool_call_reply_param(),
             ]
         };
-        let result = ListToolsResult { tools, next_cursor: None };
+        let result = ListToolsResult {
+            tools,
+            next_cursor: None,
+        };
 
         self.send_response::<mcp_types::ListToolsRequest>(id, result)
             .await;

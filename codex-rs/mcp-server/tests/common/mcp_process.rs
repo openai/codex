@@ -39,7 +39,7 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::process::Command as StdCommand;
 use tokio::process::Command;
-use tokio::time::{timeout, Duration, Instant};
+use tokio::time::{Duration, Instant, timeout};
 
 pub struct McpProcess {
     next_request_id: AtomicI64,
