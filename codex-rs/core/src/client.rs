@@ -84,7 +84,7 @@ impl ModelClient {
         summary: ReasoningSummaryConfig,
         conversation_id: ConversationId,
     ) -> Self {
-        let client = create_client(&config.responses_originator_header);
+        let client = create_client();
 
         Self {
             config,

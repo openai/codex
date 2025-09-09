@@ -190,7 +190,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     let conversation_manager = ConversationManager::new(AuthManager::shared(
         config.codex_home.clone(),
         config.preferred_auth_method,
-        config.responses_originator_header.clone(),
     ));
     let NewConversation {
         conversation_id: _,

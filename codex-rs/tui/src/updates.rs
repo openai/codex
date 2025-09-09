@@ -24,9 +24,8 @@ pub fn get_upgrade_version(config: &Config) -> Option<String> {
         // Refresh the cached latest version in the background so TUI startup
         // isn’t blocked by a network call. The UI reads the previously cached
         // value (if any) for this run; the next run shows the banner if needed.
-        let originator = config.responses_originator_header.clone();
         tokio::spawn(async move {
-            check_for_update(&version_file, &originator)
+            check_for_update(&version_file)
                 .await
                 .inspect_err(|e| tracing::error!("Failed to update version: {e}"))
         });
@@ -65,10 +64,10 @@ fn read_version_info(version_file: &Path) -> anyhow::Result<VersionInfo> {
     Ok(serde_json::from_str(&contents)?)
 }
 
-async fn check_for_update(version_file: &Path, originator: &str) -> anyhow::Result<()> {
+async fn check_for_update(version_file: &Path) -> anyhow::Result<()> {
     let ReleaseInfo {
         tag_name: latest_tag_name,
-    } = create_client(originator)
+    } = create_client()
         .get(LATEST_RELEASE_URL)
         .send()
         .await?

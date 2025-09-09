@@ -91,6 +91,11 @@ pub enum ClientRequest {
         request_id: RequestId,
         params: ResumeConversationParams,
     },
+    ArchiveConversation {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: ArchiveConversationParams,
+    },
     SendUserMessage {
         #[serde(rename = "id")]
         request_id: RequestId,
@@ -262,6 +267,18 @@ pub struct ResumeConversationParams {
 pub struct AddConversationSubscriptionResponse {
     pub subscription_id: Uuid,
 }
+
+/// The [`ConversationId`] must match the `rollout_path`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveConversationParams {
+    pub conversation_id: ConversationId,
+    pub rollout_path: PathBuf,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveConversationResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
