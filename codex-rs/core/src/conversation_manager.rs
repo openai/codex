@@ -147,8 +147,8 @@ impl ConversationManager {
 
     /// Removes the conversation from the manager's internal map, though the
     /// conversation is stored as `Arc<CodexConversation>`, it is possible that
-    /// other references to it exist elsewhere. Returns `true` if the
-    /// conversation was found and removed; otherwise, `false`.
+    /// other references to it exist elsewhere. Returns the conversation if the
+    /// conversation was found and removed.
     pub async fn remove_conversation(
         &self,
         conversation_id: &ConversationId,
