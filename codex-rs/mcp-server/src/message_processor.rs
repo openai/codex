@@ -95,7 +95,7 @@ impl MessageProcessor {
     }
 
     pub(crate) async fn process_request(&mut self, request: JSONRPCRequest) {
-        let raw_method = request.method.clone();
+        let _raw_method = request.method.clone();
         if let Ok(request_json) = serde_json::to_value(request.clone())
             && let Ok(codex_request) = serde_json::from_value::<ClientRequest>(request_json)
         {

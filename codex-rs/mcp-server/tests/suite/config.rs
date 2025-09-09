@@ -212,14 +212,9 @@ async fn get_config_includes_mcp_compatibility_mode() {
 
     // Verify the response includes some expected fields
     let result = &response.result;
-    assert!(
-        result.get("approvalPolicy").is_some(),
-        "Should include approvalPolicy"
-    );
-    assert!(
-        result.get("sandboxMode").is_some(),
-        "Should include sandboxMode"
-    );
+    let config = result.get("config").and_then(|v| v.as_object()).expect("config object present");
+    assert!(config.get("approvalPolicy").is_some(), "Should include approvalPolicy");
+    assert!(config.get("sandboxMode").is_some(), "Should include sandboxMode");
 
     // The MCP compatibility mode setting should be handled internally
     // We can't directly test it from config output, but we've tested
