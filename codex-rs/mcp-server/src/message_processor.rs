@@ -14,6 +14,7 @@ use codex_protocol::mcp_protocol::ConversationId;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
+use codex_core::default_client::get_codex_user_agent;
 use codex_core::protocol::Submission;
 use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
@@ -224,10 +225,11 @@ impl MessageProcessor {
             },
             instructions: None,
             protocol_version: params.protocol_version.clone(),
-            server_info: mcp_types::Implementation {
+            server_info: mcp_types::McpServerInfo {
                 name: "codex-mcp-server".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 title: Some("Codex".to_string()),
+                user_agent: get_codex_user_agent(),
             },
         };
 

@@ -1,6 +1,12 @@
 use reqwest::header::HeaderValue;
 use std::sync::LazyLock;
 
+/// Set this to add a suffix to the User-Agent string.
+/// A space is automatically added between the suffix and the rest of the User-Agent string.
+/// The full user agent string is returned from the mcp initialize response.
+/// Parenthesis will be added by Codex. This should only specify what goes inside of the parenthesis.
+pub const CODEX_USER_AGENT_SUFFIX_ENV_VAR: &str = "CODEX_USER_AGENT_SUFFIX";
+
 pub const CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR: &str = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
 
 #[derive(Debug, Clone)]
@@ -32,14 +38,19 @@ pub static ORIGINATOR: LazyLock<Originator> = LazyLock::new(|| {
 pub fn get_codex_user_agent() -> String {
     let build_version = env!("CARGO_PKG_VERSION");
     let os_info = os_info::get();
-    format!(
+    let prefix = format!(
         "{}/{build_version} ({} {}; {}) {}",
         ORIGINATOR.value.as_str(),
         os_info.os_type(),
         os_info.version(),
         os_info.architecture().unwrap_or("unknown"),
         crate::terminal::user_agent()
-    )
+    );
+    let suffix = match std::env::var(CODEX_USER_AGENT_SUFFIX_ENV_VAR) {
+        Ok(s) if !s.trim().is_empty() => format!(" ({})", s.trim()),
+        _ => "".to_string(),
+    };
+    format!("{prefix}{suffix}")
 }
 
 /// Create a reqwest client with default `originator` and `User-Agent` headers set.
