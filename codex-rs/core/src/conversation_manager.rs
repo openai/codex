@@ -7,7 +7,6 @@ use crate::codex_conversation::CodexConversation;
 use crate::config::Config;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
-use crate::event_mapping::map_response_item_to_event_messages;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::SessionConfiguredEvent;
@@ -21,14 +20,14 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct ResumedHistory {
+pub(crate) struct ResumedHistory {
     pub conversation_id: ConversationId,
     pub history: Vec<RolloutItem>,
     pub rollout_path: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum InitialHistory {
+pub(crate) enum InitialHistory {
     New,
     Resumed(ResumedHistory),
     Forked(Vec<RolloutItem>),
@@ -36,27 +35,7 @@ pub enum InitialHistory {
 
 // impl get_response_items and get_event_msgs
 impl InitialHistory {
-    pub fn get_response_items(&self) -> Vec<ResponseItem> {
-        match self {
-            InitialHistory::New => Vec::new(),
-            InitialHistory::Resumed(resumed) => resumed
-                .history
-                .iter()
-                .filter_map(|ri| match ri {
-                    RolloutItem::ResponseItem(item) => Some(item.clone()),
-                    _ => None,
-                })
-                .collect(),
-            InitialHistory::Forked(items) => items
-                .iter()
-                .filter_map(|ri| match ri {
-                    RolloutItem::ResponseItem(item) => Some(item.clone()),
-                    _ => None,
-                })
-                .collect(),
-        }
-    }
-    pub fn get_rollout_items(&self) -> Vec<RolloutItem> {
+    pub(crate) fn get_rollout_items(&self) -> Vec<RolloutItem> {
         match self {
             InitialHistory::New => Vec::new(),
             InitialHistory::Resumed(resumed) => resumed.history.clone(),
@@ -69,22 +48,16 @@ impl InitialHistory {
             InitialHistory::Resumed(resumed) => resumed
                 .history
                 .iter()
-                .flat_map(|ri| match ri {
-                    RolloutItem::ResponseItem(item) => map_response_item_to_event_messages(
-                        item, /*show_raw_agent_reasoning=*/ false,
-                    ),
-                    RolloutItem::EventMsg(ev) => vec![ev.clone()],
-                    RolloutItem::SessionMeta(_) => Vec::new(),
+                .filter_map(|ri| match ri {
+                    RolloutItem::EventMsg(ev) => Some(ev.clone()),
+                    _ => None,
                 })
                 .collect(),
             InitialHistory::Forked(items) => items
                 .iter()
-                .flat_map(|ri| match ri {
-                    RolloutItem::ResponseItem(item) => map_response_item_to_event_messages(
-                        item, /*show_raw_agent_reasoning=*/ false,
-                    ),
-                    RolloutItem::EventMsg(ev) => vec![ev.clone()],
-                    RolloutItem::SessionMeta(_) => Vec::new(),
+                .filter_map(|ri| match ri {
+                    RolloutItem::EventMsg(ev) => Some(ev.clone()),
+                    _ => None,
                 })
                 .collect(),
         }

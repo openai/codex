@@ -167,10 +167,23 @@ async fn traverse_directories_for_paths(
                     if items.len() == page_size {
                         break 'outer;
                     }
-                    let head = read_first_jsonl_records(&path, HEAD_RECORD_LIMIT)
-                        .await
-                        .unwrap_or_default();
-                    items.push(ConversationItem { path, head });
+                    let head: Vec<serde_json::Value> =
+                        read_first_jsonl_records(&path, HEAD_RECORD_LIMIT)
+                            .await
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(strip_payload_from_value)
+                            .collect();
+                    // Only include files that start with a session meta record in the new schema.
+                    let has_session_meta = head
+                        .first()
+                        .and_then(|v| v.get("type"))
+                        .and_then(|t| t.as_str())
+                        .map(|s| s == "session_meta")
+                        .unwrap_or(false);
+                    if has_session_meta {
+                        items.push(ConversationItem { path, head });
+                    }
                 }
             }
         }
@@ -295,4 +308,21 @@ async fn read_first_jsonl_records(
         }
     }
     Ok(head)
+}
+
+fn strip_payload_from_value(mut v: serde_json::Value) -> serde_json::Value {
+    if let serde_json::Value::Object(ref mut map) = v {
+        // For response_item records, unwrap to the inner payload to match the
+        // old header format the TUI resume picker expects (deserializable as ResponseItem).
+        if let Some(ty) = map.get("type").and_then(|t| t.as_str())
+            && ty == "response_item"
+            && let Some(payload) = map.remove("payload")
+        {
+            return payload;
+        }
+        // For other records (e.g., session_meta), drop payload for brevity but
+        // keep the outer object so timestamp remains available.
+        map.remove("payload");
+    }
+    v
 }

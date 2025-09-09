@@ -2,7 +2,6 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use chrono::DateTime;
-use chrono::TimeZone;
 use chrono::Utc;
 use codex_core::ConversationItem;
 use codex_core::ConversationsPage;
@@ -255,16 +254,10 @@ impl PickerState {
 }
 
 fn to_rows(page: ConversationsPage) -> Vec<Row> {
-    use std::cmp::Reverse;
-    let mut rows: Vec<Row> = page
-        .items
+    page.items
         .into_iter()
         .filter_map(|it| head_to_row(&it))
-        .collect();
-    // Ensure newest-first ordering within the page by timestamp when available.
-    let epoch = Utc.timestamp_opt(0, 0).single().unwrap_or_else(Utc::now);
-    rows.sort_by_key(|r| Reverse(r.ts.unwrap_or(epoch)));
-    rows
+        .collect()
 }
 
 fn head_to_row(item: &ConversationItem) -> Option<Row> {

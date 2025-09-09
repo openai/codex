@@ -1,4 +1,5 @@
 use assert_cmd::Command as AssertCommand;
+use codex_core::RolloutRecorder;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use std::time::Duration;
 use std::time::Instant;
@@ -77,6 +78,23 @@ async fn chat_mode_stream_cli() {
     assert_eq!(hi_lines, 1, "Expected exactly one line with 'hi'");
 
     server.verify().await;
+
+    // Verify a new session rollout was created and is discoverable via list_conversations
+    let page = RolloutRecorder::list_conversations(home.path(), 10, None)
+        .await
+        .expect("list conversations");
+    assert!(
+        !page.items.is_empty(),
+        "expected at least one session to be listed"
+    );
+    // First line of head must be the new schema session_meta
+    let head0_type = page.items[0]
+        .head
+        .first()
+        .and_then(|v| v.get("type"))
+        .and_then(|t| t.as_str())
+        .unwrap_or("");
+    assert_eq!(head0_type, "session_meta");
 }
 
 /// Verify that passing `-c experimental_instructions_file=...` to the CLI

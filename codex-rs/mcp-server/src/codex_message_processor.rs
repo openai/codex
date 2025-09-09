@@ -1111,10 +1111,17 @@ fn extract_conversation_summary(
     head: &[serde_json::Value],
 ) -> Option<ConversationSummary> {
     let session_meta = match head.first() {
-        Some(first_line) => match serde_json::from_value::<SessionMeta>(first_line.clone()) {
-            Ok(session_meta) => session_meta,
-            Err(..) => return None,
-        },
+        Some(first_line) => {
+            // Support new rollout schema: { timestamp, type: "session_meta", payload: { id, timestamp, ... } }
+            let type_field = first_line.get("type").and_then(|v| v.as_str());
+            if matches!(type_field, Some("session_meta")) {
+                let payload = first_line.get("payload")?.clone();
+                serde_json::from_value::<SessionMeta>(payload).ok()?
+            } else {
+                // Backward-compat: old schema where first line was just { id, timestamp }
+                serde_json::from_value::<SessionMeta>(first_line.clone()).ok()?
+            }
+        }
         None => return None,
     };
 
@@ -1170,8 +1177,12 @@ mod tests {
 
         let head = vec![
             json!({
-                "id": conversation_id.0,
                 "timestamp": timestamp,
+                "type": "session_meta",
+                "payload": {
+                    "id": conversation_id.0,
+                    "timestamp": timestamp
+                }
             }),
             json!({
                 "type": "message",

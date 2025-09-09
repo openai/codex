@@ -166,7 +166,7 @@ pub(crate) const MODEL_FORMAT_HEAD_BYTES: usize = MODEL_FORMAT_MAX_BYTES / 2;
 
 impl Codex {
     /// Spawn a new [`Codex`] and initialize the session.
-    pub async fn spawn(
+    pub(crate) async fn spawn(
         config: Config,
         auth_manager: Arc<AuthManager>,
         conversation_history: InitialHistory,
@@ -715,7 +715,7 @@ impl Session {
     async fn record_input_and_rollout_usermsg(&self, response_input: &ResponseInputItem) {
         let response_item: ResponseItem = response_input.clone().into();
         // Add to conversation history and persist response item to rollout
-        self.record_conversation_items(&[response_item.clone()])
+        self.record_conversation_items(std::slice::from_ref(&response_item))
             .await;
 
         // Derive user message events and persist only UserMessage to rollout

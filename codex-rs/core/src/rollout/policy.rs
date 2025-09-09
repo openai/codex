@@ -1,5 +1,4 @@
-use codex_protocol::models::ResponseItem;
-
+use crate::protocol::EventMsg;
 use crate::rollout::recorder::RolloutItem;
 
 /// Whether a `ResponseItem` should be persisted in rollout files.
@@ -8,16 +7,17 @@ use crate::rollout::recorder::RolloutItem;
 #[inline]
 pub(crate) fn is_persisted_response_item(item: &RolloutItem) -> bool {
     match item {
-        RolloutItem::ResponseItem(ResponseItem::Message { .. })
-        | RolloutItem::ResponseItem(ResponseItem::Reasoning { .. })
-        | RolloutItem::ResponseItem(ResponseItem::LocalShellCall { .. })
-        | RolloutItem::ResponseItem(ResponseItem::FunctionCall { .. })
-        | RolloutItem::ResponseItem(ResponseItem::FunctionCallOutput { .. })
-        | RolloutItem::ResponseItem(ResponseItem::CustomToolCall { .. })
-        | RolloutItem::ResponseItem(ResponseItem::CustomToolCallOutput { .. }) => true,
-        RolloutItem::ResponseItem(ResponseItem::WebSearchCall { .. })
-        | RolloutItem::ResponseItem(ResponseItem::Other) => false,
-        // Non-ResponseItem variants: treat as persisted
-        RolloutItem::SessionMeta(_) | RolloutItem::EventMsg(_) => true,
+        // Persist all response items (append-only transcript)
+        RolloutItem::ResponseItem(_) => true,
+        // Persist only selected event messages; drop deltas/noise
+        RolloutItem::EventMsg(ev) => matches!(
+            ev,
+            EventMsg::UserMessage(_)
+                | EventMsg::AgentMessage(_)
+                | EventMsg::AgentReasoning(_)
+                | EventMsg::TokenCount(_)
+        ),
+        // Always persist session meta
+        RolloutItem::SessionMeta(_) => true,
     }
 }

@@ -235,16 +235,13 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
         .await
         .expect("create new conversation");
 
-    // 1) Assert initial_messages contains the prior user + assistant messages as EventMsg entries
+    // 1) Assert initial_messages only includes existing EventMsg entries; response items are not converted
     let initial_msgs = session_configured
         .initial_messages
         .clone()
-        .expect("expected initial messages for resumed session");
+        .expect("expected initial messages option for resumed session");
     let initial_json = serde_json::to_value(&initial_msgs).unwrap();
-    let expected_initial_json = json!([
-        { "type": "user_message", "message": "resumed user message", "kind": "plain" },
-        { "type": "agent_message", "message": "resumed assistant message" }
-    ]);
+    let expected_initial_json = json!([]);
     assert_eq!(initial_json, expected_initial_json);
 
     // 2) Submit new input; the request body must include the prior item followed by the new user input.

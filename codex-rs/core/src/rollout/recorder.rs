@@ -41,7 +41,7 @@ pub struct SessionMeta {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct SessionMetaLine {
+pub(crate) struct SessionMetaLine {
     #[serde(flatten)]
     meta: SessionMeta,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -50,7 +50,7 @@ pub struct SessionMetaLine {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "type", content = "payload", rename_all = "snake_case")]
-pub enum RolloutItem {
+pub(crate) enum RolloutItem {
     SessionMeta(SessionMetaLine),
     ResponseItem(ResponseItem),
     EventMsg(EventMsg),
@@ -203,14 +203,15 @@ impl RolloutRecorder {
     }
 
     pub(crate) async fn record_items(&self, items: &[RolloutItem]) -> std::io::Result<()> {
-        if items.is_empty() {
-            return Ok(());
+        let mut filtered = Vec::new();
+        for item in items {
+            // Note that function calls may look a bit strange if they are
+            // "fully qualified MCP tool calls," so we could consider
+            // reformatting them in that case.
+            if is_persisted_response_item(item) {
+                filtered.push(item.clone());
+            }
         }
-        let filtered: Vec<RolloutItem> = items
-            .iter()
-            .filter(|&it| is_persisted_response_item(it))
-            .cloned()
-            .collect();
         if filtered.is_empty() {
             return Ok(());
         }
@@ -220,7 +221,7 @@ impl RolloutRecorder {
             .map_err(|e| IoError::other(format!("failed to queue rollout items: {e}")))
     }
 
-    pub async fn get_rollout_history(path: &Path) -> std::io::Result<InitialHistory> {
+    pub(crate) async fn get_rollout_history(path: &Path) -> std::io::Result<InitialHistory> {
         info!("Resuming rollout from {path:?}");
         tracing::error!("Resuming rollout from {path:?}");
         let text = tokio::fs::read_to_string(path).await?;
@@ -381,7 +382,9 @@ async fn rollout_writer(
         match cmd {
             RolloutCmd::AddItems(items) => {
                 for item in items {
-                    writer.write_rollout_item(item).await?;
+                    if is_persisted_response_item(&item) {
+                        writer.write_rollout_item(item).await?;
+                    }
                 }
             }
             RolloutCmd::Shutdown { ack } => {
