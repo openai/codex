@@ -255,6 +255,114 @@ pub async fn run_main(
     .map_err(|err| std::io::Error::other(err.to_string()))
 }
 
+#[cfg(test)]
+mod tests_build_overrides {
+    use super::*;
+
+    fn base_cli() -> Cli {
+        Cli {
+            prompt: None,
+            images: Vec::new(),
+            resume_picker: false,
+            resume_last: false,
+            resume_session_id: None,
+            model: None,
+            oss: false,
+            config_profile: None,
+            sandbox_mode: None,
+            approval_policy: None,
+            full_auto: false,
+            dangerously_bypass_approvals_and_sandbox: false,
+            cwd: None,
+            web_search: false,
+            show_saved_prompt: false,
+            no_redact_saved_prompt: false,
+            config_overrides: codex_common::CliConfigOverrides {
+                raw_overrides: vec![],
+            },
+        }
+    }
+
+    // Local helper for tests only (duplicate of inline logic in run_main)
+    fn build_overrides_from_cli_test(cli: &Cli) -> ConfigOverrides {
+        let (sandbox_mode, approval_policy) = if cli.full_auto {
+            (
+                Some(SandboxMode::WorkspaceWrite),
+                Some(AskForApproval::OnFailure),
+            )
+        } else if cli.dangerously_bypass_approvals_and_sandbox {
+            (
+                Some(SandboxMode::DangerFullAccess),
+                Some(AskForApproval::Never),
+            )
+        } else {
+            (
+                cli.sandbox_mode.map(Into::<SandboxMode>::into),
+                cli.approval_policy.map(Into::into),
+            )
+        };
+
+        let model = if let Some(model) = &cli.model {
+            Some(model.clone())
+        } else if cli.oss {
+            Some(DEFAULT_OSS_MODEL.to_owned())
+        } else {
+            None
+        };
+        let model_provider_override = if cli.oss {
+            Some(BUILT_IN_OSS_MODEL_PROVIDER_ID.to_owned())
+        } else {
+            None
+        };
+        let cwd = cli.cwd.clone().map(|p| p.canonicalize().unwrap_or(p));
+
+        ConfigOverrides {
+            model,
+            review_model: None,
+            approval_policy,
+            sandbox_mode,
+            cwd,
+            model_provider: model_provider_override,
+            config_profile: cli.config_profile.clone(),
+            codex_linux_sandbox_exe: None,
+            base_instructions: None,
+            include_plan_tool: Some(true),
+            include_apply_patch_tool: None,
+            include_view_image_tool: None,
+            show_raw_agent_reasoning: cli.oss.then_some(true),
+            tools_web_search_request: cli.web_search.then_some(true),
+            redact_saved_prompt_body: if cli.show_saved_prompt || cli.no_redact_saved_prompt {
+                Some(false)
+            } else {
+                None
+            },
+        }
+    }
+
+    #[test]
+    fn flag_show_saved_prompt_sets_override_false() {
+        let mut cli = base_cli();
+        cli.show_saved_prompt = true;
+        let ov = build_overrides_from_cli_test(&cli);
+        assert_eq!(ov.redact_saved_prompt_body, Some(false));
+    }
+
+    #[test]
+    fn alias_no_redact_saved_prompt_sets_override_false() {
+        let mut cli = base_cli();
+        cli.no_redact_saved_prompt = true;
+        let ov = build_overrides_from_cli_test(&cli);
+        assert_eq!(ov.redact_saved_prompt_body, Some(false));
+    }
+
+    #[test]
+    fn default_no_flag_sets_no_override() {
+        let cli = base_cli();
+        let ov = build_overrides_from_cli_test(&cli);
+        assert_eq!(ov.redact_saved_prompt_body, None);
+    }
+}
+
 async fn run_ratatui_app(
     cli: Cli,
     config: Config,

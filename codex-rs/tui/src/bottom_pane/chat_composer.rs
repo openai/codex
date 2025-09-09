@@ -419,6 +419,9 @@ impl ChatComposer {
             } => {
                 if let Some(sel) = popup.selected_item() {
                     // Clear textarea so no residual text remains.
+                    // Capture full composer text first so we can extract any
+                    // custom instruction appended after the command name.
+                    let full_composer_text = self.textarea.text().to_string();
                     self.textarea.set_text("");
                     // Capture any needed data from popup before clearing it.
                     let (prompt_content, prompt_name) = match sel {
@@ -438,10 +441,53 @@ impl ChatComposer {
                         CommandItem::UserPrompt(_) => {
                             if let Some(contents) = prompt_content {
                                 if let Some(name) = prompt_name {
+                                    // Extract any custom instruction (may be multiline) typed
+                                    // after the "/name" prefix in the composer.
+                                    let mut display = format!("/{name}");
+                                    let mut custom_instruction = String::new();
+                                    {
+                                        let trimmed = full_composer_text.trim_start();
+                                        let prefix = format!("/{name}");
+                                        if trimmed.starts_with(&prefix) {
+                                            let rest = &trimmed[prefix.len()..];
+                                            // Allow an optional single space after the command; preserve other newlines/spaces.
+                                            let rest = rest.strip_prefix(' ').unwrap_or(rest);
+                                            if !rest.is_empty() {
+                                                custom_instruction = rest.to_string();
+                                                display.push(' ');
+                                                display.push_str(rest);
+                                            }
+                                        }
+                                    }
+                                    // Build the agent text by wrapping custom instruction and saved prompt
+                                    // using a structured directive with explicit priorities.
+                                    // using CDATA to avoid XML escaping.
+                                    let agent_text = if custom_instruction.is_empty() {
+                                        contents.clone()
+                                    } else {
+                                        format!(
+                                            "<Directive version=\"1\">\
+<Priority>CustomInstruction > SavedPrompt</Priority>\
+<Rules>\
+<Rule>Apply CustomInstruction to SavedPrompt.</Rule>\
+<Rule>If there is any conflict, follow CustomInstruction.</Rule>\
+<Rule>Do not quote SavedPrompt or XML tags in the output.</Rule>\
+<Rule>If information is missing, make reasonable assumptions and proceed.</Rule>\
+</Rules>\
+<CustomInstruction><![CDATA[\
+{}\
+]]></CustomInstruction>\
+<SavedPrompt><![CDATA[\
+{}\
+]]></SavedPrompt>\
+</Directive>",
+                                            custom_instruction, contents
+                                        )
+                                    };
                                     return (
                                         InputResult::SubmittedWithDisplay {
-                                            text: contents,
-                                            display: format!("/{name}"),
+                                            text: agent_text,
+                                            display,
                                         },
                                         true,
                                     );
@@ -2365,9 +2411,113 @@ mod tests {
         match result {
             InputResult::Submitted(text) => assert_eq!(prompt_text.to_string(), text),
             InputResult::SubmittedWithDisplay { text, .. } => {
+                // No custom instruction: agent text should equal saved prompt body
                 assert_eq!(prompt_text.to_string(), text)
             }
             other => panic!("unexpected result variant: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn selecting_custom_prompt_with_instruction_wraps_and_displays_typed() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let prompt_text = "Hello from saved prompt";
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my".to_string(),
+            path: "/tmp/my.md".to_string().into(),
+            content: prompt_text.to_string(),
+        }]);
+
+        // Type "/my do this"
+        type_chars_humanlike(
+            &mut composer,
+            &['/', 'm', 'y', ' ', 'd', 'o', ' ', 't', 'h', 'i', 's'],
+        );
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        match result {
+            InputResult::SubmittedWithDisplay { text, display } => {
+                assert!(
+                    display.starts_with("/my do this"),
+                    "display should show typed command+instruction: {display}"
+                );
+                assert!(
+                    text.contains("<Directive version=\"1\">"),
+                    "agent text should start with Directive block: {text}"
+                );
+                assert!(text.contains("<Priority>CustomInstruction > SavedPrompt</Priority>"));
+                assert!(text.contains("<CustomInstruction><![CDATA["));
+                assert!(text.contains("do this"));
+                assert!(text.contains("]]></CustomInstruction>"));
+                assert!(text.contains("<SavedPrompt><![CDATA["));
+                assert!(text.contains(prompt_text));
+                assert!(text.contains("]]></SavedPrompt>"));
+            }
+            other => panic!("expected SubmittedWithDisplay, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn custom_instruction_with_cdata_terminator_does_not_panic_and_is_included() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+
+        let prompt_text = "Saved body with ]]> inside";
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my".to_string(),
+            path: "/tmp/my.md".to_string().into(),
+            content: prompt_text.to_string(),
+        }]);
+
+        // Type instruction that contains a CDATA terminator
+        for ch in ['/', 'm', 'y', ' ', ']', ']', '>', ' ', 'x'] {
+            let _ = composer.handle_key_event(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE));
+            std::thread::sleep(ChatComposer::recommended_paste_flush_delay());
+            let _ = composer.flush_paste_burst_if_due();
+        }
+
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        match result {
+            InputResult::SubmittedWithDisplay { text, .. } => {
+                // Ensure we include the raw instruction and structured wrapper without panics
+                assert!(text.contains("<Directive version=\"1\">"));
+                assert!(text.contains("<CustomInstruction><![CDATA["));
+                assert!(text.contains("]]></CustomInstruction>"));
+                assert!(text.contains("]]>")); // raw terminator appears as typed
+                assert!(text.contains("<SavedPrompt><![CDATA["));
+                assert!(text.contains("</SavedPrompt>"));
+            }
+            other => panic!("expected SubmittedWithDisplay, got: {other:?}"),
         }
     }
 

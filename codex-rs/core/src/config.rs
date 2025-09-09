@@ -1820,6 +1820,25 @@ model_verbosity = "high"
     }
 
     #[test]
+    fn config_toml_can_disable_saved_prompt_redaction() -> std::io::Result<()> {
+        let mut fixture = create_test_fixture()?;
+        // Set redact_saved_prompt_body = false in the base config
+        fixture.cfg.redact_saved_prompt_body = Some(false);
+
+        let overrides = ConfigOverrides {
+            cwd: Some(fixture.cwd()),
+            ..Default::default()
+        };
+        let cfg: Config = Config::load_from_base_config_with_overrides(
+            fixture.cfg.clone(),
+            overrides,
+            fixture.codex_home(),
+        )?;
+        assert_eq!(cfg.redact_saved_prompt_body, false);
+        Ok(())
+    }
+
+    #[test]
     fn test_set_project_trusted_writes_explicit_tables() -> anyhow::Result<()> {
         let project_dir = Path::new("/some/path");
         let mut doc = DocumentMut::new();
