@@ -297,8 +297,10 @@ async fn integration_creates_and_checks_session_file() {
                     Ok(v) => v,
                     Err(_) => continue,
                 };
-                if item.get("type").and_then(|t| t.as_str()) == Some("message")
-                    && let Some(c) = item.get("content")
+                if item.get("type").and_then(|t| t.as_str()) == Some("response_item")
+                    && let Some(payload) = item.get("payload")
+                    && payload.get("type").and_then(|t| t.as_str()) == Some("message")
+                    && let Some(c) = payload.get("content")
                     && c.to_string().contains(&marker)
                 {
                     matching_path = Some(path.to_path_buf());
@@ -361,9 +363,16 @@ async fn integration_creates_and_checks_session_file() {
         .unwrap_or_else(|_| panic!("missing session meta line"));
     let meta: serde_json::Value = serde_json::from_str(meta_line)
         .unwrap_or_else(|_| panic!("Failed to parse session meta line as JSON"));
-    assert!(meta.get("id").is_some(), "SessionMeta missing id");
+    assert_eq!(
+        meta.get("type").and_then(|v| v.as_str()),
+        Some("session_meta")
+    );
+    let payload = meta
+        .get("payload")
+        .unwrap_or_else(|| panic!("Missing payload in meta line"));
+    assert!(payload.get("id").is_some(), "SessionMeta missing id");
     assert!(
-        meta.get("timestamp").is_some(),
+        payload.get("timestamp").is_some(),
         "SessionMeta missing timestamp"
     );
 
@@ -375,8 +384,10 @@ async fn integration_creates_and_checks_session_file() {
         let Ok(item) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
-        if item.get("type").and_then(|t| t.as_str()) == Some("message")
-            && let Some(c) = item.get("content")
+        if item.get("type").and_then(|t| t.as_str()) == Some("response_item")
+            && let Some(payload) = item.get("payload")
+            && payload.get("type").and_then(|t| t.as_str()) == Some("message")
+            && let Some(c) = payload.get("content")
             && c.to_string().contains(&marker)
         {
             found_message = true;

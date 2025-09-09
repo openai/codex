@@ -7,10 +7,12 @@ use crate::codex_conversation::CodexConversation;
 use crate::config::Config;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
+use crate::event_mapping::map_response_item_to_event_messages;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::SessionConfiguredEvent;
 use crate::rollout::RolloutRecorder;
+use crate::rollout::recorder::RolloutItem;
 use codex_protocol::mcp_protocol::ConversationId;
 use codex_protocol::models::ResponseItem;
 use std::collections::HashMap;
@@ -21,7 +23,7 @@ use tokio::sync::RwLock;
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResumedHistory {
     pub conversation_id: ConversationId,
-    pub history: Vec<ResponseItem>,
+    pub history: Vec<RolloutItem>,
     pub rollout_path: PathBuf,
 }
 
@@ -29,7 +31,64 @@ pub struct ResumedHistory {
 pub enum InitialHistory {
     New,
     Resumed(ResumedHistory),
-    Forked(Vec<ResponseItem>),
+    Forked(Vec<RolloutItem>),
+}
+
+// impl get_response_items and get_event_msgs
+impl InitialHistory {
+    pub fn get_response_items(&self) -> Vec<ResponseItem> {
+        match self {
+            InitialHistory::New => Vec::new(),
+            InitialHistory::Resumed(resumed) => resumed
+                .history
+                .iter()
+                .filter_map(|ri| match ri {
+                    RolloutItem::ResponseItem(item) => Some(item.clone()),
+                    _ => None,
+                })
+                .collect(),
+            InitialHistory::Forked(items) => items
+                .iter()
+                .filter_map(|ri| match ri {
+                    RolloutItem::ResponseItem(item) => Some(item.clone()),
+                    _ => None,
+                })
+                .collect(),
+        }
+    }
+    pub fn get_rollout_items(&self) -> Vec<RolloutItem> {
+        match self {
+            InitialHistory::New => Vec::new(),
+            InitialHistory::Resumed(resumed) => resumed.history.clone(),
+            InitialHistory::Forked(items) => items.clone(),
+        }
+    }
+    pub fn get_event_msgs(&self) -> Vec<EventMsg> {
+        match self {
+            InitialHistory::New => Vec::new(),
+            InitialHistory::Resumed(resumed) => resumed
+                .history
+                .iter()
+                .flat_map(|ri| match ri {
+                    RolloutItem::ResponseItem(item) => map_response_item_to_event_messages(
+                        item, /*show_raw_agent_reasoning=*/ false,
+                    ),
+                    RolloutItem::EventMsg(ev) => vec![ev.clone()],
+                    RolloutItem::SessionMeta(_) => Vec::new(),
+                })
+                .collect(),
+            InitialHistory::Forked(items) => items
+                .iter()
+                .flat_map(|ri| match ri {
+                    RolloutItem::ResponseItem(item) => map_response_item_to_event_messages(
+                        item, /*show_raw_agent_reasoning=*/ false,
+                    ),
+                    RolloutItem::EventMsg(ev) => vec![ev.clone()],
+                    RolloutItem::SessionMeta(_) => Vec::new(),
+                })
+                .collect(),
+        }
+    }
 }
 
 /// Represents a newly created Codex conversation, including the first event
@@ -178,7 +237,8 @@ impl ConversationManager {
 /// and all items that follow them.
 fn truncate_after_dropping_last_messages(items: Vec<ResponseItem>, n: usize) -> InitialHistory {
     if n == 0 {
-        return InitialHistory::Forked(items);
+        let rolled: Vec<RolloutItem> = items.into_iter().map(RolloutItem::ResponseItem).collect();
+        return InitialHistory::Forked(rolled);
     }
 
     // Walk backwards counting only `user` Message items, find cut index.
@@ -200,7 +260,12 @@ fn truncate_after_dropping_last_messages(items: Vec<ResponseItem>, n: usize) -> 
         // No prefix remains after dropping; start a new conversation.
         InitialHistory::New
     } else {
-        InitialHistory::Forked(items.into_iter().take(cut_index).collect())
+        let rolled: Vec<RolloutItem> = items
+            .into_iter()
+            .take(cut_index)
+            .map(RolloutItem::ResponseItem)
+            .collect();
+        InitialHistory::Forked(rolled)
     }
 }
 
@@ -258,7 +323,11 @@ mod tests {
         let truncated = truncate_after_dropping_last_messages(items.clone(), 1);
         assert_eq!(
             truncated,
-            InitialHistory::Forked(vec![items[0].clone(), items[1].clone(), items[2].clone(),])
+            InitialHistory::Forked(vec![
+                RolloutItem::ResponseItem(items[0].clone()),
+                RolloutItem::ResponseItem(items[1].clone()),
+                RolloutItem::ResponseItem(items[2].clone()),
+            ])
         );
 
         let truncated2 = truncate_after_dropping_last_messages(items, 2);
