@@ -700,13 +700,7 @@ mod tests {
 
         assert_eq_tool_names(
             &tools,
-            &[
-                "local_shell",
-                "unified_exec",
-                "update_plan",
-                "web_search",
-                "view_image",
-            ],
+            &["unified_exec", "update_plan", "web_search", "view_image"],
         );
     }
 
@@ -728,13 +722,7 @@ mod tests {
 
         assert_eq_tool_names(
             &tools,
-            &[
-                "shell",
-                "unified_exec",
-                "update_plan",
-                "web_search",
-                "view_image",
-            ],
+            &["unified_exec", "update_plan", "web_search", "view_image"],
         );
     }
 
@@ -793,7 +781,6 @@ mod tests {
         assert_eq_tool_names(
             &tools,
             &[
-                "shell",
                 "unified_exec",
                 "web_search",
                 "view_image",
@@ -802,7 +789,7 @@ mod tests {
         );
 
         assert_eq!(
-            tools[4],
+            tools[3],
             OpenAiTool::Function(ResponsesApiTool {
                 name: "test_server/do_something_cool".to_string(),
                 parameters: JsonSchema::Object {
@@ -910,11 +897,10 @@ mod tests {
         ]);
 
         let tools = get_openai_tools(&config, Some(tools_map));
-        // Expect shell first, followed by MCP tools sorted by fully-qualified name.
+        // Expect unified_exec first, followed by MCP tools sorted by fully-qualified name.
         assert_eq_tool_names(
             &tools,
             &[
-                "shell",
                 "unified_exec",
                 "view_image",
                 "test_server/cool",
@@ -964,17 +950,11 @@ mod tests {
 
         assert_eq_tool_names(
             &tools,
-            &[
-                "shell",
-                "unified_exec",
-                "web_search",
-                "view_image",
-                "dash/search",
-            ],
+            &["unified_exec", "web_search", "view_image", "dash/search"],
         );
 
         assert_eq!(
-            tools[4],
+            tools[3],
             OpenAiTool::Function(ResponsesApiTool {
                 name: "dash/search".to_string(),
                 parameters: JsonSchema::Object {
@@ -1031,16 +1011,10 @@ mod tests {
 
         assert_eq_tool_names(
             &tools,
-            &[
-                "shell",
-                "unified_exec",
-                "web_search",
-                "view_image",
-                "dash/paginate",
-            ],
+            &["unified_exec", "web_search", "view_image", "dash/paginate"],
         );
         assert_eq!(
-            tools[4],
+            tools[3],
             OpenAiTool::Function(ResponsesApiTool {
                 name: "dash/paginate".to_string(),
                 parameters: JsonSchema::Object {
@@ -1095,16 +1069,10 @@ mod tests {
 
         assert_eq_tool_names(
             &tools,
-            &[
-                "shell",
-                "unified_exec",
-                "web_search",
-                "view_image",
-                "dash/tags",
-            ],
+            &["unified_exec", "web_search", "view_image", "dash/tags"],
         );
         assert_eq!(
-            tools[4],
+            tools[3],
             OpenAiTool::Function(ResponsesApiTool {
                 name: "dash/tags".to_string(),
                 parameters: JsonSchema::Object {
@@ -1162,16 +1130,10 @@ mod tests {
 
         assert_eq_tool_names(
             &tools,
-            &[
-                "shell",
-                "unified_exec",
-                "web_search",
-                "view_image",
-                "dash/value",
-            ],
+            &["unified_exec", "web_search", "view_image", "dash/value"],
         );
         assert_eq!(
-            tools[4],
+            tools[3],
             OpenAiTool::Function(ResponsesApiTool {
                 name: "dash/value".to_string(),
                 parameters: JsonSchema::Object {

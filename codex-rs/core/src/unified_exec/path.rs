@@ -1,7 +1,3 @@
-use std::env;
-use std::path::Path;
-use std::path::PathBuf;
-
 use super::errors::UnifiedExecError;
 
 pub(crate) fn resolve_command_path(command: &str) -> Result<String, UnifiedExecError> {
@@ -9,81 +5,78 @@ pub(crate) fn resolve_command_path(command: &str) -> Result<String, UnifiedExecE
         return Err(UnifiedExecError::MissingCommandLine);
     }
 
-    if is_explicit_path(command) {
-        return ensure_executable(Path::new(command))
-            .then_some(command.to_string())
-            .ok_or_else(|| UnifiedExecError::CommandNotFound {
-                command: command.to_string(),
-            });
-    }
-
-    if let Some(resolved) = find_in_path(command) {
-        return Ok(resolved.to_string_lossy().to_string());
-    }
-
-    Err(UnifiedExecError::CommandNotFound {
-        command: command.to_string(),
-    })
+    // Which is the most portable option regarding its current implementation.
+    which::which(command)
+        .map(|path| path.to_string_lossy().into_owned())
+        .map_err(|_| UnifiedExecError::CommandNotFound {
+            command: command.to_string(),
+        })
 }
 
-fn is_explicit_path(command: &str) -> bool {
-    let path = Path::new(command);
-    path.is_absolute() || path.components().count() > 1
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
 
-fn find_in_path(command: &str) -> Option<PathBuf> {
-    let path_var = env::var_os("PATH")?;
-    env::split_paths(&path_var)
-        .flat_map(|dir| candidate_paths(dir, command))
-        .find(|candidate| ensure_executable(candidate))
-}
+    #[test]
+    fn returns_error_when_command_is_empty() {
+        let error = resolve_command_path("");
 
-fn candidate_paths(dir: PathBuf, command: &str) -> Vec<PathBuf> {
-    build_platform_candidates(dir.join(command))
-}
-
-#[cfg(unix)]
-fn build_platform_candidates(candidate: PathBuf) -> Vec<PathBuf> {
-    vec![candidate]
-}
-
-#[cfg(windows)]
-fn build_platform_candidates(candidate: PathBuf) -> Vec<PathBuf> {
-    if candidate.extension().is_some() {
-        return vec![candidate];
-    }
-
-    let pathext = env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string());
-    let mut candidates = Vec::new();
-    for ext in pathext.split(';') {
-        if ext.is_empty() {
-            continue;
+        match error {
+            Err(UnifiedExecError::MissingCommandLine) => {}
+            other => panic!("expected MissingCommandLine error, got {other:?}"),
         }
-        let mut path_with_ext = candidate.clone();
-        let new_ext = ext.trim_start_matches('.');
-        path_with_ext.set_extension(new_ext);
-        candidates.push(path_with_ext);
     }
-    if candidates.is_empty() {
-        candidates.push(candidate);
+
+    #[test]
+    fn returns_error_when_command_cannot_be_found() {
+        let error = resolve_command_path("this-command-should-not-exist");
+
+        match error {
+            Err(UnifiedExecError::CommandNotFound { command }) => {
+                assert_eq!(command, "this-command-should-not-exist");
+            }
+            other => panic!("expected CommandNotFound error, got {other:?}"),
+        }
     }
-    candidates
-}
 
-fn ensure_executable(path: &Path) -> bool {
-    match path.metadata() {
-        Ok(metadata) => metadata.is_file() && is_executable(&metadata),
-        Err(_) => false,
+    #[test]
+    fn resolves_absolute_command_path() {
+        let temp_dir = tempdir().expect("tempdir should be created");
+        let command_name = if cfg!(windows) {
+            "codex-test-command.bat"
+        } else {
+            "codex-test-command"
+        };
+        let command_path = temp_dir.path().join(command_name);
+
+        let command_contents = if cfg!(windows) {
+            "@echo off\nexit /b 0\n"
+        } else {
+            "#!/bin/sh\necho codex\n"
+        };
+
+        std::fs::write(&command_path, command_contents).expect("command file should be writeable");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+
+            let mut permissions = std::fs::metadata(&command_path)
+                .expect("metadata should be readable")
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&command_path, permissions)
+                .expect("permissions should be set");
+        }
+
+        let absolute_path = command_path
+            .to_str()
+            .expect("absolute path should convert to string");
+
+        let resolved_path =
+            resolve_command_path(absolute_path).expect("resolver should return an absolute path");
+
+        assert_eq!(resolved_path, absolute_path);
     }
-}
-
-#[cfg(unix)]
-fn is_executable(metadata: &std::fs::Metadata) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    metadata.permissions().mode() & 0o111 != 0
-}
-
-#[cfg(not(unix))]
-fn is_executable(metadata: &std::fs::Metadata) -> bool {
-    metadata.is_file()
 }
