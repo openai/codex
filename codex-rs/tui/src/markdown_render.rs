@@ -413,9 +413,9 @@ where
         } else {
             Style::default()
         };
-        self.text.lines.push(
-            Line::from_iter([self.current_prefix_spans(), line.spans].concat()).set_style(style),
-        );
+        self.text
+            .lines
+            .push(Line::from_iter([self.current_prefix_spans(), line.spans].concat()).style(style));
     }
 
     fn push_span(&mut self, span: Span<'static>) {
