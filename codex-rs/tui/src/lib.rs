@@ -217,6 +217,7 @@ pub async fn run_main(
     let file_layer = tracing_subscriber::fmt::layer()
         .with_writer(non_blocking)
         .with_target(false)
+        .with_span_events(tracing_subscriber::fmt::format::FmtSpan::CLOSE)
         .with_filter(env_filter());
 
     if cli.oss {

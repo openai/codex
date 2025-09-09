@@ -258,9 +258,11 @@ pub(crate) struct OutgoingError {
 mod tests {
     use codex_core::protocol::EventMsg;
     use codex_core::protocol::SessionConfiguredEvent;
+    use codex_protocol::mcp_protocol::ConversationId;
     use codex_protocol::mcp_protocol::LoginChatGptCompleteNotification;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use tempfile::NamedTempFile;
     use uuid::Uuid;
 
     use super::*;
@@ -270,14 +272,17 @@ mod tests {
         let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel::<OutgoingMessage>();
         let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
 
+        let conversation_id = ConversationId::new();
+        let rollout_file = NamedTempFile::new().unwrap();
         let event = Event {
             id: "1".to_string(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                session_id: Uuid::new_v4(),
+                session_id: conversation_id,
                 model: "gpt-4o".to_string(),
                 history_log_id: 1,
                 history_entry_count: 1000,
                 initial_messages: None,
+                rollout_path: rollout_file.path().to_path_buf(),
             }),
         };
 
@@ -302,12 +307,15 @@ mod tests {
         let (outgoing_tx, mut outgoing_rx) = mpsc::unbounded_channel::<OutgoingMessage>();
         let outgoing_message_sender = OutgoingMessageSender::new(outgoing_tx);
 
+        let conversation_id = ConversationId::new();
+        let rollout_file = NamedTempFile::new().unwrap();
         let session_configured_event = SessionConfiguredEvent {
-            session_id: Uuid::new_v4(),
+            session_id: conversation_id,
             model: "gpt-4o".to_string(),
             history_log_id: 1,
             history_entry_count: 1000,
             initial_messages: None,
+            rollout_path: rollout_file.path().to_path_buf(),
         };
         let event = Event {
             id: "1".to_string(),
@@ -337,6 +345,7 @@ mod tests {
                 "history_log_id": session_configured_event.history_log_id,
                 "history_entry_count": session_configured_event.history_entry_count,
                 "type": "session_configured",
+                "rollout_path": rollout_file.path().to_path_buf(),
             }
         });
         assert_eq!(params.unwrap(), expected_params);

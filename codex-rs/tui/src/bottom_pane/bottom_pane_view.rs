@@ -19,7 +19,7 @@ pub(crate) trait BottomPaneView {
 
     /// Handle Ctrl-C while this view is active.
     fn on_ctrl_c(&mut self, _pane: &mut BottomPane) -> CancellationEvent {
-        CancellationEvent::Ignored
+        CancellationEvent::NotHandled
     }
 
     /// Return the desired height of the view.
