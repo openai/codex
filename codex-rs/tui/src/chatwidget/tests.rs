@@ -25,6 +25,7 @@ use codex_core::protocol::PatchApplyEndEvent;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TaskStartedEvent;
+use codex_protocol::mcp_protocol::ConversationId;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyModifiers;
@@ -35,11 +36,10 @@ use std::io::BufRead;
 use std::io::BufReader;
 use std::path::PathBuf;
 use tokio::sync::mpsc::unbounded_channel;
-use uuid::Uuid;
 
 fn test_config() -> Config {
     // Use base defaults to avoid depending on host state.
-    codex_core::config::Config::load_from_base_config_with_overrides(
+    Config::load_from_base_config_with_overrides(
         ConfigToml::default(),
         ConfigOverrides::default(),
         std::env::temp_dir(),
@@ -79,7 +79,7 @@ fn final_answer_without_newline_is_flushed_immediately() {
     // Set up a VT100 test terminal to capture ANSI visual output
     let width: u16 = 80;
     let height: u16 = 2000;
-    let viewport = ratatui::layout::Rect::new(0, height - 1, width, 1);
+    let viewport = Rect::new(0, height - 1, width, 1);
     let backend = ratatui::backend::TestBackend::new(width, height);
     let mut terminal = crate::custom_terminal::Terminal::with_options(backend)
         .expect("failed to construct terminal");
@@ -132,13 +132,15 @@ fn final_answer_without_newline_is_flushed_immediately() {
 fn resumed_initial_messages_render_history() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual();
 
+    let conversation_id = ConversationId::new();
+
     let configured = codex_core::protocol::SessionConfiguredEvent {
-        session_id: Uuid::nil(),
+        session_id: conversation_id,
         model: "test-model".to_string(),
         history_log_id: 0,
         history_entry_count: 0,
         initial_messages: Some(vec![
-            EventMsg::UserMessage(codex_core::protocol::UserMessageEvent {
+            EventMsg::UserMessage(UserMessageEvent {
                 message: "hello from user".to_string(),
                 kind: Some(InputMessageKind::Plain),
             }),
@@ -175,6 +177,10 @@ fn resumed_initial_messages_render_history() {
     );
 }
 
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "system configuration APIs are blocked under macOS seatbelt"
+)]
 #[tokio::test(flavor = "current_thread")]
 async fn helpers_are_available_and_do_not_panic() {
     let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
@@ -185,7 +191,7 @@ async fn helpers_are_available_and_do_not_panic() {
     )));
     let init = ChatWidgetInit {
         config: cfg,
-        frame_requester: crate::tui::FrameRequester::test_dummy(),
+        frame_requester: FrameRequester::test_dummy(),
         app_event_tx: tx,
         initial_prompt: None,
         initial_images: Vec::new(),
@@ -208,7 +214,7 @@ fn make_chatwidget_manual() -> (
     let cfg = test_config();
     let bottom = BottomPane::new(BottomPaneParams {
         app_event_tx: app_event_tx.clone(),
-        frame_requester: crate::tui::FrameRequester::test_dummy(),
+        frame_requester: FrameRequester::test_dummy(),
         has_input_focus: true,
         enhanced_keys_supported: false,
         placeholder_text: "Ask Codex to do anything".to_string(),
@@ -221,18 +227,17 @@ fn make_chatwidget_manual() -> (
         active_exec_cell: None,
         config: cfg.clone(),
         initial_user_message: None,
-        total_token_usage: TokenUsage::default(),
-        last_token_usage: TokenUsage::default(),
+        token_info: None,
         stream: StreamController::new(cfg),
         running_commands: HashMap::new(),
         task_complete_pending: false,
         interrupts: InterruptManager::new(),
         reasoning_buffer: String::new(),
         full_reasoning_buffer: String::new(),
-        session_id: None,
-        frame_requester: crate::tui::FrameRequester::test_dummy(),
+        conversation_id: None,
+        frame_requester: FrameRequester::test_dummy(),
         show_welcome_banner: true,
-        queued_user_messages: std::collections::VecDeque::new(),
+        queued_user_messages: VecDeque::new(),
         suppress_session_configured_redraw: false,
     };
     (widget, rx, op_rx)
@@ -368,11 +373,10 @@ fn begin_exec(chat: &mut ChatWidget, call_id: &str, raw_cmd: &str) {
     // Build the full command vec and parse it using core's parser,
     // then convert to protocol variants for the event payload.
     let command = vec!["bash".to_string(), "-lc".to_string(), raw_cmd.to_string()];
-    let parsed_cmd: Vec<codex_protocol::parse_command::ParsedCommand> =
-        codex_core::parse_command::parse_command(&command)
-            .into_iter()
-            .map(Into::into)
-            .collect();
+    let parsed_cmd: Vec<ParsedCommand> = codex_core::parse_command::parse_command(&command)
+        .into_iter()
+        .map(Into::into)
+        .collect();
     chat.handle_codex_event(Event {
         id: call_id.to_string(),
         msg: EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
@@ -413,7 +417,7 @@ fn active_blob(chat: &ChatWidget) -> String {
     lines_to_single_string(&lines)
 }
 
-fn open_fixture(name: &str) -> std::fs::File {
+fn open_fixture(name: &str) -> File {
     // 1) Prefer fixtures within this crate
     {
         let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -621,7 +625,7 @@ async fn binary_size_transcript_snapshot() {
     // Set up a VT100 test terminal to capture ANSI visual output
     let width: u16 = 80;
     let height: u16 = 2000;
-    let viewport = ratatui::layout::Rect::new(0, height - 1, width, 1);
+    let viewport = Rect::new(0, height - 1, width, 1);
     let backend = ratatui::backend::TestBackend::new(width, height);
     let mut terminal = crate::custom_terminal::Terminal::with_options(backend)
         .expect("failed to construct terminal");
@@ -806,7 +810,7 @@ fn approval_modal_exec_snapshot() {
     // Build a chat widget with manual channels to avoid spawning the agent.
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
     // Ensure policy allows surfacing approvals explicitly (not strictly required for direct event).
-    chat.config.approval_policy = codex_core::protocol::AskForApproval::OnRequest;
+    chat.config.approval_policy = AskForApproval::OnRequest;
     // Inject an exec approval request to display the approval modal.
     let ev = ExecApprovalRequestEvent {
         call_id: "call-approve-cmd".into(),
@@ -836,7 +840,7 @@ fn approval_modal_exec_snapshot() {
 #[test]
 fn approval_modal_exec_without_reason_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
-    chat.config.approval_policy = codex_core::protocol::AskForApproval::OnRequest;
+    chat.config.approval_policy = AskForApproval::OnRequest;
 
     let ev = ExecApprovalRequestEvent {
         call_id: "call-approve-cmd-noreason".into(),
@@ -862,10 +866,10 @@ fn approval_modal_exec_without_reason_snapshot() {
 #[test]
 fn approval_modal_patch_snapshot() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
-    chat.config.approval_policy = codex_core::protocol::AskForApproval::OnRequest;
+    chat.config.approval_policy = AskForApproval::OnRequest;
 
     // Build a small changeset and a reason/grant_root to exercise the prompt text.
-    let mut changes = std::collections::HashMap::new();
+    let mut changes = HashMap::new();
     changes.insert(
         PathBuf::from("README.md"),
         FileChange::Add {
@@ -911,7 +915,7 @@ fn interrupt_restores_queued_messages_into_composer() {
     chat.handle_codex_event(Event {
         id: "turn-1".into(),
         msg: EventMsg::TurnAborted(codex_core::protocol::TurnAbortedEvent {
-            reason: codex_core::protocol::TurnAbortReason::Interrupted,
+            reason: TurnAbortReason::Interrupted,
         }),
     });
 
@@ -1345,7 +1349,7 @@ fn apply_patch_full_flow_integration_like() {
 fn apply_patch_untrusted_shows_approval_modal() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual();
     // Ensure approval policy is untrusted (OnRequest)
-    chat.config.approval_policy = codex_core::protocol::AskForApproval::OnRequest;
+    chat.config.approval_policy = AskForApproval::OnRequest;
 
     // Simulate a patch approval request from backend
     let mut changes = HashMap::new();
@@ -1364,8 +1368,8 @@ fn apply_patch_untrusted_shows_approval_modal() {
     });
 
     // Render and ensure the approval modal title is present
-    let area = ratatui::layout::Rect::new(0, 0, 80, 12);
-    let mut buf = ratatui::buffer::Buffer::empty(area);
+    let area = Rect::new(0, 0, 80, 12);
+    let mut buf = Buffer::empty(area);
     (&chat).render_ref(area, &mut buf);
 
     let mut contains_title = false;
@@ -1390,7 +1394,7 @@ fn apply_patch_request_shows_diff_summary() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
 
     // Ensure we are in OnRequest so an approval is surfaced
-    chat.config.approval_policy = codex_core::protocol::AskForApproval::OnRequest;
+    chat.config.approval_policy = AskForApproval::OnRequest;
 
     // Simulate backend asking to apply a patch adding two lines to README.md
     let mut changes = HashMap::new();
@@ -1692,7 +1696,7 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     let width: u16 = 80;
     let ui_height: u16 = chat.desired_height(width);
     let vt_height: u16 = 40;
-    let viewport = ratatui::layout::Rect::new(0, vt_height - ui_height, width, ui_height);
+    let viewport = Rect::new(0, vt_height - ui_height, width, ui_height);
 
     // Use TestBackend for the terminal (no real ANSI emitted by drawing),
     // but capture VT100 escape stream for history insertion with a separate writer.
@@ -1707,7 +1711,7 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     }
 
     // 2) Render the ChatWidget UI into an off-screen buffer using WidgetRef directly
-    let mut ui_buf = ratatui::buffer::Buffer::empty(viewport);
+    let mut ui_buf = Buffer::empty(viewport);
     (&chat).render_ref(viewport, &mut ui_buf);
 
     // 3) Build VT100 visual from the captured ANSI

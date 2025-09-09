@@ -15,6 +15,7 @@ use async_channel::Sender;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
+use codex_protocol::mcp_protocol::ConversationId;
 use codex_protocol::protocol::ConversationHistoryResponseEvent;
 use codex_protocol::protocol::TaskStartedEvent;
 use codex_protocol::protocol::TurnAbortReason;
@@ -31,7 +32,6 @@ use tracing::error;
 use tracing::info;
 use tracing::trace;
 use tracing::warn;
-use uuid::Uuid;
 
 use crate::ModelProviderInfo;
 use crate::apply_patch;
@@ -100,9 +100,11 @@ use crate::protocol::SessionConfiguredEvent;
 use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
 use crate::protocol::TaskCompleteEvent;
+use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnDiffEvent;
 use crate::protocol::WebSearchBeginEvent;
 use crate::rollout::RolloutRecorder;
+use crate::rollout::RolloutRecorderParams;
 use crate::safety::SafetyCheck;
 use crate::safety::assess_command_safety;
 use crate::safety::assess_safety_for_untrusted_command;
@@ -150,7 +152,7 @@ pub struct Codex {
 /// unique session id.
 pub struct CodexSpawnOk {
     pub codex: Codex,
-    pub session_id: Uuid,
+    pub conversation_id: ConversationId,
 }
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
@@ -206,7 +208,7 @@ impl Codex {
         session
             .record_initial_history(&turn_context, conversation_history)
             .await;
-        let session_id = session.session_id;
+        let conversation_id = session.conversation_id;
 
         // This task will run until Op::Shutdown is received.
         tokio::spawn(submission_loop(
@@ -221,7 +223,10 @@ impl Codex {
             rx_event,
         };
 
-        Ok(CodexSpawnOk { codex, session_id })
+        Ok(CodexSpawnOk {
+            codex,
+            conversation_id,
+        })
     }
 
     /// Submit the `op` wrapped in a `Submission` with a unique ID.
@@ -263,13 +268,14 @@ struct State {
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
     pending_input: Vec<ResponseInputItem>,
     history: ConversationHistory,
+    token_info: Option<TokenUsageInfo>,
 }
 
 /// Context for an initialized model agent
 ///
 /// A session has at most 1 running task at a time, and can be interrupted by user input.
 pub(crate) struct Session {
-    session_id: Uuid,
+    conversation_id: ConversationId,
     tx_event: Sender<Event>,
 
     /// Manager for external MCP servers/tools.
@@ -359,7 +365,6 @@ impl Session {
         tx_event: Sender<Event>,
         initial_history: InitialHistory,
     ) -> anyhow::Result<(Arc<Self>, TurnContext)> {
-        let session_id = Uuid::new_v4();
         let ConfigureSession {
             provider,
             model,
@@ -377,6 +382,20 @@ impl Session {
             return Err(anyhow::anyhow!("cwd is not absolute: {cwd:?}"));
         }
 
+        let (conversation_id, rollout_params) = match &initial_history {
+            InitialHistory::New | InitialHistory::Forked(_) => {
+                let conversation_id = ConversationId::default();
+                (
+                    conversation_id,
+                    RolloutRecorderParams::new(conversation_id, user_instructions.clone()),
+                )
+            }
+            InitialHistory::Resumed(resumed_history) => (
+                resumed_history.conversation_id,
+                RolloutRecorderParams::resume(resumed_history.rollout_path.clone()),
+            ),
+        };
+
         // Error messages to dispatch after SessionConfigured is sent.
         let mut post_session_configured_error_events = Vec::<Event>::new();
 
@@ -386,7 +405,7 @@ impl Session {
         // - spin up MCP connection manager
         // - perform default shell discovery
         // - load history metadata
-        let rollout_fut = RolloutRecorder::new(&config, session_id, user_instructions.clone());
+        let rollout_fut = RolloutRecorder::new(&config, rollout_params);
 
         let mcp_fut = McpConnectionManager::new(config.mcp_servers.clone());
         let default_shell_fut = shell::default_user_shell();
@@ -432,7 +451,7 @@ impl Session {
             }
         }
 
-        // Now that `session_id` is final (may have been updated by resume),
+        // Now that the conversation id is final (may have been updated by resume),
         // construct the model client.
         let client = ModelClient::new(
             config.clone(),
@@ -440,7 +459,7 @@ impl Session {
             provider.clone(),
             model_reasoning_effort,
             model_reasoning_summary,
-            session_id,
+            conversation_id,
         );
         let turn_context = TurnContext {
             client,
@@ -463,7 +482,7 @@ impl Session {
             cwd,
         };
         let sess = Arc::new(Session {
-            session_id,
+            conversation_id,
             tx_event: tx_event.clone(),
             mcp_connection_manager,
             session_manager: ExecSessionManager::default(),
@@ -480,13 +499,16 @@ impl Session {
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
         let initial_messages = match &initial_history {
             InitialHistory::New => None,
-            InitialHistory::Resumed(items) => Some(sess.build_initial_messages(items)),
+            InitialHistory::Forked(items) => Some(sess.build_initial_messages(items)),
+            InitialHistory::Resumed(resumed_history) => {
+                Some(sess.build_initial_messages(&resumed_history.history))
+            }
         };
 
         let events = std::iter::once(Event {
             id: INITIAL_SUBMIT_ID.to_owned(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                session_id,
+                session_id: conversation_id,
                 model,
                 history_log_id,
                 history_entry_count,
@@ -529,8 +551,12 @@ impl Session {
             InitialHistory::New => {
                 self.record_initial_history_new(turn_context).await;
             }
-            InitialHistory::Resumed(items) => {
-                self.record_initial_history_resumed(items).await;
+            InitialHistory::Forked(items) => {
+                self.record_initial_history_from_items(items).await;
+            }
+            InitialHistory::Resumed(resumed_history) => {
+                self.record_initial_history_from_items(resumed_history.history)
+                    .await;
             }
         }
     }
@@ -552,8 +578,8 @@ impl Session {
         self.record_conversation_items(&conversation_items).await;
     }
 
-    async fn record_initial_history_resumed(&self, items: Vec<ResponseItem>) {
-        self.record_conversation_items(&items).await;
+    async fn record_initial_history_from_items(&self, items: Vec<ResponseItem>) {
+        self.record_conversation_items_internal(&items, false).await;
     }
 
     /// build the initial messages vector for SessionConfigured by converting
@@ -662,8 +688,14 @@ impl Session {
     /// Records items to both the rollout and the chat completions/ZDR
     /// transcript, if enabled.
     async fn record_conversation_items(&self, items: &[ResponseItem]) {
+        self.record_conversation_items_internal(items, true).await;
+    }
+
+    async fn record_conversation_items_internal(&self, items: &[ResponseItem], persist: bool) {
         debug!("Recording items for conversation: {items:?}");
-        self.record_state_snapshot(items).await;
+        if persist {
+            self.record_state_snapshot(items).await;
+        }
 
         self.state.lock_unchecked().history.record_items(items);
     }
@@ -1087,7 +1119,7 @@ async fn submission_loop(
                     provider,
                     effective_effort,
                     effective_summary,
-                    sess.session_id,
+                    sess.conversation_id,
                 );
 
                 let new_approval_policy = approval_policy.unwrap_or(prev.approval_policy);
@@ -1176,7 +1208,7 @@ async fn submission_loop(
                         provider,
                         effort,
                         summary,
-                        sess.session_id,
+                        sess.conversation_id,
                     );
 
                     let fresh_turn_context = TurnContext {
@@ -1221,7 +1253,7 @@ async fn submission_loop(
                 other => sess.notify_approval(&id, other),
             },
             Op::AddToHistory { text } => {
-                let id = sess.session_id;
+                let id = sess.conversation_id;
                 let config = config.clone();
                 tokio::spawn(async move {
                     if let Err(e) = crate::message_history::append_entry(&text, &id, &config).await
@@ -1252,7 +1284,7 @@ async fn submission_loop(
                                 log_id,
                                 entry: entry_opt.map(|e| {
                                     codex_protocol::message_history::HistoryEntry {
-                                        session_id: e.session_id,
+                                        conversation_id: e.session_id,
                                         ts: e.ts,
                                         text: e.text,
                                     }
@@ -1358,7 +1390,7 @@ async fn submission_loop(
                 let event = Event {
                     id: sub_id.clone(),
                     msg: EventMsg::ConversationHistory(ConversationHistoryResponseEvent {
-                        conversation_id: sess.session_id,
+                        conversation_id: sess.conversation_id,
                         entries: sess.state.lock_unchecked().history.contents(),
                     }),
                 };
@@ -1775,15 +1807,23 @@ async fn try_run_turn(
                 response_id: _,
                 token_usage,
             } => {
-                if let Some(token_usage) = token_usage {
-                    sess.tx_event
-                        .send(Event {
-                            id: sub_id.to_string(),
-                            msg: EventMsg::TokenCount(token_usage),
-                        })
-                        .await
-                        .ok();
-                }
+                let info = {
+                    let mut st = sess.state.lock_unchecked();
+                    let info = TokenUsageInfo::new_or_append(
+                        &st.token_info,
+                        &token_usage,
+                        turn_context.client.get_model_context_window(),
+                    );
+                    st.token_info = info.clone();
+                    info
+                };
+                sess.tx_event
+                    .send(Event {
+                        id: sub_id.to_string(),
+                        msg: EventMsg::TokenCount(crate::protocol::TokenCountEvent { info }),
+                    })
+                    .await
+                    .ok();
 
                 let unified_diff = turn_diff_tracker.get_unified_diff();
                 if let Ok(Some(unified_diff)) = unified_diff {
@@ -2947,13 +2987,21 @@ async fn drain_to_completed(
                 response_id: _,
                 token_usage,
             }) => {
-                // some providers don't return token usage, so we default
-                // TODO: consider approximate token usage
-                let token_usage = token_usage.unwrap_or_default();
+                let info = {
+                    let mut st = sess.state.lock_unchecked();
+                    let info = TokenUsageInfo::new_or_append(
+                        &st.token_info,
+                        &token_usage,
+                        turn_context.client.get_model_context_window(),
+                    );
+                    st.token_info = info.clone();
+                    info
+                };
+
                 sess.tx_event
                     .send(Event {
                         id: sub_id.to_string(),
-                        msg: EventMsg::TokenCount(token_usage),
+                        msg: EventMsg::TokenCount(crate::protocol::TokenCountEvent { info }),
                     })
                     .await
                     .ok();

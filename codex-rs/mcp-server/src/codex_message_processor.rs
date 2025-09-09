@@ -1,8 +1,3 @@
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
-
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::json_to_toml::json_to_toml;
@@ -14,11 +9,13 @@ use codex_core::ConversationManager;
 use codex_core::Cursor as RolloutCursor;
 use codex_core::NewConversation;
 use codex_core::RolloutRecorder;
+use codex_core::SessionMeta;
 use codex_core::auth::CLIENT_ID;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
 use codex_core::config::load_config_as_toml;
+use codex_core::default_client::get_codex_user_agent;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
 use codex_core::get_platform_sandbox;
@@ -48,6 +45,7 @@ use codex_protocol::mcp_protocol::ExecArbitraryCommandResponse;
 use codex_protocol::mcp_protocol::ExecCommandApprovalParams;
 use codex_protocol::mcp_protocol::ExecCommandApprovalResponse;
 use codex_protocol::mcp_protocol::ExecOneOffCommandParams;
+use codex_protocol::mcp_protocol::GetUserAgentResponse;
 use codex_protocol::mcp_protocol::GetUserSavedConfigResponse;
 use codex_protocol::mcp_protocol::GitDiffToRemoteResponse;
 use codex_protocol::mcp_protocol::InputItem as WireInputItem;
@@ -68,8 +66,16 @@ use codex_protocol::mcp_protocol::SendUserTurnParams;
 use codex_protocol::mcp_protocol::SendUserTurnResponse;
 use codex_protocol::mcp_protocol::ServerNotification;
 use codex_protocol::mcp_protocol::UserSavedConfig;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::InputMessageKind;
+use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 use mcp_types::JSONRPCErrorError;
 use mcp_types::RequestId;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tracing::error;
@@ -99,7 +105,7 @@ pub(crate) struct CodexMessageProcessor {
     conversation_listeners: HashMap<Uuid, oneshot::Sender<()>>,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
     // Queue of pending interrupt requests per conversation. We reply when TurnAborted arrives.
-    pending_interrupts: Arc<Mutex<HashMap<Uuid, Vec<RequestId>>>>,
+    pending_interrupts: Arc<Mutex<HashMap<ConversationId, Vec<RequestId>>>>,
 }
 
 impl CodexMessageProcessor {
@@ -168,6 +174,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::GetUserSavedConfig { request_id } => {
                 self.get_user_saved_config(request_id).await;
+            }
+            ClientRequest::GetUserAgent { request_id } => {
+                self.get_user_agent(request_id).await;
             }
             ClientRequest::ExecOneOffCommand { request_id, params } => {
                 self.exec_one_off_command(request_id, params).await;
@@ -384,6 +393,12 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
+    async fn get_user_agent(&self, request_id: RequestId) {
+        let user_agent = get_codex_user_agent(Some(&self.config.responses_originator_header));
+        let response = GetUserAgentResponse { user_agent };
+        self.outgoing.send_response(request_id, response).await;
+    }
+
     async fn get_user_saved_config(&self, request_id: RequestId) {
         let toml_value = match load_config_as_toml(&self.config.codex_home) {
             Ok(val) => val,
@@ -511,7 +526,7 @@ impl CodexMessageProcessor {
                     ..
                 } = conversation_id;
                 let response = NewConversationResponse {
-                    conversation_id: ConversationId(conversation_id),
+                    conversation_id,
                     model: session_configured.model,
                 };
                 self.outgoing.send_response(request_id, response).await;
@@ -559,16 +574,11 @@ impl CodexMessageProcessor {
             }
         };
 
-        // Build summaries
-        let mut items: Vec<ConversationSummary> = Vec::new();
-        for it in page.items.into_iter() {
-            let (timestamp, preview) = extract_ts_and_preview(&it.head);
-            items.push(ConversationSummary {
-                path: it.path,
-                preview,
-                timestamp,
-            });
-        }
+        let items = page
+            .items
+            .into_iter()
+            .filter_map(|it| extract_conversation_summary(it.path, &it.head))
+            .collect();
 
         // Encode next_cursor as a plain string
         let next_cursor = match page.next_cursor {
@@ -622,19 +632,29 @@ impl CodexMessageProcessor {
                 session_configured,
                 ..
             }) => {
-                let event = codex_core::protocol::Event {
+                let event = Event {
                     id: "".to_string(),
-                    msg: codex_core::protocol::EventMsg::SessionConfigured(
-                        session_configured.clone(),
-                    ),
+                    msg: EventMsg::SessionConfigured(session_configured.clone()),
                 };
                 self.outgoing.send_event_as_notification(&event, None).await;
+                let initial_messages = session_configured.initial_messages.map(|msgs| {
+                    msgs.into_iter()
+                        .filter(|event| {
+                            // Don't send non-plain user messages (like user instructions
+                            // or environment context) back so they don't get rendered.
+                            if let EventMsg::UserMessage(user_message) = event {
+                                return matches!(user_message.kind, Some(InputMessageKind::Plain));
+                            }
+                            true
+                        })
+                        .collect()
+                });
 
                 // Reply with conversation id + model and initial messages (when present)
                 let response = codex_protocol::mcp_protocol::ResumeConversationResponse {
-                    conversation_id: ConversationId(conversation_id),
+                    conversation_id,
                     model: session_configured.model.clone(),
-                    initial_messages: session_configured.initial_messages.clone(),
+                    initial_messages,
                 };
                 self.outgoing.send_response(request_id, response).await;
             }
@@ -656,7 +676,7 @@ impl CodexMessageProcessor {
         } = params;
         let Ok(conversation) = self
             .conversation_manager
-            .get_conversation(conversation_id.0)
+            .get_conversation(conversation_id)
             .await
         else {
             let error = JSONRPCErrorError {
@@ -704,7 +724,7 @@ impl CodexMessageProcessor {
 
         let Ok(conversation) = self
             .conversation_manager
-            .get_conversation(conversation_id.0)
+            .get_conversation(conversation_id)
             .await
         else {
             let error = JSONRPCErrorError {
@@ -750,7 +770,7 @@ impl CodexMessageProcessor {
         let InterruptConversationParams { conversation_id } = params;
         let Ok(conversation) = self
             .conversation_manager
-            .get_conversation(conversation_id.0)
+            .get_conversation(conversation_id)
             .await
         else {
             let error = JSONRPCErrorError {
@@ -765,7 +785,7 @@ impl CodexMessageProcessor {
         // Record the pending interrupt so we can reply when TurnAborted arrives.
         {
             let mut map = self.pending_interrupts.lock().await;
-            map.entry(conversation_id.0).or_default().push(request_id);
+            map.entry(conversation_id).or_default().push(request_id);
         }
 
         // Submit the interrupt; we'll respond upon TurnAborted.
@@ -780,12 +800,12 @@ impl CodexMessageProcessor {
         let AddConversationListenerParams { conversation_id } = params;
         let Ok(conversation) = self
             .conversation_manager
-            .get_conversation(conversation_id.0)
+            .get_conversation(conversation_id)
             .await
         else {
             let error = JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
-                message: format!("conversation not found: {}", conversation_id.0),
+                message: format!("conversation not found: {conversation_id}"),
                 data: None,
             };
             self.outgoing.send_error(request_id, error).await;
@@ -822,11 +842,11 @@ impl CodexMessageProcessor {
                         let mut params = match serde_json::to_value(event.clone()) {
                             Ok(serde_json::Value::Object(map)) => map,
                             Ok(_) => {
-                                tracing::error!("event did not serialize to an object");
+                                error!("event did not serialize to an object");
                                 continue;
                             }
                             Err(err) => {
-                                tracing::error!("failed to serialize event: {err}");
+                                error!("failed to serialize event: {err}");
                                 continue;
                             }
                         };
@@ -898,7 +918,7 @@ async fn apply_bespoke_event_handling(
     conversation_id: ConversationId,
     conversation: Arc<CodexConversation>,
     outgoing: Arc<OutgoingMessageSender>,
-    pending_interrupts: Arc<Mutex<HashMap<Uuid, Vec<RequestId>>>>,
+    pending_interrupts: Arc<Mutex<HashMap<ConversationId, Vec<RequestId>>>>,
 ) {
     let Event { id: event_id, msg } = event;
     match msg {
@@ -951,7 +971,7 @@ async fn apply_bespoke_event_handling(
         EventMsg::TurnAborted(turn_aborted_event) => {
             let pending = {
                 let mut map = pending_interrupts.lock().await;
-                map.remove(&conversation_id.0).unwrap_or_default()
+                map.remove(&conversation_id).unwrap_or_default()
             };
             if !pending.is_empty() {
                 let response = InterruptConversationResponse {
@@ -1009,7 +1029,7 @@ fn derive_config_from_params(
 
 async fn on_patch_approval_response(
     event_id: String,
-    receiver: tokio::sync::oneshot::Receiver<mcp_types::Result>,
+    receiver: oneshot::Receiver<mcp_types::Result>,
     codex: Arc<CodexConversation>,
 ) {
     let response = receiver.await;
@@ -1051,14 +1071,14 @@ async fn on_patch_approval_response(
 
 async fn on_exec_approval_response(
     event_id: String,
-    receiver: tokio::sync::oneshot::Receiver<mcp_types::Result>,
+    receiver: oneshot::Receiver<mcp_types::Result>,
     conversation: Arc<CodexConversation>,
 ) {
     let response = receiver.await;
     let value = match response {
         Ok(value) => value,
         Err(err) => {
-            tracing::error!("request failed: {err:?}");
+            error!("request failed: {err:?}");
             return;
         }
     };
@@ -1085,37 +1105,99 @@ async fn on_exec_approval_response(
     }
 }
 
-fn extract_ts_and_preview(head: &[serde_json::Value]) -> (Option<String>, String) {
-    let ts = head
-        .first()
-        .and_then(|v| v.get("timestamp"))
-        .and_then(|v| v.as_str())
-        .map(|s| s.to_string());
-    let preview = find_first_user_text(head).unwrap_or_default();
-    (ts, preview)
+fn extract_conversation_summary(
+    path: PathBuf,
+    head: &[serde_json::Value],
+) -> Option<ConversationSummary> {
+    let session_meta = match head.first() {
+        Some(first_line) => match serde_json::from_value::<SessionMeta>(first_line.clone()) {
+            Ok(session_meta) => session_meta,
+            Err(..) => return None,
+        },
+        None => return None,
+    };
+
+    let preview = head
+        .iter()
+        .filter_map(|value| serde_json::from_value::<ResponseItem>(value.clone()).ok())
+        .find_map(|item| match item {
+            ResponseItem::Message { content, .. } => {
+                content.into_iter().find_map(|content| match content {
+                    ContentItem::InputText { text } => {
+                        match InputMessageKind::from(("user", &text)) {
+                            InputMessageKind::Plain => Some(text),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                })
+            }
+            _ => None,
+        })?;
+
+    let preview = match preview.find(USER_MESSAGE_BEGIN) {
+        Some(idx) => preview[idx + USER_MESSAGE_BEGIN.len()..].trim(),
+        None => preview.as_str(),
+    };
+
+    let timestamp = if session_meta.timestamp.is_empty() {
+        None
+    } else {
+        Some(session_meta.timestamp.clone())
+    };
+
+    Some(ConversationSummary {
+        conversation_id: session_meta.id,
+        timestamp,
+        path,
+        preview: preview.to_string(),
+    })
 }
 
-fn find_first_user_text(head: &[serde_json::Value]) -> Option<String> {
-    use codex_core::protocol::InputMessageKind;
-    for v in head.iter() {
-        let t = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
-        if t != "message" {
-            continue;
-        }
-        if v.get("role").and_then(|x| x.as_str()) != Some("user") {
-            continue;
-        }
-        if let Some(arr) = v.get("content").and_then(|c| c.as_array()) {
-            for c in arr.iter() {
-                if let (Some("input_text"), Some(txt)) =
-                    (c.get("type").and_then(|t| t.as_str()), c.get("text"))
-                    && let Some(s) = txt.as_str()
-                    && matches!(InputMessageKind::from(("user", s)), InputMessageKind::Plain)
-                {
-                    return Some(s.to_string());
-                }
-            }
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+
+    #[test]
+    fn extract_conversation_summary_prefers_plain_user_messages() {
+        let conversation_id =
+            ConversationId(Uuid::parse_str("3f941c35-29b3-493b-b0a4-e25800d9aeb0").unwrap());
+        let timestamp = Some("2025-09-05T16:53:11.850Z".to_string());
+        let path = PathBuf::from("rollout.jsonl");
+
+        let head = vec![
+            json!({
+                "id": conversation_id.0,
+                "timestamp": timestamp,
+            }),
+            json!({
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": "<user_instructions>\n<AGENTS.md contents>\n</user_instructions>".to_string(),
+                }],
+            }),
+            json!({
+                "type": "message",
+                "role": "user",
+                "content": [{
+                    "type": "input_text",
+                    "text": format!("<prior context> {USER_MESSAGE_BEGIN}Count to 5"),
+                }],
+            }),
+        ];
+
+        let summary = extract_conversation_summary(path.clone(), &head).expect("summary");
+
+        assert_eq!(summary.conversation_id, conversation_id);
+        assert_eq!(
+            summary.timestamp,
+            Some("2025-09-05T16:53:11.850Z".to_string())
+        );
+        assert_eq!(summary.path, path);
+        assert_eq!(summary.preview, "Count to 5");
     }
-    None
 }

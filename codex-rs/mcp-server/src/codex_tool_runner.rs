@@ -5,6 +5,10 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::exec_approval::handle_exec_approval_request;
+use crate::outgoing_message::OutgoingMessageSender;
+use crate::outgoing_message::OutgoingNotificationMeta;
+use crate::patch_approval::handle_patch_approval_request;
 use codex_core::CodexConversation;
 use codex_core::ConversationManager;
 use codex_core::NewConversation;
@@ -18,18 +22,13 @@ use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::Submission;
 use codex_core::protocol::TaskCompleteEvent;
+use codex_protocol::mcp_protocol::ConversationId;
 use mcp_types::CallToolResult;
 use mcp_types::ContentBlock;
 use mcp_types::RequestId;
 use mcp_types::TextContent;
 use serde_json::json;
 use tokio::sync::Mutex;
-use uuid::Uuid;
-
-use crate::exec_approval::handle_exec_approval_request;
-use crate::outgoing_message::OutgoingMessageSender;
-use crate::outgoing_message::OutgoingNotificationMeta;
-use crate::patch_approval::handle_patch_approval_request;
 
 pub(crate) const INVALID_PARAMS_ERROR_CODE: i64 = -32602;
 
@@ -43,7 +42,7 @@ pub async fn run_codex_tool_session(
     config: CodexConfig,
     outgoing: Arc<OutgoingMessageSender>,
     conversation_manager: Arc<ConversationManager>,
-    running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, Uuid>>>,
+    running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, ConversationId>>>,
 ) {
     let NewConversation {
         conversation_id,
@@ -119,13 +118,13 @@ pub async fn run_codex_tool_session_reply(
     outgoing: Arc<OutgoingMessageSender>,
     request_id: RequestId,
     prompt: String,
-    running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, Uuid>>>,
-    session_id: Uuid,
+    running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, ConversationId>>>,
+    conversation_id: ConversationId,
 ) {
     running_requests_id_to_codex_uuid
         .lock()
         .await
-        .insert(request_id.clone(), session_id);
+        .insert(request_id.clone(), conversation_id);
     if let Err(e) = conversation
         .submit(Op::UserInput {
             items: vec![InputItem::Text { text: prompt }],
@@ -154,7 +153,7 @@ async fn run_codex_tool_session_inner(
     codex: Arc<CodexConversation>,
     outgoing: Arc<OutgoingMessageSender>,
     request_id: RequestId,
-    running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, Uuid>>>,
+    running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, ConversationId>>>,
 ) {
     let request_id_str = match &request_id {
         RequestId::String(s) => s.clone(),
