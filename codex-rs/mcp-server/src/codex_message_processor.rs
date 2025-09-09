@@ -1111,10 +1111,18 @@ fn extract_conversation_summary(
     head: &[serde_json::Value],
 ) -> Option<ConversationSummary> {
     let session_meta = match head.first() {
-        Some(first_line) => match serde_json::from_value::<SessionMeta>(first_line.clone()) {
-            Ok(session_meta) => session_meta,
-            Err(..) => return None,
-        },
+        Some(first_line) => {
+            if let Ok(m) = serde_json::from_value::<SessionMeta>(first_line.clone()) {
+                m
+            } else if let Some(payload) = first_line.get("payload") {
+                match serde_json::from_value::<SessionMeta>(payload.clone()) {
+                    Ok(m) => m,
+                    Err(..) => return None,
+                }
+            } else {
+                return None;
+            }
+        }
         None => return None,
     };
 

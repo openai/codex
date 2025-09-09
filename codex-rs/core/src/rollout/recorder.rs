@@ -68,10 +68,10 @@ impl PartialEq for RolloutItem {
 }
 
 #[derive(Serialize, Deserialize, Clone)]
-struct RolloutLine {
-    timestamp: String,
+pub(crate) struct RolloutLine {
+    pub(crate) timestamp: String,
     #[serde(flatten)]
-    item: RolloutItem,
+    pub(crate) item: RolloutItem,
 }
 
 #[derive(Serialize, Deserialize, Default, Clone)]

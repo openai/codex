@@ -10,6 +10,10 @@ use time::macros::format_description;
 use uuid::Uuid;
 
 use super::SESSIONS_SUBDIR;
+use super::recorder::RolloutItem;
+use super::recorder::RolloutLine;
+use super::recorder::SessionMeta;
+use crate::protocol::EventMsg;
 
 /// Returned page of conversation summaries.
 #[derive(Debug, Default, PartialEq)]
@@ -170,18 +174,11 @@ async fn traverse_directories_for_paths(
                     let head: Vec<serde_json::Value> =
                         read_first_jsonl_records(&path, HEAD_RECORD_LIMIT)
                             .await
-                            .unwrap_or_default()
-                            .into_iter()
-                            .map(strip_payload_from_value)
-                            .collect();
-                    // Only include files that start with a session meta record in the new schema.
-                    let has_session_meta = head
-                        .first()
-                        .and_then(|v| v.get("type"))
-                        .and_then(|t| t.as_str())
-                        .map(|s| s == "session_meta")
-                        .unwrap_or(false);
-                    if has_session_meta {
+                            .unwrap_or_default();
+                    // Apply filters: must have session meta and at least one user message event
+                    let has_session_meta = has_session_meta(&head);
+                    let has_user_event = file_has_usermsg_event(&path).await.unwrap_or(false);
+                    if has_session_meta && has_user_event {
                         items.push(ConversationItem { path, head });
                     }
                 }
@@ -303,26 +300,62 @@ async fn read_first_jsonl_records(
         if trimmed.is_empty() {
             continue;
         }
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
-            head.push(v);
+
+        let parsed: Result<RolloutLine, _> = serde_json::from_str(trimmed);
+        let Ok(rollout_line) = parsed else { continue };
+
+        match rollout_line.item {
+            RolloutItem::SessionMeta(session_meta_line) => {
+                // Normalize to just the meta payload to match consumers
+                if let Ok(mut val) = serde_json::to_value(session_meta_line) {
+                    if let Some(obj) = val.as_object_mut()
+                        && let Some(meta) = obj.remove("meta")
+                    {
+                        head.push(meta);
+                        continue;
+                    }
+                    head.push(val);
+                }
+            }
+            RolloutItem::ResponseItem(item) => {
+                if let Ok(val) = serde_json::to_value(item) {
+                    head.push(val);
+                }
+            }
+            RolloutItem::EventMsg(_) => {
+                // Skip events in head preview
+                continue;
+            }
         }
     }
     Ok(head)
 }
 
-fn strip_payload_from_value(mut v: serde_json::Value) -> serde_json::Value {
-    if let serde_json::Value::Object(ref mut map) = v {
-        // For response_item records, unwrap to the inner payload to match the
-        // old header format the TUI resume picker expects (deserializable as ResponseItem).
-        if let Some(ty) = map.get("type").and_then(|t| t.as_str())
-            && ty == "response_item"
-            && let Some(payload) = map.remove("payload")
-        {
-            return payload;
+fn has_session_meta(head: &[serde_json::Value]) -> bool {
+    head.first()
+        .and_then(|v| serde_json::from_value::<SessionMeta>(v.clone()).ok())
+        .is_some()
+}
+
+async fn file_has_usermsg_event(path: &Path) -> io::Result<bool> {
+    use tokio::io::AsyncBufReadExt;
+
+    let file = tokio::fs::File::open(path).await?;
+    let reader = tokio::io::BufReader::new(file);
+    let mut lines = reader.lines();
+    while let Some(line) = lines.next_line().await? {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
         }
-        // For other records (e.g., session_meta), drop payload for brevity but
-        // keep the outer object so timestamp remains available.
-        map.remove("payload");
+        let Ok(rollout_line) = serde_json::from_str::<RolloutLine>(trimmed) else {
+            continue;
+        };
+        if let RolloutItem::EventMsg(ev) = rollout_line.item
+            && matches!(ev, EventMsg::UserMessage(_))
+        {
+            return Ok(true);
+        }
     }
-    v
+    Ok(false)
 }

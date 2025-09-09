@@ -165,14 +165,28 @@ fn create_fake_rollout(codex_home: &Path, filename_ts: &str, meta_rfc3339: &str,
         })
         .to_string(),
     );
-    // Minimal user message entry as a persisted response item
+    // Minimal user message entry as a persisted response item (with envelope timestamp)
     lines.push(
         json!({
+            "timestamp": meta_rfc3339,
             "type":"response_item",
             "payload": {
                 "type":"message",
                 "role":"user",
                 "content":[{"type":"input_text","text": preview}]
+            }
+        })
+        .to_string(),
+    );
+    // Add a matching user message event line to satisfy filters
+    lines.push(
+        json!({
+            "timestamp": meta_rfc3339,
+            "type":"event_msg",
+            "payload": {
+                "type":"user_message",
+                "message": preview,
+                "kind": "plain"
             }
         })
         .to_string(),
