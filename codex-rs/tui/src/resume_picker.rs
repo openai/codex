@@ -254,13 +254,10 @@ impl PickerState {
 }
 
 fn to_rows(page: ConversationsPage) -> Vec<Row> {
-    page.items
-        .into_iter()
-        .filter_map(|it| head_to_row(&it))
-        .collect()
+    page.items.into_iter().map(|it| head_to_row(&it)).collect()
 }
 
-fn head_to_row(item: &ConversationItem) -> Option<Row> {
+fn head_to_row(item: &ConversationItem) -> Row {
     let mut ts: Option<DateTime<Utc>> = None;
     if let Some(first) = item.head.first()
         && let Some(t) = first.get("timestamp").and_then(|v| v.as_str())
@@ -269,16 +266,16 @@ fn head_to_row(item: &ConversationItem) -> Option<Row> {
         ts = Some(parsed.with_timezone(&Utc));
     }
 
-    let preview = preview_from_head(&item.head)?;
-    let preview = preview.trim().to_string();
-    if preview.is_empty() {
-        return None;
-    }
-    Some(Row {
+    let preview = preview_from_head(&item.head)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| String::from("(no message yet)"));
+
+    Row {
         path: item.path.clone(),
         preview,
         ts,
-    })
+    }
 }
 
 fn preview_from_head(head: &[serde_json::Value]) -> Option<String> {

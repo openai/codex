@@ -1111,18 +1111,7 @@ fn extract_conversation_summary(
     head: &[serde_json::Value],
 ) -> Option<ConversationSummary> {
     let session_meta = match head.first() {
-        Some(first_line) => {
-            if let Ok(m) = serde_json::from_value::<SessionMeta>(first_line.clone()) {
-                m
-            } else if let Some(payload) = first_line.get("payload") {
-                match serde_json::from_value::<SessionMeta>(payload.clone()) {
-                    Ok(m) => m,
-                    Err(..) => return None,
-                }
-            } else {
-                return None;
-            }
-        }
+        Some(first_line) => serde_json::from_value::<SessionMeta>(first_line.clone()).ok()?,
         None => return None,
     };
 
@@ -1178,12 +1167,12 @@ mod tests {
 
         let head = vec![
             json!({
+                "id": conversation_id.0,
                 "timestamp": timestamp,
-                "type": "session_meta",
-                "payload": {
-                    "id": conversation_id.0,
-                    "timestamp": timestamp
-                }
+                "cwd": "/",
+                "originator": "codex",
+                "cli_version": "0.0.0",
+                "instructions": null
             }),
             json!({
                 "type": "message",

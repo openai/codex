@@ -12,7 +12,6 @@ use uuid::Uuid;
 use super::SESSIONS_SUBDIR;
 use super::recorder::RolloutItem;
 use super::recorder::RolloutLine;
-use super::recorder::SessionMeta;
 use crate::protocol::EventMsg;
 
 /// Returned page of conversation summaries.
@@ -171,14 +170,14 @@ async fn traverse_directories_for_paths(
                     if items.len() == page_size {
                         break 'outer;
                     }
-                    let head: Vec<serde_json::Value> =
-                        read_first_jsonl_records(&path, HEAD_RECORD_LIMIT)
+                    // Read head and simultaneously detect message events within the same
+                    // first N JSONL records to avoid a second file read.
+                    let (head, saw_session_meta, saw_user_event) =
+                        read_head_and_flags(&path, HEAD_RECORD_LIMIT)
                             .await
-                            .unwrap_or_default();
+                            .unwrap_or((Vec::new(), false, false));
                     // Apply filters: must have session meta and at least one user message event
-                    let has_session_meta = has_session_meta(&head);
-                    let has_user_event = file_has_usermsg_event(&path).await.unwrap_or(false);
-                    if has_session_meta && has_user_event {
+                    if saw_session_meta && (saw_user_event) {
                         items.push(ConversationItem { path, head });
                     }
                 }
@@ -283,10 +282,10 @@ fn parse_timestamp_uuid_from_filename(name: &str) -> Option<(OffsetDateTime, Uui
     Some((ts, uuid))
 }
 
-async fn read_first_jsonl_records(
+async fn read_head_and_flags(
     path: &Path,
     max_records: usize,
-) -> io::Result<Vec<serde_json::Value>> {
+) -> io::Result<(Vec<serde_json::Value>, bool, bool)> {
     use tokio::io::AsyncBufReadExt;
 
     let file = tokio::fs::File::open(path).await?;
@@ -294,6 +293,8 @@ async fn read_first_jsonl_records(
     let mut lines = reader.lines();
     let mut head: Vec<serde_json::Value> = Vec::new();
     let mut saw_session_meta = false;
+    let mut saw_user_event = false;
+
     while head.len() < max_records {
         let line_opt = lines.next_line().await?;
         let Some(line) = line_opt else { break };
@@ -307,15 +308,7 @@ async fn read_first_jsonl_records(
 
         match rollout_line.item {
             RolloutItem::SessionMeta(session_meta_line) => {
-                // Normalize to just the meta payload to match consumers
-                if let Ok(mut val) = serde_json::to_value(session_meta_line) {
-                    if let Some(obj) = val.as_object_mut()
-                        && let Some(meta) = obj.remove("meta")
-                    {
-                        head.push(meta);
-                        saw_session_meta = true;
-                        continue;
-                    }
+                if let Ok(val) = serde_json::to_value(session_meta_line) {
                     head.push(val);
                     saw_session_meta = true;
                 }
@@ -325,44 +318,15 @@ async fn read_first_jsonl_records(
                     head.push(val);
                 }
             }
-            RolloutItem::EventMsg(_) => {
-                // Skip events in head preview
-                continue;
+            RolloutItem::EventMsg(ev) => {
+                // Capture whether an early agent/user message event exists within the head window
+                use EventMsg::*;
+                if let UserMessage(_) = ev {
+                    saw_user_event = true
+                }
             }
         }
     }
-    // Enforce same acceptance rule: must have a session_meta in the file
-    if !saw_session_meta {
-        return Ok(Vec::new());
-    }
-    Ok(head)
-}
 
-fn has_session_meta(head: &[serde_json::Value]) -> bool {
-    head.first()
-        .and_then(|v| serde_json::from_value::<SessionMeta>(v.clone()).ok())
-        .is_some()
-}
-
-async fn file_has_usermsg_event(path: &Path) -> io::Result<bool> {
-    use tokio::io::AsyncBufReadExt;
-
-    let file = tokio::fs::File::open(path).await?;
-    let reader = tokio::io::BufReader::new(file);
-    let mut lines = reader.lines();
-    while let Some(line) = lines.next_line().await? {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let Ok(rollout_line) = serde_json::from_str::<RolloutLine>(trimmed) else {
-            continue;
-        };
-        if let RolloutItem::EventMsg(ev) = rollout_line.item
-            && matches!(ev, EventMsg::UserMessage(_))
-        {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    Ok((head, saw_session_meta, saw_user_event))
 }

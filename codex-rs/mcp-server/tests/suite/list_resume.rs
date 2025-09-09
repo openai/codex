@@ -156,12 +156,19 @@ fn create_fake_rollout(codex_home: &Path, filename_ts: &str, meta_rfc3339: &str,
 
     let file_path = dir.join(format!("rollout-{filename_ts}-{uuid}.jsonl"));
     let mut lines = Vec::new();
-    // Meta line with timestamp (new schema)
+    // Meta line with timestamp (flattened meta in payload for new schema)
     lines.push(
         json!({
             "timestamp": meta_rfc3339,
             "type": "session_meta",
-            "payload": {"id": uuid, "timestamp": meta_rfc3339}
+            "payload": {
+                "id": uuid,
+                "timestamp": meta_rfc3339,
+                "cwd": "/",
+                "originator": "codex",
+                "cli_version": "0.0.0",
+                "instructions": null
+            }
         })
         .to_string(),
     );
