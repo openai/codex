@@ -729,9 +729,7 @@ dependencies = [
 name = "codex-linux-sandbox"
 version = "0.0.0"
 dependencies = [
- "anyhow",
  "clap",
- "codex-common",
  "codex-core",
  "landlock",
  "libc",
@@ -829,6 +827,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_with",
+ "strum 0.27.2",
  "strum_macros 0.27.2",
  "sys-locale",
  "tracing",
