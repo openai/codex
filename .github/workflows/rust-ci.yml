@@ -77,6 +77,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-shear
+          version: 1.5.1
       - name: cargo shear
         run: cargo shear
 
