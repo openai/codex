@@ -1209,6 +1209,7 @@ model_verbosity = "high"
                 use_experimental_streamable_shell_tool: false,
                 include_view_image_tool: true,
                 disable_paste_burst: false,
+                redact_saved_prompt_body: true,
             },
             o3_profile_config
         );
