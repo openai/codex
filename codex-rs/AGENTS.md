@@ -5,6 +5,7 @@ This file guides Codex (the coding assistant) when working in this fork. It appl
 Branch Model
 - `main`: fast‑forward mirror of `upstream/main` (no direct commits).
 - `fix-mcp-session-id-response`: long‑lived fork branch with our small changes. Do all local work here and tag releases from here.
+- `pr/compat-mode`: PR staging branch (temporary). Keep fork-only files (like AGENTS.md) OFF this branch.
 - Topic work: create short‑lived branches off `fix-mcp-session-id-response`; rebase onto `main` regularly, then merge back into it.
 
 Build & Test
@@ -56,3 +57,11 @@ Daily Update Flow
 Contact / Context
 - This branch incorporates: MCP compatibility mode, `codex-get-response`, increased default get‑response timeout (600s), and session history handling.
 - If a change is broadly useful, consider upstreaming to reduce fork drift.
+
+PR Guidance
+- Purpose: add a default-off compatibility mode for clients that do not support async notifications.
+- Flag/config: `--compatibility-mode` or `[mcp] compatibility_mode = true`.
+- Scope in PR: immediate ack for `codex`, immediate ack for `codex-reply`, gated `codex-get-response` tool.
+- Capabilities: expose `codex-get-response` only when compatibility mode is enabled.
+- Avoid naming specific third-party products in PR text; describe as "compatibility mode for non-notification clients."
+- Do not include fork-only files (e.g., `codex-rs/AGENTS.md`) on PR branches.
