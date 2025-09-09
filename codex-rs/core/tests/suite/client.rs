@@ -133,7 +133,10 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
             "payload": {
                 "id": convo_id,
                 "timestamp": "2024-01-01T00:00:00Z",
-                "instructions": "be nice"
+                "instructions": "be nice",
+                "cwd": ".",
+                "originator": "test_originator",
+                "cli_version": "test_version"
             }
         })
     )
