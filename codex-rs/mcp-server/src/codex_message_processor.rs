@@ -198,11 +198,7 @@ impl CodexMessageProcessor {
 
         let opts = LoginServerOptions {
             open_browser: false,
-            ..LoginServerOptions::new(
-                config.codex_home.clone(),
-                CLIENT_ID.to_string(),
-                config.responses_originator_header.clone(),
-            )
+            ..LoginServerOptions::new(config.codex_home.clone(), CLIENT_ID.to_string())
         };
 
         enum LoginChatGptReply {
@@ -403,7 +399,7 @@ impl CodexMessageProcessor {
     }
 
     async fn get_user_agent(&self, request_id: RequestId) {
-        let user_agent = get_codex_user_agent(Some(&self.config.responses_originator_header));
+        let user_agent = get_codex_user_agent();
         let response = GetUserAgentResponse { user_agent };
         self.outgoing.send_response(request_id, response).await;
     }

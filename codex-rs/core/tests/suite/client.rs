@@ -372,56 +372,6 @@ async fn includes_base_instructions_override_in_request() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn originator_config_override_is_used() {
-    // Mock server
-    let server = MockServer::start().await;
-
-    let first = ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_raw(sse_completed("resp1"), "text/event-stream");
-
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(first)
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
-
-    let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home);
-    config.model_provider = model_provider;
-    config.responses_originator_header = "my_override".to_owned();
-
-    let conversation_manager =
-        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
-    let codex = conversation_manager
-        .new_conversation(config)
-        .await
-        .expect("create new conversation")
-        .conversation;
-
-    codex
-        .submit(Op::UserInput {
-            items: vec![InputItem::Text {
-                text: "hello".into(),
-            }],
-        })
-        .await
-        .unwrap();
-
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
-
-    let request = &server.received_requests().await.unwrap()[0];
-    let request_originator = request.headers.get("originator").unwrap();
-    assert_eq!(request_originator.to_str().unwrap(), "my_override");
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chatgpt_auth_sends_correct_request() {
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
@@ -546,15 +496,12 @@ async fn prefers_chatgpt_token_when_config_prefers_chatgpt() {
     config.model_provider = model_provider;
     config.preferred_auth_method = AuthMode::ChatGPT;
 
-    let auth_manager = match CodexAuth::from_codex_home(
-        codex_home.path(),
-        config.preferred_auth_method,
-        &config.responses_originator_header,
-    ) {
-        Ok(Some(auth)) => codex_core::AuthManager::from_auth_for_testing(auth),
-        Ok(None) => panic!("No CodexAuth found in codex_home"),
-        Err(e) => panic!("Failed to load CodexAuth: {e}"),
-    };
+    let auth_manager =
+        match CodexAuth::from_codex_home(codex_home.path(), config.preferred_auth_method) {
+            Ok(Some(auth)) => codex_core::AuthManager::from_auth_for_testing(auth),
+            Ok(None) => panic!("No CodexAuth found in codex_home"),
+            Err(e) => panic!("Failed to load CodexAuth: {e}"),
+        };
     let conversation_manager = ConversationManager::new(auth_manager);
     let NewConversation {
         conversation: codex,
@@ -622,15 +569,12 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
     config.model_provider = model_provider;
     config.preferred_auth_method = AuthMode::ApiKey;
 
-    let auth_manager = match CodexAuth::from_codex_home(
-        codex_home.path(),
-        config.preferred_auth_method,
-        &config.responses_originator_header,
-    ) {
-        Ok(Some(auth)) => codex_core::AuthManager::from_auth_for_testing(auth),
-        Ok(None) => panic!("No CodexAuth found in codex_home"),
-        Err(e) => panic!("Failed to load CodexAuth: {e}"),
-    };
+    let auth_manager =
+        match CodexAuth::from_codex_home(codex_home.path(), config.preferred_auth_method) {
+            Ok(Some(auth)) => codex_core::AuthManager::from_auth_for_testing(auth),
+            Ok(None) => panic!("No CodexAuth found in codex_home"),
+            Err(e) => panic!("Failed to load CodexAuth: {e}"),
+        };
     let conversation_manager = ConversationManager::new(auth_manager);
     let NewConversation {
         conversation: codex,

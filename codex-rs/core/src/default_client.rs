@@ -1,11 +1,40 @@
-pub const DEFAULT_ORIGINATOR: &str = "codex_cli_rs";
+use reqwest::header::HeaderValue;
+use std::sync::LazyLock;
 
-pub fn get_codex_user_agent(originator: Option<&str>) -> String {
+pub const CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR: &str = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
+
+#[derive(Debug, Clone)]
+pub struct Originator {
+    pub value: String,
+    pub header_value: HeaderValue,
+}
+
+pub static ORIGINATOR: LazyLock<Originator> = LazyLock::new(|| {
+    let default = "codex_cli_rs";
+    let value = std::env::var(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR)
+        .unwrap_or_else(|_| default.to_string());
+
+    match HeaderValue::from_str(&value) {
+        Ok(header_value) => Originator {
+            value,
+            header_value,
+        },
+        Err(e) => {
+            tracing::error!("Unable to turn originator override {value} into header value: {e}");
+            Originator {
+                value: default.to_string(),
+                header_value: HeaderValue::from_static(default),
+            }
+        }
+    }
+});
+
+pub fn get_codex_user_agent() -> String {
     let build_version = env!("CARGO_PKG_VERSION");
     let os_info = os_info::get();
     format!(
         "{}/{build_version} ({} {}; {}) {}",
-        originator.unwrap_or(DEFAULT_ORIGINATOR),
+        ORIGINATOR.value.as_str(),
         os_info.os_type(),
         os_info.version(),
         os_info.architecture().unwrap_or("unknown"),
@@ -14,25 +43,19 @@ pub fn get_codex_user_agent(originator: Option<&str>) -> String {
 }
 
 /// Create a reqwest client with default `originator` and `User-Agent` headers set.
-pub fn create_client(originator: &str) -> reqwest::Client {
+pub fn create_client() -> reqwest::Client {
     use reqwest::header::HeaderMap;
-    use reqwest::header::HeaderValue;
 
     let mut headers = HeaderMap::new();
-    let originator_value = HeaderValue::from_str(originator)
-        .unwrap_or_else(|_| HeaderValue::from_static(DEFAULT_ORIGINATOR));
-    headers.insert("originator", originator_value);
-    let ua = get_codex_user_agent(Some(originator));
+    headers.insert("originator", ORIGINATOR.header_value.clone());
+    let ua = get_codex_user_agent();
 
-    match reqwest::Client::builder()
+    reqwest::Client::builder()
         // Set UA via dedicated helper to avoid header validation pitfalls
         .user_agent(ua)
         .default_headers(headers)
         .build()
-    {
-        Ok(client) => client,
-        Err(_) => reqwest::Client::new(),
-    }
+        .unwrap_or_else(|_| reqwest::Client::new())
 }
 
 #[cfg(test)]
@@ -41,7 +64,7 @@ mod tests {
 
     #[test]
     fn test_get_codex_user_agent() {
-        let user_agent = get_codex_user_agent(None);
+        let user_agent = get_codex_user_agent();
         assert!(user_agent.starts_with("codex_cli_rs/"));
     }
 
@@ -53,8 +76,7 @@ mod tests {
         use wiremock::matchers::method;
         use wiremock::matchers::path;
 
-        let originator = "test_originator";
-        let client = create_client(originator);
+        let client = create_client();
 
         // Spin up a local mock server and capture a request.
         let server = MockServer::start().await;
@@ -82,10 +104,10 @@ mod tests {
         let originator_header = headers
             .get("originator")
             .expect("originator header missing");
-        assert_eq!(originator_header.to_str().unwrap(), originator);
+        assert_eq!(originator_header.to_str().unwrap(), "codex_cli_rs");
 
         // User-Agent matches the computed Codex UA for that originator
-        let expected_ua = get_codex_user_agent(Some(originator));
+        let expected_ua = get_codex_user_agent();
         let ua_header = headers
             .get("user-agent")
             .expect("user-agent header missing");
@@ -96,7 +118,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     fn test_macos() {
         use regex_lite::Regex;
-        let user_agent = get_codex_user_agent(None);
+        let user_agent = get_codex_user_agent();
         let re = Regex::new(
             r"^codex_cli_rs/\d+\.\d+\.\d+ \(Mac OS \d+\.\d+\.\d+; (x86_64|arm64)\) (\S+)$",
         )
