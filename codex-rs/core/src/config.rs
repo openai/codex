@@ -177,7 +177,7 @@ pub struct Config {
 
     pub use_experimental_streamable_shell_tool: bool,
 
-    /// If set to `true`, used only the experimental unifed exec tool.
+    /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
 
     /// Include the `view_image` tool that lets the agent attach a local image path to context.
