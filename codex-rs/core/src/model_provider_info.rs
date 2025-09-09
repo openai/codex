@@ -335,6 +335,7 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
+    use std::collections::HashSet;
 
     #[test]
     fn test_deserialize_ollama_model_provider_toml() {
@@ -447,5 +448,46 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
         chat_provider.wire_api = WireApi::Chat;
         let chat_url = chat_provider.get_full_url(&None);
         assert_eq!(chat_url, "https://example.com/v1/chat/completions");
+    }
+
+    #[test]
+    fn builds_query_string_for_non_empty_params_without_trailing_separators() {
+        let mut params = HashMap::new();
+        params.insert("a".to_string(), "1".to_string());
+        params.insert("b".to_string(), "2".to_string());
+
+        let provider = ModelProviderInfo {
+            name: "Example".into(),
+            base_url: Some("https://example.com/v1".into()),
+            env_key: None,
+            env_key_instructions: None,
+            wire_api: WireApi::Responses,
+            query_params: Some(params.clone()),
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            requires_openai_auth: false,
+        };
+
+        let url = provider.get_full_url(&None);
+        assert!(url.starts_with("https://example.com/v1/responses?"));
+        assert!(!url.ends_with('?') && !url.ends_with('&'));
+
+        let query = url.split('?').nth(1).expect("query string present");
+        let parts: HashSet<&str> = query.split('&').collect();
+        assert_eq!(parts, HashSet::from(["a=1", "b=2"]));
+
+        // Also verify Chat path
+        let mut chat_provider = provider.clone();
+        chat_provider.wire_api = WireApi::Chat;
+        chat_provider.query_params = Some(params);
+        let chat_url = chat_provider.get_full_url(&None);
+        assert!(chat_url.starts_with("https://example.com/v1/chat/completions?"));
+        assert!(!chat_url.ends_with('?') && !chat_url.ends_with('&'));
+        let chat_query = chat_url.split('?').nth(1).unwrap();
+        let chat_parts: HashSet<&str> = chat_query.split('&').collect();
+        assert_eq!(chat_parts, HashSet::from(["a=1", "b=2"]));
     }
 }
