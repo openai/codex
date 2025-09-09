@@ -8,19 +8,82 @@ use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_login::ServerOptions;
 use codex_login::run_login_server;
+use std::io::{self, Write};
+use std::net::TcpStream;
 use codex_protocol::mcp_protocol::AuthMode;
 use std::env;
 use std::path::PathBuf;
 
 pub async fn login_with_chatgpt(codex_home: PathBuf, originator: String) -> std::io::Result<()> {
+    // 1) Start the server first (unchanged)
     let opts = ServerOptions::new(codex_home, CLIENT_ID.to_string(), originator);
     let server = run_login_server(opts)?;
 
     eprintln!(
-        "Starting local login server on http://localhost:{}.\nIf your browser did not open, navigate to this URL to authenticate:\n\n{}",
-        server.actual_port, server.auth_url,
+        "\nStarting local login server on http://localhost:{}.\n\
+If your browser did not open, use ANY browser to visit:\n\n{}\n",
+        server.actual_port, server.auth_url
     );
 
+    // 2) Optional fast-path: paste the final redirected URL (or code&state)
+    eprintln!("If the browser cannot reach localhost, paste the final redirected URL here.");
+    eprintln!("(Or paste `code=<...>&state=<...>`). Press Enter to skip and just wait.\n");
+
+    eprint!("paste> ");
+    io::stderr().flush().ok();
+    let mut line = String::new();
+    io::stdin().read_line(&mut line)?;
+    let paste = line.trim();
+
+    if !paste.is_empty() {
+        // 3) Extract code & state from whatever the user pasted
+        let (code, state) = if paste.contains("code=") {
+            // full URL or query string
+            let q = if paste.starts_with("http") {
+                url::Url::parse(paste)
+                    .ok()
+                    .and_then(|u| u.query().map(|s| s.to_string()))
+                    .unwrap_or_else(|| paste.to_string())
+            } else {
+                paste.to_string()
+            };
+            let mut code = None::<String>;
+            let mut state = None::<String>;
+            for pair in q.split('&') {
+                if let Some((k, v)) = pair.split_once('=') {
+                    match k {
+                        "code" => code = Some(v.to_string()),
+                        "state" => state = Some(v.to_string()),
+                        _ => {}
+                    }
+                }
+            }
+            (code.unwrap_or_default(), state.unwrap_or_default())
+        } else {
+            // user pasted just the code; state won't match, but try anyway
+            (paste.to_string(), String::new())
+        };
+
+        if !code.is_empty() {
+            // 4) Synthesize the callback to our local server
+            let path = format!(
+                "/auth/callback?code={}&state={}",
+                urlencoding::encode(&code),
+                urlencoding::encode(&state)
+            );
+            let req = format!(
+                "GET {} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+                path
+            );
+            let mut stream =
+                TcpStream::connect(("127.0.0.1", server.actual_port))?;
+            use std::io::Write as _;
+            stream.write_all(req.as_bytes())?;
+            // ignore response body; the server will finish login and exit
+        }
+    }
+
+    // 5) Proceed as usual — server will finish the flow and write auth.json
     server.block_until_done().await
 }
 
