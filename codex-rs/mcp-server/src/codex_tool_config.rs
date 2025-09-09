@@ -242,7 +242,7 @@ use crate::message_processor::DEFAULT_GET_RESPONSE_TIMEOUT_SECS;
 pub struct CodexToolCallGetResponseParam {
     /// Session ID to retrieve response from
     pub session_id: String,
-    
+
     /// Optional timeout in seconds to wait for response
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout: Option<u64>,
@@ -262,8 +262,8 @@ pub(crate) fn create_tool_for_codex_tool_call_get_response_param() -> Tool {
         .into_root_schema_for::<CodexToolCallGetResponseParam>();
 
     #[expect(clippy::expect_used)]
-    let schema_value =
-        serde_json::to_value(&schema).expect("Codex get-response tool schema should serialise to JSON");
+    let schema_value = serde_json::to_value(&schema)
+        .expect("Codex get-response tool schema should serialise to JSON");
 
     let tool_input_schema =
         serde_json::from_value::<ToolInputSchema>(schema_value).unwrap_or_else(|e| {

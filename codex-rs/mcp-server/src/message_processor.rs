@@ -8,25 +8,25 @@ use std::time::Duration;
 pub const DEFAULT_GET_RESPONSE_TIMEOUT_SECS: u64 = 600;
 
 use crate::codex_message_processor::CodexMessageProcessor;
-use crate::session_storage::{SessionResponse, SessionResponseStorage, SessionStatus};
+use crate::codex_tool_config::CodexToolCallGetResponseParam;
 use crate::codex_tool_config::CodexToolCallParam;
 use crate::codex_tool_config::CodexToolCallReplyParam;
-use crate::codex_tool_config::CodexToolCallGetResponseParam;
+use crate::codex_tool_config::create_tool_for_codex_tool_call_get_response_param;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_param;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_reply_param;
-use crate::codex_tool_config::create_tool_for_codex_tool_call_get_response_param;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::session_storage::{SessionResponse, SessionResponseStorage, SessionStatus};
 use codex_protocol::mcp_protocol::ClientRequest;
 use codex_protocol::mcp_protocol::ConversationId;
 
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
+use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::Submission;
-use codex_core::protocol::EventMsg;
 use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
 use mcp_types::ClientRequest as McpClientRequest;
@@ -47,7 +47,6 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task;
 use uuid::Uuid;
-
 
 pub(crate) struct MessageProcessor {
     codex_message_processor: CodexMessageProcessor,
@@ -446,6 +445,7 @@ impl MessageProcessor {
             match conversation_result {
                 Ok(new_conv) => {
                     let session_id = new_conv.conversation_id;
+                    let session_uuid: Uuid = session_id.into();
                     let result = CallToolResult {
                         content: vec![ContentBlock::TextContent(TextContent {
                             r#type: "text".to_string(),
@@ -466,11 +466,11 @@ impl MessageProcessor {
                         .await
                         .insert(id, session_id);
 
-                    // Initialize session response as running
-                    self.session_responses.lock().await.insert(
-                        session_id,
-                        SessionResponse::new_running(),
-                    );
+                    // Initialize session response as running (keyed by raw Uuid)
+                    self.session_responses
+                        .lock()
+                        .await
+                        .insert(session_uuid, SessionResponse::new_running());
 
                     // Now submit the initial prompt and capture responses in the background
                     let conversation = new_conv.conversation;
@@ -490,13 +490,13 @@ impl MessageProcessor {
                             );
                             // Mark as failed
                             let mut responses = session_responses.lock().await;
-                            if let Some(response) = responses.remove(&session_id) {
+                            if let Some(response) = responses.remove(&session_uuid) {
                                 responses.insert(
-                                    session_id, 
+                                    session_uuid,
                                     response.fail_with_error(
-                                        format!("failed to submit prompt: {e}"), 
-                                        String::new()
-                                    )
+                                        format!("failed to submit prompt: {e}"),
+                                        String::new(),
+                                    ),
                                 );
                             }
                             return;
@@ -517,10 +517,11 @@ impl MessageProcessor {
                                         EventMsg::TaskComplete(_) => {
                                             // Mark as completed
                                             let mut responses = session_responses.lock().await;
-                                            if let Some(response) = responses.remove(&session_id) {
+                                            if let Some(response) = responses.remove(&session_uuid)
+                                            {
                                                 responses.insert(
-                                                    session_id,
-                                                    response.complete_with_content(content)
+                                                    session_uuid,
+                                                    response.complete_with_content(content),
                                                 );
                                             }
                                             break;
@@ -528,10 +529,12 @@ impl MessageProcessor {
                                         EventMsg::Error(error) => {
                                             // Mark as failed
                                             let mut responses = session_responses.lock().await;
-                                            if let Some(response) = responses.remove(&session_id) {
+                                            if let Some(response) = responses.remove(&session_uuid)
+                                            {
                                                 responses.insert(
-                                                    session_id,
-                                                    response.fail_with_error(error.message, content)
+                                                    session_uuid,
+                                                    response
+                                                        .fail_with_error(error.message, content),
                                                 );
                                             }
                                             break;
@@ -542,13 +545,18 @@ impl MessageProcessor {
                                     }
                                 }
                                 Err(e) => {
-                                    tracing::error!("error reading event in compatibility mode: {e}");
+                                    tracing::error!(
+                                        "error reading event in compatibility mode: {e}"
+                                    );
                                     // Mark as failed
                                     let mut responses = session_responses.lock().await;
-                                    if let Some(response) = responses.remove(&session_id) {
+                                    if let Some(response) = responses.remove(&session_uuid) {
                                         responses.insert(
-                                            session_id,
-                                            response.fail_with_error(format!("event stream error: {e}"), content)
+                                            session_uuid,
+                                            response.fail_with_error(
+                                                format!("event stream error: {e}"),
+                                                content,
+                                            ),
                                         );
                                     }
                                     break;
@@ -664,6 +672,8 @@ impl MessageProcessor {
 
         // Check if we're in compatibility mode
         if self.config.mcp.compatibility_mode {
+            // Use raw Uuid for session-responses map
+            let session_uuid: Uuid = conversation_id.into();
             // In compatibility mode, send immediate response
             let result = CallToolResult {
                 content: vec![ContentBlock::TextContent(TextContent {
@@ -700,11 +710,12 @@ impl MessageProcessor {
                 }
             };
 
-            // Update session status to running
-            self.session_responses.lock().await.insert(
-                conversation_id,
-                SessionResponse::new_running(),
-            );
+            // Update session status to running (store by raw Uuid)
+            self
+                .session_responses
+                .lock()
+                .await
+                .insert(session_uuid, SessionResponse::new_running());
 
             let session_responses = self.session_responses.clone();
             task::spawn(async move {
@@ -718,10 +729,13 @@ impl MessageProcessor {
                     tracing::error!("Failed to submit prompt in compatibility mode: {e}");
                     // Mark as failed
                     let mut responses = session_responses.lock().await;
-                    if let Some(response) = responses.remove(&conversation_id) {
+                    if let Some(response) = responses.remove(&session_uuid) {
                         responses.insert(
-                            conversation_id,
-                            response.fail_with_error(format!("failed to submit prompt: {e}"), String::new())
+                            session_uuid,
+                            response.fail_with_error(
+                                format!("failed to submit prompt: {e}"),
+                                String::new(),
+                            ),
                         );
                     }
                     return;
@@ -742,10 +756,10 @@ impl MessageProcessor {
                                 EventMsg::TaskComplete(_) => {
                                     // Mark as completed
                                     let mut responses = session_responses.lock().await;
-                                    if let Some(response) = responses.remove(&conversation_id) {
+                                    if let Some(response) = responses.remove(&session_uuid) {
                                         responses.insert(
-                                            conversation_id,
-                                            response.complete_with_content(content)
+                                            session_uuid,
+                                            response.complete_with_content(content),
                                         );
                                     }
                                     break;
@@ -753,10 +767,10 @@ impl MessageProcessor {
                                 EventMsg::Error(error) => {
                                     // Mark as failed
                                     let mut responses = session_responses.lock().await;
-                                    if let Some(response) = responses.remove(&conversation_id) {
+                                    if let Some(response) = responses.remove(&session_uuid) {
                                         responses.insert(
-                                            conversation_id,
-                                            response.fail_with_error(error.message, content)
+                                            session_uuid,
+                                            response.fail_with_error(error.message, content),
                                         );
                                     }
                                     break;
@@ -770,10 +784,13 @@ impl MessageProcessor {
                             tracing::error!("Error reading event in compatibility mode: {e}");
                             // Mark as failed
                             let mut responses = session_responses.lock().await;
-                            if let Some(response) = responses.remove(&conversation_id) {
+                            if let Some(response) = responses.remove(&session_uuid) {
                                 responses.insert(
-                                    conversation_id,
-                                    response.fail_with_error(format!("event stream error: {e}"), content)
+                                    session_uuid,
+                                    response.fail_with_error(
+                                        format!("event stream error: {e}"),
+                                        content,
+                                    ),
                                 );
                             }
                             break;
@@ -798,7 +815,9 @@ impl MessageProcessor {
                     let result = CallToolResult {
                         content: vec![ContentBlock::TextContent(TextContent {
                             r#type: "text".to_owned(),
-                            text: format!("Session not found for conversation_id: {conversation_id}"),
+                            text: format!(
+                                "Session not found for conversation_id: {conversation_id}"
+                            ),
                             annotations: None,
                         })],
                         is_error: Some(true),
@@ -852,23 +871,26 @@ impl MessageProcessor {
         arguments: Option<serde_json::Value>,
     ) {
         let params = match arguments {
-            Some(json_val) => match serde_json::from_value::<CodexToolCallGetResponseParam>(json_val) {
-                Ok(params) => params,
-                Err(e) => {
-                    tracing::error!("failed to parse codex get-response parameters: {e}");
-                    let result = CallToolResult {
-                        content: vec![ContentBlock::TextContent(TextContent {
-                            r#type: "text".to_string(),
-                            text: format!("failed to parse parameters: {e}"),
-                            annotations: None,
-                        })],
-                        is_error: Some(true),
-                        structured_content: None,
-                    };
-                    self.send_response::<mcp_types::CallToolRequest>(id, result).await;
-                    return;
+            Some(json_val) => {
+                match serde_json::from_value::<CodexToolCallGetResponseParam>(json_val) {
+                    Ok(params) => params,
+                    Err(e) => {
+                        tracing::error!("failed to parse codex get-response parameters: {e}");
+                        let result = CallToolResult {
+                            content: vec![ContentBlock::TextContent(TextContent {
+                                r#type: "text".to_string(),
+                                text: format!("failed to parse parameters: {e}"),
+                                annotations: None,
+                            })],
+                            is_error: Some(true),
+                            structured_content: None,
+                        };
+                        self.send_response::<mcp_types::CallToolRequest>(id, result)
+                            .await;
+                        return;
+                    }
                 }
-            },
+            }
             None => {
                 let result = CallToolResult {
                     content: vec![ContentBlock::TextContent(TextContent {
@@ -879,7 +901,8 @@ impl MessageProcessor {
                     is_error: Some(true),
                     structured_content: None,
                 };
-                self.send_response::<mcp_types::CallToolRequest>(id, result).await;
+                self.send_response::<mcp_types::CallToolRequest>(id, result)
+                    .await;
                 return;
             }
         };
@@ -896,12 +919,14 @@ impl MessageProcessor {
                     is_error: Some(true),
                     structured_content: None,
                 };
-                self.send_response::<mcp_types::CallToolRequest>(id, result).await;
+                self.send_response::<mcp_types::CallToolRequest>(id, result)
+                    .await;
                 return;
             }
         };
 
-        let timeout_duration = Duration::from_secs(params.timeout.unwrap_or(DEFAULT_GET_RESPONSE_TIMEOUT_SECS));
+        let timeout_duration =
+            Duration::from_secs(params.timeout.unwrap_or(DEFAULT_GET_RESPONSE_TIMEOUT_SECS));
         let start_time = std::time::Instant::now();
 
         // Poll for response with timeout
@@ -919,68 +944,72 @@ impl MessageProcessor {
                         "sessionId": params.session_id
                     })),
                 };
-                self.send_response::<mcp_types::CallToolRequest>(id, result).await;
+                self.send_response::<mcp_types::CallToolRequest>(id, result)
+                    .await;
                 return;
             }
 
             let responses = self.session_responses.lock().await;
             if let Some(response) = responses.get(&session_uuid) {
                 match &response.status {
-                        SessionStatus::Completed => {
-                            let result = CallToolResult {
-                                content: vec![ContentBlock::TextContent(TextContent {
-                                    r#type: "text".to_string(),
-                                    text: response.content.clone(),
-                                    annotations: None,
-                                })],
-                                is_error: None,
-                                structured_content: Some(json!({
-                                    "status": "completed",
-                                    "sessionId": params.session_id
-                                })),
-                            };
-                            self.send_response::<mcp_types::CallToolRequest>(id, result).await;
-                            return;
-                        }
-                        SessionStatus::Failed => {
-                            let error_msg = response.error.as_deref().unwrap_or("unknown error");
-                            let result = CallToolResult {
-                                content: vec![ContentBlock::TextContent(TextContent {
-                                    r#type: "text".to_string(),
-                                    text: format!("session failed: {error_msg}"),
-                                    annotations: None,
-                                })],
-                                is_error: Some(true),
-                                structured_content: Some(json!({
-                                    "status": "failed",
-                                    "error": error_msg,
-                                    "sessionId": params.session_id,
-                                    "partialContent": response.content
-                                })),
-                            };
-                            self.send_response::<mcp_types::CallToolRequest>(id, result).await;
-                            return;
-                        }
-                        SessionStatus::Running => {
-                            // Continue polling
-                        }
+                    SessionStatus::Completed => {
+                        let result = CallToolResult {
+                            content: vec![ContentBlock::TextContent(TextContent {
+                                r#type: "text".to_string(),
+                                text: response.content.clone(),
+                                annotations: None,
+                            })],
+                            is_error: None,
+                            structured_content: Some(json!({
+                                "status": "completed",
+                                "sessionId": params.session_id
+                            })),
+                        };
+                        self.send_response::<mcp_types::CallToolRequest>(id, result)
+                            .await;
+                        return;
                     }
-                } else {
-                    let result = CallToolResult {
-                        content: vec![ContentBlock::TextContent(TextContent {
-                            r#type: "text".to_string(),
-                            text: "session not found".to_string(),
-                            annotations: None,
-                        })],
-                        is_error: Some(true),
-                        structured_content: Some(json!({
-                            "status": "not_found",
-                            "sessionId": params.session_id
-                        })),
-                    };
-                    self.send_response::<mcp_types::CallToolRequest>(id, result).await;
-                    return;
+                    SessionStatus::Failed => {
+                        let error_msg = response.error.as_deref().unwrap_or("unknown error");
+                        let result = CallToolResult {
+                            content: vec![ContentBlock::TextContent(TextContent {
+                                r#type: "text".to_string(),
+                                text: format!("session failed: {error_msg}"),
+                                annotations: None,
+                            })],
+                            is_error: Some(true),
+                            structured_content: Some(json!({
+                                "status": "failed",
+                                "error": error_msg,
+                                "sessionId": params.session_id,
+                                "partialContent": response.content
+                            })),
+                        };
+                        self.send_response::<mcp_types::CallToolRequest>(id, result)
+                            .await;
+                        return;
+                    }
+                    SessionStatus::Running => {
+                        // Continue polling
+                    }
                 }
+            } else {
+                let result = CallToolResult {
+                    content: vec![ContentBlock::TextContent(TextContent {
+                        r#type: "text".to_string(),
+                        text: "session not found".to_string(),
+                        annotations: None,
+                    })],
+                    is_error: Some(true),
+                    structured_content: Some(json!({
+                        "status": "not_found",
+                        "sessionId": params.session_id
+                    })),
+                };
+                self.send_response::<mcp_types::CallToolRequest>(id, result)
+                    .await;
+                return;
+            }
 
             // Wait a bit before polling again
             tokio::time::sleep(Duration::from_millis(500)).await;
