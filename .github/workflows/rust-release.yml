@@ -188,6 +188,7 @@ jobs:
           echo "name=${version}" >> $GITHUB_OUTPUT
 
       - name: Stage npm package
+        if: github.repository == 'openai/codex'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

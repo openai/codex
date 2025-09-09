@@ -527,7 +527,7 @@ checksum = "e9b18233253483ce2f65329a24072ec414db782531bdbb7d0bbc4bd2ce6b7e21"
 
 [[package]]
 name = "codex-ansi-escape"
-version = "0.0.0"
+version = "0.28.0-alpha.1"
 dependencies = [
  "ansi-to-tui",
  "ratatui",
@@ -536,7 +536,7 @@ dependencies = [
 
 [[package]]
 name = "codex-apply-patch"
-version = "0.0.0"
+version = "0.28.0-alpha.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -551,7 +551,7 @@ dependencies = [
 
 [[package]]
 name = "codex-arg0"
-version = "0.0.0"
+version = "0.28.0-alpha.1"
 dependencies = [
  "anyhow",
  "codex-apply-patch",
@@ -564,7 +564,7 @@ dependencies = [
 
 [[package]]
 name = "codex-chatgpt"
-version = "0.0.0"
+version = "0.28.0-alpha.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -579,7 +579,7 @@ dependencies = [
 
 [[package]]
 name = "codex-cli"
-version = "0.0.0"
+version = "0.28.0-alpha.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -602,7 +602,7 @@ dependencies = [
 
 [[package]]
 name = "codex-common"
-version = "0.0.0"
+version = "0.28.0-alpha.1"
 dependencies = [
  "clap",
  "codex-core",
@@ -613,7 +613,7 @@ dependencies = [
 
 [[package]]
 name = "codex-core"
-version = "0.0.0"
+version = "0.28.0-alpha.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -668,7 +668,7 @@ dependencies = [
 
 [[package]]
 name = "codex-exec"
-version = "0.0.0"
+version = "0.28.0-alpha.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -694,7 +694,7 @@ dependencies = [
 
 [[package]]
 name = "codex-execpolicy"
-version = "0.0.0"
+version = "0.28.0-alpha.1"
 dependencies = [
  "allocative",
  "anyhow",
@@ -714,7 +714,7 @@ dependencies = [
 
 [[package]]
 name = "codex-file-search"
-version = "0.0.0"
+version = "0.28.0-alpha.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -727,7 +727,7 @@ dependencies = [
 
 [[package]]
 name = "codex-linux-sandbox"
-version = "0.0.0"
+version = "0.28.0-alpha.1"
 dependencies = [
  "clap",
  "codex-core",
@@ -740,7 +740,7 @@ dependencies = [
 
 [[package]]
 name = "codex-login"
-version = "0.0.0"
+version = "0.28.0-alpha.1"
 dependencies = [
  "base64",
  "chrono",
@@ -761,7 +761,7 @@ dependencies = [
 
 [[package]]
 name = "codex-mcp-client"
-version = "0.0.0"
+version = "0.28.0-alpha.1"
 dependencies = [
  "anyhow",
  "mcp-types",
@@ -774,10 +774,11 @@ dependencies = [
 
 [[package]]
 name = "codex-mcp-server"
-version = "0.0.0"
+version = "0.28.0-alpha.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "clap",
  "codex-arg0",
  "codex-common",
  "codex-core",
@@ -801,7 +802,7 @@ dependencies = [
 
 [[package]]
 name = "codex-ollama"
-version = "0.0.0"
+version = "0.28.0-alpha.1"
 dependencies = [
  "async-stream",
  "bytes",
@@ -816,7 +817,7 @@ dependencies = [
 
 [[package]]
 name = "codex-protocol"
-version = "0.0.0"
+version = "0.28.0-alpha.1"
 dependencies = [
  "base64",
  "icu_decimal",
@@ -838,7 +839,7 @@ dependencies = [
 
 [[package]]
 name = "codex-protocol-ts"
-version = "0.0.0"
+version = "0.28.0-alpha.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -848,7 +849,7 @@ dependencies = [
 
 [[package]]
 name = "codex-tui"
-version = "0.0.0"
+version = "0.28.0-alpha.1"
 dependencies = [
  "anyhow",
  "arboard",
@@ -1015,7 +1016,7 @@ checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
 
 [[package]]
 name = "core_test_support"
-version = "0.0.0"
+version = "0.28.0-alpha.1"
 dependencies = [
  "codex-core",
  "serde_json",
@@ -2667,7 +2668,7 @@ dependencies = [
 
 [[package]]
 name = "mcp-types"
-version = "0.0.0"
+version = "0.28.0-alpha.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -2676,7 +2677,7 @@ dependencies = [
 
 [[package]]
 name = "mcp_test_support"
-version = "0.0.0"
+version = "0.28.0-alpha.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
