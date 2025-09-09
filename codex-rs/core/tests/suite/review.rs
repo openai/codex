@@ -7,6 +7,10 @@ use codex_core::config::Config;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
+use codex_core::protocol::ReviewCodeLocation;
+use codex_core::protocol::ReviewFinding;
+use codex_core::protocol::ReviewLineRange;
+use codex_core::protocol::ReviewOutputEvent;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id_from_str;
@@ -34,8 +38,6 @@ async fn review_op_emits_lifecycle_and_review_output() {
         return;
     }
 
-    // Start mock Responses API server. Return a single assistant message whose
-    // text is a JSON-encoded ReviewOutputEvent.
     // Start mock Responses API server. Return a single assistant message whose
     // text is a JSON-encoded ReviewOutputEvent.
     let review_json = serde_json::json!({
@@ -77,17 +79,41 @@ async fn review_op_emits_lifecycle_and_review_output() {
         .await
         .unwrap();
 
-    // Verify lifecycle: Entered -> ReviewOutput -> Exited -> TaskComplete.
+    // Verify lifecycle: Entered -> Exited(Some(review)) -> TaskComplete.
     let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode)).await;
-    // No intermediate ReviewOutput; the final selection/result is returned via ExitedReviewMode.
-    let _closed = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExitedReviewMode(None))).await;
+    let closed = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExitedReviewMode(_))).await;
+    let review = match closed {
+        EventMsg::ExitedReviewMode(Some(r)) => r,
+        other => panic!("expected ExitedReviewMode(Some(..)), got {other:?}"),
+    };
+
+    // Deep compare with the structured object encoded in review_json.
+    let expected = ReviewOutputEvent {
+        findings: vec![ReviewFinding {
+            title: "Prefer Stylize helpers".to_string(),
+            body: "Use .dim()/.bold() chaining instead of manual Style where possible.".to_string(),
+            confidence_score: 0.9,
+            priority: Some(1),
+            code_location: ReviewCodeLocation {
+                absolute_file_path: std::path::PathBuf::from("/tmp/file.rs"),
+                line_range: ReviewLineRange { start: 10, end: 20 },
+            },
+        }],
+        overall_correctness: "good".to_string(),
+        overall_explanation: "All good with some improvements suggested.".to_string(),
+        overall_confidence_score: 0.8,
+    };
+    let expected_json = serde_json::to_value(&expected).expect("serialize expected");
+    let actual_json = serde_json::to_value(&review).expect("serialize actual");
+    assert_eq!(expected_json, actual_json);
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     server.verify().await;
 }
 
 /// When the model returns plain text that is not JSON, ensure the child
-/// lifecycle still occurs and the plain text is surfaced as an AgentMessage.
+/// lifecycle still occurs and the plain text is surfaced via
+/// ExitedReviewMode(Some(..)) as the overall_explanation.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn review_op_with_plain_text_emits_agent_message() {
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
@@ -116,8 +142,22 @@ async fn review_op_with_plain_text_emits_agent_message() {
         .unwrap();
 
     let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode)).await;
-    let _message = wait_for_event(&codex, |ev| matches!(ev, EventMsg::AgentMessage(_))).await;
-    let _closed = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExitedReviewMode(None))).await;
+    let closed = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExitedReviewMode(_))).await;
+    let review = match closed {
+        EventMsg::ExitedReviewMode(Some(r)) => r,
+        other => panic!("expected ExitedReviewMode(Some(..)), got {other:?}"),
+    };
+
+    // Expect a structured fallback carrying the plain text.
+    let expected = ReviewOutputEvent {
+        findings: vec![],
+        overall_correctness: String::new(),
+        overall_explanation: "just plain text".to_string(),
+        overall_confidence_score: 1.0,
+    };
+    let expected_json = serde_json::to_value(&expected).expect("serialize expected");
+    let actual_json = serde_json::to_value(&review).expect("serialize actual");
+    assert_eq!(expected_json, actual_json);
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     server.verify().await;
@@ -360,7 +400,10 @@ async fn review_history_does_not_leak_into_parent_session() {
         .await
         .unwrap();
     let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode)).await;
-    let _closed = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExitedReviewMode(None))).await;
+    let _closed = wait_for_event(&codex, |ev| {
+        matches!(ev, EventMsg::ExitedReviewMode(Some(_)))
+    })
+    .await;
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // 2) Continue in the parent session; request input must not include any review items.

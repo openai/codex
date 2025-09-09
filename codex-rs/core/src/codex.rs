@@ -993,7 +993,6 @@ impl Session {
         state.pending_approvals.clear();
         state.pending_input.clear();
         if let Some(task) = state.current_task.take() {
-            // If currently in review mode, inform UIs we are exiting review mode now.
             if state.in_review_mode {
                 state.in_review_mode = false;
                 let _ = self.tx_event.try_send(Event {
@@ -1509,9 +1508,8 @@ async fn run_task(
 
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
     // For review threads, keep an isolated in-memory history so the
-    // model sees a fresh conversation without the parent session's history
-    // (including <user_instructions>). For normal turns, continue recording to
-    // the session history as before.
+    // model sees a fresh conversation without the parent session's history.
+    // For normal turns, continue recording to the session history as before.
     let is_review_mode = turn_context.is_review_mode;
     let mut review_thread_history: Vec<ResponseItem> = Vec::new();
     if is_review_mode {
@@ -1717,37 +1715,41 @@ async fn run_task(
     // If this was a review thread and we have a final assistant message,
     // try to parse it as a ReviewOutput.
     //
-    // If parsing fails, emit the raw assistant text as a normal AgentMessage.
+    // If parsing fails, construct a minimal ReviewOutputEvent using the plain
+    // text as the overall explanation.
     if turn_context.is_review_mode
         && let Some(text) = last_agent_message.clone()
     {
-        if let Some(review) = parse_review_output_event(&text) {
-            // Emit ExitedReviewMode(Some) to signal completion with a result.
-            {
-                let mut st = sess.state.lock_unchecked();
+        // Emit ExitedReviewMode(Some) to signal completion with a result.
+        {
+            let mut st = sess.state.lock_unchecked();
+            st.in_review_mode = false;
+        }
+
+        let review = parse_review_output_event(&text);
+        let _ = sess
+            .tx_event
+            .send(Event {
+                id: sub_id.clone(),
+                msg: EventMsg::ExitedReviewMode(Some(review)),
+            })
+            .await;
+    }
+
+    sess.remove_task(&sub_id);
+    // If this was a review thread, and we haven't already emitted an exit event
+    // (i.e., still in review mode), send a fallback ExitedReviewMode(None).
+    if turn_context.is_review_mode {
+        let should_emit_fallback = {
+            let mut st = sess.state.lock_unchecked();
+            if st.in_review_mode {
                 st.in_review_mode = false;
+                true
+            } else {
+                false
             }
-            let _ = sess
-                .tx_event
-                .send(Event {
-                    id: sub_id.clone(),
-                    msg: EventMsg::ExitedReviewMode(Some(review)),
-                })
-                .await;
-        } else {
-            // Not JSON – fall back to showing the plain text.
-            let _ = sess
-                .tx_event
-                .send(Event {
-                    id: sub_id.clone(),
-                    msg: EventMsg::AgentMessage(AgentMessageEvent { message: text }),
-                })
-                .await;
-            // And signal review completion with no structured output.
-            {
-                let mut st = sess.state.lock_unchecked();
-                st.in_review_mode = false;
-            }
+        };
+        if should_emit_fallback {
             let _ = sess
                 .tx_event
                 .send(Event {
@@ -1757,22 +1759,6 @@ async fn run_task(
                 .await;
         }
     }
-
-    sess.remove_task(&sub_id);
-    // If this was a child thread, announce result before completing the task.
-    if turn_context.is_review_mode {
-        {
-            let mut st = sess.state.lock_unchecked();
-            st.in_review_mode = false;
-        }
-        let _ = sess
-            .tx_event
-            .send(Event {
-                id: sub_id.clone(),
-                msg: EventMsg::ExitedReviewMode(None),
-            })
-            .await;
-    }
     let event = Event {
         id: sub_id,
         msg: EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }),
@@ -1780,10 +1766,12 @@ async fn run_task(
     sess.tx_event.send(event).await.ok();
 }
 
-fn parse_review_output_event(text: &str) -> Option<crate::protocol::ReviewOutputEvent> {
+/// Parse the review output; when not valid JSON, build a structured
+/// fallback that carries the plain text as the overall explanation.
+fn parse_review_output_event(text: &str) -> crate::protocol::ReviewOutputEvent {
     // Try direct parse first
     if let Ok(ev) = serde_json::from_str::<crate::protocol::ReviewOutputEvent>(text) {
-        return Some(ev);
+        return ev;
     }
     // If wrapped in markdown fences or extra prose, attempt to extract the first JSON object
     if let (Some(start), Some(end)) = (text.find('{'), text.rfind('}'))
@@ -1791,10 +1779,17 @@ fn parse_review_output_event(text: &str) -> Option<crate::protocol::ReviewOutput
     {
         let slice = &text[start..=end];
         if let Ok(ev) = serde_json::from_str::<crate::protocol::ReviewOutputEvent>(slice) {
-            return Some(ev);
+            return ev;
         }
     }
-    None
+    // Not JSON – return a structured ReviewOutputEvent that carries
+    // the plain text as the overall explanation.
+    crate::protocol::ReviewOutputEvent {
+        findings: Vec::new(),
+        overall_correctness: String::new(),
+        overall_explanation: text.to_string(),
+        overall_confidence_score: 1.0,
+    }
 }
 
 async fn run_turn(
