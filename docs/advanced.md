@@ -39,4 +39,40 @@ env = { "API_KEY" = "value" }
 ```
 
 > [!TIP]
-> It is somewhat experimental, but the Codex CLI can also be run as an MCP _server_ via `codex mcp`. If you launch it with an MCP client such as `npx @modelcontextprotocol/inspector codex mcp` and send it a `tools/list` request, you will see that there is only one tool, `codex`, that accepts a grab-bag of inputs, including a catch-all `config` map for anything you might want to override. Feel free to play around with it and provide feedback via GitHub issues. 
+> It is somewhat experimental, but the Codex CLI can also be run as an MCP _server_ via `codex mcp`. If you launch it with an MCP client such as `npx @modelcontextprotocol/inspector codex mcp` and send it a `tools/list` request, you will see that there is only one tool, `codex`, that accepts a grab-bag of inputs, including a catch-all `config` map for anything you might want to override. Feel free to play around with it and provide feedback via GitHub issues.
+
+## Install ripgrep (`rg`) for better file search
+
+Codex default prompt in [prompt.md](../codex-rs/core/prompt.md) often encourage using `rg` (ripgrep) for fast file search: it is much faster than alternatives like `grep`. Install it via your platform’s package manager if that is not already the case (find out by running `rg --version`):
+
+- macOS (Homebrew):
+
+```bash
+brew install ripgrep
+```
+
+- Linux:
+
+```bash
+# Debian/Ubuntu
+sudo apt-get update && sudo apt-get install -y ripgrep
+
+# Fedora
+sudo dnf install -y ripgrep
+
+# Arch
+sudo pacman -S ripgrep
+```
+
+- Windows:
+
+```shell
+# Winget
+winget install BurntSushi.ripgrep.MSVC
+
+# Chocolatey
+choco install ripgrep
+
+# Scoop
+scoop install ripgrep
+```
