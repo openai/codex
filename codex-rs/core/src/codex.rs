@@ -267,6 +267,12 @@ struct State {
     pending_input: Vec<ResponseInputItem>,
     history: ConversationHistory,
     token_info: Option<TokenUsageInfo>,
+    last_undo_patch: Option<StoredUndoPatch>,
+}
+
+#[derive(Clone)]
+struct StoredUndoPatch {
+    patch: String,
 }
 
 /// Context for an initialized model agent
@@ -681,6 +687,19 @@ impl Session {
         state.approved_commands.insert(cmd);
     }
 
+    fn store_last_undo_patch(&self, patch: String) {
+        let mut state = self.state.lock_unchecked();
+        state.last_undo_patch = Some(StoredUndoPatch { patch });
+    }
+
+    fn last_undo_patch(&self) -> Option<StoredUndoPatch> {
+        self.state.lock_unchecked().last_undo_patch.clone()
+    }
+
+    fn clear_last_undo_patch(&self) {
+        self.state.lock_unchecked().last_undo_patch = None;
+    }
+
     /// Records items to both the rollout and the chat completions/ZDR
     /// transcript, if enabled.
     async fn record_conversation_items(&self, items: &[ResponseItem]) {
@@ -731,6 +750,7 @@ impl Session {
                 user_explicitly_approved_this_action,
                 changes,
             }) => {
+                self.clear_last_undo_patch();
                 turn_diff_tracker.on_patch_begin(&changes);
 
                 EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
@@ -759,8 +779,7 @@ impl Session {
     async fn on_exec_command_end(
         &self,
         turn_diff_tracker: &mut TurnDiffTracker,
-        sub_id: &str,
-        call_id: &str,
+        context: &ExecCommandContext,
         output: &ExecToolCallOutput,
         is_apply_patch: bool,
     ) {
@@ -779,14 +798,14 @@ impl Session {
 
         let msg = if is_apply_patch {
             EventMsg::PatchApplyEnd(PatchApplyEndEvent {
-                call_id: call_id.to_string(),
+                call_id: context.call_id.clone(),
                 stdout,
                 stderr,
                 success: *exit_code == 0,
             })
         } else {
             EventMsg::ExecCommandEnd(ExecCommandEndEvent {
-                call_id: call_id.to_string(),
+                call_id: context.call_id.clone(),
                 stdout,
                 stderr,
                 aggregated_output,
@@ -797,7 +816,7 @@ impl Session {
         };
 
         let event = Event {
-            id: sub_id.to_string(),
+            id: context.sub_id.clone(),
             msg,
         };
         let _ = self.tx_event.send(event).await;
@@ -805,14 +824,55 @@ impl Session {
         // If this is an apply_patch, after we emit the end patch, emit a second event
         // with the full turn diff if there is one.
         if is_apply_patch {
-            let unified_diff = turn_diff_tracker.get_unified_diff();
-            if let Ok(Some(unified_diff)) = unified_diff {
-                let msg = EventMsg::TurnDiff(TurnDiffEvent { unified_diff });
-                let event = Event {
-                    id: sub_id.into(),
-                    msg,
-                };
-                let _ = self.tx_event.send(event).await;
+            match turn_diff_tracker.get_unified_diff() {
+                Ok(Some(unified_diff)) => {
+                    let msg = EventMsg::TurnDiff(TurnDiffEvent {
+                        unified_diff: unified_diff.clone(),
+                    });
+                    let event = Event {
+                        id: context.sub_id.clone(),
+                        msg,
+                    };
+                    let _ = self.tx_event.send(event).await;
+                    if *exit_code == 0 {
+                        match turn_diff_tracker.build_undo_patch() {
+                            Ok(Some(patch)) => {
+                                self.store_last_undo_patch(patch);
+                            }
+                            Ok(None) => {
+                                self.clear_last_undo_patch();
+                            }
+                            Err(error) => {
+                                warn!("failed to prepare undo patch: {error:#}");
+                                self.clear_last_undo_patch();
+                                self.notify_background_event(
+                                    &context.sub_id,
+                                    format!("Undo is unavailable for this turn: {error:#}"),
+                                )
+                                .await;
+                            }
+                        }
+                    }
+                }
+                Ok(None) => {
+                    if *exit_code == 0 {
+                        self.clear_last_undo_patch();
+                    }
+                }
+                Err(error) => {
+                    warn!("failed to compute unified diff: {error:#}");
+                    if *exit_code == 0 {
+                        self.clear_last_undo_patch();
+                        self
+                            .notify_background_event(
+                                &context.sub_id,
+                                format!(
+                                    "Undo is unavailable for this turn: failed to compute diff: {error:#}"
+                                ),
+                            )
+                            .await;
+                    }
+                }
             }
         }
     }
@@ -827,8 +887,6 @@ impl Session {
         exec_args: ExecInvokeArgs<'a>,
     ) -> crate::error::Result<ExecToolCallOutput> {
         let is_apply_patch = begin_ctx.apply_patch.is_some();
-        let sub_id = begin_ctx.sub_id.clone();
-        let call_id = begin_ctx.call_id.clone();
 
         self.on_exec_command_begin(turn_diff_tracker, begin_ctx.clone())
             .await;
@@ -856,14 +914,8 @@ impl Session {
                 &output_stderr
             }
         };
-        self.on_exec_command_end(
-            turn_diff_tracker,
-            &sub_id,
-            &call_id,
-            borrowed,
-            is_apply_patch,
-        )
-        .await;
+        self.on_exec_command_end(turn_diff_tracker, &begin_ctx, borrowed, is_apply_patch)
+            .await;
 
         result
     }
@@ -889,6 +941,37 @@ impl Session {
             }),
         };
         let _ = self.tx_event.send(event).await;
+    }
+
+    async fn undo_last_turn_diff(&self, sub_id: &str) {
+        let Some(stored_patch) = self.last_undo_patch() else {
+            self.notify_background_event(sub_id, "No turn diff available to undo.")
+                .await;
+            return;
+        };
+
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        match codex_apply_patch::apply_patch(&stored_patch.patch, &mut stdout, &mut stderr) {
+            Ok(()) => {
+                self.clear_last_undo_patch();
+                if stdout.is_empty() {
+                    self.notify_background_event(sub_id, "Reverted last turn diff.")
+                        .await;
+                } else if let Ok(output) = String::from_utf8(stdout) {
+                    self.notify_background_event(sub_id, output).await;
+                }
+            }
+            Err(error) => {
+                let mut message = format!("failed to undo turn diff: {error:#}");
+                if let Ok(stderr_text) = String::from_utf8(stderr)
+                    && !stderr_text.is_empty()
+                {
+                    message = format!("{message}\n{stderr_text}");
+                }
+                self.notify_stream_error(sub_id, message).await;
+            }
+        }
     }
 
     /// Build the full turn input by concatenating the current conversation
@@ -1167,6 +1250,9 @@ async fn submission_loop(
                         AgentTask::spawn(sess.clone(), Arc::clone(&turn_context), sub.id, items);
                     sess.set_task(task);
                 }
+            }
+            Op::UndoLastTurnDiff => {
+                sess.undo_last_turn_diff(&sub.id).await;
             }
             Op::UserTurn {
                 items,

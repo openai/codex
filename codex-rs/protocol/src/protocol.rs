@@ -60,6 +60,9 @@ pub enum Op {
         items: Vec<InputItem>,
     },
 
+    /// Undo the most recently applied turn diff using the local git repo.
+    UndoLastTurnDiff,
+
     /// Similar to [`Op::UserInput`], but contains additional context required
     /// for a turn of a [`crate::codex_conversation::CodexConversation`].
     UserTurn {
@@ -1020,6 +1023,7 @@ pub enum TurnAbortReason {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
 
     /// Serialize Event to verify that its JSON representation has the expected
     /// amount of nesting.

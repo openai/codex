@@ -13,6 +13,7 @@ use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
 use codex_core::protocol::AgentReasoningEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
+use codex_core::protocol::BackgroundEventEvent;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
@@ -616,6 +617,58 @@ fn disabled_slash_command_while_task_running_snapshot() {
     );
     let blob = lines_to_single_string(cells.last().unwrap());
     assert_snapshot!(blob);
+}
+
+#[test]
+fn undo_command_requires_confirmation() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    chat.dispatch_command(SlashCommand::Undo);
+
+    assert!(rx.try_recv().is_err(), "undo should require confirmation");
+
+    chat.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+    let mut undo_requested = false;
+    let mut history_lines = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        match event {
+            AppEvent::InsertHistoryCell(cell) => {
+                history_lines.push(cell.display_lines(80));
+            }
+            AppEvent::CodexOp(Op::UndoLastTurnDiff) => {
+                undo_requested = true;
+            }
+            _ => {}
+        }
+    }
+
+    assert!(undo_requested, "expected undo op after confirmation");
+
+    let combined = history_lines
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(combined.contains("Undoing the last Codex turn diff."));
+}
+
+#[test]
+fn background_events_are_rendered_in_history() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    chat.handle_codex_event(Event {
+        id: "undo".to_string(),
+        msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
+            message: "Reverted last turn diff.".to_string(),
+        }),
+    });
+
+    let history = drain_insert_history(&mut rx);
+    let combined = history
+        .iter()
+        .map(|lines| lines_to_single_string(lines))
+        .collect::<String>();
+    assert!(combined.contains("Reverted last turn diff."));
 }
 
 #[tokio::test(flavor = "current_thread")]

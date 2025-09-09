@@ -411,6 +411,8 @@ impl ChatWidget {
 
     fn on_background_event(&mut self, message: String) {
         debug!("BackgroundEvent: {message}");
+        self.add_to_history(history_cell::new_background_event(message));
+        self.request_redraw();
     }
 
     fn on_stream_error(&mut self, message: String) {
@@ -862,6 +864,9 @@ impl ChatWidget {
                     tx.send(AppEvent::DiffResult(text));
                 });
             }
+            SlashCommand::Undo => {
+                self.open_undo_confirmation_popup();
+            }
             SlashCommand::Mention => {
                 self.insert_str("@");
             }
@@ -1249,6 +1254,43 @@ impl ChatWidget {
             "Select Approval Mode".to_string(),
             None,
             Some("Press Enter to confirm or Esc to go back".to_string()),
+            items,
+        );
+    }
+
+    fn open_undo_confirmation_popup(&mut self) {
+        let confirm_message = "Undoing the last Codex turn diff.".to_string();
+        let undo_actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+            tx.send(AppEvent::InsertHistoryCell(Box::new(
+                history_cell::new_background_event(confirm_message.clone()),
+            )));
+            tx.send(AppEvent::CodexOp(Op::UndoLastTurnDiff));
+        })];
+
+        let items = vec![
+            SelectionItem {
+                name: "Undo last turn diff".to_string(),
+                description: Some(
+                    "Revert files that Codex changed during the most recent turn.".to_string(),
+                ),
+                is_current: false,
+                actions: undo_actions,
+            },
+            SelectionItem {
+                name: "Cancel".to_string(),
+                description: Some("Close without undoing any files.".to_string()),
+                is_current: false,
+                actions: Vec::new(),
+            },
+        ];
+
+        self.bottom_pane.show_selection_view(
+            "Undo last Codex turn?".to_string(),
+            Some(
+                "Codex will apply a patch to restore files from before the previous turn."
+                    .to_string(),
+            ),
+            Some("Press Enter to confirm or Esc to cancel".to_string()),
             items,
         );
     }

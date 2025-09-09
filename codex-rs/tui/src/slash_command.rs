@@ -18,6 +18,7 @@ pub enum SlashCommand {
     Init,
     Compact,
     Diff,
+    Undo,
     Mention,
     Status,
     Mcp,
@@ -36,6 +37,7 @@ impl SlashCommand {
             SlashCommand::Compact => "summarize conversation to prevent hitting the context limit",
             SlashCommand::Quit => "exit Codex",
             SlashCommand::Diff => "show git diff (including untracked files)",
+            SlashCommand::Undo => "undo the last turn diff applied by Codex",
             SlashCommand::Mention => "mention a file",
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::Model => "choose what model and reasoning effort to use",
@@ -63,6 +65,7 @@ impl SlashCommand {
             | SlashCommand::Approvals
             | SlashCommand::Logout => false,
             SlashCommand::Diff
+            | SlashCommand::Undo
             | SlashCommand::Mention
             | SlashCommand::Status
             | SlashCommand::Mcp
