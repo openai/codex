@@ -28,6 +28,7 @@ use super::policy::is_persisted_response_item;
 use crate::config::Config;
 use crate::conversation_manager::InitialHistory;
 use crate::conversation_manager::ResumedHistory;
+use crate::default_client::CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR;
 use crate::git_info::GitInfo;
 use crate::git_info::collect_git_info;
 use crate::protocol::EventMsg;
@@ -176,7 +177,8 @@ impl RolloutRecorder {
                         id: session_id,
                         timestamp,
                         cwd: config.cwd.clone(),
-                        originator: config.responses_originator_header.clone(),
+                        originator: std::env::var(CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR)
+                            .unwrap_or_else(|_| "codex_cli_rs".to_string()),
                         cli_version: env!("CARGO_PKG_VERSION").to_string(),
                         instructions,
                     }),
