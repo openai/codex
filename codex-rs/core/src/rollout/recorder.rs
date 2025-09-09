@@ -72,6 +72,7 @@ pub struct SavedSession {
 #[derive(Clone)]
 pub struct RolloutRecorder {
     tx: Sender<RolloutCmd>,
+    pub(crate) rollout_path: PathBuf,
 }
 
 #[derive(Clone)]
@@ -119,13 +120,14 @@ impl RolloutRecorder {
     /// cannot be created or the rollout file cannot be opened we return the
     /// error so the caller can decide whether to disable persistence.
     pub async fn new(config: &Config, params: RolloutRecorderParams) -> std::io::Result<Self> {
-        let (file, meta) = match params {
+        let (file, rollout_path, meta) = match params {
             RolloutRecorderParams::Create {
                 conversation_id,
                 instructions,
             } => {
                 let LogFileInfo {
                     file,
+                    path,
                     conversation_id: session_id,
                     timestamp,
                 } = create_log_file(config, conversation_id)?;
@@ -140,6 +142,7 @@ impl RolloutRecorder {
 
                 (
                     tokio::fs::File::from_std(file),
+                    path,
                     Some(SessionMeta {
                         timestamp,
                         id: session_id,
@@ -150,8 +153,9 @@ impl RolloutRecorder {
             RolloutRecorderParams::Resume { path } => (
                 tokio::fs::OpenOptions::new()
                     .append(true)
-                    .open(path)
+                    .open(&path)
                     .await?,
+                path,
                 None,
             ),
         };
@@ -169,7 +173,7 @@ impl RolloutRecorder {
         // driver instead of blocking the runtime.
         tokio::task::spawn(rollout_writer(file, rx, meta, cwd));
 
-        Ok(Self { tx })
+        Ok(Self { tx, rollout_path })
     }
 
     pub(crate) async fn record_items(&self, items: &[ResponseItem]) -> std::io::Result<()> {
@@ -289,6 +293,9 @@ struct LogFileInfo {
     /// Opened file handle to the rollout file.
     file: File,
 
+    /// Full path to the rollout file.
+    path: PathBuf,
+
     /// Session ID (also embedded in filename).
     conversation_id: ConversationId,
 
@@ -328,6 +335,7 @@ fn create_log_file(
 
     Ok(LogFileInfo {
         file,
+        path,
         conversation_id,
         timestamp,
     })

@@ -523,6 +523,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     history_log_id: _,
                     history_entry_count: _,
                     initial_messages: _,
+                    rollout_path: _,
                 } = session_configured_event;
 
                 ts_println!(
