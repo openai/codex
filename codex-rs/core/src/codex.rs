@@ -710,6 +710,29 @@ impl Session {
         }
     }
 
+    /// Record a user input item to conversation history and also persist a
+    /// corresponding UserMessage EventMsg to rollout.
+    async fn record_input_and_rollout_usermsg(&self, response_input: &ResponseInputItem) {
+        let response_item: ResponseItem = response_input.clone().into();
+        // Add to conversation history and persist response item to rollout
+        self.record_conversation_items(&[response_item.clone()])
+            .await;
+
+        // Derive user message events and persist only UserMessage to rollout
+        let msgs =
+            map_response_item_to_event_messages(&response_item, self.show_raw_agent_reasoning);
+        let user_msgs: Vec<RolloutItem> = msgs
+            .into_iter()
+            .filter_map(|m| match m {
+                EventMsg::UserMessage(ev) => Some(RolloutItem::EventMsg(EventMsg::UserMessage(ev))),
+                _ => None,
+            })
+            .collect();
+        if !user_msgs.is_empty() {
+            self.persist_rollout_items(&user_msgs).await;
+        }
+    }
+
     async fn on_exec_command_begin(
         &self,
         turn_diff_tracker: &mut TurnDiffTracker,
@@ -1411,7 +1434,7 @@ async fn run_task(
     sess.send_event(event).await;
 
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
-    sess.record_conversation_items(&[initial_input_for_turn.clone().into()])
+    sess.record_input_and_rollout_usermsg(&initial_input_for_turn)
         .await;
 
     let mut last_agent_message: Option<String> = None;
