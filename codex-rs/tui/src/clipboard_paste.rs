@@ -49,34 +49,60 @@ pub struct PastedImageInfo {
 /// Capture image from system clipboard, encode to PNG, and return bytes + info.
 #[cfg(not(target_os = "android"))]
 pub fn paste_image_as_png() -> Result<(Vec<u8>, PastedImageInfo), PasteImageError> {
+    let _span = tracing::debug_span!("paste_image_as_png").entered();
     tracing::debug!("attempting clipboard image read");
     let mut cb = arboard::Clipboard::new()
         .map_err(|e| PasteImageError::ClipboardUnavailable(e.to_string()))?;
-    let img = cb
-        .get_image()
-        .map_err(|e| PasteImageError::NoImage(e.to_string()))?;
-    let w = img.width as u32;
-    let h = img.height as u32;
+    // Sometimes images on the clipboard come as files (e.g. when copy/pasting from
+    // Finder), sometimes they come as image data (e.g. when pasting from Chrome).
+    // Accept both, and prefer files if both are present.
+    let files = cb
+        .get()
+        .file_list()
+        .map_err(|e| PasteImageError::ClipboardUnavailable(e.to_string()));
+    let dyn_img = if let Some(img) = files
+        .unwrap_or_default()
+        .into_iter()
+        .find_map(|f| image::open(f).ok())
+    {
+        tracing::debug!(
+            "clipboard image opened from file: {}x{}",
+            img.width(),
+            img.height()
+        );
+        img
+    } else {
+        let _span = tracing::debug_span!("get_image").entered();
+        let img = cb
+            .get_image()
+            .map_err(|e| PasteImageError::NoImage(e.to_string()))?;
+        let w = img.width as u32;
+        let h = img.height as u32;
+        tracing::debug!("clipboard image opened from image: {}x{}", w, h);
+
+        let Some(rgba_img) = image::RgbaImage::from_raw(w, h, img.bytes.into_owned()) else {
+            return Err(PasteImageError::EncodeFailed("invalid RGBA buffer".into()));
+        };
+
+        image::DynamicImage::ImageRgba8(rgba_img)
+    };
 
     let mut png: Vec<u8> = Vec::new();
-    let Some(rgba_img) = image::RgbaImage::from_raw(w, h, img.bytes.into_owned()) else {
-        return Err(PasteImageError::EncodeFailed("invalid RGBA buffer".into()));
-    };
-    let dyn_img = image::DynamicImage::ImageRgba8(rgba_img);
-    tracing::debug!("clipboard image decoded RGBA {w}x{h}");
     {
+        let span =
+            tracing::debug_span!("encode_image", byte_length = tracing::field::Empty).entered();
         let mut cursor = std::io::Cursor::new(&mut png);
         dyn_img
             .write_to(&mut cursor, image::ImageFormat::Png)
             .map_err(|e| PasteImageError::EncodeFailed(e.to_string()))?;
+        span.record("byte_length", png.len());
     }
 
-    tracing::debug!("clipboard image encoded to PNG ({}) bytes", png.len());
     Ok((
         png,
         PastedImageInfo {
-            width: w,
-            height: h,
+            width: dyn_img.width(),
+            height: dyn_img.height(),
             encoded_format: EncodedImageFormat::Png,
         },
     ))

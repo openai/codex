@@ -142,7 +142,7 @@ async fn test_list_and_resume_conversations() {
     } = to_response::<ResumeConversationResponse>(resume_resp)
         .expect("deserialize resumeConversation response");
     // conversation id should be a valid UUID
-    let _ = uuid::Uuid::from_bytes(conversation_id.0.into_bytes());
+    let _: uuid::Uuid = conversation_id.into();
 }
 
 fn create_fake_rollout(codex_home: &Path, filename_ts: &str, meta_rfc3339: &str, preview: &str) {
@@ -157,7 +157,7 @@ fn create_fake_rollout(codex_home: &Path, filename_ts: &str, meta_rfc3339: &str,
     let file_path = dir.join(format!("rollout-{filename_ts}-{uuid}.jsonl"));
     let mut lines = Vec::new();
     // Meta line with timestamp
-    lines.push(json!({"timestamp": meta_rfc3339}).to_string());
+    lines.push(json!({"timestamp": meta_rfc3339, "id": uuid}).to_string());
     // Minimal user message entry as a persisted response item
     lines.push(
         json!({
