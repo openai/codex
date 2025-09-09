@@ -17,7 +17,6 @@ icu_locale_core = "2.0.0"
 mcp-types = { path = "../mcp-types" }
 mime_guess = "2.0.5"
 serde = { version = "1", features = ["derive"] }
-serde_bytes = "0.11"
 serde_json = "1"
 serde_with = { version = "3.14.0", features = ["macros", "base64"] }
 strum = "0.27.2"
@@ -29,3 +28,7 @@ uuid = { version = "1", features = ["serde", "v4"] }
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"
+
+[package.metadata.cargo-shear]
+# Required because the not imported as strum_macros in non-nightly builds.
+ignored = ["strum"]
