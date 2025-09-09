@@ -56,9 +56,13 @@ const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
 pub enum InputResult {
     Submitted(String),
     // Submit actual text to the agent but override what is shown in the
-    // transcript UI with `display`. Used for saved prompts so users see the
-    // original command they typed (e.g., "/saved-prompt").
-    SubmittedWithDisplay { text: String, display: String },
+    // transcript UI with `display`. Optionally include `pretty_unredacted`
+    // for an unredacted transcript (e.g., custom instruction first, then saved prompt).
+    SubmittedWithDisplay {
+        text: String,
+        display: String,
+        pretty_unredacted: Option<String>,
+    },
     Command(SlashCommand),
     None,
 }
@@ -475,19 +479,26 @@ impl ChatComposer {
 <Rule>If information is missing, make reasonable assumptions and proceed.</Rule>\
 </Rules>\
 <CustomInstruction><![CDATA[\
-{}\
+{custom_instruction}\
 ]]></CustomInstruction>\
 <SavedPrompt><![CDATA[\
-{}\
+{contents}\
 ]]></SavedPrompt>\
-</Directive>",
-                                            custom_instruction, contents
+</Directive>"
                                         )
+                                    };
+                                    let pretty = if custom_instruction.is_empty() {
+                                        None
+                                    } else {
+                                        Some(format!(
+                                            "Custom instruction:\n{custom_instruction}\n\nSaved prompt:\n{contents}"
+                                        ))
                                     };
                                     return (
                                         InputResult::SubmittedWithDisplay {
                                             text: agent_text,
                                             display,
+                                            pretty_unredacted: pretty,
                                         },
                                         true,
                                     );
@@ -2452,7 +2463,7 @@ mod tests {
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
         match result {
-            InputResult::SubmittedWithDisplay { text, display } => {
+            InputResult::SubmittedWithDisplay { text, display, .. } => {
                 assert!(
                     display.starts_with("/my do this"),
                     "display should show typed command+instruction: {display}"
