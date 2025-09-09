@@ -605,6 +605,7 @@ pub(crate) fn new_session_info(
         history_log_id: _,
         history_entry_count: _,
         initial_messages: _,
+        rollout_path: _,
     } = event;
     if is_first_event {
         let cwd_str = match relativize_to_home(&config.cwd) {

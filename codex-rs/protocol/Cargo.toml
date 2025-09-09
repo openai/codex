@@ -28,6 +28,7 @@ uuid = { version = "1", features = ["serde", "v4"] }
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"
+tempfile = "3"
 
 [package.metadata.cargo-shear]
 # Required because the not imported as strum_macros in non-nightly builds.

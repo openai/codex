@@ -59,6 +59,7 @@ async fn test_conversation_create_and_send_message_ok() {
     let NewConversationResponse {
         conversation_id,
         model,
+        rollout_path: _,
     } = to_response::<NewConversationResponse>(new_conv_resp)
         .expect("deserialize newConversation response");
     assert_eq!(model, "o3");

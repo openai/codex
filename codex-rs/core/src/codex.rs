@@ -416,6 +416,7 @@ impl Session {
             error!("failed to initialize rollout recorder: {e:#}");
             anyhow::anyhow!("failed to initialize rollout recorder: {e:#}")
         })?;
+        let rollout_path = rollout_recorder.rollout_path.clone();
         // Create the mutable state for the Session.
         let state = State {
             history: ConversationHistory::new(),
@@ -509,6 +510,7 @@ impl Session {
                 history_log_id,
                 history_entry_count,
                 initial_messages,
+                rollout_path,
             }),
         })
         .chain(post_session_configured_error_events.into_iter());

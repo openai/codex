@@ -35,6 +35,7 @@ use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::path::PathBuf;
+use tempfile::NamedTempFile;
 use tokio::sync::mpsc::unbounded_channel;
 
 fn test_config() -> Config {
@@ -133,7 +134,7 @@ fn resumed_initial_messages_render_history() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual();
 
     let conversation_id = ConversationId::new();
-
+    let rollout_file = NamedTempFile::new().unwrap();
     let configured = codex_core::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         model: "test-model".to_string(),
@@ -148,6 +149,7 @@ fn resumed_initial_messages_render_history() {
                 message: "assistant reply".to_string(),
             }),
         ]),
+        rollout_path: rollout_file.path().to_path_buf(),
     };
 
     chat.handle_codex_event(Event {
