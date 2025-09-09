@@ -293,6 +293,7 @@ async fn read_first_jsonl_records(
     let reader = tokio::io::BufReader::new(file);
     let mut lines = reader.lines();
     let mut head: Vec<serde_json::Value> = Vec::new();
+    let mut saw_session_meta = false;
     while head.len() < max_records {
         let line_opt = lines.next_line().await?;
         let Some(line) = line_opt else { break };
@@ -312,9 +313,11 @@ async fn read_first_jsonl_records(
                         && let Some(meta) = obj.remove("meta")
                     {
                         head.push(meta);
+                        saw_session_meta = true;
                         continue;
                     }
                     head.push(val);
+                    saw_session_meta = true;
                 }
             }
             RolloutItem::ResponseItem(item) => {
@@ -327,6 +330,10 @@ async fn read_first_jsonl_records(
                 continue;
             }
         }
+    }
+    // Enforce same acceptance rule: must have a session_meta in the file
+    if !saw_session_meta {
+        return Ok(Vec::new());
     }
     Ok(head)
 }

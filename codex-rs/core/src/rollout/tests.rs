@@ -45,7 +45,11 @@ fn write_session_file(
         "type": "session_meta",
         "payload": {
             "id": uuid,
-            "timestamp": ts_str
+            "timestamp": ts_str,
+            "instructions": null,
+            "cwd": ".",
+            "originator": "test_originator",
+            "cli_version": "test_version"
         }
     });
     writeln!(file, "{meta}")?;
@@ -112,17 +116,26 @@ async fn test_list_conversations_latest_first() {
     let head_3 = vec![serde_json::json!({
         "id": u3,
         "timestamp": "2025-01-03T12-00-00",
-        "instructions": null
+        "instructions": null,
+        "cwd": ".",
+        "originator": "test_originator",
+        "cli_version": "test_version"
     })];
     let head_2 = vec![serde_json::json!({
         "id": u2,
         "timestamp": "2025-01-02T12-00-00",
-        "instructions": null
+        "instructions": null,
+        "cwd": ".",
+        "originator": "test_originator",
+        "cli_version": "test_version"
     })];
     let head_1 = vec![serde_json::json!({
         "id": u1,
         "timestamp": "2025-01-01T12-00-00",
-        "instructions": null
+        "instructions": null,
+        "cwd": ".",
+        "originator": "test_originator",
+        "cli_version": "test_version"
     })];
 
     let expected_cursor: Cursor =
@@ -186,12 +199,18 @@ async fn test_pagination_cursor() {
     let head_5 = vec![serde_json::json!({
         "id": u5,
         "timestamp": "2025-03-05T09-00-00",
-        "instructions": null
+        "instructions": null,
+        "cwd": ".",
+        "originator": "test_originator",
+        "cli_version": "test_version"
     })];
     let head_4 = vec![serde_json::json!({
         "id": u4,
         "timestamp": "2025-03-04T09-00-00",
-        "instructions": null
+        "instructions": null,
+        "cwd": ".",
+        "originator": "test_originator",
+        "cli_version": "test_version"
     })];
     let expected_cursor1: Cursor =
         serde_json::from_str(&format!("\"2025-03-04T09-00-00|{u4}\"")).unwrap();
@@ -230,12 +249,18 @@ async fn test_pagination_cursor() {
     let head_3 = vec![serde_json::json!({
         "id": u3,
         "timestamp": "2025-03-03T09-00-00",
-        "instructions": null
+        "instructions": null,
+        "cwd": ".",
+        "originator": "test_originator",
+        "cli_version": "test_version"
     })];
     let head_2 = vec![serde_json::json!({
         "id": u2,
         "timestamp": "2025-03-02T09-00-00",
-        "instructions": null
+        "instructions": null,
+        "cwd": ".",
+        "originator": "test_originator",
+        "cli_version": "test_version"
     })];
     let expected_cursor2: Cursor =
         serde_json::from_str(&format!("\"2025-03-02T09-00-00|{u2}\"")).unwrap();
@@ -268,7 +293,10 @@ async fn test_pagination_cursor() {
     let head_1 = vec![serde_json::json!({
         "id": u1,
         "timestamp": "2025-03-01T09-00-00",
-        "instructions": null
+        "instructions": null,
+        "cwd": ".",
+        "originator": "test_originator",
+        "cli_version": "test_version"
     })];
     let expected_cursor3: Cursor =
         serde_json::from_str(&format!("\"2025-03-01T09-00-00|{u1}\"")).unwrap();
@@ -308,7 +336,10 @@ async fn test_get_conversation_contents() {
     let expected_head = vec![serde_json::json!({
         "id": uuid,
         "timestamp": ts,
-        "instructions": null
+        "instructions": null,
+        "cwd": ".",
+        "originator": "test_originator",
+        "cli_version": "test_version"
     })];
     let expected_cursor: Cursor = serde_json::from_str(&format!("\"{ts}|{uuid}\"")).unwrap();
     let expected_page = ConversationsPage {
@@ -323,7 +354,7 @@ async fn test_get_conversation_contents() {
     assert_eq!(page, expected_page);
 
     // Entire file contents equality
-    let meta = serde_json::json!({"timestamp": ts, "type": "session_meta", "payload": {"id": uuid, "timestamp": ts}});
+    let meta = serde_json::json!({"timestamp": ts, "type": "session_meta", "payload": {"id": uuid, "timestamp": ts, "instructions": null, "cwd": ".", "originator": "test_originator", "cli_version": "test_version"}});
     let user_event = serde_json::json!({
         "timestamp": ts,
         "type": "event_msg",
@@ -367,7 +398,10 @@ async fn test_stable_ordering_same_second_pagination() {
         vec![serde_json::json!({
             "id": u,
             "timestamp": ts,
-            "instructions": null
+            "instructions": null,
+            "cwd": ".",
+            "originator": "test_originator",
+            "cli_version": "test_version"
         })]
     };
     let expected_cursor1: Cursor = serde_json::from_str(&format!("\"{ts}|{u2}\"")).unwrap();

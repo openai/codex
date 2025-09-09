@@ -37,6 +37,9 @@ use codex_protocol::models::ResponseItem;
 pub struct SessionMeta {
     pub id: ConversationId,
     pub timestamp: String,
+    pub cwd: PathBuf,
+    pub originator: String,
+    pub cli_version: String,
     pub instructions: Option<String>,
 }
 
@@ -170,8 +173,11 @@ impl RolloutRecorder {
                     tokio::fs::File::from_std(file),
                     path,
                     Some(SessionMeta {
-                        timestamp,
                         id: session_id,
+                        timestamp,
+                        cwd: config.cwd.clone(),
+                        originator: config.responses_originator_header.clone(),
+                        cli_version: env!("CARGO_PKG_VERSION").to_string(),
                         instructions,
                     }),
                 )
