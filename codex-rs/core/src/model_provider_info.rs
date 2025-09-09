@@ -126,12 +126,16 @@ impl ModelProviderInfo {
         self.query_params
             .as_ref()
             .map_or_else(String::new, |params| {
-                let full_params = params
-                    .iter()
-                    .map(|(k, v)| format!("{k}={v}"))
-                    .collect::<Vec<_>>()
-                    .join("&");
-                format!("?{full_params}")
+                if params.is_empty() {
+                    String::new()
+                } else {
+                    let full_params = params
+                        .iter()
+                        .map(|(k, v)| format!("{k}={v}"))
+                        .collect::<Vec<_>>()
+                        .join("&");
+                    format!("?{full_params}")
+                }
             })
     }
 
