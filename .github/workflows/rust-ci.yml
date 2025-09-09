@@ -63,6 +63,24 @@ jobs:
       - name: cargo fmt
         run: cargo fmt -- --config imports_granularity=Item --check
 
+  cargo_shear:
+    name: cargo shear
+    runs-on: ubuntu-24.04
+    needs: changed
+    if: ${{ needs.changed.outputs.codex == 'true' || needs.changed.outputs.workflows == 'true' || github.event_name == 'push' }}
+    defaults:
+      run:
+        working-directory: codex-rs
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.89
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-shear
+          version: 1.5.1
+      - name: cargo shear
+        run: cargo shear
+
   # --- CI to validate on different os/targets --------------------------------
   lint_build_test:
     name: ${{ matrix.runner }} - ${{ matrix.target }}${{ matrix.profile == 'release' && ' (release)' || '' }}
@@ -182,7 +200,7 @@ jobs:
   # --- Gatherer job that you mark as the ONLY required status -----------------
   results:
     name: CI results (required)
-    needs: [changed, general, lint_build_test]
+    needs: [changed, general, cargo_shear, lint_build_test]
     if: always()
     runs-on: ubuntu-24.04
     steps:
@@ -190,6 +208,7 @@ jobs:
         shell: bash
         run: |
           echo "general: ${{ needs.general.result }}"
+          echo "shear  : ${{ needs.cargo_shear.result }}"
           echo "matrix : ${{ needs.lint_build_test.result }}"
 
           # If nothing relevant changed (PR touching only root README, etc.),
@@ -201,4 +220,5 @@ jobs:
 
           # Otherwise require the jobs to have succeeded
           [[ '${{ needs.general.result }}' == 'success' ]] || { echo 'general failed'; exit 1; }
+          [[ '${{ needs.cargo_shear.result }}' == 'success' ]] || { echo 'cargo_shear failed'; exit 1; }
           [[ '${{ needs.lint_build_test.result }}' == 'success' ]] || { echo 'matrix failed'; exit 1; }
