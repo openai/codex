@@ -25,7 +25,6 @@ codex-common = { path = "../common", features = [
     "sandbox_summary",
 ] }
 codex-core = { path = "../core" }
-codex-login = { path = "../login" }
 codex-ollama = { path = "../ollama" }
 codex-protocol = { path = "../protocol" }
 owo-colors = "4.2.0"

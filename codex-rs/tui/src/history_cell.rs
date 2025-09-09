@@ -28,6 +28,7 @@ use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TokenUsage;
 use codex_protocol::mcp_protocol::ConversationId;
+use codex_protocol::num_format::format_with_separators;
 use codex_protocol::parse_command::ParsedCommand;
 use image::DynamicImage;
 use image::ImageReader;
@@ -604,6 +605,7 @@ pub(crate) fn new_session_info(
         history_log_id: _,
         history_entry_count: _,
         initial_messages: _,
+        rollout_path: _,
     } = event;
     if is_first_event {
         let cwd_str = match relativize_to_home(&config.cwd) {
@@ -964,7 +966,7 @@ pub(crate) fn new_status_output(
     // Input: <input> [+ <cached> cached]
     let mut input_line_spans: Vec<Span<'static>> = vec![
         "  • Input: ".into(),
-        usage.non_cached_input().to_string().into(),
+        format_with_separators(usage.non_cached_input()).into(),
     ];
     if usage.cached_input_tokens > 0 {
         let cached = usage.cached_input_tokens;
@@ -974,12 +976,12 @@ pub(crate) fn new_status_output(
     // Output: <output>
     lines.push(Line::from(vec![
         "  • Output: ".into(),
-        usage.output_tokens.to_string().into(),
+        format_with_separators(usage.output_tokens).into(),
     ]));
     // Total: <total>
     lines.push(Line::from(vec![
         "  • Total: ".into(),
-        usage.blended_total().to_string().into(),
+        format_with_separators(usage.blended_total()).into(),
     ]));
 
     PlainHistoryCell { lines }
