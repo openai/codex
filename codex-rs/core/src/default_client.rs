@@ -1,11 +1,17 @@
 use reqwest::header::HeaderValue;
 use std::sync::LazyLock;
+use std::sync::Mutex;
 
 /// Set this to add a suffix to the User-Agent string.
+///
+/// This is primarily designed to differentiate MCP clients (or the lack thereof) from each other.
+/// Because there can only be one MCP server per process, it should be safe for this to be a global static.
+/// However, future users of this should use this with caution as a result.
+///
 /// A space is automatically added between the suffix and the rest of the User-Agent string.
 /// The full user agent string is returned from the mcp initialize response.
 /// Parenthesis will be added by Codex. This should only specify what goes inside of the parenthesis.
-pub const CODEX_USER_AGENT_SUFFIX_ENV_VAR: &str = "CODEX_USER_AGENT_SUFFIX";
+pub static USER_AGENT_SUFFIX: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
 
 pub const CODEX_INTERNAL_ORIGINATOR_OVERRIDE_ENV_VAR: &str = "CODEX_INTERNAL_ORIGINATOR_OVERRIDE";
 
@@ -46,10 +52,19 @@ pub fn get_codex_user_agent() -> String {
         os_info.architecture().unwrap_or("unknown"),
         crate::terminal::user_agent()
     );
-    let suffix = match std::env::var(CODEX_USER_AGENT_SUFFIX_ENV_VAR) {
-        Ok(s) if !s.trim().is_empty() => format!(" ({})", s.trim()),
-        _ => "".to_string(),
-    };
+    let suffix = USER_AGENT_SUFFIX
+        .lock()
+        .ok()
+        .and_then(|guard| guard.clone())
+        .and_then(|value| {
+            let value = value.trim();
+            if value.is_empty() {
+                None
+            } else {
+                Some(value.to_string())
+            }
+        })
+        .map_or_else(String::new, |value| format!(" ({value})"));
     format!("{prefix}{suffix}")
 }
 

@@ -14,6 +14,7 @@ use codex_protocol::mcp_protocol::ConversationId;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
+use codex_core::default_client::USER_AGENT_SUFFIX;
 use codex_core::default_client::get_codex_user_agent;
 use codex_core::protocol::Submission;
 use mcp_types::CallToolRequestParams;
@@ -90,6 +91,7 @@ impl MessageProcessor {
         // Hold on to the ID so we can respond.
         let request_id = request.id.clone();
 
+        tracing::error!("[GABE] Trying from {request:?}");
         let client_request = match McpClientRequest::try_from(request) {
             Ok(client_request) => client_request,
             Err(e) => {
@@ -207,6 +209,14 @@ impl MessageProcessor {
             };
             self.outgoing.send_error(id, error).await;
             return;
+        }
+
+        let client_info = params.client_info;
+        let name = client_info.name;
+        let version = client_info.version;
+        let user_agent_suffix = format!("{name}; {version}");
+        if let Ok(mut suffix) = USER_AGENT_SUFFIX.lock() {
+            *suffix = Some(user_agent_suffix);
         }
 
         self.initialized = true;
