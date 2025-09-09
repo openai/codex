@@ -65,7 +65,41 @@ pub fn get_codex_user_agent() -> String {
             }
         })
         .map_or_else(String::new, |value| format!(" ({value})"));
-    format!("{prefix}{suffix}")
+
+    let candidate = format!("{prefix}{suffix}");
+    sanitize_user_agent(candidate, &prefix)
+}
+
+/// Sanitize the user agent string.
+///
+/// Invalid characters are replaced with an underscore.
+///
+/// If the user agent fails to parse, it falls back to fallback and then to ORIGINATOR.
+fn sanitize_user_agent(candidate: String, fallback: &str) -> String {
+    if HeaderValue::from_str(candidate.as_str()).is_ok() {
+        return candidate;
+    }
+
+    let sanitized: String = candidate
+        .chars()
+        .map(|ch| if matches!(ch, ' '..='~') { ch } else { '_' })
+        .collect();
+    if !sanitized.is_empty() && HeaderValue::from_str(sanitized.as_str()).is_ok() {
+        tracing::warn!(
+            "Sanitized Codex user agent because provided suffix contained invalid header characters"
+        );
+        sanitized
+    } else if HeaderValue::from_str(fallback).is_ok() {
+        tracing::warn!(
+            "Falling back to base Codex user agent because provided suffix could not be sanitized"
+        );
+        fallback.to_string()
+    } else {
+        tracing::warn!(
+            "Falling back to default Codex originator because base user agent string is invalid"
+        );
+        ORIGINATOR.value.clone()
+    }
 }
 
 /// Create a reqwest client with default `originator` and `User-Agent` headers set.
@@ -138,6 +172,28 @@ mod tests {
             .get("user-agent")
             .expect("user-agent header missing");
         assert_eq!(ua_header.to_str().unwrap(), expected_ua);
+    }
+
+    #[test]
+    fn test_invalid_suffix_is_sanitized() {
+        let prefix = "codex_cli_rs/0.0.0";
+        let suffix = "bad\rsuffix";
+
+        assert_eq!(
+            sanitize_user_agent(format!("{prefix} ({suffix})"), prefix),
+            "codex_cli_rs/0.0.0 (bad_suffix)"
+        );
+    }
+
+    #[test]
+    fn test_invalid_suffix_is_sanitized2() {
+        let prefix = "codex_cli_rs/0.0.0";
+        let suffix = "bad\0suffix";
+
+        assert_eq!(
+            sanitize_user_agent(format!("{prefix} ({suffix})"), prefix),
+            "codex_cli_rs/0.0.0 (bad_suffix)"
+        );
     }
 
     #[test]
