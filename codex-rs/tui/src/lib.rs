@@ -619,13 +619,8 @@ fn determine_repo_trust_state(
         // writable_roots, exclude_tmpdir_env_var, exclude_slash_tmp,
         // network_access) instead of always using defaults.
         config.approval_policy = AskForApproval::OnRequest;
-        config.sandbox_policy = if let Some(ws) = &config_toml.sandbox_workspace_write {
-            SandboxPolicy::WorkspaceWrite {
-                writable_roots: ws.writable_roots.clone(),
-                network_access: ws.network_access,
-                exclude_tmpdir_env_var: ws.exclude_tmpdir_env_var,
-                exclude_slash_tmp: ws.exclude_slash_tmp,
-            }
+        config.sandbox_policy = if config_toml.sandbox_workspace_write.is_some() {
+            config_toml.derive_sandbox_policy(Some(SandboxMode::WorkspaceWrite))
         } else {
             SandboxPolicy::new_workspace_write_policy()
         };

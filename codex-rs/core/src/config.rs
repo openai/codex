@@ -880,7 +880,10 @@ impl From<ToolsToml> for Tools {
 
 impl ConfigToml {
     /// Derive the effective sandbox policy from the configuration.
-    fn derive_sandbox_policy(&self, sandbox_mode_override: Option<SandboxMode>) -> SandboxPolicy {
+    pub fn derive_sandbox_policy(
+        &self,
+        sandbox_mode_override: Option<SandboxMode>,
+    ) -> SandboxPolicy {
         let resolved_sandbox_mode = sandbox_mode_override
             .or(self.sandbox_mode)
             .unwrap_or_default();
