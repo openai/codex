@@ -1,4 +1,6 @@
 use assert_cmd::Command as AssertCommand;
+use codex_core::RolloutRecorder;
+use codex_core::protocol::GitInfo;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use std::time::Duration;
 use std::time::Instant;
@@ -77,6 +79,22 @@ async fn chat_mode_stream_cli() {
     assert_eq!(hi_lines, 1, "Expected exactly one line with 'hi'");
 
     server.verify().await;
+
+    // Verify a new session rollout was created and is discoverable via list_conversations
+    let page = RolloutRecorder::list_conversations(home.path(), 10, None)
+        .await
+        .expect("list conversations");
+    assert!(
+        !page.items.is_empty(),
+        "expected at least one session to be listed"
+    );
+    // First line of head must be the SessionMeta payload (id/timestamp)
+    let head0 = page.items[0].head.first().expect("missing head record");
+    assert!(head0.get("id").is_some(), "head[0] missing id");
+    assert!(
+        head0.get("timestamp").is_some(),
+        "head[0] missing timestamp"
+    );
 }
 
 /// Verify that passing `-c experimental_instructions_file=...` to the CLI
@@ -297,8 +315,10 @@ async fn integration_creates_and_checks_session_file() {
                     Ok(v) => v,
                     Err(_) => continue,
                 };
-                if item.get("type").and_then(|t| t.as_str()) == Some("message")
-                    && let Some(c) = item.get("content")
+                if item.get("type").and_then(|t| t.as_str()) == Some("response_item")
+                    && let Some(payload) = item.get("payload")
+                    && payload.get("type").and_then(|t| t.as_str()) == Some("message")
+                    && let Some(c) = payload.get("content")
                     && c.to_string().contains(&marker)
                 {
                     matching_path = Some(path.to_path_buf());
@@ -361,9 +381,16 @@ async fn integration_creates_and_checks_session_file() {
         .unwrap_or_else(|_| panic!("missing session meta line"));
     let meta: serde_json::Value = serde_json::from_str(meta_line)
         .unwrap_or_else(|_| panic!("Failed to parse session meta line as JSON"));
-    assert!(meta.get("id").is_some(), "SessionMeta missing id");
+    assert_eq!(
+        meta.get("type").and_then(|v| v.as_str()),
+        Some("session_meta")
+    );
+    let payload = meta
+        .get("payload")
+        .unwrap_or_else(|| panic!("Missing payload in meta line"));
+    assert!(payload.get("id").is_some(), "SessionMeta missing id");
     assert!(
-        meta.get("timestamp").is_some(),
+        payload.get("timestamp").is_some(),
         "SessionMeta missing timestamp"
     );
 
@@ -375,8 +402,10 @@ async fn integration_creates_and_checks_session_file() {
         let Ok(item) = serde_json::from_str::<serde_json::Value>(line) else {
             continue;
         };
-        if item.get("type").and_then(|t| t.as_str()) == Some("message")
-            && let Some(c) = item.get("content")
+        if item.get("type").and_then(|t| t.as_str()) == Some("response_item")
+            && let Some(payload) = item.get("payload")
+            && payload.get("type").and_then(|t| t.as_str()) == Some("message")
+            && let Some(c) = payload.get("content")
             && c.to_string().contains(&marker)
         {
             found_message = true;
@@ -388,8 +417,7 @@ async fn integration_creates_and_checks_session_file() {
         "No message found in session file containing the marker"
     );
 
-    // Second run: resume should create a NEW session file that contains both old and new history.
-    let orig_len = content.lines().count();
+    // Second run: resume should update the existing file.
     let marker2 = format!("integration-resume-{}", Uuid::new_v4());
     let prompt2 = format!("echo {marker2}");
     // Cross‑platform safe resume override.  On Windows, backslashes in a TOML string must be escaped
@@ -449,8 +477,8 @@ async fn integration_creates_and_checks_session_file() {
     }
 
     let resumed_path = resumed_path.expect("No resumed session file found containing the marker2");
-    // Resume should have written to a new file, not the original one.
-    assert_ne!(
+    // Resume should write to the existing log file.
+    assert_eq!(
         resumed_path, path,
         "resume should create a new session file"
     );
@@ -463,14 +491,6 @@ async fn integration_creates_and_checks_session_file() {
     assert!(
         resumed_content.contains(&marker2),
         "resumed file missing resumed marker"
-    );
-
-    // Original file should remain unchanged.
-    let content_after = std::fs::read_to_string(&path).unwrap();
-    assert_eq!(
-        content_after.lines().count(),
-        orig_len,
-        "original rollout file should not change on resume"
     );
 }
 
@@ -598,7 +618,7 @@ async fn integration_git_info_unit_test() {
 
     // 5. Test serialization to ensure it works in SessionMeta
     let serialized = serde_json::to_string(&git_info).unwrap();
-    let deserialized: codex_core::git_info::GitInfo = serde_json::from_str(&serialized).unwrap();
+    let deserialized: GitInfo = serde_json::from_str(&serialized).unwrap();
 
     assert_eq!(git_info.commit_hash, deserialized.commit_hash);
     assert_eq!(git_info.branch, deserialized.branch);

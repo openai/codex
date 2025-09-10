@@ -71,11 +71,8 @@ impl CodexAuth {
     }
 
     /// Loads the available auth information from the auth.json.
-    pub fn from_codex_home(
-        codex_home: &Path,
-        originator: &str,
-    ) -> std::io::Result<Option<CodexAuth>> {
-        load_auth(codex_home, originator)
+    pub fn from_codex_home(codex_home: &Path) -> std::io::Result<Option<CodexAuth>> {
+        load_auth(codex_home)
     }
 
     pub async fn get_token_data(&self) -> Result<TokenData, std::io::Error> {
@@ -171,7 +168,7 @@ impl CodexAuth {
             mode: AuthMode::ChatGPT,
             auth_file: PathBuf::new(),
             auth_dot_json,
-            client: crate::default_client::create_client("codex_cli_rs"),
+            client: crate::default_client::create_client(),
         }
     }
 
@@ -186,10 +183,7 @@ impl CodexAuth {
     }
 
     pub fn from_api_key(api_key: &str) -> Self {
-        Self::from_api_key_with_client(
-            api_key,
-            crate::default_client::create_client(crate::default_client::DEFAULT_ORIGINATOR),
-        )
+        Self::from_api_key_with_client(api_key, crate::default_client::create_client())
     }
 }
 
@@ -227,9 +221,9 @@ pub fn login_with_api_key(codex_home: &Path, api_key: &str) -> std::io::Result<(
     write_auth_json(&get_auth_file(codex_home), &auth_dot_json)
 }
 
-fn load_auth(codex_home: &Path, originator: &str) -> std::io::Result<Option<CodexAuth>> {
+fn load_auth(codex_home: &Path) -> std::io::Result<Option<CodexAuth>> {
     let auth_file = get_auth_file(codex_home);
-    let client = crate::default_client::create_client(originator);
+    let client = crate::default_client::create_client();
     let auth_dot_json = match try_read_auth_json(&auth_file) {
         Ok(auth) => auth,
         Err(e) => {
@@ -432,9 +426,7 @@ mod tests {
             auth_dot_json,
             auth_file: _,
             ..
-        } = super::load_auth(codex_home.path(), "codex_cli_rs")
-            .unwrap()
-            .unwrap();
+        } = super::load_auth(codex_home.path()).unwrap().unwrap();
         assert_eq!(None, api_key);
         assert_eq!(AuthMode::ChatGPT, mode);
 
@@ -473,9 +465,7 @@ mod tests {
         )
         .unwrap();
 
-        let auth = super::load_auth(dir.path(), "codex_cli_rs")
-            .unwrap()
-            .unwrap();
+        let auth = super::load_auth(dir.path()).unwrap().unwrap();
         assert_eq!(auth.mode, AuthMode::ApiKey);
         assert_eq!(auth.api_key, Some("sk-test-key".to_string()));
 
@@ -557,7 +547,6 @@ mod tests {
 #[derive(Debug)]
 pub struct AuthManager {
     codex_home: PathBuf,
-    originator: String,
     inner: RwLock<CachedAuth>,
 }
 
@@ -566,13 +555,10 @@ impl AuthManager {
     /// preferred auth method. Errors loading auth are swallowed; `auth()` will
     /// simply return `None` in that case so callers can treat it as an
     /// unauthenticated state.
-    pub fn new(codex_home: PathBuf, originator: String) -> Self {
-        let auth = CodexAuth::from_codex_home(&codex_home, &originator)
-            .ok()
-            .flatten();
+    pub fn new(codex_home: PathBuf) -> Self {
+        let auth = CodexAuth::from_codex_home(&codex_home).ok().flatten();
         Self {
             codex_home,
-            originator,
             inner: RwLock::new(CachedAuth { auth }),
         }
     }
@@ -582,7 +568,6 @@ impl AuthManager {
         let cached = CachedAuth { auth: Some(auth) };
         Arc::new(Self {
             codex_home: PathBuf::new(),
-            originator: "codex_cli_rs".to_string(),
             inner: RwLock::new(cached),
         })
     }
@@ -595,9 +580,7 @@ impl AuthManager {
     /// Force a reload of the auth information from auth.json. Returns
     /// whether the auth value changed.
     pub fn reload(&self) -> bool {
-        let new_auth = CodexAuth::from_codex_home(&self.codex_home, &self.originator)
-            .ok()
-            .flatten();
+        let new_auth = CodexAuth::from_codex_home(&self.codex_home).ok().flatten();
         if let Ok(mut guard) = self.inner.write() {
             let changed = !AuthManager::auths_equal(&guard.auth, &new_auth);
             guard.auth = new_auth;
@@ -616,8 +599,8 @@ impl AuthManager {
     }
 
     /// Convenience constructor returning an `Arc` wrapper.
-    pub fn shared(codex_home: PathBuf, originator: String) -> Arc<Self> {
-        Arc::new(Self::new(codex_home, originator))
+    pub fn shared(codex_home: PathBuf) -> Arc<Self> {
+        Arc::new(Self::new(codex_home))
     }
 
     /// Attempt to refresh the current auth token (if any). On success, reload

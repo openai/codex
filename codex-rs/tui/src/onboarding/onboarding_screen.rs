@@ -84,7 +84,6 @@ impl OnboardingScreen {
                 codex_home: codex_home.clone(),
                 login_status,
                 auth_manager,
-                config,
             }))
         }
         let is_git_repo = get_git_repo_root(&cwd).is_some();
