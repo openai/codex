@@ -30,8 +30,10 @@ use std::path::PathBuf;
 use tempfile::NamedTempFile;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
+use toml_edit::Item;
 
 const OPENAI_DEFAULT_MODEL: &str = "gpt-5";
+pub const GPT5_HIGH_MODEL: &str = "gpt-5-high";
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
@@ -335,6 +337,47 @@ pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Re
     tmp_file.persist(config_path)?;
 
     Ok(())
+}
+
+pub fn record_gpt5_high_prompt_choice(
+    codex_home: &Path,
+    switch_default_model: bool,
+) -> anyhow::Result<()> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let mut doc = match std::fs::read_to_string(&config_path) {
+        Ok(serialized) => serialized.parse::<DocumentMut>()?,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => DocumentMut::new(),
+        Err(err) => return Err(err.into()),
+    };
+
+    let root_table = doc.as_table_mut();
+    let tui_table = ensure_table(root_table, "tui")?;
+    tui_table["gpt_5_high_model_prompt_seen"] = toml_edit::value(true);
+
+    if switch_default_model {
+        root_table["model"] = toml_edit::value(GPT5_HIGH_MODEL);
+    }
+
+    std::fs::create_dir_all(codex_home)?;
+    let tmp_file = NamedTempFile::new_in(codex_home)?;
+    std::fs::write(tmp_file.path(), doc.to_string())?;
+    tmp_file.persist(&config_path)?;
+
+    Ok(())
+}
+
+fn ensure_table<'a>(
+    parent: &'a mut toml_edit::Table,
+    key: &str,
+) -> anyhow::Result<&'a mut toml_edit::Table> {
+    if !parent.contains_key(key) {
+        parent.insert(key, toml_edit::table());
+    }
+
+    parent
+        .get_mut(key)
+        .and_then(Item::as_table_mut)
+        .ok_or_else(|| anyhow::anyhow!("expected `{key}` to be a TOML table"))
 }
 
 /// Apply a single dotted-path override onto a TOML value.

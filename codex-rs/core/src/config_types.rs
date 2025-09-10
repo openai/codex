@@ -78,7 +78,10 @@ pub enum HistoryPersistence {
 
 /// Collection of settings that are specific to the TUI.
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
-pub struct Tui {}
+pub struct Tui {
+    #[serde(default)]
+    pub gpt_5_high_model_prompt_seen: bool,
+}
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct SandboxWorkspaceWrite {
