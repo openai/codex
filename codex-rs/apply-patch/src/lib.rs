@@ -726,9 +726,9 @@ fn compute_replacements(
             line_index = start_idx + pattern.len();
         } else {
             return Err(ApplyPatchError::ComputeReplacements(format!(
-                "Failed to find expected lines {:?} in {}",
-                chunk.old_lines,
-                path.display()
+                "Failed to find expected lines in {}:\n{}",
+                path.display(),
+                chunk.old_lines.join("\n"),
             )));
         }
     }

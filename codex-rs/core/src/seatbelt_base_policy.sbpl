@@ -69,3 +69,8 @@
 ; Added on top of Chrome profile
 ; Needed for python multiprocessing on MacOS for the SemLock
 (allow ipc-posix-sem)
+
+; needed to look up user info, see https://crbug.com/792228
+(allow mach-lookup
+  (global-name "com.apple.system.opendirectoryd.libinfo")
+)

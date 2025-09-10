@@ -16,6 +16,7 @@ use crate::custom_prompts::CustomPrompt;
 use crate::mcp_protocol::ConversationId;
 use crate::message_history::HistoryEntry;
 use crate::models::ResponseItem;
+use crate::num_format::format_with_separators;
 use crate::parse_command::ParsedCommand;
 use crate::plan_tool::UpdatePlanArgs;
 use mcp_types::CallToolResult;
@@ -32,6 +33,7 @@ pub const USER_INSTRUCTIONS_OPEN_TAG: &str = "<user_instructions>";
 pub const USER_INSTRUCTIONS_CLOSE_TAG: &str = "</user_instructions>";
 pub const ENVIRONMENT_CONTEXT_OPEN_TAG: &str = "<environment_context>";
 pub const ENVIRONMENT_CONTEXT_CLOSE_TAG: &str = "</environment_context>";
+pub const USER_MESSAGE_BEGIN: &str = "## My request for Codex:";
 
 /// Submission Queue Entry - requests from user
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -403,7 +405,7 @@ pub struct Event {
 }
 
 /// Response event from the agent
-#[derive(Debug, Clone, Deserialize, Serialize, Display)]
+#[derive(Debug, Clone, Deserialize, Serialize, Display, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
 pub enum EventMsg {
@@ -502,22 +504,22 @@ pub enum EventMsg {
 
 // Individual event payload types matching each `EventMsg` variant.
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct ErrorEvent {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct TaskCompleteEvent {
     pub last_agent_message: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct TaskStartedEvent {
     pub model_context_window: Option<u64>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default, TS)]
 pub struct TokenUsage {
     pub input_tokens: u64,
     pub cached_input_tokens: u64,
@@ -526,7 +528,7 @@ pub struct TokenUsage {
     pub total_tokens: u64,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct TokenUsageInfo {
     pub total_token_usage: TokenUsage,
     pub last_token_usage: TokenUsage,
@@ -563,7 +565,7 @@ impl TokenUsageInfo {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct TokenCountEvent {
     pub info: Option<TokenUsageInfo>,
 }
@@ -645,19 +647,26 @@ impl From<TokenUsage> for FinalOutput {
 impl fmt::Display for FinalOutput {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let token_usage = &self.token_usage;
+
         write!(
             f,
             "Token usage: total={} input={}{} output={}{}",
-            token_usage.blended_total(),
-            token_usage.non_cached_input(),
+            format_with_separators(token_usage.blended_total()),
+            format_with_separators(token_usage.non_cached_input()),
             if token_usage.cached_input() > 0 {
-                format!(" (+ {} cached)", token_usage.cached_input())
+                format!(
+                    " (+ {} cached)",
+                    format_with_separators(token_usage.cached_input())
+                )
             } else {
                 String::new()
             },
-            token_usage.output_tokens,
+            format_with_separators(token_usage.output_tokens),
             if token_usage.reasoning_output_tokens > 0 {
-                format!(" (reasoning {})", token_usage.reasoning_output_tokens)
+                format!(
+                    " (reasoning {})",
+                    format_with_separators(token_usage.reasoning_output_tokens)
+                )
             } else {
                 String::new()
             }
@@ -665,12 +674,12 @@ impl fmt::Display for FinalOutput {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct AgentMessageEvent {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum InputMessageKind {
     /// Plain user text (default)
@@ -681,7 +690,7 @@ pub enum InputMessageKind {
     EnvironmentContext,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct UserMessageEvent {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -711,35 +720,35 @@ where
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct AgentMessageDeltaEvent {
     pub delta: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct AgentReasoningEvent {
     pub text: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct AgentReasoningRawContentEvent {
     pub text: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct AgentReasoningRawContentDeltaEvent {
     pub delta: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct AgentReasoningSectionBreakEvent {}
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct AgentReasoningDeltaEvent {
     pub delta: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct McpInvocation {
     /// Name of the MCP server as defined in the config.
     pub server: String,
@@ -749,18 +758,19 @@ pub struct McpInvocation {
     pub arguments: Option<serde_json::Value>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct McpToolCallBeginEvent {
     /// Identifier so this can be paired with the McpToolCallEnd event.
     pub call_id: String,
     pub invocation: McpInvocation,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct McpToolCallEndEvent {
     /// Identifier for the corresponding McpToolCallBegin that finished.
     pub call_id: String,
     pub invocation: McpInvocation,
+    #[ts(type = "string")]
     pub duration: Duration,
     /// Result of the tool call. Note this could be an error.
     pub result: Result<CallToolResult, String>,
@@ -775,12 +785,12 @@ impl McpToolCallEndEvent {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct WebSearchBeginEvent {
     pub call_id: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct WebSearchEndEvent {
     pub call_id: String,
     pub query: String,
@@ -788,13 +798,13 @@ pub struct WebSearchEndEvent {
 
 /// Response payload for `Op::GetHistory` containing the current session's
 /// in-memory transcript.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct ConversationHistoryResponseEvent {
     pub conversation_id: ConversationId,
     pub entries: Vec<ResponseItem>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct ExecCommandBeginEvent {
     /// Identifier so this can be paired with the ExecCommandEnd event.
     pub call_id: String,
@@ -805,7 +815,7 @@ pub struct ExecCommandBeginEvent {
     pub parsed_cmd: Vec<ParsedCommand>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct ExecCommandEndEvent {
     /// Identifier for the ExecCommandBegin that finished.
     pub call_id: String,
@@ -819,12 +829,13 @@ pub struct ExecCommandEndEvent {
     /// The command's exit code.
     pub exit_code: i32,
     /// The duration of the command execution.
+    #[ts(type = "string")]
     pub duration: Duration,
     /// Formatted output from the command, as seen by the model.
     pub formatted_output: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum ExecOutputStream {
     Stdout,
@@ -832,7 +843,7 @@ pub enum ExecOutputStream {
 }
 
 #[serde_as]
-#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS)]
 pub struct ExecCommandOutputDeltaEvent {
     /// Identifier for the ExecCommandBegin that produced this chunk.
     pub call_id: String,
@@ -840,10 +851,11 @@ pub struct ExecCommandOutputDeltaEvent {
     pub stream: ExecOutputStream,
     /// Raw bytes from the stream (may not be valid UTF-8).
     #[serde_as(as = "serde_with::base64::Base64")]
+    #[ts(type = "string")]
     pub chunk: Vec<u8>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct ExecApprovalRequestEvent {
     /// Identifier for the associated exec call, if available.
     pub call_id: String,
@@ -856,7 +868,7 @@ pub struct ExecApprovalRequestEvent {
     pub reason: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct ApplyPatchApprovalRequestEvent {
     /// Responses API call id for the associated patch apply call, if available.
     pub call_id: String,
@@ -869,17 +881,17 @@ pub struct ApplyPatchApprovalRequestEvent {
     pub grant_root: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct BackgroundEventEvent {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct StreamErrorEvent {
     pub message: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct PatchApplyBeginEvent {
     /// Identifier so this can be paired with the PatchApplyEnd event.
     pub call_id: String,
@@ -889,7 +901,7 @@ pub struct PatchApplyBeginEvent {
     pub changes: HashMap<PathBuf, FileChange>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct PatchApplyEndEvent {
     /// Identifier for the PatchApplyBegin that finished.
     pub call_id: String,
@@ -901,12 +913,12 @@ pub struct PatchApplyEndEvent {
     pub success: bool,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct TurnDiffEvent {
     pub unified_diff: String,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct GetHistoryEntryResponseEvent {
     pub offset: usize,
     pub log_id: u64,
@@ -916,19 +928,19 @@ pub struct GetHistoryEntryResponseEvent {
 }
 
 /// Response payload for `Op::ListMcpTools`.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct McpListToolsResponseEvent {
     /// Fully qualified tool name -> tool definition.
     pub tools: std::collections::HashMap<String, McpTool>,
 }
 
 /// Response payload for `Op::ListCustomPrompts`.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct ListCustomPromptsResponseEvent {
     pub custom_prompts: Vec<CustomPrompt>,
 }
 
-#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize, TS)]
 pub struct SessionConfiguredEvent {
     /// Name left as session_id instead of conversation_id for backwards compatibility.
     pub session_id: ConversationId,
@@ -946,6 +958,8 @@ pub struct SessionConfiguredEvent {
     /// When present, UIs can use these to seed the history.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub initial_messages: Option<Vec<EventMsg>>,
+
+    pub rollout_path: PathBuf,
 }
 
 /// User's decision in response to an ExecApprovalRequest.
@@ -985,7 +999,7 @@ pub enum FileChange {
     },
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct Chunk {
     /// 1-based line index of the first line in the original file
     pub orig_index: u32,
@@ -993,7 +1007,7 @@ pub struct Chunk {
     pub inserted_lines: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct TurnAbortedEvent {
     pub reason: TurnAbortReason,
 }
@@ -1008,12 +1022,15 @@ pub enum TurnAbortReason {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+    use tempfile::NamedTempFile;
 
     /// Serialize Event to verify that its JSON representation has the expected
     /// amount of nesting.
     #[test]
     fn serialize_event() {
         let conversation_id = ConversationId(uuid::uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8"));
+        let rollout_file = NamedTempFile::new().unwrap();
         let event = Event {
             id: "1234".to_string(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
@@ -1022,13 +1039,22 @@ mod tests {
                 history_log_id: 0,
                 history_entry_count: 0,
                 initial_messages: None,
+                rollout_path: rollout_file.path().to_path_buf(),
             }),
         };
-        let serialized = serde_json::to_string(&event).unwrap();
-        assert_eq!(
-            serialized,
-            r#"{"id":"1234","msg":{"type":"session_configured","session_id":"67e55044-10b1-426f-9247-bb680e5fe0c8","model":"codex-mini-latest","history_log_id":0,"history_entry_count":0}}"#
-        );
+
+        let expected = json!({
+            "id": "1234",
+            "msg": {
+                "type": "session_configured",
+                "session_id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
+                "model": "codex-mini-latest",
+                "history_log_id": 0,
+                "history_entry_count": 0,
+                "rollout_path": format!("{}", rollout_file.path().display()),
+            }
+        });
+        assert_eq!(expected, serde_json::to_value(&event).unwrap());
     }
 
     #[test]

@@ -85,7 +85,6 @@ impl OnboardingScreen {
                 login_status,
                 auth_manager,
                 preferred_auth_method,
-                config,
             }))
         }
         let is_git_repo = get_git_repo_root(&cwd).is_some();

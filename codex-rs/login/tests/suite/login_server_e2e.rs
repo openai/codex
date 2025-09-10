@@ -102,7 +102,6 @@ async fn end_to_end_login_flow_persists_auth_json() {
         port: 0,
         open_browser: false,
         force_state: Some(state),
-        originator: "test_originator".to_string(),
     };
     let server = run_login_server(opts).unwrap();
     let login_port = server.actual_port;
@@ -161,7 +160,6 @@ async fn creates_missing_codex_home_dir() {
         port: 0,
         open_browser: false,
         force_state: Some(state),
-        originator: "test_originator".to_string(),
     };
     let server = run_login_server(opts).unwrap();
     let login_port = server.actual_port;
@@ -202,7 +200,6 @@ async fn cancels_previous_login_server_when_port_is_in_use() {
         port: 0,
         open_browser: false,
         force_state: Some("cancel_state".to_string()),
-        originator: "test_originator".to_string(),
     };
 
     let first_server = run_login_server(first_opts).unwrap();
@@ -221,7 +218,6 @@ async fn cancels_previous_login_server_when_port_is_in_use() {
         port: login_port,
         open_browser: false,
         force_state: Some("cancel_state_2".to_string()),
-        originator: "test_originator".to_string(),
     };
 
     let second_server = run_login_server(second_opts).unwrap();
