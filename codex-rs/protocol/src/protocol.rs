@@ -754,7 +754,7 @@ pub struct ConversationHistoryResponseEvent {
 }
 
 /// Structured review result produced by a child review session.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ReviewOutputEvent {
     pub findings: Vec<ReviewFinding>,
     pub overall_correctness: String,
@@ -762,22 +762,25 @@ pub struct ReviewOutputEvent {
     pub overall_confidence_score: f32,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+/// A single review finding describing an observed issue or recommendation.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ReviewFinding {
     pub title: String,
     pub body: String,
     pub confidence_score: f32,
-    pub priority: Option<i32>,
+    pub priority: i32,
     pub code_location: ReviewCodeLocation,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+/// Location of the code related to a review finding.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ReviewCodeLocation {
     pub absolute_file_path: PathBuf,
     pub line_range: ReviewLineRange,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+/// Inclusive line range in a file associated with the finding.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 pub struct ReviewLineRange {
     pub start: u32,
     pub end: u32,

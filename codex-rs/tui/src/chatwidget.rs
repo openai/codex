@@ -1093,7 +1093,6 @@ impl ChatWidget {
                 self.app_event_tx
                     .send(crate::app_event::AppEvent::ConversationHistory(ev));
             }
-            // Will handle in next PR for TUI
             EventMsg::EnteredReviewMode => {}
             EventMsg::ExitedReviewMode(_) => {}
         }

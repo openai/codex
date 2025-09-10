@@ -16,8 +16,10 @@ use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id_from_str;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;
+use tokio::io::AsyncWriteExt as _;
 use uuid::Uuid;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -58,15 +60,15 @@ async fn review_op_emits_lifecycle_and_review_output() {
         "overall_confidence_score": 0.8
     })
     .to_string();
-    let sse_raw = format!(
-        r#"[
-            {{"type":"response.output_item.done", "item":{{
+    let sse_template = r#"[
+            {"type":"response.output_item.done", "item":{
                 "type":"message", "role":"assistant",
-                "content":[{{"type":"output_text","text":{review_json:?}}}]
-            }}}},
-            {{"type":"response.completed", "response": {{"id": "__ID__"}}}}
-        ]"#
-    );
+                "content":[{"type":"output_text","text":__REVIEW__}]
+            }},
+            {"type":"response.completed", "response": {"id": "__ID__"}}
+        ]"#;
+    let review_json_escaped = serde_json::to_string(&review_json).unwrap();
+    let sse_raw = sse_template.replace("__REVIEW__", &review_json_escaped);
     let server = start_responses_server_with_sse(&sse_raw, 1).await;
     let codex_home = TempDir::new().unwrap();
     let codex = new_conversation_for_server(&server, &codex_home, |_| {}).await;
@@ -87,15 +89,15 @@ async fn review_op_emits_lifecycle_and_review_output() {
         other => panic!("expected ExitedReviewMode(Some(..)), got {other:?}"),
     };
 
-    // Deep compare with the structured object encoded in review_json.
+    // Deep compare full structure using PartialEq (floats are f32 on both sides).
     let expected = ReviewOutputEvent {
         findings: vec![ReviewFinding {
             title: "Prefer Stylize helpers".to_string(),
             body: "Use .dim()/.bold() chaining instead of manual Style where possible.".to_string(),
             confidence_score: 0.9,
-            priority: Some(1),
+            priority: 1,
             code_location: ReviewCodeLocation {
-                absolute_file_path: std::path::PathBuf::from("/tmp/file.rs"),
+                absolute_file_path: PathBuf::from("/tmp/file.rs"),
                 line_range: ReviewLineRange { start: 10, end: 20 },
             },
         }],
@@ -103,9 +105,7 @@ async fn review_op_emits_lifecycle_and_review_output() {
         overall_explanation: "All good with some improvements suggested.".to_string(),
         overall_confidence_score: 0.8,
     };
-    let expected_json = serde_json::to_value(&expected).expect("serialize expected");
-    let actual_json = serde_json::to_value(&review).expect("serialize actual");
-    assert_eq!(expected_json, actual_json);
+    assert_eq!(expected, review);
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     server.verify().await;
@@ -115,7 +115,7 @@ async fn review_op_emits_lifecycle_and_review_output() {
 /// lifecycle still occurs and the plain text is surfaced via
 /// ExitedReviewMode(Some(..)) as the overall_explanation.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn review_op_with_plain_text_emits_agent_message() {
+async fn review_op_with_plain_text_emits_review_fallback() {
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
             "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
@@ -155,9 +155,7 @@ async fn review_op_with_plain_text_emits_agent_message() {
         overall_explanation: "just plain text".to_string(),
         overall_confidence_score: 1.0,
     };
-    let expected_json = serde_json::to_value(&expected).expect("serialize expected");
-    let actual_json = serde_json::to_value(&review).expect("serialize actual");
-    assert_eq!(expected_json, actual_json);
+    assert_eq!(expected, review);
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     server.verify().await;
@@ -192,15 +190,15 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
         "overall_confidence_score": 0.5
     })
     .to_string();
-    let sse_raw = format!(
-        r#"[
-            {{"type":"response.output_item.done", "item":{{
+    let sse_template = r#"[
+            {"type":"response.output_item.done", "item":{
                 "type":"message", "role":"assistant",
-                "content":[{{"type":"output_text","text":{review_json:?}}}]
-            }}}},
-            {{"type":"response.completed", "response": {{"id": "__ID__"}}}}
-        ]"#
-    );
+                "content":[{"type":"output_text","text":__REVIEW__}]
+            }},
+            {"type":"response.completed", "response": {"id": "__ID__"}}
+        ]"#;
+    let review_json_escaped = serde_json::to_string(&review_json).unwrap();
+    let sse_raw = sse_template.replace("__REVIEW__", &review_json_escaped);
     let server = start_responses_server_with_sse(&sse_raw, 1).await;
     let codex_home = TempDir::new().unwrap();
     let codex = new_conversation_for_server(&server, &codex_home, |_| {}).await;
@@ -309,10 +307,11 @@ async fn review_input_isolated_from_parent_history() {
 
     let session_file = codex_home.path().join("resume.jsonl");
     {
-        use std::io::Write as _;
-        let mut f = std::fs::File::create(&session_file).unwrap();
+        let mut f = tokio::fs::File::create(&session_file).await.unwrap();
         // Meta line
-        writeln!(f, "{}", serde_json::json!({"meta":"test"})).unwrap();
+        f.write_all(format!("{}\n", serde_json::json!({"meta":"test"})).as_bytes())
+            .await
+            .unwrap();
         // Prior user message
         let user = codex_protocol::models::ResponseItem::Message {
             id: None,
@@ -321,7 +320,9 @@ async fn review_input_isolated_from_parent_history() {
                 text: "parent: earlier user message".to_string(),
             }],
         };
-        writeln!(f, "{}", serde_json::to_string(&user).unwrap()).unwrap();
+        f.write_all(format!("{}\n", serde_json::to_string(&user).unwrap()).as_bytes())
+            .await
+            .unwrap();
         // Prior assistant message
         let assistant = codex_protocol::models::ResponseItem::Message {
             id: None,
@@ -330,7 +331,9 @@ async fn review_input_isolated_from_parent_history() {
                 text: "parent: assistant reply".to_string(),
             }],
         };
-        writeln!(f, "{}", serde_json::to_string(&assistant).unwrap()).unwrap();
+        f.write_all(format!("{}\n", serde_json::to_string(&assistant).unwrap()).as_bytes())
+            .await
+            .unwrap();
     }
     config.experimental_resume = Some(session_file);
 
@@ -478,6 +481,12 @@ async fn new_conversation_for_server<F>(
 where
     F: FnOnce(&mut Config),
 {
+    // Disable client retries for deterministic tests.
+    unsafe {
+        std::env::set_var("OPENAI_REQUEST_MAX_RETRIES", "0");
+        std::env::set_var("OPENAI_STREAM_MAX_RETRIES", "0");
+    }
+
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
         ..built_in_model_providers()["openai"].clone()
