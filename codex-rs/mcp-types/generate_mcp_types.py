@@ -265,8 +265,11 @@ class StructField:
     name: str
     type_name: str
     serde: str | None = None
+    comment: str | None = None
 
     def append(self, out: list[str], supports_const: bool) -> None:
+        if self.comment:
+            out.append(f"    // {self.comment}\n")
         if self.serde:
             out.append(f"    {self.serde}\n")
         if self.viz == "const":
@@ -311,6 +314,18 @@ def define_struct(
             fields.append(StructField("const", rs_prop.name, prop_type, rs_prop.serde))
         else:
             fields.append(StructField("pub", rs_prop.name, prop_type, rs_prop.serde))
+
+    # Special-case: add Codex-specific user_agent to Implementation
+    if name == "Implementation":
+        fields.append(
+            StructField(
+                "pub",
+                "user_agent",
+                "Option<String>",
+                '#[serde(default, skip_serializing_if = "Option::is_none")]',
+                "This is an extra field that the Codex MCP server sends as part of InitializeResult.",
+            )
+        )
 
     if implements_request_trait(name):
         add_trait_impl(name, "ModelContextProtocolRequest", fields, out)

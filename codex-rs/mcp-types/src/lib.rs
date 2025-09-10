@@ -482,20 +482,12 @@ pub struct ImageContent {
 
 /// Describes the name and version of an MCP implementation, with an optional title for UI representation.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
-pub struct McpClientInfo {
+pub struct Implementation {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     pub version: String,
-}
-
-/// Describes the name and version of an MCP implementation, with an optional title for UI representation.
-#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]
-pub struct McpServerInfo {
-    pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-    pub version: String,
+    // This is an extra field that the Codex MCP server sends as part of InitializeResult.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_agent: Option<String>,
 }
@@ -513,7 +505,7 @@ impl ModelContextProtocolRequest for InitializeRequest {
 pub struct InitializeRequestParams {
     pub capabilities: ClientCapabilities,
     #[serde(rename = "clientInfo")]
-    pub client_info: McpClientInfo,
+    pub client_info: Implementation,
     #[serde(rename = "protocolVersion")]
     pub protocol_version: String,
 }
@@ -527,7 +519,7 @@ pub struct InitializeResult {
     #[serde(rename = "protocolVersion")]
     pub protocol_version: String,
     #[serde(rename = "serverInfo")]
-    pub server_info: McpServerInfo,
+    pub server_info: Implementation,
 }
 
 impl From<InitializeResult> for serde_json::Value {

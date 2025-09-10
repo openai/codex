@@ -234,7 +234,7 @@ impl MessageProcessor {
             },
             instructions: None,
             protocol_version: params.protocol_version.clone(),
-            server_info: mcp_types::McpServerInfo {
+            server_info: mcp_types::Implementation {
                 name: "codex-mcp-server".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 title: Some("Codex".to_string()),
