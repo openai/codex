@@ -26,46 +26,15 @@ use super::list::Cursor;
 use super::list::get_conversations;
 use super::policy::is_persisted_response_item;
 use crate::config::Config;
-use crate::conversation_manager::InitialHistory;
-use crate::conversation_manager::ResumedHistory;
 use crate::default_client::ORIGINATOR;
-use crate::git_info::GitInfo;
 use crate::git_info::collect_git_info;
-use crate::protocol::EventMsg;
 use codex_protocol::models::ResponseItem;
-
-#[derive(Serialize, Deserialize, Clone, Default, Debug)]
-pub struct SessionMeta {
-    pub id: ConversationId,
-    pub timestamp: String,
-    pub cwd: PathBuf,
-    pub originator: String,
-    pub cli_version: String,
-    pub instructions: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct SessionMetaLine {
-    #[serde(flatten)]
-    meta: SessionMeta,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    git: Option<GitInfo>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
-pub enum RolloutItem {
-    SessionMeta(SessionMetaLine),
-    ResponseItem(ResponseItem),
-    EventMsg(EventMsg),
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-pub(crate) struct RolloutLine {
-    pub(crate) timestamp: String,
-    #[serde(flatten)]
-    pub(crate) item: RolloutItem,
-}
+use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::ResumedHistory;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::SessionMeta;
+use codex_protocol::protocol::SessionMetaLine;
 
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct SessionStateSnapshot {}

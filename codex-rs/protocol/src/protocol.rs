@@ -805,6 +805,120 @@ pub struct ConversationHistoryResponseEvent {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub struct ResumedHistory {
+    pub conversation_id: ConversationId,
+    pub history: Vec<RolloutItem>,
+    pub rollout_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub enum InitialHistory {
+    New,
+    Resumed(ResumedHistory),
+    Forked(Vec<RolloutItem>),
+}
+
+impl InitialHistory {
+    pub fn get_rollout_items(&self) -> Vec<RolloutItem> {
+        match self {
+            InitialHistory::New => Vec::new(),
+            InitialHistory::Resumed(resumed) => resumed.history.clone(),
+            InitialHistory::Forked(items) => items.clone(),
+        }
+    }
+    pub fn get_response_items(&self) -> Vec<ResponseItem> {
+        match self {
+            InitialHistory::New => Vec::new(),
+            InitialHistory::Resumed(resumed) => resumed
+                .history
+                .iter()
+                .filter_map(|ri| match ri {
+                    RolloutItem::ResponseItem(item) => Some(item.clone()),
+                    _ => None,
+                })
+                .collect(),
+            InitialHistory::Forked(items) => items
+                .iter()
+                .filter_map(|ri| match ri {
+                    RolloutItem::ResponseItem(item) => Some(item.clone()),
+                    _ => None,
+                })
+                .collect(),
+        }
+    }
+    pub fn get_event_msgs(&self) -> Option<Vec<EventMsg>> {
+        match self {
+            InitialHistory::New => None,
+            InitialHistory::Resumed(resumed) => Some(
+                resumed
+                    .history
+                    .iter()
+                    .filter_map(|ri| match ri {
+                        RolloutItem::EventMsg(ev) => Some(ev.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+            ),
+            InitialHistory::Forked(items) => Some(
+                items
+                    .iter()
+                    .filter_map(|ri| match ri {
+                        RolloutItem::EventMsg(ev) => Some(ev.clone()),
+                        _ => None,
+                    })
+                    .collect(),
+            ),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Default, Debug, TS)]
+pub struct SessionMeta {
+    pub id: ConversationId,
+    pub timestamp: String,
+    pub cwd: PathBuf,
+    pub originator: String,
+    pub cli_version: String,
+    pub instructions: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, TS)]
+pub struct SessionMetaLine {
+    #[serde(flatten)]
+    pub meta: SessionMeta,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git: Option<GitInfo>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, TS)]
+#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
+pub enum RolloutItem {
+    SessionMeta(SessionMetaLine),
+    ResponseItem(ResponseItem),
+    EventMsg(EventMsg),
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub struct RolloutLine {
+    pub timestamp: String,
+    #[serde(flatten)]
+    pub item: RolloutItem,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+pub struct GitInfo {
+    /// Current commit hash (SHA)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub commit_hash: Option<String>,
+    /// Current branch name
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// Repository URL (if available from remote)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repository_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct ExecCommandBeginEvent {
     /// Identifier so this can be paired with the ExecCommandEnd event.
     pub call_id: String,

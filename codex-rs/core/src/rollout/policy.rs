@@ -1,5 +1,5 @@
 use crate::protocol::EventMsg;
-use crate::rollout::recorder::RolloutItem;
+use crate::protocol::RolloutItem;
 use codex_protocol::models::ResponseItem;
 
 /// Whether a rollout `item` should be persisted in rollout files.
