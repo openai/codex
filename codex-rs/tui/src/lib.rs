@@ -48,6 +48,7 @@ mod markdown;
 mod markdown_stream;
 pub mod onboarding;
 mod pager_overlay;
+pub mod public_widgets;
 mod render;
 mod resume_picker;
 mod session_log;
@@ -70,6 +71,8 @@ mod chatwidget_stream_tests;
 mod updates;
 
 pub use cli::Cli;
+pub use public_widgets::composer_input::ComposerAction;
+pub use public_widgets::composer_input::ComposerInput;
 
 use crate::onboarding::TrustDirectorySelection;
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
