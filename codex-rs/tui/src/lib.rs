@@ -370,7 +370,7 @@ async fn run_ratatui_app(
         }
 
         config.tui.gpt_5_high_model_prompt_seen = true;
-        record_model_rollout_choice(&config, switch_to_new_model);
+        record_model_rollout_choice(&config, switch_to_new_model).await;
     }
 
     let Cli { prompt, images, .. } = cli;
@@ -514,8 +514,8 @@ fn apply_gpt5_high_defaults(config: &mut Config) {
     }
 }
 
-fn record_model_rollout_choice(config: &Config, switch: bool) {
-    if let Err(err) = record_gpt5_high_prompt_choice(&config.codex_home, switch) {
+async fn record_model_rollout_choice(config: &Config, switch: bool) {
+    if let Err(err) = record_gpt5_high_prompt_choice(&config.codex_home, switch).await {
         warn!(error = %err, "failed to record GPT-5 High prompt choice");
     }
 }

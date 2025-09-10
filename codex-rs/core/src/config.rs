@@ -15,6 +15,7 @@ use crate::model_provider_info::built_in_model_providers;
 use crate::openai_model_info::get_model_info;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
+use anyhow::Context;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
@@ -24,13 +25,14 @@ use codex_protocol::mcp_protocol::Tools;
 use codex_protocol::mcp_protocol::UserSavedConfig;
 use dirs::home_dir;
 use serde::Deserialize;
+use serde::Serialize;
+use serde_json;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
 use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
-use toml_edit::Item;
 
 const OPENAI_DEFAULT_MODEL: &str = "gpt-5";
 pub const GPT5_HIGH_MODEL: &str = "gpt-5-high";
@@ -41,6 +43,54 @@ pub const GPT5_HIGH_MODEL: &str = "gpt-5-high";
 pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 
 const CONFIG_TOML_FILE: &str = "config.toml";
+const INTERNAL_STORAGE_FILE: &str = "internal_storage.json";
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+struct InternalStorage {
+    #[serde(default)]
+    gpt_5_high_model_prompt_seen: bool,
+}
+
+// TODO(jif) generalise all the file writers.
+impl InternalStorage {
+    fn load(codex_home: &Path) -> Option<Self> {
+        let storage_path = codex_home.join(INTERNAL_STORAGE_FILE);
+        let serialized = match std::fs::read_to_string(&storage_path) {
+            Ok(serialized) => serialized,
+            Err(error) => {
+                tracing::warn!("failed to read internal storage: {error:?}");
+                return None;
+            }
+        };
+
+        serde_json::from_str::<Self>(&serialized)
+            .map_err(|error| tracing::warn!("failed to parse internal storage: {error:?}"))
+            .ok()
+    }
+
+    async fn persist(&self, codex_home: &Path) -> anyhow::Result<()> {
+        let serialized = serde_json::to_string_pretty(self)?;
+
+        tokio::fs::create_dir_all(codex_home)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to create Codex home directory at {}",
+                    codex_home.display()
+                )
+            })?;
+
+        let storage_path = codex_home.join(INTERNAL_STORAGE_FILE);
+        tokio::fs::write(&storage_path, serialized)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to persist internal storage at {}",
+                    storage_path.display()
+                )
+            })
+    }
+}
 
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
@@ -339,45 +389,40 @@ pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Re
     Ok(())
 }
 
-pub fn record_gpt5_high_prompt_choice(
+pub async fn record_gpt5_high_prompt_choice(
     codex_home: &Path,
     switch_default_model: bool,
 ) -> anyhow::Result<()> {
-    let config_path = codex_home.join(CONFIG_TOML_FILE);
-    let mut doc = match std::fs::read_to_string(&config_path) {
-        Ok(serialized) => serialized.parse::<DocumentMut>()?,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => DocumentMut::new(),
-        Err(err) => return Err(err.into()),
-    };
-
-    let root_table = doc.as_table_mut();
-    let tui_table = ensure_table(root_table, "tui")?;
-    tui_table["gpt_5_high_model_prompt_seen"] = toml_edit::value(true);
-
     if switch_default_model {
-        root_table["model"] = toml_edit::value(GPT5_HIGH_MODEL);
+        let config_path = codex_home.join(CONFIG_TOML_FILE);
+        let mut doc = match std::fs::read_to_string(&config_path) {
+            Ok(serialized) => serialized.parse::<DocumentMut>()?,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => DocumentMut::new(),
+            Err(err) => return Err(err.into()),
+        };
+
+        doc.as_table_mut()["model"] = toml_edit::value(GPT5_HIGH_MODEL);
+        tokio::fs::create_dir_all(codex_home)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to create Codex home directory at {}",
+                    codex_home.display()
+                )
+            })?;
+        let serialized = doc.to_string();
+        tokio::fs::write(&config_path, serialized)
+            .await
+            .with_context(|| {
+                format!("failed to persist config.toml at {}", config_path.display())
+            })?;
     }
 
-    std::fs::create_dir_all(codex_home)?;
-    let tmp_file = NamedTempFile::new_in(codex_home)?;
-    std::fs::write(tmp_file.path(), doc.to_string())?;
-    tmp_file.persist(&config_path)?;
+    let mut storage = InternalStorage::load(codex_home).unwrap_or_default();
+    storage.gpt_5_high_model_prompt_seen = true;
+    storage.persist(codex_home).await?;
 
     Ok(())
-}
-
-fn ensure_table<'a>(
-    parent: &'a mut toml_edit::Table,
-    key: &str,
-) -> anyhow::Result<&'a mut toml_edit::Table> {
-    if !parent.contains_key(key) {
-        parent.insert(key, toml_edit::table());
-    }
-
-    parent
-        .get_mut(key)
-        .and_then(Item::as_table_mut)
-        .ok_or_else(|| anyhow::anyhow!("expected `{key}` to be a TOML table"))
 }
 
 /// Apply a single dotted-path override onto a TOML value.
@@ -808,6 +853,11 @@ impl Config {
             Self::get_base_instructions(experimental_instructions_path, &resolved_cwd)?;
         let base_instructions = base_instructions.or(file_base_instructions);
 
+        let mut tui = cfg.tui.unwrap_or_default();
+        if let Some(storage) = InternalStorage::load(&codex_home) {
+            tui.gpt_5_high_model_prompt_seen = storage.gpt_5_high_model_prompt_seen;
+        }
+
         let config = Self {
             model,
             model_family,
@@ -831,7 +881,7 @@ impl Config {
             codex_home,
             history,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
-            tui: cfg.tui.unwrap_or_default(),
+            tui,
             codex_linux_sandbox_exe,
 
             hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(false),
@@ -972,6 +1022,7 @@ mod tests {
 
     use super::*;
     use pretty_assertions::assert_eq;
+    use serde_json::json;
     use tempfile::TempDir;
 
     #[test]
@@ -1060,6 +1111,69 @@ exclude_slash_tmp = true
             },
             sandbox_workspace_write_cfg.derive_sandbox_policy(sandbox_mode_override)
         );
+    }
+
+    #[test]
+    fn load_config_reads_internal_storage_prompt_state() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let cwd = TempDir::new()?;
+
+        let storage_path = codex_home.path().join(INTERNAL_STORAGE_FILE);
+        std::fs::write(
+            &storage_path,
+            json!({ "gpt_5_high_model_prompt_seen": true }).to_string(),
+        )?;
+
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides {
+                cwd: Some(cwd.path().to_path_buf()),
+                ..ConfigOverrides::default()
+            },
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert!(config.tui.gpt_5_high_model_prompt_seen);
+
+        Ok(())
+    }
+
+    #[test]
+    fn load_config_uses_config_prompt_when_storage_missing() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let cwd = TempDir::new()?;
+
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml {
+                tui: Some(Tui {
+                    gpt_5_high_model_prompt_seen: true,
+                }),
+                ..ConfigToml::default()
+            },
+            ConfigOverrides {
+                cwd: Some(cwd.path().to_path_buf()),
+                ..ConfigOverrides::default()
+            },
+            codex_home.path().to_path_buf(),
+        )?;
+
+        assert!(config.tui.gpt_5_high_model_prompt_seen);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn recording_prompt_choice_persists_internal_storage() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        record_gpt5_high_prompt_choice(codex_home.path(), false).await?;
+
+        let stored_contents =
+            std::fs::read_to_string(codex_home.path().join(INTERNAL_STORAGE_FILE))?;
+        let storage: InternalStorage = serde_json::from_str(&stored_contents)?;
+        assert!(storage.gpt_5_high_model_prompt_seen);
+
+        Ok(())
     }
 
     struct PrecedenceTestFixture {
