@@ -1474,7 +1474,7 @@ trust_level = "trusted"
     #[test]
     fn test_set_project_trusted_migrates_top_level_inline_projects_preserving_entries()
     -> anyhow::Result<()> {
-        let initial = r#"foo = "bar"
+        let initial = r#"toplevel = "baz"
 projects = { "/Users/mbolin/code/codex4" = { trust_level = "trusted", foo = "bar" } , "/Users/mbolin/code/codex3" = { trust_level = "trusted" } }
 model = "foo""#;
         let mut doc = initial.parse::<DocumentMut>()?;
@@ -1487,7 +1487,7 @@ model = "foo""#;
 
         // Since we created the [projects] table as part of migration, it is kept implicit.
         // Expect explicit per-project tables, preserving prior entries and appending the new one.
-        let expected = r#"foo = "bar"
+        let expected = r#"toplevel = "baz"
 model = "foo"
 
 [projects."/Users/mbolin/code/codex4"]
