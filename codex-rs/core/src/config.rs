@@ -261,17 +261,7 @@ pub fn load_config_as_toml(codex_home: &Path) -> std::io::Result<TomlValue> {
     }
 }
 
-/// Patch `CODEX_HOME/config.toml` project state.
-/// Use with caution.
-pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Result<()> {
-    let config_path = codex_home.join(CONFIG_TOML_FILE);
-    // Parse existing config if present; otherwise start a new document.
-    let mut doc = match std::fs::read_to_string(config_path.clone()) {
-        Ok(s) => s.parse::<DocumentMut>()?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => DocumentMut::new(),
-        Err(e) => return Err(e.into()),
-    };
-
+fn set_project_trusted_inner(doc: &mut DocumentMut, project_path: &Path) -> anyhow::Result<()> {
     // Ensure we render a human-friendly structure:
     //
     // [projects]
@@ -287,14 +277,26 @@ pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Re
     // Ensure top-level `projects` exists as a non-inline, explicit table. If it
     // exists but was previously represented as a non-table (e.g., inline),
     // replace it with an explicit table.
-    let mut created_projects_table = false;
     {
         let root = doc.as_table_mut();
-        let needs_table = !root.contains_key("projects")
-            || root.get("projects").and_then(|i| i.as_table()).is_none();
-        if needs_table {
-            root.insert("projects", toml_edit::table());
-            created_projects_table = true;
+        // If `projects` exists but isn't a standard table (e.g., it's an inline table),
+        // convert it to an explicit table while preserving existing entries.
+        let existing_projects = root.get("projects").cloned();
+        if existing_projects.as_ref().is_none_or(|i| !i.is_table()) {
+            let mut projects_tbl = toml_edit::Table::new();
+            projects_tbl.set_implicit(true);
+
+            // If there was an existing inline table, migrate its entries to explicit tables.
+            if let Some(inline_tbl) = existing_projects.as_ref().and_then(|i| i.as_inline_table()) {
+                for (k, v) in inline_tbl.iter() {
+                    if let Some(inner_tbl) = v.as_inline_table() {
+                        let new_tbl = inner_tbl.clone().into_table();
+                        projects_tbl.insert(k, toml_edit::Item::Table(new_tbl));
+                    }
+                }
+            }
+
+            root.insert("projects", toml_edit::Item::Table(projects_tbl));
         }
     }
     let Some(projects_tbl) = doc["projects"].as_table_mut() else {
@@ -302,12 +304,6 @@ pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Re
             "projects table missing after initialization"
         ));
     };
-
-    // If we created the `projects` table ourselves, keep it implicit so we
-    // don't render a standalone `[projects]` header.
-    if created_projects_table {
-        projects_tbl.set_implicit(true);
-    }
 
     // Ensure the per-project entry is its own explicit table. If it exists but
     // is not a table (e.g., an inline table), replace it with an explicit table.
@@ -327,6 +323,21 @@ pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Re
     };
     proj_tbl.set_implicit(false);
     proj_tbl["trust_level"] = toml_edit::value("trusted");
+    Ok(())
+}
+
+/// Patch `CODEX_HOME/config.toml` project state.
+/// Use with caution.
+pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Result<()> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    // Parse existing config if present; otherwise start a new document.
+    let mut doc = match std::fs::read_to_string(config_path.clone()) {
+        Ok(s) => s.parse::<DocumentMut>()?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => DocumentMut::new(),
+        Err(e) => return Err(e.into()),
+    };
+
+    set_project_trusted_inner(&mut doc, project_path)?;
 
     // ensure codex_home exists
     std::fs::create_dir_all(codex_home)?;
@@ -1400,17 +1411,14 @@ model_verbosity = "high"
 
     #[test]
     fn test_set_project_trusted_writes_explicit_tables() -> anyhow::Result<()> {
-        let codex_home = TempDir::new().unwrap();
-        let project_dir = TempDir::new().unwrap();
+        let project_dir = Path::new("/some/path");
+        let mut doc = DocumentMut::new();
 
-        // Call the function under test
-        set_project_trusted(codex_home.path(), project_dir.path())?;
+        set_project_trusted_inner(&mut doc, project_dir)?;
 
-        // Read back the generated config.toml and assert exact contents
-        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
-        let contents = std::fs::read_to_string(&config_path)?;
+        let contents = doc.to_string();
 
-        let raw_path = project_dir.path().to_string_lossy();
+        let raw_path = project_dir.to_string_lossy();
         let path_str = if raw_path.contains('\\') {
             format!("'{raw_path}'")
         } else {
@@ -1428,12 +1436,10 @@ trust_level = "trusted"
 
     #[test]
     fn test_set_project_trusted_converts_inline_to_explicit() -> anyhow::Result<()> {
-        let codex_home = TempDir::new().unwrap();
-        let project_dir = TempDir::new().unwrap();
+        let project_dir = Path::new("/some/path");
 
         // Seed config.toml with an inline project entry under [projects]
-        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
-        let raw_path = project_dir.path().to_string_lossy();
+        let raw_path = project_dir.to_string_lossy();
         let path_str = if raw_path.contains('\\') {
             format!("'{raw_path}'")
         } else {
@@ -1445,13 +1451,12 @@ trust_level = "trusted"
 {path_str} = {{ trust_level = "untrusted" }}
 "#
         );
-        std::fs::create_dir_all(codex_home.path())?;
-        std::fs::write(&config_path, initial)?;
+        let mut doc = initial.parse::<DocumentMut>()?;
 
         // Run the function; it should convert to explicit tables and set trusted
-        set_project_trusted(codex_home.path(), project_dir.path())?;
+        set_project_trusted_inner(&mut doc, project_dir)?;
 
-        let contents = std::fs::read_to_string(&config_path)?;
+        let contents = doc.to_string();
 
         // Assert exact output after conversion to explicit table
         let expected = format!(
@@ -1461,6 +1466,40 @@ trust_level = "trusted"
 trust_level = "trusted"
 "#
         );
+        assert_eq!(contents, expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_set_project_trusted_migrates_top_level_inline_projects_preserving_entries()
+    -> anyhow::Result<()> {
+        let initial = r#"toplevel = "baz"
+projects = { "/Users/mbolin/code/codex4" = { trust_level = "trusted", foo = "bar" } , "/Users/mbolin/code/codex3" = { trust_level = "trusted" } }
+model = "foo""#;
+        let mut doc = initial.parse::<DocumentMut>()?;
+
+        // Approve a new directory
+        let new_project = Path::new("/Users/mbolin/code/codex2");
+        set_project_trusted_inner(&mut doc, new_project)?;
+
+        let contents = doc.to_string();
+
+        // Since we created the [projects] table as part of migration, it is kept implicit.
+        // Expect explicit per-project tables, preserving prior entries and appending the new one.
+        let expected = r#"toplevel = "baz"
+model = "foo"
+
+[projects."/Users/mbolin/code/codex4"]
+trust_level = "trusted"
+foo = "bar"
+
+[projects."/Users/mbolin/code/codex3"]
+trust_level = "trusted"
+
+[projects."/Users/mbolin/code/codex2"]
+trust_level = "trusted"
+"#;
         assert_eq!(contents, expected);
 
         Ok(())
