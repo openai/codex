@@ -1474,8 +1474,8 @@ trust_level = "trusted"
     #[test]
     fn test_set_project_trusted_migrates_top_level_inline_projects_preserving_entries()
     -> anyhow::Result<()> {
-        let initial = r#"model = "foo"
-projects = { "/Users/mbolin/code/codex4" = { trust_level = "trusted", foo = "bar" } , "/Users/mbolin/code/codex3" = { trust_level = "trusted" } }"#;
+        let initial = r#"projects = { "/Users/mbolin/code/codex4" = { trust_level = "trusted", foo = "bar" } , "/Users/mbolin/code/codex3" = { trust_level = "trusted" } }
+model = "foo""#;
         let mut doc = initial.parse::<DocumentMut>()?;
 
         // Approve a new directory
