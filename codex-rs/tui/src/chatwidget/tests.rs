@@ -144,6 +144,7 @@ fn resumed_initial_messages_render_history() {
             EventMsg::UserMessage(UserMessageEvent {
                 message: "hello from user".to_string(),
                 kind: Some(InputMessageKind::Plain),
+                images: None,
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "assistant reply".to_string(),
