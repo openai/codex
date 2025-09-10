@@ -97,12 +97,12 @@ impl Shell {
                 // turn it into a PowerShell command.
                 let first = command.first().map(String::as_str);
                 if first != Some(ps.exe.as_str()) {
-                    // TODO (CODEX_2900): Handle escaping newlines.
-                    if command.iter().any(|a| a.contains('\n') || a.contains('\r')) {
-                        return Some(command);
-                    }
+                    let escaped: Vec<String> = command
+                        .iter()
+                        .map(|a| a.replace('\n', "`n").replace('\r', "`r"))
+                        .collect();
 
-                    let joined = shlex::try_join(command.iter().map(|s| s.as_str())).ok();
+                    let joined = shlex::try_join(escaped.iter().map(|s| s.as_str())).ok();
                     return joined.map(|arg| {
                         vec![
                             ps.exe.clone(),
