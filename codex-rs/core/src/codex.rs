@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -31,9 +32,12 @@ use serde::Serialize;
 use serde_json;
 use tokio::sync::oneshot;
 use tokio::task::AbortHandle;
+use tracing::Instrument;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
+use tracing::info_span;
+use tracing::instrument;
 use tracing::trace;
 use tracing::warn;
 
@@ -759,6 +763,14 @@ impl Session {
         }
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            conversation_id = %self.conversation_id,
+            sub_id = %exec_command_context.sub_id,
+            call_id = %exec_command_context.call_id
+        ),
+    )]
     async fn on_exec_command_begin(
         &self,
         turn_diff_tracker: &mut TurnDiffTracker,
@@ -801,6 +813,14 @@ impl Session {
         self.send_event(event).await;
     }
 
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            conversation_id = %self.conversation_id,
+            sub_id = %sub_id,
+            call_id = %call_id
+        ),
+    )]
     async fn on_exec_command_end(
         &self,
         turn_diff_tracker: &mut TurnDiffTracker,
@@ -865,6 +885,16 @@ impl Session {
     /// command even on error.
     ///
     /// Returns the output of the exec tool call.
+    #[tracing::instrument(
+        skip_all,
+        fields(
+            conversation_id = %self.conversation_id,
+            sub_id = %begin_ctx.sub_id,
+            call_id = %begin_ctx.call_id,
+            sandbox_type = %exec_args.sandbox_type,
+            sandbox_policy = %exec_args.sandbox_policy,
+        ),
+    )]
     async fn run_exec_with_events<'a>(
         &self,
         turn_diff_tracker: &mut TurnDiffTracker,
@@ -964,6 +994,10 @@ impl Session {
         }
     }
 
+    #[instrument(
+        skip(self, arguments),
+        fields(%server, %tool, timeout_ms = timeout.map(|t| t.as_millis()))
+    )]
     pub async fn call_tool(
         &self,
         server: &str,
@@ -1969,6 +2003,15 @@ struct TurnRunResult {
     total_token_usage: Option<TokenUsage>,
 }
 
+#[tracing::instrument(
+    skip_all,
+    fields(
+        session_id = %turn_context.client.get_conversation_id(),
+        model = %turn_context.client.get_model(),
+        model_slug = %turn_context.client.get_model_family().slug,
+        model_provider = %turn_context.client.get_provider().name,
+    ),
+)]
 async fn try_run_turn(
     sess: &Session,
     turn_context: &TurnContext,
@@ -2045,10 +2088,20 @@ async fn try_run_turn(
     let mut output = Vec::new();
 
     loop {
+        let consuming_events_span = info_span!("consuming_events");
+        let _consuming_events_span_guard = consuming_events_span.enter();
+
+        let event_span = info_span!(
+            parent: &consuming_events_span,
+            "stream_next",
+            otel.name = tracing::field::Empty,
+            delta_len = tracing::field::Empty,
+        );
+
         // Poll the next item from the model stream. We must inspect *both* Ok and Err
         // cases so that transient stream failures (e.g., dropped SSE connection before
         // `response.completed`) bubble up and trigger the caller's retry logic.
-        let event = stream.next().await;
+        let event = stream.next().instrument(event_span.clone()).await;
         let Some(event) = event else {
             // Channel closed without yielding a final Completed event or explicit error.
             // Treat as a disconnected stream so the caller can retry.
@@ -2067,9 +2120,16 @@ async fn try_run_turn(
             }
         };
 
+        event_span.record("otel.name", event.to_string());
+
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
+                let handle_response_span = info_span!(
+                    parent: &consuming_events_span,
+                    "handle_response",
+                    otel.name = item.to_string(),
+                );
                 let response = handle_response_item(
                     sess,
                     turn_context,
@@ -2077,6 +2137,7 @@ async fn try_run_turn(
                     sub_id,
                     item.clone(),
                 )
+                .instrument(handle_response_span)
                 .await?;
                 output.push(ProcessedResponseItem { item, response });
             }
@@ -2132,6 +2193,7 @@ async fn try_run_turn(
                 }
             }
             ResponseEvent::ReasoningSummaryDelta(delta) => {
+                event_span.record("delta_len", delta.len());
                 let event = Event {
                     id: sub_id.to_string(),
                     msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta }),
@@ -2146,6 +2208,7 @@ async fn try_run_turn(
                 sess.send_event(event).await;
             }
             ResponseEvent::ReasoningContentDelta(delta) => {
+                event_span.record("delta_len", delta.len());
                 if sess.show_raw_agent_reasoning {
                     let event = Event {
                         id: sub_id.to_string(),
@@ -2350,6 +2413,16 @@ async fn handle_unified_exec_tool_call(
     }
 }
 
+#[tracing::instrument(
+    skip_all,
+    fields(
+        session_id = %turn_context.client.get_conversation_id(),
+        model = %turn_context.client.get_model(),
+        model_slug = %turn_context.client.get_model_family().slug,
+        model_provider = %turn_context.client.get_provider().name,
+        otel.name = %name,
+    ),
+)]
 async fn handle_function_call(
     sess: &Session,
     turn_context: &TurnContext,
@@ -2544,6 +2617,15 @@ async fn handle_function_call(
     }
 }
 
+#[tracing::instrument(
+    skip_all,
+    fields(
+        session_id = %turn_context.client.get_conversation_id(),
+        model = %turn_context.client.get_model(),
+        model_slug = %turn_context.client.get_model_family().slug,
+        model_provider = %turn_context.client.get_provider().name,
+    ),
+)]
 async fn handle_custom_tool_call(
     sess: &Session,
     turn_context: &TurnContext,
@@ -2607,6 +2689,15 @@ fn to_exec_params(params: ShellToolCallParams, turn_context: &TurnContext) -> Ex
     }
 }
 
+#[tracing::instrument(
+    skip_all,
+    fields(
+        session_id = %turn_context.client.get_conversation_id(),
+        model = %turn_context.client.get_model(),
+        model_slug = %turn_context.client.get_model_family().slug,
+        model_provider = %turn_context.client.get_provider().name,
+    ),
+)]
 fn parse_container_exec_arguments(
     arguments: String,
     turn_context: &TurnContext,
@@ -2655,6 +2746,15 @@ fn maybe_translate_shell_command(
     params
 }
 
+#[tracing::instrument(
+    skip_all,
+    fields(
+        session_id = %turn_context.client.get_conversation_id(),
+        model = %turn_context.client.get_model(),
+        model_slug = %turn_context.client.get_model_family().slug,
+        model_provider = %turn_context.client.get_provider().name,
+    ),
+)]
 async fn handle_container_exec_with_params(
     params: ExecParams,
     sess: &Session,
@@ -2874,6 +2974,14 @@ async fn handle_container_exec_with_params(
     }
 }
 
+#[tracing::instrument(
+    skip_all,
+    fields(
+            conversation_id = %sess.conversation_id,
+            sub_id = %exec_command_context.sub_id,
+            call_id = %exec_command_context.call_id
+    ),
+)]
 async fn handle_sandbox_error(
     turn_diff_tracker: &mut TurnDiffTracker,
     params: ExecParams,

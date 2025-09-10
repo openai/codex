@@ -16,6 +16,12 @@ const MACOS_SEATBELT_BASE_POLICY: &str = include_str!("seatbelt_base_policy.sbpl
 /// already has root access.
 const MACOS_PATH_TO_SEATBELT_EXECUTABLE: &str = "/usr/bin/sandbox-exec";
 
+#[tracing::instrument(
+    skip_all,
+    fields(
+        sandbox_policy = %sandbox_policy,
+    ),
+)]
 pub async fn spawn_command_under_seatbelt(
     command: Vec<String>,
     sandbox_policy: &SandboxPolicy,

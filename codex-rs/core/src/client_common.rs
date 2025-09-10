@@ -13,6 +13,7 @@ use std::borrow::Cow;
 use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
+use strum_macros::Display;
 use tokio::sync::mpsc;
 
 /// The `instructions` field in the payload sent to a model should always start
@@ -65,7 +66,8 @@ impl Prompt {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Display)]
+#[strum(serialize_all = "snake_case")]
 pub enum ResponseEvent {
     Created,
     OutputItemDone(ResponseItem),

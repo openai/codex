@@ -13,6 +13,12 @@ use tokio::process::Child;
 /// helper accepts a list of `--sandbox-permission`/`-s` flags mirroring the
 /// public CLI. We convert the internal [`SandboxPolicy`] representation into
 /// the equivalent CLI options.
+#[tracing::instrument(
+    skip_all,
+    fields(
+        sandbox_policy = %sandbox_policy,
+    ),
+)]
 pub async fn spawn_command_under_linux_sandbox<P>(
     codex_linux_sandbox_exe: P,
     command: Vec<String>,

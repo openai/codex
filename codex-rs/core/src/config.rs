@@ -42,8 +42,7 @@ pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 
 pub(crate) const CONFIG_TOML_FILE: &str = "config.toml";
 
-/// Default rotation size for telemetry file exporter, in MiB.
-pub(crate) const DEFAULT_TELEMETRY_ROTATE_MB: u64 = 100;
+const DEFAULT_OTEL_ENVIRONMENT: &str = "dev";
 
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
@@ -191,8 +190,8 @@ pub struct Config {
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: bool,
 
-    /// Telemetry configuration (exporter type, endpoint, headers, etc.).
-    pub telemetry: crate::config_types::TelemetryConfig,
+    /// OTEL configuration (exporter type, endpoint, headers, etc.).
+    pub otel: crate::config_types::OtelConfig,
 }
 
 impl Config {
@@ -626,8 +625,8 @@ pub struct ConfigToml {
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: Option<bool>,
 
-    /// Telemetry configuration.
-    pub telemetry: Option<crate::config_types::TelemetryConfigToml>,
+    /// OTEL configuration.
+    pub otel: Option<crate::config_types::OtelConfigToml>,
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -873,7 +872,6 @@ impl Config {
             .or(config_profile.model)
             .or(cfg.model)
             .unwrap_or_else(default_model);
-
         let mut model_family = find_family_for_model(&model).unwrap_or_else(|| ModelFamily {
             slug: model.clone(),
             family: model.clone(),
@@ -982,22 +980,33 @@ impl Config {
             include_view_image_tool,
             active_profile: active_profile_name,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
-            telemetry: {
-                use crate::config_types::TelemetryConfig;
-                use crate::config_types::TelemetryConfigToml;
-                use crate::config_types::TelemetryExporterKind;
-                let t: TelemetryConfigToml = cfg.telemetry.unwrap_or_default();
-                let enabled = t.enabled.unwrap_or(true);
-                let exporter = t.exporter.unwrap_or(TelemetryExporterKind::OtlpFile);
-                let endpoint = t.endpoint;
-                let headers = t.headers.unwrap_or_default();
-                let rotate_mb = t.rotate_mb.or(Some(DEFAULT_TELEMETRY_ROTATE_MB));
-                TelemetryConfig {
-                    enabled,
-                    exporter,
-                    endpoint,
-                    headers,
-                    rotate_mb,
+
+            otel: {
+                use crate::config_types::OtelConfig;
+                use crate::config_types::OtelConfigToml;
+                use crate::config_types::OtelExporterKind;
+                use crate::config_types::OtelSampler;
+                let t: OtelConfigToml = cfg.otel.unwrap_or_default();
+                let enabled = t.enabled.unwrap_or(false);
+                let environment = t
+                    .environment
+                    .unwrap_or(DEFAULT_OTEL_ENVIRONMENT.to_string());
+                if !enabled {
+                    OtelConfig {
+                        enabled,
+                        environment,
+                        sampler: OtelSampler::AlwaysOn,
+                        exporter: OtelExporterKind::None,
+                    }
+                } else {
+                    let sampler = t.sampler.unwrap_or(OtelSampler::AlwaysOn);
+                    let exporter = t.exporter.unwrap_or(OtelExporterKind::OtlpFile);
+                    OtelConfig {
+                        enabled,
+                        environment,
+                        sampler,
+                        exporter,
+                    }
                 }
             },
         };
@@ -1520,12 +1529,11 @@ model_verbosity = "high"
                 include_view_image_tool: true,
                 active_profile: Some("o3".to_string()),
                 disable_paste_burst: false,
-                telemetry: crate::config_types::TelemetryConfig {
-                    enabled: true,
-                    exporter: crate::config_types::TelemetryExporterKind::OtlpFile,
-                    endpoint: None,
-                    headers: HashMap::new(),
-                    rotate_mb: Some(100),
+                otel: crate::config_types::OtelConfig {
+                    enabled: false,
+                    environment: DEFAULT_OTEL_ENVIRONMENT.to_string(),
+                    exporter: crate::config_types::OtelExporterKind::None,
+                    sampler: crate::config_types::OtelSampler::AlwaysOn,
                 },
             },
             o3_profile_config
@@ -1585,12 +1593,11 @@ model_verbosity = "high"
             include_view_image_tool: true,
             active_profile: Some("gpt3".to_string()),
             disable_paste_burst: false,
-            telemetry: crate::config_types::TelemetryConfig {
-                enabled: true,
-                exporter: crate::config_types::TelemetryExporterKind::OtlpFile,
-                endpoint: None,
-                headers: HashMap::new(),
-                rotate_mb: Some(100),
+            otel: crate::config_types::OtelConfig {
+                enabled: false,
+                environment: DEFAULT_OTEL_ENVIRONMENT.to_string(),
+                exporter: crate::config_types::OtelExporterKind::None,
+                sampler: crate::config_types::OtelSampler::AlwaysOn,
             },
         };
 
@@ -1665,12 +1672,11 @@ model_verbosity = "high"
             include_view_image_tool: true,
             active_profile: Some("zdr".to_string()),
             disable_paste_burst: false,
-            telemetry: crate::config_types::TelemetryConfig {
-                enabled: true,
-                exporter: crate::config_types::TelemetryExporterKind::OtlpFile,
-                endpoint: None,
-                headers: HashMap::new(),
-                rotate_mb: Some(100),
+            otel: crate::config_types::OtelConfig {
+                enabled: false,
+                environment: DEFAULT_OTEL_ENVIRONMENT.to_string(),
+                exporter: crate::config_types::OtelExporterKind::None,
+                sampler: crate::config_types::OtelSampler::AlwaysOn,
             },
         };
 
@@ -1731,6 +1737,12 @@ model_verbosity = "high"
             include_view_image_tool: true,
             active_profile: Some("gpt5".to_string()),
             disable_paste_burst: false,
+            otel: crate::config_types::OtelConfig {
+                enabled: false,
+                environment: DEFAULT_OTEL_ENVIRONMENT.to_string(),
+                exporter: crate::config_types::OtelExporterKind::None,
+                sampler: crate::config_types::OtelSampler::AlwaysOn,
+            },
         };
 
         assert_eq!(expected_gpt5_profile_config, gpt5_profile_config);
