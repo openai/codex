@@ -17,7 +17,6 @@ use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::wait_for_event;
 use tempfile::TempDir;
-use uuid::Uuid;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -270,7 +269,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
     let requests = server.received_requests().await.unwrap();
     assert_eq!(requests.len(), 2, "expected two POST requests");
 
-    let shell = default_user_shell(Uuid::new_v4(), codex_home.path()).await;
+    let shell = default_user_shell().await;
 
     let expected_env_text = format!(
         r#"<environment_context>

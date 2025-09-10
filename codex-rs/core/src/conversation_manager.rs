@@ -13,24 +13,12 @@ use crate::protocol::SessionConfiguredEvent;
 use crate::rollout::RolloutRecorder;
 use codex_protocol::mcp_protocol::ConversationId;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::RolloutItem;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ResumedHistory {
-    pub conversation_id: ConversationId,
-    pub history: Vec<ResponseItem>,
-    pub rollout_path: PathBuf,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum InitialHistory {
-    New,
-    Resumed(ResumedHistory),
-    Forked(Vec<ResponseItem>),
-}
 
 /// Represents a newly created Codex conversation, including the first event
 /// (which is [`EventMsg::SessionConfigured`]).
@@ -185,7 +173,8 @@ impl ConversationManager {
 /// and all items that follow them.
 fn truncate_after_dropping_last_messages(items: Vec<ResponseItem>, n: usize) -> InitialHistory {
     if n == 0 {
-        return InitialHistory::Forked(items);
+        let rolled: Vec<RolloutItem> = items.into_iter().map(RolloutItem::ResponseItem).collect();
+        return InitialHistory::Forked(rolled);
     }
 
     // Walk backwards counting only `user` Message items, find cut index.
@@ -207,7 +196,12 @@ fn truncate_after_dropping_last_messages(items: Vec<ResponseItem>, n: usize) -> 
         // No prefix remains after dropping; start a new conversation.
         InitialHistory::New
     } else {
-        InitialHistory::Forked(items.into_iter().take(cut_index).collect())
+        let rolled: Vec<RolloutItem> = items
+            .into_iter()
+            .take(cut_index)
+            .map(RolloutItem::ResponseItem)
+            .collect();
+        InitialHistory::Forked(rolled)
     }
 }
 
@@ -263,12 +257,18 @@ mod tests {
         ];
 
         let truncated = truncate_after_dropping_last_messages(items.clone(), 1);
+        let got_items = truncated.get_rollout_items();
+        let expected_items = vec![
+            RolloutItem::ResponseItem(items[0].clone()),
+            RolloutItem::ResponseItem(items[1].clone()),
+            RolloutItem::ResponseItem(items[2].clone()),
+        ];
         assert_eq!(
-            truncated,
-            InitialHistory::Forked(vec![items[0].clone(), items[1].clone(), items[2].clone(),])
+            serde_json::to_value(&got_items).unwrap(),
+            serde_json::to_value(&expected_items).unwrap()
         );
 
         let truncated2 = truncate_after_dropping_last_messages(items, 2);
-        assert_eq!(truncated2, InitialHistory::New);
+        assert!(matches!(truncated2, InitialHistory::New));
     }
 }

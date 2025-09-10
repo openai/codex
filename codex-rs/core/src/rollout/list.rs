@@ -10,6 +10,9 @@ use time::macros::format_description;
 use uuid::Uuid;
 
 use super::SESSIONS_SUBDIR;
+use crate::protocol::EventMsg;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 
 /// Returned page of conversation summaries.
 #[derive(Debug, Default, PartialEq)]
@@ -34,7 +37,7 @@ pub struct ConversationItem {
 }
 
 /// Hard cap to bound worst‑case work per request.
-const MAX_SCAN_FILES: usize = 10_000;
+const MAX_SCAN_FILES: usize = 100;
 const HEAD_RECORD_LIMIT: usize = 10;
 
 /// Pagination cursor identifying a file by timestamp and UUID.
@@ -167,10 +170,16 @@ async fn traverse_directories_for_paths(
                     if items.len() == page_size {
                         break 'outer;
                     }
-                    let head = read_first_jsonl_records(&path, HEAD_RECORD_LIMIT)
-                        .await
-                        .unwrap_or_default();
-                    items.push(ConversationItem { path, head });
+                    // Read head and simultaneously detect message events within the same
+                    // first N JSONL records to avoid a second file read.
+                    let (head, saw_session_meta, saw_user_event) =
+                        read_head_and_flags(&path, HEAD_RECORD_LIMIT)
+                            .await
+                            .unwrap_or((Vec::new(), false, false));
+                    // Apply filters: must have session meta and at least one user message event
+                    if saw_session_meta && saw_user_event {
+                        items.push(ConversationItem { path, head });
+                    }
                 }
             }
         }
@@ -273,16 +282,19 @@ fn parse_timestamp_uuid_from_filename(name: &str) -> Option<(OffsetDateTime, Uui
     Some((ts, uuid))
 }
 
-async fn read_first_jsonl_records(
+async fn read_head_and_flags(
     path: &Path,
     max_records: usize,
-) -> io::Result<Vec<serde_json::Value>> {
+) -> io::Result<(Vec<serde_json::Value>, bool, bool)> {
     use tokio::io::AsyncBufReadExt;
 
     let file = tokio::fs::File::open(path).await?;
     let reader = tokio::io::BufReader::new(file);
     let mut lines = reader.lines();
     let mut head: Vec<serde_json::Value> = Vec::new();
+    let mut saw_session_meta = false;
+    let mut saw_user_event = false;
+
     while head.len() < max_records {
         let line_opt = lines.next_line().await?;
         let Some(line) = line_opt else { break };
@@ -290,9 +302,29 @@ async fn read_first_jsonl_records(
         if trimmed.is_empty() {
             continue;
         }
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed) {
-            head.push(v);
+
+        let parsed: Result<RolloutLine, _> = serde_json::from_str(trimmed);
+        let Ok(rollout_line) = parsed else { continue };
+
+        match rollout_line.item {
+            RolloutItem::SessionMeta(session_meta_line) => {
+                if let Ok(val) = serde_json::to_value(session_meta_line) {
+                    head.push(val);
+                    saw_session_meta = true;
+                }
+            }
+            RolloutItem::ResponseItem(item) => {
+                if let Ok(val) = serde_json::to_value(item) {
+                    head.push(val);
+                }
+            }
+            RolloutItem::EventMsg(ev) => {
+                if matches!(ev, EventMsg::UserMessage(_)) {
+                    saw_user_event = true;
+                }
+            }
         }
     }
-    Ok(head)
+
+    Ok((head, saw_session_meta, saw_user_event))
 }

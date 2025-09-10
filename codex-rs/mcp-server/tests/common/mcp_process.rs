@@ -26,13 +26,13 @@ use codex_protocol::mcp_protocol::SendUserTurnParams;
 
 use mcp_types::CallToolRequestParams;
 use mcp_types::ClientCapabilities;
-use mcp_types::Implementation;
 use mcp_types::InitializeRequestParams;
 use mcp_types::JSONRPC_VERSION;
 use mcp_types::JSONRPCMessage;
 use mcp_types::JSONRPCNotification;
 use mcp_types::JSONRPCRequest;
 use mcp_types::JSONRPCResponse;
+use mcp_types::McpClientInfo;
 use mcp_types::ModelContextProtocolNotification;
 use mcp_types::ModelContextProtocolRequest;
 use mcp_types::RequestId;
@@ -54,6 +54,18 @@ pub struct McpProcess {
 
 impl McpProcess {
     pub async fn new(codex_home: &Path) -> anyhow::Result<Self> {
+        Self::new_with_env(codex_home, &[]).await
+    }
+
+    /// Creates a new MCP process, allowing tests to override or remove
+    /// specific environment variables for the child process only.
+    ///
+    /// Pass a tuple of (key, Some(value)) to set/override, or (key, None) to
+    /// remove a variable from the child's environment.
+    pub async fn new_with_env(
+        codex_home: &Path,
+        env_overrides: &[(&str, Option<&str>)],
+    ) -> anyhow::Result<Self> {
         // Use assert_cmd to locate the binary path and then switch to tokio::process::Command
         let std_cmd = StdCommand::cargo_bin("codex-mcp-server")
             .context("should find binary for codex-mcp-server")?;
@@ -67,6 +79,17 @@ impl McpProcess {
         cmd.stderr(Stdio::piped());
         cmd.env("CODEX_HOME", codex_home);
         cmd.env("RUST_LOG", "debug");
+
+        for (k, v) in env_overrides {
+            match v {
+                Some(val) => {
+                    cmd.env(k, val);
+                }
+                None => {
+                    cmd.env_remove(k);
+                }
+            }
+        }
 
         let mut process = cmd
             .kill_on_drop(true)
@@ -111,7 +134,7 @@ impl McpProcess {
                 roots: None,
                 sampling: None,
             },
-            client_info: Implementation {
+            client_info: McpClientInfo {
                 name: "elicitation test".into(),
                 title: Some("Elicitation Test".into()),
                 version: "0.0.0".into(),
@@ -129,6 +152,14 @@ impl McpProcess {
         .await?;
 
         let initialized = self.read_jsonrpc_message().await?;
+        let os_info = os_info::get();
+        let user_agent = format!(
+            "codex_cli_rs/0.0.0 ({} {}; {}) {} (elicitation test; 0.0.0)",
+            os_info.os_type(),
+            os_info.version(),
+            os_info.architecture().unwrap_or("unknown"),
+            codex_core::terminal::user_agent()
+        );
         assert_eq!(
             JSONRPCMessage::Response(JSONRPCResponse {
                 jsonrpc: JSONRPC_VERSION.into(),
@@ -142,7 +173,8 @@ impl McpProcess {
                     "serverInfo": {
                         "name": "codex-mcp-server",
                         "title": "Codex",
-                        "version": "0.0.0"
+                        "version": "0.0.0",
+                        "user_agent": user_agent
                     },
                     "protocolVersion": mcp_types::MCP_SCHEMA_VERSION
                 })

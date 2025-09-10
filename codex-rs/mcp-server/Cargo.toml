@@ -41,6 +41,7 @@ uuid = { version = "1", features = ["serde", "v4"] }
 [dev-dependencies]
 assert_cmd = "2"
 mcp_test_support = { path = "tests/common" }
+os_info = "3.12.0"
 pretty_assertions = "1.4.1"
 tempfile = "3"
 wiremock = "0.6"
