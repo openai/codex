@@ -271,6 +271,10 @@ where
     }
 
     fn code(&mut self, code: CowStr<'a>) {
+        if self.pending_marker_line {
+            self.push_line(Line::default());
+            self.pending_marker_line = false;
+        }
         let span = Span::from(code.into_string()).dim();
         self.push_span(span);
     }

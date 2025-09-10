@@ -696,6 +696,34 @@ fn code_block_inside_unordered_list_item_multiple_lines() {
 }
 
 #[test]
+fn ordered_item_with_code_block_and_nested_bullet() {
+    let md = "1. **item 1**\n\n2. **item 2**\n   ```\n   code\n   ```\n   - `PROCESS_START` (a `OnceLock<Instant>`) keeps the start time for the entire process.\n";
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.clone())
+                .collect::<String>()
+        })
+        .collect();
+    assert_eq!(
+        lines,
+        vec![
+            "1. item 1".to_string(),
+            "2. item 2".to_string(),
+            String::new(),
+            "   ```".to_string(),
+            "   code".to_string(),
+            "   ```".to_string(),
+            "    - PROCESS_START (a OnceLock<Instant>) keeps the start time for the entire process.".to_string(),
+        ]
+    );
+}
+
+#[test]
 fn nested_five_levels_mixed_lists() {
     let md = "1. First\n   - Second level\n     1. Third level (ordered)\n        - Fourth level (bullet)\n          - Fifth level to test indent consistency\n";
     let text = render_markdown_text(md);
