@@ -38,7 +38,6 @@ use codex_protocol::mcp_protocol::ApplyPatchApprovalParams;
 use codex_protocol::mcp_protocol::ApplyPatchApprovalResponse;
 use codex_protocol::mcp_protocol::ArchiveConversationParams;
 use codex_protocol::mcp_protocol::ArchiveConversationResponse;
-use codex_protocol::mcp_protocol::AuthMode;
 use codex_protocol::mcp_protocol::AuthStatusChangeNotification;
 use codex_protocol::mcp_protocol::ClientRequest;
 use codex_protocol::mcp_protocol::ConversationId;
