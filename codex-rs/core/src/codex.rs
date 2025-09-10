@@ -9,6 +9,9 @@ use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use crate::AuthManager;
+use crate::config_edit::CONFIG_KEY_EFFORT;
+use crate::config_edit::CONFIG_KEY_MODEL;
+use crate::config_edit::persist_non_null_overrides;
 use crate::event_mapping::map_response_item_to_event_messages;
 use async_channel::Receiver;
 use async_channel::Sender;
@@ -42,8 +45,6 @@ use crate::client::ModelClient;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::config::Config;
-use crate::config::set_default_effort_for_profile;
-use crate::config::set_default_model_for_profile;
 use crate::config_types::ShellEnvironmentPolicy;
 use crate::conversation_history::ConversationHistory;
 use crate::conversation_manager::InitialHistory;
@@ -1125,39 +1126,20 @@ async fn submission_loop(
                 // Install the new persistent context for subsequent tasks/turns.
                 turn_context = Arc::new(new_turn_context);
 
-                // Persist model across sessions
-                if model.is_some() {
-                    let codex_home = config.codex_home.clone();
-                    let profile = config.active_profile.clone();
-                    let model_to_persist = effective_model.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = set_default_model_for_profile(
-                            &codex_home,
-                            profile.as_deref(),
-                            &model_to_persist,
-                        )
-                        .await
-                        {
-                            warn!("failed to persist default model: {e:#}");
-                        }
-                    });
-                }
+                // Optionally persist changes to model / effort
+                let effort_str = effort.map(|_| effective_effort.to_string());
 
-                // Persist effort across sessions
-                if effort.is_some() {
-                    let codex_home = config.codex_home.clone();
-                    let profile = config.active_profile.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = set_default_effort_for_profile(
-                            &codex_home,
-                            profile.as_deref(),
-                            effective_effort,
-                        )
-                        .await
-                        {
-                            warn!("failed to persist default effort: {e:#}");
-                        }
-                    });
+                if let Err(e) = persist_non_null_overrides(
+                    &config.codex_home,
+                    config.active_profile.as_deref(),
+                    &[
+                        (&[CONFIG_KEY_MODEL], model.as_deref()),
+                        (&[CONFIG_KEY_EFFORT], effort_str.as_deref()),
+                    ],
+                )
+                .await
+                {
+                    warn!("failed to persist overrides: {e:#}");
                 }
 
                 if cwd.is_some() || approval_policy.is_some() || sandbox_policy.is_some() {

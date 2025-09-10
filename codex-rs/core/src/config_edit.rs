@@ -1,52 +1,15 @@
 use crate::config::CONFIG_TOML_FILE;
 use anyhow::Result;
-use codex_protocol::config_types::ReasoningEffort;
 use std::path::Path;
 use tempfile::NamedTempFile;
 use toml_edit::DocumentMut;
 
-/// Persist the default `model` to `CODEX_HOME/config.toml` so the selection
-/// is used across sessions. If a `profile` is set in `config.toml`, this
-/// updates the corresponding `[profiles.<name>]` table; otherwise it updates
-/// the top-level key. Returns `Ok(())` on success; `Err` on I/O or parse failures.
-pub async fn set_default_model_for_profile(
-    codex_home: &Path,
-    profile_override: Option<&str>,
-    model: &str,
-) -> Result<()> {
-    let overrides: [(&[&str], &str); 1] = [(&["model"], model)];
-    persist_overrides(codex_home, profile_override, &overrides).await
-}
-
-/// Persist the default `model` at the top level or active profile detected in
-/// `config.toml`. Returns `Ok(())` on success; `Err` on I/O or parse failures.
-pub async fn set_default_model(codex_home: &Path, model: &str) -> Result<()> {
-    set_default_model_for_profile(codex_home, None, model).await
-}
-
-/// Persist the default `model_reasoning_effort` to `CODEX_HOME/config.toml` so
-/// the selection is used across sessions. If a `profile` is set in
-/// `config.toml`, this updates the corresponding `[profiles.<name>]` table;
-/// otherwise it updates the top-level key. Returns `Ok(())` on success; `Err` on I/O or parse failures.
-pub async fn set_default_effort_for_profile(
-    codex_home: &Path,
-    profile_override: Option<&str>,
-    effort: ReasoningEffort,
-) -> Result<()> {
-    let effort_str = effort.to_string();
-    let overrides: [(&[&str], &str); 1] = [(&["model_reasoning_effort"], effort_str.as_str())];
-    persist_overrides(codex_home, profile_override, &overrides).await
-}
-
-/// Persist the default `model_reasoning_effort` at the top level or active
-/// profile detected in `config.toml`. Returns `Ok(())` on success; `Err` on I/O or parse failures.
-pub async fn set_default_effort(codex_home: &Path, effort: ReasoningEffort) -> Result<()> {
-    set_default_effort_for_profile(codex_home, None, effort).await
-}
+pub const CONFIG_KEY_MODEL: &str = "model";
+pub const CONFIG_KEY_EFFORT: &str = "model_reasoning_effort";
 
 /// Persist overrides into `config.toml` using explicit key segments per
 /// override. This avoids ambiguity with keys that contain dots or spaces.
-async fn persist_overrides(
+pub async fn persist_overrides(
     codex_home: &Path,
     profile: Option<&str>,
     overrides: &[(&[&str], &str)],
@@ -90,6 +53,26 @@ async fn persist_overrides(
     tmp_file.persist(config_path)?;
 
     Ok(())
+}
+
+/// Persist overrides where values may be optional. Any entries with `None`
+/// values are skipped. If all values are `None`, this becomes a no-op and
+/// returns `Ok(())` without touching the file.
+pub async fn persist_non_null_overrides(
+    codex_home: &Path,
+    profile: Option<&str>,
+    overrides: &[(&[&str], Option<&str>)],
+) -> Result<()> {
+    let filtered: Vec<(&[&str], &str)> = overrides
+        .iter()
+        .filter_map(|(k, v)| v.map(|vv| (*k, vv)))
+        .collect();
+
+    if filtered.is_empty() {
+        return Ok(());
+    }
+
+    persist_overrides(codex_home, profile, &filtered).await
 }
 
 /// Apply a single override onto a `toml_edit` document while preserving
@@ -148,12 +131,16 @@ mod tests {
         let tmpdir = tempdir().expect("tmp");
         let codex_home = tmpdir.path();
 
-        set_default_model(codex_home, "gpt-5")
-            .await
-            .expect("persist");
-        set_default_effort(codex_home, ReasoningEffort::High)
-            .await
-            .expect("persist");
+        persist_overrides(
+            codex_home,
+            None,
+            &[
+                (&[CONFIG_KEY_MODEL], "gpt-5"),
+                (&[CONFIG_KEY_EFFORT], "high"),
+            ],
+        )
+        .await
+        .expect("persist");
 
         let contents = read_config(codex_home).await;
         let expected = r#"model = "gpt-5"
@@ -174,10 +161,16 @@ model_reasoning_effort = "high"
             .await
             .expect("seed write");
 
-        set_default_model(codex_home, "o3").await.expect("persist");
-        set_default_effort(codex_home, ReasoningEffort::Minimal)
-            .await
-            .expect("persist");
+        persist_overrides(
+            codex_home,
+            None,
+            &[
+                (&[CONFIG_KEY_MODEL], "o3"),
+                (&[CONFIG_KEY_EFFORT], "minimal"),
+            ],
+        )
+        .await
+        .expect("persist");
 
         let contents = read_config(codex_home).await;
         let expected = r#"profile = "o3"
@@ -201,10 +194,16 @@ model_reasoning_effort = "minimal"
             .await
             .expect("seed write");
 
-        set_default_model(codex_home, "o3").await.expect("persist");
-        set_default_effort(codex_home, ReasoningEffort::Minimal)
-            .await
-            .expect("persist");
+        persist_overrides(
+            codex_home,
+            None,
+            &[
+                (&[CONFIG_KEY_MODEL], "o3"),
+                (&[CONFIG_KEY_EFFORT], "minimal"),
+            ],
+        )
+        .await
+        .expect("persist");
 
         let contents = read_config(codex_home).await;
         let expected = r#"profile = "my.team name"
@@ -228,12 +227,13 @@ model_reasoning_effort = "minimal"
             .expect("seed write");
 
         // Persist with an explicit profile override
-        set_default_model_for_profile(codex_home, Some("o3"), "o3")
-            .await
-            .expect("persist");
-        set_default_effort_for_profile(codex_home, Some("o3"), ReasoningEffort::High)
-            .await
-            .expect("persist");
+        persist_overrides(
+            codex_home,
+            Some("o3"),
+            &[(&[CONFIG_KEY_MODEL], "o3"), (&[CONFIG_KEY_EFFORT], "high")],
+        )
+        .await
+        .expect("persist");
 
         let contents = read_config(codex_home).await;
         let expected = r#"[profiles.o3]
@@ -255,7 +255,7 @@ model_reasoning_effort = "high"
             &[
                 (&["a", "b", "c"], "v"),
                 (&["x"], "y"),
-                (&["profiles", "p1", "model"], "gpt-5"),
+                (&["profiles", "p1", CONFIG_KEY_MODEL], "gpt-5"),
             ],
         )
         .await
@@ -316,10 +316,13 @@ existing = "keep"
             .expect("seed write");
 
         // Apply defaults; since profile is set, it should write under [profiles.o3]
-        set_default_model(codex_home, "o3").await.expect("persist");
-        set_default_effort(codex_home, ReasoningEffort::High)
-            .await
-            .expect("persist");
+        persist_overrides(
+            codex_home,
+            None,
+            &[(&[CONFIG_KEY_MODEL], "o3"), (&[CONFIG_KEY_EFFORT], "high")],
+        )
+        .await
+        .expect("persist");
 
         let contents = read_config(codex_home).await;
         let expected = r#"# Global comment
@@ -354,12 +357,16 @@ existing = "keep"
             .expect("seed write");
 
         // Since there is no profile, the defaults should be written at top-level
-        set_default_model(codex_home, "gpt-5")
-            .await
-            .expect("persist");
-        set_default_effort(codex_home, ReasoningEffort::Minimal)
-            .await
-            .expect("persist");
+        persist_overrides(
+            codex_home,
+            None,
+            &[
+                (&[CONFIG_KEY_MODEL], "gpt-5"),
+                (&[CONFIG_KEY_EFFORT], "minimal"),
+            ],
+        )
+        .await
+        .expect("persist");
 
         let contents = read_config(codex_home).await;
         let expected = r#"# Top-level comments
@@ -406,7 +413,9 @@ model_reasoning_effort = "minimal"
             .expect("seed write");
 
         // Change only the model
-        set_default_model(codex_home, "o3").await.expect("persist");
+        persist_overrides(codex_home, None, &[(&[CONFIG_KEY_MODEL], "o3")])
+            .await
+            .expect("persist");
 
         let contents = read_config(codex_home).await;
         let expected = r#"model_reasoning_effort = "minimal"
@@ -428,7 +437,7 @@ model = "o3"
             .expect("seed write");
 
         // Change only the effort
-        set_default_effort(codex_home, ReasoningEffort::High)
+        persist_overrides(codex_home, None, &[(&[CONFIG_KEY_EFFORT], "high")])
             .await
             .expect("persist");
 
@@ -455,7 +464,7 @@ model_reasoning_effort = "low"
             .await
             .expect("seed write");
 
-        set_default_model(codex_home, "o4-mini")
+        persist_overrides(codex_home, None, &[(&[CONFIG_KEY_MODEL], "o4-mini")])
             .await
             .expect("persist");
 
@@ -483,14 +492,82 @@ model = "gpt-5"
             .await
             .expect("seed write");
 
-        set_default_effort_for_profile(codex_home, Some("team"), ReasoningEffort::Minimal)
-            .await
-            .expect("persist");
+        persist_overrides(
+            codex_home,
+            Some("team"),
+            &[(&[CONFIG_KEY_EFFORT], "minimal")],
+        )
+        .await
+        .expect("persist");
 
         let contents = read_config(codex_home).await;
         let expected = r#"[profiles.team]
 model = "gpt-5"
 model_reasoning_effort = "minimal"
+"#;
+        assert_eq!(contents, expected);
+    }
+
+    /// Verifies `persist_non_null_overrides` skips `None` entries and writes only present values at top-level.
+    #[tokio::test]
+    async fn persist_non_null_skips_none_top_level() {
+        let tmpdir = tempdir().expect("tmp");
+        let codex_home = tmpdir.path();
+
+        persist_non_null_overrides(
+            codex_home,
+            None,
+            &[
+                (&[CONFIG_KEY_MODEL], Some("gpt-5")),
+                (&[CONFIG_KEY_EFFORT], None),
+            ],
+        )
+        .await
+        .expect("persist");
+
+        let contents = read_config(codex_home).await;
+        let expected = "model = \"gpt-5\"\n";
+        assert_eq!(contents, expected);
+    }
+
+    /// Verifies no-op behavior when all provided overrides are `None` (no file created/modified).
+    #[tokio::test]
+    async fn persist_non_null_noop_when_all_none() {
+        let tmpdir = tempdir().expect("tmp");
+        let codex_home = tmpdir.path();
+
+        persist_non_null_overrides(
+            codex_home,
+            None,
+            &[(&["a"], None), (&["profiles", "p", "x"], None)],
+        )
+        .await
+        .expect("persist");
+
+        // Should not create config.toml on a pure no-op
+        assert!(!codex_home.join(CONFIG_TOML_FILE).exists());
+    }
+
+    /// Verifies entries are written under the specified profile and `None` entries are skipped.
+    #[tokio::test]
+    async fn persist_non_null_respects_profile_override() {
+        let tmpdir = tempdir().expect("tmp");
+        let codex_home = tmpdir.path();
+
+        persist_non_null_overrides(
+            codex_home,
+            Some("team"),
+            &[
+                (&[CONFIG_KEY_MODEL], Some("o3")),
+                (&[CONFIG_KEY_EFFORT], None),
+            ],
+        )
+        .await
+        .expect("persist");
+
+        let contents = read_config(codex_home).await;
+        let expected = r#"[profiles.team]
+model = "o3"
 "#;
         assert_eq!(contents, expected);
     }

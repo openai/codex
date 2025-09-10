@@ -1,7 +1,3 @@
-pub use crate::config_edit::set_default_effort;
-pub use crate::config_edit::set_default_effort_for_profile;
-pub use crate::config_edit::set_default_model;
-pub use crate::config_edit::set_default_model_for_profile;
 use crate::config_profile::ConfigProfile;
 use crate::config_types::History;
 use crate::config_types::McpServerConfig;
