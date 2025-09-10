@@ -496,6 +496,7 @@ pub struct McpServerInfo {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     pub version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_agent: Option<String>,
 }
 
