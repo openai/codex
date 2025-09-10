@@ -762,7 +762,7 @@ fn html_in_tight_ordered_item_soft_breaks_with_space() {
     let text = render_markdown_text(md);
     let expected = Text::from_iter([
         Line::from_iter(["1. ".light_blue(), "Foo".into()]),
-        Line::from_iter(["<i>", "Bar", "</i>"]),
+        Line::from_iter(["   ", "<i>", "Bar", "</i>"]),
     ]);
     assert_eq!(text, expected);
 }
@@ -774,7 +774,7 @@ fn html_continuation_paragraph_in_unordered_item_indented() {
     let expected = Text::from_iter([
         Line::from_iter(["- ", "Item"]),
         Line::default(),
-        Line::from_iter(["<em>", "continued", "</em>"]),
+        Line::from_iter(["  ", "<em>", "continued", "</em>"]),
     ]);
     assert_eq!(text, expected);
 }

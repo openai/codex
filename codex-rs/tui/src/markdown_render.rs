@@ -67,7 +67,6 @@ where
     text: Text<'static>,
     inline_styles: Vec<Style>,
     indent_stack: Vec<IndentContext>,
-    suppress_list_indent: bool,
     list_indices: Vec<Option<u64>>,
     link: Option<String>,
     needs_newline: bool,
@@ -88,7 +87,6 @@ where
             text: Text::default(),
             inline_styles: Vec::new(),
             indent_stack: Vec::new(),
-            suppress_list_indent: false,
             list_indices: Vec::new(),
             link: None,
             needs_newline: false,
@@ -281,8 +279,6 @@ where
 
     fn html(&mut self, html: CowStr<'a>) {
         self.pending_marker_line = false;
-        let previous_suppress = self.suppress_list_indent;
-        self.suppress_list_indent = true;
         for (i, line) in html.lines().enumerate() {
             if self.needs_newline {
                 self.push_line(Line::default());
@@ -291,35 +287,10 @@ where
             if i > 0 {
                 self.push_line(Line::default());
             }
-            self.strip_list_indent_for_html_line();
             let style = self.inline_styles.last().copied().unwrap_or_default();
             self.push_span(Span::styled(line.to_string(), style));
         }
-        self.suppress_list_indent = previous_suppress;
         self.needs_newline = false;
-    }
-
-    fn strip_list_indent_for_html_line(&mut self) {
-        if self.list_indices.is_empty() {
-            return;
-        }
-        let Some(last) = self.text.lines.last_mut() else {
-            return;
-        };
-        let has_content = last
-            .spans
-            .iter()
-            .any(|span| span.content.chars().any(|ch| ch != ' ' && ch != '>'));
-        if has_content {
-            return;
-        }
-        while let Some(first) = last.spans.first() {
-            if first.content.chars().all(|ch| ch == ' ') {
-                last.spans.remove(0);
-            } else {
-                break;
-            }
-        }
     }
 
     fn hard_break(&mut self) {
@@ -457,22 +428,13 @@ where
                 .iter()
                 .enumerate()
                 .rev()
-                .find_map(|(i, ctx)| {
-                    if ctx.marker.is_some() && !(self.suppress_list_indent && ctx.is_list) {
-                        Some(i)
-                    } else {
-                        None
-                    }
-                })
+                .find_map(|(i, ctx)| if ctx.marker.is_some() { Some(i) } else { None })
         } else {
             None
         };
         let last_list_index = self.indent_stack.iter().rposition(|ctx| ctx.is_list);
 
         for (i, ctx) in self.indent_stack.iter().enumerate() {
-            if self.suppress_list_indent && ctx.is_list {
-                continue;
-            }
             if self.pending_marker_line {
                 if Some(i) == last_marker_index
                     && let Some(marker) = &ctx.marker
