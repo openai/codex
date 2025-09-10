@@ -19,11 +19,8 @@ pub fn set_chatgpt_token_data(value: TokenData) {
 }
 
 /// Initialize the ChatGPT token from auth.json file
-pub async fn init_chatgpt_token_from_auth(
-    codex_home: &Path,
-    originator: &str,
-) -> std::io::Result<()> {
-    let auth = CodexAuth::from_codex_home(codex_home, AuthMode::ChatGPT, originator)?;
+pub async fn init_chatgpt_token_from_auth(codex_home: &Path) -> std::io::Result<()> {
+    let auth = CodexAuth::from_codex_home(codex_home, AuthMode::ChatGPT)?;
     if let Some(auth) = auth {
         let token_data = auth.get_token_data().await?;
         set_chatgpt_token_data(token_data);

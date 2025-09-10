@@ -16,6 +16,7 @@ pub fn generate_ts(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
     ensure_dir(out_dir)?;
 
     // Generate TS bindings
+    mcp_types::InitializeResult::export_all_to(out_dir)?;
     codex_protocol::mcp_protocol::ConversationId::export_all_to(out_dir)?;
     codex_protocol::mcp_protocol::InputItem::export_all_to(out_dir)?;
     codex_protocol::mcp_protocol::ClientRequest::export_all_to(out_dir)?;
