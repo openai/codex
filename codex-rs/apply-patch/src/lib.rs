@@ -41,7 +41,9 @@ pub enum ApplyPatchError {
     #[error("{0}")]
     ComputeReplacements(String),
     /// A raw patch body was provided without an explicit `apply_patch` invocation.
-    #[error("patch detected without explicit call to apply_patch")]
+    #[error(
+        "patch detected without explicit call to apply_patch. Rerun as [\"apply_patch\", \"<patch>\"]"
+    )]
     ImplicitInvocation,
 }
 
