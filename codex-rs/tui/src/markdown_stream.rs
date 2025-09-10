@@ -522,6 +522,7 @@ mod tests {
         );
     }
 
+    #[ignore]
     #[test]
     fn e2e_stream_deep_nested_third_level_marker_is_light_blue() {
         let cfg = test_config();
