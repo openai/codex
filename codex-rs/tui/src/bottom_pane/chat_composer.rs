@@ -1215,6 +1215,18 @@ impl ChatComposer {
     pub(crate) fn set_esc_backtrack_hint(&mut self, show: bool) {
         self.esc_backtrack_hint = show;
     }
+
+    #[inline]
+    fn clear_area(buf: &mut Buffer, rect: Rect) {
+        if rect.width == 0 || rect.height == 0 {
+            return;
+        }
+        let spaces = " ".repeat(rect.width as usize);
+        for row in 0..rect.height {
+            let y = rect.y + row;
+            buf.set_stringn(rect.x, y, &spaces, rect.width as usize, Style::default());
+        }
+    }
 }
 
 impl WidgetRef for ChatComposer {
@@ -1328,19 +1340,7 @@ impl WidgetRef for ChatComposer {
         let mut state = self.textarea_state.borrow_mut();
         // Proactively clear the textarea region to avoid residual characters from
         // previous frames (e.g., placeholder text lingering after content updates).
-        if textarea_rect.width > 0 && textarea_rect.height > 0 {
-            let spaces = " ".repeat(textarea_rect.width as usize);
-            for row in 0..textarea_rect.height {
-                let y = textarea_rect.y + row;
-                buf.set_stringn(
-                    textarea_rect.x,
-                    y,
-                    &spaces,
-                    textarea_rect.width as usize,
-                    Style::default(),
-                );
-            }
-        }
+        Self::clear_area(buf, textarea_rect);
         if self.textarea.text().is_empty() {
             Line::from(self.placeholder_text.as_str())
                 .style(Style::default().dim())
