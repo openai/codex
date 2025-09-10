@@ -130,7 +130,13 @@ impl McpProcess {
 
         let initialized = self.read_jsonrpc_message().await?;
         let os_info = os_info::get();
-
+        let user_agent = format!(
+            "codex_cli_rs/0.0.0 ({} {}; {}) {} (elicitation test; 0.0.0)",
+            os_info.os_type(),
+            os_info.version(),
+            os_info.architecture().unwrap_or("unknown"),
+            codex_core::terminal::user_agent()
+        );
         assert_eq!(
             JSONRPCMessage::Response(JSONRPCResponse {
                 jsonrpc: JSONRPC_VERSION.into(),
@@ -145,7 +151,7 @@ impl McpProcess {
                         "name": "codex-mcp-server",
                         "title": "Codex",
                         "version": "0.0.0",
-                        "user_agent": format!("codex_cli_rs/0.0.0 ({}; {}) vscode/1.5.11 (elicitation test; 0.0.0)", os_info.os_type(), os_info.version())
+                        "user_agent": user_agent
                     },
                     "protocolVersion": mcp_types::MCP_SCHEMA_VERSION
                 })
