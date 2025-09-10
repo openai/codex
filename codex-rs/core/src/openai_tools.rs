@@ -50,7 +50,7 @@ pub(crate) enum OpenAiTool {
     // TODO: Understand why we get an error on web_search although the API docs say it's supported.
     // https://platform.openai.com/docs/guides/tools-web-search?api-mode=responses#:~:text=%7B%20type%3A%20%22web_search%22%20%7D%2C
     #[serde(rename = "web_search")]
-    WebSearch {},
+    WebSearch { name: String },
     #[serde(rename = "custom")]
     Freeform(FreeformTool),
 }
@@ -570,7 +570,9 @@ pub(crate) fn get_openai_tools(
     }
 
     if config.web_search_request {
-        tools.push(OpenAiTool::WebSearch {});
+        tools.push(OpenAiTool::WebSearch {
+            name: "web_search".to_string(),
+        });
     }
 
     // Include the view_image tool so the agent can attach images to context.
@@ -611,7 +613,7 @@ mod tests {
             .map(|tool| match tool {
                 OpenAiTool::Function(ResponsesApiTool { name, .. }) => name,
                 OpenAiTool::LocalShell {} => "local_shell",
-                OpenAiTool::WebSearch {} => "web_search",
+                OpenAiTool::WebSearch { name } => name,
                 OpenAiTool::Freeform(FreeformTool { name, .. }) => name,
             })
             .collect::<Vec<_>>();

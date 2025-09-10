@@ -2633,13 +2633,16 @@ async fn handle_sandbox_error(
         )
         .await;
 
-    match rx_approve.await.unwrap_or_default() {
+    let decision = rx_approve.await.unwrap_or_default();
+    match decision {
         ReviewDecision::Approved | ReviewDecision::ApprovedForSession => {
-            // Persist this command as pre‑approved for the
-            // remainder of the session so future
-            // executions skip the sandbox directly.
-            // TODO(ragona): Isn't this a bug? It always saves the command in an | fork?
-            sess.add_approved_command(params.command.clone());
+            if matches!(decision, ReviewDecision::ApprovedForSession) {
+                // Persist this command as pre‑approved for the
+                // remainder of the session so future
+                // executions skip the sandbox directly.
+                sess.add_approved_command(params.command.clone());
+            }
+
             // Inform UI we are retrying without sandbox.
             sess.notify_background_event(&sub_id, "retrying command without sandbox")
                 .await;
