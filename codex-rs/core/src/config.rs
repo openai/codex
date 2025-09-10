@@ -288,9 +288,7 @@ pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Re
         // If `projects` exists but isn't a standard table (e.g., it's an inline table),
         // convert it to an explicit table while preserving existing entries.
         let existing_projects = root.get("projects").cloned();
-        let needs_table = !root.contains_key("projects")
-            || root.get("projects").and_then(|i| i.as_table()).is_none();
-        if needs_table {
+        if existing_projects.as_ref().is_none_or(|i| !i.is_table()) {
             let mut projects_tbl = toml_edit::Table::new();
             projects_tbl.set_implicit(true);
 
@@ -1471,7 +1469,8 @@ trust_level = "trusted"
         // Seed config.toml where `projects` is a top-level inline table mapping
         // multiple paths to inline tables.
         let config_path = codex_home.path().join(CONFIG_TOML_FILE);
-        let initial = r#"projects = { "/Users/mbolin/code/codex4" = { trust_level = "trusted", foo = "bar" } , "/Users/mbolin/code/codex3" = { trust_level = "trusted" } }"#;
+        let initial = r#"model = "foo"
+projects = { "/Users/mbolin/code/codex4" = { trust_level = "trusted", foo = "bar" } , "/Users/mbolin/code/codex3" = { trust_level = "trusted" } }"#;
         std::fs::create_dir_all(codex_home.path())?;
         std::fs::write(&config_path, initial)?;
 
@@ -1483,7 +1482,9 @@ trust_level = "trusted"
 
         // Since we created the [projects] table as part of migration, it is kept implicit.
         // Expect explicit per-project tables, preserving prior entries and appending the new one.
-        let expected = r#"[projects."/Users/mbolin/code/codex4"]
+        let expected = r#"model = "foo"
+
+[projects."/Users/mbolin/code/codex4"]
 trust_level = "trusted"
 foo = "bar"
 
