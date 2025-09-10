@@ -1,5 +1,6 @@
 use assert_cmd::Command as AssertCommand;
 use codex_core::RolloutRecorder;
+use codex_core::protocol::GitInfo;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use std::time::Duration;
 use std::time::Instant;
@@ -617,7 +618,7 @@ async fn integration_git_info_unit_test() {
 
     // 5. Test serialization to ensure it works in SessionMeta
     let serialized = serde_json::to_string(&git_info).unwrap();
-    let deserialized: codex_core::git_info::GitInfo = serde_json::from_str(&serialized).unwrap();
+    let deserialized: GitInfo = serde_json::from_str(&serialized).unwrap();
 
     assert_eq!(git_info.commit_hash, deserialized.commit_hash);
     assert_eq!(git_info.branch, deserialized.branch);

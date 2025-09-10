@@ -10,9 +10,9 @@ use time::macros::format_description;
 use uuid::Uuid;
 
 use super::SESSIONS_SUBDIR;
-use super::recorder::RolloutItem;
-use super::recorder::RolloutLine;
 use crate::protocol::EventMsg;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 
 /// Returned page of conversation summaries.
 #[derive(Debug, Default, PartialEq)]
