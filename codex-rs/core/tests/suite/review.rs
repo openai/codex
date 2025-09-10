@@ -308,11 +308,25 @@ async fn review_input_isolated_from_parent_history() {
     let session_file = codex_home.path().join("resume.jsonl");
     {
         let mut f = tokio::fs::File::create(&session_file).await.unwrap();
-        // Meta line
-        f.write_all(format!("{}\n", serde_json::json!({"meta":"test"})).as_bytes())
+        let convo_id = Uuid::new_v4();
+        // Proper session_meta line (enveloped) with a conversation id
+        let meta_line = serde_json::json!({
+            "timestamp": "2024-01-01T00:00:00.000Z",
+            "type": "session_meta",
+            "payload": {
+                "id": convo_id,
+                "timestamp": "2024-01-01T00:00:00Z",
+                "instructions": null,
+                "cwd": ".",
+                "originator": "test_originator",
+                "cli_version": "test_version"
+            }
+        });
+        f.write_all(format!("{meta_line}\n").as_bytes())
             .await
             .unwrap();
-        // Prior user message
+
+        // Prior user message (enveloped response_item)
         let user = codex_protocol::models::ResponseItem::Message {
             id: None,
             role: "user".to_string(),
@@ -320,10 +334,17 @@ async fn review_input_isolated_from_parent_history() {
                 text: "parent: earlier user message".to_string(),
             }],
         };
-        f.write_all(format!("{}\n", serde_json::to_string(&user).unwrap()).as_bytes())
+        let user_json = serde_json::to_value(&user).unwrap();
+        let user_line = serde_json::json!({
+            "timestamp": "2024-01-01T00:00:01.000Z",
+            "type": "response_item",
+            "payload": user_json
+        });
+        f.write_all(format!("{user_line}\n").as_bytes())
             .await
             .unwrap();
-        // Prior assistant message
+
+        // Prior assistant message (enveloped response_item)
         let assistant = codex_protocol::models::ResponseItem::Message {
             id: None,
             role: "assistant".to_string(),
@@ -331,7 +352,13 @@ async fn review_input_isolated_from_parent_history() {
                 text: "parent: assistant reply".to_string(),
             }],
         };
-        f.write_all(format!("{}\n", serde_json::to_string(&assistant).unwrap()).as_bytes())
+        let assistant_json = serde_json::to_value(&assistant).unwrap();
+        let assistant_line = serde_json::json!({
+            "timestamp": "2024-01-01T00:00:02.000Z",
+            "type": "response_item",
+            "payload": assistant_json
+        });
+        f.write_all(format!("{assistant_line}\n").as_bytes())
             .await
             .unwrap();
     }

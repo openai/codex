@@ -1465,7 +1465,7 @@ async fn spawn_review_thread(
         provider,
         parent_turn_context.client.get_reasoning_effort(),
         parent_turn_context.client.get_reasoning_summary(),
-        sess.session_id,
+        sess.conversation_id,
     );
 
     let review_turn_context = TurnContext {
@@ -1521,6 +1521,10 @@ async fn spawn_review_thread(
 ///   back to the model in the next turn.
 /// - If the model sends only an assistant message, we record it in the
 ///   conversation history and consider the task complete.
+///
+/// Review mode: when `turn_context.is_review_mode` is true, the turn runs in an
+/// isolated in-memory thread without the parent session's prior history or
+/// user_instructions. Emits ExitedReviewMode upon final review message.
 async fn run_task(
     sess: Arc<Session>,
     turn_context: &TurnContext,
@@ -1548,7 +1552,7 @@ async fn run_task(
         review_thread_history.push(initial_input_for_turn.clone().into());
     } else {
         sess.record_input_and_rollout_usermsg(&initial_input_for_turn)
-        .await;
+            .await;
     }
 
     let mut last_agent_message: Option<String> = None;
@@ -2050,7 +2054,7 @@ async fn try_run_turn(
                         id: sub_id.to_string(),
                         msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
                     };
-                    sess.send_event(event).await.ok();
+                    sess.send_event(event).await;
                 } else {
                     trace!("suppressing OutputTextDelta in review mode");
                 }
