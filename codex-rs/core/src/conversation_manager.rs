@@ -221,15 +221,6 @@ mod tests {
             }],
         }
     }
-    fn user_input(text: &str) -> ResponseItem {
-        ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: text.to_string(),
-            }],
-        }
-    }
     fn assistant_msg(text: &str) -> ResponseItem {
         ResponseItem::Message {
             id: None,
