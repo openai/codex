@@ -524,8 +524,21 @@ fn record_model_rollout_choice(config: &Config, switch: bool) {
 mod tests {
     use super::*;
     use clap::Parser;
+    use std::sync::Once;
+
+    fn enable_debug_high_env() {
+        static DEBUG_HIGH_ONCE: Once = Once::new();
+        DEBUG_HIGH_ONCE.call_once(|| {
+            // SAFETY: Tests run in a controlled environment and require this env variable to
+            // opt into the GPT-5 High rollout prompt gating. We only set it once.
+            unsafe {
+                std::env::set_var("DEBUG_HIGH", "1");
+            }
+        });
+    }
 
     fn make_config(preferred: AuthMode) -> Config {
+        enable_debug_high_env();
         let mut cfg = Config::load_from_base_config_with_overrides(
             ConfigToml::default(),
             ConfigOverrides::default(),
