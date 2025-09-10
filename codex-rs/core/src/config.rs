@@ -32,7 +32,7 @@ use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
 
 const OPENAI_DEFAULT_MODEL: &str = "gpt-5";
-const OPENAI_DEFAULT_REVIEW_MODEL: &str = "codex-1p-kingdra-250-ev3";
+const OPENAI_DEFAULT_REVIEW_MODEL: &str = "gpt-5";
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
@@ -47,7 +47,7 @@ pub struct Config {
     /// Optional override of model selection.
     pub model: String,
 
-    /// Model used specifically for review sessions. Defaults to "codex-1p-kingdra-250-ev3".
+    /// Model used specifically for review sessions. Defaults to "gpt-5".
     pub review_model: String,
 
     pub model_family: ModelFamily,
@@ -1178,7 +1178,7 @@ model_verbosity = "high"
         assert_eq!(
             Config {
                 model: "o3".to_string(),
-                review_model: "codex-1p-kingdra-250-ev3".to_string(),
+                review_model: "gpt-5".to_string(),
                 model_family: find_family_for_model("o3").expect("known model slug"),
                 model_context_window: Some(200_000),
                 model_max_output_tokens: Some(100_000),
@@ -1235,7 +1235,7 @@ model_verbosity = "high"
         )?;
         let expected_gpt3_profile_config = Config {
             model: "gpt-3.5-turbo".to_string(),
-            review_model: "codex-1p-kingdra-250-ev3".to_string(),
+            review_model: "gpt-5".to_string(),
             model_family: find_family_for_model("gpt-3.5-turbo").expect("known model slug"),
             model_context_window: Some(16_385),
             model_max_output_tokens: Some(4_096),
@@ -1307,7 +1307,7 @@ model_verbosity = "high"
         )?;
         let expected_zdr_profile_config = Config {
             model: "o3".to_string(),
-            review_model: "codex-1p-kingdra-250-ev3".to_string(),
+            review_model: "gpt-5".to_string(),
             model_family: find_family_for_model("o3").expect("known model slug"),
             model_context_window: Some(200_000),
             model_max_output_tokens: Some(100_000),
@@ -1365,7 +1365,7 @@ model_verbosity = "high"
         )?;
         let expected_gpt5_profile_config = Config {
             model: "gpt-5".to_string(),
-            review_model: "codex-1p-kingdra-250-ev3".to_string(),
+            review_model: "gpt-5".to_string(),
             model_family: find_family_for_model("gpt-5").expect("known model slug"),
             model_context_window: Some(272_000),
             model_max_output_tokens: Some(128_000),
