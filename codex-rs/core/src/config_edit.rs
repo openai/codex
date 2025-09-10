@@ -16,9 +16,13 @@ pub async fn persist_overrides(
 ) -> Result<()> {
     let config_path = codex_home.join(CONFIG_TOML_FILE);
 
+    let mut need_create_dir = false;
     let mut doc = match tokio::fs::read_to_string(&config_path).await {
         Ok(s) => s.parse::<DocumentMut>()?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => DocumentMut::new(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            need_create_dir = true;
+            DocumentMut::new()
+        }
         Err(e) => return Err(e.into()),
     };
 
@@ -47,7 +51,9 @@ pub async fn persist_overrides(
         }
     }
 
-    tokio::fs::create_dir_all(codex_home).await?;
+    if need_create_dir {
+        tokio::fs::create_dir_all(codex_home).await?;
+    }
     let tmp_file = NamedTempFile::new_in(codex_home)?;
     tokio::fs::write(tmp_file.path(), doc.to_string()).await?;
     tmp_file.persist(config_path)?;
