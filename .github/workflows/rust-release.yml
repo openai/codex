@@ -91,10 +91,19 @@ jobs:
             ${{ github.workspace }}/codex-rs/target/
           key: cargo-${{ matrix.runner }}-${{ matrix.target }}-release-${{ hashFiles('**/Cargo.lock') }}
 
+      - if: ${{ startsWith(matrix.runner, 'ubuntu-24.04') }}
+        name: Install ALSA build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev pkg-config
+          sudo rm -rf /var/lib/apt/lists/*
+
       - if: ${{ matrix.target == 'x86_64-unknown-linux-musl' || matrix.target == 'aarch64-unknown-linux-musl'}}
         name: Install musl build tools
         run: |
-          sudo apt install -y musl-tools pkg-config
+          sudo apt-get update
+          sudo apt-get install -y musl-tools pkg-config
+          sudo rm -rf /var/lib/apt/lists/*
 
       - name: Cargo build
         run: cargo build --target ${{ matrix.target }} --release --bin codex
