@@ -208,8 +208,6 @@ fn truncate_after_dropping_last_messages(history: InitialHistory, n: usize) -> I
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event_mapping::map_response_item_to_event_messages;
-    use crate::protocol::EventMsg;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ReasoningItemReasoningSummary;
     use codex_protocol::models::ResponseItem;
