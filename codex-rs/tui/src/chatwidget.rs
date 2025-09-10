@@ -382,9 +382,9 @@ impl ChatWidget {
 
     fn on_web_search_end(&mut self, ev: WebSearchEndEvent) {
         self.flush_answer_stream_with_separator();
+        let WebSearchEndEvent { query, .. } = ev;
         self.add_to_history(history_cell::new_web_search_call(format!(
-            "Searched: {}",
-            ev.query
+            "Searched: {query}"
         )));
     }
 
@@ -810,10 +810,8 @@ impl ChatWidget {
 
     fn dispatch_command(&mut self, cmd: SlashCommand) {
         if !cmd.available_during_task() && self.bottom_pane.is_task_running() {
-            let message = format!(
-                "'/{}' is disabled while a task is in progress.",
-                cmd.command()
-            );
+            let cmd_name = cmd.command();
+            let message = format!("'/{cmd_name}' is disabled while a task is in progress.");
             self.add_to_history(history_cell::new_error_event(message));
             self.request_redraw();
             return;
@@ -1087,6 +1085,8 @@ impl ChatWidget {
                 self.app_event_tx
                     .send(crate::app_event::AppEvent::ConversationHistory(ev));
             }
+            EventMsg::EnteredReviewMode => {}
+            EventMsg::ExitedReviewMode(_) => {}
         }
     }
 
