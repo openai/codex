@@ -127,6 +127,7 @@ pub async fn run_main(
         model_provider: model_provider_override,
         config_profile: cli.config_profile.clone(),
         codex_linux_sandbox_exe,
+        full_auto: cli.full_auto.then_some(true),
         base_instructions: None,
         include_plan_tool: Some(true),
         include_apply_patch_tool: None,

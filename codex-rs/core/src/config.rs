@@ -398,6 +398,10 @@ pub struct ConfigToml {
     /// Default approval policy for executing commands.
     pub approval_policy: Option<AskForApproval>,
 
+    /// Convenience flag to automatically enable sandboxed execution with
+    /// automatic command approval and GPT-5 high reasoning settings.
+    pub full_auto: Option<bool>,
+
     #[serde(default)]
     pub shell_environment_policy: ShellEnvironmentPolicyToml,
 
@@ -618,6 +622,7 @@ pub struct ConfigOverrides {
     pub model_provider: Option<String>,
     pub config_profile: Option<String>,
     pub codex_linux_sandbox_exe: Option<PathBuf>,
+    pub full_auto: Option<bool>,
     pub base_instructions: Option<String>,
     pub include_plan_tool: Option<bool>,
     pub include_apply_patch_tool: Option<bool>,
@@ -651,6 +656,7 @@ impl Config {
             include_view_image_tool,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
+            full_auto: full_auto_override,
         } = overrides;
 
         let config_profile = match config_profile_key.as_ref().or(cfg.profile.as_ref()) {
@@ -666,6 +672,14 @@ impl Config {
                 .clone(),
             None => ConfigProfile::default(),
         };
+        let full_auto = config_profile
+            .full_auto
+            .or(cfg.full_auto)
+            .or(full_auto_override)
+            .unwrap_or(false);
+
+        let sandbox_mode = sandbox_mode.or(full_auto.then_some(SandboxMode::WorkspaceWrite));
+        let approval_policy = approval_policy.or(full_auto.then_some(AskForApproval::OnFailure));
 
         let sandbox_policy = cfg.derive_sandbox_policy(sandbox_mode);
 
@@ -675,10 +689,14 @@ impl Config {
             model_providers.entry(key).or_insert(provider);
         }
 
-        let model_provider_id = model_provider
-            .or(config_profile.model_provider)
-            .or(cfg.model_provider)
-            .unwrap_or_else(|| "openai".to_string());
+        let model_provider_id = if full_auto {
+            "openai".to_string()
+        } else {
+            model_provider
+                .or(config_profile.model_provider)
+                .or(cfg.model_provider)
+                .unwrap_or_else(|| "openai".to_string())
+        };
         let model_provider = model_providers
             .get(&model_provider_id)
             .ok_or_else(|| {
@@ -720,10 +738,14 @@ impl Config {
             .or(cfg.tools.as_ref().and_then(|t| t.view_image))
             .unwrap_or(true);
 
-        let model = model
-            .or(config_profile.model)
-            .or(cfg.model)
-            .unwrap_or_else(default_model);
+        let model = if full_auto {
+            "gpt-5".to_string()
+        } else {
+            model
+                .or(config_profile.model)
+                .or(cfg.model)
+                .unwrap_or_else(default_model)
+        };
 
         let mut model_family = find_family_for_model(&model).unwrap_or_else(|| ModelFamily {
             slug: model.clone(),
@@ -796,15 +818,27 @@ impl Config {
                 .show_raw_agent_reasoning
                 .or(show_raw_agent_reasoning)
                 .unwrap_or(false),
-            model_reasoning_effort: config_profile
-                .model_reasoning_effort
-                .or(cfg.model_reasoning_effort)
-                .unwrap_or_default(),
-            model_reasoning_summary: config_profile
-                .model_reasoning_summary
-                .or(cfg.model_reasoning_summary)
-                .unwrap_or_default(),
-            model_verbosity: config_profile.model_verbosity.or(cfg.model_verbosity),
+            model_reasoning_effort: if full_auto {
+                ReasoningEffort::High
+            } else {
+                config_profile
+                    .model_reasoning_effort
+                    .or(cfg.model_reasoning_effort)
+                    .unwrap_or_default()
+            },
+            model_reasoning_summary: if full_auto {
+                ReasoningSummary::Detailed
+            } else {
+                config_profile
+                    .model_reasoning_summary
+                    .or(cfg.model_reasoning_summary)
+                    .unwrap_or_default()
+            },
+            model_verbosity: if full_auto {
+                Some(Verbosity::High)
+            } else {
+                config_profile.model_verbosity.or(cfg.model_verbosity)
+            },
             chatgpt_base_url: config_profile
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)
