@@ -5,6 +5,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use std::borrow::Cow;
 use std::path::Path;
+use tui_markdown;
 
 #[allow(clippy::disallowed_methods)]
 const DEFAULT_CODE_BG: Color = Color::Rgb(40, 44, 52);

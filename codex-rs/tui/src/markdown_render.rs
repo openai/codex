@@ -42,6 +42,7 @@ pub(crate) fn render_markdown_text(input: &str) -> Text<'static> {
     w.text
 }
 
+#[allow(dead_code)]
 pub(crate) fn render_markdown_text_with_citations(
     input: &str,
     scheme: Option<&str>,

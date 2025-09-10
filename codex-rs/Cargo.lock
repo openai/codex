@@ -785,6 +785,7 @@ dependencies = [
  "codex-protocol",
  "mcp-types",
  "mcp_test_support",
+ "os_info",
  "pretty_assertions",
  "schemars 0.8.22",
  "serde",
@@ -843,6 +844,7 @@ dependencies = [
  "anyhow",
  "clap",
  "codex-protocol",
+ "mcp-types",
  "ts-rs",
 ]
 
@@ -877,6 +879,7 @@ dependencies = [
  "path-clean",
  "pathdiff",
  "pretty_assertions",
+ "pulldown-cmark 0.10.3",
  "rand 0.9.2",
  "ratatui",
  "regex-lite",
@@ -1865,9 +1868,9 @@ checksum = "07e28edb80900c19c28f1072f2e8aeca7fa06b23cd4169cefe1af5aa3260783f"
 
 [[package]]
 name = "glob"
-version = "0.3.2"
+version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a8d1add55171497b4705a648c6b583acafb01d58050a51727785f0b2c8e0a2b2"
+checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
 name = "globset"
@@ -2691,9 +2694,11 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "codex-core",
  "codex-mcp-server",
  "codex-protocol",
  "mcp-types",
+ "os_info",
  "pretty_assertions",
  "serde",
  "serde_json",
@@ -3388,6 +3393,19 @@ dependencies = [
 
 [[package]]
 name = "pulldown-cmark"
+version = "0.10.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76979bea66e7875e7509c4ec5300112b316af87fa7a252ca91c448b32dfe3993"
+dependencies = [
+ "bitflags 2.9.1",
+ "getopts",
+ "memchr",
+ "pulldown-cmark-escape 0.10.1",
+ "unicase",
+]
+
+[[package]]
+name = "pulldown-cmark"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1e8bbe1a966bd2f362681a44f6edce3c2310ac21e4d5067a6e7ec396297a6ea0"
@@ -3395,9 +3413,15 @@ dependencies = [
  "bitflags 2.9.1",
  "getopts",
  "memchr",
- "pulldown-cmark-escape",
+ "pulldown-cmark-escape 0.11.0",
  "unicase",
 ]
+
+[[package]]
+name = "pulldown-cmark-escape"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bd348ff538bc9caeda7ee8cad2d1d48236a1f443c1fa3913c6a02fe0043b1dd3"
 
 [[package]]
 name = "pulldown-cmark-escape"
@@ -5075,7 +5099,7 @@ dependencies = [
  "ansi-to-tui",
  "itertools 0.14.0",
  "pretty_assertions",
- "pulldown-cmark",
+ "pulldown-cmark 0.13.0",
  "ratatui",
  "rstest",
  "syntect",
