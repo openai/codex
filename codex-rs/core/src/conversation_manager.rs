@@ -11,81 +11,14 @@ use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::SessionConfiguredEvent;
 use crate::rollout::RolloutRecorder;
-use crate::rollout::recorder::RolloutItem;
 use codex_protocol::mcp_protocol::ConversationId;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::RolloutItem;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-
-#[derive(Debug, Clone)]
-pub struct ResumedHistory {
-    pub conversation_id: ConversationId,
-    pub history: Vec<RolloutItem>,
-    pub rollout_path: PathBuf,
-}
-
-#[derive(Debug, Clone)]
-pub enum InitialHistory {
-    New,
-    Resumed(ResumedHistory),
-    Forked(Vec<RolloutItem>),
-}
-
-impl InitialHistory {
-    pub(crate) fn get_rollout_items(&self) -> Vec<RolloutItem> {
-        match self {
-            InitialHistory::New => Vec::new(),
-            InitialHistory::Resumed(resumed) => resumed.history.clone(),
-            InitialHistory::Forked(items) => items.clone(),
-        }
-    }
-    pub fn get_response_items(&self) -> Vec<ResponseItem> {
-        match self {
-            InitialHistory::New => Vec::new(),
-            InitialHistory::Resumed(resumed) => resumed
-                .history
-                .iter()
-                .filter_map(|ri| match ri {
-                    RolloutItem::ResponseItem(item) => Some(item.clone()),
-                    _ => None,
-                })
-                .collect(),
-            InitialHistory::Forked(items) => items
-                .iter()
-                .filter_map(|ri| match ri {
-                    RolloutItem::ResponseItem(item) => Some(item.clone()),
-                    _ => None,
-                })
-                .collect(),
-        }
-    }
-    pub fn get_event_msgs(&self) -> Option<Vec<EventMsg>> {
-        match self {
-            InitialHistory::New => None,
-            InitialHistory::Resumed(resumed) => Some(
-                resumed
-                    .history
-                    .iter()
-                    .filter_map(|ri| match ri {
-                        RolloutItem::EventMsg(ev) => Some(ev.clone()),
-                        _ => None,
-                    })
-                    .collect(),
-            ),
-            InitialHistory::Forked(items) => Some(
-                items
-                    .iter()
-                    .filter_map(|ri| match ri {
-                        RolloutItem::EventMsg(ev) => Some(ev.clone()),
-                        _ => None,
-                    })
-                    .collect(),
-            ),
-        }
-    }
-}
 
 /// Represents a newly created Codex conversation, including the first event
 /// (which is [`EventMsg::SessionConfigured`]).

@@ -3,6 +3,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use codex_protocol::mcp_protocol::GitSha;
+use codex_protocol::protocol::GitInfo;
 use futures::future::join_all;
 use serde::Deserialize;
 use serde::Serialize;
@@ -42,19 +43,6 @@ pub fn get_git_repo_root(base_dir: &Path) -> Option<PathBuf> {
 
 /// Timeout for git commands to prevent freezing on large repositories
 const GIT_COMMAND_TIMEOUT: TokioDuration = TokioDuration::from_secs(5);
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct GitInfo {
-    /// Current commit hash (SHA)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub commit_hash: Option<String>,
-    /// Current branch name
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub branch: Option<String>,
-    /// Repository URL (if available from remote)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub repository_url: Option<String>,
-}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct GitDiffToRemote {
