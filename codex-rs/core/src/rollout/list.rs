@@ -318,6 +318,9 @@ async fn read_head_and_flags(
                     head.push(val);
                 }
             }
+            RolloutItem::CodexExecutiveItem(_) => {
+                // Not included in `head`; skip.
+            }
             RolloutItem::EventMsg(ev) => {
                 if matches!(ev, EventMsg::UserMessage(_)) {
                     saw_user_event = true;

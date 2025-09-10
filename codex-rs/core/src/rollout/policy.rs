@@ -8,6 +8,8 @@ pub(crate) fn is_persisted_response_item(item: &RolloutItem) -> bool {
     match item {
         RolloutItem::ResponseItem(item) => should_persist_response_item(item),
         RolloutItem::EventMsg(ev) => should_persist_event_msg(ev),
+        // Persist Codex executive markers so we can analyze flows (e.g., compaction, API turns).
+        RolloutItem::CodexExecutiveItem(_) => true,
         // Always persist session meta
         RolloutItem::SessionMeta(_) => true,
     }

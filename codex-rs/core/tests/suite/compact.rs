@@ -3,6 +3,7 @@
 use codex_core::CodexAuth;
 use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
+use codex_core::NewConversation;
 use codex_core::built_in_model_providers;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
@@ -142,11 +143,12 @@ async fn summarize_context_three_requests_and_instructions() {
     let mut config = load_default_config_for_test(&home);
     config.model_provider = model_provider;
     let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
-    let codex = conversation_manager
-        .new_conversation(config)
-        .await
-        .unwrap()
-        .conversation;
+    let NewConversation {
+        conversation: codex,
+        session_configured,
+        ..
+    } = conversation_manager.new_conversation(config).await.unwrap();
+    let rollout_path = session_configured.rollout_path;
 
     // 1) Normal user input – should hit server once.
     codex
@@ -247,5 +249,44 @@ async fn summarize_context_three_requests_and_instructions() {
     assert!(
         !messages.iter().any(|(_, t)| t.contains(SUMMARIZE_TRIGGER)),
         "third request should not include the summarize trigger"
+    );
+
+    // Verify rollout contains APITurn entries for each API call and a Compacted entry.
+    // The rollout writer runs on a background task; poll briefly until entries are present.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let poll = || {
+        let text = std::fs::read_to_string(&rollout_path).unwrap_or_else(|e| {
+            panic!(
+                "failed to read rollout file {}: {e}",
+                rollout_path.display()
+            )
+        });
+        let count = text
+            .lines()
+            .filter(|l| l.contains("\"type\":\"codex_executive_item\"") && l.contains("APITurn"))
+            .count();
+        let saw = text.contains("\"type\":\"codex_executive_item\"")
+            && text.contains("\"Compacted\"")
+            && text.contains(SUMMARY_TEXT);
+        (count, saw)
+    };
+    let (mut api_turn_count, mut saw_compacted_summary) = poll();
+    while std::time::Instant::now() < deadline {
+        if api_turn_count >= 3 && saw_compacted_summary {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let (count, saw) = poll();
+        api_turn_count = count;
+        saw_compacted_summary = saw;
+    }
+
+    assert!(
+        api_turn_count == 3,
+        "expected three APITurn entries in rollout"
+    );
+    assert!(
+        saw_compacted_summary,
+        "expected a Compacted entry containing the summarizer output"
     );
 }

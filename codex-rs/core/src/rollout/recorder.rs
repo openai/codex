@@ -238,6 +238,9 @@ impl RolloutRecorder {
                     RolloutItem::ResponseItem(item) => {
                         items.push(RolloutItem::ResponseItem(item));
                     }
+                    RolloutItem::CodexExecutiveItem(item) => {
+                        items.push(RolloutItem::CodexExecutiveItem(item));
+                    }
                     RolloutItem::EventMsg(_ev) => {
                         items.push(RolloutItem::EventMsg(_ev));
                     }

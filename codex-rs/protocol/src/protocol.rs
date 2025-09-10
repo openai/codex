@@ -897,7 +897,29 @@ pub struct SessionMetaLine {
 pub enum RolloutItem {
     SessionMeta(SessionMetaLine),
     ResponseItem(ResponseItem),
+    CodexExecutiveItem(CodexExecutiveItem),
     EventMsg(EventMsg),
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+pub enum CodexExecutiveItem {
+    Compacted(CompactedItem),
+    APITurn(APITurnItem),
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+pub struct CompactedItem {
+    pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+pub struct APITurnItem {
+    pub cwd: PathBuf,
+    pub approval_policy: AskForApproval,
+    pub sandbox_policy: SandboxPolicy,
+    pub model: String,
+    pub effort: ReasoningEffortConfig,
+    pub summary: ReasoningSummaryConfig,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
