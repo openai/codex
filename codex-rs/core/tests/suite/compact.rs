@@ -5,9 +5,12 @@ use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
 use codex_core::NewConversation;
 use codex_core::built_in_model_providers;
+use codex_core::protocol::CodexExecutiveItem;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
+use codex_core::protocol::RolloutItem;
+use codex_core::protocol::RolloutLine;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use core_test_support::load_default_config_for_test;
 use core_test_support::wait_for_event;
@@ -261,13 +264,28 @@ async fn summarize_context_three_requests_and_instructions() {
                 rollout_path.display()
             )
         });
-        let count = text
-            .lines()
-            .filter(|l| l.contains("\"type\":\"codex_executive_item\"") && l.contains("APITurn"))
-            .count();
-        let saw = text.contains("\"type\":\"codex_executive_item\"")
-            && text.contains("\"Compacted\"")
-            && text.contains(SUMMARY_TEXT);
+        let mut count = 0usize;
+        let mut saw = false;
+        for line in text.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let Ok(entry): Result<RolloutLine, _> = serde_json::from_str(trimmed) else {
+                continue;
+            };
+            match entry.item {
+                RolloutItem::CodexExecutiveItem(CodexExecutiveItem::APITurn(_)) => {
+                    count += 1;
+                }
+                RolloutItem::CodexExecutiveItem(CodexExecutiveItem::Compacted(ci)) => {
+                    if ci.message == SUMMARY_TEXT {
+                        saw = true;
+                    }
+                }
+                _ => {}
+            }
+        }
         (count, saw)
     };
     let (mut api_turn_count, mut saw_compacted_summary) = poll();
