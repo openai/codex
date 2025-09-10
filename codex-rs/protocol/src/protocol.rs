@@ -695,6 +695,8 @@ pub struct UserMessageEvent {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<InputMessageKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub images: Option<Vec<String>>,
 }
 
 impl<T, U> From<(T, U)> for InputMessageKind

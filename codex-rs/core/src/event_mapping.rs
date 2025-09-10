@@ -25,31 +25,68 @@ pub(crate) fn map_response_item_to_event_messages(
                 return Vec::new();
             }
 
-            let events: Vec<EventMsg> = content
-                .iter()
-                .filter_map(|content_item| match content_item {
-                    ContentItem::OutputText { text } => {
-                        Some(EventMsg::AgentMessage(AgentMessageEvent {
-                            message: text.clone(),
-                        }))
+            let mut events: Vec<EventMsg> = Vec::new();
+
+            if role == "user" {
+                let mut message_parts: Vec<String> = Vec::new();
+                let mut images: Vec<String> = Vec::new();
+                let mut kind: Option<InputMessageKind> = None;
+
+                for content_item in content.iter() {
+                    match content_item {
+                        ContentItem::InputText { text } => {
+                            if kind.is_none() {
+                                let trimmed = text.trim_start();
+                                kind = if trimmed.starts_with("<environment_context>") {
+                                    Some(InputMessageKind::EnvironmentContext)
+                                } else if trimmed.starts_with("<user_instructions>") {
+                                    Some(InputMessageKind::UserInstructions)
+                                } else {
+                                    Some(InputMessageKind::Plain)
+                                };
+                            }
+                            message_parts.push(text.clone());
+                        }
+                        ContentItem::InputImage { image_url } => {
+                            images.push(image_url.clone());
+                        }
+                        ContentItem::OutputText { text } => {
+                            events.push(EventMsg::AgentMessage(AgentMessageEvent {
+                                message: text.clone(),
+                            }));
+                        }
                     }
-                    ContentItem::InputText { text } => {
-                        let trimmed = text.trim_start();
-                        let kind = if trimmed.starts_with("<environment_context>") {
-                            Some(InputMessageKind::EnvironmentContext)
-                        } else if trimmed.starts_with("<user_instructions>") {
-                            Some(InputMessageKind::UserInstructions)
-                        } else {
-                            Some(InputMessageKind::Plain)
-                        };
-                        Some(EventMsg::UserMessage(UserMessageEvent {
+                }
+
+                if !message_parts.is_empty() || !images.is_empty() {
+                    let message = if message_parts.is_empty() {
+                        String::new()
+                    } else {
+                        message_parts.join("\n")
+                    };
+                    let images = if images.is_empty() {
+                        None
+                    } else {
+                        Some(images)
+                    };
+
+                    events.push(EventMsg::UserMessage(UserMessageEvent {
+                        message,
+                        kind,
+                        images,
+                    }));
+                }
+            } else {
+                // Non-user role (e.g., assistant): surface output text as agent messages.
+                for content_item in content.iter() {
+                    if let ContentItem::OutputText { text } = content_item {
+                        events.push(EventMsg::AgentMessage(AgentMessageEvent {
                             message: text.clone(),
-                            kind,
-                        }))
+                        }));
                     }
-                    _ => None,
-                })
-                .collect();
+                }
+            }
+
             events
         }
 
