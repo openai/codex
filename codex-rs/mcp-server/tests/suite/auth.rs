@@ -15,10 +15,6 @@ use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-fn unwrap_result<T, E: std::fmt::Display>(result: Result<T, E>, context: &str) -> T {
-    result.unwrap_or_else(|err| panic!("{context}: {err}"))
-}
-
 // Helper to create a config.toml; mirrors create_conversation.rs
 fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {
     let config_toml = codex_home.join("config.toml");
@@ -42,26 +38,22 @@ stream_max_retries = 0
 }
 
 async fn login_with_api_key_via_request(mcp: &mut McpProcess, api_key: &str) {
-    let request_id = unwrap_result(
-        mcp.send_login_api_key_request(LoginApiKeyParams {
+    let request_id = mcp
+        .send_login_api_key_request(LoginApiKeyParams {
             api_key: api_key.to_string(),
         })
-        .await,
-        "send loginApiKey",
-    );
+        .await
+        .unwrap_or_else(|e| panic!("send loginApiKey: {e}"));
 
-    let resp: JSONRPCResponse = unwrap_result(
-        unwrap_result(
-            timeout(
-                DEFAULT_READ_TIMEOUT,
-                mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-            )
-            .await,
-            "loginApiKey timeout",
-        ),
-        "loginApiKey response",
-    );
-    let _: LoginApiKeyResponse = unwrap_result(to_response(resp), "deserialize login response");
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await
+    .unwrap_or_else(|e| panic!("loginApiKey timeout: {e}"))
+    .unwrap_or_else(|e| panic!("loginApiKey response: {e}"));
+    let _: LoginApiKeyResponse =
+        to_response(resp).unwrap_or_else(|e| panic!("deserialize login response: {e}"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -69,39 +61,30 @@ async fn get_auth_status_no_auth() {
     let codex_home = TempDir::new().unwrap_or_else(|e| panic!("create tempdir: {e}"));
     create_config_toml(codex_home.path()).unwrap_or_else(|err| panic!("write config.toml: {err}"));
 
-    let mut mcp = unwrap_result(
-        McpProcess::new(codex_home.path()).await,
-        "spawn mcp process",
-    );
-    unwrap_result(
-        unwrap_result(
-            timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await,
-            "init timeout",
-        ),
-        "init failed",
-    );
+    let mut mcp = McpProcess::new(codex_home.path())
+        .await
+        .expect("spawn mcp process");
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize())
+        .await
+        .expect("init timeout")
+        .expect("init failed");
 
-    let request_id = unwrap_result(
-        mcp.send_get_auth_status_request(GetAuthStatusParams {
+    let request_id = mcp
+        .send_get_auth_status_request(GetAuthStatusParams {
             include_token: Some(true),
             refresh_token: Some(false),
         })
-        .await,
-        "send getAuthStatus",
-    );
+        .await
+        .expect("send getAuthStatus");
 
-    let resp: JSONRPCResponse = unwrap_result(
-        unwrap_result(
-            timeout(
-                DEFAULT_READ_TIMEOUT,
-                mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-            )
-            .await,
-            "getAuthStatus timeout",
-        ),
-        "getAuthStatus response",
-    );
-    let status: GetAuthStatusResponse = unwrap_result(to_response(resp), "deserialize status");
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await
+    .expect("getAuthStatus timeout")
+    .expect("getAuthStatus response");
+    let status: GetAuthStatusResponse = to_response(resp).expect("deserialize status");
     assert_eq!(status.auth_method, None, "expected no auth method");
     assert_eq!(status.auth_token, None, "expected no token");
 }
@@ -111,41 +94,32 @@ async fn get_auth_status_with_api_key() {
     let codex_home = TempDir::new().unwrap_or_else(|e| panic!("create tempdir: {e}"));
     create_config_toml(codex_home.path()).unwrap_or_else(|err| panic!("write config.toml: {err}"));
 
-    let mut mcp = unwrap_result(
-        McpProcess::new(codex_home.path()).await,
-        "spawn mcp process",
-    );
-    unwrap_result(
-        unwrap_result(
-            timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await,
-            "init timeout",
-        ),
-        "init failed",
-    );
+    let mut mcp = McpProcess::new(codex_home.path())
+        .await
+        .expect("spawn mcp process");
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize())
+        .await
+        .expect("init timeout")
+        .expect("init failed");
 
     login_with_api_key_via_request(&mut mcp, "sk-test-key").await;
 
-    let request_id = unwrap_result(
-        mcp.send_get_auth_status_request(GetAuthStatusParams {
+    let request_id = mcp
+        .send_get_auth_status_request(GetAuthStatusParams {
             include_token: Some(true),
             refresh_token: Some(false),
         })
-        .await,
-        "send getAuthStatus",
-    );
+        .await
+        .expect("send getAuthStatus");
 
-    let resp: JSONRPCResponse = unwrap_result(
-        unwrap_result(
-            timeout(
-                DEFAULT_READ_TIMEOUT,
-                mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-            )
-            .await,
-            "getAuthStatus timeout",
-        ),
-        "getAuthStatus response",
-    );
-    let status: GetAuthStatusResponse = unwrap_result(to_response(resp), "deserialize status");
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await
+    .expect("getAuthStatus timeout")
+    .expect("getAuthStatus response");
+    let status: GetAuthStatusResponse = to_response(resp).expect("deserialize status");
     assert_eq!(status.auth_method, Some(AuthMode::ApiKey));
     assert_eq!(status.auth_token, Some("sk-test-key".to_string()));
 }
@@ -155,17 +129,13 @@ async fn get_auth_status_with_api_key_no_include_token() {
     let codex_home = TempDir::new().unwrap_or_else(|e| panic!("create tempdir: {e}"));
     create_config_toml(codex_home.path()).unwrap_or_else(|err| panic!("write config.toml: {err}"));
 
-    let mut mcp = unwrap_result(
-        McpProcess::new(codex_home.path()).await,
-        "spawn mcp process",
-    );
-    unwrap_result(
-        unwrap_result(
-            timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await,
-            "init timeout",
-        ),
-        "init failed",
-    );
+    let mut mcp = McpProcess::new(codex_home.path())
+        .await
+        .expect("spawn mcp process");
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize())
+        .await
+        .expect("init timeout")
+        .expect("init failed");
 
     login_with_api_key_via_request(&mut mcp, "sk-test-key").await;
 
@@ -174,23 +144,19 @@ async fn get_auth_status_with_api_key_no_include_token() {
         include_token: None,
         refresh_token: Some(false),
     };
-    let request_id = unwrap_result(
-        mcp.send_get_auth_status_request(params).await,
-        "send getAuthStatus",
-    );
+    let request_id = mcp
+        .send_get_auth_status_request(params)
+        .await
+        .expect("send getAuthStatus");
 
-    let resp: JSONRPCResponse = unwrap_result(
-        unwrap_result(
-            timeout(
-                DEFAULT_READ_TIMEOUT,
-                mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
-            )
-            .await,
-            "getAuthStatus timeout",
-        ),
-        "getAuthStatus response",
-    );
-    let status: GetAuthStatusResponse = unwrap_result(to_response(resp), "deserialize status");
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await
+    .expect("getAuthStatus timeout")
+    .expect("getAuthStatus response");
+    let status: GetAuthStatusResponse = to_response(resp).expect("deserialize status");
     assert_eq!(status.auth_method, Some(AuthMode::ApiKey));
     assert!(status.auth_token.is_none(), "token must be omitted");
 }

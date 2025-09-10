@@ -17,10 +17,6 @@ use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-fn unwrap_result<T, E: std::fmt::Display>(result: Result<T, E>, context: &str) -> T {
-    result.unwrap_or_else(|err| panic!("{context}: {err}"))
-}
-
 // Helper to create a config.toml; mirrors create_conversation.rs
 fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {
     let config_toml = codex_home.join("config.toml");
@@ -101,53 +97,42 @@ async fn login_and_cancel_chatgpt() {
     let codex_home = TempDir::new().unwrap_or_else(|e| panic!("create tempdir: {e}"));
     create_config_toml(codex_home.path()).unwrap_or_else(|err| panic!("write config.toml: {err}"));
 
-    let mut mcp = unwrap_result(
-        McpProcess::new(codex_home.path()).await,
-        "spawn mcp process",
-    );
-    unwrap_result(
-        unwrap_result(
-            timeout(DEFAULT_READ_TIMEOUT, mcp.initialize()).await,
-            "init timeout",
-        ),
-        "init failed",
-    );
+    let mut mcp = McpProcess::new(codex_home.path())
+        .await
+        .expect("spawn mcp process");
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize())
+        .await
+        .expect("init timeout")
+        .expect("init failed");
 
-    let login_id = unwrap_result(mcp.send_login_chat_gpt_request().await, "send loginChatGpt");
-    let login_resp: JSONRPCResponse = unwrap_result(
-        unwrap_result(
-            timeout(
-                DEFAULT_READ_TIMEOUT,
-                mcp.read_stream_until_response_message(RequestId::Integer(login_id)),
-            )
-            .await,
-            "loginChatGpt timeout",
-        ),
-        "loginChatGpt response",
-    );
-    let login: LoginChatGptResponse =
-        unwrap_result(to_response(login_resp), "deserialize login resp");
+    let login_id = mcp
+        .send_login_chat_gpt_request()
+        .await
+        .expect("send loginChatGpt");
+    let login_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(login_id)),
+    )
+    .await
+    .expect("loginChatGpt timeout")
+    .expect("loginChatGpt response");
+    let login: LoginChatGptResponse = to_response(login_resp).expect("deserialize login resp");
 
-    let cancel_id = unwrap_result(
-        mcp.send_cancel_login_chat_gpt_request(CancelLoginChatGptParams {
+    let cancel_id = mcp
+        .send_cancel_login_chat_gpt_request(CancelLoginChatGptParams {
             login_id: login.login_id,
         })
-        .await,
-        "send cancelLoginChatGpt",
-    );
-    let cancel_resp: JSONRPCResponse = unwrap_result(
-        unwrap_result(
-            timeout(
-                DEFAULT_READ_TIMEOUT,
-                mcp.read_stream_until_response_message(RequestId::Integer(cancel_id)),
-            )
-            .await,
-            "cancelLoginChatGpt timeout",
-        ),
-        "cancelLoginChatGpt response",
-    );
+        .await
+        .expect("send cancelLoginChatGpt");
+    let cancel_resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(cancel_id)),
+    )
+    .await
+    .expect("cancelLoginChatGpt timeout")
+    .expect("cancelLoginChatGpt response");
     let _ok: CancelLoginChatGptResponse =
-        unwrap_result(to_response(cancel_resp), "deserialize cancel response");
+        to_response(cancel_resp).expect("deserialize cancel response");
 
     // Optionally observe the completion notification; do not fail if it races.
     let maybe_note = timeout(
