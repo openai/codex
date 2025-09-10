@@ -499,7 +499,7 @@ pub enum EventMsg {
     /// Notification that the agent is shutting down.
     ShutdownComplete,
 
-    ConversationHistory(ConversationHistoryResponseEvent),
+    ConversationHistory(ConversationPathResponseEvent),
 }
 
 // Individual event payload types matching each `EventMsg` variant.
@@ -801,9 +801,9 @@ pub struct WebSearchEndEvent {
 /// Response payload for `Op::GetHistory` containing the current session's
 /// in-memory transcript.
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
-pub struct ConversationHistoryResponseEvent {
+pub struct ConversationPathResponseEvent {
     pub conversation_id: ConversationId,
-    pub entries: Vec<ResponseItem>,
+    pub path: PathBuf,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]

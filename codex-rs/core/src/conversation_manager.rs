@@ -150,13 +150,13 @@ impl ConversationManager {
     /// caller's `config`). The new conversation will have a fresh id.
     pub async fn fork_conversation(
         &self,
-        conversation_history: Vec<ResponseItem>,
         num_messages_to_drop: usize,
         config: Config,
+        path: PathBuf,
     ) -> CodexResult<NewConversation> {
         // Compute the prefix up to the cut point.
-        let history =
-            truncate_after_dropping_last_messages(conversation_history, num_messages_to_drop);
+        let history = RolloutRecorder::get_rollout_history(&path).await?;
+        let history = truncate_after_dropping_last_messages(history, num_messages_to_drop);
 
         // Spawn a new conversation with the computed initial history.
         let auth_manager = self.auth_manager.clone();
@@ -171,36 +171,36 @@ impl ConversationManager {
 
 /// Return a prefix of `items` obtained by dropping the last `n` user messages
 /// and all items that follow them.
-fn truncate_after_dropping_last_messages(items: Vec<ResponseItem>, n: usize) -> InitialHistory {
+fn truncate_after_dropping_last_messages(history: InitialHistory, n: usize) -> InitialHistory {
     if n == 0 {
-        let rolled: Vec<RolloutItem> = items.into_iter().map(RolloutItem::ResponseItem).collect();
-        return InitialHistory::Forked(rolled);
+        return history;
     }
 
-    // Walk backwards counting only `user` Message items, find cut index.
-    let mut count = 0usize;
-    let mut cut_index = 0usize;
-    for (idx, item) in items.iter().enumerate().rev() {
-        if let ResponseItem::Message { role, .. } = item
+    // Work directly on rollout items, and cut the vector at the nth-from-last user message input.
+    let items: Vec<RolloutItem> = history.get_rollout_items();
+
+    // Find indices of user message inputs in rollout order.
+    let mut user_positions: Vec<usize> = Vec::new();
+    for (idx, item) in items.iter().enumerate() {
+        if let RolloutItem::ResponseItem(ResponseItem::Message { role, .. }) = item
             && role == "user"
         {
-            count += 1;
-            if count == n {
-                // Cut everything from this user message to the end.
-                cut_index = idx;
-                break;
-            }
+            user_positions.push(idx);
         }
     }
-    if cut_index == 0 {
-        // No prefix remains after dropping; start a new conversation.
+
+    // If fewer than n user messages exist, treat as empty.
+    if user_positions.len() < n {
+        return InitialHistory::New;
+    }
+
+    // Cut strictly before the nth-from-last user message (do not keep the nth itself).
+    let cut_idx = user_positions[user_positions.len() - n];
+    let rolled: Vec<RolloutItem> = items.into_iter().take(cut_idx).collect();
+
+    if rolled.is_empty() {
         InitialHistory::New
     } else {
-        let rolled: Vec<RolloutItem> = items
-            .into_iter()
-            .take(cut_index)
-            .map(RolloutItem::ResponseItem)
-            .collect();
         InitialHistory::Forked(rolled)
     }
 }
@@ -208,6 +208,8 @@ fn truncate_after_dropping_last_messages(items: Vec<ResponseItem>, n: usize) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event_mapping::map_response_item_to_event_messages;
+    use crate::protocol::EventMsg;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ReasoningItemReasoningSummary;
     use codex_protocol::models::ResponseItem;
@@ -217,6 +219,15 @@ mod tests {
             id: None,
             role: "user".to_string(),
             content: vec![ContentItem::OutputText {
+                text: text.to_string(),
+            }],
+        }
+    }
+    fn user_input(text: &str) -> ResponseItem {
+        ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
                 text: text.to_string(),
             }],
         }
@@ -256,7 +267,13 @@ mod tests {
             assistant_msg("a4"),
         ];
 
-        let truncated = truncate_after_dropping_last_messages(items.clone(), 1);
+        // Wrap as InitialHistory::Forked with response items only.
+        let initial: Vec<RolloutItem> = items
+            .iter()
+            .cloned()
+            .map(RolloutItem::ResponseItem)
+            .collect();
+        let truncated = truncate_after_dropping_last_messages(InitialHistory::Forked(initial), 1);
         let got_items = truncated.get_rollout_items();
         let expected_items = vec![
             RolloutItem::ResponseItem(items[0].clone()),
@@ -268,7 +285,60 @@ mod tests {
             serde_json::to_value(&expected_items).unwrap()
         );
 
-        let truncated2 = truncate_after_dropping_last_messages(items, 2);
+        let initial2: Vec<RolloutItem> = items
+            .iter()
+            .cloned()
+            .map(RolloutItem::ResponseItem)
+            .collect();
+        let truncated2 = truncate_after_dropping_last_messages(InitialHistory::Forked(initial2), 2);
         assert!(matches!(truncated2, InitialHistory::New));
+    }
+
+    #[test]
+    fn event_prefix_counts_from_end_with_duplicate_user_prompts() {
+        // Two identical user prompts with assistant replies between them.
+        let responses = vec![
+            user_input("same"),
+            assistant_msg("a1"),
+            user_input("same"),
+            assistant_msg("a2"),
+        ];
+
+        // Derive event messages in order from responses (user → UserMessage, assistant → AgentMessage).
+        let mut events: Vec<EventMsg> = Vec::new();
+        for r in &responses {
+            events.extend(map_response_item_to_event_messages(r, false));
+        }
+
+        // Build initial history containing both events and responses.
+        let mut initial: Vec<RolloutItem> = Vec::new();
+        initial.extend(events.iter().cloned().map(RolloutItem::EventMsg));
+        initial.extend(responses.iter().cloned().map(RolloutItem::ResponseItem));
+
+        // Drop the last user turn.
+        let truncated = truncate_after_dropping_last_messages(InitialHistory::Forked(initial), 1);
+
+        // Expect the event prefix to include the first user + first assistant only,
+        // and the response prefix to include the first user + first assistant only.
+        let got_items = truncated.get_rollout_items();
+
+        // Compute expected events and responses after cut. With rollout-based truncation we
+        // preserve all prior event messages and truncate only the response items at the cut.
+        let expected_event_prefix: Vec<RolloutItem> =
+            events.iter().cloned().map(RolloutItem::EventMsg).collect();
+        let expected_response_prefix: Vec<RolloutItem> = responses[..2]
+            .iter()
+            .cloned()
+            .map(RolloutItem::ResponseItem)
+            .collect();
+
+        let mut expected: Vec<RolloutItem> = Vec::new();
+        expected.extend(expected_event_prefix);
+        expected.extend(expected_response_prefix);
+
+        assert_eq!(
+            serde_json::to_value(&got_items).unwrap(),
+            serde_json::to_value(&expected).unwrap()
+        );
     }
 }
