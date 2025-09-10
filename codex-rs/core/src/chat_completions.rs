@@ -1,6 +1,20 @@
 use std::time::Duration;
 
+use crate::ModelProviderInfo;
+use crate::client_common::Prompt;
+use crate::client_common::ResponseEvent;
+use crate::client_common::ResponseStream;
+use crate::error::CodexErr;
+use crate::error::Result;
+use crate::model_family::ModelFamily;
+use crate::openai_tools::create_tools_json_for_chat_completions_api;
+use crate::util::backoff;
 use bytes::Bytes;
+use codex_otel::otel_provider::OtelProvider;
+use codex_protocol::mcp_protocol::ConversationId;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ReasoningItemContent;
+use codex_protocol::models::ResponseItem;
 use eventsource_stream::Eventsource;
 use futures::Stream;
 use futures::StreamExt;
@@ -12,25 +26,25 @@ use std::task::Context;
 use std::task::Poll;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
+use tracing::Instrument;
 use tracing::debug;
+use tracing::info_span;
 use tracing::trace;
 
-use crate::ModelProviderInfo;
-use crate::client_common::Prompt;
-use crate::client_common::ResponseEvent;
-use crate::client_common::ResponseStream;
-use crate::error::CodexErr;
-use crate::error::Result;
-use crate::model_family::ModelFamily;
-use crate::openai_tools::create_tools_json_for_chat_completions_api;
-use crate::util::backoff;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ReasoningItemContent;
-use codex_protocol::models::ResponseItem;
-
 /// Implementation for the classic Chat Completions API.
+#[tracing::instrument(
+    skip_all,
+    fields(
+            conversation_id = %_conversation_id,
+            model = %_model,
+            model_slug = %model_family.slug,
+            model_provider = %provider.name,
+    ),
+)]
 pub(crate) async fn stream_chat_completions(
+    _conversation_id: &ConversationId,
     prompt: &Prompt,
+    _model: &String,
     model_family: &ModelFamily,
     client: &reqwest::Client,
     provider: &ModelProviderInfo,
@@ -288,10 +302,16 @@ pub(crate) async fn stream_chat_completions(
 
         let req_builder = provider.create_request_builder(client, &None).await?;
 
+        let request_span = info_span!("request").or_current();
+
+        let tracing_headers = OtelProvider::headers(&request_span);
+
         let res = req_builder
             .header(reqwest::header::ACCEPT, "text/event-stream")
+            .headers(tracing_headers)
             .json(&payload)
             .send()
+            .instrument(request_span)
             .await;
 
         match res {

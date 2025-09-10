@@ -4,59 +4,64 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
-use codex_telemetry as telemetry;
+use codex_otel::config::OtelExporter;
+use codex_otel::config::OtelSampler;
+use codex_otel::config::OtelSettings;
+use codex_otel::otel_provider::OtelProvider;
 use tempfile::TempDir;
-
 use tracing_subscriber::prelude::*;
+use walkdir::WalkDir;
 
 fn latest_trace_file(dir: &Path) -> Option<PathBuf> {
     let traces_dir = dir.join("traces");
-    let mut entries: Vec<_> = fs::read_dir(&traces_dir)
-        .ok()?
-        .filter_map(|e| e.ok())
-        .collect();
-    if entries.is_empty() {
-        return None;
+
+    WalkDir::new(&traces_dir)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_file())
+        .filter_map(|e| {
+            let mtime = e.metadata().ok()?.modified().ok()?;
+            Some((mtime, e.into_path()))
+        })
+        .max_by_key(|(mtime, _)| *mtime)
+        .map(|(_, path)| path)
+}
+fn settings(codex_home: PathBuf) -> OtelSettings {
+    OtelSettings {
+        enabled: true,
+        environment: "test".to_string(),
+        service_name: "codex-test".to_string(),
+        service_version: "0.0.0".to_string(),
+        codex_home,
+        sampler: OtelSampler::AlwaysOn,
+        exporter: OtelExporter::OtlpFile,
     }
-    entries.sort_by_key(|e| e.metadata().and_then(|m| m.modified()).ok());
-    entries.last().map(|e| e.path())
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn file_exporter_writes_span_json() {
-    // Arrange
     let tmp = TempDir::new().expect("temp dir");
     let codex_home = tmp.path().to_path_buf();
 
-    let (guard, tracer) = telemetry::build_layer(&telemetry::Settings {
-        enabled: true,
-        exporter: telemetry::Exporter::OtlpFile {
-            rotate_mb: Some(100),
-        },
-        service_name: "codex-test".to_string(),
-        service_version: "0.0.0".to_string(),
-        codex_home: Some(codex_home.clone()),
-    })
-    .expect("build otel layer");
+    let provider = OtelProvider::from(&settings(codex_home.clone()))
+        .unwrap()
+        .expect("otel provider");
+    let tracer = provider.tracer();
 
-    let otel_layer = tracing_opentelemetry::OpenTelemetryLayer::new(tracer);
+    let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
     let subscriber = tracing_subscriber::registry().with(otel_layer);
 
-    // Act: create and drop a span within a scoped subscriber.
     tracing::subscriber::with_default(subscriber, || {
         let span = tracing::info_span!("test.span", test_id = %"123");
         let _entered = span.entered();
     });
 
-    // Drop guard to flush provider and batch processor.
-    drop(guard);
+    drop(provider);
 
-    // Assert: a traces file exists and contains a JSON line with the span name.
     let file = latest_trace_file(&codex_home).expect("traces file should exist");
     let contents = fs::read_to_string(&file).expect("read traces file");
     assert!(!contents.is_empty(), "traces file should not be empty");
 
-    // Parse first line and check basic OTLP shape and span name.
     let first_line = contents.lines().next().expect("at least one line");
     let v: serde_json::Value = serde_json::from_str(first_line).expect("valid json line");
 
@@ -65,41 +70,30 @@ async fn file_exporter_writes_span_json() {
         .unwrap_or("");
     assert_eq!(span_name, "test.span");
 
-    // Ensure required fields exist
     assert!(v["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["traceId"].is_string());
     assert!(v["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["spanId"].is_string());
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn session_span_flushes_on_shutdown() {
-    // Arrange
     let tmp = TempDir::new().expect("temp dir");
     let codex_home = tmp.path().to_path_buf();
 
-    let (guard, tracer) = telemetry::build_layer(&telemetry::Settings {
-        enabled: true,
-        exporter: telemetry::Exporter::OtlpFile {
-            rotate_mb: Some(100),
-        },
-        service_name: "codex-test".to_string(),
-        service_version: "0.0.0".to_string(),
-        codex_home: Some(codex_home.clone()),
-    })
-    .expect("build otel layer");
+    let provider = OtelProvider::from(&settings(codex_home.clone()))
+        .unwrap()
+        .expect("otel provider");
+    let tracer = provider.tracer();
 
-    let otel_layer = tracing_opentelemetry::OpenTelemetryLayer::new(tracer);
+    let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
     let subscriber = tracing_subscriber::registry().with(otel_layer);
 
-    // Act: create a session span via helper in a scoped subscriber, then drop guard to flush
     tracing::subscriber::with_default(subscriber, || {
-        let span = telemetry::make_session_span("s1", "model-x", "provider-y");
+        let span = tracing::info_span!("codex.session", test_id = %"123");
         drop(span);
     });
 
-    // Drop guard to flush provider and batch processor.
-    drop(guard);
+    drop(provider);
 
-    // Assert: traces contain a span named "codex.session"
     let file = latest_trace_file(&codex_home).expect("traces file should exist");
     let contents = fs::read_to_string(&file).expect("read traces file");
     let mut found = false;
@@ -108,11 +102,11 @@ async fn session_span_flushes_on_shutdown() {
             Ok(v) => v,
             Err(_) => continue,
         };
-        if let Some(name) = v["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["name"].as_str() {
-            if name == "codex.session" {
-                found = true;
-                break;
-            }
+        if let Some(name) = v["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["name"].as_str()
+            && name == "codex.session"
+        {
+            found = true;
+            break;
         }
     }
     assert!(found, "expected a codex.session span to be exported");
