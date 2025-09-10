@@ -425,6 +425,101 @@ pub async fn record_gpt5_high_prompt_choice(
     Ok(())
 }
 
+fn ensure_profile_table<'a>(
+    doc: &'a mut DocumentMut,
+    profile_name: &str,
+) -> anyhow::Result<&'a mut toml_edit::Table> {
+    let mut created_profiles_table = false;
+    {
+        let root = doc.as_table_mut();
+        let needs_table = !root.contains_key("profiles")
+            || root
+                .get("profiles")
+                .and_then(|item| item.as_table())
+                .is_none();
+        if needs_table {
+            root.insert("profiles", toml_edit::table());
+            created_profiles_table = true;
+        }
+    }
+
+    let Some(profiles_table) = doc["profiles"].as_table_mut() else {
+        return Err(anyhow::anyhow!(
+            "profiles table missing after initialization"
+        ));
+    };
+
+    if created_profiles_table {
+        profiles_table.set_implicit(true);
+    }
+
+    let needs_profile_table = !profiles_table.contains_key(profile_name)
+        || profiles_table
+            .get(profile_name)
+            .and_then(|item| item.as_table())
+            .is_none();
+    if needs_profile_table {
+        profiles_table.insert(profile_name, toml_edit::table());
+    }
+
+    let Some(profile_table) = profiles_table
+        .get_mut(profile_name)
+        .and_then(|item| item.as_table_mut())
+    else {
+        return Err(anyhow::anyhow!(format!(
+            "profile table missing for {profile_name}"
+        )));
+    };
+
+    profile_table.set_implicit(false);
+    Ok(profile_table)
+}
+
+pub async fn persist_model_selection(
+    codex_home: &Path,
+    active_profile: Option<&str>,
+    model: &str,
+    effort: ReasoningEffort,
+) -> anyhow::Result<()> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let serialized = match tokio::fs::read_to_string(&config_path).await {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err.into()),
+    };
+
+    let mut doc = if serialized.is_empty() {
+        DocumentMut::new()
+    } else {
+        serialized.parse::<DocumentMut>()?
+    };
+
+    if let Some(profile_name) = active_profile {
+        let profile_table = ensure_profile_table(&mut doc, profile_name)?;
+        profile_table["model"] = toml_edit::value(model);
+        profile_table["model_reasoning_effort"] = toml_edit::value(effort.to_string());
+    } else {
+        let table = doc.as_table_mut();
+        table["model"] = toml_edit::value(model);
+        table["model_reasoning_effort"] = toml_edit::value(effort.to_string());
+    }
+
+    tokio::fs::create_dir_all(codex_home)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to create Codex home directory at {}",
+                codex_home.display()
+            )
+        })?;
+
+    tokio::fs::write(&config_path, doc.to_string())
+        .await
+        .with_context(|| format!("failed to persist config.toml at {}", config_path.display()))?;
+
+    Ok(())
+}
+
 /// Apply a single dotted-path override onto a TOML value.
 fn apply_toml_override(root: &mut TomlValue, path: &str, value: TomlValue) {
     use toml::value::Table;
@@ -1172,6 +1267,54 @@ exclude_slash_tmp = true
             std::fs::read_to_string(codex_home.path().join(INTERNAL_STORAGE_FILE))?;
         let storage: InternalStorage = serde_json::from_str(&stored_contents)?;
         assert!(storage.gpt_5_high_model_prompt_seen);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persist_model_selection_updates_defaults() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        persist_model_selection(
+            codex_home.path(),
+            None,
+            "gpt-5-high-new",
+            ReasoningEffort::High,
+        )
+        .await?;
+
+        let serialized =
+            tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        assert_eq!(parsed.model.as_deref(), Some("gpt-5-high-new"));
+        assert_eq!(parsed.model_reasoning_effort, Some(ReasoningEffort::High));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persist_model_selection_updates_profile() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        persist_model_selection(
+            codex_home.path(),
+            Some("dev"),
+            "gpt-5-high-new",
+            ReasoningEffort::Low,
+        )
+        .await?;
+
+        let serialized =
+            tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+        let profile = parsed
+            .profiles
+            .get("dev")
+            .expect("profile should be created");
+
+        assert_eq!(profile.model.as_deref(), Some("gpt-5-high-new"));
+        assert_eq!(profile.model_reasoning_effort, Some(ReasoningEffort::Low));
 
         Ok(())
     }

@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_core::config::Config;
+use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -1207,7 +1208,7 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(
             "Select model and reasoning level".to_string(),
             Some("Switch between OpenAI models for this and future Codex CLI session".to_string()),
-            Some("Press Enter to confirm or Esc to go back".to_string()),
+            Some("Press Enter to confirm, Esc to go back, Ctrl+S to save".to_string()),
             items,
         );
     }
@@ -1270,7 +1271,20 @@ impl ChatWidget {
 
     /// Set the model in the widget's config copy.
     pub(crate) fn set_model(&mut self, model: String) {
-        self.config.model = model;
+        self.config.model = model.clone();
+        if let Some(family) = find_family_for_model(&model) {
+            self.config.model_family = family;
+        }
+    }
+
+    pub(crate) fn add_info_message(&mut self, message: String) {
+        self.add_to_history(history_cell::new_info_event(message));
+        self.request_redraw();
+    }
+
+    pub(crate) fn add_error_message(&mut self, message: String) {
+        self.add_to_history(history_cell::new_error_event(message));
+        self.request_redraw();
     }
 
     pub(crate) fn add_mcp_output(&mut self) {

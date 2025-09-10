@@ -379,6 +379,7 @@ async fn run_ratatui_app(
         &mut tui,
         auth_manager,
         config,
+        active_profile,
         prompt,
         images,
         resume_selection,
