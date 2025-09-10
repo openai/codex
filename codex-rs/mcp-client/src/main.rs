@@ -17,10 +17,10 @@ use anyhow::Context;
 use anyhow::Result;
 use codex_mcp_client::McpClient;
 use mcp_types::ClientCapabilities;
-use mcp_types::Implementation;
 use mcp_types::InitializeRequestParams;
 use mcp_types::ListToolsRequestParams;
 use mcp_types::MCP_SCHEMA_VERSION;
+use mcp_types::McpClientInfo;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -60,7 +60,7 @@ async fn main() -> Result<()> {
             sampling: None,
             elicitation: None,
         },
-        client_info: Implementation {
+        client_info: McpClientInfo {
             name: "codex-mcp-client".to_owned(),
             version: env!("CARGO_PKG_VERSION").to_owned(),
             title: Some("Codex".to_string()),

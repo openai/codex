@@ -1,10 +1,10 @@
 use mcp_types::ClientCapabilities;
 use mcp_types::ClientRequest;
-use mcp_types::Implementation;
 use mcp_types::InitializeRequestParams;
 use mcp_types::JSONRPC_VERSION;
 use mcp_types::JSONRPCMessage;
 use mcp_types::JSONRPCRequest;
+use mcp_types::McpClientInfo;
 use mcp_types::RequestId;
 use serde_json::json;
 
@@ -58,7 +58,7 @@ fn deserialize_initialize_request() {
                 sampling: None,
                 elicitation: None,
             },
-            client_info: Implementation {
+            client_info: McpClientInfo {
                 name: "acme-client".into(),
                 title: Some("Acme".to_string()),
                 version: "1.2.3".into(),

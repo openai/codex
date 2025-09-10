@@ -785,6 +785,7 @@ dependencies = [
  "codex-protocol",
  "mcp-types",
  "mcp_test_support",
+ "os_info",
  "pretty_assertions",
  "schemars 0.8.22",
  "serde",
@@ -843,6 +844,7 @@ dependencies = [
  "anyhow",
  "clap",
  "codex-protocol",
+ "mcp-types",
  "ts-rs",
 ]
 
@@ -2680,9 +2682,11 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
+ "codex-core",
  "codex-mcp-server",
  "codex-protocol",
  "mcp-types",
+ "os_info",
  "pretty_assertions",
  "serde",
  "serde_json",
