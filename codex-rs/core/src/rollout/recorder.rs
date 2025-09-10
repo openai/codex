@@ -228,11 +228,11 @@ impl RolloutRecorder {
             match serde_json::from_value::<RolloutLine>(v.clone()) {
                 Ok(rollout_line) => match rollout_line.item {
                     RolloutItem::SessionMeta(session_meta_line) => {
-                        tracing::error!(
-                            "Parsed conversation ID from rollout file: {:?}",
-                            session_meta_line.meta.id
-                        );
-                        conversation_id = Some(session_meta_line.meta.id);
+                        // Use the FIRST SessionMeta encountered in the file as the canonical
+                        // conversation id and main session information. Keep all items intact.
+                        if conversation_id.is_none() {
+                            conversation_id = Some(session_meta_line.meta.id);
+                        }
                         items.push(RolloutItem::SessionMeta(session_meta_line));
                     }
                     RolloutItem::ResponseItem(item) => {
