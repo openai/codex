@@ -38,7 +38,7 @@ const OPENAI_DEFAULT_MODEL: &str = "gpt-5";
 /// the context window.
 pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 
-const CONFIG_TOML_FILE: &str = "config.toml";
+pub(crate) const CONFIG_TOML_FILE: &str = "config.toml";
 
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
@@ -174,6 +174,10 @@ pub struct Config {
 
     /// Include the `view_image` tool that lets the agent attach a local image path to context.
     pub include_view_image_tool: bool,
+
+    /// The active profile name used to derive this `Config` (if any).
+    pub active_profile: Option<String>,
+
     /// When true, disables burst-paste detection for typed input entirely.
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
@@ -653,7 +657,11 @@ impl Config {
             tools_web_search_request: override_tools_web_search_request,
         } = overrides;
 
-        let config_profile = match config_profile_key.as_ref().or(cfg.profile.as_ref()) {
+        let active_profile_name = config_profile_key
+            .as_ref()
+            .or(cfg.profile.as_ref())
+            .cloned();
+        let config_profile = match active_profile_name.as_ref() {
             Some(key) => cfg
                 .profiles
                 .get(key)
@@ -819,6 +827,7 @@ impl Config {
                 .experimental_use_exec_command_tool
                 .unwrap_or(false),
             include_view_image_tool,
+            active_profile: active_profile_name,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
         };
         Ok(config)
@@ -1193,6 +1202,7 @@ model_verbosity = "high"
                 preferred_auth_method: AuthMode::ChatGPT,
                 use_experimental_streamable_shell_tool: false,
                 include_view_image_tool: true,
+                active_profile: Some("o3".to_string()),
                 disable_paste_burst: false,
             },
             o3_profile_config
@@ -1249,6 +1259,7 @@ model_verbosity = "high"
             preferred_auth_method: AuthMode::ChatGPT,
             use_experimental_streamable_shell_tool: false,
             include_view_image_tool: true,
+            active_profile: Some("gpt3".to_string()),
             disable_paste_burst: false,
         };
 
@@ -1320,6 +1331,7 @@ model_verbosity = "high"
             preferred_auth_method: AuthMode::ChatGPT,
             use_experimental_streamable_shell_tool: false,
             include_view_image_tool: true,
+            active_profile: Some("zdr".to_string()),
             disable_paste_burst: false,
         };
 
@@ -1377,6 +1389,7 @@ model_verbosity = "high"
             preferred_auth_method: AuthMode::ChatGPT,
             use_experimental_streamable_shell_tool: false,
             include_view_image_tool: true,
+            active_profile: Some("gpt5".to_string()),
             disable_paste_burst: false,
         };
 
@@ -1452,6 +1465,4 @@ trust_level = "trusted"
 
         Ok(())
     }
-
-    // No test enforcing the presence of a standalone [projects] header.
 }

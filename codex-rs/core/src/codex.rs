@@ -9,6 +9,9 @@ use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use crate::AuthManager;
+use crate::config_edit::CONFIG_KEY_EFFORT;
+use crate::config_edit::CONFIG_KEY_MODEL;
+use crate::config_edit::persist_non_null_overrides;
 use crate::event_mapping::map_response_item_to_event_messages;
 use async_channel::Receiver;
 use async_channel::Sender;
@@ -1100,10 +1103,10 @@ async fn submission_loop(
                 let provider = prev.client.get_provider();
 
                 // Effective model + family
-                let (effective_model, effective_family) = if let Some(m) = model {
+                let (effective_model, effective_family) = if let Some(ref m) = model {
                     let fam =
-                        find_family_for_model(&m).unwrap_or_else(|| config.model_family.clone());
-                    (m, fam)
+                        find_family_for_model(m).unwrap_or_else(|| config.model_family.clone());
+                    (m.clone(), fam)
                 } else {
                     (prev.client.get_model(), prev.client.get_model_family())
                 };
@@ -1161,6 +1164,23 @@ async fn submission_loop(
 
                 // Install the new persistent context for subsequent tasks/turns.
                 turn_context = Arc::new(new_turn_context);
+
+                // Optionally persist changes to model / effort
+                let effort_str = effort.map(|_| effective_effort.to_string());
+
+                if let Err(e) = persist_non_null_overrides(
+                    &config.codex_home,
+                    config.active_profile.as_deref(),
+                    &[
+                        (&[CONFIG_KEY_MODEL], model.as_deref()),
+                        (&[CONFIG_KEY_EFFORT], effort_str.as_deref()),
+                    ],
+                )
+                .await
+                {
+                    warn!("failed to persist overrides: {e:#}");
+                }
+
                 if cwd.is_some() || approval_policy.is_some() || sandbox_policy.is_some() {
                     sess.record_conversation_items(&[ResponseItem::from(EnvironmentContext::new(
                         cwd,
