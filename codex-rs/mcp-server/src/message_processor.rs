@@ -238,7 +238,7 @@ impl MessageProcessor {
                 name: "codex-mcp-server".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 title: Some("Codex".to_string()),
-                user_agent: get_codex_user_agent(),
+                user_agent: Some(get_codex_user_agent()),
             },
         };
 
