@@ -1326,12 +1326,27 @@ impl WidgetRef for ChatComposer {
         textarea_rect.x += 1;
 
         let mut state = self.textarea_state.borrow_mut();
-        StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
+        // Proactively clear the textarea region to avoid residual characters from
+        // previous frames (e.g., placeholder text lingering after content updates).
+        if textarea_rect.width > 0 && textarea_rect.height > 0 {
+            let spaces = " ".repeat(textarea_rect.width as usize);
+            for row in 0..textarea_rect.height {
+                let y = textarea_rect.y + row;
+                buf.set_stringn(
+                    textarea_rect.x,
+                    y,
+                    &spaces,
+                    textarea_rect.width as usize,
+                    Style::default(),
+                );
+            }
+        }
         if self.textarea.text().is_empty() {
             Line::from(self.placeholder_text.as_str())
                 .style(Style::default().dim())
                 .render_ref(textarea_rect.inner(Margin::new(1, 0)), buf);
         }
+        StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
     }
 }
 
