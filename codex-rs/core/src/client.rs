@@ -6,6 +6,7 @@ use std::time::Duration;
 use crate::AuthManager;
 use bytes::Bytes;
 use codex_protocol::mcp_protocol::AuthMode;
+use codex_protocol::mcp_protocol::ConversationId;
 use eventsource_stream::Eventsource;
 use futures::prelude::*;
 use regex_lite::Regex;
@@ -19,7 +20,6 @@ use tokio_util::io::ReaderStream;
 use tracing::debug;
 use tracing::trace;
 use tracing::warn;
-use uuid::Uuid;
 
 use crate::chat_completions::AggregateStreamExt;
 use crate::chat_completions::stream_chat_completions;
@@ -70,7 +70,7 @@ pub struct ModelClient {
     auth_manager: Option<Arc<AuthManager>>,
     client: reqwest::Client,
     provider: ModelProviderInfo,
-    session_id: Uuid,
+    conversation_id: ConversationId,
     effort: ReasoningEffortConfig,
     summary: ReasoningSummaryConfig,
 }
@@ -82,16 +82,16 @@ impl ModelClient {
         provider: ModelProviderInfo,
         effort: ReasoningEffortConfig,
         summary: ReasoningSummaryConfig,
-        session_id: Uuid,
+        conversation_id: ConversationId,
     ) -> Self {
-        let client = create_client(&config.responses_originator_header);
+        let client = create_client();
 
         Self {
             config,
             auth_manager,
             client,
             provider,
-            session_id,
+            conversation_id,
             effort,
             summary,
         }
@@ -197,7 +197,7 @@ impl ModelClient {
             store: false,
             stream: true,
             include,
-            prompt_cache_key: Some(self.session_id.to_string()),
+            prompt_cache_key: Some(self.conversation_id.to_string()),
             text,
         };
 
@@ -223,7 +223,9 @@ impl ModelClient {
 
             req_builder = req_builder
                 .header("OpenAI-Beta", "responses=experimental")
-                .header("session_id", self.session_id.to_string())
+                // Send session_id for compatibility.
+                .header("conversation_id", self.conversation_id.to_string())
+                .header("session_id", self.conversation_id.to_string())
                 .header(reqwest::header::ACCEPT, "text/event-stream")
                 .json(&payload);
 
@@ -398,9 +400,15 @@ impl From<ResponseCompletedUsage> for TokenUsage {
     fn from(val: ResponseCompletedUsage) -> Self {
         TokenUsage {
             input_tokens: val.input_tokens,
-            cached_input_tokens: val.input_tokens_details.map(|d| d.cached_tokens),
+            cached_input_tokens: val
+                .input_tokens_details
+                .map(|d| d.cached_tokens)
+                .unwrap_or(0),
             output_tokens: val.output_tokens,
-            reasoning_output_tokens: val.output_tokens_details.map(|d| d.reasoning_tokens),
+            reasoning_output_tokens: val
+                .output_tokens_details
+                .map(|d| d.reasoning_tokens)
+                .unwrap_or(0),
             total_tokens: val.total_tokens,
         }
     }

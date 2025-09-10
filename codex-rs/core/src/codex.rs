@@ -10,11 +10,13 @@ use std::time::Duration;
 
 use crate::AuthManager;
 use crate::event_mapping::map_response_item_to_event_messages;
+use crate::rollout::recorder::RolloutItem;
 use async_channel::Receiver;
 use async_channel::Sender;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
+use codex_protocol::mcp_protocol::ConversationId;
 use codex_protocol::protocol::ConversationHistoryResponseEvent;
 use codex_protocol::protocol::TaskStartedEvent;
 use codex_protocol::protocol::TurnAbortReason;
@@ -30,7 +32,6 @@ use tracing::error;
 use tracing::info;
 use tracing::trace;
 use tracing::warn;
-use uuid::Uuid;
 
 /// Review thread system prompt. Edit `core/src/review_prompt.md` to customize.
 const REVIEW_PROMPT: &str = include_str!("review_prompt.md");
@@ -103,9 +104,11 @@ use crate::protocol::SessionConfiguredEvent;
 use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
 use crate::protocol::TaskCompleteEvent;
+use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnDiffEvent;
 use crate::protocol::WebSearchBeginEvent;
 use crate::rollout::RolloutRecorder;
+use crate::rollout::RolloutRecorderParams;
 use crate::safety::SafetyCheck;
 use crate::safety::assess_command_safety;
 use crate::safety::assess_safety_for_untrusted_command;
@@ -152,7 +155,7 @@ pub struct Codex {
 /// unique session id.
 pub struct CodexSpawnOk {
     pub codex: Codex,
-    pub session_id: Uuid,
+    pub conversation_id: ConversationId,
 }
 
 pub(crate) const INITIAL_SUBMIT_ID: &str = "";
@@ -205,10 +208,7 @@ impl Codex {
             error!("Failed to create session: {e:#}");
             CodexErr::InternalAgentDied
         })?;
-        session
-            .record_initial_history(&turn_context, conversation_history)
-            .await;
-        let session_id = session.session_id;
+        let conversation_id = session.conversation_id;
 
         // This task will run until Op::Shutdown is received.
         tokio::spawn(submission_loop(
@@ -223,7 +223,10 @@ impl Codex {
             rx_event,
         };
 
-        Ok(CodexSpawnOk { codex, session_id })
+        Ok(CodexSpawnOk {
+            codex,
+            conversation_id,
+        })
     }
 
     /// Submit the `op` wrapped in a `Submission` with a unique ID.
@@ -265,6 +268,7 @@ struct State {
     pending_approvals: HashMap<String, oneshot::Sender<ReviewDecision>>,
     pending_input: Vec<ResponseInputItem>,
     history: ConversationHistory,
+    token_info: Option<TokenUsageInfo>,
     is_review_mode: bool,
 }
 
@@ -272,7 +276,7 @@ struct State {
 ///
 /// A session has at most 1 running task at a time, and can be interrupted by user input.
 pub(crate) struct Session {
-    session_id: Uuid,
+    conversation_id: ConversationId,
     tx_event: Sender<Event>,
 
     /// Manager for external MCP servers/tools.
@@ -362,7 +366,6 @@ impl Session {
         tx_event: Sender<Event>,
         initial_history: InitialHistory,
     ) -> anyhow::Result<(Arc<Self>, TurnContext)> {
-        let session_id = Uuid::new_v4();
         let ConfigureSession {
             provider,
             model,
@@ -380,6 +383,20 @@ impl Session {
             return Err(anyhow::anyhow!("cwd is not absolute: {cwd:?}"));
         }
 
+        let (conversation_id, rollout_params) = match &initial_history {
+            InitialHistory::New | InitialHistory::Forked(_) => {
+                let conversation_id = ConversationId::default();
+                (
+                    conversation_id,
+                    RolloutRecorderParams::new(conversation_id, user_instructions.clone()),
+                )
+            }
+            InitialHistory::Resumed(resumed_history) => (
+                resumed_history.conversation_id,
+                RolloutRecorderParams::resume(resumed_history.rollout_path.clone()),
+            ),
+        };
+
         // Error messages to dispatch after SessionConfigured is sent.
         let mut post_session_configured_error_events = Vec::<Event>::new();
 
@@ -389,10 +406,10 @@ impl Session {
         // - spin up MCP connection manager
         // - perform default shell discovery
         // - load history metadata
-        let rollout_fut = RolloutRecorder::new(&config, session_id, user_instructions.clone());
+        let rollout_fut = RolloutRecorder::new(&config, rollout_params);
 
         let mcp_fut = McpConnectionManager::new(config.mcp_servers.clone());
-        let default_shell_fut = shell::default_user_shell();
+        let default_shell_fut = shell::default_user_shell(conversation_id.0, &config.codex_home);
         let history_meta_fut = crate::message_history::history_metadata(&config);
 
         // Join all independent futures.
@@ -403,6 +420,7 @@ impl Session {
             error!("failed to initialize rollout recorder: {e:#}");
             anyhow::anyhow!("failed to initialize rollout recorder: {e:#}")
         })?;
+        let rollout_path = rollout_recorder.rollout_path.clone();
         // Create the mutable state for the Session.
         let state = State {
             history: ConversationHistory::new(),
@@ -435,7 +453,7 @@ impl Session {
             }
         }
 
-        // Now that `session_id` is final (may have been updated by resume),
+        // Now that the conversation id is final (may have been updated by resume),
         // construct the model client.
         let client = ModelClient::new(
             config.clone(),
@@ -443,7 +461,7 @@ impl Session {
             provider.clone(),
             model_reasoning_effort,
             model_reasoning_summary,
-            session_id,
+            conversation_id,
         );
         let turn_context = TurnContext {
             client,
@@ -465,8 +483,9 @@ impl Session {
             cwd,
             is_review_mode: false,
         };
+
         let sess = Arc::new(Session {
-            session_id,
+            conversation_id,
             tx_event: tx_event.clone(),
             mcp_connection_manager,
             session_manager: ExecSessionManager::default(),
@@ -480,26 +499,24 @@ impl Session {
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
         // If resuming, include converted initial messages in the payload so UIs can render them immediately.
-        let initial_messages = match &initial_history {
-            InitialHistory::New => None,
-            InitialHistory::Resumed(items) => Some(sess.build_initial_messages(items)),
-        };
+        let initial_messages = initial_history.get_event_msgs();
+        sess.record_initial_history(&turn_context, initial_history)
+            .await;
 
         let events = std::iter::once(Event {
             id: INITIAL_SUBMIT_ID.to_owned(),
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
-                session_id,
+                session_id: conversation_id,
                 model,
                 history_log_id,
                 history_entry_count,
                 initial_messages,
+                rollout_path,
             }),
         })
         .chain(post_session_configured_error_events.into_iter());
         for event in events {
-            if let Err(e) = tx_event.send(event).await {
-                error!("failed to send event: {e:?}");
-            }
+            sess.send_event(event).await;
         }
 
         Ok((sess, turn_context))
@@ -529,49 +546,33 @@ impl Session {
     ) {
         match conversation_history {
             InitialHistory::New => {
-                self.record_initial_history_new(turn_context).await;
+                // Build and record initial items (user instructions + environment context)
+                let items = self.build_initial_context(turn_context);
+                self.record_conversation_items(&items).await;
             }
-            InitialHistory::Resumed(items) => {
-                self.record_initial_history_resumed(items).await;
+            InitialHistory::Resumed(_) | InitialHistory::Forked(_) => {
+                let rollout_items = conversation_history.get_rollout_items();
+                let persist = matches!(conversation_history, InitialHistory::Forked(_));
+
+                // Always add response items to conversation history
+                let response_items = conversation_history.get_response_items();
+                if !response_items.is_empty() {
+                    self.record_into_history(&response_items);
+                }
+
+                // If persisting, persist all rollout items as-is (recorder filters)
+                if persist && !rollout_items.is_empty() {
+                    self.persist_rollout_items(&rollout_items).await;
+                }
             }
         }
     }
 
-    async fn record_initial_history_new(&self, turn_context: &TurnContext) {
-        // record the initial user instructions and environment context,
-        // regardless of whether we restored items.
-        // TODO: Those items shouldn't be "user messages" IMO. Maybe developer messages.
-        let mut conversation_items = Vec::<ResponseItem>::with_capacity(2);
-        if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
-            conversation_items.push(UserInstructions::new(user_instructions.to_string()).into());
-        }
-        conversation_items.push(ResponseItem::from(EnvironmentContext::new(
-            Some(turn_context.cwd.clone()),
-            Some(turn_context.approval_policy),
-            Some(turn_context.sandbox_policy.clone()),
-            Some(self.user_shell.clone()),
-        )));
-        self.record_conversation_items(&conversation_items).await;
-    }
-
-    async fn record_initial_history_resumed(&self, items: Vec<ResponseItem>) {
-        self.record_conversation_items(&items).await;
-    }
-
-    /// build the initial messages vector for SessionConfigured by converting
-    /// ResponseItems into EventMsg.
-    fn build_initial_messages(&self, items: &[ResponseItem]) -> Vec<EventMsg> {
-        items
-            .iter()
-            .flat_map(|item| {
-                map_response_item_to_event_messages(item, self.show_raw_agent_reasoning)
-            })
-            .collect()
-    }
-
-    /// Sends the given event to the client and swallows the send event, if
-    /// any, logging it as an error.
+    /// Persist the event to rollout and send it to clients.
     pub(crate) async fn send_event(&self, event: Event) {
+        // Persist the event into rollout (recorder filters as needed)
+        let rollout_items = vec![RolloutItem::EventMsg(event.msg.clone())];
+        self.persist_rollout_items(&rollout_items).await;
         if let Err(e) = self.tx_event.send(event).await {
             error!("failed to send tool call event: {e}");
         }
@@ -605,7 +606,7 @@ impl Session {
                 reason,
             }),
         };
-        let _ = self.tx_event.send(event).await;
+        self.send_event(event).await;
         rx_approve
     }
 
@@ -637,7 +638,7 @@ impl Session {
                 grant_root,
             }),
         };
-        let _ = self.tx_event.send(event).await;
+        self.send_event(event).await;
         rx_approve
     }
 
@@ -661,30 +662,76 @@ impl Session {
         state.approved_commands.insert(cmd);
     }
 
-    /// Records items to both the rollout and the chat completions/ZDR
-    /// transcript, if enabled.
+    /// Records input items: always append to conversation history and
+    /// persist these response items to rollout.
     async fn record_conversation_items(&self, items: &[ResponseItem]) {
-        debug!("Recording items for conversation: {items:?}");
-        self.record_state_snapshot(items).await;
-
-        self.state.lock_unchecked().history.record_items(items);
+        self.record_into_history(items);
+        self.persist_rollout_response_items(items).await;
     }
 
-    async fn record_state_snapshot(&self, items: &[ResponseItem]) {
-        let snapshot = { crate::rollout::SessionStateSnapshot {} };
+    /// Append ResponseItems to the in-memory conversation history only.
+    fn record_into_history(&self, items: &[ResponseItem]) {
+        self.state
+            .lock_unchecked()
+            .history
+            .record_items(items.iter());
+    }
 
+    async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {
+        let rollout_items: Vec<RolloutItem> = items
+            .iter()
+            .cloned()
+            .map(RolloutItem::ResponseItem)
+            .collect();
+        self.persist_rollout_items(&rollout_items).await;
+    }
+
+    fn build_initial_context(&self, turn_context: &TurnContext) -> Vec<ResponseItem> {
+        let mut items = Vec::<ResponseItem>::with_capacity(2);
+        if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
+            items.push(UserInstructions::new(user_instructions.to_string()).into());
+        }
+        items.push(ResponseItem::from(EnvironmentContext::new(
+            Some(turn_context.cwd.clone()),
+            Some(turn_context.approval_policy),
+            Some(turn_context.sandbox_policy.clone()),
+            Some(self.user_shell.clone()),
+        )));
+        items
+    }
+
+    async fn persist_rollout_items(&self, items: &[RolloutItem]) {
         let recorder = {
             let guard = self.rollout.lock_unchecked();
             guard.as_ref().cloned()
         };
+        if let Some(rec) = recorder
+            && let Err(e) = rec.record_items(items).await
+        {
+            error!("failed to record rollout items: {e:#}");
+        }
+    }
 
-        if let Some(rec) = recorder {
-            if let Err(e) = rec.record_state(snapshot).await {
-                error!("failed to record rollout state: {e:#}");
-            }
-            if let Err(e) = rec.record_items(items).await {
-                error!("failed to record rollout items: {e:#}");
-            }
+    /// Record a user input item to conversation history and also persist a
+    /// corresponding UserMessage EventMsg to rollout.
+    async fn record_input_and_rollout_usermsg(&self, response_input: &ResponseInputItem) {
+        let response_item: ResponseItem = response_input.clone().into();
+        // Add to conversation history and persist response item to rollout
+        self.record_conversation_items(std::slice::from_ref(&response_item))
+            .await;
+
+        // Derive user message events and persist only UserMessage to rollout
+        let msgs =
+            map_response_item_to_event_messages(&response_item, self.show_raw_agent_reasoning);
+        let user_msgs: Vec<RolloutItem> = msgs
+            .into_iter()
+            .filter_map(|m| match m {
+                EventMsg::UserMessage(ev) => Some(RolloutItem::EventMsg(EventMsg::UserMessage(ev))),
+                _ => None,
+            })
+            .collect();
+        if !user_msgs.is_empty() {
+            self.persist_rollout_items(&user_msgs).await;
         }
     }
 
@@ -727,7 +774,7 @@ impl Session {
             id: sub_id.to_string(),
             msg,
         };
-        let _ = self.tx_event.send(event).await;
+        self.send_event(event).await;
     }
 
     async fn on_exec_command_end(
@@ -774,7 +821,7 @@ impl Session {
             id: sub_id.to_string(),
             msg,
         };
-        let _ = self.tx_event.send(event).await;
+        self.send_event(event).await;
 
         // If this is an apply_patch, after we emit the end patch, emit a second event
         // with the full turn diff if there is one.
@@ -786,7 +833,7 @@ impl Session {
                     id: sub_id.into(),
                     msg,
                 };
-                let _ = self.tx_event.send(event).await;
+                self.send_event(event).await;
             }
         }
     }
@@ -852,7 +899,7 @@ impl Session {
                 message: message.into(),
             }),
         };
-        let _ = self.tx_event.send(event).await;
+        self.send_event(event).await;
     }
 
     async fn notify_stream_error(&self, sub_id: &str, message: impl Into<String>) {
@@ -862,7 +909,7 @@ impl Session {
                 message: message.into(),
             }),
         };
-        let _ = self.tx_event.send(event).await;
+        self.send_event(event).await;
     }
 
     /// Build the full turn input by concatenating the current conversation
@@ -1032,9 +1079,9 @@ impl AgentTask {
                 id: self.sub_id,
                 msg: EventMsg::TurnAborted(TurnAbortedEvent { reason }),
             };
-            let tx_event = self.sess.tx_event.clone();
+            let sess = self.sess.clone();
             tokio::spawn(async move {
-                tx_event.send(event).await.ok();
+                sess.send_event(event).await;
             });
         }
     }
@@ -1096,7 +1143,7 @@ async fn submission_loop(
                     provider,
                     effective_effort,
                     effective_summary,
-                    sess.session_id,
+                    sess.conversation_id,
                 );
 
                 let new_approval_policy = approval_policy.unwrap_or(prev.approval_policy);
@@ -1185,7 +1232,7 @@ async fn submission_loop(
                         provider,
                         effort,
                         summary,
-                        sess.session_id,
+                        sess.conversation_id,
                     );
 
                     let fresh_turn_context = TurnContext {
@@ -1229,7 +1276,7 @@ async fn submission_loop(
                 other => sess.notify_approval(&id, other),
             },
             Op::AddToHistory { text } => {
-                let id = sess.session_id;
+                let id = sess.conversation_id;
                 let config = config.clone();
                 tokio::spawn(async move {
                     if let Err(e) = crate::message_history::append_entry(&text, &id, &config).await
@@ -1241,7 +1288,7 @@ async fn submission_loop(
 
             Op::GetHistoryEntryRequest { offset, log_id } => {
                 let config = config.clone();
-                let tx_event = sess.tx_event.clone();
+                let sess_clone = sess.clone();
                 let sub_id = sub.id.clone();
 
                 tokio::spawn(async move {
@@ -1260,7 +1307,7 @@ async fn submission_loop(
                                 log_id,
                                 entry: entry_opt.map(|e| {
                                     codex_protocol::message_history::HistoryEntry {
-                                        session_id: e.session_id,
+                                        conversation_id: e.session_id,
                                         ts: e.ts,
                                         text: e.text,
                                     }
@@ -1269,13 +1316,10 @@ async fn submission_loop(
                         ),
                     };
 
-                    if let Err(e) = tx_event.send(event).await {
-                        warn!("failed to send GetHistoryEntryResponse event: {e}");
-                    }
+                    sess_clone.send_event(event).await;
                 });
             }
             Op::ListMcpTools => {
-                let tx_event = sess.tx_event.clone();
                 let sub_id = sub.id.clone();
 
                 // This is a cheap lookup from the connection manager's cache.
@@ -1286,12 +1330,9 @@ async fn submission_loop(
                         crate::protocol::McpListToolsResponseEvent { tools },
                     ),
                 };
-                if let Err(e) = tx_event.send(event).await {
-                    warn!("failed to send McpListToolsResponse event: {e}");
-                }
+                sess.send_event(event).await;
             }
             Op::ListCustomPrompts => {
-                let tx_event = sess.tx_event.clone();
                 let sub_id = sub.id.clone();
 
                 let custom_prompts: Vec<CustomPrompt> =
@@ -1307,9 +1348,7 @@ async fn submission_loop(
                         custom_prompts,
                     }),
                 };
-                if let Err(e) = tx_event.send(event).await {
-                    warn!("failed to send ListCustomPromptsResponse event: {e}");
-                }
+                sess.send_event(event).await;
             }
             Op::Compact => {
                 // Create a summarization request as user input
@@ -1345,34 +1384,27 @@ async fn submission_loop(
                             message: "Failed to shutdown rollout recorder".to_string(),
                         }),
                     };
-                    if let Err(e) = sess.tx_event.send(event).await {
-                        warn!("failed to send error message: {e:?}");
-                    }
+                    sess.send_event(event).await;
                 }
 
                 let event = Event {
                     id: sub.id.clone(),
                     msg: EventMsg::ShutdownComplete,
                 };
-                if let Err(e) = sess.tx_event.send(event).await {
-                    warn!("failed to send Shutdown event: {e}");
-                }
+                sess.send_event(event).await;
                 break;
             }
             Op::GetHistory => {
-                let tx_event = sess.tx_event.clone();
                 let sub_id = sub.id.clone();
 
                 let event = Event {
                     id: sub_id.clone(),
                     msg: EventMsg::ConversationHistory(ConversationHistoryResponseEvent {
-                        conversation_id: sess.session_id,
+                        conversation_id: sess.conversation_id,
                         entries: sess.state.lock_unchecked().history.contents(),
                     }),
                 };
-                if let Err(e) = tx_event.send(event).await {
-                    warn!("failed to send ConversationHistory event: {e}");
-                }
+                sess.send_event(event).await;
             }
             Op::Review { prompt } => {
                 spawn_review_thread(
@@ -1504,9 +1536,7 @@ async fn run_task(
             model_context_window: turn_context.client.get_model_context_window(),
         }),
     };
-    if sess.tx_event.send(event).await.is_err() {
-        return;
-    }
+    sess.send_event(event).await;
 
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
     // For review threads, keep an isolated in-memory history so the
@@ -1517,8 +1547,8 @@ async fn run_task(
     if is_review_mode {
         review_thread_history.push(initial_input_for_turn.clone().into());
     } else {
-        sess.record_conversation_items(&[initial_input_for_turn.clone().into()])
-            .await;
+        sess.record_input_and_rollout_usermsg(&initial_input_for_turn)
+        .await;
     }
 
     let mut last_agent_message: Option<String> = None;
@@ -1707,7 +1737,7 @@ async fn run_task(
                         message: e.to_string(),
                     }),
                 };
-                sess.tx_event.send(event).await.ok();
+                sess.send_event(event).await;
                 // let the user continue the conversation
                 break;
             }
@@ -1767,7 +1797,7 @@ async fn run_task(
         id: sub_id,
         msg: EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }),
     };
-    sess.tx_event.send(event).await.ok();
+    sess.send_event(event).await;
 }
 
 /// Parse the review output; when not valid JSON, build a structured
@@ -1983,15 +2013,22 @@ async fn try_run_turn(
                 response_id: _,
                 token_usage,
             } => {
-                if let Some(token_usage) = token_usage {
-                    sess.tx_event
-                        .send(Event {
-                            id: sub_id.to_string(),
-                            msg: EventMsg::TokenCount(token_usage),
-                        })
-                        .await
-                        .ok();
-                }
+                let info = {
+                    let mut st = sess.state.lock_unchecked();
+                    let info = TokenUsageInfo::new_or_append(
+                        &st.token_info,
+                        &token_usage,
+                        turn_context.client.get_model_context_window(),
+                    );
+                    st.token_info = info.clone();
+                    info
+                };
+                let _ = sess
+                    .send_event(Event {
+                        id: sub_id.to_string(),
+                        msg: EventMsg::TokenCount(crate::protocol::TokenCountEvent { info }),
+                    })
+                    .await;
 
                 let unified_diff = turn_diff_tracker.get_unified_diff();
                 if let Ok(Some(unified_diff)) = unified_diff {
@@ -2000,7 +2037,7 @@ async fn try_run_turn(
                         id: sub_id.to_string(),
                         msg,
                     };
-                    let _ = sess.tx_event.send(event).await;
+                    sess.send_event(event).await;
                 }
 
                 return Ok(output);
@@ -2013,7 +2050,7 @@ async fn try_run_turn(
                         id: sub_id.to_string(),
                         msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
                     };
-                    sess.tx_event.send(event).await.ok();
+                    sess.send_event(event).await.ok();
                 } else {
                     trace!("suppressing OutputTextDelta in review mode");
                 }
@@ -2023,14 +2060,14 @@ async fn try_run_turn(
                     id: sub_id.to_string(),
                     msg: EventMsg::AgentReasoningDelta(AgentReasoningDeltaEvent { delta }),
                 };
-                sess.tx_event.send(event).await.ok();
+                sess.send_event(event).await;
             }
             ResponseEvent::ReasoningSummaryPartAdded => {
                 let event = Event {
                     id: sub_id.to_string(),
                     msg: EventMsg::AgentReasoningSectionBreak(AgentReasoningSectionBreakEvent {}),
                 };
-                sess.tx_event.send(event).await.ok();
+                sess.send_event(event).await;
             }
             ResponseEvent::ReasoningContentDelta(delta) => {
                 if sess.show_raw_agent_reasoning {
@@ -2040,7 +2077,7 @@ async fn try_run_turn(
                             AgentReasoningRawContentDeltaEvent { delta },
                         ),
                     };
-                    sess.tx_event.send(event).await.ok();
+                    sess.send_event(event).await;
                 }
             }
         }
@@ -2061,9 +2098,7 @@ async fn run_compact_task(
             model_context_window,
         }),
     };
-    if sess.tx_event.send(start_event).await.is_err() {
-        return;
-    }
+    sess.send_event(start_event).await;
 
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
     let turn_input: Vec<ResponseItem> =
@@ -2249,7 +2284,7 @@ async fn handle_response_item(
                     id: sub_id.to_string(),
                     msg,
                 };
-                sess.tx_event.send(event).await.ok();
+                sess.send_event(event).await;
             }
             None
         }
@@ -2513,13 +2548,25 @@ pub struct ExecInvokeArgs<'a> {
     pub stdout_stream: Option<StdoutStream>,
 }
 
+fn should_translate_shell_command(
+    shell: &crate::shell::Shell,
+    shell_policy: &ShellEnvironmentPolicy,
+) -> bool {
+    matches!(shell, crate::shell::Shell::PowerShell(_))
+        || shell_policy.use_profile
+        || matches!(
+            shell,
+            crate::shell::Shell::Posix(shell) if shell.shell_snapshot.is_some()
+        )
+}
+
 fn maybe_translate_shell_command(
     params: ExecParams,
     sess: &Session,
     turn_context: &TurnContext,
 ) -> ExecParams {
-    let should_translate = matches!(sess.user_shell, crate::shell::Shell::PowerShell(_))
-        || turn_context.shell_environment_policy.use_profile;
+    let should_translate =
+        should_translate_shell_command(&sess.user_shell, &turn_context.shell_environment_policy);
 
     if should_translate
         && let Some(command) = sess
@@ -3071,13 +3118,21 @@ async fn drain_to_completed(
                 response_id: _,
                 token_usage,
             }) => {
-                // some providers don't return token usage, so we default
-                // TODO: consider approximate token usage
-                let token_usage = token_usage.unwrap_or_default();
+                let info = {
+                    let mut st = sess.state.lock_unchecked();
+                    let info = TokenUsageInfo::new_or_append(
+                        &st.token_info,
+                        &token_usage,
+                        turn_context.client.get_model_context_window(),
+                    );
+                    st.token_info = info.clone();
+                    info
+                };
+
                 sess.tx_event
                     .send(Event {
                         id: sub_id.to_string(),
-                        msg: EventMsg::TokenCount(token_usage),
+                        msg: EventMsg::TokenCount(crate::protocol::TokenCountEvent { info }),
                     })
                     .await
                     .ok();
@@ -3128,10 +3183,15 @@ fn convert_call_tool_result_to_function_call_output_payload(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config_types::ShellEnvironmentPolicyInherit;
     use mcp_types::ContentBlock;
     use mcp_types::TextContent;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use shell::ShellSnapshot;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::Arc;
     use std::time::Duration as StdDuration;
 
     fn text_block(s: &str) -> ContentBlock {
@@ -3140,6 +3200,48 @@ mod tests {
             text: s.to_string(),
             r#type: "text".to_string(),
         })
+    }
+
+    fn shell_policy_with_profile(use_profile: bool) -> ShellEnvironmentPolicy {
+        ShellEnvironmentPolicy {
+            inherit: ShellEnvironmentPolicyInherit::All,
+            ignore_default_excludes: false,
+            exclude: Vec::new(),
+            r#set: HashMap::new(),
+            include_only: Vec::new(),
+            use_profile,
+        }
+    }
+
+    fn zsh_shell(shell_snapshot: Option<Arc<ShellSnapshot>>) -> shell::Shell {
+        shell::Shell::Posix(shell::PosixShell {
+            shell_path: "/bin/zsh".to_string(),
+            rc_path: "/Users/example/.zshrc".to_string(),
+            shell_snapshot,
+        })
+    }
+
+    #[test]
+    fn translates_commands_when_shell_policy_requests_profile() {
+        let policy = shell_policy_with_profile(true);
+        let shell = zsh_shell(None);
+        assert!(should_translate_shell_command(&shell, &policy));
+    }
+
+    #[test]
+    fn translates_commands_for_zsh_with_snapshot() {
+        let policy = shell_policy_with_profile(false);
+        let shell = zsh_shell(Some(Arc::new(ShellSnapshot::new(PathBuf::from(
+            "/tmp/snapshot",
+        )))));
+        assert!(should_translate_shell_command(&shell, &policy));
+    }
+
+    #[test]
+    fn bypasses_translation_for_zsh_without_snapshot_or_profile() {
+        let policy = shell_policy_with_profile(false);
+        let shell = zsh_shell(None);
+        assert!(!should_translate_shell_command(&shell, &policy));
     }
 
     #[test]

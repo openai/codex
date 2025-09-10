@@ -19,13 +19,37 @@ use strum_macros::Display;
 use ts_rs::TS;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, Hash)]
 #[ts(type = "string")]
 pub struct ConversationId(pub Uuid);
+
+impl ConversationId {
+    pub fn new() -> Self {
+        Self(Uuid::new_v4())
+    }
+}
+
+impl Default for ConversationId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl Display for ConversationId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
+    }
+}
+
+impl From<Uuid> for ConversationId {
+    fn from(value: Uuid) -> Self {
+        Self(value)
+    }
+}
+
+impl From<ConversationId> for Uuid {
+    fn from(value: ConversationId) -> Self {
+        value.0
     }
 }
 
@@ -66,6 +90,11 @@ pub enum ClientRequest {
         #[serde(rename = "id")]
         request_id: RequestId,
         params: ResumeConversationParams,
+    },
+    ArchiveConversation {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: ArchiveConversationParams,
     },
     SendUserMessage {
         #[serde(rename = "id")]
@@ -116,6 +145,10 @@ pub enum ClientRequest {
         params: GetAuthStatusParams,
     },
     GetUserSavedConfig {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+    },
+    GetUserAgent {
         #[serde(rename = "id")]
         request_id: RequestId,
     },
@@ -175,9 +208,10 @@ pub struct NewConversationParams {
 pub struct NewConversationResponse {
     pub conversation_id: ConversationId,
     pub model: String,
+    pub rollout_path: PathBuf,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ResumeConversationResponse {
     pub conversation_id: ConversationId,
@@ -200,6 +234,7 @@ pub struct ListConversationsParams {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ConversationSummary {
+    pub conversation_id: ConversationId,
     pub path: PathBuf,
     pub preview: String,
     /// RFC3339 timestamp string for the session start, if available.
@@ -232,6 +267,18 @@ pub struct ResumeConversationParams {
 pub struct AddConversationSubscriptionResponse {
     pub subscription_id: Uuid,
 }
+
+/// The [`ConversationId`] must match the `rollout_path`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveConversationParams {
+    pub conversation_id: ConversationId,
+    pub rollout_path: PathBuf,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ArchiveConversationResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
@@ -319,6 +366,12 @@ pub struct GetAuthStatusResponse {
     pub preferred_auth_method: AuthMode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_token: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct GetUserAgentResponse {
+    pub user_agent: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
@@ -602,5 +655,11 @@ mod tests {
             }),
             serde_json::to_value(&request).unwrap(),
         );
+    }
+
+    #[test]
+    fn test_conversation_id_default_is_not_zeroes() {
+        let id = ConversationId::default();
+        assert_ne!(id.0, Uuid::nil());
     }
 }

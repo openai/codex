@@ -2,13 +2,11 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use chrono::DateTime;
-use chrono::TimeZone;
 use chrono::Utc;
 use codex_core::ConversationItem;
 use codex_core::ConversationsPage;
 use codex_core::Cursor;
 use codex_core::RolloutRecorder;
-use codex_core::protocol::InputMessageKind;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -24,6 +22,10 @@ use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::InputMessageKind;
+use codex_protocol::protocol::USER_MESSAGE_BEGIN;
 
 const PAGE_SIZE: usize = 25;
 
@@ -252,19 +254,10 @@ impl PickerState {
 }
 
 fn to_rows(page: ConversationsPage) -> Vec<Row> {
-    use std::cmp::Reverse;
-    let mut rows: Vec<Row> = page
-        .items
-        .into_iter()
-        .filter_map(|it| head_to_row(&it))
-        .collect();
-    // Ensure newest-first ordering within the page by timestamp when available.
-    let epoch = Utc.timestamp_opt(0, 0).single().unwrap_or_else(Utc::now);
-    rows.sort_by_key(|r| Reverse(r.ts.unwrap_or(epoch)));
-    rows
+    page.items.into_iter().map(|it| head_to_row(&it)).collect()
 }
 
-fn head_to_row(item: &ConversationItem) -> Option<Row> {
+fn head_to_row(item: &ConversationItem) -> Row {
     let mut ts: Option<DateTime<Utc>> = None;
     if let Some(first) = item.head.first()
         && let Some(t) = first.get("timestamp").and_then(|v| v.as_str())
@@ -273,49 +266,54 @@ fn head_to_row(item: &ConversationItem) -> Option<Row> {
         ts = Some(parsed.with_timezone(&Utc));
     }
 
-    let preview = find_first_user_text(&item.head)?;
-    let preview = preview.trim().to_string();
-    if preview.is_empty() {
-        return None;
-    }
-    Some(Row {
+    let preview = preview_from_head(&item.head)
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| String::from("(no message yet)"));
+
+    Row {
         path: item.path.clone(),
         preview,
         ts,
-    })
+    }
 }
 
-/// Return the first plain user text from the JSONL `head` of a rollout.
-///
-/// Strategy: scan for the first `{ type: "message", role: "user" }` entry and
-/// then return the first `content` item where `{ type: "input_text" }` that is
-/// classified as `InputMessageKind::Plain` (i.e., not wrapped in
-/// `<user_instructions>` or `<environment_context>` tags).
-fn find_first_user_text(head: &[serde_json::Value]) -> Option<String> {
-    for v in head.iter() {
-        let t = v.get("type").and_then(|x| x.as_str()).unwrap_or("");
-        if t != "message" {
-            continue;
-        }
-        if v.get("role").and_then(|x| x.as_str()) != Some("user") {
-            continue;
-        }
-        if let Some(arr) = v.get("content").and_then(|c| c.as_array()) {
-            for c in arr.iter() {
-                if let (Some("input_text"), Some(txt)) =
-                    (c.get("type").and_then(|t| t.as_str()), c.get("text"))
-                    && let Some(s) = txt.as_str()
-                {
-                    // Skip XML-wrapped user_instructions/environment_context blocks and
-                    // return the first plain user text we find.
-                    if matches!(InputMessageKind::from(("user", s)), InputMessageKind::Plain) {
-                        return Some(s.to_string());
-                    }
+fn preview_from_head(head: &[serde_json::Value]) -> Option<String> {
+    head.iter()
+        .filter_map(|value| serde_json::from_value::<ResponseItem>(value.clone()).ok())
+        .find_map(|item| match item {
+            ResponseItem::Message { content, .. } => {
+                // Find the actual user message (as opposed to user instructions or ide context)
+                let preview = content
+                    .into_iter()
+                    .filter_map(|content| match content {
+                        ContentItem::InputText { text }
+                            if matches!(
+                                InputMessageKind::from(("user", text.as_str())),
+                                InputMessageKind::Plain
+                            ) =>
+                        {
+                            // Strip ide context.
+                            let text = match text.find(USER_MESSAGE_BEGIN) {
+                                Some(idx) => {
+                                    text[idx + USER_MESSAGE_BEGIN.len()..].trim().to_string()
+                                }
+                                None => text,
+                            };
+                            Some(text)
+                        }
+                        _ => None,
+                    })
+                    .collect::<String>();
+
+                if preview.is_empty() {
+                    None
+                } else {
+                    Some(preview)
                 }
             }
-        }
-    }
-    None
+            _ => None,
+        })
 }
 
 fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
@@ -452,35 +450,30 @@ mod tests {
     }
 
     #[test]
-    fn skips_user_instructions_and_env_context() {
+    fn preview_uses_first_message_input_text() {
         let head = vec![
             json!({ "timestamp": "2025-01-01T00:00:00Z" }),
             json!({
                 "type": "message",
                 "role": "user",
                 "content": [
-                    { "type": "input_text", "text": "<user_instructions>hi</user_instructions>" }
+                    { "type": "input_text", "text": "<user_instructions>hi</user_instructions>" },
+                    { "type": "input_text", "text": "real question" },
+                    { "type": "input_image", "image_url": "ignored" }
                 ]
             }),
             json!({
                 "type": "message",
                 "role": "user",
-                "content": [
-                    { "type": "input_text", "text": "<environment_context>cwd</environment_context>" }
-                ]
-            }),
-            json!({
-                "type": "message",
-                "role": "user",
-                "content": [ { "type": "input_text", "text": "real question" } ]
+                "content": [ { "type": "input_text", "text": "later text" } ]
             }),
         ];
-        let first = find_first_user_text(&head);
-        assert_eq!(first.as_deref(), Some("real question"));
+        let preview = preview_from_head(&head);
+        assert_eq!(preview.as_deref(), Some("real question"));
     }
 
     #[test]
-    fn to_rows_sorts_descending_by_timestamp() {
+    fn to_rows_preserves_backend_order() {
         // Construct two items with different timestamps and real user text.
         let a = ConversationItem {
             path: PathBuf::from("/tmp/a.jsonl"),
@@ -497,8 +490,8 @@ mod tests {
             reached_scan_cap: false,
         });
         assert_eq!(rows.len(), 2);
-        // Expect the newer timestamp (B) first
-        assert!(rows[0].preview.contains('B'));
-        assert!(rows[1].preview.contains('A'));
+        // Preserve the given order; backend already provides newest-first
+        assert!(rows[0].preview.contains('A'));
+        assert!(rows[1].preview.contains('B'));
     }
 }
