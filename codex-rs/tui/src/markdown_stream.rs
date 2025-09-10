@@ -40,6 +40,7 @@ impl MarkdownStreamCollector {
     }
 
     pub fn push_delta(&mut self, delta: &str) {
+        tracing::trace!("push_delta: {delta:?}");
         self.buffer.push_str(delta);
     }
 
@@ -86,7 +87,6 @@ impl MarkdownStreamCollector {
         if !source.ends_with('\n') {
             source.push('\n');
         }
-        // Debug log the raw buffer used for final render (optional with RUST_LOG).
         tracing::debug!(
             raw_len = raw_buffer.len(),
             source_len = source.len(),
@@ -94,6 +94,7 @@ impl MarkdownStreamCollector {
             raw_buffer.len(),
             source.len()
         );
+        tracing::trace!("markdown finalize (raw source):\n---\n{source}\n---");
 
         let mut rendered: Vec<Line<'static>> = Vec::new();
         markdown::append_markdown(&source, &mut rendered, config);
