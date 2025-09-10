@@ -149,7 +149,7 @@ pub enum Op {
 
     /// Request the full in-memory conversation transcript for the current session.
     /// Reply is delivered via `EventMsg::ConversationHistory`.
-    GetHistory,
+    GetPath,
 
     /// Request the list of MCP tools available across all configured servers.
     /// Reply is delivered via `EventMsg::McpListToolsResponse`.
@@ -499,7 +499,7 @@ pub enum EventMsg {
     /// Notification that the agent is shutting down.
     ShutdownComplete,
 
-    ConversationHistory(ConversationPathResponseEvent),
+    ConversationPath(ConversationPathResponseEvent),
 }
 
 // Individual event payload types matching each `EventMsg` variant.

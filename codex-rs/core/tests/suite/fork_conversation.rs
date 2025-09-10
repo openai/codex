@@ -76,11 +76,11 @@ async fn fork_conversation_twice_drops_to_first_message() {
     }
 
     // Request history from the base conversation to obtain rollout path.
-    codex.submit(Op::GetHistory).await.unwrap();
+    codex.submit(Op::GetPath).await.unwrap();
     let base_history =
-        wait_for_event(&codex, |ev| matches!(ev, EventMsg::ConversationHistory(_))).await;
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::ConversationPath(_))).await;
     let base_path = match &base_history {
-        EventMsg::ConversationHistory(ConversationPathResponseEvent { path, .. }) => path.clone(),
+        EventMsg::ConversationPath(ConversationPathResponseEvent { path, .. }) => path.clone(),
         _ => panic!("expected ConversationHistory event"),
     };
 
@@ -144,13 +144,13 @@ async fn fork_conversation_twice_drops_to_first_message() {
         .await
         .expect("fork 1");
 
-    codex_fork1.submit(Op::GetHistory).await.unwrap();
+    codex_fork1.submit(Op::GetPath).await.unwrap();
     let fork1_history = wait_for_event(&codex_fork1, |ev| {
-        matches!(ev, EventMsg::ConversationHistory(_))
+        matches!(ev, EventMsg::ConversationPath(_))
     })
     .await;
     let fork1_path = match &fork1_history {
-        EventMsg::ConversationHistory(ConversationPathResponseEvent { path, .. }) => path.clone(),
+        EventMsg::ConversationPath(ConversationPathResponseEvent { path, .. }) => path.clone(),
         _ => panic!("expected ConversationHistory event after first fork"),
     };
 
@@ -170,13 +170,13 @@ async fn fork_conversation_twice_drops_to_first_message() {
         .await
         .expect("fork 2");
 
-    codex_fork2.submit(Op::GetHistory).await.unwrap();
+    codex_fork2.submit(Op::GetPath).await.unwrap();
     let fork2_history = wait_for_event(&codex_fork2, |ev| {
-        matches!(ev, EventMsg::ConversationHistory(_))
+        matches!(ev, EventMsg::ConversationPath(_))
     })
     .await;
     let fork2_path = match &fork2_history {
-        EventMsg::ConversationHistory(ConversationPathResponseEvent { path, .. }) => path.clone(),
+        EventMsg::ConversationPath(ConversationPathResponseEvent { path, .. }) => path.clone(),
         _ => panic!("expected ConversationHistory event after second fork"),
     };
     // GetHistory on fork2 flushed; the file is ready.

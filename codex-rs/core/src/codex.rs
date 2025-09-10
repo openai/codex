@@ -1397,7 +1397,7 @@ async fn submission_loop(
                 sess.send_event(event).await;
                 break;
             }
-            Op::GetHistory => {
+            Op::GetPath => {
                 let sub_id = sub.id.clone();
                 // Flush rollout writes before returning the path so readers observe a consistent file.
                 let (path, rec_opt) = {
@@ -1410,14 +1410,14 @@ async fn submission_loop(
                         }
                     }
                 };
-                if let Some(rec) = rec_opt {
-                    if let Err(e) = rec.flush().await {
-                        warn!("failed to flush rollout recorder before GetHistory: {e}");
-                    }
+                if let Some(rec) = rec_opt
+                    && let Err(e) = rec.flush().await
+                {
+                    warn!("failed to flush rollout recorder before GetHistory: {e}");
                 }
                 let event = Event {
                     id: sub_id.clone(),
-                    msg: EventMsg::ConversationHistory(ConversationPathResponseEvent {
+                    msg: EventMsg::ConversationPath(ConversationPathResponseEvent {
                         conversation_id: sess.conversation_id,
                         path,
                     }),

@@ -100,7 +100,7 @@ impl App {
     ) {
         self.backtrack.pending = Some((base_id, drop_last_messages, prefill));
         self.app_event_tx.send(crate::app_event::AppEvent::CodexOp(
-            codex_core::protocol::Op::GetHistory,
+            codex_core::protocol::Op::GetPath,
         ));
     }
 
