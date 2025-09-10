@@ -1,12 +1,5 @@
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::Arc;
-
 use crate::AuthManager;
 use crate::CodexAuth;
-use codex_protocol::mcp_protocol::ConversationId;
-use tokio::sync::RwLock;
-
 use crate::codex::Codex;
 use crate::codex::CodexSpawnOk;
 use crate::codex::INITIAL_SUBMIT_ID;
@@ -18,13 +11,14 @@ use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::SessionConfiguredEvent;
 use crate::rollout::RolloutRecorder;
+use codex_protocol::mcp_protocol::ConversationId;
 use codex_protocol::models::ResponseItem;
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum InitialHistory {
-    New,
-    Resumed(Vec<ResponseItem>),
-}
+use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::RolloutItem;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 /// Represents a newly created Codex conversation, including the first event
 /// (which is [`EventMsg::SessionConfigured`]).
@@ -77,7 +71,7 @@ impl ConversationManager {
             let CodexSpawnOk {
                 codex,
                 conversation_id,
-            } = { Codex::spawn(config, auth_manager, InitialHistory::New).await? };
+            } = Codex::spawn(config, auth_manager, InitialHistory::New).await?;
             self.finalize_spawn(codex, conversation_id).await
         }
     }
@@ -139,8 +133,15 @@ impl ConversationManager {
         self.finalize_spawn(codex, conversation_id).await
     }
 
-    pub async fn remove_conversation(&self, conversation_id: ConversationId) {
-        self.conversations.write().await.remove(&conversation_id);
+    /// Removes the conversation from the manager's internal map, though the
+    /// conversation is stored as `Arc<CodexConversation>`, it is possible that
+    /// other references to it exist elsewhere. Returns the conversation if the
+    /// conversation was found and removed.
+    pub async fn remove_conversation(
+        &self,
+        conversation_id: &ConversationId,
+    ) -> Option<Arc<CodexConversation>> {
+        self.conversations.write().await.remove(conversation_id)
     }
 
     /// Fork an existing conversation by dropping the last `drop_last_messages`
@@ -172,7 +173,8 @@ impl ConversationManager {
 /// and all items that follow them.
 fn truncate_after_dropping_last_messages(items: Vec<ResponseItem>, n: usize) -> InitialHistory {
     if n == 0 {
-        return InitialHistory::Resumed(items);
+        let rolled: Vec<RolloutItem> = items.into_iter().map(RolloutItem::ResponseItem).collect();
+        return InitialHistory::Forked(rolled);
     }
 
     // Walk backwards counting only `user` Message items, find cut index.
@@ -194,7 +196,12 @@ fn truncate_after_dropping_last_messages(items: Vec<ResponseItem>, n: usize) -> 
         // No prefix remains after dropping; start a new conversation.
         InitialHistory::New
     } else {
-        InitialHistory::Resumed(items.into_iter().take(cut_index).collect())
+        let rolled: Vec<RolloutItem> = items
+            .into_iter()
+            .take(cut_index)
+            .map(RolloutItem::ResponseItem)
+            .collect();
+        InitialHistory::Forked(rolled)
     }
 }
 
@@ -250,12 +257,18 @@ mod tests {
         ];
 
         let truncated = truncate_after_dropping_last_messages(items.clone(), 1);
+        let got_items = truncated.get_rollout_items();
+        let expected_items = vec![
+            RolloutItem::ResponseItem(items[0].clone()),
+            RolloutItem::ResponseItem(items[1].clone()),
+            RolloutItem::ResponseItem(items[2].clone()),
+        ];
         assert_eq!(
-            truncated,
-            InitialHistory::Resumed(vec![items[0].clone(), items[1].clone(), items[2].clone(),])
+            serde_json::to_value(&got_items).unwrap(),
+            serde_json::to_value(&expected_items).unwrap()
         );
 
         let truncated2 = truncate_after_dropping_last_messages(items, 2);
-        assert_eq!(truncated2, InitialHistory::New);
+        assert!(matches!(truncated2, InitialHistory::New));
     }
 }

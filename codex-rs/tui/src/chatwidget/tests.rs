@@ -35,6 +35,7 @@ use std::fs::File;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::path::PathBuf;
+use tempfile::NamedTempFile;
 use tokio::sync::mpsc::unbounded_channel;
 
 fn test_config() -> Config {
@@ -133,7 +134,7 @@ fn resumed_initial_messages_render_history() {
     let (mut chat, mut rx, _ops) = make_chatwidget_manual();
 
     let conversation_id = ConversationId::new();
-
+    let rollout_file = NamedTempFile::new().unwrap();
     let configured = codex_core::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         model: "test-model".to_string(),
@@ -143,11 +144,13 @@ fn resumed_initial_messages_render_history() {
             EventMsg::UserMessage(UserMessageEvent {
                 message: "hello from user".to_string(),
                 kind: Some(InputMessageKind::Plain),
+                images: None,
             }),
             EventMsg::AgentMessage(AgentMessageEvent {
                 message: "assistant reply".to_string(),
             }),
         ]),
+        rollout_path: rollout_file.path().to_path_buf(),
     };
 
     chat.handle_codex_event(Event {
@@ -177,6 +180,10 @@ fn resumed_initial_messages_render_history() {
     );
 }
 
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "system configuration APIs are blocked under macOS seatbelt"
+)]
 #[tokio::test(flavor = "current_thread")]
 async fn helpers_are_available_and_do_not_panic() {
     let (tx_raw, _rx) = unbounded_channel::<AppEvent>();

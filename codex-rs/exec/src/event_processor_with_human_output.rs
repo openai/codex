@@ -26,6 +26,7 @@ use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnDiffEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
+use codex_protocol::num_format::format_with_separators;
 use owo_colors::OwoColorize;
 use owo_colors::Style;
 use shlex::try_join;
@@ -194,7 +195,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     ts_println!(
                         self,
                         "tokens used: {}",
-                        usage_info.total_token_usage.blended_total()
+                        format_with_separators(usage_info.total_token_usage.blended_total())
                     );
                 }
             }
@@ -522,6 +523,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     history_log_id: _,
                     history_entry_count: _,
                     initial_messages: _,
+                    rollout_path: _,
                 } = session_configured_event;
 
                 ts_println!(

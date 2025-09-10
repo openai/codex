@@ -17,7 +17,6 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 tempfile = "3"
-thiserror = "2.0.16"
 tiny_http = "0.12"
 tokio = { version = "1", features = [
     "io-std",
@@ -31,5 +30,4 @@ urlencoding = "2.1"
 webbrowser = "1.0"
 
 [dev-dependencies]
-pretty_assertions = "1.4.1"
 tempfile = "3"
