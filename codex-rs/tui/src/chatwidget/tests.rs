@@ -1756,3 +1756,123 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
     let visual = vt_lines.join("\n");
     assert_snapshot!(visual);
 }
+
+// E2E vt100 snapshot for complex markdown with indented and nested fenced code blocks
+#[test]
+fn chatwidget_markdown_code_blocks_vt100_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    // Simulate a final agent message via streaming deltas instead of a single message
+
+    chat.handle_codex_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::TaskStarted(TaskStartedEvent {
+            model_context_window: None,
+        }),
+    });
+    // Build a vt100 visual from the history insertions only (no UI overlay)
+    let width: u16 = 80;
+    let height: u16 = 50;
+    let backend = ratatui::backend::TestBackend::new(width, height);
+    let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+    // Place viewport at the last line so that history lines insert above it
+    term.set_viewport_area(Rect::new(0, height - 1, width, 1));
+
+    let mut ansi: Vec<u8> = Vec::new();
+
+    // Simulate streaming via AgentMessageDelta in 2-character chunks (no final AgentMessage).
+    let source: &str = r#"
+
+    -- Indented code block (4 spaces)
+    SELECT *
+    FROM "users"
+    WHERE "email" LIKE '%@example.com';
+
+````markdown
+```sh
+printf 'fenced within fenced\n'
+```
+````
+
+```jsonc
+{
+  // comment allowed in jsonc
+  "path": "C:\\Program Files\\App",
+  "regex": "^foo.*(bar)?$"
+}
+```
+"#;
+
+    let mut it = source.chars();
+    loop {
+        let mut delta = String::new();
+        match it.next() {
+            Some(c) => delta.push(c),
+            None => break,
+        }
+        if let Some(c2) = it.next() {
+            delta.push(c2);
+        }
+
+        chat.handle_codex_event(Event {
+            id: "t1".into(),
+            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
+        });
+        // Drive commit ticks and drain emitted history lines into the vt100 buffer.
+        loop {
+            chat.on_commit_tick();
+            let mut inserted_any = false;
+            while let Ok(app_ev) = rx.try_recv() {
+                if let AppEvent::InsertHistoryCell(cell) = app_ev {
+                    let lines = cell.display_lines(width);
+                    crate::insert_history::insert_history_lines_to_writer(
+                        &mut term, &mut ansi, lines,
+                    );
+                    inserted_any = true;
+                }
+            }
+            if !inserted_any {
+                break;
+            }
+        }
+    }
+
+    // Finalize the stream without sending a final AgentMessage, to flush any tail.
+    chat.handle_codex_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::TaskComplete(TaskCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+    for lines in drain_insert_history(&mut rx) {
+        crate::insert_history::insert_history_lines_to_writer(&mut term, &mut ansi, lines);
+    }
+
+    let mut parser = vt100::Parser::new(height, width, 0);
+    parser.process(&ansi);
+
+    let mut vt_lines: Vec<String> = (0..height)
+        .map(|row| {
+            let mut s = String::with_capacity(width as usize);
+            for col in 0..width {
+                if let Some(cell) = parser.screen().cell(row, col) {
+                    if let Some(ch) = cell.contents().chars().next() {
+                        s.push(ch);
+                    } else {
+                        s.push(' ');
+                    }
+                } else {
+                    s.push(' ');
+                }
+            }
+            s.trim_end().to_string()
+        })
+        .collect();
+
+    // Compact trailing blank rows for a stable snapshot
+    while matches!(vt_lines.last(), Some(l) if l.trim().is_empty()) {
+        vt_lines.pop();
+    }
+    let visual = vt_lines.join("\n");
+    assert_snapshot!(visual);
+}
