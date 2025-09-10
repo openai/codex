@@ -173,7 +173,7 @@ impl ConversationManager {
 /// and all items that follow them.
 fn truncate_after_dropping_last_messages(history: InitialHistory, n: usize) -> InitialHistory {
     if n == 0 {
-        return history;
+        return InitialHistory::Forked(history.get_rollout_items());
     }
 
     // Work directly on rollout items, and cut the vector at the nth-from-last user message input.
