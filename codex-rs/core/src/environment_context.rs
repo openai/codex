@@ -26,6 +26,7 @@ pub(crate) struct EnvironmentContext {
     pub approval_policy: Option<AskForApproval>,
     pub sandbox_mode: Option<SandboxMode>,
     pub network_access: Option<NetworkAccess>,
+    pub writable_roots: Option<Vec<PathBuf>>,
     pub shell: Option<Shell>,
 }
 
@@ -57,6 +58,16 @@ impl EnvironmentContext {
                 }
                 None => None,
             },
+            writable_roots: match sandbox_policy {
+                Some(SandboxPolicy::WorkspaceWrite { writable_roots, .. }) => {
+                    if writable_roots.is_empty() {
+                        None
+                    } else {
+                        Some(writable_roots.clone())
+                    }
+                }
+                _ => None,
+            },
             shell,
         }
     }
@@ -72,6 +83,7 @@ impl EnvironmentContext {
     ///   <cwd>...</cwd>
     ///   <approval_policy>...</approval_policy>
     ///   <sandbox_mode>...</sandbox_mode>
+    ///   <writable_roots>...</writable_roots>
     ///   <network_access>...</network_access>
     ///   <shell>...</shell>
     /// </environment_context>
@@ -94,6 +106,16 @@ impl EnvironmentContext {
                 "  <network_access>{network_access}</network_access>"
             ));
         }
+        if let Some(writable_roots) = self.writable_roots {
+            lines.push("  <writable_roots>".to_string());
+            for writable_root in writable_roots {
+                lines.push(format!(
+                    "    <root>{}</root>",
+                    writable_root.to_string_lossy()
+                ));
+            }
+            lines.push("  </writable_roots>".to_string());
+        }
         if let Some(shell) = self.shell
             && let Some(shell_name) = shell.name()
         {
@@ -113,5 +135,79 @@ impl From<EnvironmentContext> for ResponseItem {
                 text: ec.serialize_to_xml(),
             }],
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+
+    fn workspace_write_policy(writable_roots: Vec<&str>, network_access: bool) -> SandboxPolicy {
+        SandboxPolicy::WorkspaceWrite {
+            writable_roots: writable_roots.into_iter().map(PathBuf::from).collect(),
+            network_access,
+            exclude_tmpdir_env_var: false,
+            exclude_slash_tmp: false,
+        }
+    }
+
+    #[test]
+    fn serialize_workspace_write_environment_context() {
+        let context = EnvironmentContext::new(
+            Some(PathBuf::from("/repo")),
+            Some(AskForApproval::OnRequest),
+            Some(workspace_write_policy(vec!["/repo", "/tmp"], false)),
+            None,
+        );
+
+        let expected = r#"<environment_context>
+  <cwd>/repo</cwd>
+  <approval_policy>on-request</approval_policy>
+  <sandbox_mode>workspace-write</sandbox_mode>
+  <network_access>restricted</network_access>
+  <writable_roots>
+    <root>/repo</root>
+    <root>/tmp</root>
+  </writable_roots>
+</environment_context>"#;
+
+        assert_eq!(context.serialize_to_xml(), expected);
+    }
+
+    #[test]
+    fn serialize_read_only_environment_context() {
+        let context = EnvironmentContext::new(
+            None,
+            Some(AskForApproval::Never),
+            Some(SandboxPolicy::ReadOnly),
+            None,
+        );
+
+        let expected = r#"<environment_context>
+  <approval_policy>never</approval_policy>
+  <sandbox_mode>read-only</sandbox_mode>
+  <network_access>restricted</network_access>
+</environment_context>"#;
+
+        assert_eq!(context.serialize_to_xml(), expected);
+    }
+
+    #[test]
+    fn serialize_full_access_environment_context() {
+        let context = EnvironmentContext::new(
+            None,
+            Some(AskForApproval::OnFailure),
+            Some(SandboxPolicy::DangerFullAccess),
+            None,
+        );
+
+        let expected = r#"<environment_context>
+  <approval_policy>on-failure</approval_policy>
+  <sandbox_mode>danger-full-access</sandbox_mode>
+  <network_access>enabled</network_access>
+</environment_context>"#;
+
+        assert_eq!(context.serialize_to_xml(), expected);
     }
 }
