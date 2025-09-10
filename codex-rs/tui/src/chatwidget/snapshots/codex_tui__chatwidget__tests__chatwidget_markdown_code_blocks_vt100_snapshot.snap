@@ -1,0 +1,26 @@
+---
+source: tui/src/chatwidget/tests.rs
+assertion_line: 1876
+expression: visual
+---
+> ```
+  -- Indented code block (4 spaces)
+  ```
+  FROM "users"
+  ```
+  ```
+
+  ```markdown
+  ```sh
+  ```
+  ```
+  ```
+
+  ```jsonc
+  {
+    // comment allowed in jsonc
+    "path": "C:\\Program Files\\App",
+    "regex": "^foo.*(bar)?$"
+  }
+  ```
+

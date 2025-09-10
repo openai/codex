@@ -112,7 +112,13 @@ where
             Event::Code(code) => self.code(code),
             Event::SoftBreak => self.soft_break(),
             Event::HardBreak => self.hard_break(),
-            Event::Rule => self.hard_break(),
+            Event::Rule => {
+                if !self.text.lines.is_empty() {
+                    self.push_blank_line();
+                }
+                self.push_line(Line::from("———"));
+                self.needs_newline = true;
+            }
             Event::Html(html) => self.html(html),
             Event::InlineHtml(html) => self.html(html),
             Event::FootnoteReference(_) => {}

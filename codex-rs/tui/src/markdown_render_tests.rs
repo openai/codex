@@ -419,6 +419,51 @@ fn blockquote_with_multiline_code_block() {
 }
 
 #[test]
+fn nested_blockquote_with_inline_and_fenced_code() {
+    /*
+    let md = \"> Nested quote with code:\n\
+> > Inner quote and `inline code`\n\
+> >\n\
+> > ```\n\
+> > # fenced code inside a quote\n\
+> > echo \"hello from a quote\"\n\
+> > ```\n";
+    */
+    let md = r#"> Nested quote with code:
+> > Inner quote and `inline code`
+> >
+> > ```
+> > # fenced code inside a quote
+> > echo "hello from a quote"
+> > ```
+"#;
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|l| {
+            l.spans
+                .iter()
+                .map(|s| s.content.clone())
+                .collect::<String>()
+        })
+        .collect();
+    assert_eq!(
+        lines,
+        vec![
+            "> Nested quote with code:".to_string(),
+            "> ".to_string(),
+            "> > Inner quote and inline code".to_string(),
+            "> > ".to_string(),
+            "> > ```".to_string(),
+            "> > # fenced code inside a quote".to_string(),
+            "> > echo \"hello from a quote\"".to_string(),
+            "> > ```".to_string(),
+        ]
+    );
+}
+
+#[test]
 fn list_unordered_single() {
     let text = render_markdown_text("- List item 1\n");
     let expected = Text::from_iter([Line::from_iter(["- ", "List item 1"])]);
@@ -636,6 +681,76 @@ fn code_block_multiple_lines_root() {
         Line::from("```"),
     ]);
     assert_eq!(text, expected);
+}
+
+#[test]
+fn code_block_indented() {
+    let md = "    function greet() {\n      console.log(\"Hi\");\n    }\n";
+    let text = render_markdown_text(md);
+    let expected = Text::from_iter([
+        Line::from("```"),
+        Line::from("function greet() {"),
+        Line::from("  console.log(\"Hi\");"),
+        Line::from("}"),
+        Line::from("```"),
+    ]);
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn horizontal_rule_renders_em_dashes() {
+    let md = "Before\n\n---\n\nAfter\n";
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|l| {
+            l.spans
+                .iter()
+                .map(|s| s.content.clone())
+                .collect::<String>()
+        })
+        .collect();
+    assert_eq!(lines, vec!["Before", "", "———", "", "After"]);
+}
+
+#[test]
+fn code_block_with_inner_triple_backticks_outer_four() {
+    let md = r#"````text
+Here is a code block that shows another fenced block:
+
+```md
+# Inside fence
+- bullet
+- `inline code`
+```
+````
+"#;
+    let text = render_markdown_text(md);
+    let lines: Vec<String> = text
+        .lines
+        .iter()
+        .map(|l| {
+            l.spans
+                .iter()
+                .map(|s| s.content.clone())
+                .collect::<String>()
+        })
+        .collect();
+    assert_eq!(
+        lines,
+        vec![
+            "```text".to_string(),
+            "Here is a code block that shows another fenced block:".to_string(),
+            String::new(),
+            "```md".to_string(),
+            "# Inside fence".to_string(),
+            "- bullet".to_string(),
+            "- `inline code`".to_string(),
+            "```".to_string(),
+            "```".to_string(),
+        ]
+    );
 }
 
 #[test]
