@@ -30,16 +30,7 @@ pub fn assess_patch_safety(
         };
     }
 
-    match policy {
-        AskForApproval::OnFailure | AskForApproval::Never | AskForApproval::OnRequest => {
-            // Continue to see if this can be auto-approved.
-        }
-        // TODO(ragona): I'm not sure this is actually correct? I believe in this case
-        // we want to continue to the writable paths check before asking the user.
-        AskForApproval::UnlessTrusted => {
-            return SafetyCheck::AskUser;
-        }
-    }
+    // Continue to see if this can be auto-approved for all policies.
 
     // Even though the patch *appears* to be constrained to writable paths, it
     // is possible that paths in the patch are hard links to files outside the

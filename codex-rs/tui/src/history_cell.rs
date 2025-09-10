@@ -714,34 +714,40 @@ fn try_new_completed_mcp_tool_call_with_image_output(
 ) -> Option<CompletedMcpToolCallWithImageOutput> {
     match result {
         Ok(mcp_types::CallToolResult { content, .. }) => {
-            if let Some(mcp_types::ContentBlock::ImageContent(image)) = content.first() {
-                let raw_data = match base64::engine::general_purpose::STANDARD.decode(&image.data) {
-                    Ok(data) => data,
-                    Err(e) => {
-                        error!("Failed to decode image data: {e}");
-                        return None;
-                    }
-                };
-                let reader = match ImageReader::new(Cursor::new(raw_data)).with_guessed_format() {
-                    Ok(reader) => reader,
-                    Err(e) => {
-                        error!("Failed to guess image format: {e}");
-                        return None;
-                    }
-                };
+            let image = content.iter().find_map(|block| {
+                if let mcp_types::ContentBlock::ImageContent(image) = block {
+                    Some(image)
+                } else {
+                    None
+                }
+            });
 
-                let image = match reader.decode() {
-                    Ok(image) => image,
-                    Err(e) => {
-                        error!("Image decoding failed: {e}");
-                        return None;
-                    }
-                };
+            let image = image?;
 
-                Some(CompletedMcpToolCallWithImageOutput { _image: image })
-            } else {
-                None
-            }
+            let raw_data = match base64::engine::general_purpose::STANDARD.decode(&image.data) {
+                Ok(data) => data,
+                Err(e) => {
+                    error!("Failed to decode image data: {e}");
+                    return None;
+                }
+            };
+            let reader = match ImageReader::new(Cursor::new(raw_data)).with_guessed_format() {
+                Ok(reader) => reader,
+                Err(e) => {
+                    error!("Failed to guess image format: {e}");
+                    return None;
+                }
+            };
+
+            let image = match reader.decode() {
+                Ok(image) => image,
+                Err(e) => {
+                    error!("Image decoding failed: {e}");
+                    return None;
+                }
+            };
+
+            Some(CompletedMcpToolCallWithImageOutput { _image: image })
         }
         _ => None,
     }
