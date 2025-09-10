@@ -1,4 +1,3 @@
-use codex_core::default_client::get_codex_user_agent;
 use codex_protocol::mcp_protocol::GetUserAgentResponse;
 use mcp_test_support::McpProcess;
 use mcp_test_support::to_response;
@@ -34,11 +33,18 @@ async fn get_user_agent_returns_current_codex_user_agent() {
     .expect("getUserAgent timeout")
     .expect("getUserAgent response");
 
+    let os_info = os_info::get();
+    let user_agent = format!(
+        "codex_cli_rs/0.0.0 ({} {}; {}) {} (elicitation test; 0.0.0)",
+        os_info.os_type(),
+        os_info.version(),
+        os_info.architecture().unwrap_or("unknown"),
+        codex_core::terminal::user_agent()
+    );
+
     let received: GetUserAgentResponse =
         to_response(response).expect("deserialize getUserAgent response");
-    let expected = GetUserAgentResponse {
-        user_agent: get_codex_user_agent(),
-    };
+    let expected = GetUserAgentResponse { user_agent };
 
     assert_eq!(received, expected);
 }
