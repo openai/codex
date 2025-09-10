@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::mem;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -9,6 +10,7 @@ use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use crate::AuthManager;
+use crate::client_common::REVIEW_PROMPT;
 use crate::event_mapping::map_response_item_to_event_messages;
 use crate::rollout::recorder::RolloutItem;
 use async_channel::Receiver;
@@ -32,9 +34,6 @@ use tracing::error;
 use tracing::info;
 use tracing::trace;
 use tracing::warn;
-
-/// Review thread system prompt. Edit `core/src/review_prompt.md` to customize.
-const REVIEW_PROMPT: &str = include_str!("review_prompt.md");
 
 use crate::ModelProviderInfo;
 use crate::apply_patch;
@@ -958,13 +957,11 @@ impl Session {
         state.pending_approvals.clear();
         state.pending_input.clear();
         if let Some(task) = state.current_task.take() {
-            if state.is_review_mode {
-                state.is_review_mode = false;
-                let _ = self.tx_event.try_send(Event {
-                    id: task.sub_id.clone(),
-                    msg: EventMsg::ExitedReviewMode(None),
-                });
-            }
+            let sub_id = task.sub_id.clone();
+            let sess = task.sess.clone();
+            tokio::spawn(async move {
+                try_exit_review_mode(sess, sub_id, None).await;
+            });
             task.abort(TurnAbortReason::Interrupted);
         }
     }
@@ -1445,8 +1442,8 @@ async fn spawn_review_thread(
         use_streamable_shell_tool: false,
         include_view_image_tool: false,
     });
-    let base_instructions = Some(REVIEW_PROMPT.to_string());
 
+    let base_instructions = Some(REVIEW_PROMPT.to_string());
     let provider = parent_turn_context.client.get_provider();
     let auth_manager = parent_turn_context.client.get_auth_manager();
     let model_family = review_model_family.clone();
@@ -1481,9 +1478,7 @@ async fn spawn_review_thread(
     };
 
     // Seed the child task with the review prompt as the initial user message.
-    let input: Vec<InputItem> = vec![InputItem::Text {
-        text: prompt.clone(),
-    }];
+    let input: Vec<InputItem> = vec![InputItem::Text { text: prompt }];
     let tc = Arc::new(review_turn_context);
 
     // Clone sub_id for the upcoming announcement before moving it into the task.
@@ -1549,7 +1544,7 @@ async fn run_task(
     let is_review_mode = turn_context.is_review_mode;
     let mut review_thread_history: Vec<ResponseItem> = Vec::new();
     if is_review_mode {
-        review_thread_history.push(initial_input_for_turn.clone().into());
+        review_thread_history.push(initial_input_for_turn.into());
     } else {
         sess.record_input_and_rollout_usermsg(&initial_input_for_turn)
             .await;
@@ -1569,13 +1564,6 @@ async fn run_task(
             .into_iter()
             .map(ResponseItem::from)
             .collect::<Vec<ResponseItem>>();
-        if is_review_mode {
-            if !pending_input.is_empty() {
-                review_thread_history.extend(pending_input.clone());
-            }
-        } else {
-            sess.record_conversation_items(&pending_input).await;
-        }
 
         // Construct the input that we will send to the model.
         //
@@ -1583,13 +1571,17 @@ async fn run_task(
         //   model sees a fresh conversation (no parent history/user_instructions).
         //
         // - For normal turns, use the session's full history. When using the
-        // chat completions API (or ZDR clients), the model needs the full
-        // conversation history on each turn. The rollout file, however, should
-        // only record the new items that originated in this turn so that it
-        // represents an append-only log without duplicates.
+        //   chat completions API (or ZDR clients), the model needs the full
+        //   conversation history on each turn. The rollout file, however, should
+        //   only record the new items that originated in this turn so that it
+        //   represents an append-only log without duplicates.
         let turn_input: Vec<ResponseItem> = if is_review_mode {
+            if !pending_input.is_empty() {
+                review_thread_history.extend(pending_input);
+            }
             review_thread_history.clone()
         } else {
+            sess.record_conversation_items(&pending_input).await;
             sess.turn_input_with_history(pending_input)
         };
 
@@ -1752,51 +1744,19 @@ async fn run_task(
     // try to parse it as a ReviewOutput.
     //
     // If parsing fails, construct a minimal ReviewOutputEvent using the plain
-    // text as the overall explanation.
-    if turn_context.is_review_mode
-        && let Some(text) = last_agent_message.clone()
-    {
-        {
-            let mut st = sess.state.lock_unchecked();
-            st.is_review_mode = false;
-        }
-
-        // Emit ExitedReviewMode(Some) to signal completion with a result.
-        let review = parse_review_output_event(&text);
-        trace!("emitting ExitedReviewMode(Some(..))");
-        let _ = sess
-            .tx_event
-            .send(Event {
-                id: sub_id.clone(),
-                msg: EventMsg::ExitedReviewMode(Some(review)),
-            })
-            .await;
+    // text as the overall explanation. Else, just exit review mode with None.
+    //
+    // Also sets Session State's is_review_mode => false.
+    if turn_context.is_review_mode {
+        try_exit_review_mode(
+            sess.clone(),
+            sub_id.clone(),
+            last_agent_message.as_deref().map(parse_review_output_event),
+        )
+        .await;
     }
 
     sess.remove_task(&sub_id);
-    // If this was a review thread, and we haven't already emitted an exit event
-    // (i.e., still in review mode), send a fallback ExitedReviewMode(None).
-    if turn_context.is_review_mode {
-        let should_emit_fallback = {
-            let mut st = sess.state.lock_unchecked();
-            if st.is_review_mode {
-                st.is_review_mode = false;
-                true
-            } else {
-                false
-            }
-        };
-        if should_emit_fallback {
-            trace!("emitting ExitedReviewMode(None)");
-            let _ = sess
-                .tx_event
-                .send(Event {
-                    id: sub_id.clone(),
-                    msg: EventMsg::ExitedReviewMode(None),
-                })
-                .await;
-        }
-    }
     let event = Event {
         id: sub_id,
         msg: EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }),
@@ -1816,11 +1776,10 @@ fn parse_review_output_event(text: &str) -> ReviewOutputEvent {
     // If wrapped in markdown fences or extra prose, attempt to extract the first JSON object
     if let (Some(start), Some(end)) = (text.find('{'), text.rfind('}'))
         && start < end
+        && let Some(slice) = text.get(start..=end)
+        && let Ok(ev) = serde_json::from_str::<ReviewOutputEvent>(slice)
     {
-        let slice = &text[start..=end];
-        if let Ok(ev) = serde_json::from_str::<ReviewOutputEvent>(slice) {
-            return ev;
-        }
+        return ev;
     }
     // Not JSON – return a structured ReviewOutputEvent that carries
     // the plain text as the overall explanation.
@@ -3181,6 +3140,27 @@ fn convert_call_tool_result_to_function_call_output_payload(
     FunctionCallOutputPayload {
         content,
         success: Some(is_success),
+    }
+}
+
+/// Sets session state's is_review_mode = false, and
+/// emits an ExitedReviewMode Event with optional ReviewOutput.
+async fn try_exit_review_mode(
+    session: Arc<Session>,
+    task_sub_id: String,
+    res: Option<ReviewOutputEvent>,
+) {
+    let is_review_mode = {
+        let mut st = session.state.lock_unchecked();
+        mem::take(&mut st.is_review_mode)
+    };
+
+    if is_review_mode {
+        let event = Event {
+            id: task_sub_id,
+            msg: EventMsg::ExitedReviewMode(res),
+        };
+        session.send_event(event).await;
     }
 }
 

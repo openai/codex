@@ -508,12 +508,6 @@ async fn new_conversation_for_server<F>(
 where
     F: FnOnce(&mut Config),
 {
-    // Disable client retries for deterministic tests.
-    unsafe {
-        std::env::set_var("OPENAI_REQUEST_MAX_RETRIES", "0");
-        std::env::set_var("OPENAI_STREAM_MAX_RETRIES", "0");
-    }
-
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
         ..built_in_model_providers()["openai"].clone()
