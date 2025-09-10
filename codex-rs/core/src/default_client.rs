@@ -4,9 +4,15 @@ use std::sync::Mutex;
 
 /// Set this to add a suffix to the User-Agent string.
 ///
-/// This is primarily designed to differentiate MCP clients (or the lack thereof) from each other.
+/// It is not ideal that we're using a global singleton for this.
+/// This is primarily designed to differentiate MCP clients from each other.
 /// Because there can only be one MCP server per process, it should be safe for this to be a global static.
 /// However, future users of this should use this with caution as a result.
+/// In addition, we want to be confident that this value is used for ALL clients and doing that requires a
+/// lot of wiring and it's easy to miss code paths by doing so.
+/// See https://github.com/openai/codex/pull/3388/files for an example of what that would look like.
+/// Finally, we want to make sure this is set for ALL mcp clients without needing to know a special env var
+/// or having to set data that they already specified in the mcp initialize request somewhere else.
 ///
 /// A space is automatically added between the suffix and the rest of the User-Agent string.
 /// The full user agent string is returned from the mcp initialize response.
@@ -55,15 +61,11 @@ pub fn get_codex_user_agent() -> String {
     let suffix = USER_AGENT_SUFFIX
         .lock()
         .ok()
-        .and_then(|guard| guard.clone())
-        .and_then(|value| {
-            let value = value.trim();
-            if value.is_empty() {
-                None
-            } else {
-                Some(value.to_string())
-            }
-        })
+        .and_then(|guard| guard.clone());
+    let suffix = suffix
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
         .map_or_else(String::new, |value| format!(" ({value})"));
 
     let candidate = format!("{prefix}{suffix}");
