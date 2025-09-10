@@ -66,7 +66,7 @@ OUTPUT FORMAT:
       "title": "<≤ 80 chars, imperative>",
       "body": "<valid Markdown explaining *why* this is a problem; cite files/lines/functions>",
       "confidence_score": <float 0.0-1.0>,
-      "priority": <int 0-3, optional>,
+      "priority": <int 0-3>,
       "code_location": {
         "absolute_file_path": "<file path>",
         "line_range": {"start": <int>, "end": <int>}
