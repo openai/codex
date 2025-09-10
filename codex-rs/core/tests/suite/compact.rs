@@ -49,6 +49,22 @@ fn ev_completed(id: &str) -> Value {
     })
 }
 
+fn ev_completed_with_tokens(id: &str, total_tokens: u64) -> Value {
+    serde_json::json!({
+        "type": "response.completed",
+        "response": {
+            "id": id,
+            "usage": {
+                "input_tokens": total_tokens,
+                "input_tokens_details": null,
+                "output_tokens": 0,
+                "output_tokens_details": null,
+                "total_tokens": total_tokens
+            }
+        }
+    })
+}
+
 /// Convenience: SSE event for a single assistant message output item.
 fn ev_assistant_message(id: &str, text: &str) -> Value {
     serde_json::json!({
@@ -85,6 +101,9 @@ const FIRST_REPLY: &str = "FIRST_REPLY";
 const SUMMARY_TEXT: &str = "SUMMARY_ONLY_CONTEXT";
 const SUMMARIZE_TRIGGER: &str = "Start Summarization";
 const THIRD_USER_MSG: &str = "next turn";
+const AUTO_SUMMARY_TEXT: &str = "AUTO_SUMMARY";
+const FIRST_AUTO_MSG: &str = "token limit start";
+const SECOND_AUTO_MSG: &str = "token limit push";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn summarize_context_three_requests_and_instructions() {
@@ -207,12 +226,12 @@ async fn summarize_context_three_requests_and_instructions() {
     let text2 = last2["content"][0]["text"].as_str().unwrap();
     assert!(text2.contains(SUMMARIZE_TRIGGER));
 
-    // Third request must contain only the summary from step 2 as prior history plus new user msg.
+    // Third request must contain the refreshed instructions, bridge summary message and new user msg.
     let input3 = body3.get("input").and_then(|v| v.as_array()).unwrap();
     println!("third request body: {body3}");
     assert!(
-        input3.len() >= 2,
-        "expected summary + new user message in third request"
+        input3.len() >= 3,
+        "expected refreshed context and new user message in third request"
     );
 
     // Collect all (role, text) message tuples.
@@ -228,24 +247,132 @@ async fn summarize_context_three_requests_and_instructions() {
         }
     }
 
-    // Exactly one assistant message should remain after compaction and the new user message is present.
+    // No previous assistant messages should remain and the new user message is present.
     let assistant_count = messages.iter().filter(|(r, _)| r == "assistant").count();
-    assert_eq!(
-        assistant_count, 1,
-        "exactly one assistant message should remain after compaction"
-    );
+    assert_eq!(assistant_count, 0, "assistant history should be cleared");
     assert!(
         messages
             .iter()
             .any(|(r, t)| r == "user" && t == THIRD_USER_MSG),
         "third request should include the new user message"
     );
+    let Some((_, bridge_text)) = messages.iter().find(|(role, text)| {
+        role == "user"
+            && text.contains("Here are all the user messages")
+            && text.contains(SUMMARY_TEXT)
+    }) else {
+        panic!("expected a bridge message containing the summary");
+    };
     assert!(
-        !messages.iter().any(|(_, t)| t.contains("hello world")),
-        "third request should not include the original user input"
+        bridge_text.contains("hello world"),
+        "bridge should capture earlier user messages"
     );
     assert!(
-        !messages.iter().any(|(_, t)| t.contains(SUMMARIZE_TRIGGER)),
+        !bridge_text.contains(SUMMARIZE_TRIGGER),
+        "bridge text should not echo the summarize trigger"
+    );
+    assert!(
+        !messages
+            .iter()
+            .any(|(_, text)| text.contains(SUMMARIZE_TRIGGER)),
         "third request should not include the summarize trigger"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compact_runs_after_token_limit_hit() {
+    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+        );
+        return;
+    }
+
+    let server = MockServer::start().await;
+
+    let sse1 = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed_with_tokens("r1", 70_000),
+    ]);
+
+    let sse2 = sse(vec![
+        ev_assistant_message("m2", "SECOND_REPLY"),
+        ev_completed_with_tokens("r2", 60_000),
+    ]);
+
+    let sse3 = sse(vec![
+        ev_assistant_message("m3", AUTO_SUMMARY_TEXT),
+        ev_completed_with_tokens("r3", 200),
+    ]);
+
+    let first_matcher = |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body.contains(FIRST_AUTO_MSG)
+            && !body.contains(SECOND_AUTO_MSG)
+            && !body.contains("You are a summarization assistant")
+    };
+    mount_sse_once(&server, first_matcher, sse1).await;
+
+    let second_matcher = |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body.contains(SECOND_AUTO_MSG)
+            && body.contains(FIRST_AUTO_MSG)
+            && !body.contains("You are a summarization assistant")
+    };
+    mount_sse_once(&server, second_matcher, sse2).await;
+
+    let third_matcher = |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body.contains("You are a summarization assistant")
+    };
+    mount_sse_once(&server, third_matcher, sse3).await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    let home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&home);
+    config.model_provider = model_provider;
+    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
+    let codex = conversation_manager
+        .new_conversation(config)
+        .await
+        .unwrap()
+        .conversation;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: FIRST_AUTO_MSG.into(),
+            }],
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: SECOND_AUTO_MSG.into(),
+            }],
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 3, "auto compact should add a third request");
+
+    let body3 = requests[2].body_json::<serde_json::Value>().unwrap();
+    let instructions = body3
+        .get("instructions")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    assert!(
+        instructions.contains("You are a summarization assistant"),
+        "auto compact should reuse summarization instructions"
     );
 }
