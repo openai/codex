@@ -91,7 +91,6 @@ impl MessageProcessor {
         // Hold on to the ID so we can respond.
         let request_id = request.id.clone();
 
-        tracing::error!("[GABE] Trying from {request:?}");
         let client_request = match McpClientRequest::try_from(request) {
             Ok(client_request) => client_request,
             Err(e) => {

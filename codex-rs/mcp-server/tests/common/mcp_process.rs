@@ -142,7 +142,8 @@ impl McpProcess {
                     "serverInfo": {
                         "name": "codex-mcp-server",
                         "title": "Codex",
-                        "version": "0.0.0"
+                        "version": "0.0.0",
+                        "user_agent": "codex_cli_rs/0.0.0 (Mac OS 15.6.1; arm64) vscode/1.5.11 (elicitation test; 0.0.0)"
                     },
                     "protocolVersion": mcp_types::MCP_SCHEMA_VERSION
                 })
