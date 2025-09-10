@@ -21,4 +21,5 @@ tokio = { version = "1", features = [
     "process",
     "rt-multi-thread",
 ] }
+os_info = "3.12.0"
 wiremock = "0.6"
