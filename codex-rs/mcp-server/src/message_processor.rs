@@ -1,19 +1,31 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Duration;
+
+/// Default timeout for codex-get-response tool (10 minutes)
+/// GPT-5 research tasks can take 5+ minutes to complete thorough analysis,
+/// so 600s provides adequate buffer while still catching truly stuck sessions.
+pub const DEFAULT_GET_RESPONSE_TIMEOUT_SECS: u64 = 600;
 
 use crate::codex_message_processor::CodexMessageProcessor;
+use crate::codex_tool_config::CodexToolCallGetResponseParam;
 use crate::codex_tool_config::CodexToolCallParam;
 use crate::codex_tool_config::CodexToolCallReplyParam;
+use crate::codex_tool_config::create_tool_for_codex_tool_call_get_response_param;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_param;
 use crate::codex_tool_config::create_tool_for_codex_tool_call_reply_param;
 use crate::error_code::INVALID_REQUEST_ERROR_CODE;
 use crate::outgoing_message::OutgoingMessageSender;
+use crate::session_storage::{SessionResponse, SessionResponseStorage, SessionStatus};
 use codex_protocol::mcp_protocol::ClientRequest;
 use codex_protocol::mcp_protocol::ConversationId;
 
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
+use codex_core::protocol::EventMsg;
+use codex_core::protocol::InputItem;
+use codex_core::protocol::Op;
 use codex_core::protocol::Submission;
 use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
@@ -43,6 +55,9 @@ pub(crate) struct MessageProcessor {
     codex_linux_sandbox_exe: Option<PathBuf>,
     conversation_manager: Arc<ConversationManager>,
     running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, ConversationId>>>,
+    config: Arc<Config>,
+    /// Storage for completed responses in compatibility mode
+    session_responses: Arc<Mutex<SessionResponseStorage>>,
 }
 
 impl MessageProcessor {
@@ -62,7 +77,7 @@ impl MessageProcessor {
             conversation_manager.clone(),
             outgoing.clone(),
             codex_linux_sandbox_exe.clone(),
-            config,
+            config.clone(),
         );
         Self {
             codex_message_processor,
@@ -71,10 +86,13 @@ impl MessageProcessor {
             codex_linux_sandbox_exe,
             conversation_manager,
             running_requests_id_to_codex_uuid: Arc::new(Mutex::new(HashMap::new())),
+            config,
+            session_responses: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
     pub(crate) async fn process_request(&mut self, request: JSONRPCRequest) {
+        let _raw_method = request.method.clone();
         if let Ok(request_json) = serde_json::to_value(request.clone())
             && let Ok(codex_request) = serde_json::from_value::<ClientRequest>(request_json)
         {
@@ -92,7 +110,8 @@ impl MessageProcessor {
         let client_request = match McpClientRequest::try_from(request) {
             Ok(client_request) => client_request,
             Err(e) => {
-                tracing::warn!("Failed to convert request: {e}");
+                // Support fork-only helper: getConfigToml
+                tracing::warn!("failed to convert request: {e}");
                 return;
             }
         };
@@ -153,7 +172,7 @@ impl MessageProcessor {
         let server_notification = match ServerNotification::try_from(notification) {
             Ok(n) => n,
             Err(e) => {
-                tracing::warn!("Failed to convert notification: {e}");
+                tracing::warn!("failed to convert notification: {e}");
                 return;
             }
         };
@@ -309,11 +328,20 @@ impl MessageProcessor {
         params: <mcp_types::ListToolsRequest as mcp_types::ModelContextProtocolRequest>::Params,
     ) {
         tracing::trace!("tools/list -> {params:?}");
-        let result = ListToolsResult {
-            tools: vec![
+        let tools = if self.config.mcp.compatibility_mode {
+            vec![
                 create_tool_for_codex_tool_call_param(),
                 create_tool_for_codex_tool_call_reply_param(),
-            ],
+                create_tool_for_codex_tool_call_get_response_param(),
+            ]
+        } else {
+            vec![
+                create_tool_for_codex_tool_call_param(),
+                create_tool_for_codex_tool_call_reply_param(),
+            ]
+        };
+        let result = ListToolsResult {
+            tools,
             next_cursor: None,
         };
 
@@ -335,6 +363,10 @@ impl MessageProcessor {
                 self.handle_tool_call_codex_session_reply(id, arguments)
                     .await
             }
+            "codex-get-response" => {
+                self.handle_tool_call_codex_get_response(id, arguments)
+                    .await
+            }
             _ => {
                 let result = CallToolResult {
                     content: vec![ContentBlock::TextContent(TextContent {
@@ -353,7 +385,9 @@ impl MessageProcessor {
     async fn handle_tool_call_codex(&self, id: RequestId, arguments: Option<serde_json::Value>) {
         let (initial_prompt, config): (String, Config) = match arguments {
             Some(json_val) => match serde_json::from_value::<CodexToolCallParam>(json_val) {
-                Ok(tool_cfg) => match tool_cfg.into_config(self.codex_linux_sandbox_exe.clone()) {
+                Ok(tool_cfg) => match tool_cfg
+                    .into_config(self.codex_linux_sandbox_exe.clone(), Some(&self.config))
+                {
                     Ok(cfg) => cfg,
                     Err(e) => {
                         let result = CallToolResult {
@@ -405,25 +439,175 @@ impl MessageProcessor {
             }
         };
 
-        // Clone outgoing and server to move into async task.
-        let outgoing = self.outgoing.clone();
-        let conversation_manager = self.conversation_manager.clone();
-        let running_requests_id_to_codex_uuid = self.running_requests_id_to_codex_uuid.clone();
+        // Compatibility mode for MCP clients that cannot handle async notifications (like Claude Code).
+        // When enabled, we return an immediate response with a session ID, then process the request
+        // in the background, avoiding the async notification flow that some clients can't handle.
+        if config.mcp.compatibility_mode {
+            // Return immediate response with session ID, process in background
+            let conversation_result = self
+                .conversation_manager
+                .new_conversation(config.clone())
+                .await;
 
-        // Spawn an async task to handle the Codex session so that we do not
-        // block the synchronous message-processing loop.
-        task::spawn(async move {
-            // Run the Codex session and stream events back to the client.
-            crate::codex_tool_runner::run_codex_tool_session(
-                id,
-                initial_prompt,
-                config,
-                outgoing,
-                conversation_manager,
-                running_requests_id_to_codex_uuid,
-            )
-            .await;
-        });
+            match conversation_result {
+                Ok(new_conv) => {
+                    let session_id = new_conv.conversation_id;
+                    let session_uuid: Uuid = session_id.into();
+                    let result = CallToolResult {
+                        content: vec![ContentBlock::TextContent(TextContent {
+                            r#type: "text".to_string(),
+                            text: format!("Session started with ID: {session_id}"),
+                            annotations: None,
+                        })],
+                        is_error: None,
+                        structured_content: Some(json!({
+                            "sessionId": session_id.to_string()
+                        })),
+                    };
+                    self.send_response::<mcp_types::CallToolRequest>(id.clone(), result)
+                        .await;
+
+                    // Store the conversation for later use with codex-reply
+                    self.running_requests_id_to_codex_uuid
+                        .lock()
+                        .await
+                        .insert(id, session_id);
+
+                    // Initialize session response as running (keyed by raw Uuid)
+                    self.session_responses
+                        .lock()
+                        .await
+                        .insert(session_uuid, SessionResponse::new_running());
+
+                    // Now submit the initial prompt and capture responses in the background
+                    let conversation = new_conv.conversation;
+                    let session_responses = self.session_responses.clone();
+                    task::spawn(async move {
+                        // Submit the prompt
+                        if let Err(e) = conversation
+                            .submit(Op::UserInput {
+                                items: vec![InputItem::Text {
+                                    text: initial_prompt,
+                                }],
+                            })
+                            .await
+                        {
+                            tracing::error!(
+                                "Failed to submit initial prompt in compatibility mode: {e}"
+                            );
+                            // Mark as failed
+                            let mut responses = session_responses.lock().await;
+                            if let Some(response) = responses.remove(&session_uuid) {
+                                responses.insert(
+                                    session_uuid,
+                                    response.fail_with_error(
+                                        format!("failed to submit prompt: {e}"),
+                                        String::new(),
+                                    ),
+                                );
+                            }
+                            return;
+                        }
+
+                        // Capture events and accumulate content
+                        let mut content = String::new();
+                        loop {
+                            match conversation.next_event().await {
+                                Ok(event) => {
+                                    match event.msg {
+                                        EventMsg::AgentMessage(msg) => {
+                                            content.push_str(&msg.message);
+                                        }
+                                        EventMsg::AgentMessageDelta(delta) => {
+                                            content.push_str(&delta.delta);
+                                        }
+                                        EventMsg::TaskComplete(_) => {
+                                            // Mark as completed
+                                            let mut responses = session_responses.lock().await;
+                                            if let Some(response) = responses.remove(&session_uuid)
+                                            {
+                                                responses.insert(
+                                                    session_uuid,
+                                                    response.complete_with_content(content),
+                                                );
+                                            }
+                                            break;
+                                        }
+                                        EventMsg::Error(error) => {
+                                            // Mark as failed
+                                            let mut responses = session_responses.lock().await;
+                                            if let Some(response) = responses.remove(&session_uuid)
+                                            {
+                                                responses.insert(
+                                                    session_uuid,
+                                                    response
+                                                        .fail_with_error(error.message, content),
+                                                );
+                                            }
+                                            break;
+                                        }
+                                        _ => {
+                                            // Ignore other events
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        "error reading event in compatibility mode: {e}"
+                                    );
+                                    // Mark as failed
+                                    let mut responses = session_responses.lock().await;
+                                    if let Some(response) = responses.remove(&session_uuid) {
+                                        responses.insert(
+                                            session_uuid,
+                                            response.fail_with_error(
+                                                format!("event stream error: {e}"),
+                                                content,
+                                            ),
+                                        );
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    });
+                }
+                Err(e) => {
+                    let result = CallToolResult {
+                        content: vec![ContentBlock::TextContent(TextContent {
+                            r#type: "text".to_string(),
+                            text: format!("Failed to start Codex session: {e}"),
+                            annotations: None,
+                        })],
+                        is_error: Some(true),
+                        structured_content: None,
+                    };
+                    self.send_response::<mcp_types::CallToolRequest>(id, result)
+                        .await;
+                }
+            }
+        } else {
+            // Original async mode
+            // Clone outgoing and server to move into async task.
+            let outgoing = self.outgoing.clone();
+            let conversation_manager = self.conversation_manager.clone();
+            let running_requests_id_to_codex_uuid = self.running_requests_id_to_codex_uuid.clone();
+
+            // Spawn an async task to handle the Codex session so that we do not
+            // block the synchronous message-processing loop.
+            task::spawn(async move {
+                // Run the Codex session and stream events back to the client.
+                crate::codex_tool_runner::run_codex_tool_session(
+                    id,
+                    initial_prompt,
+                    config,
+                    outgoing,
+                    conversation_manager,
+                    running_requests_id_to_codex_uuid,
+                )
+                .await;
+            });
+        }
     }
 
     async fn handle_tool_call_codex_session_reply(
@@ -493,51 +677,183 @@ impl MessageProcessor {
             }
         };
 
-        // Clone outgoing to move into async task.
-        let outgoing = self.outgoing.clone();
-        let running_requests_id_to_codex_uuid = self.running_requests_id_to_codex_uuid.clone();
-
-        let codex = match self
-            .conversation_manager
-            .get_conversation(conversation_id)
-            .await
-        {
-            Ok(c) => c,
-            Err(_) => {
-                tracing::warn!("Session not found for conversation_id: {conversation_id}");
-                let result = CallToolResult {
-                    content: vec![ContentBlock::TextContent(TextContent {
-                        r#type: "text".to_owned(),
-                        text: format!("Session not found for conversation_id: {conversation_id}"),
-                        annotations: None,
-                    })],
-                    is_error: Some(true),
-                    structured_content: None,
-                };
-                outgoing.send_response(request_id, result).await;
-                return;
-            }
-        };
-
-        // Spawn the long-running reply handler.
-        tokio::spawn({
-            let codex = codex.clone();
-            let outgoing = outgoing.clone();
-            let prompt = prompt.clone();
-            let running_requests_id_to_codex_uuid = running_requests_id_to_codex_uuid.clone();
-
-            async move {
-                crate::codex_tool_runner::run_codex_tool_session_reply(
-                    codex,
-                    outgoing,
-                    request_id,
-                    prompt,
-                    running_requests_id_to_codex_uuid,
-                    conversation_id,
-                )
+        // Check if we're in compatibility mode
+        if self.config.mcp.compatibility_mode {
+            // Use raw Uuid for session-responses map
+            let session_uuid: Uuid = conversation_id.into();
+            // In compatibility mode, send immediate response
+            let result = CallToolResult {
+                content: vec![ContentBlock::TextContent(TextContent {
+                    r#type: "text".to_string(),
+                    text: format!("Continuing session {conversation_id}"),
+                    annotations: None,
+                })],
+                is_error: None,
+                structured_content: None,
+            };
+            self.send_response::<mcp_types::CallToolRequest>(request_id.clone(), result)
                 .await;
-            }
-        });
+
+            // Store the mapping for tracking
+            self.running_requests_id_to_codex_uuid
+                .lock()
+                .await
+                .insert(request_id, conversation_id);
+
+            // Submit the prompt to the conversation in the background
+            let codex = match self
+                .conversation_manager
+                .get_conversation(conversation_id)
+                .await
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to get conversation for session {}: {}",
+                        conversation_id,
+                        e
+                    );
+                    return;
+                }
+            };
+
+            // Update session status to running (store by raw Uuid)
+            self.session_responses
+                .lock()
+                .await
+                .insert(session_uuid, SessionResponse::new_running());
+
+            let session_responses = self.session_responses.clone();
+            task::spawn(async move {
+                // Submit the prompt
+                if let Err(e) = codex
+                    .submit(Op::UserInput {
+                        items: vec![InputItem::Text { text: prompt }],
+                    })
+                    .await
+                {
+                    tracing::error!("Failed to submit prompt in compatibility mode: {e}");
+                    // Mark as failed
+                    let mut responses = session_responses.lock().await;
+                    if let Some(response) = responses.remove(&session_uuid) {
+                        responses.insert(
+                            session_uuid,
+                            response.fail_with_error(
+                                format!("failed to submit prompt: {e}"),
+                                String::new(),
+                            ),
+                        );
+                    }
+                    return;
+                }
+
+                // Capture events and accumulate content
+                let mut content = String::new();
+                loop {
+                    match codex.next_event().await {
+                        Ok(event) => {
+                            match event.msg {
+                                EventMsg::AgentMessage(msg) => {
+                                    content.push_str(&msg.message);
+                                }
+                                EventMsg::AgentMessageDelta(delta) => {
+                                    content.push_str(&delta.delta);
+                                }
+                                EventMsg::TaskComplete(_) => {
+                                    // Mark as completed
+                                    let mut responses = session_responses.lock().await;
+                                    if let Some(response) = responses.remove(&session_uuid) {
+                                        responses.insert(
+                                            session_uuid,
+                                            response.complete_with_content(content),
+                                        );
+                                    }
+                                    break;
+                                }
+                                EventMsg::Error(error) => {
+                                    // Mark as failed
+                                    let mut responses = session_responses.lock().await;
+                                    if let Some(response) = responses.remove(&session_uuid) {
+                                        responses.insert(
+                                            session_uuid,
+                                            response.fail_with_error(error.message, content),
+                                        );
+                                    }
+                                    break;
+                                }
+                                _ => {
+                                    // Ignore other events
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::error!("Error reading event in compatibility mode: {e}");
+                            // Mark as failed
+                            let mut responses = session_responses.lock().await;
+                            if let Some(response) = responses.remove(&session_uuid) {
+                                responses.insert(
+                                    session_uuid,
+                                    response.fail_with_error(
+                                        format!("event stream error: {e}"),
+                                        content,
+                                    ),
+                                );
+                            }
+                            break;
+                        }
+                    }
+                }
+            });
+        } else {
+            // Original async mode
+            // Clone outgoing to move into async task.
+            let outgoing = self.outgoing.clone();
+            let running_requests_id_to_codex_uuid = self.running_requests_id_to_codex_uuid.clone();
+
+            let codex = match self
+                .conversation_manager
+                .get_conversation(conversation_id)
+                .await
+            {
+                Ok(c) => c,
+                Err(_) => {
+                    tracing::warn!("Session not found for conversation_id: {conversation_id}");
+                    let result = CallToolResult {
+                        content: vec![ContentBlock::TextContent(TextContent {
+                            r#type: "text".to_owned(),
+                            text: format!(
+                                "Session not found for conversation_id: {conversation_id}"
+                            ),
+                            annotations: None,
+                        })],
+                        is_error: Some(true),
+                        structured_content: None,
+                    };
+                    outgoing.send_response(request_id, result).await;
+                    return;
+                }
+            };
+
+            // Spawn the long-running reply handler.
+            tokio::spawn({
+                let codex = codex.clone();
+                let outgoing = outgoing.clone();
+                let prompt = prompt.clone();
+                let running_requests_id_to_codex_uuid = running_requests_id_to_codex_uuid.clone();
+
+                async move {
+                    crate::codex_tool_runner::run_codex_tool_session_reply(
+                        codex,
+                        outgoing,
+                        request_id,
+                        prompt,
+                        running_requests_id_to_codex_uuid,
+                        conversation_id,
+                    )
+                    .await;
+                }
+            });
+        }
     }
 
     fn handle_set_level(
@@ -552,6 +868,158 @@ impl MessageProcessor {
         params: <mcp_types::CompleteRequest as mcp_types::ModelContextProtocolRequest>::Params,
     ) {
         tracing::info!("completion/complete -> params: {:?}", params);
+    }
+
+    /// Handle the codex-get-response tool call.
+    async fn handle_tool_call_codex_get_response(
+        &self,
+        id: RequestId,
+        arguments: Option<serde_json::Value>,
+    ) {
+        let params = match arguments {
+            Some(json_val) => {
+                match serde_json::from_value::<CodexToolCallGetResponseParam>(json_val) {
+                    Ok(params) => params,
+                    Err(e) => {
+                        tracing::error!("failed to parse codex get-response parameters: {e}");
+                        let result = CallToolResult {
+                            content: vec![ContentBlock::TextContent(TextContent {
+                                r#type: "text".to_string(),
+                                text: format!("failed to parse parameters: {e}"),
+                                annotations: None,
+                            })],
+                            is_error: Some(true),
+                            structured_content: None,
+                        };
+                        self.send_response::<mcp_types::CallToolRequest>(id, result)
+                            .await;
+                        return;
+                    }
+                }
+            }
+            None => {
+                let result = CallToolResult {
+                    content: vec![ContentBlock::TextContent(TextContent {
+                        r#type: "text".to_string(),
+                        text: "missing session_id parameter".to_string(),
+                        annotations: None,
+                    })],
+                    is_error: Some(true),
+                    structured_content: None,
+                };
+                self.send_response::<mcp_types::CallToolRequest>(id, result)
+                    .await;
+                return;
+            }
+        };
+
+        let session_uuid = match params.session_id.parse::<Uuid>() {
+            Ok(uuid) => uuid,
+            Err(e) => {
+                let result = CallToolResult {
+                    content: vec![ContentBlock::TextContent(TextContent {
+                        r#type: "text".to_string(),
+                        text: format!("invalid session_id format: {e}"),
+                        annotations: None,
+                    })],
+                    is_error: Some(true),
+                    structured_content: None,
+                };
+                self.send_response::<mcp_types::CallToolRequest>(id, result)
+                    .await;
+                return;
+            }
+        };
+
+        let timeout_duration =
+            Duration::from_secs(params.timeout.unwrap_or(DEFAULT_GET_RESPONSE_TIMEOUT_SECS));
+        let start_time = std::time::Instant::now();
+
+        // Poll for response with timeout
+        loop {
+            if start_time.elapsed() >= timeout_duration {
+                let result = CallToolResult {
+                    content: vec![ContentBlock::TextContent(TextContent {
+                        r#type: "text".to_string(),
+                        text: "timeout waiting for response".to_string(),
+                        annotations: None,
+                    })],
+                    is_error: Some(true),
+                    structured_content: Some(json!({
+                        "status": "timeout",
+                        "sessionId": params.session_id
+                    })),
+                };
+                self.send_response::<mcp_types::CallToolRequest>(id, result)
+                    .await;
+                return;
+            }
+
+            let responses = self.session_responses.lock().await;
+            if let Some(response) = responses.get(&session_uuid) {
+                match &response.status {
+                    SessionStatus::Completed => {
+                        let result = CallToolResult {
+                            content: vec![ContentBlock::TextContent(TextContent {
+                                r#type: "text".to_string(),
+                                text: response.content.clone(),
+                                annotations: None,
+                            })],
+                            is_error: None,
+                            structured_content: Some(json!({
+                                "status": "completed",
+                                "sessionId": params.session_id
+                            })),
+                        };
+                        self.send_response::<mcp_types::CallToolRequest>(id, result)
+                            .await;
+                        return;
+                    }
+                    SessionStatus::Failed => {
+                        let error_msg = response.error.as_deref().unwrap_or("unknown error");
+                        let result = CallToolResult {
+                            content: vec![ContentBlock::TextContent(TextContent {
+                                r#type: "text".to_string(),
+                                text: format!("session failed: {error_msg}"),
+                                annotations: None,
+                            })],
+                            is_error: Some(true),
+                            structured_content: Some(json!({
+                                "status": "failed",
+                                "error": error_msg,
+                                "sessionId": params.session_id,
+                                "partialContent": response.content
+                            })),
+                        };
+                        self.send_response::<mcp_types::CallToolRequest>(id, result)
+                            .await;
+                        return;
+                    }
+                    SessionStatus::Running => {
+                        // Continue polling
+                    }
+                }
+            } else {
+                let result = CallToolResult {
+                    content: vec![ContentBlock::TextContent(TextContent {
+                        r#type: "text".to_string(),
+                        text: "session not found".to_string(),
+                        annotations: None,
+                    })],
+                    is_error: Some(true),
+                    structured_content: Some(json!({
+                        "status": "not_found",
+                        "sessionId": params.session_id
+                    })),
+                };
+                self.send_response::<mcp_types::CallToolRequest>(id, result)
+                    .await;
+                return;
+            }
+
+            // Wait a bit before polling again
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
     }
 
     // ---------------------------------------------------------------------

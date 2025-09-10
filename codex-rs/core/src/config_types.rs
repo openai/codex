@@ -80,6 +80,16 @@ pub enum HistoryPersistence {
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct Tui {}
 
+/// MCP (Model Context Protocol) specific configuration.
+#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+#[serde(rename_all = "kebab-case")]
+pub struct Mcp {
+    /// Enable compatibility mode for MCP clients that cannot handle async notifications.
+    /// When enabled, responses are sent synchronously with session information included.
+    #[serde(default)]
+    pub compatibility_mode: bool,
+}
+
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct SandboxWorkspaceWrite {
     #[serde(default)]

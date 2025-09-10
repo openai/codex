@@ -48,7 +48,7 @@ pub async fn run_codex_tool_session(
         conversation_id,
         conversation,
         session_configured,
-    } = match conversation_manager.new_conversation(config).await {
+    } = match conversation_manager.new_conversation(config.clone()).await {
         Ok(res) => res,
         Err(e) => {
             let result = CallToolResult {
@@ -64,6 +64,23 @@ pub async fn run_codex_tool_session(
             return;
         }
     };
+
+    // In compatibility mode, send immediate response with session ID and return early
+    if config.mcp.compatibility_mode {
+        let result = CallToolResult {
+            content: vec![ContentBlock::TextContent(TextContent {
+                r#type: "text".to_string(),
+                text: format!("Session started with ID: {conversation_id}"),
+                annotations: None,
+            })],
+            is_error: None,
+            structured_content: Some(json!({
+                "sessionId": conversation_id.to_string()
+            })),
+        };
+        outgoing.send_response(id, result).await;
+        return;
+    }
 
     let session_configured_event = Event {
         // Use a fake id value for now.
