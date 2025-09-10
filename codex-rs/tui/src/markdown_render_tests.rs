@@ -5,6 +5,7 @@ use ratatui::text::Span;
 use ratatui::text::Text;
 
 use crate::markdown_render::render_markdown_text;
+use insta::assert_snapshot;
 
 #[test]
 fn empty() {
@@ -391,14 +392,7 @@ fn blockquote_with_code_block() {
                 .collect::<String>()
         })
         .collect();
-    assert_eq!(
-        lines,
-        vec![
-            "> ```".to_string(),
-            "> code".to_string(),
-            "> ```".to_string()
-        ]
-    );
+    assert_eq!(lines, vec!["> code".to_string()]);
 }
 
 #[test]
@@ -415,19 +409,19 @@ fn blockquote_with_multiline_code_block() {
                 .collect::<String>()
         })
         .collect();
-    assert_eq!(lines, vec!["> ```", "> first", "> second", "> ```"]);
+    assert_eq!(lines, vec!["> first", "> second"]);
 }
 
 #[test]
 fn nested_blockquote_with_inline_and_fenced_code() {
     /*
     let md = \"> Nested quote with code:\n\
-> > Inner quote and `inline code`\n\
-> >\n\
-> > ```\n\
-> > # fenced code inside a quote\n\
-> > echo \"hello from a quote\"\n\
-> > ```\n";
+    > > Inner quote and `inline code`\n\
+    > >\n\
+    > > ```\n\
+    > > # fenced code inside a quote\n\
+    > > echo \"hello from a quote\"\n\
+    > > ```\n";
     */
     let md = r#"> Nested quote with code:
 > > Inner quote and `inline code`
@@ -455,10 +449,8 @@ fn nested_blockquote_with_inline_and_fenced_code() {
             "> ".to_string(),
             "> > Inner quote and inline code".to_string(),
             "> > ".to_string(),
-            "> > ```".to_string(),
             "> > # fenced code inside a quote".to_string(),
             "> > echo \"hello from a quote\"".to_string(),
-            "> > ```".to_string(),
         ]
     );
 }
@@ -662,11 +654,7 @@ fn link() {
 #[test]
 fn code_block_unhighlighted() {
     let text = render_markdown_text("```rust\nfn main() {}\n```\n");
-    let expected = Text::from_iter([
-        Line::from("```rust"),
-        Line::from("fn main() {}"),
-        Line::from("```"),
-    ]);
+    let expected = Text::from_iter([Line::from_iter(["", "fn main() {}"])]);
     assert_eq!(text, expected);
 }
 
@@ -675,10 +663,8 @@ fn code_block_multiple_lines_root() {
     let md = "```\nfirst\nsecond\n```\n";
     let text = render_markdown_text(md);
     let expected = Text::from_iter([
-        Line::from("```"),
-        Line::from("first"),
-        Line::from("second"),
-        Line::from("```"),
+        Line::from_iter(["", "first"]),
+        Line::from_iter(["", "second"]),
     ]);
     assert_eq!(text, expected);
 }
@@ -688,11 +674,9 @@ fn code_block_indented() {
     let md = "    function greet() {\n      console.log(\"Hi\");\n    }\n";
     let text = render_markdown_text(md);
     let expected = Text::from_iter([
-        Line::from("```"),
-        Line::from("function greet() {"),
-        Line::from("  console.log(\"Hi\");"),
-        Line::from("}"),
-        Line::from("```"),
+        Line::from_iter(["    ", "function greet() {"]),
+        Line::from_iter(["    ", "  console.log(\"Hi\");"]),
+        Line::from_iter(["    ", "}"]),
     ]);
     assert_eq!(text, expected);
 }
@@ -740,14 +724,12 @@ Here is a code block that shows another fenced block:
     assert_eq!(
         lines,
         vec![
-            "```text".to_string(),
             "Here is a code block that shows another fenced block:".to_string(),
             String::new(),
             "```md".to_string(),
             "# Inside fence".to_string(),
             "- bullet".to_string(),
             "- `inline code`".to_string(),
-            "```".to_string(),
             "```".to_string(),
         ]
     );
@@ -767,7 +749,7 @@ fn code_block_inside_unordered_list_item_is_indented() {
                 .collect::<String>()
         })
         .collect();
-    assert_eq!(lines, vec!["- Item", "", "  ```", "  code line", "  ```"]);
+    assert_eq!(lines, vec!["- Item", "", "  code line"]);
 }
 
 #[test]
@@ -784,10 +766,7 @@ fn code_block_multiple_lines_inside_unordered_list() {
                 .collect::<String>()
         })
         .collect();
-    assert_eq!(
-        lines,
-        vec!["- Item", "", "  ```", "  first", "  second", "  ```"]
-    );
+    assert_eq!(lines, vec!["- Item", "", "  first", "  second"]);
 }
 
 #[test]
@@ -804,10 +783,78 @@ fn code_block_inside_unordered_list_item_multiple_lines() {
                 .collect::<String>()
         })
         .collect();
-    assert_eq!(
-        lines,
-        vec!["- Item", "", "  ```", "  first", "  second", "  ```"]
-    );
+    assert_eq!(lines, vec!["- Item", "", "  first", "  second"]);
+}
+
+#[test]
+fn markdown_render_complex_snapshot() {
+    let md = r#"# H1: Markdown Streaming Test
+Intro paragraph with bold **text**, italic *text*, and inline code `x=1`.
+Combined bold-italic ***both*** and escaped asterisks \*literal\*.
+Auto-link: <https://example.com> and reference link [ref][r1].
+Link with title: [hover me](https://example.com "Example") and mailto <mailto:test@example.com>.
+Image: ![alt text](https://example.com/img.png "Title")
+> Blockquote level 1
+>> Blockquote level 2 with `inline code`
+- Unordered list item 1
+  - Nested bullet with italics _inner_
+- Unordered list item 2 with ~~strikethrough~~
+1. Ordered item one
+2. Ordered item two with sublist:
+   1) Alt-numbered subitem
+- [ ] Task: unchecked
+- [x] Task: checked with link [home](https://example.org)
+---
+Table below (alignment test):
+| Left | Center | Right |
+|:-----|:------:|------:|
+| a    |   b    |     c |
+Inline HTML: <sup>sup</sup> and <sub>sub</sub>.
+HTML block:
+<div style="border:1px solid #ccc;padding:2px">inline block</div>
+Escapes: \_underscores\_, backslash \\, ticks ``code with `backtick` inside``.
+Emoji shortcodes: :sparkles: :tada: (if supported).
+Hard break test (line ends with two spaces)  
+Next line should be close to previous.
+Footnote reference here[^1] and another[^longnote].
+Horizontal rule with asterisks:
+***
+Fenced code block (JSON):
+```json
+{ "a": 1, "b": [true, false] }
+```
+Fenced code with tildes and triple backticks inside:
+~~~markdown
+To close ``` you need tildes.
+~~~
+Indented code block:
+    for i in range(3): print(i)
+Definition-like list:
+Term
+: Definition with `code`.
+Character entities: &amp; &lt; &gt; &quot; &#39;
+[^1]: This is the first footnote.
+[^longnote]: A longer footnote with a link to [Rust](https://www.rust-lang.org/).
+Escaped pipe in text: a \| b \| c.
+URL with parentheses: [link](https://example.com/path_(with)_parens).
+[r1]: https://example.com/ref "Reference link title"
+"#;
+
+    let text = render_markdown_text(md);
+    // Convert to plain text lines for snapshot (ignore styles)
+    let rendered = text
+        .lines
+        .iter()
+        .map(|l| {
+            l.spans
+                .iter()
+                .map(|s| s.content.clone())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert_snapshot!(rendered);
 }
 
 #[test]
@@ -830,9 +877,7 @@ fn ordered_item_with_code_block_and_nested_bullet() {
             "1. item 1".to_string(),
             "2. item 2".to_string(),
             String::new(),
-            "   ```".to_string(),
             "   code".to_string(),
-            "   ```".to_string(),
             "    - PROCESS_START (a OnceLock<Instant>) keeps the start time for the entire process.".to_string(),
         ]
     );
@@ -867,7 +912,11 @@ fn html_inline_is_verbatim() {
 fn html_block_is_verbatim_multiline() {
     let md = "<div>\n  <span>hi</span>\n</div>\n";
     let text = render_markdown_text(md);
-    let expected = Text::from(Line::from_iter(["<div>", "  <span>hi</span>", "</div>"]));
+    let expected = Text::from_iter([
+        Line::from_iter(["<div>"]),
+        Line::from_iter(["  <span>hi</span>"]),
+        Line::from_iter(["</div>"]),
+    ]);
     assert_eq!(text, expected);
 }
 

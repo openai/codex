@@ -119,8 +119,8 @@ where
                 self.push_line(Line::from("———"));
                 self.needs_newline = true;
             }
-            Event::Html(html) => self.html(html),
-            Event::InlineHtml(html) => self.html(html),
+            Event::Html(html) => self.html(html, false),
+            Event::InlineHtml(html) => self.html(html, true),
             Event::FootnoteReference(_) => {}
             Event::TaskListMarker(_) => {}
         }
@@ -132,11 +132,15 @@ where
             Tag::Heading { level, .. } => self.start_heading(level),
             Tag::BlockQuote => self.start_blockquote(),
             Tag::CodeBlock(kind) => {
+                let indent = match kind {
+                    CodeBlockKind::Fenced(_) => None,
+                    CodeBlockKind::Indented => Some(Span::from(" ".repeat(4))),
+                };
                 let lang = match kind {
                     CodeBlockKind::Fenced(lang) => Some(lang.to_string()),
                     CodeBlockKind::Indented => None,
                 };
-                self.start_codeblock(lang)
+                self.start_codeblock(lang, indent)
             }
             Tag::List(start) => self.start_list(start),
             Tag::Item => self.start_item(),
@@ -283,7 +287,7 @@ where
         self.push_span(span);
     }
 
-    fn html(&mut self, html: CowStr<'a>) {
+    fn html(&mut self, html: CowStr<'a>, inline: bool) {
         self.pending_marker_line = false;
         for (i, line) in html.lines().enumerate() {
             if self.needs_newline {
@@ -296,7 +300,7 @@ where
             let style = self.inline_styles.last().copied().unwrap_or_default();
             self.push_span(Span::styled(line.to_string(), style));
         }
-        self.needs_newline = false;
+        self.needs_newline = !inline;
     }
 
     fn hard_break(&mut self) {
@@ -350,23 +354,29 @@ where
         self.needs_newline = false;
     }
 
-    fn start_codeblock(&mut self, lang: Option<String>) {
+    fn start_codeblock(&mut self, _lang: Option<String>, indent: Option<Span<'static>>) {
         if !self.text.lines.is_empty() {
             self.push_blank_line();
         }
         self.in_code_block = true;
-        let opener = match lang {
-            Some(l) if !l.is_empty() => format!("```{l}"),
-            _ => "```".to_string(),
-        };
-        self.push_line(opener.into());
+        self.indent_stack.push(IndentContext::new(
+            vec![indent.unwrap_or_default()],
+            None,
+            false,
+        ));
+        // let opener = match lang {
+        //     Some(l) if !l.is_empty() => format!("```{l}"),
+        //     _ => "```".to_string(),
+        // };
+        // self.push_line(opener.into());
         self.needs_newline = true;
     }
 
     fn end_codeblock(&mut self) {
-        self.push_line("```".into());
+        // self.push_line("```".into());
         self.needs_newline = true;
         self.in_code_block = false;
+        self.indent_stack.pop();
     }
 
     fn push_inline_style(&mut self, style: Style) {

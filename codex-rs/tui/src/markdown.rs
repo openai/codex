@@ -79,8 +79,7 @@ mod tests {
                     .collect::<String>()
             })
             .collect();
-        assert!(lines.iter().any(|s| s == "```"));
-        assert!(lines.iter().any(|s| s == "code 1" || s == "    code 1"));
+        assert_eq!(lines, vec!["Before", "", "    code 1", "", "After"]);
     }
 
     #[test]
