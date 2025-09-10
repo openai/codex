@@ -46,7 +46,7 @@ async fn logout_chatgpt_removes_auth() {
     login_with_api_key(codex_home.path(), "sk-test-key").expect("seed api key");
     assert!(codex_home.path().join("auth.json").exists());
 
-    let mut mcp = McpProcess::new(codex_home.path())
+    let mut mcp = McpProcess::new_with_env(codex_home.path(), &[("OPENAI_API_KEY", None)])
         .await
         .expect("spawn mcp process");
     timeout(DEFAULT_READ_TIMEOUT, mcp.initialize())
