@@ -286,11 +286,40 @@ pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Re
     let mut created_projects_table = false;
     {
         let root = doc.as_table_mut();
+        // If `projects` exists but isn't a standard table (e.g., it's an inline table),
+        // convert it to an explicit table while preserving existing entries.
+        let existing_projects = root.get("projects").cloned();
         let needs_table = !root.contains_key("projects")
             || root.get("projects").and_then(|i| i.as_table()).is_none();
         if needs_table {
             root.insert("projects", toml_edit::table());
             created_projects_table = true;
+
+            // If there was an existing inline table, migrate its entries to explicit tables.
+            if let Some(item) = existing_projects
+                && let Some(val) = item.as_value()
+                && let Some(inline_tbl) = val.as_inline_table()
+            {
+                if let Some(projects_tbl) = root.get_mut("projects").and_then(|i| i.as_table_mut())
+                {
+                    for (k, v) in inline_tbl.iter() {
+                        // Expect each value to be an inline table like { trust_level = "..." }
+                        let trust_level_str = v
+                            .as_inline_table()
+                            .and_then(|inner| inner.get("trust_level"))
+                            .and_then(|tl| tl.as_str())
+                            .unwrap_or("trusted");
+
+                        projects_tbl.insert(k, toml_edit::table());
+                        if let Some(proj_tbl) =
+                            projects_tbl.get_mut(k).and_then(|i| i.as_table_mut())
+                        {
+                            proj_tbl.set_implicit(false);
+                            proj_tbl["trust_level"] = toml_edit::value(trust_level_str);
+                        }
+                    }
+                }
+            }
         }
     }
     let Some(projects_tbl) = doc["projects"].as_table_mut() else {
@@ -1454,4 +1483,42 @@ trust_level = "trusted"
     }
 
     // No test enforcing the presence of a standalone [projects] header.
+
+    #[test]
+    fn test_set_project_trusted_migrates_top_level_inline_projects_preserving_entries()
+    -> anyhow::Result<()> {
+        let codex_home = TempDir::new().unwrap();
+
+        // Seed config.toml where `projects` is a top-level inline table mapping
+        // multiple paths to inline tables.
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+        let initial = r#"projects = { "/Users/mbolin/code/codex4" = { trust_level = "trusted" } , "/Users/mbolin/code/openai" = { trust_level = "trusted" } , "/Users/mbolin/code/codex3" = { trust_level = "trusted" } }
+"#;
+        std::fs::create_dir_all(codex_home.path())?;
+        std::fs::write(&config_path, initial)?;
+
+        // Approve a new directory
+        let new_project = std::path::Path::new("/Users/mbolin/code/codex2");
+        set_project_trusted(codex_home.path(), new_project)?;
+
+        let contents = std::fs::read_to_string(&config_path)?;
+
+        // Since we created the [projects] table as part of migration, it is kept implicit.
+        // Expect explicit per-project tables, preserving prior entries and appending the new one.
+        let expected = r#"[projects."/Users/mbolin/code/codex4"]
+trust_level = "trusted"
+
+[projects."/Users/mbolin/code/openai"]
+trust_level = "trusted"
+
+[projects."/Users/mbolin/code/codex3"]
+trust_level = "trusted"
+
+[projects."/Users/mbolin/code/codex2"]
+trust_level = "trusted"
+"#;
+        assert_eq!(contents, expected);
+
+        Ok(())
+    }
 }
