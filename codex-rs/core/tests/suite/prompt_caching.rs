@@ -427,7 +427,14 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() {
     // reflecting the new approval policy and sandbox settings. Omit cwd because it did
     // not change.
     let expected_env_text_2 = format!(
-        "<environment_context>\n  <approval_policy>never</approval_policy>\n  <sandbox_mode>workspace-write</sandbox_mode>\n  <network_access>enabled</network_access>\n  <writable_roots>\n    <root>{}</root>\n  </writable_roots>\n</environment_context>",
+        r#"<environment_context>
+  <approval_policy>never</approval_policy>
+  <sandbox_mode>workspace-write</sandbox_mode>
+  <network_access>enabled</network_access>
+  <writable_roots>
+    <root>{}</root>
+  </writable_roots>
+</environment_context>"#,
         writable.path().to_string_lossy()
     );
     let expected_env_msg_2 = serde_json::json!({
