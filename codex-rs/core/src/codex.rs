@@ -1756,12 +1756,12 @@ async fn run_task(
     if turn_context.is_review_mode
         && let Some(text) = last_agent_message.clone()
     {
-        // Emit ExitedReviewMode(Some) to signal completion with a result.
         {
             let mut st = sess.state.lock_unchecked();
             st.is_review_mode = false;
         }
 
+        // Emit ExitedReviewMode(Some) to signal completion with a result.
         let review = parse_review_output_event(&text);
         trace!("emitting ExitedReviewMode(Some(..))");
         let _ = sess
