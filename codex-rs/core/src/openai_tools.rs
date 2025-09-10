@@ -633,6 +633,7 @@ pub(crate) fn get_openai_tools(
         tools.push(create_view_image_tool());
     }
     if let Some(mcp_tools) = mcp_tools {
+        // Ensure deterministic ordering to maximize prompt cache hits.
         let mut entries: Vec<(String, mcp_types::Tool)> = mcp_tools.into_iter().collect();
         entries.sort_by(|a, b| a.0.cmp(&b.0));
 

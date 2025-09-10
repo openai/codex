@@ -21,11 +21,8 @@ use crate::exec_command::ExecCommandSession;
 use crate::truncate::truncate_middle;
 
 mod errors;
-mod path;
 
 pub(crate) use errors::UnifiedExecError;
-
-use path::resolve_command_path;
 
 const DEFAULT_TIMEOUT_MS: u64 = 1_000;
 const MAX_TIMEOUT_MS: u64 = 60_000;
@@ -54,6 +51,8 @@ pub(crate) struct UnifiedExecSessionManager {
 struct ManagedUnifiedExecSession {
     session: ExecCommandSession,
     output_buffer: OutputBuffer,
+    /// Notifies waiters whenever new output has been appended to
+    /// `output_buffer`, allowing clients to poll for fresh data.
     output_notify: Arc<Notify>,
     output_task: JoinHandle<()>,
 }
@@ -314,8 +313,8 @@ async fn create_unified_exec_session(
         })
         .map_err(UnifiedExecError::create_session)?;
 
-    let resolved_command = resolve_command_path(&command[0])?;
-    let mut command_builder = CommandBuilder::new(&resolved_command);
+    // Safe thanks to the check at the top of the function.
+    let mut command_builder = CommandBuilder::new(command[0].clone());
     for arg in &command[1..] {
         command_builder.arg(arg);
     }
@@ -476,7 +475,7 @@ mod tests {
             .handle_request(UnifiedExecRequest {
                 session_id: None,
                 input_chunks: &[
-                    "/bin/echo".to_string(),
+                    "echo".to_string(),
                     "$CODEX_INTERACTIVE_SHELL_VAR\n".to_string(),
                 ],
                 timeout_ms: Some(1_500),
@@ -504,7 +503,7 @@ mod tests {
         let open_shell = manager
             .handle_request(UnifiedExecRequest {
                 session_id: None,
-                input_chunks: &["/bin/bash".to_string(), "-i".to_string()],
+                input_chunks: &["bash".to_string(), "-i".to_string()],
                 timeout_ms: Some(1_500),
             })
             .await?;
@@ -554,7 +553,7 @@ mod tests {
         let result = manager
             .handle_request(UnifiedExecRequest {
                 session_id: None,
-                input_chunks: &["/bin/echo".to_string(), "codex".to_string()],
+                input_chunks: &["echo".to_string(), "codex".to_string()],
                 timeout_ms: Some(120_000),
             })
             .await?;
