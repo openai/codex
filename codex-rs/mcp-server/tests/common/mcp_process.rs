@@ -295,6 +295,11 @@ impl McpProcess {
         self.send_request("getUserAgent", None).await
     }
 
+    /// Send a `userInfo` JSON-RPC request.
+    pub async fn send_user_info_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request("userInfo", None).await
+    }
+
     /// Send a `listConversations` JSON-RPC request.
     pub async fn send_list_conversations_request(
         &mut self,
