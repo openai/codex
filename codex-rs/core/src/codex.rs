@@ -2290,6 +2290,7 @@ async fn handle_unified_exec_tool_call(
     session_id: Option<String>,
     arguments: Vec<String>,
     timeout_ms: Option<u64>,
+    cwd: Option<std::path::PathBuf>,
 ) -> ResponseInputItem {
     let parsed_session_id = if let Some(session_id) = session_id {
         match session_id.parse::<i32>() {
@@ -2312,6 +2313,7 @@ async fn handle_unified_exec_tool_call(
         session_id: parsed_session_id,
         input_chunks: &arguments,
         timeout_ms,
+        cwd,
     };
 
     let result = sess.unified_exec_manager.handle_request(request).await;
@@ -2406,6 +2408,7 @@ async fn handle_function_call(
                 args.session_id,
                 args.input,
                 args.timeout_ms,
+                Some(turn_context.cwd.clone()),
             )
             .await
         }
