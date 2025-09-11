@@ -11,6 +11,8 @@ use codex_core::NewConversation;
 use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
 use codex_core::auth::CLIENT_ID;
+use codex_core::auth::get_auth_file;
+use codex_core::auth::try_read_auth_json;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
@@ -67,6 +69,7 @@ use codex_protocol::mcp_protocol::SendUserMessageResponse;
 use codex_protocol::mcp_protocol::SendUserTurnParams;
 use codex_protocol::mcp_protocol::SendUserTurnResponse;
 use codex_protocol::mcp_protocol::ServerNotification;
+use codex_protocol::mcp_protocol::UserInfoResponse;
 use codex_protocol::mcp_protocol::UserSavedConfig;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -186,6 +189,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::GetUserAgent { request_id } => {
                 self.get_user_agent(request_id).await;
+            }
+            ClientRequest::UserInfo { request_id } => {
+                self.get_user_info(request_id).await;
             }
             ClientRequest::ExecOneOffCommand { request_id, params } => {
                 self.exec_one_off_command(request_id, params).await;
@@ -436,6 +442,18 @@ impl CodexMessageProcessor {
         let response = GetUserSavedConfigResponse {
             config: user_saved_config,
         };
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn get_user_info(&self, request_id: RequestId) {
+        // Read alleged user email from auth.json (best-effort; not verified).
+        let auth_path = get_auth_file(&self.config.codex_home);
+        let alleged_user_email = match try_read_auth_json(&auth_path) {
+            Ok(auth) => auth.tokens.and_then(|t| t.id_token.email),
+            Err(_) => None,
+        };
+
+        let response = UserInfoResponse { alleged_user_email };
         self.outgoing.send_response(request_id, response).await;
     }
 
