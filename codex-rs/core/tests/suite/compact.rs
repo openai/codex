@@ -370,7 +370,12 @@ async fn auto_compact_runs_after_token_limit_hit() {
             && !body.contains(SECOND_AUTO_MSG)
             && !body.contains("You have exceeded the maximum number of tokens")
     };
-    mount_sse_once(&server, first_matcher, sse1).await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(first_matcher)
+        .respond_with(sse_response(sse1))
+        .mount(&server)
+        .await;
 
     let second_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
@@ -378,13 +383,23 @@ async fn auto_compact_runs_after_token_limit_hit() {
             && body.contains(FIRST_AUTO_MSG)
             && !body.contains("You have exceeded the maximum number of tokens")
     };
-    mount_sse_once(&server, second_matcher, sse2).await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(second_matcher)
+        .respond_with(sse_response(sse2))
+        .mount(&server)
+        .await;
 
     let third_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains("You have exceeded the maximum number of tokens")
     };
-    mount_sse_once(&server, third_matcher, sse3).await;
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(third_matcher)
+        .respond_with(sse_response(sse3))
+        .mount(&server)
+        .await;
 
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
@@ -433,5 +448,147 @@ async fn auto_compact_runs_after_token_limit_hit() {
     assert!(
         instructions.contains("You have exceeded the maximum number of tokens"),
         "auto compact should reuse summarization instructions"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compact_persists_rollout_entries() {
+    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+        );
+        return;
+    }
+
+    let server = start_mock_server().await;
+
+    let sse1 = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed_with_tokens("r1", 70_000),
+    ]);
+
+    let sse2 = sse(vec![
+        ev_assistant_message("m2", "SECOND_REPLY"),
+        ev_completed_with_tokens("r2", 330_000),
+    ]);
+
+    let sse3 = sse(vec![
+        ev_assistant_message("m3", AUTO_SUMMARY_TEXT),
+        ev_completed_with_tokens("r3", 200),
+    ]);
+
+    let first_matcher = |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body.contains(FIRST_AUTO_MSG)
+            && !body.contains(SECOND_AUTO_MSG)
+            && !body.contains("You have exceeded the maximum number of tokens")
+    };
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(first_matcher)
+        .respond_with(sse_response(sse1))
+        .mount(&server)
+        .await;
+
+    let second_matcher = |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body.contains(SECOND_AUTO_MSG)
+            && body.contains(FIRST_AUTO_MSG)
+            && !body.contains("You have exceeded the maximum number of tokens")
+    };
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(second_matcher)
+        .respond_with(sse_response(sse2))
+        .mount(&server)
+        .await;
+
+    let third_matcher = |req: &wiremock::Request| {
+        let body = std::str::from_utf8(&req.body).unwrap_or("");
+        body.contains("You have exceeded the maximum number of tokens")
+    };
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .and(third_matcher)
+        .respond_with(sse_response(sse3))
+        .mount(&server)
+        .await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    let home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&home);
+    config.model_provider = model_provider;
+    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
+    let NewConversation {
+        conversation: codex,
+        session_configured,
+        ..
+    } = conversation_manager.new_conversation(config).await.unwrap();
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: FIRST_AUTO_MSG.into(),
+            }],
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: SECOND_AUTO_MSG.into(),
+            }],
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    codex.submit(Op::Shutdown).await.unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
+
+    let rollout_path = session_configured.rollout_path;
+    let text = std::fs::read_to_string(&rollout_path).unwrap_or_else(|e| {
+        panic!(
+            "failed to read rollout file {}: {e}",
+            rollout_path.display()
+        )
+    });
+
+    let mut turn_context_count = 0usize;
+    let mut saw_compacted_summary = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(entry): Result<RolloutLine, _> = serde_json::from_str(trimmed) else {
+            continue;
+        };
+        match entry.item {
+            RolloutItem::TurnContext(_) => {
+                turn_context_count += 1;
+            }
+            RolloutItem::Compacted(ci) => {
+                if ci.message == AUTO_SUMMARY_TEXT {
+                    saw_compacted_summary = true;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    assert!(
+        turn_context_count >= 3,
+        "expected at least three turn context entries, got {turn_context_count}"
+    );
+    assert!(
+        saw_compacted_summary,
+        "expected compacted summary entry containing the auto summary"
     );
 }

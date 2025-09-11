@@ -10,6 +10,7 @@ use crate::client_common::ResponseEvent;
 use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::protocol::AgentMessageEvent;
+use crate::protocol::CompactedItem;
 use crate::protocol::ErrorEvent;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
@@ -19,11 +20,13 @@ use crate::protocol::TaskStartedEvent;
 use crate::protocol::TokenCountEvent;
 use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
+use crate::protocol::TurnContextItem;
 use crate::util::backoff;
 use askama::Template;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::RolloutItem;
 use futures::prelude::*;
 
 pub(super) const COMPACT_TRIGGER_TEXT: &str = "Start Summarization";
@@ -126,6 +129,16 @@ async fn run_compact_task_inner(
     let max_retries = turn_context.client.get_provider().stream_max_retries();
     let mut retries = 0;
 
+    let rollout_item = RolloutItem::TurnContext(TurnContextItem {
+        cwd: turn_context.cwd.clone(),
+        approval_policy: turn_context.approval_policy,
+        sandbox_policy: turn_context.sandbox_policy.clone(),
+        model: turn_context.client.get_model(),
+        effort: turn_context.client.get_reasoning_effort(),
+        summary: turn_context.client.get_reasoning_summary(),
+    });
+    sess.persist_rollout_items(&[rollout_item]).await;
+
     loop {
         let attempt_result =
             drain_to_completed(&sess, turn_context.as_ref(), &sub_id, &prompt).await;
@@ -181,6 +194,11 @@ async fn run_compact_task_inner(
         state.token_info = None;
         state.token_limit_reached = false;
     }
+
+    let rollout_item = RolloutItem::Compacted(CompactedItem {
+        message: summary_text.clone(),
+    });
+    sess.persist_rollout_items(&[rollout_item]).await;
 
     let event = Event {
         id: sub_id.clone(),
