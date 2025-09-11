@@ -32,7 +32,13 @@ pub struct CodexAuth {
 
 impl PartialEq for CodexAuth {
     fn eq(&self, other: &Self) -> bool {
+        // Consider auth values equal only if the effective authentication state
+        // is the same: auth mode, api key, and the current in‑memory auth.json
+        // snapshot (tokens/last_refresh). The client and file path are not
+        // part of the logical auth identity for consumers.
         self.mode == other.mode
+            && self.api_key == other.api_key
+            && self.get_current_auth_json() == other.get_current_auth_json()
     }
 }
 
