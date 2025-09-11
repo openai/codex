@@ -10,8 +10,7 @@ use crate::model_family::ModelFamily;
 use crate::openai_tools::create_tools_json_for_chat_completions_api;
 use crate::util::backoff;
 use bytes::Bytes;
-use codex_otel::otel_provider::OtelProvider;
-use codex_protocol::mcp_protocol::ConversationId;
+use codex_otel::trace_manager::TraceManager;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ResponseItem;
@@ -28,26 +27,15 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tracing::Instrument;
 use tracing::debug;
-use tracing::info_span;
 use tracing::trace;
 
 /// Implementation for the classic Chat Completions API.
-#[tracing::instrument(
-    skip_all,
-    fields(
-            conversation_id = %_conversation_id,
-            model = %_model,
-            model_slug = %model_family.slug,
-            model_provider = %provider.name,
-    ),
-)]
 pub(crate) async fn stream_chat_completions(
-    _conversation_id: &ConversationId,
     prompt: &Prompt,
-    _model: &String,
     model_family: &ModelFamily,
     client: &reqwest::Client,
     provider: &ModelProviderInfo,
+    trace_manager: &TraceManager,
 ) -> Result<ResponseStream> {
     // Build messages array
     let mut messages = Vec::<serde_json::Value>::new();
@@ -300,41 +288,52 @@ pub(crate) async fn stream_chat_completions(
     loop {
         attempt += 1;
 
+        let request_span = trace_manager.request(&prompt.input);
+
         let req_builder = provider.create_request_builder(client, &None).await?;
 
-        let request_span = info_span!("request").or_current();
-
-        let tracing_headers = OtelProvider::headers(&request_span);
+        let tracing_headers = TraceManager::headers(&request_span);
 
         let res = req_builder
             .header(reqwest::header::ACCEPT, "text/event-stream")
             .headers(tracing_headers)
             .json(&payload)
             .send()
-            .instrument(request_span)
+            .instrument(request_span.span())
             .await;
 
         match res {
             Ok(resp) if resp.status().is_success() => {
+                request_span.status_code(resp.status());
                 let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
                 let stream = resp.bytes_stream().map_err(CodexErr::Reqwest);
                 tokio::spawn(process_chat_sse(
                     stream,
                     tx_event,
                     provider.stream_idle_timeout(),
+                    trace_manager.clone(),
                 ));
                 return Ok(ResponseStream { rx_event });
             }
             Ok(res) => {
                 let status = res.status();
+                let mut log_message = status.to_string();
+                request_span.status_code(status);
                 if !(status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error()) {
                     let body = (res.text().await).unwrap_or_default();
+                    if !body.is_empty() {
+                        log_message = format!("{log_message}: {body}");
+                    }
+                    request_span.error(attempt, Some(status), &log_message);
                     return Err(CodexErr::UnexpectedStatus(status, body));
                 }
 
                 if attempt > max_retries {
+                    request_span.error(attempt, Some(status), &log_message);
                     return Err(CodexErr::RetryLimit(status));
                 }
+
+                request_span.error(attempt, Some(status), &log_message);
 
                 let retry_after_secs = res
                     .headers()
@@ -348,6 +347,8 @@ pub(crate) async fn stream_chat_completions(
                 tokio::time::sleep(delay).await;
             }
             Err(e) => {
+                let error_message = format!("{e:#}");
+                request_span.error(attempt, None, &error_message);
                 if attempt > max_retries {
                     return Err(e.into());
                 }
@@ -365,6 +366,7 @@ async fn process_chat_sse<S>(
     stream: S,
     tx_event: mpsc::Sender<Result<ResponseEvent>>,
     idle_timeout: Duration,
+    trace_manager: TraceManager,
 ) where
     S: Stream<Item = Result<Bytes>> + Unpin,
 {
@@ -387,13 +389,15 @@ async fn process_chat_sse<S>(
     let mut assistant_text = String::new();
     let mut reasoning_text = String::new();
 
+    let sse_span = trace_manager.response();
+
     loop {
-        let sse = match timeout(idle_timeout, stream.next()).await {
+        let sse = match timeout(idle_timeout, stream.next().instrument(sse_span.span())).await {
             Ok(Some(Ok(ev))) => ev,
             Ok(Some(Err(e))) => {
-                let _ = tx_event
-                    .send(Err(CodexErr::Stream(e.to_string(), None)))
-                    .await;
+                let error = e.to_string();
+                sse_span.error(error.as_str());
+                let _ = tx_event.send(Err(CodexErr::Stream(error, None))).await;
                 return;
             }
             Ok(None) => {
@@ -407,15 +411,16 @@ async fn process_chat_sse<S>(
                 return;
             }
             Err(_) => {
+                let error = "idle timeout waiting for SSE";
+                sse_span.error(error);
                 let _ = tx_event
-                    .send(Err(CodexErr::Stream(
-                        "idle timeout waiting for SSE".into(),
-                        None,
-                    )))
+                    .send(Err(CodexErr::Stream(error.into(), None)))
                     .await;
                 return;
             }
         };
+
+        sse_span.body(sse.data.as_str());
 
         // OpenAI Chat streaming sends a literal string "[DONE]" when finished.
         if sse.data.trim() == "[DONE]" {
@@ -456,7 +461,11 @@ async fn process_chat_sse<S>(
         // Parse JSON chunk
         let chunk: serde_json::Value = match serde_json::from_str(&sse.data) {
             Ok(v) => v,
-            Err(_) => continue,
+            Err(e) => {
+                let error = format!("Failed to parse SSE event: {e}, data: {}", &sse.data);
+                sse_span.error(error.as_str());
+                continue;
+            }
         };
         trace!("chat_completions received SSE chunk: {chunk:?}");
 

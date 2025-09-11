@@ -18,9 +18,7 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_util::io::ReaderStream;
 use tracing::Instrument;
-use tracing::Span;
 use tracing::debug;
-use tracing::info_span;
 use tracing::trace;
 use tracing::warn;
 
@@ -46,7 +44,7 @@ use crate::openai_tools::create_tools_json_for_responses_api;
 use crate::protocol::TokenUsage;
 use crate::token_data::PlanType;
 use crate::util::backoff;
-use codex_otel::otel_provider::OtelProvider;
+use codex_otel::trace_manager::TraceManager;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ResponseItem;
@@ -73,6 +71,7 @@ struct Error {
 pub struct ModelClient {
     config: Arc<Config>,
     auth_manager: Option<Arc<AuthManager>>,
+    trace_manager: TraceManager,
     client: reqwest::Client,
     provider: ModelProviderInfo,
     conversation_id: ConversationId,
@@ -84,6 +83,7 @@ impl ModelClient {
     pub fn new(
         config: Arc<Config>,
         auth_manager: Option<Arc<AuthManager>>,
+        trace_manager: TraceManager,
         provider: ModelProviderInfo,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
@@ -94,6 +94,7 @@ impl ModelClient {
         Self {
             config,
             auth_manager,
+            trace_manager,
             client,
             provider,
             conversation_id,
@@ -117,27 +118,17 @@ impl ModelClient {
     /// Dispatches to either the Responses or Chat implementation depending on
     /// the provider config.  Public callers always invoke `stream()` – the
     /// specialised helpers are private to avoid accidental misuse.
-    #[tracing::instrument(
-        skip(self),
-        fields(
-            conversation_id = %self.conversation_id,
-            model = %self.config.model,
-            model_slug = %self.config.model_family.slug,
-            model_provider = %self.config.model_provider.name,
-        ),
-    )]
     pub async fn stream(&self, prompt: &Prompt) -> Result<ResponseStream> {
         match self.provider.wire_api {
             WireApi::Responses => self.stream_responses(prompt).await,
             WireApi::Chat => {
                 // Create the raw streaming connection first.
                 let response_stream = stream_chat_completions(
-                    &self.conversation_id,
                     prompt,
-                    &self.config.model,
                     &self.config.model_family,
                     &self.client,
                     &self.provider,
+                    &self.trace_manager,
                 )
                 .await?;
 
@@ -170,20 +161,12 @@ impl ModelClient {
     }
 
     /// Implementation for the OpenAI *Responses* experimental API.
-    #[tracing::instrument(
-        skip_all,
-        fields(
-            conversation_id = %self.conversation_id,
-            model = %self.config.model,
-            model_slug = %self.config.model_family.slug,
-            model_provider = %self.config.model_provider.name,
-        ),
-    )]
     async fn stream_responses(&self, prompt: &Prompt) -> Result<ResponseStream> {
         if let Some(path) = &*CODEX_RS_SSE_FIXTURE {
             // short circuit for tests
             warn!(path, "Streaming from fixture");
-            return stream_from_fixture(path, self.provider.clone()).await;
+            return stream_from_fixture(path, self.provider.clone(), self.trace_manager.clone())
+                .await;
         }
 
         let auth_manager = self.auth_manager.clone();
@@ -262,6 +245,8 @@ impl ModelClient {
                 payload_body.as_str()
             );
 
+            let request_span = self.trace_manager.request(&input_with_instructions);
+
             let mut req_builder = self
                 .provider
                 .create_request_builder(&self.client, &auth)
@@ -282,14 +267,11 @@ impl ModelClient {
                 req_builder = req_builder.header("chatgpt-account-id", account_id);
             }
 
-            let request_span =
-                info_span!("request", request_id = tracing::field::Empty).or_current();
-
-            let tracing_headers = OtelProvider::headers(&request_span);
+            let tracing_headers = TraceManager::headers(&request_span);
 
             req_builder = req_builder.headers(tracing_headers);
 
-            let res = req_builder.send().instrument(request_span.clone()).await;
+            let res = req_builder.send().instrument(request_span.span()).await;
 
             if let Ok(resp) = &res {
                 let request_id = resp
@@ -305,11 +287,12 @@ impl ModelClient {
                         .map(|v| v.to_str().unwrap_or_default())
                         .unwrap_or_default()
                 );
-                request_span.record("request_id", request_id);
+                request_span.request_id(request_id);
             }
 
             match res {
                 Ok(resp) if resp.status().is_success() => {
+                    request_span.status_code(resp.status());
                     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
 
                     // spawn task to process SSE
@@ -318,12 +301,14 @@ impl ModelClient {
                         stream,
                         tx_event,
                         self.provider.stream_idle_timeout(),
+                        self.trace_manager.clone(),
                     ));
 
                     return Ok(ResponseStream { rx_event });
                 }
                 Ok(res) => {
                     let status = res.status();
+                    let mut log_message = status.to_string();
 
                     // Pull out Retry‑After header if present.
                     let retry_after_secs = res
@@ -339,19 +324,15 @@ impl ModelClient {
                         let _ = manager.refresh_token().await;
                     }
 
-                    // The OpenAI Responses endpoint returns structured JSON bodies even for 4xx/5xx
-                    // errors. When we bubble early with only the HTTP status the caller sees an opaque
-                    // "unexpected status 400 Bad Request" which makes debugging nearly impossible.
-                    // Instead, read (and include) the response text so higher layers and users see the
-                    // exact error message (e.g. "Unknown parameter: 'input[0].metadata'"). The body is
-                    // small and this branch only runs on error paths so the extra allocation is
-                    // negligible.
                     if !(status == StatusCode::TOO_MANY_REQUESTS
                         || status == StatusCode::UNAUTHORIZED
                         || status.is_server_error())
                     {
-                        // Surface the error body to callers. Use `unwrap_or_default` per Clippy.
                         let body = res.text().await.unwrap_or_default();
+                        if !body.is_empty() {
+                            log_message = format!("{log_message}: {body}");
+                        }
+                        request_span.error(attempt, Some(status), &log_message);
                         return Err(CodexErr::UnexpectedStatus(status, body));
                     }
 
@@ -359,24 +340,24 @@ impl ModelClient {
                         let body = res.json::<ErrorResponse>().await.ok();
                         if let Some(ErrorResponse { error }) = body {
                             if error.r#type.as_deref() == Some("usage_limit_reached") {
-                                // Prefer the plan_type provided in the error message if present
-                                // because it's more up to date than the one encoded in the auth
-                                // token.
                                 let plan_type = error
                                     .plan_type
                                     .or_else(|| auth.as_ref().and_then(|a| a.get_plan_type()));
                                 let resets_in_seconds = error.resets_in_seconds;
+                                request_span.error(attempt, Some(status), &log_message);
                                 return Err(CodexErr::UsageLimitReached(UsageLimitReachedError {
                                     plan_type,
                                     resets_in_seconds,
                                 }));
                             } else if error.r#type.as_deref() == Some("usage_not_included") {
+                                request_span.error(attempt, Some(status), &log_message);
                                 return Err(CodexErr::UsageNotIncluded);
                             }
                         }
                     }
 
                     if attempt > max_retries {
+                        request_span.error(attempt, Some(status), &log_message);
                         if status == StatusCode::INTERNAL_SERVER_ERROR {
                             return Err(CodexErr::InternalServerError);
                         }
@@ -384,12 +365,16 @@ impl ModelClient {
                         return Err(CodexErr::RetryLimit(status));
                     }
 
+                    request_span.error(attempt, Some(status), &log_message);
+
                     let delay = retry_after_secs
                         .map(|s| Duration::from_millis(s * 1_000))
                         .unwrap_or_else(|| backoff(attempt));
                     tokio::time::sleep(delay).await;
                 }
                 Err(e) => {
+                    let error_message = format!("{e:#}");
+                    request_span.error(attempt, None, &error_message);
                     if attempt > max_retries {
                         return Err(e.into());
                     }
@@ -402,6 +387,10 @@ impl ModelClient {
 
     pub fn get_provider(&self) -> ModelProviderInfo {
         self.provider.clone()
+    }
+
+    pub fn get_trace_manager(&self) -> TraceManager {
+        self.trace_manager.clone()
     }
 
     /// Returns the currently configured model slug.
@@ -519,6 +508,7 @@ async fn process_sse<S>(
     stream: S,
     tx_event: mpsc::Sender<Result<ResponseEvent>>,
     idle_timeout: Duration,
+    trace_manager: TraceManager,
 ) where
     S: Stream<Item = Result<Bytes>> + Unpin,
 {
@@ -529,12 +519,16 @@ async fn process_sse<S>(
     let mut response_completed: Option<ResponseCompleted> = None;
     let mut response_error: Option<CodexErr> = None;
 
+    let sse_span = trace_manager.response();
+
     loop {
-        let sse = match timeout(idle_timeout, stream.next()).await {
+        let sse = match timeout(idle_timeout, stream.next().instrument(sse_span.span())).await {
             Ok(Some(Ok(sse))) => sse,
             Ok(Some(Err(e))) => {
                 debug!("SSE Error: {e:#}");
-                let event = CodexErr::Stream(e.to_string(), None);
+                let error = e.to_string();
+                sse_span.error(error.as_str());
+                let event = CodexErr::Stream(error, None);
                 let _ = tx_event.send(Err(event)).await;
                 return;
             }
@@ -544,6 +538,21 @@ async fn process_sse<S>(
                         id: response_id,
                         usage,
                     }) => {
+                        if let Some(token_usage) = &usage {
+                            sse_span.token_usage(
+                                token_usage.input_tokens,
+                                token_usage.output_tokens,
+                                token_usage
+                                    .input_tokens_details
+                                    .as_ref()
+                                    .map(|d| d.cached_tokens),
+                                token_usage
+                                    .output_tokens_details
+                                    .as_ref()
+                                    .map(|d| d.reasoning_tokens),
+                                token_usage.total_tokens,
+                            );
+                        }
                         let event = ResponseEvent::Completed {
                             response_id,
                             token_usage: usage.map(Into::into),
@@ -551,22 +560,27 @@ async fn process_sse<S>(
                         let _ = tx_event.send(Ok(event)).await;
                     }
                     None => {
-                        let _ = tx_event
-                            .send(Err(response_error.unwrap_or(CodexErr::Stream(
-                                "stream closed before response.completed".into(),
-                                None,
-                            ))))
-                            .await;
+                        let error = response_error.unwrap_or(CodexErr::Stream(
+                            "stream closed before response.completed".into(),
+                            None,
+                        ));
+
+                        if let CodexErr::Stream(message, _) = &error {
+                            sse_span.error(message.as_str());
+                        }
+
+                        let _ = tx_event.send(Err(error)).await;
                     }
                 }
                 return;
             }
             Err(_) => {
+                let error = "idle timeout waiting for SSE";
+
+                sse_span.error(error);
+
                 let _ = tx_event
-                    .send(Err(CodexErr::Stream(
-                        "idle timeout waiting for SSE".into(),
-                        None,
-                    )))
+                    .send(Err(CodexErr::Stream(error.into(), None)))
                     .await;
                 return;
             }
@@ -575,15 +589,17 @@ async fn process_sse<S>(
         let raw = sse.data.clone();
         trace!("SSE event: {}", raw);
 
+        sse_span.body(raw.as_str());
+
         let event: SseEvent = match serde_json::from_str(&sse.data) {
             Ok(event) => event,
             Err(e) => {
-                debug!("Failed to parse SSE event: {e}, data: {}", &sse.data);
+                let error = format!("Failed to parse SSE event: {e}, data: {}", &sse.data);
+                sse_span.error(error.as_str());
+                debug!(error);
                 continue;
             }
         };
-
-        Span::current().record("otel.name", event.kind.as_str());
 
         match event.kind.as_str() {
             // Individual output item finalised. Forward immediately so the
@@ -607,7 +623,9 @@ async fn process_sse<S>(
             "response.output_item.done" => {
                 let Some(item_val) = event.item else { continue };
                 let Ok(item) = serde_json::from_value::<ResponseItem>(item_val) else {
-                    debug!("failed to parse ResponseItem from output_item.done");
+                    let error = "failed to parse ResponseItem from output_item.done";
+                    debug!(error);
+                    sse_span.error(error);
                     continue;
                 };
 
@@ -647,10 +665,13 @@ async fn process_sse<S>(
             }
             "response.failed" => {
                 if let Some(resp_val) = event.response {
+                    let error_message = "response.failed event received";
                     response_error = Some(CodexErr::Stream(
-                        "response.failed event received".to_string(),
+                        error_message.to_string(),
                         None,
                     ));
+
+                    sse_span.error(error_message);
 
                     let error = resp_val.get("error");
 
@@ -659,10 +680,13 @@ async fn process_sse<S>(
                             Ok(error) => {
                                 let delay = try_parse_retry_after(&error);
                                 let message = error.message.unwrap_or_default();
+                                sse_span.error(message.as_str());
                                 response_error = Some(CodexErr::Stream(message, delay));
                             }
                             Err(e) => {
-                                debug!("failed to parse ErrorResponse: {e}");
+                                let error_message = format!("failed to parse ErrorResponse: {e}");
+                                debug!(error_message);
+                                sse_span.error(error_message.as_str());
                             }
                         }
                     }
@@ -676,7 +700,9 @@ async fn process_sse<S>(
                             response_completed = Some(r);
                         }
                         Err(e) => {
-                            debug!("failed to parse ResponseCompleted: {e}");
+                            let error_message = format!("failed to parse ResponseCompleted: {e}");
+                            debug!(error_message);
+                            sse_span.error(error_message.as_str());
                             continue;
                         }
                     };
@@ -723,6 +749,7 @@ async fn process_sse<S>(
 async fn stream_from_fixture(
     path: impl AsRef<Path>,
     provider: ModelProviderInfo,
+    trace_manager: TraceManager,
 ) -> Result<ResponseStream> {
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
     let f = std::fs::File::open(path.as_ref())?;
@@ -741,6 +768,7 @@ async fn stream_from_fixture(
         stream,
         tx_event,
         provider.stream_idle_timeout(),
+        trace_manager,
     ));
     Ok(ResponseStream { rx_event })
 }
@@ -796,6 +824,7 @@ mod tests {
     async fn collect_events(
         chunks: &[&[u8]],
         provider: ModelProviderInfo,
+        trace_manager: TraceManager,
     ) -> Vec<Result<ResponseEvent>> {
         let mut builder = IoBuilder::new();
         for chunk in chunks {
@@ -805,7 +834,12 @@ mod tests {
         let reader = builder.build();
         let stream = ReaderStream::new(reader).map_err(CodexErr::Io);
         let (tx, mut rx) = mpsc::channel::<Result<ResponseEvent>>(16);
-        tokio::spawn(process_sse(stream, tx, provider.stream_idle_timeout()));
+        tokio::spawn(process_sse(
+            stream,
+            tx,
+            provider.stream_idle_timeout(),
+            trace_manager,
+        ));
 
         let mut events = Vec::new();
         while let Some(ev) = rx.recv().await {
@@ -819,6 +853,7 @@ mod tests {
     async fn run_sse(
         events: Vec<serde_json::Value>,
         provider: ModelProviderInfo,
+        trace_manager: TraceManager,
     ) -> Vec<ResponseEvent> {
         let mut body = String::new();
         for e in events {
@@ -835,7 +870,12 @@ mod tests {
 
         let (tx, mut rx) = mpsc::channel::<Result<ResponseEvent>>(8);
         let stream = ReaderStream::new(std::io::Cursor::new(body)).map_err(CodexErr::Io);
-        tokio::spawn(process_sse(stream, tx, provider.stream_idle_timeout()));
+        tokio::spawn(process_sse(
+            stream,
+            tx,
+            provider.stream_idle_timeout(),
+            trace_manager,
+        ));
 
         let mut out = Vec::new();
         while let Some(ev) = rx.recv().await {
@@ -895,9 +935,19 @@ mod tests {
             requires_openai_auth: false,
         };
 
+        let trace_manager = TraceManager::new(
+            ConversationId::new(),
+            "test",
+            "test",
+            None,
+            AuthMode::ChatGPT,
+            "test".to_string(),
+        );
+
         let events = collect_events(
             &[sse1.as_bytes(), sse2.as_bytes(), sse3.as_bytes()],
             provider,
+            trace_manager,
         )
         .await;
 
@@ -955,7 +1005,16 @@ mod tests {
             requires_openai_auth: false,
         };
 
-        let events = collect_events(&[sse1.as_bytes()], provider).await;
+        let trace_manager = TraceManager::new(
+            ConversationId::new(),
+            "test",
+            "test",
+            None,
+            AuthMode::ChatGPT,
+            "test".to_string(),
+        );
+
+        let events = collect_events(&[sse1.as_bytes()], provider, trace_manager).await;
 
         assert_eq!(events.len(), 2);
 
@@ -989,7 +1048,16 @@ mod tests {
             requires_openai_auth: false,
         };
 
-        let events = collect_events(&[sse1.as_bytes()], provider).await;
+        let trace_manager = TraceManager::new(
+            ConversationId::new(),
+            "test",
+            "test",
+            None,
+            AuthMode::ChatGPT,
+            "test".to_string(),
+        );
+
+        let events = collect_events(&[sse1.as_bytes()], provider, trace_manager).await;
 
         assert_eq!(events.len(), 1);
 
@@ -1094,7 +1162,16 @@ mod tests {
                 requires_openai_auth: false,
             };
 
-            let out = run_sse(evs, provider).await;
+            let trace_manager = TraceManager::new(
+                ConversationId::new(),
+                "test",
+                "test",
+                None,
+                AuthMode::ChatGPT,
+                "test".to_string(),
+            );
+
+            let out = run_sse(evs, provider, trace_manager).await;
             assert_eq!(out.len(), case.expected_len, "case {}", case.name);
             assert!(
                 (case.expect_first)(&out[0]),
