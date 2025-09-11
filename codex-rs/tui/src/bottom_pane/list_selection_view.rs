@@ -168,24 +168,30 @@ impl BottomPaneView for ListSelectionView {
 
         let mut next_y = area.y.saturating_add(1);
         if let Some(sub) = &self.subtitle {
-            let subtitle_area = Rect {
-                x: area.x,
-                y: next_y,
-                width: area.width,
-                height: 1,
-            };
-            let subtitle_spans: Vec<Span<'static>> =
-                vec![Self::dim_prefix_span(), sub.clone().dim()];
-            let subtitle_para = Paragraph::new(Line::from(subtitle_spans));
-            subtitle_para.render(subtitle_area, buf);
-            // Render the extra spacer line with the dimmed prefix to align with title/subtitle
-            let spacer_area = Rect {
-                x: area.x,
-                y: next_y.saturating_add(1),
-                width: area.width,
-                height: 1,
-            };
-            Self::render_dim_prefix_line(spacer_area, buf);
+            // Render subtitle only if there is room for at least one line
+            if next_y < area.y.saturating_add(area.height) {
+                let subtitle_area = Rect {
+                    x: area.x,
+                    y: next_y,
+                    width: area.width,
+                    height: 1,
+                };
+                let subtitle_spans: Vec<Span<'static>> =
+                    vec![Self::dim_prefix_span(), sub.clone().dim()];
+                let subtitle_para = Paragraph::new(Line::from(subtitle_spans));
+                subtitle_para.render(subtitle_area, buf);
+            }
+            // Render spacer below subtitle only if it fits within the area
+            let spacer_y = next_y.saturating_add(1);
+            if spacer_y < area.y.saturating_add(area.height) {
+                let spacer_area = Rect {
+                    x: area.x,
+                    y: spacer_y,
+                    width: area.width,
+                    height: 1,
+                };
+                Self::render_dim_prefix_line(spacer_area, buf);
+            }
             next_y = next_y.saturating_add(2);
         }
 
@@ -234,14 +240,17 @@ impl BottomPaneView for ListSelectionView {
         }
 
         if let Some(hint) = &self.footer_hint {
-            let footer_area = Rect {
-                x: area.x,
-                y: area.y + area.height - 1,
-                width: area.width,
-                height: 1,
-            };
-            let footer_para = Paragraph::new(hint.clone().dim());
-            footer_para.render(footer_area, buf);
+            // Only render footer if there is at least one row of height
+            if area.height > 0 {
+                let footer_area = Rect {
+                    x: area.x,
+                    y: area.y.saturating_add(area.height.saturating_sub(1)),
+                    width: area.width,
+                    height: 1,
+                };
+                let footer_para = Paragraph::new(hint.clone().dim());
+                footer_para.render(footer_area, buf);
+            }
         }
     }
 }
