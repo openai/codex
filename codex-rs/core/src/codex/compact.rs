@@ -30,7 +30,6 @@ pub(super) const COMPACT_TRIGGER_TEXT: &str = "Start Summarization";
 const SUMMARIZATION_PROMPT: &str = include_str!("../../templates/compact/prompt.md");
 // TODO(jif) switch all the usage to i32 / i64
 const AUTO_COMPACT_TOKEN_LIMIT: u64 = 120_000;
-const BASE_INSTRUCTIONS: &str = include_str!("../../prompt.md");
 
 fn tokens_used_for_auto_compact(token_usage: &TokenUsage) -> u64 {
     token_usage.tokens_in_context_window()
@@ -118,14 +117,21 @@ async fn run_compact_task_inner(
     sess.send_event(start_event).await;
 
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
-    let turn_input = sess.turn_input_with_history(vec![initial_input_for_turn.clone().into()]);
+    let turn_input = sess.turn_input_with_history(vec![
+        initial_input_for_turn.clone().into(),
+        ResponseInputItem::Message {
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: compact_instructions,
+            }],
+        }
+        .into(),
+    ]);
 
-    let base_instructions_override = (!compact_instructions.is_empty())
-        .then(|| format!("{BASE_INSTRUCTIONS}\n\n{compact_instructions}"));
     let prompt = Prompt {
         input: turn_input,
         tools: Vec::new(),
-        base_instructions_override,
+        base_instructions_override: None,
     };
 
     let max_retries = turn_context.client.get_provider().stream_max_retries();
