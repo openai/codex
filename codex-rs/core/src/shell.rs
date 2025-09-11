@@ -1,36 +1,18 @@
 use serde::Deserialize;
 use serde::Serialize;
 use shlex;
-use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
-use tracing::trace;
-use uuid::Uuid;
 
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-/// This structure cannot derive Clone or this will break the Drop implementation.
-pub struct ShellSnapshot {
-    pub(crate) path: PathBuf,
-}
-
-impl ShellSnapshot {
-    pub fn new(path: PathBuf) -> Self {
-        Self { path }
-    }
-}
-
-impl Drop for ShellSnapshot {
-    fn drop(&mut self) {
-        delete_shell_snapshot(&self.path);
-    }
+#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
+pub struct ZshShell {
+    shell_path: String,
+    zshrc_path: String,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
-pub struct PosixShell {
-    pub(crate) shell_path: String,
-    pub(crate) rc_path: String,
-    #[serde(skip_serializing, skip_deserializing)]
-    pub(crate) shell_snapshot: Option<Arc<ShellSnapshot>>,
+pub struct BashShell {
+    shell_path: String,
+    bashrc_path: String,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
@@ -41,7 +23,8 @@ pub struct PowerShellConfig {
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub enum Shell {
-    Posix(PosixShell),
+    Zsh(ZshShell),
+    Bash(BashShell),
     PowerShell(PowerShellConfig),
     Unknown,
 }
@@ -49,27 +32,11 @@ pub enum Shell {
 impl Shell {
     pub fn format_default_shell_invocation(&self, command: Vec<String>) -> Option<Vec<String>> {
         match self {
-            Shell::Posix(shell) => {
-                let joined = strip_bash_lc(&command)
-                    .or_else(|| shlex::try_join(command.iter().map(|s| s.as_str())).ok())?;
-
-                let mut source_path = Path::new(&shell.rc_path);
-
-                let session_cmd = if let Some(shell_snapshot) = &shell.shell_snapshot
-                    && shell_snapshot.path.exists()
-                {
-                    source_path = shell_snapshot.path.as_path();
-                    "-c".to_string()
-                } else {
-                    "-lc".to_string()
-                };
-
-                let source_path_str = source_path.to_string_lossy().to_string();
-                let quoted_source_path = shlex::try_quote(&source_path_str).ok()?;
-                let rc_command =
-                    format!("[ -f {quoted_source_path} ] && . {quoted_source_path}; ({joined})");
-
-                Some(vec![shell.shell_path.clone(), session_cmd, rc_command])
+            Shell::Zsh(zsh) => {
+                format_shell_invocation_with_rc(&command, &zsh.shell_path, &zsh.zshrc_path)
+            }
+            Shell::Bash(bash) => {
+                format_shell_invocation_with_rc(&command, &bash.shell_path, &bash.bashrc_path)
             }
             Shell::PowerShell(ps) => {
                 // If model generated a bash command, prefer a detected bash fallback
@@ -122,20 +89,33 @@ impl Shell {
 
     pub fn name(&self) -> Option<String> {
         match self {
-            Shell::Posix(shell) => Path::new(&shell.shell_path)
+            Shell::Zsh(zsh) => std::path::Path::new(&zsh.shell_path)
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string()),
+            Shell::Bash(bash) => std::path::Path::new(&bash.shell_path)
                 .file_name()
                 .map(|s| s.to_string_lossy().to_string()),
             Shell::PowerShell(ps) => Some(ps.exe.clone()),
             Shell::Unknown => None,
         }
     }
+}
 
-    pub fn get_snapshot(&self) -> Option<Arc<ShellSnapshot>> {
-        match self {
-            Shell::Posix(shell) => shell.shell_snapshot.clone(),
-            _ => None,
-        }
-    }
+fn format_shell_invocation_with_rc(
+    command: &Vec<String>,
+    shell_path: &str,
+    rc_path: &str,
+) -> Option<Vec<String>> {
+    let joined = strip_bash_lc(command)
+        .or_else(|| shlex::try_join(command.iter().map(|s| s.as_str())).ok())?;
+
+    let rc_command = if std::path::Path::new(rc_path).exists() {
+        format!("source {rc_path} && ({joined})")
+    } else {
+        joined
+    };
+
+    Some(vec![shell_path.to_string(), "-lc".to_string(), rc_command])
 }
 
 fn strip_bash_lc(command: &Vec<String>) -> Option<String> {
@@ -152,7 +132,7 @@ fn strip_bash_lc(command: &Vec<String>) -> Option<String> {
 }
 
 #[cfg(unix)]
-async fn detect_default_user_shell(session_id: Uuid, codex_home: &Path) -> Shell {
+fn detect_default_user_shell() -> Shell {
     use libc::getpwuid;
     use libc::getuid;
     use std::ffi::CStr;
@@ -167,45 +147,31 @@ async fn detect_default_user_shell(session_id: Uuid, codex_home: &Path) -> Shell
                 .into_owned();
             let home_path = CStr::from_ptr((*pw).pw_dir).to_string_lossy().into_owned();
 
-            let rc_path = if shell_path.ends_with("/zsh") {
-                format!("{home_path}/.zshrc")
-            } else if shell_path.ends_with("/bash") {
-                format!("{home_path}/.bashrc")
-            } else {
-                return Shell::Unknown;
-            };
-
-            let snapshot_path = snapshots::ensure_posix_snapshot(
-                &shell_path,
-                &rc_path,
-                Path::new(&home_path),
-                codex_home,
-                session_id,
-            )
-            .await;
-            if snapshot_path.is_none() {
-                trace!("failed to prepare posix snapshot; using live profile");
+            if shell_path.ends_with("/zsh") {
+                return Shell::Zsh(ZshShell {
+                    shell_path,
+                    zshrc_path: format!("{home_path}/.zshrc"),
+                });
             }
-            let shell_snapshot =
-                snapshot_path.map(|snapshot| Arc::new(ShellSnapshot::new(snapshot)));
 
-            return Shell::Posix(PosixShell {
-                shell_path,
-                rc_path,
-                shell_snapshot,
-            });
+            if shell_path.ends_with("/bash") {
+                return Shell::Bash(BashShell {
+                    shell_path,
+                    bashrc_path: format!("{home_path}/.bashrc"),
+                });
+            }
         }
     }
     Shell::Unknown
 }
 
 #[cfg(unix)]
-pub async fn default_user_shell(session_id: Uuid, codex_home: &Path) -> Shell {
-    detect_default_user_shell(session_id, codex_home).await
+pub async fn default_user_shell() -> Shell {
+    detect_default_user_shell()
 }
 
 #[cfg(target_os = "windows")]
-pub async fn default_user_shell(_session_id: Uuid, _codex_home: &Path) -> Shell {
+pub async fn default_user_shell() -> Shell {
     use tokio::process::Command;
 
     // Prefer PowerShell 7+ (`pwsh`) if available, otherwise fall back to Windows PowerShell.
@@ -245,158 +211,42 @@ pub async fn default_user_shell(_session_id: Uuid, _codex_home: &Path) -> Shell 
 }
 
 #[cfg(all(not(target_os = "windows"), not(unix)))]
-pub async fn default_user_shell(_session_id: Uuid, _codex_home: &Path) -> Shell {
+pub async fn default_user_shell() -> Shell {
     Shell::Unknown
-}
-
-#[cfg(unix)]
-mod snapshots {
-    use super::*;
-
-    fn zsh_profile_paths(home: &Path) -> Vec<PathBuf> {
-        [".zshenv", ".zprofile", ".zshrc", ".zlogin"]
-            .into_iter()
-            .map(|name| home.join(name))
-            .collect()
-    }
-
-    fn posix_profile_source_script(home: &Path) -> String {
-        zsh_profile_paths(home)
-            .into_iter()
-            .map(|profile| {
-                let profile_string = profile.to_string_lossy().into_owned();
-                let quoted = shlex::try_quote(&profile_string)
-                    .map(|cow| cow.into_owned())
-                    .unwrap_or(profile_string.clone());
-
-                format!("[ -f {quoted} ] && . {quoted}")
-            })
-            .collect::<Vec<_>>()
-            .join("; ")
-    }
-
-    pub(crate) async fn ensure_posix_snapshot(
-        shell_path: &str,
-        rc_path: &str,
-        home: &Path,
-        codex_home: &Path,
-        session_id: Uuid,
-    ) -> Option<PathBuf> {
-        let snapshot_path = codex_home.join(format!("shell_snapshots/snapshot_{session_id}.zsh"));
-
-        // Check if an update in the profile requires to re-generate the snapshot.
-        let snapshot_is_stale = async {
-            let snapshot_metadata = tokio::fs::metadata(&snapshot_path).await.ok()?;
-            let snapshot_modified = snapshot_metadata.modified().ok()?;
-
-            for profile in zsh_profile_paths(home) {
-                let Ok(profile_metadata) = tokio::fs::metadata(&profile).await else {
-                    continue;
-                };
-
-                let Ok(profile_modified) = profile_metadata.modified() else {
-                    return Some(true);
-                };
-
-                if profile_modified > snapshot_modified {
-                    return Some(true);
-                }
-            }
-
-            Some(false)
-        }
-        .await
-        .unwrap_or(true);
-
-        if !snapshot_is_stale {
-            return Some(snapshot_path);
-        }
-
-        match regenerate_posix_snapshot(shell_path, rc_path, home, &snapshot_path).await {
-            Ok(()) => Some(snapshot_path),
-            Err(err) => {
-                tracing::warn!("failed to generate posix snapshot: {err}");
-                None
-            }
-        }
-    }
-
-    async fn regenerate_posix_snapshot(
-        shell_path: &str,
-        rc_path: &str,
-        home: &Path,
-        snapshot_path: &Path,
-    ) -> std::io::Result<()> {
-        // Use `emulate -L sh` instead of `set -o posix` so we work on zsh builds
-        // that disable that option. Guard `alias -p` with `|| true` so the script
-        // keeps a zero exit status even if aliases are disabled.
-        let mut capture_script = String::new();
-        let profile_sources = posix_profile_source_script(home);
-        if !profile_sources.is_empty() {
-            capture_script.push_str(&format!("{profile_sources}; "));
-        }
-
-        let zshrc = home.join(rc_path);
-
-        capture_script.push_str(
-            &format!(". {}; setopt posixbuiltins; export -p; {{ alias | sed 's/^/alias /'; }} 2>/dev/null || true", zshrc.display()),
-        );
-        let output = tokio::process::Command::new(shell_path)
-            .arg("-lc")
-            .arg(capture_script)
-            .env("HOME", home)
-            .output()
-            .await?;
-
-        if !output.status.success() {
-            return Err(std::io::Error::other(format!(
-                "snapshot capture exited with status {}",
-                output.status
-            )));
-        }
-
-        let mut contents = String::from("# Generated by Codex. Do not edit.\n");
-
-        contents.push_str(&String::from_utf8_lossy(&output.stdout));
-        contents.push('\n');
-
-        if let Some(parent) = snapshot_path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
-
-        let tmp_path = snapshot_path.with_extension("tmp");
-        tokio::fs::write(&tmp_path, contents).await?;
-
-        // Restrict the snapshot to user read/write so that environment variables or aliases
-        // that may contain secrets are not exposed to other users on the system.
-        use std::os::unix::fs::PermissionsExt;
-        let permissions = std::fs::Permissions::from_mode(0o600);
-        tokio::fs::set_permissions(&tmp_path, permissions).await?;
-
-        tokio::fs::rename(&tmp_path, snapshot_path).await?;
-        Ok(())
-    }
-}
-
-pub(crate) fn delete_shell_snapshot(path: &Path) {
-    if let Err(err) = std::fs::remove_file(path) {
-        trace!("failed to delete shell snapshot {path:?}: {err}");
-    }
 }
 
 #[cfg(test)]
 #[cfg(unix)]
 mod tests {
     use super::*;
+    use std::process::Command;
 
-    use std::path::PathBuf;
+    #[tokio::test]
+    async fn test_current_shell_detects_zsh() {
+        let shell = Command::new("sh")
+            .arg("-c")
+            .arg("echo $SHELL")
+            .output()
+            .unwrap();
+
+        let home = std::env::var("HOME").unwrap();
+        let shell_path = String::from_utf8_lossy(&shell.stdout).trim().to_string();
+        if shell_path.ends_with("/zsh") {
+            assert_eq!(
+                default_user_shell().await,
+                Shell::Zsh(ZshShell {
+                    shell_path: shell_path.to_string(),
+                    zshrc_path: format!("{home}/.zshrc",),
+                })
+            );
+        }
+    }
 
     #[tokio::test]
     async fn test_run_with_profile_zshrc_not_exists() {
-        let shell = Shell::Posix(PosixShell {
+        let shell = Shell::Zsh(ZshShell {
             shell_path: "/bin/zsh".to_string(),
-            rc_path: "/does/not/exist/.zshrc".to_string(),
-            shell_snapshot: None,
+            zshrc_path: "/does/not/exist/.zshrc".to_string(),
         });
         let actual_cmd = shell.format_default_shell_invocation(vec!["myecho".to_string()]);
         assert_eq!(
@@ -404,7 +254,24 @@ mod tests {
             Some(vec![
                 "/bin/zsh".to_string(),
                 "-lc".to_string(),
-                "[ -f /does/not/exist/.zshrc ] && . /does/not/exist/.zshrc; (myecho)".to_string(),
+                "myecho".to_string()
+            ])
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_with_profile_bashrc_not_exists() {
+        let shell = Shell::Bash(BashShell {
+            shell_path: "/bin/bash".to_string(),
+            bashrc_path: "/does/not/exist/.bashrc".to_string(),
+        });
+        let actual_cmd = shell.format_default_shell_invocation(vec!["myecho".to_string()]);
+        assert_eq!(
+            actual_cmd,
+            Some(vec![
+                "/bin/bash".to_string(),
+                "-lc".to_string(),
+                "myecho".to_string()
             ])
         );
     }
@@ -416,11 +283,7 @@ mod tests {
         let cases = vec![
             (
                 vec!["myecho"],
-                vec![
-                    shell_path,
-                    "-lc",
-                    "[ -f BASHRC_PATH ] && . BASHRC_PATH; (myecho)",
-                ],
+                vec![shell_path, "-lc", "source BASHRC_PATH && (myecho)"],
                 Some("It works!\n"),
             ),
             (
@@ -428,7 +291,7 @@ mod tests {
                 vec![
                     shell_path,
                     "-lc",
-                    "[ -f BASHRC_PATH ] && . BASHRC_PATH; (echo 'single' \"double\")",
+                    "source BASHRC_PATH && (echo 'single' \"double\")",
                 ],
                 Some("single double\n"),
             ),
@@ -454,10 +317,9 @@ mod tests {
                     "#,
             )
             .unwrap();
-            let shell = Shell::Posix(PosixShell {
+            let shell = Shell::Bash(BashShell {
                 shell_path: shell_path.to_string(),
-                rc_path: bashrc_path.to_str().unwrap().to_string(),
-                shell_snapshot: None,
+                bashrc_path: bashrc_path.to_str().unwrap().to_string(),
             });
 
             let actual_cmd = shell
@@ -507,82 +369,6 @@ mod tests {
 #[cfg(target_os = "macos")]
 mod macos_tests {
     use super::*;
-    use crate::shell::snapshots::ensure_posix_snapshot;
-
-    #[tokio::test]
-    async fn test_snapshot_generation_uses_session_id_and_cleanup() {
-        let shell_path = "/bin/zsh";
-
-        let temp_home = tempfile::tempdir().unwrap();
-        let codex_home = tempfile::tempdir().unwrap();
-        std::fs::write(
-            temp_home.path().join(".zshrc"),
-            "export SNAPSHOT_TEST_VAR=1\nalias snapshot_test_alias='echo hi'\n",
-        )
-        .unwrap();
-
-        let session_id = Uuid::new_v4();
-        let snapshot_path = ensure_posix_snapshot(
-            shell_path,
-            ".zshrc",
-            temp_home.path(),
-            codex_home.path(),
-            session_id,
-        )
-        .await
-        .expect("snapshot path");
-
-        let filename = snapshot_path
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .to_string();
-        assert!(filename.contains(&session_id.to_string()));
-        assert!(snapshot_path.exists());
-
-        let snapshot_path_second = ensure_posix_snapshot(
-            shell_path,
-            ".zshrc",
-            temp_home.path(),
-            codex_home.path(),
-            session_id,
-        )
-        .await
-        .expect("snapshot path");
-        assert_eq!(snapshot_path, snapshot_path_second);
-
-        let contents = std::fs::read_to_string(&snapshot_path).unwrap();
-        assert!(contents.contains("alias snapshot_test_alias='echo hi'"));
-        assert!(contents.contains("SNAPSHOT_TEST_VAR=1"));
-
-        delete_shell_snapshot(&snapshot_path);
-        assert!(!snapshot_path.exists());
-    }
-
-    #[test]
-    fn format_default_shell_invocation_prefers_snapshot_when_available() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let snapshot_path = temp_dir.path().join("snapshot.zsh");
-        std::fs::write(&snapshot_path, "export SNAPSHOT_READY=1").unwrap();
-
-        let shell = Shell::Posix(PosixShell {
-            shell_path: "/bin/zsh".to_string(),
-            rc_path: {
-                let path = temp_dir.path().join(".zshrc");
-                std::fs::write(&path, "# test zshrc").unwrap();
-                path.to_string_lossy().to_string()
-            },
-            shell_snapshot: Some(Arc::new(ShellSnapshot::new(snapshot_path.clone()))),
-        });
-
-        let invocation = shell.format_default_shell_invocation(vec!["echo".to_string()]);
-        let expected_command = vec!["/bin/zsh".to_string(), "-c".to_string(), {
-            let snapshot_path = snapshot_path.to_string_lossy();
-            format!("[ -f {snapshot_path} ] && . {snapshot_path}; (echo)")
-        }];
-
-        assert_eq!(invocation, Some(expected_command));
-    }
 
     #[tokio::test]
     async fn test_run_with_profile_escaping_and_execution() {
@@ -591,20 +377,12 @@ mod macos_tests {
         let cases = vec![
             (
                 vec!["myecho"],
-                vec![
-                    shell_path,
-                    "-lc",
-                    "[ -f ZSHRC_PATH ] && . ZSHRC_PATH; (myecho)",
-                ],
+                vec![shell_path, "-lc", "source ZSHRC_PATH && (myecho)"],
                 Some("It works!\n"),
             ),
             (
                 vec!["myecho"],
-                vec![
-                    shell_path,
-                    "-lc",
-                    "[ -f ZSHRC_PATH ] && . ZSHRC_PATH; (myecho)",
-                ],
+                vec![shell_path, "-lc", "source ZSHRC_PATH && (myecho)"],
                 Some("It works!\n"),
             ),
             (
@@ -612,7 +390,7 @@ mod macos_tests {
                 vec![
                     shell_path,
                     "-lc",
-                    "[ -f ZSHRC_PATH ] && . ZSHRC_PATH; (bash -c \"echo 'single' \\\"double\\\"\")",
+                    "source ZSHRC_PATH && (bash -c \"echo 'single' \\\"double\\\"\")",
                 ],
                 Some("single double\n"),
             ),
@@ -621,7 +399,7 @@ mod macos_tests {
                 vec![
                     shell_path,
                     "-lc",
-                    "[ -f ZSHRC_PATH ] && . ZSHRC_PATH; (echo 'single' \"double\")",
+                    "source ZSHRC_PATH && (echo 'single' \"double\")",
                 ],
                 Some("single double\n"),
             ),
@@ -648,10 +426,9 @@ mod macos_tests {
                     "#,
             )
             .unwrap();
-            let shell = Shell::Posix(PosixShell {
+            let shell = Shell::Zsh(ZshShell {
                 shell_path: shell_path.to_string(),
-                rc_path: zshrc_path.to_str().unwrap().to_string(),
-                shell_snapshot: None,
+                zshrc_path: zshrc_path.to_str().unwrap().to_string(),
             });
 
             let actual_cmd = shell

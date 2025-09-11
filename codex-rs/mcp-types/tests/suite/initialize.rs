@@ -62,6 +62,7 @@ fn deserialize_initialize_request() {
                 name: "acme-client".into(),
                 title: Some("Acme".to_string()),
                 version: "1.2.3".into(),
+                user_agent: None,
             },
             protocol_version: "2025-06-18".into(),
         }

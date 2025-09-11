@@ -47,6 +47,7 @@ pub mod insert_history;
 mod key_hint;
 pub mod live_wrap;
 mod markdown;
+mod markdown_render;
 mod markdown_stream;
 mod new_model_popup;
 pub mod onboarding;
@@ -63,11 +64,6 @@ mod tui;
 mod user_approval_widget;
 mod version;
 mod wrapping;
-
-// Internal vt100-based replay tests live as a separate source file to keep them
-// close to the widget code. Include them in unit tests.
-#[cfg(test)]
-mod chatwidget_stream_tests;
 
 #[cfg(not(debug_assertions))]
 mod updates;
@@ -324,6 +320,14 @@ async fn run_ratatui_app(
     // Initialize high-fidelity session event logging if enabled.
     session_log::maybe_init(&config);
 
+    let Cli {
+        prompt,
+        images,
+        resume,
+        r#continue,
+        ..
+    } = cli;
+
     let auth_manager = AuthManager::shared(config.codex_home.clone(), config.preferred_auth_method);
     let login_status = get_login_status(&config);
     let should_show_onboarding =
@@ -440,7 +444,7 @@ fn get_login_status(config: &Config) -> LoginStatus {
         // Reading the OpenAI API key is an async operation because it may need
         // to refresh the token. Block on it.
         let codex_home = config.codex_home.clone();
-        match CodexAuth::from_codex_home(&codex_home, config.preferred_auth_method) {
+        match CodexAuth::from_codex_home(&codex_home) {
             Ok(Some(auth)) => LoginStatus::AuthMode(auth.mode),
             Ok(None) => LoginStatus::NotAuthenticated,
             Err(err) => {
@@ -508,10 +512,7 @@ fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool 
         return false;
     }
 
-    match login_status {
-        LoginStatus::NotAuthenticated => true,
-        LoginStatus::AuthMode(method) => method != config.preferred_auth_method,
-    }
+    login_status == LoginStatus::NotAuthenticated
 }
 
 fn should_show_model_rollout_prompt(
@@ -550,52 +551,23 @@ mod tests {
         });
     }
 
-    fn make_config(preferred: AuthMode) -> Config {
+    fn make_config() -> Config {
         enable_debug_high_env();
-        let mut cfg = Config::load_from_base_config_with_overrides(
+        Config::load_from_base_config_with_overrides(
             ConfigToml::default(),
             ConfigOverrides::default(),
             std::env::temp_dir(),
         )
-        .expect("load default config");
-        cfg.preferred_auth_method = preferred;
-        cfg
+        .expect("load default config")
     }
 
     #[test]
     fn shows_login_when_not_authenticated() {
-        let cfg = make_config(AuthMode::ChatGPT);
+        let cfg = make_config();
         assert!(should_show_login_screen(
             LoginStatus::NotAuthenticated,
             &cfg
         ));
-    }
-
-    #[test]
-    fn shows_login_when_api_key_but_prefers_chatgpt() {
-        let cfg = make_config(AuthMode::ChatGPT);
-        assert!(should_show_login_screen(
-            LoginStatus::AuthMode(AuthMode::ApiKey),
-            &cfg
-        ))
-    }
-
-    #[test]
-    fn hides_login_when_api_key_and_prefers_api_key() {
-        let cfg = make_config(AuthMode::ApiKey);
-        assert!(!should_show_login_screen(
-            LoginStatus::AuthMode(AuthMode::ApiKey),
-            &cfg
-        ))
-    }
-
-    #[test]
-    fn hides_login_when_chatgpt_and_prefers_chatgpt() {
-        let cfg = make_config(AuthMode::ChatGPT);
-        assert!(!should_show_login_screen(
-            LoginStatus::AuthMode(AuthMode::ChatGPT),
-            &cfg
-        ))
     }
 
     #[test]

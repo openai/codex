@@ -612,5 +612,4 @@ Options that are specific to the TUI.
 | `experimental_use_exec_command_tool` | boolean | Use experimental exec command tool. |
 | `responses_originator_header_internal_override` | string | Override `originator` header value. |
 | `projects.<path>.trust_level` | string | Mark project/worktree as trusted (only `"trusted"` is recognized). |
-| `preferred_auth_method` | `chatgpt` \| `apikey` | Select default auth method (default: `chatgpt`). |
 | `tools.web_search` | boolean | Enable web search tool (alias: `web_search_request`) (default: false). |
