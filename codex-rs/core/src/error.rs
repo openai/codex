@@ -137,13 +137,13 @@ impl std::fmt::Display for UsageLimitReachedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let message = match self.plan_type.as_ref() {
             Some(PlanType::Known(KnownPlan::Plus)) => format!(
-                "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing) or{}",
-                retry_suffix(self.resets_in_seconds)
+                "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing){}",
+                retry_suffix_after_or(self.resets_in_seconds)
             ),
             Some(PlanType::Known(KnownPlan::Team)) | Some(PlanType::Known(KnownPlan::Business)) => {
                 format!(
-                    "You've hit your usage limit. To get more access now, send a request to your admin{} or",
-                    retry_suffix(self.resets_in_seconds)
+                    "You've hit your usage limit. To get more access now, send a request to your admin{}",
+                    retry_suffix_after_or(self.resets_in_seconds)
                 )
             }
             Some(PlanType::Known(KnownPlan::Free)) => "You've hit your usage limit. Upgrade to Plus or Pro (https://openai.com/chatgpt/pricing)".to_string(),
@@ -169,6 +169,15 @@ fn retry_suffix(resets_in_seconds: Option<u64>) -> String {
         format!(" Try again in {reset_duration}.")
     } else {
         " Try again later.".to_string()
+    }
+}
+
+fn retry_suffix_after_or(resets_in_seconds: Option<u64>) -> String {
+    if let Some(secs) = resets_in_seconds {
+        let reset_duration = format_reset_duration(secs);
+        format!(" or try again in {reset_duration}.")
+    } else {
+        " or try again later.".to_string()
     }
 }
 
