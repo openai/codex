@@ -14,8 +14,7 @@ use codex_core::config::ConfigToml;
 use codex_core::config::GPT5_HIGH_MODEL;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
-use codex_core::config::record_gpt5_high_prompt_choice;
-use codex_core::model_family::find_family_for_model;
+use codex_core::config::persist_model_selection;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_ollama::DEFAULT_OSS_MODEL;
@@ -24,7 +23,6 @@ use codex_protocol::mcp_protocol::AuthMode;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
 use tracing::error;
-use tracing::warn;
 use tracing_appender::non_blocking;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
@@ -74,14 +72,14 @@ mod chatwidget_stream_tests;
 #[cfg(not(debug_assertions))]
 mod updates;
 
-pub use cli::Cli;
-
 use crate::new_model_popup::ModelUpgradeDecision;
 use crate::new_model_popup::run_model_upgrade_popup;
 use crate::onboarding::TrustDirectorySelection;
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::onboarding::onboarding_screen::run_onboarding_app;
 use crate::tui::Tui;
+pub use cli::Cli;
+use codex_core::internal_storage::InternalStorage;
 
 // (tests access modules directly within the crate)
 
@@ -198,6 +196,8 @@ pub async fn run_main(
         cli_profile_override,
     )?;
 
+    let internal_storage = InternalStorage::load(&config.codex_home);
+
     let log_dir = codex_core::config::log_dir(&config)?;
     std::fs::create_dir_all(&log_dir)?;
     // Open (or create) your log file, appending to it.
@@ -240,14 +240,21 @@ pub async fn run_main(
 
     let _ = tracing_subscriber::registry().with(file_layer).try_init();
 
-    run_ratatui_app(cli, config, active_profile, should_show_trust_screen)
-        .await
-        .map_err(|err| std::io::Error::other(err.to_string()))
+    run_ratatui_app(
+        cli,
+        config,
+        internal_storage,
+        active_profile,
+        should_show_trust_screen,
+    )
+    .await
+    .map_err(|err| std::io::Error::other(err.to_string()))
 }
 
 async fn run_ratatui_app(
     cli: Cli,
     config: Config,
+    mut internal_storage: InternalStorage,
     active_profile: Option<String>,
     should_show_trust_screen: bool,
 ) -> color_eyre::Result<codex_core::protocol::TokenUsage> {
@@ -361,16 +368,33 @@ async fn run_ratatui_app(
         resume_picker::ResumeSelection::StartFresh
     };
 
-    if should_show_model_rollout_prompt(&cli, &config, active_profile.as_deref()) {
+    if should_show_model_rollout_prompt(
+        &cli,
+        &config,
+        active_profile.as_deref(),
+        internal_storage.gpt_5_high_model_prompt_seen,
+    ) {
+        internal_storage.gpt_5_high_model_prompt_seen = true;
+        if let Err(e) = internal_storage.persist().await {
+            error!("Failed to persist internal storage: {e:?}");
+        }
+
         let upgrade_decision = run_model_upgrade_popup(&mut tui).await?;
         let switch_to_new_model = upgrade_decision == ModelUpgradeDecision::Switch;
 
         if switch_to_new_model {
-            apply_gpt5_high_defaults(&mut config);
+            config.model = GPT5_HIGH_MODEL.to_owned();
+            if let Err(e) = persist_model_selection(
+                &config.codex_home,
+                active_profile.as_deref(),
+                &config.model,
+                None,
+            )
+            .await
+            {
+                error!("Failed to persist model selection: {e:?}");
+            }
         }
-
-        config.tui.gpt_5_high_model_prompt_seen = true;
-        record_model_rollout_choice(&config, switch_to_new_model).await;
     }
 
     let Cli { prompt, images, .. } = cli;
@@ -494,6 +518,7 @@ fn should_show_model_rollout_prompt(
     cli: &Cli,
     config: &Config,
     active_profile: Option<&str>,
+    gpt_5_high_model_prompt_seen: bool,
 ) -> bool {
     // TODO(jif) drop.
     let debug_high_enabled = std::env::var("DEBUG_HIGH")
@@ -503,22 +528,9 @@ fn should_show_model_rollout_prompt(
     active_profile.is_none()
         && debug_high_enabled
         && cli.model.is_none()
-        && !config.tui.gpt_5_high_model_prompt_seen
+        && !gpt_5_high_model_prompt_seen
         && config.model_provider.requires_openai_auth
         && !cli.oss
-}
-
-fn apply_gpt5_high_defaults(config: &mut Config) {
-    config.model = GPT5_HIGH_MODEL.to_owned();
-    if let Some(family) = find_family_for_model(GPT5_HIGH_MODEL) {
-        config.model_family = family;
-    }
-}
-
-async fn record_model_rollout_choice(config: &Config, switch: bool) {
-    if let Err(err) = record_gpt5_high_prompt_choice(&config.codex_home, switch).await {
-        warn!(error = %err, "failed to record GPT-5 High prompt choice");
-    }
 }
 
 #[cfg(test)]
@@ -590,28 +602,32 @@ mod tests {
     fn shows_model_rollout_prompt_for_default_model() {
         let cli = Cli::parse_from(["codex"]);
         let cfg = make_config(AuthMode::ChatGPT);
-        assert!(should_show_model_rollout_prompt(&cli, &cfg, None));
+        assert!(should_show_model_rollout_prompt(&cli, &cfg, None, false));
     }
 
     #[test]
     fn hides_model_rollout_prompt_when_marked_seen() {
         let cli = Cli::parse_from(["codex"]);
-        let mut cfg = make_config(AuthMode::ChatGPT);
-        cfg.tui.gpt_5_high_model_prompt_seen = true;
-        assert!(!should_show_model_rollout_prompt(&cli, &cfg, None));
+        let cfg = make_config(AuthMode::ChatGPT);
+        assert!(!should_show_model_rollout_prompt(&cli, &cfg, None, true));
     }
 
     #[test]
     fn hides_model_rollout_prompt_when_cli_overrides_model() {
         let cli = Cli::parse_from(["codex", "--model", "gpt-4.1"]);
         let cfg = make_config(AuthMode::ChatGPT);
-        assert!(!should_show_model_rollout_prompt(&cli, &cfg, None));
+        assert!(!should_show_model_rollout_prompt(&cli, &cfg, None, false));
     }
 
     #[test]
     fn hides_model_rollout_prompt_when_profile_active() {
         let cli = Cli::parse_from(["codex"]);
         let cfg = make_config(AuthMode::ChatGPT);
-        assert!(!should_show_model_rollout_prompt(&cli, &cfg, Some("gpt5")));
+        assert!(!should_show_model_rollout_prompt(
+            &cli,
+            &cfg,
+            Some("gpt5"),
+            false,
+        ));
     }
 }

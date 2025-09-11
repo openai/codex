@@ -25,8 +25,6 @@ use codex_protocol::mcp_protocol::Tools;
 use codex_protocol::mcp_protocol::UserSavedConfig;
 use dirs::home_dir;
 use serde::Deserialize;
-use serde::Serialize;
-use serde_json;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
@@ -43,54 +41,6 @@ pub const GPT5_HIGH_MODEL: &str = "gpt-5-high";
 pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 
 const CONFIG_TOML_FILE: &str = "config.toml";
-const INTERNAL_STORAGE_FILE: &str = "internal_storage.json";
-
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-struct InternalStorage {
-    #[serde(default)]
-    gpt_5_high_model_prompt_seen: bool,
-}
-
-// TODO(jif) generalise all the file writers.
-impl InternalStorage {
-    fn load(codex_home: &Path) -> Option<Self> {
-        let storage_path = codex_home.join(INTERNAL_STORAGE_FILE);
-        let serialized = match std::fs::read_to_string(&storage_path) {
-            Ok(serialized) => serialized,
-            Err(error) => {
-                tracing::warn!("failed to read internal storage: {error:?}");
-                return None;
-            }
-        };
-
-        serde_json::from_str::<Self>(&serialized)
-            .map_err(|error| tracing::warn!("failed to parse internal storage: {error:?}"))
-            .ok()
-    }
-
-    async fn persist(&self, codex_home: &Path) -> anyhow::Result<()> {
-        let serialized = serde_json::to_string_pretty(self)?;
-
-        tokio::fs::create_dir_all(codex_home)
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to create Codex home directory at {}",
-                    codex_home.display()
-                )
-            })?;
-
-        let storage_path = codex_home.join(INTERNAL_STORAGE_FILE);
-        tokio::fs::write(&storage_path, serialized)
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to persist internal storage at {}",
-                    storage_path.display()
-                )
-            })
-    }
-}
 
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
@@ -180,9 +130,6 @@ pub struct Config {
     /// Optional URI-based file opener. If set, citations to files in the model
     /// output will be hyperlinked using the specified URI scheme.
     pub file_opener: UriBasedFileOpener,
-
-    /// Collection of settings that are specific to the TUI.
-    pub tui: Tui,
 
     /// Path to the `codex-linux-sandbox` executable. This must be set if
     /// [`crate::exec::SandboxType::LinuxSeccomp`] is used. Note that this
@@ -389,42 +336,6 @@ pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Re
     Ok(())
 }
 
-pub async fn record_gpt5_high_prompt_choice(
-    codex_home: &Path,
-    switch_default_model: bool,
-) -> anyhow::Result<()> {
-    if switch_default_model {
-        let config_path = codex_home.join(CONFIG_TOML_FILE);
-        let mut doc = match std::fs::read_to_string(&config_path) {
-            Ok(serialized) => serialized.parse::<DocumentMut>()?,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => DocumentMut::new(),
-            Err(err) => return Err(err.into()),
-        };
-
-        doc.as_table_mut()["model"] = toml_edit::value(GPT5_HIGH_MODEL);
-        tokio::fs::create_dir_all(codex_home)
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to create Codex home directory at {}",
-                    codex_home.display()
-                )
-            })?;
-        let serialized = doc.to_string();
-        tokio::fs::write(&config_path, serialized)
-            .await
-            .with_context(|| {
-                format!("failed to persist config.toml at {}", config_path.display())
-            })?;
-    }
-
-    let mut storage = InternalStorage::load(codex_home).unwrap_or_default();
-    storage.gpt_5_high_model_prompt_seen = true;
-    storage.persist(codex_home).await?;
-
-    Ok(())
-}
-
 fn ensure_profile_table<'a>(
     doc: &'a mut DocumentMut,
     profile_name: &str,
@@ -475,11 +386,12 @@ fn ensure_profile_table<'a>(
     Ok(profile_table)
 }
 
+// TODO(jif) refactor config persistence.
 pub async fn persist_model_selection(
     codex_home: &Path,
     active_profile: Option<&str>,
     model: &str,
-    effort: ReasoningEffort,
+    effort: Option<ReasoningEffort>,
 ) -> anyhow::Result<()> {
     let config_path = codex_home.join(CONFIG_TOML_FILE);
     let serialized = match tokio::fs::read_to_string(&config_path).await {
@@ -497,13 +409,18 @@ pub async fn persist_model_selection(
     if let Some(profile_name) = active_profile {
         let profile_table = ensure_profile_table(&mut doc, profile_name)?;
         profile_table["model"] = toml_edit::value(model);
-        profile_table["model_reasoning_effort"] = toml_edit::value(effort.to_string());
+        if let Some(effort) = effort {
+            profile_table["model_reasoning_effort"] = toml_edit::value(effort.to_string());
+        }
     } else {
         let table = doc.as_table_mut();
         table["model"] = toml_edit::value(model);
-        table["model_reasoning_effort"] = toml_edit::value(effort.to_string());
+        if let Some(effort) = effort {
+            table["model_reasoning_effort"] = toml_edit::value(effort.to_string());
+        }
     }
 
+    // TODO(jif) refactor the home creation
     tokio::fs::create_dir_all(codex_home)
         .await
         .with_context(|| {
@@ -948,11 +865,6 @@ impl Config {
             Self::get_base_instructions(experimental_instructions_path, &resolved_cwd)?;
         let base_instructions = base_instructions.or(file_base_instructions);
 
-        let mut tui = cfg.tui.unwrap_or_default();
-        if let Some(storage) = InternalStorage::load(&codex_home) {
-            tui.gpt_5_high_model_prompt_seen = storage.gpt_5_high_model_prompt_seen;
-        }
-
         let config = Self {
             model,
             model_family,
@@ -976,7 +888,6 @@ impl Config {
             codex_home,
             history,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
-            tui,
             codex_linux_sandbox_exe,
 
             hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(false),
@@ -1117,7 +1028,7 @@ mod tests {
 
     use super::*;
     use pretty_assertions::assert_eq;
-    use serde_json::json;
+
     use tempfile::TempDir;
 
     #[test]
@@ -1208,69 +1119,6 @@ exclude_slash_tmp = true
         );
     }
 
-    #[test]
-    fn load_config_reads_internal_storage_prompt_state() -> std::io::Result<()> {
-        let codex_home = TempDir::new()?;
-        let cwd = TempDir::new()?;
-
-        let storage_path = codex_home.path().join(INTERNAL_STORAGE_FILE);
-        std::fs::write(
-            &storage_path,
-            json!({ "gpt_5_high_model_prompt_seen": true }).to_string(),
-        )?;
-
-        let config = Config::load_from_base_config_with_overrides(
-            ConfigToml::default(),
-            ConfigOverrides {
-                cwd: Some(cwd.path().to_path_buf()),
-                ..ConfigOverrides::default()
-            },
-            codex_home.path().to_path_buf(),
-        )?;
-
-        assert!(config.tui.gpt_5_high_model_prompt_seen);
-
-        Ok(())
-    }
-
-    #[test]
-    fn load_config_uses_config_prompt_when_storage_missing() -> std::io::Result<()> {
-        let codex_home = TempDir::new()?;
-        let cwd = TempDir::new()?;
-
-        let config = Config::load_from_base_config_with_overrides(
-            ConfigToml {
-                tui: Some(Tui {
-                    gpt_5_high_model_prompt_seen: true,
-                }),
-                ..ConfigToml::default()
-            },
-            ConfigOverrides {
-                cwd: Some(cwd.path().to_path_buf()),
-                ..ConfigOverrides::default()
-            },
-            codex_home.path().to_path_buf(),
-        )?;
-
-        assert!(config.tui.gpt_5_high_model_prompt_seen);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn recording_prompt_choice_persists_internal_storage() -> anyhow::Result<()> {
-        let codex_home = TempDir::new()?;
-
-        record_gpt5_high_prompt_choice(codex_home.path(), false).await?;
-
-        let stored_contents =
-            std::fs::read_to_string(codex_home.path().join(INTERNAL_STORAGE_FILE))?;
-        let storage: InternalStorage = serde_json::from_str(&stored_contents)?;
-        assert!(storage.gpt_5_high_model_prompt_seen);
-
-        Ok(())
-    }
-
     #[tokio::test]
     async fn persist_model_selection_updates_defaults() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
@@ -1279,7 +1127,7 @@ exclude_slash_tmp = true
             codex_home.path(),
             None,
             "gpt-5-high-new",
-            ReasoningEffort::High,
+            Some(ReasoningEffort::High),
         )
         .await?;
 
@@ -1301,7 +1149,7 @@ exclude_slash_tmp = true
             codex_home.path(),
             Some("dev"),
             "gpt-5-high-new",
-            ReasoningEffort::Low,
+            Some(ReasoningEffort::Low),
         )
         .await?;
 
@@ -1477,7 +1325,6 @@ model_verbosity = "high"
                 codex_home: fixture.codex_home(),
                 history: History::default(),
                 file_opener: UriBasedFileOpener::VsCode,
-                tui: Tui::default(),
                 codex_linux_sandbox_exe: None,
                 hide_agent_reasoning: false,
                 show_raw_agent_reasoning: false,
@@ -1533,7 +1380,6 @@ model_verbosity = "high"
             codex_home: fixture.codex_home(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
-            tui: Tui::default(),
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
@@ -1604,7 +1450,6 @@ model_verbosity = "high"
             codex_home: fixture.codex_home(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
-            tui: Tui::default(),
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
@@ -1661,7 +1506,6 @@ model_verbosity = "high"
             codex_home: fixture.codex_home(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
-            tui: Tui::default(),
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,

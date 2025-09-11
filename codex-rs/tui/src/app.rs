@@ -362,7 +362,9 @@ impl App {
 
         match scope {
             SaveScope::Profile(profile) => {
-                match persist_model_selection(&codex_home, Some(profile), &model, effort).await {
+                match persist_model_selection(&codex_home, Some(profile), &model, Some(effort))
+                    .await
+                {
                     Ok(()) => {
                         self.model_saved_to_profile = true;
                         self.chat_widget.add_info_message(format!(
@@ -381,7 +383,7 @@ impl App {
                 }
             }
             SaveScope::Global => {
-                match persist_model_selection(&codex_home, None, &model, effort).await {
+                match persist_model_selection(&codex_home, None, &model, Some(effort)).await {
                     Ok(()) => {
                         self.model_saved_to_global = true;
                         self.chat_widget.add_info_message(format!(
