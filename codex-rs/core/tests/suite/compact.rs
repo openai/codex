@@ -232,7 +232,10 @@ async fn summarize_context_three_requests_and_instructions() {
     assert_eq!(last2.get("type").unwrap().as_str().unwrap(), "message");
     assert_eq!(last2.get("role").unwrap().as_str().unwrap(), "user");
     let text2 = last2["content"][0]["text"].as_str().unwrap();
-    assert!(text2.contains(SUMMARIZE_TRIGGER));
+    assert!(
+        text2.contains(SUMMARIZE_TRIGGER),
+        "expected summarize trigger, got `{text2}`"
+    );
 
     // Third request must contain the refreshed instructions, bridge summary message and new user msg.
     let input3 = body3.get("input").and_then(|v| v.as_array()).unwrap();
@@ -306,7 +309,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
 
     let sse2 = sse(vec![
         ev_assistant_message("m2", "SECOND_REPLY"),
-        ev_completed_with_tokens("r2", 130_000),
+        ev_completed_with_tokens("r2", 330_000),
     ]);
 
     let sse3 = sse(vec![

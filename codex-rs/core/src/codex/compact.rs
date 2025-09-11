@@ -28,15 +28,12 @@ use futures::prelude::*;
 
 pub(super) const COMPACT_TRIGGER_TEXT: &str = "Start Summarization";
 const SUMMARIZATION_PROMPT: &str = include_str!("../../templates/compact/prompt.md");
-// TODO(jif) switch all the usage to i32 / i64
-const AUTO_COMPACT_TOKEN_LIMIT: u64 = 120_000;
 
-fn tokens_used_for_auto_compact(token_usage: &TokenUsage) -> u64 {
-    token_usage.tokens_in_context_window()
-}
-
-fn should_auto_compact(token_usage: &TokenUsage) -> bool {
-    tokens_used_for_auto_compact(token_usage) >= AUTO_COMPACT_TOKEN_LIMIT
+fn auto_compact_token_limit(turn_context: &TurnContext) -> i64 {
+    turn_context
+        .client
+        .get_auto_compact_token_limit()
+        .unwrap_or(i64::MAX)
 }
 
 #[derive(Template)]
@@ -117,21 +114,13 @@ async fn run_compact_task_inner(
     sess.send_event(start_event).await;
 
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
-    let turn_input = sess.turn_input_with_history(vec![
-        initial_input_for_turn.clone().into(),
-        ResponseInputItem::Message {
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: compact_instructions,
-            }],
-        }
-        .into(),
-    ]);
+    let instructions_override = compact_instructions;
+    let turn_input = sess.turn_input_with_history(vec![initial_input_for_turn.clone().into()]);
 
     let prompt = Prompt {
         input: turn_input,
         tools: Vec::new(),
-        base_instructions_override: None,
+        base_instructions_override: Some(instructions_override),
     };
 
     let max_retries = turn_context.client.get_provider().stream_max_retries();
@@ -220,8 +209,9 @@ pub(super) fn update_token_usage_info(
         token_usage,
         turn_context.client.get_model_context_window(),
     );
+    let limit = auto_compact_token_limit(turn_context);
     if let Some(info) = &info
-        && should_auto_compact(&info.last_token_usage)
+        && (info.last_token_usage.tokens_in_context_window() as i64) >= limit
     {
         state.token_limit_reached = true;
     }
@@ -337,25 +327,65 @@ async fn drain_to_completed(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pretty_assertions::assert_eq;
 
-    fn token_usage(
-        input_tokens: u64,
-        cached_input_tokens: u64,
-        reasoning_output_tokens: u64,
-        total_tokens: u64,
-    ) -> TokenUsage {
-        TokenUsage {
-            input_tokens,
-            cached_input_tokens,
-            output_tokens: 0,
-            reasoning_output_tokens,
-            total_tokens,
-        }
+    #[test]
+    fn content_items_to_text_joins_non_empty_segments() {
+        let items = vec![
+            ContentItem::InputText {
+                text: "hello".to_string(),
+            },
+            ContentItem::OutputText {
+                text: String::new(),
+            },
+            ContentItem::OutputText {
+                text: "world".to_string(),
+            },
+        ];
+
+        let joined = content_items_to_text(&items);
+
+        assert_eq!(Some("hello\nworld".to_string()), joined);
     }
 
     #[test]
-    fn auto_compact_counts_cached_tokens() {
-        let usage = token_usage(100, 2100, 0, AUTO_COMPACT_TOKEN_LIMIT + 10);
-        assert!(should_auto_compact(&usage));
+    fn content_items_to_text_ignores_image_only_content() {
+        let items = vec![ContentItem::InputImage {
+            image_url: "file://image.png".to_string(),
+        }];
+
+        let joined = content_items_to_text(&items);
+
+        assert_eq!(None, joined);
+    }
+
+    #[test]
+    fn collect_user_messages_extracts_user_text_only() {
+        let items = vec![
+            ResponseItem::Message {
+                id: Some("assistant".to_string()),
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: "ignored".to_string(),
+                }],
+            },
+            ResponseItem::Message {
+                id: Some("user".to_string()),
+                role: "user".to_string(),
+                content: vec![
+                    ContentItem::InputText {
+                        text: "first".to_string(),
+                    },
+                    ContentItem::OutputText {
+                        text: "second".to_string(),
+                    },
+                ],
+            },
+            ResponseItem::Other,
+        ];
+
+        let collected = collect_user_messages(&items);
+
+        assert_eq!(vec!["first\nsecond".to_string()], collected);
     }
 }

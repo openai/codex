@@ -103,6 +103,12 @@ impl ModelClient {
             .or_else(|| get_model_info(&self.config.model_family).map(|info| info.context_window))
     }
 
+    pub fn get_auto_compact_token_limit(&self) -> Option<i64> {
+        self.config.model_auto_compact_token_limit.or_else(|| {
+            get_model_info(&self.config.model_family).map(|info| info.auto_compact_token_limit)
+        })
+    }
+
     /// Dispatches to either the Responses or Chat implementation depending on
     /// the provider config.  Public callers always invoke `stream()` – the
     /// specialised helpers are private to avoid accidental misuse.
