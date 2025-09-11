@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use codex_protocol::mcp_protocol::AuthMode;
 
+use crate::token_data::PlanType;
 use crate::token_data::TokenData;
 use crate::token_data::parse_id_token;
 
@@ -134,9 +135,9 @@ impl CodexAuth {
         self.get_current_token_data().and_then(|t| t.account_id)
     }
 
-    pub fn get_plan_type(&self) -> Option<String> {
+    pub(crate) fn get_plan_type(&self) -> Option<PlanType> {
         self.get_current_token_data()
-            .and_then(|t| t.id_token.chatgpt_plan_type.as_ref().map(|p| p.as_string()))
+            .and_then(|t| t.id_token.chatgpt_plan_type)
     }
 
     fn get_current_auth_json(&self) -> Option<AuthDotJson> {
