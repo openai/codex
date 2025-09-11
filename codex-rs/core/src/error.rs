@@ -176,9 +176,9 @@ fn write_retry_suffix(
 ) -> std::fmt::Result {
     if let Some(secs) = resets_in_seconds {
         let reset_duration = format_reset_duration(secs);
-        write!(f, " in {reset_duration}.")
+        write!(f, "Try again in {reset_duration}.")
     } else {
-        write!(f, " later.")
+        write!(f, "Try again later.")
     }
 }
 
