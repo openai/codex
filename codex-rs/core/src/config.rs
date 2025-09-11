@@ -988,12 +988,14 @@ impl Config {
                 use crate::config_types::OtelSampler;
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
                 let enabled = t.enabled.unwrap_or(false);
+                let log_user_prompt = t.log_user_prompt.unwrap_or(false);
                 let environment = t
                     .environment
                     .unwrap_or(DEFAULT_OTEL_ENVIRONMENT.to_string());
                 if !enabled {
                     OtelConfig {
                         enabled,
+                        log_user_prompt,
                         environment,
                         sampler: OtelSampler::AlwaysOn,
                         exporter: OtelExporterKind::None,
@@ -1003,6 +1005,7 @@ impl Config {
                     let exporter = t.exporter.unwrap_or(OtelExporterKind::OtlpFile);
                     OtelConfig {
                         enabled,
+                        log_user_prompt,
                         environment,
                         sampler,
                         exporter,
@@ -1531,6 +1534,7 @@ model_verbosity = "high"
                 disable_paste_burst: false,
                 otel: crate::config_types::OtelConfig {
                     enabled: false,
+                    log_user_prompt: false,
                     environment: DEFAULT_OTEL_ENVIRONMENT.to_string(),
                     exporter: crate::config_types::OtelExporterKind::None,
                     sampler: crate::config_types::OtelSampler::AlwaysOn,
@@ -1595,6 +1599,7 @@ model_verbosity = "high"
             disable_paste_burst: false,
             otel: crate::config_types::OtelConfig {
                 enabled: false,
+                log_user_prompt: false,
                 environment: DEFAULT_OTEL_ENVIRONMENT.to_string(),
                 exporter: crate::config_types::OtelExporterKind::None,
                 sampler: crate::config_types::OtelSampler::AlwaysOn,
@@ -1674,6 +1679,7 @@ model_verbosity = "high"
             disable_paste_burst: false,
             otel: crate::config_types::OtelConfig {
                 enabled: false,
+                log_user_prompt: false,
                 environment: DEFAULT_OTEL_ENVIRONMENT.to_string(),
                 exporter: crate::config_types::OtelExporterKind::None,
                 sampler: crate::config_types::OtelSampler::AlwaysOn,
@@ -1739,6 +1745,7 @@ model_verbosity = "high"
             disable_paste_burst: false,
             otel: crate::config_types::OtelConfig {
                 enabled: false,
+                log_user_prompt: false,
                 environment: DEFAULT_OTEL_ENVIRONMENT.to_string(),
                 exporter: crate::config_types::OtelExporterKind::None,
                 sampler: crate::config_types::OtelSampler::AlwaysOn,

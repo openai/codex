@@ -941,6 +941,7 @@ mod tests {
             "test",
             None,
             AuthMode::ChatGPT,
+            false,
             "test".to_string(),
         );
 
@@ -1011,6 +1012,7 @@ mod tests {
             "test",
             None,
             AuthMode::ChatGPT,
+            false,
             "test".to_string(),
         );
 
@@ -1054,6 +1056,7 @@ mod tests {
             "test",
             None,
             AuthMode::ChatGPT,
+            false,
             "test".to_string(),
         );
 
@@ -1168,6 +1171,7 @@ mod tests {
                 "test",
                 None,
                 AuthMode::ChatGPT,
+                false,
                 "test".to_string(),
             );
 
