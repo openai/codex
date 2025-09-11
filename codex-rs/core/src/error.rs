@@ -1,3 +1,4 @@
+use crate::token_data::{KnownPlan, PlanType};
 use codex_protocol::mcp_protocol::ConversationId;
 use reqwest::StatusCode;
 use serde_json;
@@ -127,38 +128,52 @@ pub enum CodexErr {
 
 #[derive(Debug)]
 pub struct UsageLimitReachedError {
-    pub plan_type: Option<String>,
-    pub resets_in_seconds: Option<u64>,
+    pub(crate) plan_type: Option<PlanType>,
+    pub(crate) resets_in_seconds: Option<u64>,
 }
 
 impl std::fmt::Display for UsageLimitReachedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Base message differs slightly for legacy ChatGPT Plus plan users.
-        if let Some(plan_type) = &self.plan_type
-            && plan_type == "plus"
-        {
-            write!(
-                f,
-                "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing) or try again"
-            )?;
-            if let Some(secs) = self.resets_in_seconds {
-                let reset_duration = format_reset_duration(secs);
-                write!(f, " in {reset_duration}.")?;
-            } else {
-                write!(f, " later.")?;
+        match self.plan_type.as_ref() {
+            Some(PlanType::Known(KnownPlan::Plus)) => {
+                write!(
+                    f,
+                    "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing) or try again"
+                )?;
+                write_retry_suffix(f, self.resets_in_seconds)
             }
-        } else {
-            write!(f, "You've hit your usage limit.")?;
+            Some(PlanType::Known(KnownPlan::Team)) | Some(PlanType::Known(KnownPlan::Business)) => {
+                write!(
+                    f,
+                    "You've hit your usage limit. Ask an admin to buy more credits (https://platform.openai.com/account/credits) or try again"
+                )?;
+                write_retry_suffix(f, self.resets_in_seconds)
+            }
+            _ => {
+                write!(f, "You've hit your usage limit.")?;
 
-            if let Some(secs) = self.resets_in_seconds {
-                let reset_duration = format_reset_duration(secs);
-                write!(f, " Try again in {reset_duration}.")?;
-            } else {
-                write!(f, " Try again later.")?;
+                if let Some(secs) = self.resets_in_seconds {
+                    let reset_duration = format_reset_duration(secs);
+                    write!(f, " Try again in {reset_duration}.")?
+                } else {
+                    write!(f, " Try again later.")?
+                }
+
+                Ok(())
             }
         }
+    }
+}
 
-        Ok(())
+fn write_retry_suffix(
+    f: &mut std::fmt::Formatter<'_>,
+    resets_in_seconds: Option<u64>,
+) -> std::fmt::Result {
+    if let Some(secs) = resets_in_seconds {
+        let reset_duration = format_reset_duration(secs);
+        write!(f, " in {reset_duration}.")
+    } else {
+        write!(f, " later.")
     }
 }
 
@@ -237,7 +252,7 @@ mod tests {
     #[test]
     fn usage_limit_reached_error_formats_plus_plan() {
         let err = UsageLimitReachedError {
-            plan_type: Some("plus".to_string()),
+            plan_type: Some(PlanType::Known(KnownPlan::Plus)),
             resets_in_seconds: None,
         };
         assert_eq!(
@@ -259,9 +274,33 @@ mod tests {
     }
 
     #[test]
+    fn usage_limit_reached_error_formats_team_plan() {
+        let err = UsageLimitReachedError {
+            plan_type: Some(PlanType::Known(KnownPlan::Team)),
+            resets_in_seconds: Some(3600),
+        };
+        assert_eq!(
+            err.to_string(),
+            "You've hit your usage limit. Ask an admin to buy more credits (https://platform.openai.com/account/credits) or try again in 1 hour."
+        );
+    }
+
+    #[test]
+    fn usage_limit_reached_error_formats_business_plan_without_reset() {
+        let err = UsageLimitReachedError {
+            plan_type: Some(PlanType::Known(KnownPlan::Business)),
+            resets_in_seconds: None,
+        };
+        assert_eq!(
+            err.to_string(),
+            "You've hit your usage limit. Ask an admin to buy more credits (https://platform.openai.com/account/credits) or try again later."
+        );
+    }
+
+    #[test]
     fn usage_limit_reached_error_formats_default_for_other_plans() {
         let err = UsageLimitReachedError {
-            plan_type: Some("pro".to_string()),
+            plan_type: Some(PlanType::Known(KnownPlan::Pro)),
             resets_in_seconds: None,
         };
         assert_eq!(
@@ -285,7 +324,7 @@ mod tests {
     #[test]
     fn usage_limit_reached_includes_hours_and_minutes() {
         let err = UsageLimitReachedError {
-            plan_type: Some("plus".to_string()),
+            plan_type: Some(PlanType::Known(KnownPlan::Plus)),
             resets_in_seconds: Some(3 * 3600 + 32 * 60),
         };
         assert_eq!(

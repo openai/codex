@@ -41,6 +41,7 @@ use crate::model_provider_info::WireApi;
 use crate::openai_model_info::get_model_info;
 use crate::openai_tools::create_tools_json_for_responses_api;
 use crate::protocol::TokenUsage;
+use crate::token_data::PlanType;
 use crate::util::backoff;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -60,7 +61,7 @@ struct Error {
     message: Option<String>,
 
     // Optional fields available on "usage_limit_reached" and "usage_not_included" errors
-    plan_type: Option<String>,
+    plan_type: Option<PlanType>,
     resets_in_seconds: Option<u64>,
 }
 
@@ -304,7 +305,7 @@ impl ModelClient {
                                 // token.
                                 let plan_type = error
                                     .plan_type
-                                    .or_else(|| auth.and_then(|a| a.get_plan_type()));
+                                    .or_else(|| auth.as_ref().and_then(|a| a.get_plan_type()));
                                 let resets_in_seconds = error.resets_in_seconds;
                                 return Err(CodexErr::UsageLimitReached(UsageLimitReachedError {
                                     plan_type,
