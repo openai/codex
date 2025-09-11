@@ -68,13 +68,8 @@ pub struct Cli {
     pub json: bool,
 
     /// Whether to include the plan tool in the conversation.
-    #[arg(
-        long = "include-plan-tool",
-        value_name = "BOOL",
-        num_args = 0..=1,
-        default_missing_value = "false"
-    )]
-    pub include_plan_tool: Option<bool>,
+    #[arg(long = "include-plan-tool", default_value_t = false)]
+    pub include_plan_tool: bool,
 
     /// Specifies file where the last message from the agent should be written.
     #[arg(long = "output-last-message")]
