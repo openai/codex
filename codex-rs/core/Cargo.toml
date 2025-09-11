@@ -54,6 +54,7 @@ tracing = { version = "0.1.41", features = ["log"] }
 tree-sitter = "0.25.9"
 tree-sitter-bash = "0.25.0"
 uuid = { version = "1", features = ["serde", "v4"] }
+which = "6"
 wildmatch = "2.4.0"
 
 
@@ -68,9 +69,6 @@ openssl-sys = { version = "*", features = ["vendored"] }
 # Build OpenSSL from source for musl builds.
 [target.aarch64-unknown-linux-musl.dependencies]
 openssl-sys = { version = "*", features = ["vendored"] }
-
-[target.'cfg(target_os = "windows")'.dependencies]
-which = "6"
 
 [dev-dependencies]
 assert_cmd = "2"

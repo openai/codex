@@ -26,13 +26,13 @@ use codex_protocol::mcp_protocol::SendUserTurnParams;
 
 use mcp_types::CallToolRequestParams;
 use mcp_types::ClientCapabilities;
+use mcp_types::Implementation;
 use mcp_types::InitializeRequestParams;
 use mcp_types::JSONRPC_VERSION;
 use mcp_types::JSONRPCMessage;
 use mcp_types::JSONRPCNotification;
 use mcp_types::JSONRPCRequest;
 use mcp_types::JSONRPCResponse;
-use mcp_types::McpClientInfo;
 use mcp_types::ModelContextProtocolNotification;
 use mcp_types::ModelContextProtocolRequest;
 use mcp_types::RequestId;
@@ -134,10 +134,11 @@ impl McpProcess {
                 roots: None,
                 sampling: None,
             },
-            client_info: McpClientInfo {
+            client_info: Implementation {
                 name: "elicitation test".into(),
                 title: Some("Elicitation Test".into()),
                 version: "0.0.0".into(),
+                user_agent: None,
             },
             protocol_version: mcp_types::MCP_SCHEMA_VERSION.into(),
         };
@@ -292,6 +293,11 @@ impl McpProcess {
     /// Send a `getUserAgent` JSON-RPC request.
     pub async fn send_get_user_agent_request(&mut self) -> anyhow::Result<i64> {
         self.send_request("getUserAgent", None).await
+    }
+
+    /// Send a `userInfo` JSON-RPC request.
+    pub async fn send_user_info_request(&mut self) -> anyhow::Result<i64> {
+        self.send_request("userInfo", None).await
     }
 
     /// Send a `listConversations` JSON-RPC request.
