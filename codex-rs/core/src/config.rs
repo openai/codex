@@ -843,7 +843,7 @@ impl Config {
                 .unwrap_or(false),
             use_experimental_unified_exec_tool: cfg
                 .experimental_use_unified_exec_tool
-                .unwrap_or(true),
+                .unwrap_or(false),
             include_view_image_tool,
             active_profile: active_profile_name,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
