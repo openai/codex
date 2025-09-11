@@ -1527,7 +1527,6 @@ async fn run_task(
                 })
             })
             .collect();
-        tracing::warn!("In the turn");
         match run_turn(
             &sess,
             turn_context.as_ref(),
