@@ -150,17 +150,21 @@ impl std::fmt::Display for UsageLimitReachedError {
                 )?;
                 write_retry_suffix(f, self.resets_in_seconds)
             }
-            _ => {
+            Some(PlanType::Known(KnownPlan::Free))
+            | Some(PlanType::Known(KnownPlan::Pro))
+            | Some(PlanType::Known(KnownPlan::Enterprise))
+            | Some(PlanType::Known(KnownPlan::Edu)) => {
                 write!(f, "You've hit your usage limit.")?;
 
                 if let Some(secs) = self.resets_in_seconds {
-                    let reset_duration = format_reset_duration(secs);
-                    write!(f, " Try again in {reset_duration}.")?
+                    write_retry_suffix(f, Some(secs))
                 } else {
-                    write!(f, " Try again later.")?
+                    write_retry_suffix(f, None)
                 }
-
-                Ok(())
+            }
+            Some(PlanType::Unknown(_)) | None => {
+                write!(f, "You've hit your usage limit.")?;
+                write_retry_suffix(f, self.resets_in_seconds)
             }
         }
     }
