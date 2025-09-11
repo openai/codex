@@ -2,8 +2,11 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use codex_common::CliConfigOverrides;
+use codex_core::admin_controls::ADMIN_DANGEROUS_SANDBOX_DISABLED_MESSAGE;
+use codex_core::config::AdminAuditContext;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::audit_admin_run_without_prompt;
 
 use crate::chatgpt_token::init_chatgpt_token_from_auth;
 use crate::get_task::GetTaskResponse;
@@ -30,6 +33,28 @@ pub async fn run_apply_command(
             .map_err(anyhow::Error::msg)?,
         ConfigOverrides::default(),
     )?;
+
+    if config
+        .admin_danger_prompt
+        .as_ref()
+        .is_some_and(|prompt| prompt.needs_prompt())
+    {
+        anyhow::bail!(ADMIN_DANGEROUS_SANDBOX_DISABLED_MESSAGE);
+    }
+
+    audit_admin_run_without_prompt(
+        &config.admin_controls,
+        AdminAuditContext {
+            sandbox_policy: &config.sandbox_policy,
+            approval_policy: &config.approval_policy,
+            cwd: &config.cwd,
+            command: None,
+            dangerously_bypass_requested: false,
+            dangerous_mode_justification: None,
+            record_command_event: false,
+        },
+    )
+    .await?;
 
     init_chatgpt_token_from_auth(&config.codex_home).await?;
 

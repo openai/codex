@@ -12,8 +12,11 @@ use codex_core::AuthManager;
 use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_core::ConversationManager;
 use codex_core::NewConversation;
+use codex_core::admin_controls::ADMIN_DANGEROUS_SANDBOX_DISABLED_MESSAGE;
+use codex_core::config::AdminAuditContext;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::audit_admin_run_without_prompt;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
@@ -162,6 +165,30 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     };
 
     let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides)?;
+
+    if config
+        .admin_danger_prompt
+        .as_ref()
+        .is_some_and(|prompt| prompt.needs_prompt())
+    {
+        eprintln!("{ADMIN_DANGEROUS_SANDBOX_DISABLED_MESSAGE}");
+        std::process::exit(1);
+    }
+
+    audit_admin_run_without_prompt(
+        &config.admin_controls,
+        AdminAuditContext {
+            sandbox_policy: &config.sandbox_policy,
+            approval_policy: &config.approval_policy,
+            cwd: &config.cwd,
+            command: None,
+            dangerously_bypass_requested: dangerously_bypass_approvals_and_sandbox,
+            dangerous_mode_justification: None,
+            record_command_event: false,
+        },
+    )
+    .await
+    .map_err(|err| anyhow::anyhow!("{err}"))?;
     let mut event_processor: Box<dyn EventProcessor> = if json_mode {
         Box::new(EventProcessorWithJsonOutput::new(last_message_file.clone()))
     } else {

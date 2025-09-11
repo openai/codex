@@ -1,10 +1,13 @@
 use codex_common::CliConfigOverrides;
 use codex_core::CodexAuth;
+use codex_core::admin_controls::ADMIN_DANGEROUS_SANDBOX_DISABLED_MESSAGE;
 use codex_core::auth::CLIENT_ID;
 use codex_core::auth::login_with_api_key;
 use codex_core::auth::logout;
+use codex_core::config::AdminAuditContext;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::audit_admin_run_without_prompt;
 use codex_login::ServerOptions;
 use codex_login::run_login_server;
 use codex_protocol::mcp_protocol::AuthMode;
@@ -23,7 +26,7 @@ pub async fn login_with_chatgpt(codex_home: PathBuf) -> std::io::Result<()> {
 }
 
 pub async fn run_login_with_chatgpt(cli_config_overrides: CliConfigOverrides) -> ! {
-    let config = load_config_or_exit(cli_config_overrides);
+    let config = load_config_or_exit(cli_config_overrides).await;
 
     match login_with_chatgpt(config.codex_home).await {
         Ok(_) => {
@@ -41,7 +44,7 @@ pub async fn run_login_with_api_key(
     cli_config_overrides: CliConfigOverrides,
     api_key: String,
 ) -> ! {
-    let config = load_config_or_exit(cli_config_overrides);
+    let config = load_config_or_exit(cli_config_overrides).await;
 
     match login_with_api_key(&config.codex_home, &api_key) {
         Ok(_) => {
@@ -56,7 +59,7 @@ pub async fn run_login_with_api_key(
 }
 
 pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
-    let config = load_config_or_exit(cli_config_overrides);
+    let config = load_config_or_exit(cli_config_overrides).await;
 
     match CodexAuth::from_codex_home(&config.codex_home) {
         Ok(Some(auth)) => match auth.mode {
@@ -87,7 +90,7 @@ pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
 }
 
 pub async fn run_logout(cli_config_overrides: CliConfigOverrides) -> ! {
-    let config = load_config_or_exit(cli_config_overrides);
+    let config = load_config_or_exit(cli_config_overrides).await;
 
     match logout(&config.codex_home) {
         Ok(true) => {
@@ -105,7 +108,7 @@ pub async fn run_logout(cli_config_overrides: CliConfigOverrides) -> ! {
     }
 }
 
-fn load_config_or_exit(cli_config_overrides: CliConfigOverrides) -> Config {
+async fn load_config_or_exit(cli_config_overrides: CliConfigOverrides) -> Config {
     let cli_overrides = match cli_config_overrides.parse_overrides() {
         Ok(v) => v,
         Err(e) => {
@@ -115,13 +118,42 @@ fn load_config_or_exit(cli_config_overrides: CliConfigOverrides) -> Config {
     };
 
     let config_overrides = ConfigOverrides::default();
-    match Config::load_with_cli_overrides(cli_overrides, config_overrides) {
+    let config = match Config::load_with_cli_overrides(cli_overrides, config_overrides) {
         Ok(config) => config,
         Err(e) => {
             eprintln!("Error loading configuration: {e}");
             std::process::exit(1);
         }
+    };
+
+    if config
+        .admin_danger_prompt
+        .as_ref()
+        .is_some_and(|prompt| prompt.needs_prompt())
+    {
+        eprintln!("{ADMIN_DANGEROUS_SANDBOX_DISABLED_MESSAGE}");
+        std::process::exit(1);
     }
+
+    if let Err(err) = audit_admin_run_without_prompt(
+        &config.admin_controls,
+        AdminAuditContext {
+            sandbox_policy: &config.sandbox_policy,
+            approval_policy: &config.approval_policy,
+            cwd: &config.cwd,
+            command: None,
+            dangerously_bypass_requested: false,
+            dangerous_mode_justification: None,
+            record_command_event: false,
+        },
+    )
+    .await
+    {
+        eprintln!("{err}");
+        std::process::exit(1);
+    }
+
+    config
 }
 
 fn safe_format_key(key: &str) -> String {

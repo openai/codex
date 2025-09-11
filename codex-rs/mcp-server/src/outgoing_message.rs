@@ -11,9 +11,14 @@ use mcp_types::JSONRPCMessage;
 use mcp_types::JSONRPCNotification;
 use mcp_types::JSONRPCRequest;
 use mcp_types::JSONRPCResponse;
+use mcp_types::LoggingLevel;
+use mcp_types::LoggingMessageNotification;
+use mcp_types::LoggingMessageNotificationParams;
+use mcp_types::ModelContextProtocolNotification;
 use mcp_types::RequestId;
 use mcp_types::Result;
 use serde::Serialize;
+use serde_json::json;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
@@ -123,6 +128,31 @@ impl OutgoingMessageSender {
             params: Some(params.clone()),
         })
         .await;
+    }
+
+    pub(crate) async fn send_admin_warning(&self, request_id: Option<&RequestId>, message: &str) {
+        let data = if let Some(id) = request_id {
+            json!({
+                "message": message,
+                "requestId": id,
+            })
+        } else {
+            json!({ "message": message })
+        };
+
+        let params = serde_json::to_value(LoggingMessageNotificationParams {
+            data,
+            level: LoggingLevel::Warning,
+            logger: Some("codex-admin".to_string()),
+        })
+        .ok();
+
+        let notification = OutgoingNotification {
+            method: LoggingMessageNotification::METHOD.to_string(),
+            params,
+        };
+
+        self.send_notification(notification).await;
     }
 
     pub(crate) async fn send_server_notification(&self, notification: ServerNotification) {

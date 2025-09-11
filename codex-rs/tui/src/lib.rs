@@ -8,9 +8,11 @@ use codex_core::AuthManager;
 use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_core::CodexAuth;
 use codex_core::RolloutRecorder;
+use codex_core::config::AdminAuditContext;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
+use codex_core::config::audit_admin_run_with_prompt;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::protocol::AskForApproval;
@@ -25,6 +27,7 @@ use tracing_appender::non_blocking;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 
+mod admin_prompt;
 mod app;
 mod app_backtrack;
 mod app_event;
@@ -67,6 +70,7 @@ mod updates;
 
 pub use cli::Cli;
 
+use crate::admin_prompt::prompt_for_admin_danger_reason;
 use crate::onboarding::TrustDirectorySelection;
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::onboarding::onboarding_screen::run_onboarding_app;
@@ -153,6 +157,24 @@ pub async fn run_main(
             }
         }
     };
+
+    let admin_audit_context = AdminAuditContext {
+        sandbox_policy: &config.sandbox_policy,
+        approval_policy: &config.approval_policy,
+        cwd: &config.cwd,
+        command: None,
+        dangerously_bypass_requested: cli.dangerously_bypass_approvals_and_sandbox,
+        dangerous_mode_justification: None,
+        record_command_event: false,
+    };
+
+    let _admin_override_reason = audit_admin_run_with_prompt(
+        &config.admin_controls,
+        admin_audit_context,
+        prompt_for_admin_danger_reason(&config),
+    )
+    .await
+    .map_err(|err| std::io::Error::other(err.to_string()))?;
 
     // we load config.toml here to determine project state.
     #[allow(clippy::print_stderr)]

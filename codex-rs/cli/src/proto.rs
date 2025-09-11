@@ -5,8 +5,11 @@ use codex_common::CliConfigOverrides;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::NewConversation;
+use codex_core::admin_controls::ADMIN_DANGEROUS_SANDBOX_DISABLED_MESSAGE;
+use codex_core::config::AdminAuditContext;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
+use codex_core::config::audit_admin_run_without_prompt;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::Submission;
@@ -36,6 +39,28 @@ pub async fn run_main(opts: ProtoCli) -> anyhow::Result<()> {
         .map_err(anyhow::Error::msg)?;
 
     let config = Config::load_with_cli_overrides(overrides_vec, ConfigOverrides::default())?;
+
+    if config
+        .admin_danger_prompt
+        .as_ref()
+        .is_some_and(|prompt| prompt.needs_prompt())
+    {
+        anyhow::bail!(ADMIN_DANGEROUS_SANDBOX_DISABLED_MESSAGE);
+    }
+
+    audit_admin_run_without_prompt(
+        &config.admin_controls,
+        AdminAuditContext {
+            sandbox_policy: &config.sandbox_policy,
+            approval_policy: &config.approval_policy,
+            cwd: &config.cwd,
+            command: None,
+            dangerously_bypass_requested: false,
+            dangerous_mode_justification: None,
+            record_command_event: false,
+        },
+    )
+    .await?;
     // Use conversation_manager API to start a conversation
     let conversation_manager =
         ConversationManager::new(AuthManager::shared(config.codex_home.clone()));

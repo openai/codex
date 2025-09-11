@@ -10,6 +10,7 @@ use codex_core::Cursor as RolloutCursor;
 use codex_core::NewConversation;
 use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
+use codex_core::admin_controls::ADMIN_DANGEROUS_SANDBOX_DISABLED_MESSAGE;
 use codex_core::auth::CLIENT_ID;
 use codex_core::auth::get_auth_file;
 use codex_core::auth::login_with_api_key;
@@ -24,12 +25,14 @@ use codex_core::exec_env::create_env;
 use codex_core::get_platform_sandbox;
 use codex_core::git_info::git_diff_to_remote;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
+use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::InputItem as CoreInputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewDecision;
+use codex_core::protocol::SandboxPolicy;
 use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
 use codex_login::run_login_server;
@@ -897,6 +900,23 @@ impl CodexMessageProcessor {
                 WireInputItem::LocalImage { path } => CoreInputItem::LocalImage { path },
             })
             .collect();
+
+        let controls = &self.config.admin_controls;
+        let sandbox_policy = self.config.sandbox_policy.clone();
+        let approval_policy = self.config.approval_policy;
+        let sandbox_is_dangerous = sandbox_policy.has_full_network_access();
+        let dangerously_bypass_requested =
+            matches!(sandbox_policy, SandboxPolicy::DangerFullAccess)
+                && approval_policy == AskForApproval::Never;
+
+        if (sandbox_is_dangerous && controls.disallow_dangerous_sandbox)
+            || (dangerously_bypass_requested
+                && controls.disallow_dangerously_bypass_approvals_and_sandbox)
+        {
+            self.outgoing
+                .send_admin_warning(Some(&request_id), ADMIN_DANGEROUS_SANDBOX_DISABLED_MESSAGE)
+                .await;
+        }
 
         // Submit user input to the conversation.
         let _ = conversation

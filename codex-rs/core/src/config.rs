@@ -1,3 +1,5 @@
+use crate::admin_controls::ADMIN_DANGEROUS_SANDBOX_DISABLED_MESSAGE;
+use crate::admin_controls::AdminControls;
 use crate::config_profile::ConfigProfile;
 use crate::config_types::History;
 use crate::config_types::McpServerConfig;
@@ -181,6 +183,10 @@ pub struct Config {
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: bool,
+
+    pub admin_controls: AdminControls,
+
+    pub admin_danger_prompt: Option<AdminDangerPrompt>,
 }
 
 impl Config {
@@ -200,7 +206,7 @@ impl Config {
         let codex_home = find_codex_home()?;
 
         // Step 1: parse `config.toml` into a generic JSON value.
-        let mut root_value = load_config_as_toml(&codex_home)?;
+        let mut root_value = crate::config_loader::load_config_as_toml(&codex_home)?;
 
         // Step 2: apply the `-c` overrides.
         for (path, value) in cli_overrides.into_iter() {
@@ -223,7 +229,7 @@ pub fn load_config_as_toml_with_cli_overrides(
     codex_home: &Path,
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> std::io::Result<ConfigToml> {
-    let mut root_value = load_config_as_toml(codex_home)?;
+    let mut root_value = crate::config_loader::load_config_as_toml(codex_home)?;
 
     for (path, value) in cli_overrides.into_iter() {
         apply_toml_override(&mut root_value, &path, value);
@@ -237,28 +243,12 @@ pub fn load_config_as_toml_with_cli_overrides(
     Ok(cfg)
 }
 
-/// Read `CODEX_HOME/config.toml` and return it as a generic TOML value. Returns
-/// an empty TOML table when the file does not exist.
-pub fn load_config_as_toml(codex_home: &Path) -> std::io::Result<TomlValue> {
-    let config_path = codex_home.join(CONFIG_TOML_FILE);
-    match std::fs::read_to_string(&config_path) {
-        Ok(contents) => match toml::from_str::<TomlValue>(&contents) {
-            Ok(val) => Ok(val),
-            Err(e) => {
-                tracing::error!("Failed to parse config.toml: {e}");
-                Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-            }
-        },
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            tracing::info!("config.toml not found, using defaults");
-            Ok(TomlValue::Table(Default::default()))
-        }
-        Err(e) => {
-            tracing::error!("Failed to read config.toml: {e}");
-            Err(e)
-        }
-    }
-}
+pub use crate::config_loader::load_config_as_toml;
+
+pub use crate::admin_controls::AdminAuditContext;
+pub use crate::admin_controls::audit_admin_run_with_prompt;
+pub use crate::admin_controls::audit_admin_run_without_prompt;
+pub use crate::admin_controls::maybe_post_admin_audit_events;
 
 fn set_project_trusted_inner(doc: &mut DocumentMut, project_path: &Path) -> anyhow::Result<()> {
     // Ensure we render a human-friendly structure:
@@ -394,6 +384,10 @@ fn apply_toml_override(root: &mut TomlValue, path: &str, value: TomlValue) {
     }
 }
 
+pub use crate::admin_controls::AdminAuditEvents;
+pub use crate::admin_controls::AdminConfigToml;
+pub use crate::admin_controls::AdminDangerPrompt;
+
 /// Base config deserialized from ~/.codex/config.toml.
 #[derive(Deserialize, Debug, Clone, Default)]
 pub struct ConfigToml {
@@ -497,6 +491,9 @@ pub struct ConfigToml {
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: Option<bool>,
+
+    /// Administrative controls configured by the enterprise administrator.
+    pub admin: Option<AdminConfigToml>,
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -685,6 +682,44 @@ impl Config {
 
         let sandbox_policy = cfg.derive_sandbox_policy(sandbox_mode);
 
+        let admin_controls = AdminControls::from_toml(cfg.admin.clone());
+
+        let resolved_approval_policy = approval_policy
+            .or(config_profile.approval_policy)
+            .or(cfg.approval_policy)
+            .unwrap_or_else(AskForApproval::default);
+
+        let sandbox_is_dangerous = sandbox_policy.has_full_network_access();
+        let dangerously_bypass_requested =
+            matches!(sandbox_policy, SandboxPolicy::DangerFullAccess)
+                && resolved_approval_policy == AskForApproval::Never;
+
+        let mut admin_danger_prompt = AdminDangerPrompt::default();
+
+        if sandbox_is_dangerous && admin_controls.disallow_dangerous_sandbox {
+            if admin_controls.allow_danger_with_reason {
+                admin_danger_prompt.sandbox = true;
+            } else {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    ADMIN_DANGEROUS_SANDBOX_DISABLED_MESSAGE,
+                ));
+            }
+        }
+
+        if dangerously_bypass_requested
+            && admin_controls.disallow_dangerously_bypass_approvals_and_sandbox
+        {
+            if admin_controls.allow_danger_with_reason {
+                admin_danger_prompt.dangerously_bypass = true;
+            } else {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    ADMIN_DANGEROUS_SANDBOX_DISABLED_MESSAGE,
+                ));
+            }
+        }
+
         let mut model_providers = built_in_model_providers();
         // Merge user-defined providers into the built-in list.
         for (key, provider) in cfg.model_providers.into_iter() {
@@ -789,10 +824,7 @@ impl Config {
             model_provider_id,
             model_provider,
             cwd: resolved_cwd,
-            approval_policy: approval_policy
-                .or(config_profile.approval_policy)
-                .or(cfg.approval_policy)
-                .unwrap_or_else(AskForApproval::default),
+            approval_policy: resolved_approval_policy,
             sandbox_policy,
             shell_environment_policy,
             notify: cfg.notify,
@@ -839,6 +871,10 @@ impl Config {
             include_view_image_tool,
             active_profile: active_profile_name,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
+            admin_controls,
+            admin_danger_prompt: admin_danger_prompt
+                .needs_prompt()
+                .then_some(admin_danger_prompt),
         };
         Ok(config)
     }
@@ -1214,6 +1250,8 @@ model_verbosity = "high"
                 include_view_image_tool: true,
                 active_profile: Some("o3".to_string()),
                 disable_paste_burst: false,
+                admin_controls: AdminControls::default(),
+                admin_danger_prompt: None,
             },
             o3_profile_config
         );
@@ -1271,6 +1309,8 @@ model_verbosity = "high"
             include_view_image_tool: true,
             active_profile: Some("gpt3".to_string()),
             disable_paste_burst: false,
+            admin_controls: AdminControls::default(),
+            admin_danger_prompt: None,
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -1343,6 +1383,8 @@ model_verbosity = "high"
             include_view_image_tool: true,
             active_profile: Some("zdr".to_string()),
             disable_paste_burst: false,
+            admin_controls: AdminControls::default(),
+            admin_danger_prompt: None,
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
@@ -1401,6 +1443,8 @@ model_verbosity = "high"
             include_view_image_tool: true,
             active_profile: Some("gpt5".to_string()),
             disable_paste_burst: false,
+            admin_controls: AdminControls::default(),
+            admin_danger_prompt: None,
         };
 
         assert_eq!(expected_gpt5_profile_config, gpt5_profile_config);

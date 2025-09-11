@@ -12,6 +12,7 @@ use crate::patch_approval::handle_patch_approval_request;
 use codex_core::CodexConversation;
 use codex_core::ConversationManager;
 use codex_core::NewConversation;
+use codex_core::admin_controls::ADMIN_DANGEROUS_SANDBOX_DISABLED_MESSAGE;
 use codex_core::config::Config as CodexConfig;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::ApplyPatchApprovalRequestEvent;
@@ -44,6 +45,11 @@ pub async fn run_codex_tool_session(
     conversation_manager: Arc<ConversationManager>,
     running_requests_id_to_codex_uuid: Arc<Mutex<HashMap<RequestId, ConversationId>>>,
 ) {
+    let admin_prompt_required = config
+        .admin_danger_prompt
+        .as_ref()
+        .is_some_and(|prompt| prompt.needs_prompt());
+
     let NewConversation {
         conversation_id,
         conversation,
@@ -76,6 +82,12 @@ pub async fn run_codex_tool_session(
             Some(OutgoingNotificationMeta::new(Some(id.clone()))),
         )
         .await;
+
+    if admin_prompt_required {
+        outgoing
+            .send_admin_warning(Some(&id), ADMIN_DANGEROUS_SANDBOX_DISABLED_MESSAGE)
+            .await;
+    }
 
     // Use the original MCP request ID as the `sub_id` for the Codex submission so that
     // any events emitted for this tool-call can be correlated with the
