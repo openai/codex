@@ -298,7 +298,6 @@ impl App {
             }
             AppEvent::UpdateReasoningEffort(effort) => {
                 self.chat_widget.set_reasoning_effort(effort);
-                self.config.model_reasoning_effort = effort;
             }
             AppEvent::UpdateModel(model) => {
                 self.chat_widget.set_model(model.clone());

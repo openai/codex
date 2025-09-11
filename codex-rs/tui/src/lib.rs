@@ -320,15 +320,7 @@ async fn run_ratatui_app(
     // Initialize high-fidelity session event logging if enabled.
     session_log::maybe_init(&config);
 
-    let Cli {
-        prompt,
-        images,
-        resume,
-        r#continue,
-        ..
-    } = cli;
-
-    let auth_manager = AuthManager::shared(config.codex_home.clone(), config.preferred_auth_method);
+    let auth_manager = AuthManager::shared(config.codex_home.clone());
     let login_status = get_login_status(&config);
     let should_show_onboarding =
         should_show_onboarding(login_status, &config, should_show_trust_screen);
@@ -573,28 +565,28 @@ mod tests {
     #[test]
     fn shows_model_rollout_prompt_for_default_model() {
         let cli = Cli::parse_from(["codex"]);
-        let cfg = make_config(AuthMode::ChatGPT);
+        let cfg = make_config();
         assert!(should_show_model_rollout_prompt(&cli, &cfg, None, false));
     }
 
     #[test]
     fn hides_model_rollout_prompt_when_marked_seen() {
         let cli = Cli::parse_from(["codex"]);
-        let cfg = make_config(AuthMode::ChatGPT);
+        let cfg = make_config();
         assert!(!should_show_model_rollout_prompt(&cli, &cfg, None, true));
     }
 
     #[test]
     fn hides_model_rollout_prompt_when_cli_overrides_model() {
         let cli = Cli::parse_from(["codex", "--model", "gpt-4.1"]);
-        let cfg = make_config(AuthMode::ChatGPT);
+        let cfg = make_config();
         assert!(!should_show_model_rollout_prompt(&cli, &cfg, None, false));
     }
 
     #[test]
     fn hides_model_rollout_prompt_when_profile_active() {
         let cli = Cli::parse_from(["codex"]);
-        let cfg = make_config(AuthMode::ChatGPT);
+        let cfg = make_config();
         assert!(!should_show_model_rollout_prompt(
             &cli,
             &cfg,

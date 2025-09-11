@@ -4,7 +4,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_core::config::Config;
-use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -1271,10 +1270,7 @@ impl ChatWidget {
 
     /// Set the model in the widget's config copy.
     pub(crate) fn set_model(&mut self, model: String) {
-        self.config.model = model.clone();
-        if let Some(family) = find_family_for_model(&model) {
-            self.config.model_family = family;
-        }
+        self.config.model = model;
     }
 
     pub(crate) fn add_info_message(&mut self, message: String) {
