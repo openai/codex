@@ -305,7 +305,7 @@ async fn test_pagination_cursor() {
             path: p1,
             head: head_1,
         }],
-        next_cursor: Some(expected_cursor3.clone()),
+        next_cursor: Some(expected_cursor3),
         num_scanned_files: 5, // scanned 05, 04 (anchor), 03, 02 (anchor), 01
         reached_scan_cap: false,
     };
@@ -344,7 +344,7 @@ async fn test_get_conversation_contents() {
     let expected_cursor: Cursor = serde_json::from_str(&format!("\"{ts}|{uuid}\"")).unwrap();
     let expected_page = ConversationsPage {
         items: vec![ConversationItem {
-            path: expected_path.clone(),
+            path: expected_path,
             head: expected_head,
         }],
         next_cursor: Some(expected_cursor),
@@ -437,7 +437,7 @@ async fn test_stable_ordering_same_second_pagination() {
             path: p1,
             head: head(u1),
         }],
-        next_cursor: Some(expected_cursor2.clone()),
+        next_cursor: Some(expected_cursor2),
         num_scanned_files: 3, // scanned u3, u2 (anchor), u1
         reached_scan_cap: false,
     };

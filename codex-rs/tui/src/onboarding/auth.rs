@@ -432,7 +432,7 @@ impl AuthModeWidget {
         match &mut *guard {
             SignInState::ApiKeyEntry(state) => {
                 if state.value.is_empty() {
-                    if let Some(prefill) = prefill_from_env.clone() {
+                    if let Some(prefill) = prefill_from_env {
                         state.value = prefill;
                         state.prepopulated_from_env = true;
                     } else {

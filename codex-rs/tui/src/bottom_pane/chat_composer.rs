@@ -487,7 +487,7 @@ impl ChatComposer {
             } => {
                 // Hide popup without modifying text, remember token to avoid immediate reopen.
                 if let Some(tok) = Self::current_at_token(&self.textarea) {
-                    self.dismissed_file_popup_token = Some(tok.to_string());
+                    self.dismissed_file_popup_token = Some(tok);
                 }
                 self.active_popup = ActivePopup::None;
                 (InputResult::None, true)
@@ -546,7 +546,7 @@ impl ChatComposer {
                             Some(ext) if ext == "jpg" || ext == "jpeg" => "JPEG",
                             _ => "IMG",
                         };
-                        self.attach_image(path_buf.clone(), w, h, format_label);
+                        self.attach_image(path_buf, w, h, format_label);
                         // Add a trailing space to keep typing fluid.
                         self.textarea.insert_str(" ");
                     } else {
@@ -2123,7 +2123,7 @@ mod tests {
 
         // Re-add and test backspace in middle: should break the placeholder string
         // and drop the image mapping (same as text placeholder behavior).
-        composer.attach_image(path.clone(), 20, 10, "PNG");
+        composer.attach_image(path, 20, 10, "PNG");
         let placeholder2 = composer.attached_images[0].placeholder.clone();
         // Move cursor to roughly middle of placeholder
         if let Some(start_pos) = composer.textarea.text().find(&placeholder2) {
@@ -2182,7 +2182,7 @@ mod tests {
         let path1 = PathBuf::from("/tmp/image_dup1.png");
         let path2 = PathBuf::from("/tmp/image_dup2.png");
 
-        composer.attach_image(path1.clone(), 10, 5, "PNG");
+        composer.attach_image(path1, 10, 5, "PNG");
         // separate placeholders with a space for clarity
         composer.handle_paste(" ".into());
         composer.attach_image(path2.clone(), 10, 5, "PNG");
@@ -2231,7 +2231,7 @@ mod tests {
         assert!(composer.textarea.text().starts_with("[image 3x2 PNG] "));
 
         let imgs = composer.take_recent_submission_images();
-        assert_eq!(imgs, vec![tmp_path.clone()]);
+        assert_eq!(imgs, vec![tmp_path]);
     }
 
     #[test]

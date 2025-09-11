@@ -617,7 +617,7 @@ fn test_parse_patch_lenient() {
     assert_eq!(
         parse_patch_text(&patch_text_in_double_quoted_heredoc, ParseMode::Lenient),
         Ok(ApplyPatchArgs {
-            hunks: expected_patch.clone(),
+            hunks: expected_patch,
             patch: patch_text.to_string(),
             workdir: None,
         })
@@ -637,7 +637,7 @@ fn test_parse_patch_lenient() {
         "<<EOF\n*** Begin Patch\n*** Update File: file2.py\nEOF\n".to_string();
     assert_eq!(
         parse_patch_text(&patch_text_with_missing_closing_heredoc, ParseMode::Strict),
-        Err(expected_error.clone())
+        Err(expected_error)
     );
     assert_eq!(
         parse_patch_text(&patch_text_with_missing_closing_heredoc, ParseMode::Lenient),
