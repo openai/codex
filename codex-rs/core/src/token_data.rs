@@ -3,8 +3,6 @@ use serde::Deserialize;
 use serde::Serialize;
 use thiserror::Error;
 
-use codex_protocol::mcp_protocol::AuthMode;
-
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Default)]
 pub struct TokenData {
     /// Flat info parsed from the JWT in auth.json.
@@ -20,36 +18,6 @@ pub struct TokenData {
     pub refresh_token: String,
 
     pub account_id: Option<String>,
-}
-
-impl TokenData {
-    /// Returns true if this is a plan that should use the traditional
-    /// "metered" billing via an API key.
-    pub(crate) fn should_use_api_key(
-        &self,
-        preferred_auth_method: AuthMode,
-        is_openai_email: bool,
-    ) -> bool {
-        if preferred_auth_method == AuthMode::ApiKey {
-            return true;
-        }
-        // If the email is an OpenAI email, use AuthMode::ChatGPT unless preferred_auth_method is AuthMode::ApiKey.
-        if is_openai_email {
-            return false;
-        }
-
-        self.id_token
-            .chatgpt_plan_type
-            .as_ref()
-            .is_none_or(|plan| plan.is_plan_that_should_use_api_key())
-    }
-
-    pub fn is_openai_email(&self) -> bool {
-        self.id_token
-            .email
-            .as_deref()
-            .is_some_and(|email| email.trim().to_ascii_lowercase().ends_with("@openai.com"))
-    }
 }
 
 /// Flat subset of useful claims in id_token from auth.json.
@@ -80,19 +48,6 @@ pub(crate) enum PlanType {
 }
 
 impl PlanType {
-    fn is_plan_that_should_use_api_key(&self) -> bool {
-        match self {
-            Self::Known(known) => {
-                use KnownPlan::*;
-                !matches!(known, Free | Plus | Pro | Team)
-            }
-            Self::Unknown(_) => {
-                // Unknown plans should use the API key.
-                true
-            }
-        }
-    }
-
     pub fn as_string(&self) -> String {
         match self {
             Self::Known(known) => format!("{known:?}").to_lowercase(),

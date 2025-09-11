@@ -34,6 +34,7 @@ enum Step {
 
 pub(crate) trait KeyboardHandler {
     fn handle_key_event(&mut self, key_event: KeyEvent);
+    fn handle_paste(&mut self, _pasted: String) {}
 }
 
 pub(crate) enum StepState {
@@ -69,7 +70,6 @@ impl OnboardingScreen {
             auth_manager,
             config,
         } = args;
-        let preferred_auth_method = config.preferred_auth_method;
         let cwd = config.cwd.clone();
         let codex_home = config.codex_home.clone();
         let mut steps: Vec<Step> = vec![Step::Welcome(WelcomeWidget {
@@ -84,7 +84,6 @@ impl OnboardingScreen {
                 codex_home: codex_home.clone(),
                 login_status,
                 auth_manager,
-                preferred_auth_method,
             }))
         }
         let is_git_repo = get_git_repo_root(&cwd).is_some();
@@ -194,6 +193,17 @@ impl KeyboardHandler for OnboardingScreen {
         };
         self.request_frame.schedule_frame();
     }
+
+    fn handle_paste(&mut self, pasted: String) {
+        if pasted.is_empty() {
+            return;
+        }
+
+        if let Some(active_step) = self.current_steps_mut().into_iter().last() {
+            active_step.handle_paste(pasted);
+        }
+        self.request_frame.schedule_frame();
+    }
 }
 
 impl WidgetRef for &OnboardingScreen {
@@ -263,6 +273,14 @@ impl KeyboardHandler for Step {
             Step::TrustDirectory(widget) => widget.handle_key_event(key_event),
         }
     }
+
+    fn handle_paste(&mut self, pasted: String) {
+        match self {
+            Step::Welcome(_) => {}
+            Step::Auth(widget) => widget.handle_paste(pasted),
+            Step::TrustDirectory(widget) => widget.handle_paste(pasted),
+        }
+    }
 }
 
 impl StepStateProvider for Step {
@@ -312,12 +330,14 @@ pub(crate) async fn run_onboarding_app(
                 TuiEvent::Key(key_event) => {
                     onboarding_screen.handle_key_event(key_event);
                 }
+                TuiEvent::Paste(text) => {
+                    onboarding_screen.handle_paste(text);
+                }
                 TuiEvent::Draw => {
                     let _ = tui.draw(u16::MAX, |frame| {
                         frame.render_widget_ref(&onboarding_screen, frame.area());
                     });
                 }
-                _ => {}
             }
         }
     }
