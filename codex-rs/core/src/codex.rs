@@ -941,6 +941,14 @@ impl Session {
         }
     }
 
+    fn enqueue_pending_responses(&self, responses: Vec<ResponseInputItem>) {
+        if responses.is_empty() {
+            return;
+        }
+        let mut state = self.state.lock_unchecked();
+        state.pending_input.extend(responses);
+    }
+
     pub fn get_pending_input(&self) -> Vec<ResponseInputItem> {
         let mut state = self.state.lock_unchecked();
         if state.pending_input.is_empty() {
@@ -1481,6 +1489,7 @@ async fn run_task(
                 })
             })
             .collect();
+        tracing::warn!("In the turn");
         match run_turn(
             &sess,
             turn_context.as_ref(),
@@ -1491,9 +1500,13 @@ async fn run_task(
         .await
         {
             Ok(turn_output) => {
+                let TurnRunResult {
+                    processed_items,
+                    token_limit_reached,
+                } = turn_output;
                 let mut items_to_record_in_conversation_history = Vec::<ResponseItem>::new();
                 let mut responses = Vec::<ResponseInputItem>::new();
-                for processed_response_item in turn_output {
+                for processed_response_item in processed_items {
                     let ProcessedResponseItem { item, response } = processed_response_item;
                     match (&item, &response) {
                         (ResponseItem::Message { role, .. }, None) if role == "assistant" => {
@@ -1590,8 +1603,12 @@ async fn run_task(
                         .await;
                 }
 
+                if token_limit_reached {
+                    compact::run_inline_auto_compact_task(sess.clone(), turn_context.clone()).await;
+                    continue;
+                }
+
                 if responses.is_empty() {
-                    debug!("Turn completed");
                     last_agent_message = get_last_assistant_message_from_turn(
                         &items_to_record_in_conversation_history,
                     );
@@ -1602,6 +1619,8 @@ async fn run_task(
                     });
                     break;
                 }
+                sess.enqueue_pending_responses(responses);
+                continue;
             }
             Err(e) => {
                 info!("Turn error: {e:#}");
@@ -1618,15 +1637,11 @@ async fn run_task(
         }
     }
     sess.remove_task(&sub_id);
-    let should_auto_compact = sess.take_token_limit_reached();
     let event = Event {
         id: sub_id,
         msg: EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }),
     };
     sess.send_event(event).await;
-    if should_auto_compact {
-        compact::spawn_auto_compact_task(sess, turn_context);
-    }
 }
 
 async fn run_turn(
@@ -1635,7 +1650,7 @@ async fn run_turn(
     turn_diff_tracker: &mut TurnDiffTracker,
     sub_id: String,
     input: Vec<ResponseItem>,
-) -> CodexResult<Vec<ProcessedResponseItem>> {
+) -> CodexResult<TurnRunResult> {
     let tools = get_openai_tools(
         &turn_context.tools_config,
         Some(sess.mcp_connection_manager.list_all_tools()),
@@ -1699,13 +1714,19 @@ struct ProcessedResponseItem {
     response: Option<ResponseInputItem>,
 }
 
+#[derive(Debug)]
+struct TurnRunResult {
+    processed_items: Vec<ProcessedResponseItem>,
+    token_limit_reached: bool,
+}
+
 async fn try_run_turn(
     sess: &Session,
     turn_context: &TurnContext,
     turn_diff_tracker: &mut TurnDiffTracker,
     sub_id: &str,
     prompt: &Prompt,
-) -> CodexResult<Vec<ProcessedResponseItem>> {
+) -> CodexResult<TurnRunResult> {
     // call_ids that are part of this response.
     let completed_call_ids = prompt
         .input
@@ -1815,6 +1836,7 @@ async fn try_run_turn(
                 token_usage,
             } => {
                 let info = compact::update_token_usage_info(sess, turn_context, &token_usage);
+                let token_limit_reached = sess.take_token_limit_reached();
                 let _ = sess
                     .send_event(Event {
                         id: sub_id.to_string(),
@@ -1832,7 +1854,12 @@ async fn try_run_turn(
                     sess.send_event(event).await;
                 }
 
-                return Ok(output);
+                let result = TurnRunResult {
+                    processed_items: output,
+                    token_limit_reached,
+                };
+
+                return Ok(result);
             }
             ResponseEvent::OutputTextDelta(delta) => {
                 let event = Event {

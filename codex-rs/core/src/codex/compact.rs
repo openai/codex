@@ -1,5 +1,10 @@
 use std::sync::Arc;
 
+use super::AgentTask;
+use super::MutexExt;
+use super::Session;
+use super::TurnContext;
+use super::get_last_assistant_message_from_turn;
 use crate::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::error::CodexErr;
@@ -15,20 +20,31 @@ use crate::protocol::TokenCountEvent;
 use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
 use crate::util::backoff;
+use askama::Template;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseInputItem;
 use codex_protocol::models::ResponseItem;
 use futures::prelude::*;
 
-use super::AgentTask;
-use super::MutexExt;
-use super::Session;
-use super::TurnContext;
-use super::get_last_assistant_message_from_turn;
-
 pub(super) const COMPACT_TRIGGER_TEXT: &str = "Start Summarization";
-const SUMMARIZATION_PROMPT: &str = include_str!("../prompt_for_compact_command.md");
+const SUMMARIZATION_PROMPT: &str = include_str!("../../templates/compact/prompt.md");
+// TODO(jif) switch all the usage to i32 / i64
 const AUTO_COMPACT_TOKEN_LIMIT: u64 = 120_000;
+
+fn tokens_used_for_auto_compact(token_usage: &TokenUsage) -> u64 {
+    token_usage.tokens_in_context_window()
+}
+
+fn should_auto_compact(token_usage: &TokenUsage) -> bool {
+    tokens_used_for_auto_compact(token_usage) >= AUTO_COMPACT_TOKEN_LIMIT
+}
+
+#[derive(Template)]
+#[template(path = "compact/history_bridge.md", escape = "none")]
+struct HistoryBridgeTemplate<'a> {
+    user_messages_text: &'a str,
+    summary_text: &'a str,
+}
 
 pub(super) fn spawn_compact_task(
     sess: Arc<Session>,
@@ -46,12 +62,23 @@ pub(super) fn spawn_compact_task(
     sess.set_task(task);
 }
 
-pub(super) fn spawn_auto_compact_task(sess: Arc<Session>, turn_context: Arc<TurnContext>) {
+pub(super) async fn run_inline_auto_compact_task(
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+) {
     let sub_id = sess.next_internal_sub_id();
     let input = vec![InputItem::Text {
         text: COMPACT_TRIGGER_TEXT.to_string(),
     }];
-    spawn_compact_task(sess, turn_context, sub_id, input);
+    run_compact_task_inner(
+        sess,
+        turn_context,
+        sub_id,
+        input,
+        SUMMARIZATION_PROMPT.to_string(),
+        false,
+    )
+    .await;
 }
 
 pub(super) async fn run_compact_task(
@@ -60,6 +87,25 @@ pub(super) async fn run_compact_task(
     sub_id: String,
     input: Vec<InputItem>,
     compact_instructions: String,
+) {
+    run_compact_task_inner(
+        sess,
+        turn_context,
+        sub_id,
+        input,
+        compact_instructions,
+        true,
+    )
+    .await;
+}
+
+async fn run_compact_task_inner(
+    sess: Arc<Session>,
+    turn_context: Arc<TurnContext>,
+    sub_id: String,
+    input: Vec<InputItem>,
+    compact_instructions: String,
+    remove_task_on_completion: bool,
 ) {
     let model_context_window = turn_context.client.get_model_context_window();
     let start_event = Event {
@@ -71,13 +117,22 @@ pub(super) async fn run_compact_task(
     sess.send_event(start_event).await;
 
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
-    let turn_input: Vec<ResponseItem> =
-        sess.turn_input_with_history(vec![initial_input_for_turn.clone().into()]);
+    let mut turn_input = sess.turn_input_with_history(vec![initial_input_for_turn.clone().into()]);
+
+    if !compact_instructions.is_empty() {
+        turn_input.push(ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: compact_instructions.clone(),
+            }],
+        });
+    }
 
     let prompt = Prompt {
         input: turn_input,
         tools: Vec::new(),
-        base_instructions_override: Some(compact_instructions.clone()),
+        base_instructions_override: None,
     };
 
     let max_retries = turn_context.client.get_provider().stream_max_retries();
@@ -88,8 +143,12 @@ pub(super) async fn run_compact_task(
             drain_to_completed(&sess, turn_context.as_ref(), &sub_id, &prompt).await;
 
         match attempt_result {
-            Ok(()) => break,
-            Err(CodexErr::Interrupted) => return,
+            Ok(()) => {
+                break;
+            }
+            Err(CodexErr::Interrupted) => {
+                return;
+            }
             Err(e) => {
                 if retries < max_retries {
                     retries += 1;
@@ -117,7 +176,9 @@ pub(super) async fn run_compact_task(
         }
     }
 
-    sess.remove_task(&sub_id);
+    if remove_task_on_completion {
+        sess.remove_task(&sub_id);
+    }
     let history_snapshot = {
         let state = sess.state.lock_unchecked();
         state.history.contents()
@@ -160,8 +221,8 @@ pub(super) fn update_token_usage_info(
         token_usage,
         turn_context.client.get_model_context_window(),
     );
-    if let Some(ref info) = info
-        && info.total_token_usage.total_tokens >= AUTO_COMPACT_TOKEN_LIMIT
+    if let Some(info) = &info
+        && should_auto_compact(&info.last_token_usage)
     {
         state.token_limit_reached = true;
     }
@@ -217,9 +278,13 @@ fn build_compacted_history(
     } else {
         summary_text.to_string()
     };
-    let bridge = format!(
-        "Here are all the user messages {user_messages_text}. Another LLM started working on this task, here is the current state: {summary_text}. Please, finish the task",
-    );
+    let Ok(bridge) = HistoryBridgeTemplate {
+        user_messages_text: &user_messages_text,
+        summary_text: &summary_text,
+    }
+    .render() else {
+        return vec![];
+    };
     history.push(ResponseItem::Message {
         id: None,
         role: "user".to_string(),
@@ -267,5 +332,31 @@ async fn drain_to_completed(
             Ok(_) => continue,
             Err(e) => return Err(e),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn token_usage(
+        input_tokens: u64,
+        cached_input_tokens: u64,
+        reasoning_output_tokens: u64,
+        total_tokens: u64,
+    ) -> TokenUsage {
+        TokenUsage {
+            input_tokens,
+            cached_input_tokens,
+            output_tokens: 0,
+            reasoning_output_tokens,
+            total_tokens,
+        }
+    }
+
+    #[test]
+    fn auto_compact_counts_cached_tokens() {
+        let usage = token_usage(100, 2100, 0, AUTO_COMPACT_TOKEN_LIMIT + 10);
+        assert!(should_auto_compact(&usage));
     }
 }
