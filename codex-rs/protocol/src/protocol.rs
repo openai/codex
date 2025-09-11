@@ -904,7 +904,7 @@ pub enum RolloutItem {
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 pub enum CodexExecutiveItem {
     Compacted(CompactedItem),
-    APITurn(APITurnItem),
+    APITurn(TurnContextItem),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
@@ -913,7 +913,7 @@ pub struct CompactedItem {
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
-pub struct APITurnItem {
+pub struct TurnContextItem {
     pub cwd: PathBuf,
     pub approval_policy: AskForApproval,
     pub sandbox_policy: SandboxPolicy,
