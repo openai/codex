@@ -1161,6 +1161,47 @@ exclude_slash_tmp = true
     }
 
     #[tokio::test]
+    async fn persist_model_selection_overwrites_existing_model() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+
+        tokio::fs::write(
+            &config_path,
+            r#"
+model = "gpt-5"
+model_reasoning_effort = "medium"
+
+[profiles.dev]
+model = "gpt-4.1"
+"#,
+        )
+        .await?;
+
+        persist_model_selection(
+            codex_home.path(),
+            None,
+            "o4-mini",
+            Some(ReasoningEffort::High),
+        )
+        .await?;
+
+        let serialized = tokio::fs::read_to_string(config_path).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        assert_eq!(parsed.model.as_deref(), Some("o4-mini"));
+        assert_eq!(parsed.model_reasoning_effort, Some(ReasoningEffort::High));
+        assert_eq!(
+            parsed
+                .profiles
+                .get("dev")
+                .and_then(|profile| profile.model.as_deref()),
+            Some("gpt-4.1"),
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn persist_model_selection_updates_profile() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
 
@@ -1182,6 +1223,56 @@ exclude_slash_tmp = true
 
         assert_eq!(profile.model.as_deref(), Some("gpt-5-high-new"));
         assert_eq!(profile.model_reasoning_effort, Some(ReasoningEffort::Low));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persist_model_selection_updates_existing_profile() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+
+        tokio::fs::write(
+            &config_path,
+            r#"
+[profiles.dev]
+model = "gpt-4"
+model_reasoning_effort = "medium"
+
+[profiles.prod]
+model = "gpt-5"
+"#,
+        )
+        .await?;
+
+        persist_model_selection(
+            codex_home.path(),
+            Some("dev"),
+            "o4-high",
+            Some(ReasoningEffort::Medium),
+        )
+        .await?;
+
+        let serialized = tokio::fs::read_to_string(config_path).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        let dev_profile = parsed
+            .profiles
+            .get("dev")
+            .expect("dev profile should survive updates");
+        assert_eq!(dev_profile.model.as_deref(), Some("o4-high"));
+        assert_eq!(
+            dev_profile.model_reasoning_effort,
+            Some(ReasoningEffort::Medium)
+        );
+
+        assert_eq!(
+            parsed
+                .profiles
+                .get("prod")
+                .and_then(|profile| profile.model.as_deref()),
+            Some("gpt-5"),
+        );
 
         Ok(())
     }
