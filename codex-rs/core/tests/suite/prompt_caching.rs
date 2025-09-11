@@ -191,7 +191,8 @@ async fn prompt_tools_are_consistent_across_requests() {
     let expected_instructions: &str = include_str!("../../prompt.md");
     // our internal implementation is responsible for keeping tools in sync
     // with the OpenAI schema, so we just verify the tool presence here
-    let expected_tools_names: &[&str] = &["shell", "update_plan", "apply_patch", "view_image"];
+    let expected_tools_names: &[&str] =
+        &["unified_exec", "update_plan", "apply_patch", "view_image"];
     let body0 = requests[0].body_json::<serde_json::Value>().unwrap();
     assert_eq!(
         body0["instructions"],

@@ -115,7 +115,6 @@ pub enum ResponseItem {
         status: Option<String>,
         action: WebSearchAction,
     },
-
     #[serde(other)]
     Other,
 }

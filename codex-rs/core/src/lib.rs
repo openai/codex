@@ -35,6 +35,8 @@ mod mcp_tool_call;
 mod message_history;
 mod model_provider_info;
 pub mod parse_command;
+mod truncate;
+mod unified_exec;
 mod user_instructions;
 pub use model_provider_info::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 pub use model_provider_info::ModelProviderInfo;

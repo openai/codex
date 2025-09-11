@@ -26,6 +26,7 @@ use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
 use futures::prelude::*;
 use mcp_types::CallToolResult;
+use serde::Deserialize;
 use serde::Serialize;
 use serde_json;
 use tokio::sync::oneshot;
@@ -112,6 +113,7 @@ use crate::safety::assess_command_safety;
 use crate::safety::assess_safety_for_untrusted_command;
 use crate::shell;
 use crate::turn_diff_tracker::TurnDiffTracker;
+use crate::unified_exec::UnifiedExecSessionManager;
 use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
@@ -280,6 +282,7 @@ pub(crate) struct Session {
     /// Manager for external MCP servers/tools.
     mcp_connection_manager: McpConnectionManager,
     session_manager: ExecSessionManager,
+    unified_exec_manager: UnifiedExecSessionManager,
 
     /// External notifier command (will be passed as args to exec()). When
     /// `None` this feature is disabled.
@@ -471,6 +474,7 @@ impl Session {
                 include_web_search_request: config.tools_web_search_request,
                 use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
                 include_view_image_tool: config.include_view_image_tool,
+                experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
             }),
             user_instructions,
             base_instructions,
@@ -484,6 +488,7 @@ impl Session {
             tx_event: tx_event.clone(),
             mcp_connection_manager,
             session_manager: ExecSessionManager::default(),
+            unified_exec_manager: UnifiedExecSessionManager::default(),
             notify,
             state: Mutex::new(state),
             rollout: Mutex::new(Some(rollout_recorder)),
@@ -1149,6 +1154,7 @@ async fn submission_loop(
                     include_web_search_request: config.tools_web_search_request,
                     use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
                     include_view_image_tool: config.include_view_image_tool,
+                    experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
                 });
 
                 let new_turn_context = TurnContext {
@@ -1251,6 +1257,8 @@ async fn submission_loop(
                             use_streamable_shell_tool: config
                                 .use_experimental_streamable_shell_tool,
                             include_view_image_tool: config.include_view_image_tool,
+                            experimental_unified_exec_tool: config
+                                .use_experimental_unified_exec_tool,
                         }),
                         user_instructions: turn_context.user_instructions.clone(),
                         base_instructions: turn_context.base_instructions.clone(),
@@ -2082,6 +2090,72 @@ async fn handle_response_item(
     Ok(output)
 }
 
+async fn handle_unified_exec_tool_call(
+    sess: &Session,
+    call_id: String,
+    session_id: Option<String>,
+    arguments: Vec<String>,
+    timeout_ms: Option<u64>,
+) -> ResponseInputItem {
+    let parsed_session_id = if let Some(session_id) = session_id {
+        match session_id.parse::<i32>() {
+            Ok(parsed) => Some(parsed),
+            Err(output) => {
+                return ResponseInputItem::FunctionCallOutput {
+                    call_id: call_id.to_string(),
+                    output: FunctionCallOutputPayload {
+                        content: format!("invalid session_id: {session_id} due to error {output}"),
+                        success: Some(false),
+                    },
+                };
+            }
+        }
+    } else {
+        None
+    };
+
+    let request = crate::unified_exec::UnifiedExecRequest {
+        session_id: parsed_session_id,
+        input_chunks: &arguments,
+        timeout_ms,
+    };
+
+    let result = sess.unified_exec_manager.handle_request(request).await;
+
+    let output_payload = match result {
+        Ok(value) => {
+            #[derive(Serialize)]
+            struct SerializedUnifiedExecResult<'a> {
+                session_id: Option<String>,
+                output: &'a str,
+            }
+
+            match serde_json::to_string(&SerializedUnifiedExecResult {
+                session_id: value.session_id.map(|id| id.to_string()),
+                output: &value.output,
+            }) {
+                Ok(serialized) => FunctionCallOutputPayload {
+                    content: serialized,
+                    success: Some(true),
+                },
+                Err(err) => FunctionCallOutputPayload {
+                    content: format!("failed to serialize unified exec output: {err}"),
+                    success: Some(false),
+                },
+            }
+        }
+        Err(err) => FunctionCallOutputPayload {
+            content: format!("unified exec failed: {err}"),
+            success: Some(false),
+        },
+    };
+
+    ResponseInputItem::FunctionCallOutput {
+        call_id,
+        output: output_payload,
+    }
+}
+
 async fn handle_function_call(
     sess: &Session,
     turn_context: &TurnContext,
@@ -2106,6 +2180,38 @@ async fn handle_function_call(
                 turn_diff_tracker,
                 sub_id,
                 call_id,
+            )
+            .await
+        }
+        "unified_exec" => {
+            #[derive(Deserialize)]
+            struct UnifiedExecArgs {
+                input: Vec<String>,
+                #[serde(default)]
+                session_id: Option<String>,
+                #[serde(default)]
+                timeout_ms: Option<u64>,
+            }
+
+            let args = match serde_json::from_str::<UnifiedExecArgs>(&arguments) {
+                Ok(args) => args,
+                Err(err) => {
+                    return ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: FunctionCallOutputPayload {
+                            content: format!("failed to parse function arguments: {err}"),
+                            success: Some(false),
+                        },
+                    };
+                }
+            };
+
+            handle_unified_exec_tool_call(
+                sess,
+                call_id,
+                args.session_id,
+                args.input,
+                args.timeout_ms,
             )
             .await
         }
