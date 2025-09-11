@@ -1038,4 +1038,37 @@ mod tests {
         let delay = try_parse_retry_after(&err);
         assert_eq!(delay, Some(Duration::from_secs_f64(1.898)));
     }
+
+    #[test]
+    fn error_response_deserializes_old_schema_known_plan_type_and_serializes_back() {
+        use crate::token_data::KnownPlan;
+        use crate::token_data::PlanType;
+
+        let json = r#"{"error":{"type":"usage_limit_reached","plan_type":"pro","resets_in_seconds":3600}}"#;
+        let resp: ErrorResponse =
+            serde_json::from_str(json).expect("should deserialize old schema");
+
+        assert!(matches!(
+            resp.error.plan_type,
+            Some(PlanType::Known(KnownPlan::Pro))
+        ));
+
+        let plan_json = serde_json::to_string(&resp.error.plan_type).expect("serialize plan_type");
+        assert_eq!(plan_json, "\"pro\"");
+    }
+
+    #[test]
+    fn error_response_deserializes_old_schema_unknown_plan_type_and_serializes_back() {
+        use crate::token_data::PlanType;
+
+        let json =
+            r#"{"error":{"type":"usage_limit_reached","plan_type":"vip","resets_in_seconds":60}}"#;
+        let resp: ErrorResponse =
+            serde_json::from_str(json).expect("should deserialize old schema");
+
+        assert!(matches!(resp.error.plan_type, Some(PlanType::Unknown(ref s)) if s == "vip"));
+
+        let plan_json = serde_json::to_string(&resp.error.plan_type).expect("serialize plan_type");
+        assert_eq!(plan_json, "\"vip\"");
+    }
 }

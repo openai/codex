@@ -1,4 +1,5 @@
-use crate::token_data::{KnownPlan, PlanType};
+use crate::token_data::KnownPlan;
+use crate::token_data::PlanType;
 use codex_protocol::mcp_protocol::ConversationId;
 use reqwest::StatusCode;
 use serde_json;
