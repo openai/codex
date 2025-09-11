@@ -99,7 +99,7 @@ impl HistoryCell for UserHistoryCell {
         let mut lines: Vec<Line<'static>> = Vec::new();
 
         // Wrap the content first, then prefix each wrapped line with the marker.
-        let wrap_width = width.saturating_sub(1); // account for the ▌ prefix
+        let wrap_width = width.saturating_sub(2); // account for the ▌ prefix and trailing space
         let wrapped = textwrap::wrap(
             &self.message,
             textwrap::Options::new(wrap_width as usize)
@@ -107,7 +107,7 @@ impl HistoryCell for UserHistoryCell {
         );
 
         for line in wrapped {
-            lines.push(vec!["▌".cyan().dim(), line.to_string().dim()].into());
+            lines.push(vec!["▌ ".cyan().dim(), line.to_string().dim()].into());
         }
         lines
     }
@@ -1753,7 +1753,7 @@ mod tests {
             message: msg.to_string(),
         };
 
-        // Small width to force wrapping more clearly. Effective wrap width is width-1 due to the ▌ prefix.
+        // Small width to force wrapping more clearly. Effective wrap width is width-2 due to the ▌ prefix and trailing space.
         let width: u16 = 12;
         let lines = cell.display_lines(width);
         let rendered = render_lines(&lines).join("\n");
