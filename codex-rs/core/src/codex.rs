@@ -19,11 +19,13 @@ use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
 use codex_protocol::mcp_protocol::ConversationId;
+use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::ConversationPathResponseEvent;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::TaskStartedEvent;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
+use codex_protocol::protocol::TurnContextItem;
 use futures::prelude::*;
 use mcp_types::CallToolResult;
 use serde::Deserialize;
@@ -1786,6 +1788,15 @@ async fn try_run_turn(
         })
     };
 
+    let rollout_item = RolloutItem::TurnContext(TurnContextItem {
+        cwd: turn_context.cwd.clone(),
+        approval_policy: turn_context.approval_policy,
+        sandbox_policy: turn_context.sandbox_policy.clone(),
+        model: turn_context.client.get_model().clone(),
+        effort: turn_context.client.get_reasoning_effort(),
+        summary: turn_context.client.get_reasoning_summary(),
+    });
+    sess.persist_rollout_items(&[rollout_item]).await;
     let mut stream = turn_context.client.clone().stream(&prompt).await?;
 
     let mut output = Vec::new();
@@ -1968,10 +1979,14 @@ async fn run_compact_task(
 
     sess.remove_task(&sub_id);
 
-    {
+    let rollout_item = {
         let mut state = sess.state.lock_unchecked();
         state.history.keep_last_messages(1);
-    }
+        RolloutItem::Compacted(CompactedItem {
+            message: state.history.last_agent_message(),
+        })
+    };
+    sess.persist_rollout_items(&[rollout_item]).await;
 
     let event = Event {
         id: sub_id.clone(),
@@ -2997,6 +3012,15 @@ async fn drain_to_completed(
     sub_id: &str,
     prompt: &Prompt,
 ) -> CodexResult<()> {
+    let rollout_item = RolloutItem::TurnContext(TurnContextItem {
+        cwd: turn_context.cwd.clone(),
+        approval_policy: turn_context.approval_policy,
+        sandbox_policy: turn_context.sandbox_policy.clone(),
+        model: turn_context.client.get_model(),
+        effort: turn_context.client.get_reasoning_effort(),
+        summary: turn_context.client.get_reasoning_summary(),
+    });
+    sess.persist_rollout_items(&[rollout_item]).await;
     let mut stream = turn_context.client.clone().stream(prompt).await?;
     loop {
         let maybe_event = stream.next().await;

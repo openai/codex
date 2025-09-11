@@ -3,10 +3,13 @@
 use codex_core::CodexAuth;
 use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
+use codex_core::NewConversation;
 use codex_core::built_in_model_providers;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
+use codex_core::protocol::RolloutItem;
+use codex_core::protocol::RolloutLine;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use core_test_support::load_default_config_for_test;
 use core_test_support::wait_for_event;
@@ -142,11 +145,12 @@ async fn summarize_context_three_requests_and_instructions() {
     let mut config = load_default_config_for_test(&home);
     config.model_provider = model_provider;
     let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
-    let codex = conversation_manager
-        .new_conversation(config)
-        .await
-        .unwrap()
-        .conversation;
+    let NewConversation {
+        conversation: codex,
+        session_configured,
+        ..
+    } = conversation_manager.new_conversation(config).await.unwrap();
+    let rollout_path = session_configured.rollout_path;
 
     // 1) Normal user input – should hit server once.
     codex
@@ -247,5 +251,48 @@ async fn summarize_context_three_requests_and_instructions() {
     assert!(
         !messages.iter().any(|(_, t)| t.contains(SUMMARIZE_TRIGGER)),
         "third request should not include the summarize trigger"
+    );
+
+    // Shut down Codex to flush rollout entries before inspecting the file.
+    codex.submit(Op::Shutdown).await.unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
+
+    // Verify rollout contains APITurn entries for each API call and a Compacted entry.
+    let text = std::fs::read_to_string(&rollout_path).unwrap_or_else(|e| {
+        panic!(
+            "failed to read rollout file {}: {e}",
+            rollout_path.display()
+        )
+    });
+    let mut api_turn_count = 0usize;
+    let mut saw_compacted_summary = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(entry): Result<RolloutLine, _> = serde_json::from_str(trimmed) else {
+            continue;
+        };
+        match entry.item {
+            RolloutItem::TurnContext(_) => {
+                api_turn_count += 1;
+            }
+            RolloutItem::Compacted(ci) => {
+                if ci.message == SUMMARY_TEXT {
+                    saw_compacted_summary = true;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    assert!(
+        api_turn_count == 3,
+        "expected three APITurn entries in rollout"
+    );
+    assert!(
+        saw_compacted_summary,
+        "expected a Compacted entry containing the summarizer output"
     );
 }

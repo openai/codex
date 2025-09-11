@@ -318,6 +318,12 @@ async fn read_head_and_flags(
                     head.push(val);
                 }
             }
+            RolloutItem::TurnContext(_) => {
+                // Not included in `head`; skip.
+            }
+            RolloutItem::Compacted(_) => {
+                // Not included in `head`; skip.
+            }
             RolloutItem::EventMsg(ev) => {
                 if matches!(ev, EventMsg::UserMessage(_)) {
                     saw_user_event = true;
