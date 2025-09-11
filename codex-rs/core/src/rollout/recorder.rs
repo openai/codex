@@ -238,8 +238,11 @@ impl RolloutRecorder {
                     RolloutItem::ResponseItem(item) => {
                         items.push(RolloutItem::ResponseItem(item));
                     }
-                    RolloutItem::CodexExecutiveItem(item) => {
-                        items.push(RolloutItem::CodexExecutiveItem(item));
+                    RolloutItem::Compacted(item) => {
+                        items.push(RolloutItem::Compacted(item));
+                    }
+                    RolloutItem::TurnContext(item) => {
+                        items.push(RolloutItem::TurnContext(item));
                     }
                     RolloutItem::EventMsg(_ev) => {
                         items.push(RolloutItem::EventMsg(_ev));

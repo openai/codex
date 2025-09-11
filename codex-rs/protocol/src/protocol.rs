@@ -897,14 +897,9 @@ pub struct SessionMetaLine {
 pub enum RolloutItem {
     SessionMeta(SessionMetaLine),
     ResponseItem(ResponseItem),
-    CodexExecutiveItem(CodexExecutiveItem),
-    EventMsg(EventMsg),
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, TS)]
-pub enum CodexExecutiveItem {
     Compacted(CompactedItem),
-    APITurn(TurnContextItem),
+    TurnContext(TurnContextItem),
+    EventMsg(EventMsg),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]

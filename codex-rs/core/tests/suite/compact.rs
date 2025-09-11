@@ -5,7 +5,6 @@ use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
 use codex_core::NewConversation;
 use codex_core::built_in_model_providers;
-use codex_core::protocol::CodexExecutiveItem;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
@@ -275,10 +274,10 @@ async fn summarize_context_three_requests_and_instructions() {
                 continue;
             };
             match entry.item {
-                RolloutItem::CodexExecutiveItem(CodexExecutiveItem::APITurn(_)) => {
+                RolloutItem::TurnContext(_) => {
                     count += 1;
                 }
-                RolloutItem::CodexExecutiveItem(CodexExecutiveItem::Compacted(ci)) => {
+                RolloutItem::Compacted(ci) => {
                     if ci.message == SUMMARY_TEXT {
                         saw = true;
                     }

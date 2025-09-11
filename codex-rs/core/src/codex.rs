@@ -19,7 +19,6 @@ use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
 use codex_protocol::mcp_protocol::ConversationId;
-use codex_protocol::protocol::CodexExecutiveItem;
 use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::ConversationPathResponseEvent;
 use codex_protocol::protocol::RolloutItem;
@@ -1789,15 +1788,14 @@ async fn try_run_turn(
         })
     };
 
-    let rollout_item =
-        RolloutItem::CodexExecutiveItem(CodexExecutiveItem::APITurn(TurnContextItem {
-            cwd: turn_context.cwd.clone(),
-            approval_policy: turn_context.approval_policy,
-            sandbox_policy: turn_context.sandbox_policy.clone(),
-            model: turn_context.client.get_model().clone(),
-            effort: turn_context.client.get_reasoning_effort(),
-            summary: turn_context.client.get_reasoning_summary(),
-        }));
+    let rollout_item = RolloutItem::TurnContext(TurnContextItem {
+        cwd: turn_context.cwd.clone(),
+        approval_policy: turn_context.approval_policy,
+        sandbox_policy: turn_context.sandbox_policy.clone(),
+        model: turn_context.client.get_model().clone(),
+        effort: turn_context.client.get_reasoning_effort(),
+        summary: turn_context.client.get_reasoning_summary(),
+    });
     sess.persist_rollout_items(&[rollout_item]).await;
     let mut stream = turn_context.client.clone().stream(&prompt).await?;
 
@@ -1984,9 +1982,9 @@ async fn run_compact_task(
     let rollout_item = {
         let mut state = sess.state.lock_unchecked();
         state.history.keep_last_messages(1);
-        RolloutItem::CodexExecutiveItem(CodexExecutiveItem::Compacted(CompactedItem {
+        RolloutItem::Compacted(CompactedItem {
             message: state.history.last_agent_message(),
-        }))
+        })
     };
     sess.persist_rollout_items(&[rollout_item]).await;
 
@@ -3014,15 +3012,14 @@ async fn drain_to_completed(
     sub_id: &str,
     prompt: &Prompt,
 ) -> CodexResult<()> {
-    let rollout_item =
-        RolloutItem::CodexExecutiveItem(CodexExecutiveItem::APITurn(TurnContextItem {
-            cwd: turn_context.cwd.clone(),
-            approval_policy: turn_context.approval_policy,
-            sandbox_policy: turn_context.sandbox_policy.clone(),
-            model: turn_context.client.get_model(),
-            effort: turn_context.client.get_reasoning_effort(),
-            summary: turn_context.client.get_reasoning_summary(),
-        }));
+    let rollout_item = RolloutItem::TurnContext(TurnContextItem {
+        cwd: turn_context.cwd.clone(),
+        approval_policy: turn_context.approval_policy,
+        sandbox_policy: turn_context.sandbox_policy.clone(),
+        model: turn_context.client.get_model(),
+        effort: turn_context.client.get_reasoning_effort(),
+        summary: turn_context.client.get_reasoning_summary(),
+    });
     sess.persist_rollout_items(&[rollout_item]).await;
     let mut stream = turn_context.client.clone().stream(prompt).await?;
     loop {
