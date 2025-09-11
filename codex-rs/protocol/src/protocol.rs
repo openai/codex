@@ -85,6 +85,9 @@ pub enum Op {
 
         /// Will only be honored if the model is configured to use reasoning.
         summary: ReasoningSummaryConfig,
+
+        /// Whether to enable web search.
+        enable_web_search: bool,
     },
 
     /// Override parts of the persistent turn context for subsequent turns.
@@ -117,6 +120,10 @@ pub enum Op {
         /// Updated reasoning summary preference (honored only for reasoning-capable models).
         #[serde(skip_serializing_if = "Option::is_none")]
         summary: Option<ReasoningSummaryConfig>,
+
+        /// Whether to enable web search.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        enable_web_search: Option<bool>,
     },
 
     /// Approve a command execution

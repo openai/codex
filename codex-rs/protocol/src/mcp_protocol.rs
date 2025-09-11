@@ -505,6 +505,7 @@ pub struct SendUserTurnParams {
     pub model: String,
     pub effort: ReasoningEffort,
     pub summary: ReasoningSummary,
+    pub enable_web_search: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
