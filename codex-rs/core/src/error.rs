@@ -135,52 +135,56 @@ pub struct UsageLimitReachedError {
 
 impl std::fmt::Display for UsageLimitReachedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.plan_type.as_ref() {
-            Some(PlanType::Known(KnownPlan::Plus)) => {
-                write!(
-                    f,
-                    "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing) or try again"
-                )?;
-                write_retry_suffix(f, self.resets_in_seconds)
-            }
+        let message = match self.plan_type.as_ref() {
+            Some(PlanType::Known(KnownPlan::Plus)) => format!(
+                "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing){}",
+                retry_suffix_after_or(self.resets_in_seconds)
+            ),
             Some(PlanType::Known(KnownPlan::Team)) | Some(PlanType::Known(KnownPlan::Business)) => {
-                write!(
-                    f,
-                    "You've hit your usage limit. Ask an admin to buy more credits (https://platform.openai.com/account/credits) or try again"
-                )?;
-                write_retry_suffix(f, self.resets_in_seconds)
+                format!(
+                    "You've hit your usage limit. To get more access now, send a request to your admin{}",
+                    retry_suffix_after_or(self.resets_in_seconds)
+                )
             }
-            Some(PlanType::Known(KnownPlan::Free))
-            | Some(PlanType::Known(KnownPlan::Pro))
+            Some(PlanType::Known(KnownPlan::Free)) => format!(
+                "You've hit your usage limit. Upgrade to Plus or Pro (https://openai.com/chatgpt/pricing){}",
+                retry_suffix_after_or(self.resets_in_seconds)
+            ),
+            Some(PlanType::Known(KnownPlan::Pro))
             | Some(PlanType::Known(KnownPlan::Enterprise))
-            | Some(PlanType::Known(KnownPlan::Edu)) => {
-                write!(f, "You've hit your usage limit.")?;
+            | Some(PlanType::Known(KnownPlan::Edu)) => format!(
+                "You've hit your usage limit.{}",
+                retry_suffix(self.resets_in_seconds)
+            ),
+            Some(PlanType::Unknown(_)) | None => format!(
+                "You've hit your usage limit.{}",
+                retry_suffix(self.resets_in_seconds)
+            ),
+        };
 
-                if let Some(secs) = self.resets_in_seconds {
-                    write_retry_suffix(f, Some(secs))
-                } else {
-                    write_retry_suffix(f, None)
-                }
-            }
-            Some(PlanType::Unknown(_)) | None => {
-                write!(f, "You've hit your usage limit.")?;
-                write_retry_suffix(f, self.resets_in_seconds)
-            }
-        }
+        write!(f, "{message}")
     }
 }
 
-fn write_retry_suffix(
-    f: &mut std::fmt::Formatter<'_>,
-    resets_in_seconds: Option<u64>,
-) -> std::fmt::Result {
+fn retry_suffix(resets_in_seconds: Option<u64>) -> String {
     if let Some(secs) = resets_in_seconds {
         let reset_duration = format_reset_duration(secs);
-        write!(f, "Try again in {reset_duration}.")
+        format!(" Try again in {reset_duration}.")
     } else {
-        write!(f, "Try again later.")
+        " Try again later.".to_string()
     }
 }
+
+fn retry_suffix_after_or(resets_in_seconds: Option<u64>) -> String {
+    if let Some(secs) = resets_in_seconds {
+        let reset_duration = format_reset_duration(secs);
+        format!(" or try again in {reset_duration}.")
+    } else {
+        " or try again later.".to_string()
+    }
+}
+
+// resets_phrase removed; Team/Business use retry_suffix_after_or after CTA
 
 fn format_reset_duration(total_secs: u64) -> String {
     let days = total_secs / 86_400;
@@ -286,7 +290,7 @@ mod tests {
         };
         assert_eq!(
             err.to_string(),
-            "You've hit your usage limit. Ask an admin to buy more credits (https://platform.openai.com/account/credits) or try again in 1 hour."
+            "You've hit your usage limit. To get more access now, send a request to your admin or try again in 1 hour."
         );
     }
 
@@ -298,7 +302,7 @@ mod tests {
         };
         assert_eq!(
             err.to_string(),
-            "You've hit your usage limit. Ask an admin to buy more credits (https://platform.openai.com/account/credits) or try again later."
+            "You've hit your usage limit. To get more access now, send a request to your admin or try again later."
         );
     }
 
