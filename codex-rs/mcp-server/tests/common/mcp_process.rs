@@ -18,6 +18,7 @@ use codex_protocol::mcp_protocol::CancelLoginChatGptParams;
 use codex_protocol::mcp_protocol::GetAuthStatusParams;
 use codex_protocol::mcp_protocol::InterruptConversationParams;
 use codex_protocol::mcp_protocol::ListConversationsParams;
+use codex_protocol::mcp_protocol::LoginApiKeyParams;
 use codex_protocol::mcp_protocol::NewConversationParams;
 use codex_protocol::mcp_protocol::RemoveConversationListenerParams;
 use codex_protocol::mcp_protocol::ResumeConversationParams;
@@ -316,6 +317,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("resumeConversation", params).await
+    }
+
+    /// Send a `loginApiKey` JSON-RPC request.
+    pub async fn send_login_api_key_request(
+        &mut self,
+        params: LoginApiKeyParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("loginApiKey", params).await
     }
 
     /// Send a `loginChatGpt` JSON-RPC request.

@@ -80,7 +80,10 @@ pub struct ModelProviderInfo {
     /// the connection as lost.
     pub stream_idle_timeout_ms: Option<u64>,
 
-    /// Whether this provider requires some form of standard authentication (API key, ChatGPT token).
+    /// Does this provider require an OpenAI API Key or ChatGPT login token? If true,
+    /// user is presented with login screen on first run, and login preference and token/key
+    /// are stored in auth.json. If false (which is the default), login screen is skipped,
+    /// and API key (if needed) comes from the "env_key" environment variable.
     #[serde(default)]
     pub requires_openai_auth: bool,
 }
