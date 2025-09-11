@@ -541,7 +541,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 let UpdatePlanArgs { explanation, plan } = plan_update_event;
 
                 // Header
-                ts_println!(self, "{}", "plan update".style(self.magenta));
+                ts_println!(self, "{}", "Plan update".style(self.magenta));
 
                 // Optional explanation
                 if let Some(explanation) = explanation
