@@ -159,7 +159,7 @@ mod tests {
             EventMsg::UserMessage(user) => {
                 assert_eq!(user.message, "Hello world");
                 assert!(matches!(user.kind, Some(InputMessageKind::Plain)));
-                assert_eq!(user.images, Some(vec![img1.clone(), img2.clone()]));
+                assert_eq!(user.images, Some(vec![img1, img2]));
             }
             other => panic!("expected UserMessage, got {other:?}"),
         }

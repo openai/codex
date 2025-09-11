@@ -280,7 +280,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 parsed_cmd: _,
             }) => {
                 self.call_id_to_command.insert(
-                    call_id.clone(),
+                    call_id,
                     ExecCommandBegin {
                         command: command.clone(),
                     },
@@ -382,7 +382,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 // Store metadata so we can calculate duration later when we
                 // receive the corresponding PatchApplyEnd event.
                 self.call_id_to_patch.insert(
-                    call_id.clone(),
+                    call_id,
                     PatchApplyBegin {
                         start_time: Instant::now(),
                         auto_approved,

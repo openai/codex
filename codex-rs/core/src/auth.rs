@@ -131,8 +131,7 @@ impl CodexAuth {
     }
 
     pub fn get_account_id(&self) -> Option<String> {
-        self.get_current_token_data()
-            .and_then(|t| t.account_id.clone())
+        self.get_current_token_data().and_then(|t| t.account_id)
     }
 
     pub fn get_plan_type(&self) -> Option<String> {
@@ -146,7 +145,7 @@ impl CodexAuth {
     }
 
     fn get_current_token_data(&self) -> Option<TokenData> {
-        self.get_current_auth_json().and_then(|t| t.tokens.clone())
+        self.get_current_auth_json().and_then(|t| t.tokens)
     }
 
     /// Consider this private to integration tests.
@@ -291,10 +290,10 @@ async fn update_tokens(
     let tokens = auth_dot_json.tokens.get_or_insert_with(TokenData::default);
     tokens.id_token = parse_id_token(&id_token).map_err(std::io::Error::other)?;
     if let Some(access_token) = access_token {
-        tokens.access_token = access_token.to_string();
+        tokens.access_token = access_token;
     }
     if let Some(refresh_token) = refresh_token {
-        tokens.refresh_token = refresh_token.to_string();
+        tokens.refresh_token = refresh_token;
     }
     auth_dot_json.last_refresh = Some(Utc::now());
     write_auth_json(auth_file, &auth_dot_json)?;

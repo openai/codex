@@ -299,7 +299,7 @@ mod tests {
         let Ok(expected_params) = serde_json::to_value(&event) else {
             panic!("Event must serialize");
         };
-        assert_eq!(params, Some(expected_params.clone()));
+        assert_eq!(params, Some(expected_params));
     }
 
     #[tokio::test]

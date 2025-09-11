@@ -352,7 +352,7 @@ fn exec_approval_decision_truncates_multiline_and_long_commands() {
     let long = format!("echo {}", "a".repeat(200));
     let ev_long = ExecApprovalRequestEvent {
         call_id: "call-long".into(),
-        command: vec!["bash".into(), "-lc".into(), long.clone()],
+        command: vec!["bash".into(), "-lc".into(), long],
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         reason: None,
     };
