@@ -897,7 +897,24 @@ pub struct SessionMetaLine {
 pub enum RolloutItem {
     SessionMeta(SessionMetaLine),
     ResponseItem(ResponseItem),
+    Compacted(CompactedItem),
+    TurnContext(TurnContextItem),
     EventMsg(EventMsg),
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+pub struct CompactedItem {
+    pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+pub struct TurnContextItem {
+    pub cwd: PathBuf,
+    pub approval_policy: AskForApproval,
+    pub sandbox_policy: SandboxPolicy,
+    pub model: String,
+    pub effort: ReasoningEffortConfig,
+    pub summary: ReasoningSummaryConfig,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
