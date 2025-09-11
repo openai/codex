@@ -146,10 +146,7 @@ impl std::fmt::Display for UsageLimitReachedError {
                     retry_suffix(self.resets_in_seconds)
                 )
             }
-            Some(PlanType::Known(KnownPlan::Free)) => format!(
-                "You've hit your usage limit. Upgrade to Plus or Pro (https://openai.com/chatgpt/pricing) or{}",
-                retry_suffix(self.resets_in_seconds)
-            ),
+            Some(PlanType::Known(KnownPlan::Free)) => "You've hit your usage limit. Upgrade to Plus or Pro (https://openai.com/chatgpt/pricing)".to_string(),
             Some(PlanType::Known(KnownPlan::Pro))
             | Some(PlanType::Known(KnownPlan::Enterprise))
             | Some(PlanType::Known(KnownPlan::Edu)) => format!(
