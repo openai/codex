@@ -1057,7 +1057,7 @@ pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
     // before the text. VS16 is intentionally omitted to keep spacing tighter
     // in terminals like Ghostty.
     let lines: Vec<Line<'static>> =
-        vec![vec![padded_emoji("🖐").red().bold(), " ".into(), message.into()].into()];
+        vec![vec![padded_emoji("■").red().bold(), " ".into(), message.red()].into()];
     PlainHistoryCell { lines }
 }
 
