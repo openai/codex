@@ -29,6 +29,9 @@ otel = [
 
 [dependencies]
 # Optional to keep build lean unless feature enabled
+codex-protocol = { path = "../protocol" }
+codex-mcp-client = { path = "../mcp-client" }
+chrono = "0.4.42"
 tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3", features = ["registry", "fmt"], optional = true }
 tracing-opentelemetry = { version = "0.31.0", optional = true }

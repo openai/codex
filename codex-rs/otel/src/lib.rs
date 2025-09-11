@@ -5,6 +5,7 @@ mod file_exporter;
 
 #[cfg(feature = "otel")]
 pub mod otel_provider;
+pub mod trace_manager;
 
 #[cfg(not(feature = "otel"))]
 mod imp {

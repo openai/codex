@@ -6,16 +6,13 @@ use crate::file_exporter::FileExporter;
 use crate::file_exporter::create_log_file;
 use opentelemetry::KeyValue;
 use opentelemetry::global;
-use opentelemetry::propagation::TextMapPropagator;
 use opentelemetry::trace::TracerProvider;
-use opentelemetry_http::HeaderInjector;
 use opentelemetry_otlp::Protocol;
 use opentelemetry_otlp::SpanExporter;
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_otlp::WithHttpConfig;
 use opentelemetry_otlp::WithTonicConfig;
 use opentelemetry_sdk::Resource;
-use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::trace::Sampler;
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use opentelemetry_sdk::trace::Tracer;
@@ -25,9 +22,7 @@ use reqwest::header::HeaderName;
 use reqwest::header::HeaderValue;
 use std::error::Error;
 use tonic::metadata::MetadataMap;
-use tracing::Span;
 use tracing::debug;
-use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 const ENV_ATTRIBUTE: &str = "env";
 
@@ -43,13 +38,6 @@ impl OtelProvider {
 
     pub fn shutdown(&self) {
         let _ = self.provider.shutdown();
-    }
-
-    pub fn headers(span: &Span) -> HeaderMap {
-        let mut injector = HeaderMap::new();
-        TraceContextPropagator::default()
-            .inject_context(&span.context(), &mut HeaderInjector(&mut injector));
-        injector
     }
 
     pub fn from(settings: &OtelSettings) -> Result<Option<Self>, Box<dyn Error>> {
