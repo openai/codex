@@ -237,4 +237,4 @@ jobs:
             repos/${GITHUB_REPOSITORY}/git/refs/heads/latest-alpha-cli \
             -X PATCH \
             -f sha="${GITHUB_SHA}" \
-            -f force=true
+            -F force=true
