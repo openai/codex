@@ -78,7 +78,7 @@ pub(crate) fn get_model_info(model_family: &ModelFamily) -> Option<ModelInfo> {
             max_output_tokens: 4_096,
         }),
 
-        "gpt-5" => Some(ModelInfo {
+        _ if slug.starts_with("gpt-5") => Some(ModelInfo {
             context_window: 272_000,
             max_output_tokens: 128_000,
         }),
