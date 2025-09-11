@@ -1383,7 +1383,7 @@ mod tests {
 
         let area = Rect::new(0, 0, 40, 6);
         let mut buf = Buffer::empty(area);
-        (&composer).render_ref(area, &mut buf);
+        composer.render_ref(area, &mut buf);
 
         let row_to_string = |y: u16| {
             let mut row = String::new();
