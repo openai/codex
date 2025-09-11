@@ -55,6 +55,17 @@ pub async fn run_login_with_api_key(
     }
 }
 
+/// Login using the OAuth device code flow.
+///
+/// Currently not implemented; exits with a clear message.
+pub async fn run_login_with_device_code(cli_config_overrides: CliConfigOverrides) -> ! {
+    // Parse and load config for consistency with other login commands.
+    let _config = load_config_or_exit(cli_config_overrides);
+
+    eprintln!("Device code login is not supported yet.");
+    std::process::exit(2);
+}
+
 pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
     let config = load_config_or_exit(cli_config_overrides);
 
