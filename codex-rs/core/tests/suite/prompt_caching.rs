@@ -191,7 +191,8 @@ async fn prompt_tools_are_consistent_across_requests() {
     let expected_instructions: &str = include_str!("../../prompt.md");
     // our internal implementation is responsible for keeping tools in sync
     // with the OpenAI schema, so we just verify the tool presence here
-    let expected_tools_names: &[&str] = &["shell", "update_plan", "apply_patch", "view_image"];
+    let expected_tools_names: &[&str] =
+        &["unified_exec", "update_plan", "apply_patch", "view_image"];
     let body0 = requests[0].body_json::<serde_json::Value>().unwrap();
     assert_eq!(
         body0["instructions"],
@@ -426,11 +427,17 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() {
     // After overriding the turn context, the environment context should be emitted again
     // reflecting the new approval policy and sandbox settings. Omit cwd because it did
     // not change.
-    let expected_env_text_2 = r#"<environment_context>
+    let expected_env_text_2 = format!(
+        r#"<environment_context>
   <approval_policy>never</approval_policy>
   <sandbox_mode>workspace-write</sandbox_mode>
   <network_access>enabled</network_access>
-</environment_context>"#;
+  <writable_roots>
+    <root>{}</root>
+  </writable_roots>
+</environment_context>"#,
+        writable.path().to_string_lossy()
+    );
     let expected_env_msg_2 = serde_json::json!({
         "type": "message",
         "role": "user",
