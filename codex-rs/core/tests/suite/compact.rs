@@ -12,6 +12,7 @@ use core_test_support::load_default_config_for_test;
 use core_test_support::wait_for_event;
 use serde_json::Value;
 use tempfile::TempDir;
+use wiremock::BodyPrintLimit;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -97,6 +98,13 @@ where
         .await;
 }
 
+async fn start_mock_server() -> MockServer {
+    MockServer::builder()
+        .body_print_limit(BodyPrintLimit::Limited(20_000))
+        .start()
+        .await
+}
+
 const FIRST_REPLY: &str = "FIRST_REPLY";
 const SUMMARY_TEXT: &str = "SUMMARY_ONLY_CONTEXT";
 const SUMMARIZE_TRIGGER: &str = "Start Summarization";
@@ -106,7 +114,6 @@ const FIRST_AUTO_MSG: &str = "token limit start";
 const SECOND_AUTO_MSG: &str = "token limit push";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore]
 async fn summarize_context_three_requests_and_instructions() {
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
@@ -116,7 +123,7 @@ async fn summarize_context_three_requests_and_instructions() {
     }
 
     // Set up a mock server that we can inspect after the run.
-    let server = MockServer::start().await;
+    let server = start_mock_server().await;
 
     // SSE 1: assistant replies normally so it is recorded in history.
     let sse1 = sse(vec![
@@ -214,7 +221,7 @@ async fn summarize_context_three_requests_and_instructions() {
         "summarization should override base instructions"
     );
     assert!(
-        instr2.contains("You are a summarization assistant"),
+        instr2.contains("You have exceeded the maximum number of tokens"),
         "summarization instructions not applied"
     );
 
@@ -259,7 +266,8 @@ async fn summarize_context_three_requests_and_instructions() {
     );
     let Some((_, bridge_text)) = messages.iter().find(|(role, text)| {
         role == "user"
-            && text.contains("Here are all the user messages")
+            && (text.contains("Here were the user messages")
+                || text.contains("Here are all the user messages"))
             && text.contains(SUMMARY_TEXT)
     }) else {
         panic!("expected a bridge message containing the summary");
@@ -281,7 +289,6 @@ async fn summarize_context_three_requests_and_instructions() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore]
 async fn auto_compact_runs_after_token_limit_hit() {
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
@@ -290,7 +297,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
         return;
     }
 
-    let server = MockServer::start().await;
+    let server = start_mock_server().await;
 
     let sse1 = sse(vec![
         ev_assistant_message("m1", FIRST_REPLY),
@@ -299,7 +306,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
 
     let sse2 = sse(vec![
         ev_assistant_message("m2", "SECOND_REPLY"),
-        ev_completed_with_tokens("r2", 60_000),
+        ev_completed_with_tokens("r2", 130_000),
     ]);
 
     let sse3 = sse(vec![
@@ -311,7 +318,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(FIRST_AUTO_MSG)
             && !body.contains(SECOND_AUTO_MSG)
-            && !body.contains("You are a summarization assistant")
+            && !body.contains("You have exceeded the maximum number of tokens")
     };
     mount_sse_once(&server, first_matcher, sse1).await;
 
@@ -319,13 +326,13 @@ async fn auto_compact_runs_after_token_limit_hit() {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(SECOND_AUTO_MSG)
             && body.contains(FIRST_AUTO_MSG)
-            && !body.contains("You are a summarization assistant")
+            && !body.contains("You have exceeded the maximum number of tokens")
     };
     mount_sse_once(&server, second_matcher, sse2).await;
 
     let third_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
-        body.contains("You are a summarization assistant")
+        body.contains("You have exceeded the maximum number of tokens")
     };
     mount_sse_once(&server, third_matcher, sse3).await;
 
@@ -374,7 +381,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
         .and_then(|v| v.as_str())
         .unwrap_or_default();
     assert!(
-        instructions.contains("You are a summarization assistant"),
+        instructions.contains("You have exceeded the maximum number of tokens"),
         "auto compact should reuse summarization instructions"
     );
 }

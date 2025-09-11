@@ -117,22 +117,14 @@ async fn run_compact_task_inner(
     sess.send_event(start_event).await;
 
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
-    let mut turn_input = sess.turn_input_with_history(vec![initial_input_for_turn.clone().into()]);
+    let turn_input = sess.turn_input_with_history(vec![initial_input_for_turn.clone().into()]);
 
-    if !compact_instructions.is_empty() {
-        turn_input.push(ResponseItem::Message {
-            id: None,
-            role: "user".to_string(),
-            content: vec![ContentItem::InputText {
-                text: compact_instructions.clone(),
-            }],
-        });
-    }
-
+    println!("Instructions: {compact_instructions:?}");
     let prompt = Prompt {
         input: turn_input,
         tools: Vec::new(),
-        base_instructions_override: None,
+        base_instructions_override: (!compact_instructions.is_empty())
+            .then_some(compact_instructions.clone()),
     };
 
     let max_retries = turn_context.client.get_provider().stream_max_retries();
