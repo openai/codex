@@ -11,8 +11,10 @@ use codex_core::RolloutRecorder;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
+use codex_core::config::GPT5_HIGH_MODEL;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
+use codex_core::config::persist_model_selection;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_ollama::DEFAULT_OSS_MODEL;
@@ -47,6 +49,7 @@ pub mod live_wrap;
 mod markdown;
 mod markdown_render;
 mod markdown_stream;
+mod new_model_popup;
 pub mod onboarding;
 mod pager_overlay;
 mod render;
@@ -65,12 +68,14 @@ mod wrapping;
 #[cfg(not(debug_assertions))]
 mod updates;
 
-pub use cli::Cli;
-
+use crate::new_model_popup::ModelUpgradeDecision;
+use crate::new_model_popup::run_model_upgrade_popup;
 use crate::onboarding::TrustDirectorySelection;
 use crate::onboarding::onboarding_screen::OnboardingScreenArgs;
 use crate::onboarding::onboarding_screen::run_onboarding_app;
 use crate::tui::Tui;
+pub use cli::Cli;
+use codex_core::internal_storage::InternalStorage;
 
 // (tests access modules directly within the crate)
 
@@ -174,13 +179,20 @@ pub async fn run_main(
         }
     };
 
+    let cli_profile_override = cli.config_profile.clone();
+    let active_profile = cli_profile_override
+        .clone()
+        .or_else(|| config_toml.profile.clone());
+
     let should_show_trust_screen = determine_repo_trust_state(
         &mut config,
         &config_toml,
         approval_policy,
         sandbox_mode,
-        cli.config_profile.clone(),
+        cli_profile_override,
     )?;
+
+    let internal_storage = InternalStorage::load(&config.codex_home);
 
     let log_dir = codex_core::config::log_dir(&config)?;
     std::fs::create_dir_all(&log_dir)?;
@@ -224,14 +236,22 @@ pub async fn run_main(
 
     let _ = tracing_subscriber::registry().with(file_layer).try_init();
 
-    run_ratatui_app(cli, config, should_show_trust_screen)
-        .await
-        .map_err(|err| std::io::Error::other(err.to_string()))
+    run_ratatui_app(
+        cli,
+        config,
+        internal_storage,
+        active_profile,
+        should_show_trust_screen,
+    )
+    .await
+    .map_err(|err| std::io::Error::other(err.to_string()))
 }
 
 async fn run_ratatui_app(
     cli: Cli,
     config: Config,
+    mut internal_storage: InternalStorage,
+    active_profile: Option<String>,
     should_show_trust_screen: bool,
 ) -> color_eyre::Result<codex_core::protocol::TokenUsage> {
     let mut config = config;
@@ -300,14 +320,6 @@ async fn run_ratatui_app(
     // Initialize high-fidelity session event logging if enabled.
     session_log::maybe_init(&config);
 
-    let Cli {
-        prompt,
-        images,
-        resume,
-        r#continue,
-        ..
-    } = cli;
-
     let auth_manager = AuthManager::shared(config.codex_home.clone());
     let login_status = get_login_status(&config);
     let should_show_onboarding =
@@ -330,7 +342,7 @@ async fn run_ratatui_app(
         }
     }
 
-    let resume_selection = if r#continue {
+    let resume_selection = if cli.r#continue {
         match RolloutRecorder::list_conversations(&config.codex_home, 1, None).await {
             Ok(page) => page
                 .items
@@ -339,7 +351,7 @@ async fn run_ratatui_app(
                 .unwrap_or(resume_picker::ResumeSelection::StartFresh),
             Err(_) => resume_picker::ResumeSelection::StartFresh,
         }
-    } else if resume {
+    } else if cli.resume {
         match resume_picker::run_resume_picker(&mut tui, &config.codex_home).await? {
             resume_picker::ResumeSelection::Exit => {
                 restore();
@@ -352,10 +364,42 @@ async fn run_ratatui_app(
         resume_picker::ResumeSelection::StartFresh
     };
 
+    if should_show_model_rollout_prompt(
+        &cli,
+        &config,
+        active_profile.as_deref(),
+        internal_storage.gpt_5_high_model_prompt_seen,
+    ) {
+        internal_storage.gpt_5_high_model_prompt_seen = true;
+        if let Err(e) = internal_storage.persist().await {
+            error!("Failed to persist internal storage: {e:?}");
+        }
+
+        let upgrade_decision = run_model_upgrade_popup(&mut tui).await?;
+        let switch_to_new_model = upgrade_decision == ModelUpgradeDecision::Switch;
+
+        if switch_to_new_model {
+            config.model = GPT5_HIGH_MODEL.to_owned();
+            if let Err(e) = persist_model_selection(
+                &config.codex_home,
+                active_profile.as_deref(),
+                &config.model,
+                None,
+            )
+            .await
+            {
+                error!("Failed to persist model selection: {e:?}");
+            }
+        }
+    }
+
+    let Cli { prompt, images, .. } = cli;
+
     let app_result = App::run(
         &mut tui,
         auth_manager,
         config,
+        active_profile,
         prompt,
         images,
         resume_selection,
@@ -463,11 +507,44 @@ fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool 
     login_status == LoginStatus::NotAuthenticated
 }
 
+fn should_show_model_rollout_prompt(
+    cli: &Cli,
+    config: &Config,
+    active_profile: Option<&str>,
+    gpt_5_high_model_prompt_seen: bool,
+) -> bool {
+    // TODO(jif) drop.
+    let debug_high_enabled = std::env::var("DEBUG_HIGH")
+        .map(|v| v.eq_ignore_ascii_case("1"))
+        .unwrap_or(false);
+
+    active_profile.is_none()
+        && debug_high_enabled
+        && cli.model.is_none()
+        && !gpt_5_high_model_prompt_seen
+        && config.model_provider.requires_openai_auth
+        && !cli.oss
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::Parser;
+    use std::sync::Once;
+
+    fn enable_debug_high_env() {
+        static DEBUG_HIGH_ONCE: Once = Once::new();
+        DEBUG_HIGH_ONCE.call_once(|| {
+            // SAFETY: Tests run in a controlled environment and require this env variable to
+            // opt into the GPT-5 High rollout prompt gating. We only set it once.
+            unsafe {
+                std::env::set_var("DEBUG_HIGH", "1");
+            }
+        });
+    }
 
     fn make_config() -> Config {
+        enable_debug_high_env();
         Config::load_from_base_config_with_overrides(
             ConfigToml::default(),
             ConfigOverrides::default(),
@@ -482,6 +559,39 @@ mod tests {
         assert!(should_show_login_screen(
             LoginStatus::NotAuthenticated,
             &cfg
+        ));
+    }
+
+    #[test]
+    fn shows_model_rollout_prompt_for_default_model() {
+        let cli = Cli::parse_from(["codex"]);
+        let cfg = make_config();
+        assert!(should_show_model_rollout_prompt(&cli, &cfg, None, false));
+    }
+
+    #[test]
+    fn hides_model_rollout_prompt_when_marked_seen() {
+        let cli = Cli::parse_from(["codex"]);
+        let cfg = make_config();
+        assert!(!should_show_model_rollout_prompt(&cli, &cfg, None, true));
+    }
+
+    #[test]
+    fn hides_model_rollout_prompt_when_cli_overrides_model() {
+        let cli = Cli::parse_from(["codex", "--model", "gpt-4.1"]);
+        let cfg = make_config();
+        assert!(!should_show_model_rollout_prompt(&cli, &cfg, None, false));
+    }
+
+    #[test]
+    fn hides_model_rollout_prompt_when_profile_active() {
+        let cli = Cli::parse_from(["codex"]);
+        let cfg = make_config();
+        assert!(!should_show_model_rollout_prompt(
+            &cli,
+            &cfg,
+            Some("gpt5"),
+            false,
         ));
     }
 }

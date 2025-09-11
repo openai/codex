@@ -11,6 +11,8 @@ use codex_ansi_escape::ansi_escape_line;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
+use codex_core::config::persist_model_selection;
+use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::TokenUsage;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
@@ -37,6 +39,9 @@ pub(crate) struct App {
 
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
+    pub(crate) active_profile: Option<String>,
+    model_saved_to_profile: bool,
+    model_saved_to_global: bool,
 
     pub(crate) file_search: FileSearchManager,
 
@@ -61,6 +66,7 @@ impl App {
         tui: &mut tui::Tui,
         auth_manager: Arc<AuthManager>,
         config: Config,
+        active_profile: Option<String>,
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
         resume_selection: ResumeSelection,
@@ -119,6 +125,9 @@ impl App {
             app_event_tx,
             chat_widget,
             config,
+            active_profile,
+            model_saved_to_profile: false,
+            model_saved_to_global: false,
             file_search,
             enhanced_keys_supported,
             transcript_lines: Vec::new(),
@@ -291,7 +300,14 @@ impl App {
                 self.chat_widget.set_reasoning_effort(effort);
             }
             AppEvent::UpdateModel(model) => {
-                self.chat_widget.set_model(model);
+                self.chat_widget.set_model(model.clone());
+                self.config.model = model.clone();
+                if let Some(family) = find_family_for_model(&model) {
+                    self.config.model_family = family;
+                }
+                self.model_saved_to_profile = false;
+                self.model_saved_to_global = false;
+                self.show_model_save_hint();
             }
             AppEvent::UpdateAskForApprovalPolicy(policy) => {
                 self.chat_widget.set_approval_policy(policy);
@@ -307,6 +323,92 @@ impl App {
         self.chat_widget.token_usage()
     }
 
+    fn show_model_save_hint(&mut self) {
+        let model = self.config.model.clone();
+        if self.active_profile.is_some() {
+            self.chat_widget.add_info_message(format!(
+                "Model switched to {model}. Press Ctrl+S to save it for this profile, then press Ctrl+S again to set it as your global default."
+            ));
+        } else {
+            self.chat_widget.add_info_message(format!(
+                "Model switched to {model}. Press Ctrl+S to save it as your global default."
+            ));
+        }
+    }
+
+    async fn persist_model_shortcut(&mut self) {
+        enum SaveScope<'a> {
+            Profile(&'a str),
+            Global,
+            AlreadySaved,
+        }
+
+        let scope = if let Some(profile) = self
+            .active_profile
+            .as_deref()
+            .filter(|_| !self.model_saved_to_profile)
+        {
+            SaveScope::Profile(profile)
+        } else if !self.model_saved_to_global {
+            SaveScope::Global
+        } else {
+            SaveScope::AlreadySaved
+        };
+
+        let model = self.config.model.clone();
+        let effort = self.config.model_reasoning_effort;
+        let codex_home = self.config.codex_home.clone();
+
+        match scope {
+            SaveScope::Profile(profile) => {
+                match persist_model_selection(&codex_home, Some(profile), &model, Some(effort))
+                    .await
+                {
+                    Ok(()) => {
+                        self.model_saved_to_profile = true;
+                        self.chat_widget.add_info_message(format!(
+                            "Saved model {model} ({effort}) for profile `{profile}`. Press Ctrl+S again to make this your global default."
+                        ));
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist model selection via shortcut"
+                        );
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to save model preference for profile `{profile}`: {err}"
+                        ));
+                    }
+                }
+            }
+            SaveScope::Global => {
+                match persist_model_selection(&codex_home, None, &model, Some(effort)).await {
+                    Ok(()) => {
+                        self.model_saved_to_global = true;
+                        self.chat_widget.add_info_message(format!(
+                            "Saved model {model} ({effort}) as your global default."
+                        ));
+                    }
+                    Err(err) => {
+                        tracing::error!(
+                            error = %err,
+                            "failed to persist global model selection via shortcut"
+                        );
+                        self.chat_widget.add_error_message(format!(
+                            "Failed to save global model preference: {err}"
+                        ));
+                    }
+                }
+            }
+            SaveScope::AlreadySaved => {
+                self.chat_widget.add_info_message(
+                    "Model preference already saved globally; no further action needed."
+                        .to_string(),
+                );
+            }
+        }
+    }
+
     async fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {
         match key_event {
             KeyEvent {
@@ -319,6 +421,14 @@ impl App {
                 let _ = tui.enter_alt_screen();
                 self.overlay = Some(Overlay::new_transcript(self.transcript_lines.clone()));
                 tui.frame_requester().schedule_frame();
+            }
+            KeyEvent {
+                code: KeyCode::Char('s'),
+                modifiers: crossterm::event::KeyModifiers::CONTROL,
+                kind: KeyEventKind::Press,
+                ..
+            } => {
+                self.persist_model_shortcut().await;
             }
             // Esc primes/advances backtracking only in normal (not working) mode
             // with an empty composer. In any other state, forward Esc so the

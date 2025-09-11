@@ -1207,7 +1207,7 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(
             "Select model and reasoning level".to_string(),
             Some("Switch between OpenAI models for this and future Codex CLI session".to_string()),
-            Some("Press Enter to confirm or Esc to go back".to_string()),
+            Some("Press Enter to confirm, Esc to go back, Ctrl+S to save".to_string()),
             items,
         );
     }
@@ -1271,6 +1271,16 @@ impl ChatWidget {
     /// Set the model in the widget's config copy.
     pub(crate) fn set_model(&mut self, model: String) {
         self.config.model = model;
+    }
+
+    pub(crate) fn add_info_message(&mut self, message: String) {
+        self.add_to_history(history_cell::new_info_event(message));
+        self.request_redraw();
+    }
+
+    pub(crate) fn add_error_message(&mut self, message: String) {
+        self.add_to_history(history_cell::new_error_event(message));
+        self.request_redraw();
     }
 
     pub(crate) fn add_mcp_output(&mut self) {
