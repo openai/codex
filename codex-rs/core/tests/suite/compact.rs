@@ -253,49 +253,38 @@ async fn summarize_context_three_requests_and_instructions() {
         "third request should not include the summarize trigger"
     );
 
+    // Shut down Codex to flush rollout entries before inspecting the file.
+    codex.submit(Op::Shutdown).await.unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::ShutdownComplete)).await;
+
     // Verify rollout contains APITurn entries for each API call and a Compacted entry.
-    // The rollout writer runs on a background task; poll briefly until entries are present.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-    let poll = || {
-        let text = std::fs::read_to_string(&rollout_path).unwrap_or_else(|e| {
-            panic!(
-                "failed to read rollout file {}: {e}",
-                rollout_path.display()
-            )
-        });
-        let mut count = 0usize;
-        let mut saw = false;
-        for line in text.lines() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            let Ok(entry): Result<RolloutLine, _> = serde_json::from_str(trimmed) else {
-                continue;
-            };
-            match entry.item {
-                RolloutItem::TurnContext(_) => {
-                    count += 1;
-                }
-                RolloutItem::Compacted(ci) => {
-                    if ci.message == SUMMARY_TEXT {
-                        saw = true;
-                    }
-                }
-                _ => {}
-            }
+    let text = std::fs::read_to_string(&rollout_path).unwrap_or_else(|e| {
+        panic!(
+            "failed to read rollout file {}: {e}",
+            rollout_path.display()
+        )
+    });
+    let mut api_turn_count = 0usize;
+    let mut saw_compacted_summary = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
         }
-        (count, saw)
-    };
-    let (mut api_turn_count, mut saw_compacted_summary) = poll();
-    while std::time::Instant::now() < deadline {
-        if api_turn_count >= 3 && saw_compacted_summary {
-            break;
+        let Ok(entry): Result<RolloutLine, _> = serde_json::from_str(trimmed) else {
+            continue;
+        };
+        match entry.item {
+            RolloutItem::TurnContext(_) => {
+                api_turn_count += 1;
+            }
+            RolloutItem::Compacted(ci) => {
+                if ci.message == SUMMARY_TEXT {
+                    saw_compacted_summary = true;
+                }
+            }
+            _ => {}
         }
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        let (count, saw) = poll();
-        api_turn_count = count;
-        saw_compacted_summary = saw;
     }
 
     assert!(
