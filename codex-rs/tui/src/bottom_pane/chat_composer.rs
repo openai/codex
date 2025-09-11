@@ -243,6 +243,10 @@ impl ChatComposer {
 
     /// Replace the entire composer content with `text` and reset cursor.
     pub(crate) fn set_text_content(&mut self, text: String) {
+        // Clear any existing content, placeholders, and attachments first.
+        self.textarea.set_text("");
+        self.pending_pastes.clear();
+        self.attached_images.clear();
         self.textarea.set_text(&text);
         self.textarea.set_cursor(0);
         self.sync_command_popup();
@@ -1215,18 +1219,6 @@ impl ChatComposer {
     pub(crate) fn set_esc_backtrack_hint(&mut self, show: bool) {
         self.esc_backtrack_hint = show;
     }
-
-    #[inline]
-    fn clear_area(buf: &mut Buffer, rect: Rect) {
-        if rect.width == 0 || rect.height == 0 {
-            return;
-        }
-        let spaces = " ".repeat(rect.width as usize);
-        for row in 0..rect.height {
-            let y = rect.y + row;
-            buf.set_stringn(rect.x, y, &spaces, rect.width as usize, Style::default());
-        }
-    }
 }
 
 impl WidgetRef for ChatComposer {
@@ -1338,15 +1330,12 @@ impl WidgetRef for ChatComposer {
         textarea_rect.x += 1;
 
         let mut state = self.textarea_state.borrow_mut();
-        // Proactively clear the textarea region to avoid residual characters from
-        // previous frames (e.g., placeholder text lingering after content updates).
-        Self::clear_area(buf, textarea_rect);
+        StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
         if self.textarea.text().is_empty() {
             Line::from(self.placeholder_text.as_str())
                 .style(Style::default().dim())
                 .render_ref(textarea_rect.inner(Margin::new(1, 0)), buf);
         }
-        StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
     }
 }
 

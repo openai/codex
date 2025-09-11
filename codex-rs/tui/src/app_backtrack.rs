@@ -335,7 +335,7 @@ impl App {
         self.trim_transcript_for_backtrack(drop_count);
         self.render_transcript_once(tui);
         if !prefill.is_empty() {
-            self.chat_widget.insert_str(prefill);
+            self.chat_widget.set_composer_text(prefill.to_string());
         }
         tui.frame_requester().schedule_frame();
     }

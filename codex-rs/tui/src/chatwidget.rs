@@ -1316,6 +1316,11 @@ impl ChatWidget {
         self.bottom_pane.insert_str(text);
     }
 
+    /// Replace the composer content with the provided text and reset cursor.
+    pub(crate) fn set_composer_text(&mut self, text: String) {
+        self.bottom_pane.set_composer_text(text);
+    }
+
     pub(crate) fn show_esc_backtrack_hint(&mut self) {
         self.bottom_pane.show_esc_backtrack_hint();
     }
