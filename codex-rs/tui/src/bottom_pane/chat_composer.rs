@@ -243,6 +243,10 @@ impl ChatComposer {
 
     /// Replace the entire composer content with `text` and reset cursor.
     pub(crate) fn set_text_content(&mut self, text: String) {
+        // Clear any existing content, placeholders, and attachments first.
+        self.textarea.set_text("");
+        self.pending_pastes.clear();
+        self.attached_images.clear();
         self.textarea.set_text(&text);
         self.textarea.set_cursor(0);
         self.sync_command_popup();
