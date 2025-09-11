@@ -304,7 +304,7 @@ impl App {
     }
 
     pub(crate) fn token_usage(&self) -> codex_core::protocol::TokenUsage {
-        self.chat_widget.token_usage().clone()
+        self.chat_widget.token_usage()
     }
 
     async fn handle_key_event(&mut self, tui: &mut tui::Tui, key_event: KeyEvent) {

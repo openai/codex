@@ -737,10 +737,10 @@ mod tests {
 
         let mut changes: HashMap<PathBuf, FileChange> = HashMap::new();
         changes.insert(
-            abs_old.clone(),
+            abs_old,
             FileChange::Update {
                 unified_diff: patch,
-                move_path: Some(abs_new.clone()),
+                move_path: Some(abs_new),
             },
         );
 

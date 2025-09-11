@@ -733,6 +733,8 @@ fn compute_replacements(
         }
     }
 
+    replacements.sort_by(|(lhs_idx, _, _), (rhs_idx, _, _)| lhs_idx.cmp(rhs_idx));
+
     Ok(replacements)
 }
 
@@ -1214,6 +1216,33 @@ PATCH"#,
 
         let contents = fs::read_to_string(&path).unwrap();
         assert_eq!(contents, "a\nB\nc\nd\nE\nf\ng\n");
+    }
+
+    #[test]
+    fn test_pure_addition_chunk_followed_by_removal() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("panic.txt");
+        fs::write(&path, "line1\nline2\nline3\n").unwrap();
+        let patch = wrap_patch(&format!(
+            r#"*** Update File: {}
+@@
++after-context
++second-line
+@@
+ line1
+-line2
+-line3
++line2-replacement"#,
+            path.display()
+        ));
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        apply_patch(&patch, &mut stdout, &mut stderr).unwrap();
+        let contents = fs::read_to_string(path).unwrap();
+        assert_eq!(
+            contents,
+            "line1\nline2-replacement\nafter-context\nsecond-line\n"
+        );
     }
 
     /// Ensure that patches authored with ASCII characters can update lines that

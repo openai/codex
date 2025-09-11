@@ -11,6 +11,9 @@ use codex_core::NewConversation;
 use codex_core::RolloutRecorder;
 use codex_core::SessionMeta;
 use codex_core::auth::CLIENT_ID;
+use codex_core::auth::get_auth_file;
+use codex_core::auth::login_with_api_key;
+use codex_core::auth::try_read_auth_json;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
@@ -37,7 +40,6 @@ use codex_protocol::mcp_protocol::ApplyPatchApprovalParams;
 use codex_protocol::mcp_protocol::ApplyPatchApprovalResponse;
 use codex_protocol::mcp_protocol::ArchiveConversationParams;
 use codex_protocol::mcp_protocol::ArchiveConversationResponse;
-use codex_protocol::mcp_protocol::AuthMode;
 use codex_protocol::mcp_protocol::AuthStatusChangeNotification;
 use codex_protocol::mcp_protocol::ClientRequest;
 use codex_protocol::mcp_protocol::ConversationId;
@@ -55,6 +57,8 @@ use codex_protocol::mcp_protocol::InterruptConversationParams;
 use codex_protocol::mcp_protocol::InterruptConversationResponse;
 use codex_protocol::mcp_protocol::ListConversationsParams;
 use codex_protocol::mcp_protocol::ListConversationsResponse;
+use codex_protocol::mcp_protocol::LoginApiKeyParams;
+use codex_protocol::mcp_protocol::LoginApiKeyResponse;
 use codex_protocol::mcp_protocol::LoginChatGptCompleteNotification;
 use codex_protocol::mcp_protocol::LoginChatGptResponse;
 use codex_protocol::mcp_protocol::NewConversationParams;
@@ -67,6 +71,7 @@ use codex_protocol::mcp_protocol::SendUserMessageResponse;
 use codex_protocol::mcp_protocol::SendUserTurnParams;
 use codex_protocol::mcp_protocol::SendUserTurnResponse;
 use codex_protocol::mcp_protocol::ServerNotification;
+use codex_protocol::mcp_protocol::UserInfoResponse;
 use codex_protocol::mcp_protocol::UserSavedConfig;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
@@ -169,6 +174,9 @@ impl CodexMessageProcessor {
             ClientRequest::GitDiffToRemote { request_id, params } => {
                 self.git_diff_to_origin(request_id, params.cwd).await;
             }
+            ClientRequest::LoginApiKey { request_id, params } => {
+                self.login_api_key(request_id, params).await;
+            }
             ClientRequest::LoginChatGpt { request_id } => {
                 self.login_chatgpt(request_id).await;
             }
@@ -187,8 +195,44 @@ impl CodexMessageProcessor {
             ClientRequest::GetUserAgent { request_id } => {
                 self.get_user_agent(request_id).await;
             }
+            ClientRequest::UserInfo { request_id } => {
+                self.get_user_info(request_id).await;
+            }
             ClientRequest::ExecOneOffCommand { request_id, params } => {
                 self.exec_one_off_command(request_id, params).await;
+            }
+        }
+    }
+
+    async fn login_api_key(&mut self, request_id: RequestId, params: LoginApiKeyParams) {
+        {
+            let mut guard = self.active_login.lock().await;
+            if let Some(active) = guard.take() {
+                active.drop();
+            }
+        }
+
+        match login_with_api_key(&self.config.codex_home, &params.api_key) {
+            Ok(()) => {
+                self.auth_manager.reload();
+                self.outgoing
+                    .send_response(request_id, LoginApiKeyResponse {})
+                    .await;
+
+                let payload = AuthStatusChangeNotification {
+                    auth_method: self.auth_manager.auth().map(|auth| auth.mode),
+                };
+                self.outgoing
+                    .send_server_notification(ServerNotification::AuthStatusChange(payload))
+                    .await;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to save api key: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
             }
         }
     }
@@ -346,7 +390,7 @@ impl CodexMessageProcessor {
             .await;
 
         // Send auth status change notification reflecting the current auth mode
-        // after logout (which may fall back to API key via env var).
+        // after logout.
         let current_auth_method = self.auth_manager.auth().map(|auth| auth.mode);
         let payload = AuthStatusChangeNotification {
             auth_method: current_auth_method,
@@ -361,13 +405,17 @@ impl CodexMessageProcessor {
         request_id: RequestId,
         params: codex_protocol::mcp_protocol::GetAuthStatusParams,
     ) {
-        let preferred_auth_method: AuthMode = self.auth_manager.preferred_auth_method();
         let include_token = params.include_token.unwrap_or(false);
         let do_refresh = params.refresh_token.unwrap_or(false);
 
         if do_refresh && let Err(err) = self.auth_manager.refresh_token().await {
             tracing::warn!("failed to refresh token while getting auth status: {err}");
         }
+
+        // Determine whether auth is required based on the active model provider.
+        // If a custom provider is configured with `requires_openai_auth == false`,
+        // then no auth step is required; otherwise, default to requiring auth.
+        let requires_openai_auth = Some(self.config.model_provider.requires_openai_auth);
 
         let response = match self.auth_manager.auth() {
             Some(auth) => {
@@ -384,14 +432,14 @@ impl CodexMessageProcessor {
                 };
                 codex_protocol::mcp_protocol::GetAuthStatusResponse {
                     auth_method: reported_auth_method,
-                    preferred_auth_method,
                     auth_token: token_opt,
+                    requires_openai_auth,
                 }
             }
             None => codex_protocol::mcp_protocol::GetAuthStatusResponse {
                 auth_method: None,
-                preferred_auth_method,
                 auth_token: None,
+                requires_openai_auth,
             },
         };
 
@@ -436,6 +484,18 @@ impl CodexMessageProcessor {
         let response = GetUserSavedConfigResponse {
             config: user_saved_config,
         };
+        self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn get_user_info(&self, request_id: RequestId) {
+        // Read alleged user email from auth.json (best-effort; not verified).
+        let auth_path = get_auth_file(&self.config.codex_home);
+        let alleged_user_email = match try_read_auth_json(&auth_path) {
+            Ok(auth) => auth.tokens.and_then(|t| t.id_token.email),
+            Err(_) => None,
+        };
+
+        let response = UserInfoResponse { alleged_user_email };
         self.outgoing.send_response(request_id, response).await;
     }
 

@@ -17,7 +17,6 @@ use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::wait_for_event;
 use tempfile::TempDir;
-use uuid::Uuid;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -270,7 +269,7 @@ async fn prefixes_context_and_instructions_once_and_consistently_across_requests
     let requests = server.received_requests().await.unwrap();
     assert_eq!(requests.len(), 2, "expected two POST requests");
 
-    let shell = default_user_shell(Uuid::new_v4(), codex_home.path()).await;
+    let shell = default_user_shell().await;
 
     let expected_env_text = format!(
         r#"<environment_context>
@@ -427,11 +426,17 @@ async fn overrides_turn_context_but_keeps_cached_prefix_and_key_constant() {
     // After overriding the turn context, the environment context should be emitted again
     // reflecting the new approval policy and sandbox settings. Omit cwd because it did
     // not change.
-    let expected_env_text_2 = r#"<environment_context>
+    let expected_env_text_2 = format!(
+        r#"<environment_context>
   <approval_policy>never</approval_policy>
   <sandbox_mode>workspace-write</sandbox_mode>
   <network_access>enabled</network_access>
-</environment_context>"#;
+  <writable_roots>
+    <root>{}</root>
+  </writable_roots>
+</environment_context>"#,
+        writable.path().to_string_lossy()
+    );
     let expected_env_msg_2 = serde_json::json!({
         "type": "message",
         "role": "user",
