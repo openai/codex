@@ -19,7 +19,6 @@ use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
 use codex_protocol::mcp_protocol::ConversationId;
-use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::ConversationPathResponseEvent;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::TaskStartedEvent;
