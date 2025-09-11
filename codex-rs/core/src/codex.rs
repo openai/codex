@@ -2718,6 +2718,20 @@ async fn handle_sandbox_error(
     let sub_id = exec_command_context.sub_id.clone();
     let cwd = exec_command_context.cwd.clone();
 
+    // if the command timed out, we can simply return this failure to the model
+    if matches!(error, SandboxErr::Timeout) {
+        return ResponseInputItem::FunctionCallOutput {
+            call_id,
+            output: FunctionCallOutputPayload {
+                content: format!(
+                    "command timed out after {} milliseconds",
+                    params.timeout_duration().as_millis()
+                ),
+                success: Some(false),
+            },
+        };
+    }
+
     // Early out if either the user never wants to be asked for approval, or
     // we're letting the model manage escalation requests. Otherwise, continue
     match turn_context.approval_policy {
@@ -2733,20 +2747,6 @@ async fn handle_sandbox_error(
             };
         }
         AskForApproval::UnlessTrusted | AskForApproval::OnFailure => (),
-    }
-
-    // similarly, if the command timed out, we can simply return this failure to the model
-    if matches!(error, SandboxErr::Timeout) {
-        return ResponseInputItem::FunctionCallOutput {
-            call_id,
-            output: FunctionCallOutputPayload {
-                content: format!(
-                    "command timed out after {} milliseconds",
-                    params.timeout_duration().as_millis()
-                ),
-                success: Some(false),
-            },
-        };
     }
 
     // Note that when `error` is `SandboxErr::Denied`, it could be a false
