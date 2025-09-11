@@ -65,6 +65,6 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::PlanUpdate(_)
         | EventMsg::TurnAborted(_)
         | EventMsg::ShutdownComplete
-        | EventMsg::ConversationHistory(_) => false,
+        | EventMsg::ConversationPath(_) => false,
     }
 }

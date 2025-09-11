@@ -152,6 +152,10 @@ pub enum ClientRequest {
         #[serde(rename = "id")]
         request_id: RequestId,
     },
+    UserInfo {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+    },
     /// Execute a command (argv vector) under the server's sandbox.
     ExecOneOffCommand {
         #[serde(rename = "id")]
@@ -372,6 +376,16 @@ pub struct GetAuthStatusResponse {
 #[serde(rename_all = "camelCase")]
 pub struct GetUserAgentResponse {
     pub user_agent: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct UserInfoResponse {
+    /// Note: `alleged_user_email` is not currently verified. We read it from
+    /// the local auth.json, which the user could theoretically modify. In the
+    /// future, we may add logic to verify the email against the server before
+    /// returning it.
+    pub alleged_user_email: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
