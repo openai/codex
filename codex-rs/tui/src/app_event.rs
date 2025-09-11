@@ -57,6 +57,9 @@ pub(crate) enum AppEvent {
     /// Update the current sandbox policy in the running app and widget.
     UpdateSandboxPolicy(SandboxPolicy),
 
+    /// Update whether the web_search tool is available for this session.
+    UpdateWebSearchRequest(bool),
+
     /// Forwarded conversation history snapshot from the current conversation.
     ConversationHistory(ConversationPathResponseEvent),
 }

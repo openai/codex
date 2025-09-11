@@ -299,6 +299,9 @@ impl App {
             AppEvent::UpdateSandboxPolicy(policy) => {
                 self.chat_widget.set_sandbox_policy(policy);
             }
+            AppEvent::UpdateWebSearchRequest(enabled) => {
+                self.chat_widget.set_web_search_enabled(enabled);
+            }
         }
         Ok(true)
     }

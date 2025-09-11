@@ -1099,6 +1099,7 @@ async fn submission_loop(
                 model,
                 effort,
                 summary,
+                include_web_search_request,
             } => {
                 // Recalculate the persistent turn context with provided overrides.
                 let prev = Arc::clone(&turn_context);
@@ -1142,13 +1143,16 @@ async fn submission_loop(
                     .unwrap_or(prev.sandbox_policy.clone());
                 let new_cwd = cwd.clone().unwrap_or_else(|| prev.cwd.clone());
 
+                let effective_web_search =
+                    include_web_search_request.unwrap_or(prev.tools_config.web_search_request);
+
                 let tools_config = ToolsConfig::new(&ToolsConfigParams {
                     model_family: &effective_family,
                     approval_policy: new_approval_policy,
                     sandbox_policy: new_sandbox_policy.clone(),
                     include_plan_tool: config.include_plan_tool,
                     include_apply_patch_tool: config.include_apply_patch_tool,
-                    include_web_search_request: config.tools_web_search_request,
+                    include_web_search_request: effective_web_search,
                     use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
                     include_view_image_tool: config.include_view_image_tool,
                     experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,

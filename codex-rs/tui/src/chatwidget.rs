@@ -836,6 +836,9 @@ impl ChatWidget {
             SlashCommand::Approvals => {
                 self.open_approvals_popup();
             }
+            SlashCommand::Search => {
+                self.open_search_popup();
+            }
             SlashCommand::Quit => {
                 self.app_event_tx.send(AppEvent::ExitRequest);
             }
@@ -1185,6 +1188,7 @@ impl ChatWidget {
                     model: Some(model_slug.clone()),
                     effort: Some(effort),
                     summary: None,
+                    include_web_search_request: None,
                 }));
                 tx.send(AppEvent::UpdateModel(model_slug.clone()));
                 tx.send(AppEvent::UpdateReasoningEffort(effort));
@@ -1233,6 +1237,7 @@ impl ChatWidget {
                     model: None,
                     effort: None,
                     summary: None,
+                    include_web_search_request: None,
                 }));
                 tx.send(AppEvent::UpdateAskForApprovalPolicy(approval));
                 tx.send(AppEvent::UpdateSandboxPolicy(sandbox.clone()));
@@ -1248,6 +1253,47 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(
             "Select Approval Mode".to_string(),
             None,
+            Some("Press Enter to confirm or Esc to go back".to_string()),
+            items,
+        );
+    }
+
+    pub(crate) fn open_search_popup(&mut self) {
+        let cur = self.config.tools_web_search_request;
+        let mut items: Vec<SelectionItem> = Vec::new();
+
+        for (name, enabled, desc) in [
+            ("Search Disabled", false, None),
+            (
+                "Search Enabled for Session",
+                true,
+                Some("Makes the web_search tool available to the model".to_string()),
+            ),
+        ] {
+            let is_current = cur == enabled;
+            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+                tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
+                    cwd: None,
+                    approval_policy: None,
+                    sandbox_policy: None,
+                    model: None,
+                    effort: None,
+                    summary: None,
+                    include_web_search_request: Some(enabled),
+                }));
+                tx.send(AppEvent::UpdateWebSearchRequest(enabled));
+            })];
+            items.push(SelectionItem {
+                name: name.to_string(),
+                description: desc.clone(),
+                is_current,
+                actions,
+            });
+        }
+
+        self.bottom_pane.show_selection_view(
+            "Select Web Search".to_string(),
+            Some("Toggle web search tool availability for this session".to_string()),
             Some("Press Enter to confirm or Esc to go back".to_string()),
             items,
         );
@@ -1271,6 +1317,11 @@ impl ChatWidget {
     /// Set the model in the widget's config copy.
     pub(crate) fn set_model(&mut self, model: String) {
         self.config.model = model;
+    }
+
+    /// Set web search tool availability in the widget's config copy.
+    pub(crate) fn set_web_search_enabled(&mut self, enabled: bool) {
+        self.config.tools_web_search_request = enabled;
     }
 
     pub(crate) fn add_mcp_output(&mut self) {
