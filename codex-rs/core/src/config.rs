@@ -19,7 +19,6 @@ use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::Verbosity;
-use codex_protocol::mcp_protocol::AuthMode;
 use codex_protocol::mcp_protocol::Tools;
 use codex_protocol::mcp_protocol::UserSavedConfig;
 use dirs::home_dir;
@@ -166,9 +165,6 @@ pub struct Config {
     pub include_apply_patch_tool: bool,
 
     pub tools_web_search_request: bool,
-
-    /// If set to `true`, the API key will be signed with the `originator` header.
-    pub preferred_auth_method: AuthMode,
 
     pub use_experimental_streamable_shell_tool: bool,
 
@@ -493,9 +489,6 @@ pub struct ConfigToml {
     pub experimental_use_unified_exec_tool: Option<bool>,
 
     pub projects: Option<HashMap<String, ProjectConfig>>,
-
-    /// If set to `true`, the API key will be signed with the `originator` header.
-    pub preferred_auth_method: Option<AuthMode>,
 
     /// Nested tools section for feature toggles
     pub tools: Option<ToolsToml>,
@@ -837,7 +830,6 @@ impl Config {
             include_plan_tool: include_plan_tool.unwrap_or(false),
             include_apply_patch_tool: include_apply_patch_tool.unwrap_or(false),
             tools_web_search_request,
-            preferred_auth_method: cfg.preferred_auth_method.unwrap_or(AuthMode::ChatGPT),
             use_experimental_streamable_shell_tool: cfg
                 .experimental_use_exec_command_tool
                 .unwrap_or(false),
@@ -1217,7 +1209,6 @@ model_verbosity = "high"
                 include_plan_tool: false,
                 include_apply_patch_tool: false,
                 tools_web_search_request: false,
-                preferred_auth_method: AuthMode::ChatGPT,
                 use_experimental_streamable_shell_tool: false,
                 use_experimental_unified_exec_tool: true,
                 include_view_image_tool: true,
@@ -1275,7 +1266,6 @@ model_verbosity = "high"
             include_plan_tool: false,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
-            preferred_auth_method: AuthMode::ChatGPT,
             use_experimental_streamable_shell_tool: false,
             use_experimental_unified_exec_tool: true,
             include_view_image_tool: true,
@@ -1348,7 +1338,6 @@ model_verbosity = "high"
             include_plan_tool: false,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
-            preferred_auth_method: AuthMode::ChatGPT,
             use_experimental_streamable_shell_tool: false,
             use_experimental_unified_exec_tool: true,
             include_view_image_tool: true,
@@ -1407,7 +1396,6 @@ model_verbosity = "high"
             include_plan_tool: false,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
-            preferred_auth_method: AuthMode::ChatGPT,
             use_experimental_streamable_shell_tool: false,
             use_experimental_unified_exec_tool: true,
             include_view_image_tool: true,

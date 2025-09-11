@@ -2,10 +2,10 @@
 
 ## Usage-based billing alternative: Use an OpenAI API key
 
-If you prefer to pay-as-you-go, you can still authenticate with your OpenAI API key by setting it as an environment variable:
+If you prefer to pay-as-you-go, you can still authenticate with your OpenAI API key:
 
 ```shell
-export OPENAI_API_KEY="your-api-key-here"
+codex login --api-key "your-api-key-here"
 ```
 
 This key must, at minimum, have write access to the Responses API.
@@ -17,36 +17,6 @@ If you've used the Codex CLI before with usage-based billing via an API key and 
 1. Update the CLI and ensure `codex --version` is `0.20.0` or later
 2. Delete `~/.codex/auth.json` (on Windows: `C:\\Users\\USERNAME\\.codex\\auth.json`)
 3. Run `codex login` again
-
-## Forcing a specific auth method (advanced)
-
-You can explicitly choose which authentication Codex should prefer when both are available.
-
-- To always use your API key (even when ChatGPT auth exists), set:
-
-```toml
-# ~/.codex/config.toml
-preferred_auth_method = "apikey"
-```
-
-Or override ad-hoc via CLI:
-
-```bash
-codex --config preferred_auth_method="apikey"
-```
-
-- To prefer ChatGPT auth (default), set:
-
-```toml
-# ~/.codex/config.toml
-preferred_auth_method = "chatgpt"
-```
-
-Notes:
-
-- When `preferred_auth_method = "apikey"` and an API key is available, the login screen is skipped.
-- When `preferred_auth_method = "chatgpt"` (default), Codex prefers ChatGPT auth if present; if only an API key is present, it will use the API key. Certain account types may also require API-key mode.
-- To check which auth method is being used during a session, use the `/status` command in the TUI.
 
 ## Connecting on a "Headless" Machine
 
