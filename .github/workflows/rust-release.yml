@@ -219,3 +219,8 @@ jobs:
         with:
           tag: ${{ github.ref_name }}
           config: .github/dotslash-config.json
+
+      - name: Publish to npm
+        run: npm publish --access public "${GITHUB_WORKSPACE}/dist/npm/codex-npm-${{ steps.release_name.outputs.name }}.tgz"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
