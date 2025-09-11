@@ -37,6 +37,7 @@ impl ConversationHistory {
         self.items = items;
     }
 
+    #[allow(dead_code)] // Allowed while we figure out why it was here.
     pub(crate) fn last_agent_message(&self) -> String {
         for item in self.items.iter().rev() {
             if let ResponseItem::Message { role, content, .. } = item
