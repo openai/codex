@@ -62,10 +62,11 @@ impl OllamaClient {
             || matches!(provider.wire_api, WireApi::Chat)
                 && is_openai_compatible_base_url(base_url);
         let host_root = base_url_to_host_root(base_url);
-        let client = reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(5))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
+        let client = codex_core::default_client::apply_env_proxy(
+            reqwest::Client::builder().connect_timeout(std::time::Duration::from_secs(5)),
+        )
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
         let client = Self {
             client,
             host_root,
@@ -220,10 +221,11 @@ impl OllamaClient {
     /// Low-level constructor given a raw host root, e.g. "http://localhost:11434".
     #[cfg(test)]
     fn from_host_root(host_root: impl Into<String>) -> Self {
-        let client = reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(5))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
+        let client = codex_core::default_client::apply_env_proxy(
+            reqwest::Client::builder().connect_timeout(std::time::Duration::from_secs(5)),
+        )
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new());
         Self {
             client,
             host_root: host_root.into(),
