@@ -146,7 +146,10 @@ impl std::fmt::Display for UsageLimitReachedError {
                     retry_suffix_after_or(self.resets_in_seconds)
                 )
             }
-            Some(PlanType::Known(KnownPlan::Free)) => "You've hit your usage limit. Upgrade to Plus or Pro (https://openai.com/chatgpt/pricing)".to_string(),
+            Some(PlanType::Known(KnownPlan::Free)) => {
+                "Free plan is not supported in Codex. Upgrade to Plus or Pro (https://openai.com/chatgpt/pricing)"
+                    .to_string()
+            }
             Some(PlanType::Known(KnownPlan::Pro))
             | Some(PlanType::Known(KnownPlan::Enterprise))
             | Some(PlanType::Known(KnownPlan::Edu)) => format!(
@@ -262,6 +265,18 @@ mod tests {
         assert_eq!(
             err.to_string(),
             "You've hit your usage limit. Upgrade to Pro (https://openai.com/chatgpt/pricing) or try again later."
+        );
+    }
+
+    #[test]
+    fn usage_limit_reached_error_formats_free_plan() {
+        let err = UsageLimitReachedError {
+            plan_type: Some(PlanType::Known(KnownPlan::Free)),
+            resets_in_seconds: Some(3600),
+        };
+        assert_eq!(
+            err.to_string(),
+            "Free plan is not supported in Codex. Upgrade to Plus or Pro (https://openai.com/chatgpt/pricing)"
         );
     }
 
