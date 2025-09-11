@@ -9,9 +9,11 @@ use opentelemetry_http::HeaderInjector;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use reqwest::StatusCode;
 use reqwest::header::HeaderMap;
+use serde::Serialize;
 use tracing::Span;
 use tracing::info_span;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
+use strum_macros::Display;
 
 pub struct RequestSpan(pub(crate) Span);
 
@@ -133,6 +135,56 @@ impl SSESpan {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Display)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolDecisionOutcome {
+    Accept,
+    Reject,
+}
+
+#[derive(Debug, Clone, Serialize, Display)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolDecisionSource {
+    Config,
+    UserForSession,
+    UserTemporary,
+    UserAbort,
+    UserReject,
+}
+
+pub struct ToolDecisionSpan(pub(crate) Span);
+
+impl ToolDecisionSpan {
+    pub fn new(
+        metadata: TraceMetadata,
+        tool_name: &str,
+        outcome: ToolDecisionOutcome,
+        source: ToolDecisionSource,
+    ) -> Self {
+        let span = info_span!(
+            "codex.tool_decision",
+            session.id = %metadata.conversation_id,
+            app.version = %metadata.app_version,
+            user.account_id = tracing::field::Empty,
+            terminal.type = %metadata.terminal_type,
+            event.timestamp = %timestamp(),
+            tool_name = %tool_name,
+            decision = outcome.to_string(),
+            source = source.to_string(),
+        );
+
+        if let Some(account_id) = &metadata.account_id {
+            span.record("user.account_id", account_id);
+        }
+
+        ToolDecisionSpan(span)
+    }
+
+    pub fn span(&self) -> Span {
+        self.0.clone()
+    }
+}
+
 pub struct UserPromptSpan(pub(crate) Span);
 
 impl UserPromptSpan {
@@ -239,6 +291,10 @@ impl TraceManager {
             .collect::<String>();
 
         UserPromptSpan::new(self.metadata.clone(), prompt.as_ref())
+    }
+
+    pub fn tool_decision(&self, tool_name: &str, outcome: ToolDecisionOutcome, source: ToolDecisionSource) -> ToolDecisionSpan {
+        ToolDecisionSpan::new(self.metadata.clone(), tool_name, outcome, source)
     }
 }
 

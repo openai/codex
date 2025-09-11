@@ -41,7 +41,9 @@ opentelemetry-otlp = { version = "0.30.0", features = ["grpc-tonic", "http-proto
 opentelemetry-proto = { version = "0.30.0", features = ["gen-tonic"], optional = true }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"], optional = true }
 tonic = { version = "0.13.1", optional = true }
+serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", optional = true }
+strum_macros = "0.27.2"
 uuid = { version = "1.18.1", features = ["v4"] }
 time = { version = "0.3", features = ["formatting", "parsing", "local-offset", "macros"] }
 walkdir = "2.5.0"
