@@ -147,7 +147,7 @@ impl std::fmt::Display for UsageLimitReachedError {
                 )
             }
             Some(PlanType::Known(KnownPlan::Free)) => {
-                "Free plan is not supported in Codex. Upgrade to Plus or Pro (https://openai.com/chatgpt/pricing)"
+                "To use Codex with your ChatGPT plan, upgrade to Plus: https://openai.com/chatgpt/pricing."
                     .to_string()
             }
             Some(PlanType::Known(KnownPlan::Pro))
@@ -276,7 +276,7 @@ mod tests {
         };
         assert_eq!(
             err.to_string(),
-            "Free plan is not supported in Codex. Upgrade to Plus or Pro (https://openai.com/chatgpt/pricing)"
+            "To use Codex with your ChatGPT plan, upgrade to Plus: https://openai.com/chatgpt/pricing."
         );
     }
 
