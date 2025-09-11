@@ -100,7 +100,7 @@ where
 
 async fn start_mock_server() -> MockServer {
     MockServer::builder()
-        .body_print_limit(BodyPrintLimit::Limited(20_000))
+        .body_print_limit(BodyPrintLimit::Limited(80_000))
         .start()
         .await
 }
