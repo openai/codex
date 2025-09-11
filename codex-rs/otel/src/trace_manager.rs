@@ -3,6 +3,7 @@ use chrono::Utc;
 use codex_protocol::mcp_protocol::AuthMode;
 use codex_protocol::mcp_protocol::ConversationId;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::InputItem;
 use opentelemetry::propagation::TextMapPropagator;
 use opentelemetry_http::HeaderInjector;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
@@ -132,6 +133,39 @@ impl SSESpan {
     }
 }
 
+pub struct UserPromptSpan(pub(crate) Span);
+
+impl UserPromptSpan {
+    pub fn new(metadata: TraceMetadata, prompt: &str) -> Self {
+        let prompt_to_log = if metadata.log_user_prompts {
+            prompt
+        } else {
+            "[REDACTED]"
+        };
+
+        let span = info_span!(
+            "codex.user_prompt",
+            session.id = %metadata.conversation_id,
+            app.version = %metadata.app_version,
+            user.account_id = tracing::field::Empty,
+            terminal.type = %metadata.terminal_type,
+            event.timestamp = %timestamp(),
+            prompt_length = %prompt.chars().count(),
+            prompt = %prompt_to_log,
+        );
+
+        if let Some(account_id) = &metadata.account_id {
+            span.record("user.account_id", account_id);
+        }
+
+        Self(span)
+    }
+
+    pub fn span(&self) -> Span {
+        self.0.clone()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TraceMetadata {
     conversation_id: ConversationId,
@@ -139,6 +173,7 @@ pub struct TraceMetadata {
     account_id: Option<String>,
     model: String,
     slug: String,
+    log_user_prompts: bool,
     app_version: &'static str,
     terminal_type: String,
 }
@@ -155,6 +190,7 @@ impl TraceManager {
         slug: &str,
         account_id: Option<String>,
         auth_mode: AuthMode,
+        log_user_prompts: bool,
         terminal_type: String,
     ) -> TraceManager {
         Self {
@@ -164,6 +200,7 @@ impl TraceManager {
                 account_id,
                 model: model.to_owned(),
                 slug: slug.to_owned(),
+                log_user_prompts,
                 app_version: env!("CARGO_PKG_VERSION"),
                 terminal_type,
             },
@@ -190,6 +227,18 @@ impl TraceManager {
 
     pub fn response(&self) -> SSESpan {
         SSESpan::new(self.metadata.clone())
+    }
+
+    pub fn user_prompt(&self, items: &[InputItem]) -> UserPromptSpan {
+        let prompt = items
+            .iter()
+            .flat_map(|item| match item {
+                InputItem::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<String>();
+
+        UserPromptSpan::new(self.metadata.clone(), prompt.as_ref())
     }
 }
 

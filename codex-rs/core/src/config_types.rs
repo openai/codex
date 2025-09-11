@@ -117,6 +117,9 @@ pub struct OtelConfigToml {
     /// Enable or disable OTEL entirely. Defaults to false.
     pub enabled: Option<bool>,
 
+    /// Log user prompt in traces
+    pub log_user_prompt: Option<bool>,
+
     /// Mark traces with environment (dev, staging, prod, test). Defaults to dev.
     pub environment: Option<String>,
 
@@ -131,6 +134,7 @@ pub struct OtelConfigToml {
 #[derive(Debug, Clone, PartialEq)]
 pub struct OtelConfig {
     pub enabled: bool,
+    pub log_user_prompt: bool,
     pub environment: String,
     pub sampler: OtelSampler,
     pub exporter: OtelExporterKind,

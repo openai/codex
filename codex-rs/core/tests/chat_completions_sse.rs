@@ -73,6 +73,7 @@ async fn run_stream(sse_body: &str) -> Vec<ResponseEvent> {
         config.model_family.slug.as_str(),
         None,
         AuthMode::ChatGPT,
+        false,
         "test".to_string(),
     );
 

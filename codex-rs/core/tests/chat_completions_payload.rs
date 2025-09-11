@@ -80,6 +80,7 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
         config.model_family.slug.as_str(),
         None,
         AuthMode::ChatGPT,
+        false,
         "test".to_string(),
     );
 
