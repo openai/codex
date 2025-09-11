@@ -279,6 +279,17 @@ impl App {
                 ));
                 tui.frame_requester().schedule_frame();
             }
+            AppEvent::PatchUndoResult {
+                success,
+                stdout,
+                stderr,
+            } => {
+                self.chat_widget
+                    .on_patch_undo_result(success, stdout, stderr);
+            }
+            AppEvent::UndoConfirmationSelected { confirm } => {
+                self.chat_widget.on_undo_confirmation(confirm);
+            }
             AppEvent::StartFileSearch(query) => {
                 if !query.is_empty() {
                     self.file_search.on_user_query(query);

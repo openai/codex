@@ -58,6 +58,7 @@ mod status_indicator_widget;
 mod streaming;
 mod text_formatting;
 mod tui;
+mod undo_patch;
 mod user_approval_widget;
 mod version;
 mod wrapping;

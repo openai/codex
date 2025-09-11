@@ -1170,6 +1170,77 @@ pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
     PlainHistoryCell { lines }
 }
 
+pub(crate) fn new_patch_undo_available(patch_count: usize) -> PlainHistoryCell {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push("↺ Undo available for last turn".magenta().bold().into());
+    if patch_count <= 1 {
+        lines.push("Type /undo to revert this patch.".dim().into());
+    } else {
+        lines.push(
+            format!("Type /undo to revert {patch_count} patches from the last turn.")
+                .dim()
+                .into(),
+        );
+    }
+    PlainHistoryCell { lines }
+}
+
+pub(crate) fn new_patch_undo_unavailable() -> PlainHistoryCell {
+    let lines = vec!["No applied patch to undo.".dim().into()];
+    PlainHistoryCell { lines }
+}
+
+pub(crate) fn new_patch_undo_busy() -> PlainHistoryCell {
+    let lines = vec![
+        "Undo already running".magenta().bold().into(),
+        "Wait for the previous undo to finish before starting another."
+            .dim()
+            .into(),
+    ];
+    PlainHistoryCell { lines }
+}
+
+pub(crate) fn new_patch_undo_in_progress() -> PlainHistoryCell {
+    let lines = vec!["↺ Undoing latest patch…".magenta().bold().into()];
+    PlainHistoryCell { lines }
+}
+
+pub(crate) fn new_patch_undo_cancelled() -> PlainHistoryCell {
+    let lines = vec![
+        "↺ Undo cancelled".magenta().bold().into(),
+        "Keeping the last turn's changes.".dim().into(),
+    ];
+    PlainHistoryCell { lines }
+}
+
+pub(crate) fn new_patch_undo_result(
+    success: bool,
+    stdout: String,
+    stderr: String,
+) -> PlainHistoryCell {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    if success {
+        lines.push("✓ Undo complete".green().bold().into());
+    } else {
+        lines.push("✘ Failed to undo patch".red().bold().into());
+    }
+
+    let push_block = |lines: &mut Vec<Line<'static>>, title: &str, body: &str| {
+        if body.trim().is_empty() {
+            return;
+        }
+        lines.push(title.to_string().dim().into());
+        for line in body.lines() {
+            lines.push(format!("  {line}").into());
+        }
+    };
+
+    push_block(&mut lines, "stdout:", &stdout);
+    push_block(&mut lines, "stderr:", &stderr);
+
+    PlainHistoryCell { lines }
+}
+
 /// Create a new history cell for a proposed command approval.
 /// Renders a header and the command preview similar to how proposed patches
 /// show a header and summary.

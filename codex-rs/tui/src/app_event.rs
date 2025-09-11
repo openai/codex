@@ -39,6 +39,18 @@ pub(crate) enum AppEvent {
     /// Result of computing a `/diff` command.
     DiffResult(String),
 
+    /// Result of running `/undo` to revert the latest applied patch.
+    PatchUndoResult {
+        success: bool,
+        stdout: String,
+        stderr: String,
+    },
+
+    /// User selection from the undo confirmation prompt.
+    UndoConfirmationSelected {
+        confirm: bool,
+    },
+
     InsertHistoryCell(Box<dyn HistoryCell>),
 
     StartCommitAnimation,

@@ -751,13 +751,21 @@ impl Session {
             Some(ApplyPatchCommandContext {
                 user_explicitly_approved_this_action,
                 changes,
+                patch,
+                cwd,
             }) => {
+                debug!(
+                    "applying patch ({} bytes) in {}",
+                    patch.len(),
+                    cwd.display()
+                );
                 turn_diff_tracker.on_patch_begin(&changes);
 
                 EventMsg::PatchApplyBegin(PatchApplyBeginEvent {
                     call_id,
                     auto_approved: !user_explicitly_approved_this_action,
                     changes,
+                    cwd,
                 })
             }
             None => EventMsg::ExecCommandBegin(ExecCommandBeginEvent {
@@ -783,7 +791,7 @@ impl Session {
         sub_id: &str,
         call_id: &str,
         output: &ExecToolCallOutput,
-        is_apply_patch: bool,
+        apply_patch: Option<&ApplyPatchCommandContext>,
     ) {
         let ExecToolCallOutput {
             stdout,
@@ -798,12 +806,25 @@ impl Session {
         let formatted_output = format_exec_output_str(output);
         let aggregated_output: String = aggregated_output.text.clone();
 
-        let msg = if is_apply_patch {
+        let msg = if let Some(apply_patch) = apply_patch {
+            let diff = if *exit_code == 0 {
+                match turn_diff_tracker.get_unified_diff_for_changes(&apply_patch.changes) {
+                    Ok(diff) => diff,
+                    Err(err) => {
+                        warn!("failed to compute patch diff: {err:#}");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+
             EventMsg::PatchApplyEnd(PatchApplyEndEvent {
                 call_id: call_id.to_string(),
                 stdout,
                 stderr,
                 success: *exit_code == 0,
+                diff,
             })
         } else {
             EventMsg::ExecCommandEnd(ExecCommandEndEvent {
@@ -825,7 +846,7 @@ impl Session {
 
         // If this is an apply_patch, after we emit the end patch, emit a second event
         // with the full turn diff if there is one.
-        if is_apply_patch {
+        if apply_patch.is_some() {
             let unified_diff = turn_diff_tracker.get_unified_diff();
             if let Ok(Some(unified_diff)) = unified_diff {
                 let msg = EventMsg::TurnDiff(TurnDiffEvent { unified_diff });
@@ -847,7 +868,7 @@ impl Session {
         begin_ctx: ExecCommandContext,
         exec_args: ExecInvokeArgs<'a>,
     ) -> crate::error::Result<ExecToolCallOutput> {
-        let is_apply_patch = begin_ctx.apply_patch.is_some();
+        let apply_patch_ctx = begin_ctx.apply_patch.clone();
         let sub_id = begin_ctx.sub_id.clone();
         let call_id = begin_ctx.call_id.clone();
 
@@ -882,7 +903,7 @@ impl Session {
             &sub_id,
             &call_id,
             borrowed,
-            is_apply_patch,
+            apply_patch_ctx.as_ref(),
         )
         .await;
 
@@ -1011,6 +1032,8 @@ pub(crate) struct ExecCommandContext {
 pub(crate) struct ApplyPatchCommandContext {
     pub(crate) user_explicitly_approved_this_action: bool,
     pub(crate) changes: HashMap<PathBuf, FileChange>,
+    pub(crate) patch: String,
+    pub(crate) cwd: PathBuf,
 }
 
 /// A series of Turns in response to user input.
@@ -2632,6 +2655,8 @@ async fn handle_container_exec_with_params(
              }| ApplyPatchCommandContext {
                 user_explicitly_approved_this_action,
                 changes: convert_apply_patch_to_protocol(&action),
+                patch: action.patch.clone(),
+                cwd: action.cwd.clone(),
             },
         ),
     };

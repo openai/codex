@@ -249,6 +249,56 @@ impl TurnDiffTracker {
         }
     }
 
+    pub fn get_unified_diff_for_changes(
+        &mut self,
+        changes: &HashMap<PathBuf, FileChange>,
+    ) -> Result<Option<String>> {
+        let mut internal_names: Vec<String> = changes
+            .iter()
+            .flat_map(|(path, change)| {
+                let mut names = Vec::new();
+                if let Some(internal) = self.external_to_temp_name.get(path) {
+                    names.push(internal.clone());
+                }
+                if let FileChange::Update {
+                    move_path: Some(dest),
+                    ..
+                } = change
+                    && let Some(internal) = self.external_to_temp_name.get(dest)
+                {
+                    names.push(internal.clone());
+                }
+                names
+            })
+            .collect();
+
+        if internal_names.is_empty() {
+            return Ok(None);
+        }
+
+        internal_names.sort();
+        internal_names.dedup();
+        internal_names.sort_by_key(|internal| {
+            self.get_path_for_internal(internal)
+                .map(|p| self.relative_to_git_root_str(&p))
+                .unwrap_or_default()
+        });
+
+        let mut aggregated = String::new();
+        for internal in internal_names {
+            aggregated.push_str(self.get_file_diff(&internal).as_str());
+            if !aggregated.ends_with('\n') {
+                aggregated.push('\n');
+            }
+        }
+
+        if aggregated.trim().is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(aggregated))
+        }
+    }
+
     fn get_file_diff(&mut self, internal_file_name: &str) -> String {
         let mut aggregated = String::new();
 
@@ -784,6 +834,9 @@ index {left_oid_b}..{ZERO_OID}
         assert_eq!(combined, expected);
     }
 
+    /// Confirms that updating a binary file (non-UTF8 content) produces a
+    /// unified diff that reports "Binary files differ" with correct blob OIDs
+    /// instead of a textual hunk.
     #[test]
     fn binary_files_differ_update() {
         let dir = tempdir().unwrap();

@@ -378,6 +378,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 call_id,
                 auto_approved,
                 changes,
+                cwd,
             }) => {
                 // Store metadata so we can calculate duration later when we
                 // receive the corresponding PatchApplyEnd event.
@@ -391,9 +392,10 @@ impl EventProcessor for EventProcessorWithHumanOutput {
 
                 ts_println!(
                     self,
-                    "{} auto_approved={}:",
+                    "{} auto_approved={} in {}:",
                     "apply_patch".style(self.magenta),
                     auto_approved,
+                    cwd.to_string_lossy(),
                 );
 
                 // Pretty-print the patch summary with colored diff markers so
@@ -461,7 +463,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 stdout,
                 stderr,
                 success,
-                ..
+                diff: _diff,
             }) => {
                 let patch_begin = self.call_id_to_patch.remove(&call_id);
 

@@ -1015,6 +1015,8 @@ pub struct PatchApplyBeginEvent {
     pub auto_approved: bool,
     /// The changes to be applied.
     pub changes: HashMap<PathBuf, FileChange>,
+    /// The working directory the patch was applied from.
+    pub cwd: PathBuf,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
@@ -1027,6 +1029,9 @@ pub struct PatchApplyEndEvent {
     pub stderr: String,
     /// Whether the patch was applied successfully.
     pub success: bool,
+    /// Unified diff describing the patch the tool applied, if available.
+    #[serde(default)]
+    pub diff: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -18,6 +19,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
+use codex_core::protocol::FileChange;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::InputMessageKind;
 use codex_core::protocol::ListCustomPromptsResponseEvent;
@@ -67,6 +69,7 @@ use crate::history_cell::HistoryCell;
 use crate::history_cell::PatchEventType;
 use crate::slash_command::SlashCommand;
 use crate::tui::FrameRequester;
+use crate::undo_patch;
 // streaming internals are provided by crate::streaming and crate::markdown_stream
 use crate::user_approval_widget::ApprovalRequest;
 mod interrupts;
@@ -93,6 +96,143 @@ struct RunningCommand {
     parsed_cmd: Vec<ParsedCommand>,
 }
 
+#[derive(Clone)]
+struct AppliedPatchDiff {
+    diff: String,
+    working_dir: PathBuf,
+}
+
+const MAX_COMPLETED_UNDO_TURNS: usize = 1;
+
+#[derive(Default)]
+struct PatchUndoHistory {
+    working_dirs: HashMap<String, PathBuf>,
+    active_turn: Vec<AppliedPatchDiff>,
+    completed_turns: Vec<Arc<[AppliedPatchDiff]>>,
+    undo_in_progress: Option<Arc<[AppliedPatchDiff]>>,
+}
+
+impl PatchUndoHistory {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn start_turn(&mut self) {
+        self.working_dirs.clear();
+        self.active_turn.clear();
+    }
+
+    fn finish_turn(&mut self) -> Option<usize> {
+        let completed = self.take_active_turn()?;
+        let count = completed.len();
+        self.completed_turns.push(completed);
+        self.prune_completed_turns();
+        Some(count)
+    }
+
+    fn take_active_turn(&mut self) -> Option<Arc<[AppliedPatchDiff]>> {
+        (!self.active_turn.is_empty())
+            .then(|| Arc::from(self.active_turn.drain(..).collect::<Vec<_>>()))
+    }
+
+    fn start_patch(
+        &mut self,
+        call_id: String,
+        changes: &HashMap<PathBuf, FileChange>,
+        patch_cwd: PathBuf,
+        default_cwd: &Path,
+    ) {
+        let working_dir = working_dir_for_patch(changes, &patch_cwd, default_cwd);
+        self.working_dirs.insert(call_id, working_dir);
+    }
+
+    fn complete_patch(&mut self, call_id: &str, success: bool, diff: Option<String>) {
+        let Some(working_dir) = self.working_dirs.remove(call_id) else {
+            return;
+        };
+
+        if !success {
+            return;
+        }
+
+        let Some(diff) = diff else {
+            return;
+        };
+
+        if diff.trim().is_empty() {
+            return;
+        }
+
+        self.active_turn
+            .push(AppliedPatchDiff { diff, working_dir });
+    }
+
+    fn prune_completed_turns(&mut self) {
+        while self.completed_turns.len() > MAX_COMPLETED_UNDO_TURNS {
+            self.completed_turns.remove(0);
+        }
+    }
+
+    fn begin_undo(&mut self) -> Option<Arc<[AppliedPatchDiff]>> {
+        if self.undo_in_progress.is_some() {
+            return None;
+        }
+
+        let turn = self
+            .completed_turns
+            .pop()
+            .or_else(|| self.take_active_turn())?;
+
+        self.undo_in_progress = Some(turn.clone());
+        Some(turn)
+    }
+
+    fn finish_undo(&mut self, success: bool) {
+        if let Some(turn) = self.undo_in_progress.take()
+            && !success
+        {
+            self.completed_turns.push(turn);
+            self.prune_completed_turns();
+        }
+    }
+
+    fn undo_in_progress(&self) -> bool {
+        self.undo_in_progress.is_some()
+    }
+
+    fn undo_available(&self) -> bool {
+        !self.completed_turns.is_empty() || !self.active_turn.is_empty()
+    }
+}
+
+fn find_git_root_for_changes(changes: &HashMap<PathBuf, FileChange>) -> Option<PathBuf> {
+    changes.keys().find_map(|path| find_git_root(path))
+}
+
+fn find_git_root(path: &Path) -> Option<PathBuf> {
+    let start = if path.is_dir() { path } else { path.parent()? };
+
+    for candidate in start.ancestors() {
+        let marker = candidate.join(".git");
+        if marker.is_dir() || marker.is_file() {
+            return Some(candidate.to_path_buf());
+        }
+    }
+
+    None
+}
+
+fn working_dir_for_patch(
+    changes: &HashMap<PathBuf, FileChange>,
+    patch_cwd: &Path,
+    default_cwd: &Path,
+) -> PathBuf {
+    find_git_root_for_changes(changes)
+        .or_else(|| find_git_root(patch_cwd))
+        .or_else(|| patch_cwd.is_absolute().then(|| patch_cwd.to_path_buf()))
+        .unwrap_or_else(|| default_cwd.to_path_buf())
+}
+
 /// Common initialization parameters shared by all `ChatWidget` constructors.
 pub(crate) struct ChatWidgetInit {
     pub(crate) config: Config,
@@ -117,6 +257,7 @@ pub(crate) struct ChatWidget {
     task_complete_pending: bool,
     // Queue of interruptive UI events deferred during an active write cycle
     interrupts: InterruptManager,
+    patch_history: PatchUndoHistory,
     // Accumulates the current reasoning block text to extract a header
     reasoning_buffer: String,
     // Accumulates full reasoning content for transcript-only recording
@@ -235,6 +376,7 @@ impl ChatWidget {
     // Raw reasoning uses the same flow as summarized reasoning
 
     fn on_task_started(&mut self) {
+        self.patch_history.start_turn();
         self.bottom_pane.clear_ctrl_c_quit_hint();
         self.bottom_pane.set_task_running(true);
         self.stream.reset_headers_for_new_turn();
@@ -250,6 +392,7 @@ impl ChatWidget {
             let sink = AppEventHistorySink(self.app_event_tx.clone());
             let _ = self.stream.finalize(true, &sink);
         }
+        self.finalize_patch_turn();
         // Mark task stopped and request redraw now that all content is in history.
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
@@ -270,6 +413,7 @@ impl ChatWidget {
         self.finalize_active_exec_cell_as_failed();
         // Emit the provided error message/history cell.
         self.add_to_history(history_cell::new_error_event(message));
+        self.finalize_patch_turn();
         // Reset running state and clear streaming buffers.
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
@@ -344,11 +488,19 @@ impl ChatWidget {
     }
 
     fn on_patch_apply_begin(&mut self, event: PatchApplyBeginEvent) {
+        let PatchApplyBeginEvent {
+            call_id,
+            auto_approved,
+            changes,
+            cwd,
+        } = event;
+
+        let history_changes = changes.clone();
+        self.patch_history
+            .start_patch(call_id, &changes, cwd, &self.config.cwd);
         self.add_to_history(history_cell::new_patch_event(
-            PatchEventType::ApplyBegin {
-                auto_approved: event.auto_approved,
-            },
-            event.changes,
+            PatchEventType::ApplyBegin { auto_approved },
+            history_changes,
             &self.config.cwd,
         ));
     }
@@ -510,8 +662,8 @@ impl ChatWidget {
         &mut self,
         event: codex_core::protocol::PatchApplyEndEvent,
     ) {
-        // If the patch was successful, just let the "Edited" block stand.
-        // Otherwise, add a failure block.
+        self.patch_history
+            .complete_patch(&event.call_id, event.success, event.diff.clone());
         if !event.success {
             self.add_to_history(history_cell::new_patch_apply_failure(event.stderr));
         }
@@ -658,6 +810,7 @@ impl ChatWidget {
             running_commands: HashMap::new(),
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
+            patch_history: PatchUndoHistory::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             conversation_id: None,
@@ -710,6 +863,7 @@ impl ChatWidget {
             running_commands: HashMap::new(),
             task_complete_pending: false,
             interrupts: InterruptManager::new(),
+            patch_history: PatchUndoHistory::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
             conversation_id: None,
@@ -861,6 +1015,9 @@ impl ChatWidget {
                     };
                     tx.send(AppEvent::DiffResult(text));
                 });
+            }
+            SlashCommand::Undo => {
+                self.undo_last_patch();
             }
             SlashCommand::Mention => {
                 self.insert_str("@");
@@ -1140,7 +1297,136 @@ impl ChatWidget {
         self.bottom_pane.set_queued_user_messages(messages);
     }
 
+    fn finalize_patch_turn(&mut self) {
+        if let Some(patch_count) = self.patch_history.finish_turn() {
+            self.add_to_history(history_cell::new_patch_undo_available(patch_count));
+        }
+    }
+
     pub(crate) fn add_diff_in_progress(&mut self) {
+        self.request_redraw();
+    }
+
+    fn undo_last_patch(&mut self) {
+        if self.patch_history.undo_in_progress() {
+            self.add_to_history(history_cell::new_patch_undo_busy());
+            self.request_redraw();
+            return;
+        }
+
+        if !self.patch_history.undo_available() {
+            self.add_to_history(history_cell::new_patch_undo_unavailable());
+            self.request_redraw();
+            return;
+        }
+
+        self.open_undo_confirmation_popup();
+    }
+
+    fn open_undo_confirmation_popup(&mut self) {
+        let confirm_action: SelectionAction = Box::new(|tx| {
+            tx.send(AppEvent::UndoConfirmationSelected { confirm: true });
+        });
+        let cancel_action: SelectionAction = Box::new(|tx| {
+            tx.send(AppEvent::UndoConfirmationSelected { confirm: false });
+        });
+
+        let items = vec![
+            SelectionItem {
+                name: "Yes — undo last turn".to_string(),
+                description: Some(
+                    "Revert the patches Codex applied in the previous turn.".to_string(),
+                ),
+                is_current: false,
+                actions: vec![confirm_action],
+            },
+            SelectionItem {
+                name: "No — keep changes".to_string(),
+                description: Some("Leave files as they are.".to_string()),
+                is_current: true,
+                actions: vec![cancel_action],
+            },
+        ];
+
+        self.bottom_pane.show_selection_view(
+            "Undo patches from the last turn?".to_string(),
+            Some("This will apply git reverse patches and may discard edits.".to_string()),
+            Some("Press Enter to choose or Esc to cancel".to_string()),
+            items,
+        );
+    }
+
+    fn start_patch_undo(&mut self) {
+        if self.patch_history.undo_in_progress() {
+            self.add_to_history(history_cell::new_patch_undo_busy());
+            self.request_redraw();
+            return;
+        }
+
+        let Some(patches) = self.patch_history.begin_undo() else {
+            self.add_to_history(history_cell::new_patch_undo_unavailable());
+            self.request_redraw();
+            return;
+        };
+
+        self.add_to_history(history_cell::new_patch_undo_in_progress());
+        self.request_redraw();
+
+        let tx = self.app_event_tx.clone();
+        let patches = patches.clone();
+        tokio::spawn(async move {
+            let mut overall_success = true;
+            let mut combined_stdout = String::new();
+            let mut combined_stderr = String::new();
+
+            let append_output = |buffer: &mut String, output: &str| {
+                if output.is_empty() {
+                    return;
+                }
+                if !buffer.is_empty() && !buffer.ends_with('\n') {
+                    buffer.push('\n');
+                }
+                buffer.push_str(output);
+            };
+
+            for patch in patches.iter().rev() {
+                match undo_patch::undo_patch(&patch.diff, &patch.working_dir).await {
+                    Ok(outcome) => {
+                        append_output(&mut combined_stdout, &outcome.stdout);
+                        append_output(&mut combined_stderr, &outcome.stderr);
+                        if !outcome.success {
+                            overall_success = false;
+                            break;
+                        }
+                    }
+                    Err(err) => {
+                        overall_success = false;
+                        append_output(&mut combined_stderr, &err.to_string());
+                        break;
+                    }
+                }
+            }
+
+            tx.send(AppEvent::PatchUndoResult {
+                success: overall_success,
+                stdout: combined_stdout,
+                stderr: combined_stderr,
+            });
+        });
+    }
+
+    pub(crate) fn on_undo_confirmation(&mut self, confirm: bool) {
+        if confirm {
+            self.start_patch_undo();
+        } else {
+            self.add_to_history(history_cell::new_patch_undo_cancelled());
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn on_patch_undo_result(&mut self, success: bool, stdout: String, stderr: String) {
+        self.patch_history.finish_undo(success);
+        self.add_to_history(history_cell::new_patch_undo_result(success, stdout, stderr));
         self.request_redraw();
     }
 
