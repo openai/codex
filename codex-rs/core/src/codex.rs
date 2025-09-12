@@ -1486,7 +1486,7 @@ async fn run_task(
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
     let mut turn_diff_tracker = TurnDiffTracker::new();
-    let mut auto_compact_attempted = false;
+    let mut auto_compact_recently_attempted = false;
 
     loop {
         // Note that pending_input would be something like a message the user
@@ -1643,7 +1643,7 @@ async fn run_task(
                 }
 
                 if token_limit_reached {
-                    if auto_compact_attempted {
+                    if auto_compact_recently_attempted {
                         let limit_str = limit.to_string();
                         let current_tokens = total_usage_tokens
                             .map(|tokens| tokens.to_string())
@@ -1659,10 +1659,12 @@ async fn run_task(
                         sess.send_event(event).await;
                         break;
                     }
-                    auto_compact_attempted = true;
+                    auto_compact_recently_attempted = true;
                     compact::run_inline_auto_compact_task(sess.clone(), turn_context.clone()).await;
                     continue;
                 }
+
+                auto_compact_recently_attempted = false;
 
                 if responses.is_empty() {
                     last_agent_message = get_last_assistant_message_from_turn(

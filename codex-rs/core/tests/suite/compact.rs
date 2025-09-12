@@ -19,11 +19,17 @@ use tempfile::TempDir;
 use wiremock::BodyPrintLimit;
 use wiremock::Mock;
 use wiremock::MockServer;
+use wiremock::Request;
+use wiremock::Respond;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 use pretty_assertions::assert_eq;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
 
 // --- Test helpers -----------------------------------------------------------
 
@@ -83,6 +89,18 @@ fn ev_assistant_message(id: &str, text: &str) -> Value {
     })
 }
 
+fn ev_function_call(call_id: &str, name: &str, arguments: &str) -> Value {
+    serde_json::json!({
+        "type": "response.output_item.done",
+        "item": {
+            "type": "function_call",
+            "call_id": call_id,
+            "name": name,
+            "arguments": arguments
+        }
+    })
+}
+
 fn sse_response(body: String) -> ResponseTemplate {
     ResponseTemplate::new(200)
         .insert_header("content-type", "text/event-stream")
@@ -117,6 +135,13 @@ const AUTO_SUMMARY_TEXT: &str = "AUTO_SUMMARY";
 const FIRST_AUTO_MSG: &str = "token limit start";
 const SECOND_AUTO_MSG: &str = "token limit push";
 const STILL_TOO_BIG_REPLY: &str = "STILL_TOO_BIG";
+const MULTI_AUTO_MSG: &str = "multi auto";
+const SECOND_LARGE_REPLY: &str = "SECOND_LARGE_REPLY";
+const FIRST_AUTO_SUMMARY: &str = "FIRST_AUTO_SUMMARY";
+const SECOND_AUTO_SUMMARY: &str = "SECOND_AUTO_SUMMARY";
+const FINAL_REPLY: &str = "FINAL_REPLY";
+const DUMMY_FUNCTION_NAME: &str = "unsupported_tool";
+const DUMMY_CALL_ID: &str = "call-multi-auto";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn summarize_context_three_requests_and_instructions() {
@@ -700,5 +725,147 @@ async fn auto_compact_stops_after_failed_attempt() {
     assert!(
         !instructions.contains("You have exceeded the maximum number of tokens"),
         "third request should be the follow-up turn, not another summarization"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_events() {
+    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+        );
+        return;
+    }
+
+    let server = start_mock_server().await;
+
+    let sse1 = sse(vec![
+        ev_assistant_message("m1", FIRST_REPLY),
+        ev_completed_with_tokens("r1", 500),
+    ]);
+    let sse2 = sse(vec![
+        ev_assistant_message("m2", FIRST_AUTO_SUMMARY),
+        ev_completed_with_tokens("r2", 50),
+    ]);
+    let sse3 = sse(vec![
+        ev_function_call(DUMMY_CALL_ID, DUMMY_FUNCTION_NAME, "{}"),
+        ev_completed_with_tokens("r3", 150),
+    ]);
+    let sse4 = sse(vec![
+        ev_assistant_message("m4", SECOND_LARGE_REPLY),
+        ev_completed_with_tokens("r4", 450),
+    ]);
+    let sse5 = sse(vec![
+        ev_assistant_message("m5", SECOND_AUTO_SUMMARY),
+        ev_completed_with_tokens("r5", 60),
+    ]);
+    let sse6 = sse(vec![
+        ev_assistant_message("m6", FINAL_REPLY),
+        ev_completed_with_tokens("r6", 120),
+    ]);
+
+    #[derive(Clone)]
+    struct SeqResponder {
+        bodies: Arc<Vec<String>>,
+        calls: Arc<AtomicUsize>,
+        requests: Arc<Mutex<Vec<Vec<u8>>>>,
+    }
+
+    impl SeqResponder {
+        fn new(bodies: Vec<String>) -> Self {
+            Self {
+                bodies: Arc::new(bodies),
+                calls: Arc::new(AtomicUsize::new(0)),
+                requests: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        fn recorded_requests(&self) -> Vec<Vec<u8>> {
+            self.requests.lock().unwrap().clone()
+        }
+    }
+
+    impl Respond for SeqResponder {
+        fn respond(&self, req: &Request) -> ResponseTemplate {
+            let idx = self.calls.fetch_add(1, Ordering::SeqCst);
+            self.requests.lock().unwrap().push(req.body.clone());
+            let body = self
+                .bodies
+                .get(idx)
+                .unwrap_or_else(|| panic!("unexpected request index {idx}"))
+                .clone();
+            ResponseTemplate::new(200)
+                .insert_header("content-type", "text/event-stream")
+                .set_body_raw(body, "text/event-stream")
+        }
+    }
+
+    let responder = SeqResponder::new(vec![sse1, sse2, sse3, sse4, sse5, sse6]);
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(responder.clone())
+        .expect(6)
+        .mount(&server)
+        .await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    let home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&home);
+    config.model_provider = model_provider;
+    config.model_auto_compact_token_limit = Some(200);
+    let conversation_manager = ConversationManager::with_auth(CodexAuth::from_api_key("dummy"));
+    let codex = conversation_manager
+        .new_conversation(config)
+        .await
+        .unwrap()
+        .conversation;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![InputItem::Text {
+                text: MULTI_AUTO_MSG.into(),
+            }],
+        })
+        .await
+        .unwrap();
+
+    loop {
+        let event = codex.next_event().await.unwrap();
+        if let EventMsg::TaskComplete(_) = &event.msg
+            && !event.id.starts_with("auto-compact-")
+        {
+            break;
+        }
+    }
+
+    let request_bodies: Vec<String> = responder
+        .recorded_requests()
+        .into_iter()
+        .map(|body| String::from_utf8(body).unwrap_or_default())
+        .collect();
+    assert_eq!(
+        request_bodies.len(),
+        6,
+        "expected six requests including two auto compactions"
+    );
+    assert!(
+        request_bodies[0].contains(MULTI_AUTO_MSG),
+        "first request should contain the user input"
+    );
+    assert!(
+        request_bodies[1].contains("You have exceeded the maximum number of tokens"),
+        "first auto compact request should use summarization instructions"
+    );
+    assert!(
+        request_bodies[3].contains(&format!("unsupported call: {DUMMY_FUNCTION_NAME}")),
+        "function call output should be sent before the second auto compact"
+    );
+    assert!(
+        request_bodies[4].contains("You have exceeded the maximum number of tokens"),
+        "second auto compact request should reuse summarization instructions"
     );
 }
