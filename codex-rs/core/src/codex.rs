@@ -1099,7 +1099,7 @@ impl AgentTask {
                 let sess = self.sess.clone();
                 let sub_id = self.sub_id.clone();
                 tokio::spawn(async move {
-                    try_exit_review_mode(sess, sub_id, None).await;
+                    exit_review_mode(sess, sub_id, None).await;
                 });
             }
             self.handle.abort();
@@ -1770,7 +1770,7 @@ async fn run_task(
     //
     // Emits an ExitedReviewMode event with the parsed review output.
     if turn_context.is_review_mode {
-        try_exit_review_mode(
+        exit_review_mode(
             sess.clone(),
             sub_id.clone(),
             last_agent_message.as_deref().map(parse_review_output_event),
@@ -3166,7 +3166,7 @@ fn convert_call_tool_result_to_function_call_output_payload(
 }
 
 /// Emits an ExitedReviewMode Event with optional ReviewOutput.
-async fn try_exit_review_mode(
+async fn exit_review_mode(
     session: Arc<Session>,
     task_sub_id: String,
     res: Option<ReviewOutputEvent>,
