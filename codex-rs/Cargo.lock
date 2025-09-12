@@ -819,6 +819,7 @@ dependencies = [
  "codex-core",
  "codex-protocol",
  "core_test_support",
+ "pretty_assertions",
  "rand",
  "reqwest",
  "serde",

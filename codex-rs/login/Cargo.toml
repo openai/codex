@@ -32,4 +32,5 @@ webbrowser = { workspace = true }
 [dev-dependencies]
 anyhow = { workspace = true }
 core_test_support = { workspace = true }
+pretty_assertions = "1"
 tempfile = { workspace = true }

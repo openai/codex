@@ -6,6 +6,7 @@ use codex_core::auth::logout;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_login::ServerOptions;
+use codex_login::run_device_code_login;
 use codex_login::run_login_server;
 use codex_protocol::mcp_protocol::AuthMode;
 use std::path::PathBuf;
@@ -56,14 +57,25 @@ pub async fn run_login_with_api_key(
 }
 
 /// Login using the OAuth device code flow.
-///
-/// Currently not implemented; exits with a clear message.
-pub async fn run_login_with_device_code(cli_config_overrides: CliConfigOverrides) -> ! {
-    // Parse and load config for consistency with other login commands.
-    let _config = load_config_or_exit(cli_config_overrides);
-
-    eprintln!("Device code login is not supported yet.");
-    std::process::exit(2);
+pub async fn run_login_with_device_code(
+    cli_config_overrides: CliConfigOverrides,
+    issuer: Option<String>,
+) -> ! {
+    let config = load_config_or_exit(cli_config_overrides);
+    let mut opts = ServerOptions::new(config.codex_home, CLIENT_ID.to_string());
+    if let Some(iss) = issuer {
+        opts.issuer = iss;
+    }
+    match run_device_code_login(opts).await {
+        Ok(()) => {
+            eprintln!("Successfully logged in");
+            std::process::exit(0);
+        }
+        Err(e) => {
+            eprintln!("Error logging in with device code: {e}");
+            std::process::exit(1);
+        }
+    }
 }
 
 pub async fn run_login_status(cli_config_overrides: CliConfigOverrides) -> ! {
