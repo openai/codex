@@ -217,6 +217,8 @@ pub struct NewConversationParams {
 pub struct NewConversationResponse {
     pub conversation_id: ConversationId,
     pub model: String,
+    /// Note this could be ignored by the model.
+    pub reasoning_effort: ReasoningEffort,
     pub rollout_path: PathBuf,
 }
 

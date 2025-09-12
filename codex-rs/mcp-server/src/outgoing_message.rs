@@ -258,6 +258,7 @@ pub(crate) struct OutgoingError {
 mod tests {
     use codex_core::protocol::EventMsg;
     use codex_core::protocol::SessionConfiguredEvent;
+    use codex_protocol::config_types::ReasoningEffort;
     use codex_protocol::mcp_protocol::ConversationId;
     use codex_protocol::mcp_protocol::LoginChatGptCompleteNotification;
     use pretty_assertions::assert_eq;
@@ -279,6 +280,7 @@ mod tests {
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
                 model: "gpt-4o".to_string(),
+                reasoning_effort: ReasoningEffort::default(),
                 history_log_id: 1,
                 history_entry_count: 1000,
                 initial_messages: None,
@@ -312,6 +314,7 @@ mod tests {
         let session_configured_event = SessionConfiguredEvent {
             session_id: conversation_id,
             model: "gpt-4o".to_string(),
+            reasoning_effort: ReasoningEffort::default(),
             history_log_id: 1,
             history_entry_count: 1000,
             initial_messages: None,
@@ -342,6 +345,7 @@ mod tests {
             "msg": {
                 "session_id": session_configured_event.session_id,
                 "model": session_configured_event.model,
+                "reasoning_effort": session_configured_event.reasoning_effort,
                 "history_log_id": session_configured_event.history_log_id,
                 "history_entry_count": session_configured_event.history_entry_count,
                 "type": "session_configured",
