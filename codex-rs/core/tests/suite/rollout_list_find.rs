@@ -1,7 +1,8 @@
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 use std::io::Write;
 use std::path::PathBuf;
 
-use codex_core::rollout::find_conversation_path_by_id_str;
+use codex_core::find_conversation_path_by_id_str;
 use tempfile::TempDir;
 use uuid::Uuid;
 
@@ -11,7 +12,7 @@ fn write_minimal_rollout_with_id(codex_home: &TempDir, id: Uuid) -> PathBuf {
     let sessions = codex_home.path().join("sessions/2024/01/01");
     std::fs::create_dir_all(&sessions).unwrap();
 
-    let file = sessions.join(format!("rollout-2024-01-01T00-00-00-{}.jsonl", id));
+    let file = sessions.join(format!("rollout-2024-01-01T00-00-00-{id}.jsonl"));
     let mut f = std::fs::File::create(&file).unwrap();
     // Minimal first line: session_meta with the id so content search can find it
     writeln!(

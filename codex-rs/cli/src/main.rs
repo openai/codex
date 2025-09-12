@@ -90,16 +90,13 @@ struct CompletionCommand {
 
 #[derive(Debug, Parser)]
 struct ResumeCommand {
-    #[clap(skip)]
-    config_overrides: CliConfigOverrides,
-
     /// Conversation/session id (UUID). When provided, resumes this session.
     /// If omitted, use --last to pick the most recent recorded session.
     #[arg(value_name = "SESSION_ID")]
     session_id: Option<String>,
 
     /// Continue the most recent session without showing the picker.
-    #[arg(long = "last", default_value_t = false)]
+    #[arg(long = "last", default_value_t = false, conflicts_with = "session_id")]
     last: bool,
 }
 
@@ -161,52 +158,55 @@ fn main() -> anyhow::Result<()> {
 }
 
 async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
-    let cli = MultitoolCli::parse();
+    let MultitoolCli {
+        config_overrides: root_config_overrides,
+        interactive,
+        subcommand,
+    } = MultitoolCli::parse();
 
-    match cli.subcommand {
+    let mut interactive_cli = Some(interactive);
+
+    match subcommand {
         None => {
-            let mut tui_cli = cli.interactive;
-            prepend_config_flags(&mut tui_cli.config_overrides, cli.config_overrides);
+            let mut tui_cli = interactive_cli.take().expect("interactive cli unavailable");
+            prepend_config_flags(&mut tui_cli.config_overrides, root_config_overrides.clone());
             let usage = codex_tui::run_main(tui_cli, codex_linux_sandbox_exe).await?;
             if !usage.is_zero() {
                 println!("{}", codex_core::protocol::FinalOutput::from(usage));
             }
         }
         Some(Subcommand::Exec(mut exec_cli)) => {
-            prepend_config_flags(&mut exec_cli.config_overrides, cli.config_overrides);
+            prepend_config_flags(
+                &mut exec_cli.config_overrides,
+                root_config_overrides.clone(),
+            );
             codex_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
         }
         Some(Subcommand::Mcp) => {
-            codex_mcp_server::run_main(codex_linux_sandbox_exe, cli.config_overrides).await?;
+            codex_mcp_server::run_main(codex_linux_sandbox_exe, root_config_overrides.clone())
+                .await?;
         }
-        Some(Subcommand::Resume(resume_cli)) => {
-            // Build a TUI CLI instance in resume/continue mode and invoke the TUI runner.
-            let mut tui_cli = TuiCli {
-                prompt: None,
-                images: Vec::new(),
-                // hidden flags in TUI CLI; we set them programmatically
-                resume_picker: resume_cli.session_id.is_none() && !resume_cli.last,
-                resume_last: resume_cli.last,
-                resume_session_id: resume_cli.session_id,
-                model: None,
-                oss: false,
-                config_profile: None,
-                sandbox_mode: None,
-                approval_policy: None,
-                full_auto: false,
-                dangerously_bypass_approvals_and_sandbox: false,
-                cwd: None,
-                web_search: false,
-                config_overrides: CliConfigOverrides {
-                    raw_overrides: Vec::new(),
-                },
-            };
-            // Prepend any root-level -c overrides so TUI can see them.
-            prepend_config_flags(&mut tui_cli.config_overrides, resume_cli.config_overrides);
+        Some(Subcommand::Resume(ResumeCommand { session_id, last })) => {
+            // Start with the parsed interactive CLI so resume shares the same
+            // configuration surface area as `codex` without additional flags.
+            let mut tui_cli = interactive_cli
+                .take()
+                .expect("interactive cli unavailable for resume");
+
+            let resume_session_id = session_id;
+            tui_cli.resume_picker = resume_session_id.is_none() && !last;
+            tui_cli.resume_last = last;
+            tui_cli.resume_session_id = resume_session_id;
+
+            // Propagate any root-level config overrides (e.g. `-c key=value`).
+            prepend_config_flags(&mut tui_cli.config_overrides, root_config_overrides.clone());
             codex_tui::run_main(tui_cli, codex_linux_sandbox_exe).await?;
         }
         Some(Subcommand::Login(mut login_cli)) => {
-            prepend_config_flags(&mut login_cli.config_overrides, cli.config_overrides);
+            prepend_config_flags(
+                &mut login_cli.config_overrides,
+                root_config_overrides.clone(),
+            );
             match login_cli.action {
                 Some(LoginSubcommand::Status) => {
                     run_login_status(login_cli.config_overrides).await;
@@ -221,11 +221,17 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             }
         }
         Some(Subcommand::Logout(mut logout_cli)) => {
-            prepend_config_flags(&mut logout_cli.config_overrides, cli.config_overrides);
+            prepend_config_flags(
+                &mut logout_cli.config_overrides,
+                root_config_overrides.clone(),
+            );
             run_logout(logout_cli.config_overrides).await;
         }
         Some(Subcommand::Proto(mut proto_cli)) => {
-            prepend_config_flags(&mut proto_cli.config_overrides, cli.config_overrides);
+            prepend_config_flags(
+                &mut proto_cli.config_overrides,
+                root_config_overrides.clone(),
+            );
             proto::run_main(proto_cli).await?;
         }
         Some(Subcommand::Completion(completion_cli)) => {
@@ -233,7 +239,10 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         }
         Some(Subcommand::Debug(debug_args)) => match debug_args.cmd {
             DebugCommand::Seatbelt(mut seatbelt_cli) => {
-                prepend_config_flags(&mut seatbelt_cli.config_overrides, cli.config_overrides);
+                prepend_config_flags(
+                    &mut seatbelt_cli.config_overrides,
+                    root_config_overrides.clone(),
+                );
                 codex_cli::debug_sandbox::run_command_under_seatbelt(
                     seatbelt_cli,
                     codex_linux_sandbox_exe,
@@ -241,7 +250,10 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 .await?;
             }
             DebugCommand::Landlock(mut landlock_cli) => {
-                prepend_config_flags(&mut landlock_cli.config_overrides, cli.config_overrides);
+                prepend_config_flags(
+                    &mut landlock_cli.config_overrides,
+                    root_config_overrides.clone(),
+                );
                 codex_cli::debug_sandbox::run_command_under_landlock(
                     landlock_cli,
                     codex_linux_sandbox_exe,
@@ -250,7 +262,10 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             }
         },
         Some(Subcommand::Apply(mut apply_cli)) => {
-            prepend_config_flags(&mut apply_cli.config_overrides, cli.config_overrides);
+            prepend_config_flags(
+                &mut apply_cli.config_overrides,
+                root_config_overrides.clone(),
+            );
             run_apply_command(apply_cli, None).await?;
         }
         Some(Subcommand::GenerateTs(gen_cli)) => {
