@@ -950,14 +950,6 @@ impl Session {
         }
     }
 
-    fn enqueue_pending_responses(&self, responses: Vec<ResponseInputItem>) {
-        if responses.is_empty() {
-            return;
-        }
-        let mut state = self.state.lock_unchecked();
-        state.pending_input.extend(responses);
-    }
-
     pub fn get_pending_input(&self) -> Vec<ResponseInputItem> {
         let mut state = self.state.lock_unchecked();
         if state.pending_input.is_empty() {
