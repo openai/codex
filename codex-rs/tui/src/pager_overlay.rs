@@ -3,7 +3,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::history_cell::HistoryCell;
-use crate::render::highlight;
 use crate::render::line_utils::push_owned_lines;
 use crate::tui;
 use crate::tui::TuiEvent;
@@ -18,6 +17,7 @@ use ratatui::style::Styled;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
+use ratatui::text::Text;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 
@@ -76,21 +76,24 @@ fn render_key_hints(area: Rect, buf: &mut Buffer, pairs: &[(&str, &str)]) {
 
 /// Generic widget for rendering a pager view.
 struct PagerView {
-    lines: Vec<Line<'static>>,
+    texts: Vec<Text<'static>>,
     scroll_offset: usize,
     title: String,
     wrap_cache: Option<WrapCache>,
     last_content_height: Option<usize>,
+    /// If set, on next render ensure this chunk is visible.
+    pending_scroll_chunk: Option<usize>,
 }
 
 impl PagerView {
-    fn new(lines: Vec<Line<'static>>, title: String, scroll_offset: usize) -> Self {
+    fn new(texts: Vec<Text<'static>>, title: String, scroll_offset: usize) -> Self {
         Self {
-            lines,
+            texts,
             scroll_offset,
             title,
             wrap_cache: None,
             last_content_height: None,
+            pending_scroll_chunk: None,
         }
     }
 
@@ -99,6 +102,14 @@ impl PagerView {
         let content_area = self.scroll_area(area);
         self.update_last_content_height(content_area.height);
         self.ensure_wrapped(content_area.width);
+        // If there is a pending request to scroll a specific chunk into view,
+        // satisfy it now that wrapping is up to date for this width.
+        if let (Some(idx), Some(cache)) =
+            (self.pending_scroll_chunk.take(), self.wrap_cache.as_ref())
+            && let Some(range) = cache.chunk_ranges.get(idx).cloned()
+        {
+            self.ensure_range_visible(range, content_area.height as usize, cache.wrapped.len());
+        }
         // Compute page bounds without holding an immutable borrow on cache while mutating self
         let wrapped_len = self
             .wrap_cache
@@ -111,7 +122,7 @@ impl PagerView {
         let start = self.scroll_offset;
         let end = (start + content_area.height as usize).min(wrapped_len);
 
-        let (wrapped, _src_idx) = self.cached();
+        let wrapped = self.cached();
         let page = &wrapped[start..end];
         self.render_content_page_prepared(content_area, buf, page);
         self.render_bottom_bar(area, content_area, buf, wrapped);
@@ -245,7 +256,8 @@ impl PagerView {
 struct WrapCache {
     width: u16,
     wrapped: Vec<Line<'static>>,
-    src_idx: Vec<usize>,
+    /// For each input Text chunk, the inclusive-excluded range of wrapped lines produced.
+    chunk_ranges: Vec<std::ops::Range<usize>>,
     base_len: usize,
 }
 
@@ -253,32 +265,36 @@ impl PagerView {
     fn ensure_wrapped(&mut self, width: u16) {
         let width = width.max(1);
         let needs = match self.wrap_cache {
-            Some(ref c) => c.width != width || c.base_len != self.lines.len(),
+            Some(ref c) => c.width != width || c.base_len != self.texts.len(),
             None => true,
         };
         if !needs {
             return;
         }
         let mut wrapped: Vec<Line<'static>> = Vec::new();
-        let mut src_idx: Vec<usize> = Vec::new();
-        for (i, line) in self.lines.iter().enumerate() {
-            let ws = crate::wrapping::word_wrap_line(line, width as usize);
-            src_idx.extend(std::iter::repeat_n(i, ws.len()));
-            push_owned_lines(&ws, &mut wrapped);
+        let mut chunk_ranges: Vec<std::ops::Range<usize>> = Vec::with_capacity(self.texts.len());
+        for text in &self.texts {
+            let start = wrapped.len();
+            for line in &text.lines {
+                let ws = crate::wrapping::word_wrap_line(line, width as usize);
+                push_owned_lines(&ws, &mut wrapped);
+            }
+            let end = wrapped.len();
+            chunk_ranges.push(start..end);
         }
         self.wrap_cache = Some(WrapCache {
             width,
             wrapped,
-            src_idx,
-            base_len: self.lines.len(),
+            chunk_ranges,
+            base_len: self.texts.len(),
         });
     }
 
-    fn cached(&self) -> (&[Line<'static>], &[usize]) {
+    fn cached(&self) -> &[Line<'static>] {
         if let Some(cache) = self.wrap_cache.as_ref() {
-            (&cache.wrapped, &cache.src_idx)
+            &cache.wrapped
         } else {
-            (&[], &[])
+            &[]
         }
     }
 
@@ -299,6 +315,36 @@ impl PagerView {
         let max_scroll = cache.wrapped.len().saturating_sub(visible);
         self.scroll_offset >= max_scroll
     }
+
+    /// Request that the given text chunk index be scrolled into view on next render.
+    fn scroll_chunk_into_view(&mut self, chunk_index: usize) {
+        self.pending_scroll_chunk = Some(chunk_index);
+    }
+
+    fn ensure_range_visible(
+        &mut self,
+        range: std::ops::Range<usize>,
+        viewport_height: usize,
+        total_wrapped: usize,
+    ) {
+        if viewport_height == 0 || total_wrapped == 0 {
+            return;
+        }
+        let first = range.start.min(total_wrapped.saturating_sub(1));
+        let last = range
+            .end
+            .saturating_sub(1)
+            .min(total_wrapped.saturating_sub(1));
+        let current_top = self.scroll_offset.min(total_wrapped.saturating_sub(1));
+        let current_bottom = current_top.saturating_add(viewport_height.saturating_sub(1));
+
+        if first < current_top {
+            self.scroll_offset = first;
+        } else if last > current_bottom {
+            // Scroll just enough so that 'last' is visible at the bottom
+            self.scroll_offset = last.saturating_sub(viewport_height.saturating_sub(1));
+        }
+    }
 }
 
 pub(crate) struct TranscriptOverlay {
@@ -312,7 +358,7 @@ impl TranscriptOverlay {
     pub(crate) fn new(transcript_cells: Vec<Arc<dyn HistoryCell>>) -> Self {
         Self {
             view: PagerView::new(
-                Self::render_cells_to_lines(&transcript_cells, &None),
+                Self::render_cells_to_texts(&transcript_cells, &None),
                 "T R A N S C R I P T".to_string(),
                 usize::MAX,
             ),
@@ -322,29 +368,43 @@ impl TranscriptOverlay {
         }
     }
 
-    fn render_cells_to_lines(
+    fn render_cells_to_texts(
         cells: &[Arc<dyn HistoryCell>],
         highlight_cell: &Option<Arc<dyn HistoryCell>>,
-    ) -> Vec<Line<'static>> {
-        let mut lines: Vec<Line<'static>> = Vec::new();
+    ) -> Vec<Text<'static>> {
+        let mut texts: Vec<Text<'static>> = Vec::new();
+        let mut first = true;
         for cell in cells {
-            if !cell.is_stream_continuation() && !lines.is_empty() {
+            let mut lines: Vec<Line<'static>> = Vec::new();
+            if !cell.is_stream_continuation() && !first {
                 lines.push(Line::from(""));
             }
-            if let Some(highlight_cell) = highlight_cell
+            let cell_lines = if let Some(highlight_cell) = highlight_cell
                 && Arc::ptr_eq(cell, highlight_cell)
             {
-                lines.extend(cell.transcript_lines().into_iter().map(|l| l.reversed()));
+                cell.transcript_lines()
+                    .into_iter()
+                    .map(|l| l.reversed())
+                    .collect()
             } else {
-                lines.extend(cell.transcript_lines());
-            }
+                cell.transcript_lines()
+            };
+            lines.extend(cell_lines);
+            texts.push(Text::from(lines));
+            first = false;
         }
-        lines
+        texts
     }
 
     pub(crate) fn insert_cell(&mut self, cell: Arc<dyn HistoryCell>) {
         let follow_bottom = self.view.is_scrolled_to_bottom();
-        self.view.lines.extend(cell.transcript_lines());
+        // Append as a new Text chunk (with a separating blank if needed)
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        if !cell.is_stream_continuation() && !self.cells.is_empty() {
+            lines.push(Line::from(""));
+        }
+        lines.extend(cell.transcript_lines());
+        self.view.texts.push(Text::from(lines));
         self.cells.push(cell);
         self.view.wrap_cache = None;
         if follow_bottom {
@@ -355,7 +415,12 @@ impl TranscriptOverlay {
     pub(crate) fn set_highlight_cell(&mut self, cell: Option<Arc<dyn HistoryCell>>) {
         self.highlight_cell = cell;
         self.view.wrap_cache = None;
-        self.view.lines = Self::render_cells_to_lines(&self.cells, &self.highlight_cell);
+        self.view.texts = Self::render_cells_to_texts(&self.cells, &self.highlight_cell);
+        if let Some(target) = &self.highlight_cell
+            && let Some(idx) = self.cells.iter().position(|c| Arc::ptr_eq(c, target))
+        {
+            self.view.scroll_chunk_into_view(idx);
+        }
     }
 
     fn render_hints(&self, area: Rect, buf: &mut Buffer) {
@@ -416,9 +481,6 @@ impl TranscriptOverlay {
     pub(crate) fn is_done(&self) -> bool {
         self.is_done
     }
-    pub(crate) fn set_scroll_offset(&mut self, offset: usize) {
-        self.view.scroll_offset = offset;
-    }
 }
 
 pub(crate) struct StaticOverlay {
@@ -429,7 +491,7 @@ pub(crate) struct StaticOverlay {
 impl StaticOverlay {
     pub(crate) fn with_title(lines: Vec<Line<'static>>, title: String) -> Self {
         Self {
-            view: PagerView::new(lines, title, 0),
+            view: PagerView::new(vec![Text::from(lines)], title, 0),
             is_done: false,
         }
     }
@@ -492,9 +554,26 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
+    #[derive(Debug)]
+    struct TestCell {
+        lines: Vec<Line<'static>>,
+    }
+
+    impl crate::history_cell::HistoryCell for TestCell {
+        fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+            self.lines.clone()
+        }
+
+        fn transcript_lines(&self) -> Vec<Line<'static>> {
+            self.lines.clone()
+        }
+    }
+
     #[test]
     fn edit_prev_hint_is_visible() {
-        let mut overlay = TranscriptOverlay::new(vec![Line::from("hello")]);
+        let mut overlay = TranscriptOverlay::new(vec![Arc::new(TestCell {
+            lines: vec![Line::from("hello")],
+        })]);
 
         // Render into a small buffer and assert the backtrack hint is present
         let area = Rect::new(0, 0, 40, 10);
@@ -519,9 +598,15 @@ mod tests {
     fn transcript_overlay_snapshot_basic() {
         // Prepare a transcript overlay with a few lines
         let mut overlay = TranscriptOverlay::new(vec![
-            Line::from("alpha"),
-            Line::from("beta"),
-            Line::from("gamma"),
+            Arc::new(TestCell {
+                lines: vec![Line::from("alpha")],
+            }),
+            Arc::new(TestCell {
+                lines: vec![Line::from("beta")],
+            }),
+            Arc::new(TestCell {
+                lines: vec![Line::from("gamma")],
+            }),
         ]);
         let mut term = Terminal::new(TestBackend::new(40, 10)).expect("term");
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
@@ -531,8 +616,15 @@ mod tests {
 
     #[test]
     fn transcript_overlay_keeps_scroll_pinned_at_bottom() {
-        let mut overlay =
-            TranscriptOverlay::new((0..20).map(|i| Line::from(format!("line{i}"))).collect());
+        let mut overlay = TranscriptOverlay::new(
+            (0..20)
+                .map(|i| {
+                    Arc::new(TestCell {
+                        lines: vec![Line::from(format!("line{i}"))],
+                    }) as Arc<dyn HistoryCell>
+                })
+                .collect(),
+        );
         let mut term = Terminal::new(TestBackend::new(40, 12)).expect("term");
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
             .expect("draw");
@@ -542,22 +634,33 @@ mod tests {
             "expected initial render to leave view at bottom"
         );
 
-        overlay.insert_lines(vec!["tail".into()]);
+        overlay.insert_cell(Arc::new(TestCell {
+            lines: vec!["tail".into()],
+        }));
 
         assert_eq!(overlay.view.scroll_offset, usize::MAX);
     }
 
     #[test]
     fn transcript_overlay_preserves_manual_scroll_position() {
-        let mut overlay =
-            TranscriptOverlay::new((0..20).map(|i| Line::from(format!("line{i}"))).collect());
+        let mut overlay = TranscriptOverlay::new(
+            (0..20)
+                .map(|i| {
+                    Arc::new(TestCell {
+                        lines: vec![Line::from(format!("line{i}"))],
+                    }) as Arc<dyn HistoryCell>
+                })
+                .collect(),
+        );
         let mut term = Terminal::new(TestBackend::new(40, 12)).expect("term");
         term.draw(|f| overlay.render(f.area(), f.buffer_mut()))
             .expect("draw");
 
         overlay.view.scroll_offset = 0;
 
-        overlay.insert_lines(vec!["tail".into()]);
+        overlay.insert_cell(Arc::new(TestCell {
+            lines: vec!["tail".into()],
+        }));
 
         assert_eq!(overlay.view.scroll_offset, 0);
     }
@@ -578,17 +681,21 @@ mod tests {
     #[test]
     fn pager_wrap_cache_reuses_for_same_width_and_rebuilds_on_change() {
         let long = "This is a long line that should wrap multiple times to ensure non-empty wrapped output.";
-        let mut pv = PagerView::new(vec![long.into(), long.into()], "T".to_string(), 0);
+        let mut pv = PagerView::new(
+            vec![Text::from(vec![long.into()]), Text::from(vec![long.into()])],
+            "T".to_string(),
+            0,
+        );
 
         // Build cache at width 24
         pv.ensure_wrapped(24);
-        let (w1, _) = pv.cached();
+        let w1 = pv.cached();
         assert!(!w1.is_empty(), "expected wrapped output to be non-empty");
         let ptr1 = w1.as_ptr();
 
         // Re-run with same width: cache should be reused (pointer stability heuristic)
         pv.ensure_wrapped(24);
-        let (w2, _) = pv.cached();
+        let w2 = pv.cached();
         let ptr2 = w2.as_ptr();
         assert_eq!(ptr1, ptr2, "cache should not rebuild for unchanged width");
 
@@ -596,7 +703,7 @@ mod tests {
         // Drop immutable borrow before mutating
         let prev_len = w2.len();
         pv.ensure_wrapped(36);
-        let (w3, _) = pv.cached();
+        let w3 = pv.cached();
         assert_ne!(
             prev_len,
             w3.len(),
@@ -607,15 +714,16 @@ mod tests {
     #[test]
     fn pager_wrap_cache_invalidates_on_append() {
         let long = "Another long line for wrapping behavior verification.";
-        let mut pv = PagerView::new(vec![long.into()], "T".to_string(), 0);
+        let mut pv = PagerView::new(vec![Text::from(vec![long.into()])], "T".to_string(), 0);
         pv.ensure_wrapped(28);
-        let (w1, _) = pv.cached();
+        let w1 = pv.cached();
         let len1 = w1.len();
 
         // Append new lines should cause ensure_wrapped to rebuild due to len change
-        pv.lines.extend([long.into(), long.into()]);
+        pv.texts.push(Text::from(vec![long.into()]));
+        pv.texts.push(Text::from(vec![long.into()]));
         pv.ensure_wrapped(28);
-        let (w2, _) = pv.cached();
+        let w2 = pv.cached();
         assert!(
             w2.len() >= len1,
             "wrapped length should grow or stay same after append"
