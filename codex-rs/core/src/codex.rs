@@ -1511,6 +1511,7 @@ async fn spawn_review_thread(
         include_web_search_request: false,
         use_streamable_shell_tool: false,
         include_view_image_tool: false,
+        experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
     });
 
     let base_instructions = Some(REVIEW_PROMPT.to_string());
