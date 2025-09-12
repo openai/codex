@@ -138,6 +138,7 @@ fn resumed_initial_messages_render_history() {
     let configured = codex_core::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         model: "test-model".to_string(),
+        reasoning_effort: ReasoningEffortConfig::default(),
         history_log_id: 0,
         history_entry_count: 0,
         initial_messages: Some(vec![
@@ -352,7 +353,7 @@ fn exec_approval_decision_truncates_multiline_and_long_commands() {
     let long = format!("echo {}", "a".repeat(200));
     let ev_long = ExecApprovalRequestEvent {
         call_id: "call-long".into(),
-        command: vec!["bash".into(), "-lc".into(), long.clone()],
+        command: vec!["bash".into(), "-lc".into(), long],
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         reason: None,
     };

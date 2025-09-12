@@ -28,6 +28,7 @@ mod exec_command;
 pub mod exec_env;
 mod flags;
 pub mod git_info;
+pub mod internal_storage;
 mod is_safe_command;
 pub mod landlock;
 mod mcp_connection_manager;
@@ -74,6 +75,7 @@ pub use rollout::list::ConversationsPage;
 pub use rollout::list::Cursor;
 mod user_notification;
 pub mod util;
+
 pub use apply_patch::CODEX_APPLY_PATCH_ARG1;
 pub use safety::get_platform_sandbox;
 // Re-export the protocol types from the standalone `codex-protocol` crate so existing

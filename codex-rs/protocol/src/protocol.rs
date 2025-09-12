@@ -897,7 +897,24 @@ pub struct SessionMetaLine {
 pub enum RolloutItem {
     SessionMeta(SessionMetaLine),
     ResponseItem(ResponseItem),
+    Compacted(CompactedItem),
+    TurnContext(TurnContextItem),
     EventMsg(EventMsg),
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+pub struct CompactedItem {
+    pub message: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, TS)]
+pub struct TurnContextItem {
+    pub cwd: PathBuf,
+    pub approval_policy: AskForApproval,
+    pub sandbox_policy: SandboxPolicy,
+    pub model: String,
+    pub effort: ReasoningEffortConfig,
+    pub summary: ReasoningSummaryConfig,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -1064,6 +1081,9 @@ pub struct SessionConfiguredEvent {
     /// Tell the client what model is being queried.
     pub model: String,
 
+    /// The effort the model is putting into reasoning about the user's request.
+    pub reasoning_effort: ReasoningEffortConfig,
+
     /// Identifier of the history log file (inode on Unix, 0 otherwise).
     pub history_log_id: u64,
 
@@ -1152,6 +1172,7 @@ mod tests {
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
                 model: "codex-mini-latest".to_string(),
+                reasoning_effort: ReasoningEffortConfig::default(),
                 history_log_id: 0,
                 history_entry_count: 0,
                 initial_messages: None,
@@ -1165,6 +1186,7 @@ mod tests {
                 "type": "session_configured",
                 "session_id": "67e55044-10b1-426f-9247-bb680e5fe0c8",
                 "model": "codex-mini-latest",
+                "reasoning_effort": "medium",
                 "history_log_id": 0,
                 "history_entry_count": 0,
                 "rollout_path": format!("{}", rollout_file.path().display()),

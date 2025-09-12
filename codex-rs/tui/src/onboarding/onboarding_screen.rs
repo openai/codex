@@ -71,7 +71,7 @@ impl OnboardingScreen {
             config,
         } = args;
         let cwd = config.cwd.clone();
-        let codex_home = config.codex_home.clone();
+        let codex_home = config.codex_home;
         let mut steps: Vec<Step> = vec![Step::Welcome(WelcomeWidget {
             is_logged_in: !matches!(login_status, LoginStatus::NotAuthenticated),
         })];

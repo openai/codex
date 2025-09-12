@@ -153,6 +153,11 @@ pub enum ClientRequest {
         #[serde(rename = "id")]
         request_id: RequestId,
     },
+    SetDefaultModel {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: SetDefaultModelParams,
+    },
     GetUserAgent {
         #[serde(rename = "id")]
         request_id: RequestId,
@@ -217,6 +222,8 @@ pub struct NewConversationParams {
 pub struct NewConversationResponse {
     pub conversation_id: ConversationId,
     pub model: String,
+    /// Note this could be ignored by the model.
+    pub reasoning_effort: ReasoningEffort,
     pub rollout_path: PathBuf,
 }
 
@@ -413,6 +420,19 @@ pub struct UserInfoResponse {
 pub struct GetUserSavedConfigResponse {
     pub config: UserSavedConfig,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SetDefaultModelParams {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SetDefaultModelResponse {}
 
 /// UserSavedConfig contains a subset of the config. It is meant to expose mcp
 /// client-configurable settings that can be specified in the NewConversation

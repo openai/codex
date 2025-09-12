@@ -41,6 +41,7 @@ use crate::model_provider_info::WireApi;
 use crate::openai_model_info::get_model_info;
 use crate::openai_tools::create_tools_json_for_responses_api;
 use crate::protocol::TokenUsage;
+use crate::token_data::PlanType;
 use crate::util::backoff;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
@@ -60,7 +61,7 @@ struct Error {
     message: Option<String>,
 
     // Optional fields available on "usage_limit_reached" and "usage_not_included" errors
-    plan_type: Option<String>,
+    plan_type: Option<PlanType>,
     resets_in_seconds: Option<u64>,
 }
 
@@ -239,10 +240,10 @@ impl ModelClient {
             let res = req_builder.send().await;
             if let Ok(resp) = &res {
                 trace!(
-                    "Response status: {}, request-id: {}",
+                    "Response status: {}, cf-ray: {}",
                     resp.status(),
                     resp.headers()
-                        .get("x-request-id")
+                        .get("cf-ray")
                         .map(|v| v.to_str().unwrap_or_default())
                         .unwrap_or_default()
                 );
@@ -304,7 +305,7 @@ impl ModelClient {
                                 // token.
                                 let plan_type = error
                                     .plan_type
-                                    .or_else(|| auth.and_then(|a| a.get_plan_type()));
+                                    .or_else(|| auth.as_ref().and_then(|a| a.get_plan_type()));
                                 let resets_in_seconds = error.resets_in_seconds;
                                 return Err(CodexErr::UsageLimitReached(UsageLimitReachedError {
                                     plan_type,
@@ -1036,5 +1037,38 @@ mod tests {
         };
         let delay = try_parse_retry_after(&err);
         assert_eq!(delay, Some(Duration::from_secs_f64(1.898)));
+    }
+
+    #[test]
+    fn error_response_deserializes_old_schema_known_plan_type_and_serializes_back() {
+        use crate::token_data::KnownPlan;
+        use crate::token_data::PlanType;
+
+        let json = r#"{"error":{"type":"usage_limit_reached","plan_type":"pro","resets_in_seconds":3600}}"#;
+        let resp: ErrorResponse =
+            serde_json::from_str(json).expect("should deserialize old schema");
+
+        assert!(matches!(
+            resp.error.plan_type,
+            Some(PlanType::Known(KnownPlan::Pro))
+        ));
+
+        let plan_json = serde_json::to_string(&resp.error.plan_type).expect("serialize plan_type");
+        assert_eq!(plan_json, "\"pro\"");
+    }
+
+    #[test]
+    fn error_response_deserializes_old_schema_unknown_plan_type_and_serializes_back() {
+        use crate::token_data::PlanType;
+
+        let json =
+            r#"{"error":{"type":"usage_limit_reached","plan_type":"vip","resets_in_seconds":60}}"#;
+        let resp: ErrorResponse =
+            serde_json::from_str(json).expect("should deserialize old schema");
+
+        assert!(matches!(resp.error.plan_type, Some(PlanType::Unknown(ref s)) if s == "vip"));
+
+        let plan_json = serde_json::to_string(&resp.error.plan_type).expect("serialize plan_type");
+        assert_eq!(plan_json, "\"vip\"");
     }
 }
