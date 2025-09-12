@@ -1,6 +1,9 @@
 use std::io::Result;
+use std::sync::Arc;
 use std::time::Duration;
 
+use crate::history_cell::HistoryCell;
+use crate::render::highlight;
 use crate::render::line_utils::push_owned_lines;
 use crate::tui;
 use crate::tui::TuiEvent;
@@ -24,8 +27,8 @@ pub(crate) enum Overlay {
 }
 
 impl Overlay {
-    pub(crate) fn new_transcript(lines: Vec<Line<'static>>) -> Self {
-        Self::Transcript(TranscriptOverlay::new(lines))
+    pub(crate) fn new_transcript(cells: Vec<Arc<dyn HistoryCell>>) -> Self {
+        Self::Transcript(TranscriptOverlay::new(cells))
     }
 
     pub(crate) fn new_static_with_title(lines: Vec<Line<'static>>, title: String) -> Self {
@@ -111,34 +114,6 @@ impl PagerView {
         let (wrapped, _src_idx) = self.cached();
         let page = &wrapped[start..end];
         self.render_content_page_prepared(content_area, buf, page);
-        self.render_bottom_bar(area, content_area, buf, wrapped);
-    }
-
-    fn render_with_highlight(
-        &mut self,
-        area: Rect,
-        buf: &mut Buffer,
-        highlight: Option<(usize, usize)>,
-    ) {
-        self.render_header(area, buf);
-        let content_area = self.scroll_area(area);
-        self.update_last_content_height(content_area.height);
-        self.ensure_wrapped(content_area.width);
-        // Compute page bounds first to avoid borrow conflicts
-        let wrapped_len = self
-            .wrap_cache
-            .as_ref()
-            .map(|c| c.wrapped.len())
-            .unwrap_or(0);
-        self.scroll_offset = self
-            .scroll_offset
-            .min(wrapped_len.saturating_sub(content_area.height as usize));
-        let start = self.scroll_offset;
-        let end = (start + content_area.height as usize).min(wrapped_len);
-
-        let (wrapped, src_idx) = self.cached();
-        let page = self.page_with_optional_highlight(wrapped, src_idx, start, end, highlight);
-        self.render_content_page_prepared(content_area, buf, &page);
         self.render_bottom_bar(area, content_area, buf, wrapped);
     }
 
@@ -307,45 +282,6 @@ impl PagerView {
         }
     }
 
-    fn page_with_optional_highlight<'a>(
-        &self,
-        wrapped: &'a [Line<'static>],
-        src_idx: &[usize],
-        start: usize,
-        end: usize,
-        highlight: Option<(usize, usize)>,
-    ) -> std::borrow::Cow<'a, [Line<'static>]> {
-        use ratatui::style::Modifier;
-        let (hi_start, hi_end) = match highlight {
-            Some(r) => r,
-            None => return std::borrow::Cow::Borrowed(&wrapped[start..end]),
-        };
-        let mut out: Vec<Line<'static>> = Vec::with_capacity(end - start);
-        let mut bold_done = false;
-        for (row, src_line) in wrapped
-            .iter()
-            .enumerate()
-            .skip(start)
-            .take(end.saturating_sub(start))
-        {
-            let mut line = src_line.clone();
-            if let Some(src) = src_idx.get(row).copied()
-                && src >= hi_start
-                && src < hi_end
-            {
-                for (i, s) in line.spans.iter_mut().enumerate() {
-                    s.style.add_modifier |= Modifier::REVERSED;
-                    if !bold_done && i == 0 {
-                        s.style.add_modifier |= Modifier::BOLD;
-                        bold_done = true;
-                    }
-                }
-            }
-            out.push(line);
-        }
-        std::borrow::Cow::Owned(out)
-    }
-
     fn is_scrolled_to_bottom(&self) -> bool {
         if self.scroll_offset == usize::MAX {
             return true;
@@ -367,34 +303,59 @@ impl PagerView {
 
 pub(crate) struct TranscriptOverlay {
     view: PagerView,
-    highlight_range: Option<(usize, usize)>,
+    cells: Vec<Arc<dyn HistoryCell>>,
+    highlight_cell: Option<Arc<dyn HistoryCell>>,
     is_done: bool,
 }
 
 impl TranscriptOverlay {
-    pub(crate) fn new(transcript_lines: Vec<Line<'static>>) -> Self {
+    pub(crate) fn new(transcript_cells: Vec<Arc<dyn HistoryCell>>) -> Self {
         Self {
             view: PagerView::new(
-                transcript_lines,
+                Self::render_cells_to_lines(&transcript_cells, &None),
                 "T R A N S C R I P T".to_string(),
                 usize::MAX,
             ),
-            highlight_range: None,
+            cells: transcript_cells,
+            highlight_cell: None,
             is_done: false,
         }
     }
 
-    pub(crate) fn insert_lines(&mut self, lines: Vec<Line<'static>>) {
+    fn render_cells_to_lines(
+        cells: &[Arc<dyn HistoryCell>],
+        highlight_cell: &Option<Arc<dyn HistoryCell>>,
+    ) -> Vec<Line<'static>> {
+        let mut lines: Vec<Line<'static>> = Vec::new();
+        for cell in cells {
+            if !cell.is_stream_continuation() && !lines.is_empty() {
+                lines.push(Line::from(""));
+            }
+            if let Some(highlight_cell) = highlight_cell
+                && Arc::ptr_eq(cell, highlight_cell)
+            {
+                lines.extend(cell.transcript_lines().into_iter().map(|l| l.reversed()));
+            } else {
+                lines.extend(cell.transcript_lines());
+            }
+        }
+        lines
+    }
+
+    pub(crate) fn insert_cell(&mut self, cell: Arc<dyn HistoryCell>) {
         let follow_bottom = self.view.is_scrolled_to_bottom();
-        self.view.lines.extend(lines);
+        self.view.lines.extend(cell.transcript_lines());
+        self.cells.push(cell);
         self.view.wrap_cache = None;
         if follow_bottom {
             self.view.scroll_offset = usize::MAX;
         }
     }
 
-    pub(crate) fn set_highlight_range(&mut self, range: Option<(usize, usize)>) {
-        self.highlight_range = range;
+    pub(crate) fn set_highlight_cell(&mut self, cell: Option<Arc<dyn HistoryCell>>) {
+        self.highlight_cell = cell;
+        self.view.wrap_cache = None;
+        self.view.lines = Self::render_cells_to_lines(&self.cells, &self.highlight_cell);
     }
 
     fn render_hints(&self, area: Rect, buf: &mut Buffer) {
@@ -402,9 +363,7 @@ impl TranscriptOverlay {
         let line2 = Rect::new(area.x, area.y.saturating_add(1), area.width, 1);
         render_key_hints(line1, buf, PAGER_KEY_HINTS);
         let mut pairs: Vec<(&str, &str)> = vec![("q", "quit"), ("Esc", "edit prev")];
-        if let Some((start, end)) = self.highlight_range
-            && end > start
-        {
+        if self.highlight_cell.is_some() {
             pairs.push(("⏎", "edit message"));
         }
         render_key_hints(line2, buf, &pairs);
@@ -414,8 +373,7 @@ impl TranscriptOverlay {
         let top_h = area.height.saturating_sub(3);
         let top = Rect::new(area.x, area.y, area.width, top_h);
         let bottom = Rect::new(area.x, area.y + top_h, area.width, 3);
-        self.view
-            .render_with_highlight(top, buf, self.highlight_range);
+        self.view.render(top, buf);
         self.render_hints(bottom, buf);
     }
 }
