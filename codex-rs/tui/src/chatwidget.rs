@@ -1279,8 +1279,8 @@ impl ChatWidget {
         self.config.model = model;
     }
 
-    pub(crate) fn add_info_message(&mut self, message: String) {
-        self.add_to_history(history_cell::new_info_event(message));
+    pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
+        self.add_to_history(history_cell::new_info_event(message, hint));
         self.request_redraw();
     }
 

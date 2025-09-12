@@ -82,12 +82,14 @@ impl WidgetRef for &ModelUpgradePopup {
         Clear.render(area, buf);
 
         let mut lines: Vec<Line> = vec![
+            String::new().into(),
+            format!("   Codex is now powered by {GPT5_HIGH_MODEL}, a new model that is").into(),
             Line::from(vec![
-                "> ".into(),
-                format!("Try {GPT5_HIGH_MODEL} as your default model").bold(),
+                "   ".into(),
+                "faster, a better collaborator, ".bold(),
+                "and ".into(),
+                "more steerable.".bold(),
             ]),
-            format!("  {GPT5_HIGH_MODEL} is our latest model tuned for coding workflows.").into(),
-            "  Switch now or keep your current default – you can change models any time.".into(),
             "".into(),
         ];
 
