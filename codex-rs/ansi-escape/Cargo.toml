@@ -1,7 +1,7 @@
 [package]
+edition = "2024"
 name = "codex-ansi-escape"
 version = { workspace = true }
-edition = "2024"
 
 [lib]
 name = "codex_ansi_escape"
@@ -10,7 +10,7 @@ path = "src/lib.rs"
 [dependencies]
 ansi-to-tui = "7.0.0"
 ratatui = { version = "0.29.0", features = [
-    "unstable-widget-ref",
     "unstable-rendered-line-info",
+    "unstable-widget-ref",
 ] }
 tracing = { version = "0.1.41", features = ["log"] }

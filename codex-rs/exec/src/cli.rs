@@ -14,9 +14,12 @@ pub struct Cli {
     #[arg(long, short = 'm')]
     pub model: Option<String>,
 
+    #[arg(long = "oss", default_value_t = false)]
+    pub oss: bool,
+
     /// Select the sandbox policy to use when executing model-generated shell
     /// commands.
-    #[arg(long = "sandbox", short = 's')]
+    #[arg(long = "sandbox", short = 's', value_enum)]
     pub sandbox_mode: Option<codex_common::SandboxModeCliArg>,
 
     /// Configuration profile from config.toml to specify default options.
@@ -31,6 +34,7 @@ pub struct Cli {
     /// EXTREMELY DANGEROUS. Intended solely for running in environments that are externally sandboxed.
     #[arg(
         long = "dangerously-bypass-approvals-and-sandbox",
+        alias = "yolo",
         default_value_t = false,
         conflicts_with = "full_auto"
     )]

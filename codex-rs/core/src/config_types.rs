@@ -5,11 +5,9 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
-use strum_macros::Display;
 use wildmatch::WildMatchPattern;
 
 use serde::Deserialize;
-use serde::Serialize;
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
@@ -20,6 +18,10 @@ pub struct McpServerConfig {
 
     #[serde(default)]
     pub env: Option<HashMap<String, String>>,
+
+    /// Startup timeout in milliseconds for initializing MCP server & initially listing tools.
+    #[serde(default)]
+    pub startup_timeout_ms: Option<u64>,
 }
 
 #[derive(Deserialize, Debug, Copy, Clone, PartialEq)]
@@ -76,41 +78,29 @@ pub enum HistoryPersistence {
 
 /// Collection of settings that are specific to the TUI.
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
-pub struct Tui {
-    /// By default, mouse capture is enabled in the TUI so that it is possible
-    /// to scroll the conversation history with a mouse. This comes at the cost
-    /// of not being able to use the mouse to select text in the TUI.
-    /// (Most terminals support a modifier key to allow this. For example,
-    /// text selection works in iTerm if you hold down the `Option` key while
-    /// clicking and dragging.)
-    ///
-    /// Setting this option to `true` disables mouse capture, so scrolling with
-    /// the mouse is not possible, though the keyboard shortcuts e.g. `b` and
-    /// `space` still work. This allows the user to select text in the TUI
-    /// using the mouse without needing to hold down a modifier key.
-    pub disable_mouse_capture: bool,
-}
-
-#[derive(Deserialize, Debug, Clone, Copy, PartialEq, Default)]
-#[serde(rename_all = "kebab-case")]
-pub enum SandboxMode {
-    #[serde(rename = "read-only")]
-    #[default]
-    ReadOnly,
-
-    #[serde(rename = "workspace-write")]
-    WorkspaceWrite,
-
-    #[serde(rename = "danger-full-access")]
-    DangerFullAccess,
-}
+pub struct Tui {}
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
-pub struct SandboxWorkplaceWrite {
+pub struct SandboxWorkspaceWrite {
     #[serde(default)]
     pub writable_roots: Vec<PathBuf>,
     #[serde(default)]
     pub network_access: bool,
+    #[serde(default)]
+    pub exclude_tmpdir_env_var: bool,
+    #[serde(default)]
+    pub exclude_slash_tmp: bool,
+}
+
+impl From<SandboxWorkspaceWrite> for codex_protocol::mcp_protocol::SandboxSettings {
+    fn from(sandbox_workspace_write: SandboxWorkspaceWrite) -> Self {
+        Self {
+            writable_roots: sandbox_workspace_write.writable_roots,
+            network_access: Some(sandbox_workspace_write.network_access),
+            exclude_tmpdir_env_var: Some(sandbox_workspace_write.exclude_tmpdir_env_var),
+            exclude_slash_tmp: Some(sandbox_workspace_write.exclude_slash_tmp),
+        }
+    }
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
@@ -118,10 +108,10 @@ pub struct SandboxWorkplaceWrite {
 pub enum ShellEnvironmentPolicyInherit {
     /// "Core" environment variables for the platform. On UNIX, this would
     /// include HOME, LOGNAME, PATH, SHELL, and USER, among others.
-    #[default]
     Core,
 
     /// Inherits the full environment from the parent process.
+    #[default]
     All,
 
     /// Do not inherit any environment variables from the parent process.
@@ -143,6 +133,8 @@ pub struct ShellEnvironmentPolicyToml {
 
     /// List of regular expressions.
     pub include_only: Option<Vec<String>>,
+
+    pub experimental_use_profile: Option<bool>,
 }
 
 pub type EnvironmentVariablePattern = WildMatchPattern<'*', '?'>;
@@ -171,11 +163,15 @@ pub struct ShellEnvironmentPolicy {
 
     /// Environment variable names to retain in the environment.
     pub include_only: Vec<EnvironmentVariablePattern>,
+
+    /// If true, the shell profile will be used to run the command.
+    pub use_profile: bool,
 }
 
 impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
     fn from(toml: ShellEnvironmentPolicyToml) -> Self {
-        let inherit = toml.inherit.unwrap_or(ShellEnvironmentPolicyInherit::Core);
+        // Default to inheriting the full environment when not specified.
+        let inherit = toml.inherit.unwrap_or(ShellEnvironmentPolicyInherit::All);
         let ignore_default_excludes = toml.ignore_default_excludes.unwrap_or(false);
         let exclude = toml
             .exclude
@@ -190,6 +186,7 @@ impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
             .into_iter()
             .map(|s| EnvironmentVariablePattern::new_case_insensitive(&s))
             .collect();
+        let use_profile = toml.experimental_use_profile.unwrap_or(false);
 
         Self {
             inherit,
@@ -197,34 +194,15 @@ impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
             exclude,
             r#set,
             include_only,
+            use_profile,
         }
     }
 }
 
-/// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#get-started-with-reasoning
-#[derive(Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq, Display)]
-#[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase")]
-pub enum ReasoningEffort {
-    Low,
+#[derive(Deserialize, Debug, Clone, PartialEq, Eq, Default, Hash)]
+#[serde(rename_all = "kebab-case")]
+pub enum ReasoningSummaryFormat {
     #[default]
-    Medium,
-    High,
-    /// Option to disable reasoning.
     None,
-}
-
-/// A summary of the reasoning performed by the model. This can be useful for
-/// debugging and understanding the model's reasoning process.
-/// See https://platform.openai.com/docs/guides/reasoning?api-mode=responses#reasoning-summaries
-#[derive(Debug, Serialize, Deserialize, Default, Clone, Copy, PartialEq, Eq, Display)]
-#[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase")]
-pub enum ReasoningSummary {
-    #[default]
-    Auto,
-    Concise,
-    Detailed,
-    /// Option to disable reasoning summaries.
-    None,
+    Experimental,
 }

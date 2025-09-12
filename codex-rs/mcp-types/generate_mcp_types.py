@@ -1,22 +1,30 @@
 #!/usr/bin/env python3
 # flake8: noqa: E501
 
+import argparse
 import json
 import subprocess
 import sys
+import tempfile
 
 from dataclasses import (
     dataclass,
 )
+from difflib import unified_diff
 from pathlib import Path
+from shutil import copy2
 
 # Helper first so it is defined when other functions call it.
 from typing import Any, Literal
 
-SCHEMA_VERSION = "2025-03-26"
+
+SCHEMA_VERSION = "2025-06-18"
 JSONRPC_VERSION = "2.0"
 
-STANDARD_DERIVE = "#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]\n"
+STANDARD_DERIVE = "#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]\n"
+STANDARD_HASHABLE_DERIVE = (
+    "#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, Hash, Eq, TS)]\n"
+)
 
 # Will be populated with the schema's `definitions` map in `main()` so that
 # helper functions (for example `define_any_of`) can perform look-ups while
@@ -26,21 +34,44 @@ DEFINITIONS: dict[str, Any] = {}
 CLIENT_REQUEST_TYPE_NAMES: list[str] = []
 # Concrete *Notification types that make up the ServerNotification enum.
 SERVER_NOTIFICATION_TYPE_NAMES: list[str] = []
+# Enum types that will need a `allow(clippy::large_enum_variant)` annotation in
+# order to compile without warnings.
+LARGE_ENUMS = {"ServerResult"}
 
 
 def main() -> int:
-    num_args = len(sys.argv)
-    if num_args == 1:
-        schema_file = (
-            Path(__file__).resolve().parent / "schema" / SCHEMA_VERSION / "schema.json"
-        )
-    elif num_args == 2:
-        schema_file = Path(sys.argv[1])
-    else:
-        print("Usage: python3 codegen.py <schema.json>")
-        return 1
+    parser = argparse.ArgumentParser(
+        description="Embed, cluster and analyse text prompts via the OpenAI API.",
+    )
 
-    lib_rs = Path(__file__).resolve().parent / "src/lib.rs"
+    default_schema_file = (
+        Path(__file__).resolve().parent / "schema" / SCHEMA_VERSION / "schema.json"
+    )
+    default_lib_rs = Path(__file__).resolve().parent / "src/lib.rs"
+    parser.add_argument(
+        "schema_file",
+        nargs="?",
+        default=default_schema_file,
+        help="schema.json file to process",
+    )
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Regenerate lib.rs in a sandbox and ensure the checked-in file matches",
+    )
+    args = parser.parse_args()
+    schema_file = Path(args.schema_file)
+    crate_dir = Path(__file__).resolve().parent
+
+    if args.check:
+        return run_check(schema_file, crate_dir, default_lib_rs)
+
+    generate_lib_rs(schema_file, default_lib_rs, fmt=True)
+    return 0
+
+
+def generate_lib_rs(schema_file: Path, lib_rs: Path, fmt: bool) -> None:
+    lib_rs.parent.mkdir(parents=True, exist_ok=True)
 
     global DEFINITIONS  # Allow helper functions to access the schema.
 
@@ -62,6 +93,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use std::convert::TryFrom;
+
+use ts_rs::TS;
 
 pub const MCP_SCHEMA_VERSION: &str = "{SCHEMA_VERSION}";
 pub const JSONRPC_VERSION: &str = "{JSONRPC_VERSION}";
@@ -103,9 +136,7 @@ fn default_jsonrpc() -> String {{ JSONRPC_VERSION.to_owned() }}
 
     for req_name in CLIENT_REQUEST_TYPE_NAMES:
         defn = definitions[req_name]
-        method_const = (
-            defn.get("properties", {}).get("method", {}).get("const", req_name)
-        )
+        method_const = defn.get("properties", {}).get("method", {}).get("const", req_name)
         payload_type = f"<{req_name} as ModelContextProtocolRequest>::Params"
         try_from_impl_lines.append(f'            "{method_const}" => {{\n')
         try_from_impl_lines.append(
@@ -114,9 +145,7 @@ fn default_jsonrpc() -> String {{ JSONRPC_VERSION.to_owned() }}
         try_from_impl_lines.append(
             f"                let params: {payload_type} = serde_json::from_value(params_json)?;\n"
         )
-        try_from_impl_lines.append(
-            f"                Ok(ClientRequest::{req_name}(params))\n"
-        )
+        try_from_impl_lines.append(f"                Ok(ClientRequest::{req_name}(params))\n")
         try_from_impl_lines.append("            },\n")
 
     try_from_impl_lines.append(
@@ -130,9 +159,7 @@ fn default_jsonrpc() -> String {{ JSONRPC_VERSION.to_owned() }}
 
     # Generate TryFrom for ServerNotification
     notif_impl_lines: list[str] = []
-    notif_impl_lines.append(
-        "impl TryFrom<JSONRPCNotification> for ServerNotification {\n"
-    )
+    notif_impl_lines.append("impl TryFrom<JSONRPCNotification> for ServerNotification {\n")
     notif_impl_lines.append("    type Error = serde_json::Error;\n")
     notif_impl_lines.append(
         "    fn try_from(n: JSONRPCNotification) -> std::result::Result<Self, Self::Error> {\n"
@@ -141,9 +168,7 @@ fn default_jsonrpc() -> String {{ JSONRPC_VERSION.to_owned() }}
 
     for notif_name in SERVER_NOTIFICATION_TYPE_NAMES:
         n_def = definitions[notif_name]
-        method_const = (
-            n_def.get("properties", {}).get("method", {}).get("const", notif_name)
-        )
+        method_const = n_def.get("properties", {}).get("method", {}).get("const", notif_name)
         payload_type = f"<{notif_name} as ModelContextProtocolNotification>::Params"
         notif_impl_lines.append(f'            "{method_const}" => {{\n')
         # params may be optional
@@ -153,9 +178,7 @@ fn default_jsonrpc() -> String {{ JSONRPC_VERSION.to_owned() }}
         notif_impl_lines.append(
             f"                let params: {payload_type} = serde_json::from_value(params_json)?;\n"
         )
-        notif_impl_lines.append(
-            f"                Ok(ServerNotification::{notif_name}(params))\n"
-        )
+        notif_impl_lines.append(f"                Ok(ServerNotification::{notif_name}(params))\n")
         notif_impl_lines.append("            },\n")
 
     notif_impl_lines.append(
@@ -171,13 +194,70 @@ fn default_jsonrpc() -> String {{ JSONRPC_VERSION.to_owned() }}
         for chunk in out:
             f.write(chunk)
 
-    subprocess.check_call(
-        ["cargo", "fmt", "--", "--config", "imports_granularity=Item"],
-        cwd=lib_rs.parent.parent,
-        stderr=subprocess.DEVNULL,
-    )
+    if fmt:
+        subprocess.check_call(
+            ["cargo", "fmt", "--", "--config", "imports_granularity=Item"],
+            cwd=lib_rs.parent.parent,
+            stderr=subprocess.DEVNULL,
+        )
 
-    return 0
+
+def run_check(schema_file: Path, crate_dir: Path, checked_in_lib: Path) -> int:
+    config_path = crate_dir.parent / "rustfmt.toml"
+    eprint(f"Running --check with schema {schema_file}")
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_path = Path(tmp_dir)
+        eprint(f"Created temporary workspace at {tmp_path}")
+        manifest_path = tmp_path / "Cargo.toml"
+        eprint(f"Copying Cargo.toml into {manifest_path}")
+        copy2(crate_dir / "Cargo.toml", manifest_path)
+        manifest_text = manifest_path.read_text(encoding="utf-8")
+        manifest_text = manifest_text.replace(
+            "version = { workspace = true }",
+            'version = "0.0.0"',
+        )
+        manifest_text = manifest_text.replace("\n[lints]\nworkspace = true\n", "\n")
+        manifest_path.write_text(manifest_text, encoding="utf-8")
+        src_dir = tmp_path / "src"
+        src_dir.mkdir(parents=True, exist_ok=True)
+        eprint(f"Generating lib.rs into {src_dir}")
+        generated_lib = src_dir / "lib.rs"
+
+        generate_lib_rs(schema_file, generated_lib, fmt=False)
+
+        eprint("Formatting generated lib.rs with rustfmt")
+        subprocess.check_call(
+            [
+                "rustfmt",
+                "--config-path",
+                str(config_path),
+                str(generated_lib),
+            ],
+            cwd=tmp_path,
+            stderr=subprocess.DEVNULL,
+        )
+
+        eprint("Comparing generated lib.rs with checked-in version")
+        checked_in_contents = checked_in_lib.read_text(encoding="utf-8")
+        generated_contents = generated_lib.read_text(encoding="utf-8")
+
+        if checked_in_contents == generated_contents:
+            eprint("lib.rs matches checked-in version")
+            return 0
+
+        diff = unified_diff(
+            checked_in_contents.splitlines(keepends=True),
+            generated_contents.splitlines(keepends=True),
+            fromfile=str(checked_in_lib),
+            tofile=str(generated_lib),
+        )
+        diff_text = "".join(diff)
+        eprint("Generated lib.rs does not match the checked-in version. Diff:")
+        if diff_text:
+            eprint(diff_text, end="")
+        eprint("Re-run generate_mcp_types.py without --check to update src/lib.rs.")
+        return 1
 
 
 def add_definition(name: str, definition: dict[str, Any], out: list[str]) -> None:
@@ -197,6 +277,8 @@ def add_definition(name: str, definition: dict[str, Any], out: list[str]) -> Non
         if name.endswith("Result"):
             out.extend(f"impl From<{name}> for serde_json::Value {{\n")
             out.append(f"    fn from(value: {name}) -> Self {{\n")
+            out.append("        // Leave this as it should never fail\n")
+            out.append("        #[expect(clippy::unwrap_used)]\n")
             out.append("        serde_json::to_value(value).unwrap()\n")
             out.append("    }\n")
             out.append("}\n\n")
@@ -211,20 +293,7 @@ def add_definition(name: str, definition: dict[str, Any], out: list[str]) -> Non
     any_of = definition.get("anyOf", [])
     if any_of:
         assert isinstance(any_of, list)
-        if name == "JSONRPCMessage":
-            # Special case for JSONRPCMessage because its definition in the
-            # JSON schema does not quite match how we think about this type
-            # definition in Rust.
-            deep_copied_any_of = json.loads(json.dumps(any_of))
-            deep_copied_any_of[2] = {
-                "$ref": "#/definitions/JSONRPCBatchRequest",
-            }
-            deep_copied_any_of[5] = {
-                "$ref": "#/definitions/JSONRPCBatchResponse",
-            }
-            out.extend(define_any_of(name, deep_copied_any_of, description))
-        else:
-            out.extend(define_any_of(name, any_of, description))
+        out.extend(define_any_of(name, any_of, description))
         return
 
     type_prop = definition.get("type", None)
@@ -262,8 +331,11 @@ class StructField:
     name: str
     type_name: str
     serde: str | None = None
+    comment: str | None = None
 
     def append(self, out: list[str], supports_const: bool) -> None:
+        if self.comment:
+            out.append(f"    // {self.comment}\n")
         if self.serde:
             out.append(f"    {self.serde}\n")
         if self.viz == "const":
@@ -308,6 +380,18 @@ def define_struct(
             fields.append(StructField("const", rs_prop.name, prop_type, rs_prop.serde))
         else:
             fields.append(StructField("pub", rs_prop.name, prop_type, rs_prop.serde))
+
+    # Special-case: add Codex-specific user_agent to Implementation
+    if name == "Implementation":
+        fields.append(
+            StructField(
+                "pub",
+                "user_agent",
+                "Option<String>",
+                '#[serde(default, skip_serializing_if = "Option::is_none")]',
+                "This is an extra field that the Codex MCP server sends as part of InitializeResult.",
+            )
+        )
 
     if implements_request_trait(name):
         add_trait_impl(name, "ModelContextProtocolRequest", fields, out)
@@ -393,7 +477,7 @@ def define_string_enum(
 
 
 def define_untagged_enum(name: str, type_list: list[str], out: list[str]) -> None:
-    out.append(STANDARD_DERIVE)
+    out.append(STANDARD_HASHABLE_DERIVE)
     out.append("#[serde(untagged)]\n")
     out.append(f"pub enum {name} {{\n")
     for simple_type in type_list:
@@ -403,15 +487,11 @@ def define_untagged_enum(name: str, type_list: list[str], out: list[str]) -> Non
             case "integer":
                 out.append("    Integer(i64),\n")
             case _:
-                raise ValueError(
-                    f"Unknown type in untagged enum: {simple_type} in {name}"
-                )
+                raise ValueError(f"Unknown type in untagged enum: {simple_type} in {name}")
     out.append("}\n\n")
 
 
-def define_any_of(
-    name: str, list_of_refs: list[Any], description: str | None = None
-) -> list[str]:
+def define_any_of(name: str, list_of_refs: list[Any], description: str | None = None) -> list[str]:
     """Generate a Rust enum for a JSON-Schema `anyOf` union.
 
     For most types we simply map each `$ref` inside the `anyOf` list to a
@@ -439,6 +519,8 @@ def define_any_of(
     if serde := get_serde_annotation_for_anyof_type(name):
         out.append(serde + "\n")
 
+    if name in LARGE_ENUMS:
+        out.append("#[allow(clippy::large_enum_variant)]\n")
     out.append(f"pub enum {name} {{\n")
 
     if name == "ClientRequest":
@@ -474,9 +556,7 @@ def define_any_of(
             if name == "ClientRequest":
                 payload_type = f"<{ref_name} as ModelContextProtocolRequest>::Params"
             else:
-                payload_type = (
-                    f"<{ref_name} as ModelContextProtocolNotification>::Params"
-                )
+                payload_type = f"<{ref_name} as ModelContextProtocolNotification>::Params"
 
             # Determine the wire value for `method` so we can annotate the
             # variant appropriately. If for some reason the schema does not
@@ -484,9 +564,7 @@ def define_any_of(
             # least compile (although deserialization will likely fail).
             request_def = DEFINITIONS.get(ref_name, {})
             method_const = (
-                request_def.get("properties", {})
-                .get("method", {})
-                .get("const", ref_name)
+                request_def.get("properties", {}).get("method", {}).get("const", ref_name)
             )
 
             out.append(f'    #[serde(rename = "{method_const}")]\n')
@@ -536,7 +614,7 @@ def map_type(
     if type_prop == "string":
         if const_prop := typedef.get("const", None):
             assert isinstance(const_prop, str)
-            return f'&\'static str = "{const_prop    }"'
+            return f'&\'static str = "{const_prop}"'
         else:
             return "String"
     elif type_prop == "integer":
@@ -596,6 +674,8 @@ def rust_prop_name(name: str, is_optional: bool) -> RustProp:
         prop_name = "r#type"
     elif name == "ref":
         prop_name = "r#ref"
+    elif name == "enum":
+        prop_name = "r#enum"
     elif snake_case := to_snake_case(name):
         prop_name = snake_case
         is_rename = True
@@ -610,7 +690,7 @@ def rust_prop_name(name: str, is_optional: bool) -> RustProp:
         serde_annotations.append('skip_serializing_if = "Option::is_none"')
 
     if serde_annotations:
-        serde_str = f'#[serde({", ".join(serde_annotations)})]'
+        serde_str = f"#[serde({', '.join(serde_annotations)})]"
     else:
         serde_str = None
     return RustProp(prop_name, serde_str)
@@ -618,9 +698,7 @@ def rust_prop_name(name: str, is_optional: bool) -> RustProp:
 
 def to_snake_case(name: str) -> str:
     """Convert a camelCase or PascalCase name to snake_case."""
-    snake_case = name[0].lower() + "".join(
-        "_" + c.lower() if c.isupper() else c for c in name[1:]
-    )
+    snake_case = name[0].lower() + "".join("_" + c.lower() if c.isupper() else c for c in name[1:])
     if snake_case != name:
         return snake_case
     else:
@@ -654,6 +732,10 @@ def emit_doc_comment(text: str | None, out: list[str]) -> None:
         return
     for line in text.strip().split("\n"):
         out.append(f"/// {line.rstrip()}\n")
+
+
+def eprint(*args: Any, **kwargs: Any) -> None:
+    print(*args, file=sys.stderr, **kwargs)
 
 
 if __name__ == "__main__":

@@ -1,16 +1,23 @@
 [package]
+edition = "2024"
 name = "codex-login"
 version = { workspace = true }
-edition = "2024"
 
 [lints]
 workspace = true
 
 [dependencies]
+base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
-reqwest = { version = "0.12", features = ["json"] }
+codex-core = { path = "../core" }
+codex-protocol = { path = "../protocol" }
+rand = "0.8"
+reqwest = { version = "0.12", features = ["json", "blocking"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
+tempfile = "3"
+tiny_http = "0.12"
 tokio = { version = "1", features = [
     "io-std",
     "macros",
@@ -18,3 +25,9 @@ tokio = { version = "1", features = [
     "rt-multi-thread",
     "signal",
 ] }
+url = "2"
+urlencoding = "2.1"
+webbrowser = "1.0"
+
+[dev-dependencies]
+tempfile = "3"

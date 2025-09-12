@@ -1,0 +1,20 @@
+---
+source: tui/src/history_cell.rs
+expression: rendered
+---
+• Updated Plan
+  └ I’ll update Grafana call
+    error handling by adding
+    retries and clearer
+    messages when the backend is
+    unreachable.
+    ✔ Investigate existing error
+      paths and logging around
+      HTTP timeouts
+    □ Harden Grafana client
+      error handling with retry/
+      backoff and user‑friendly
+      messages
+    □ Add tests for transient
+      failure scenarios and
+      surfacing to the UI

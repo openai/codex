@@ -88,7 +88,7 @@ impl ExecvChecker {
         let mut program = valid_exec.program.to_string();
         for system_path in valid_exec.system_path {
             if is_executable_file(&system_path) {
-                program = system_path.to_string();
+                program = system_path;
                 break;
             }
         }
@@ -140,7 +140,6 @@ fn is_executable_file(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
     use tempfile::TempDir;
 
     use super::*;
@@ -197,7 +196,7 @@ system_path=[{fake_cp:?}]
         let checker = setup(&fake_cp);
         let exec_call = ExecCall {
             program: "cp".into(),
-            args: vec![source.clone(), dest.clone()],
+            args: vec![source, dest.clone()],
         };
         let valid_exec = match checker.r#match(&exec_call)? {
             MatchedExec::Match { exec } => exec,
@@ -208,14 +207,19 @@ system_path=[{fake_cp:?}]
         assert_eq!(
             checker.check(valid_exec.clone(), &cwd, &[], &[]),
             Err(ReadablePathNotInReadableFolders {
-                file: source_path.clone(),
+                file: source_path,
                 folders: vec![]
             }),
         );
 
         // Only readable folders specified.
         assert_eq!(
-            checker.check(valid_exec.clone(), &cwd, &[root_path.clone()], &[]),
+            checker.check(
+                valid_exec.clone(),
+                &cwd,
+                std::slice::from_ref(&root_path),
+                &[]
+            ),
             Err(WriteablePathNotInWriteableFolders {
                 file: dest_path.clone(),
                 folders: vec![]
@@ -225,10 +229,10 @@ system_path=[{fake_cp:?}]
         // Both readable and writeable folders specified.
         assert_eq!(
             checker.check(
-                valid_exec.clone(),
+                valid_exec,
                 &cwd,
-                &[root_path.clone()],
-                &[root_path.clone()]
+                std::slice::from_ref(&root_path),
+                std::slice::from_ref(&root_path)
             ),
             Ok(cp.clone()),
         );
@@ -237,7 +241,7 @@ system_path=[{fake_cp:?}]
         // folders.
         let exec_call_folders_as_args = ExecCall {
             program: "cp".into(),
-            args: vec![root.clone(), root.clone()],
+            args: vec![root.clone(), root],
         };
         let valid_exec_call_folders_as_args = match checker.r#match(&exec_call_folders_as_args)? {
             MatchedExec::Match { exec } => exec,
@@ -247,10 +251,10 @@ system_path=[{fake_cp:?}]
             checker.check(
                 valid_exec_call_folders_as_args,
                 &cwd,
-                &[root_path.clone()],
-                &[root_path.clone()]
+                std::slice::from_ref(&root_path),
+                std::slice::from_ref(&root_path)
             ),
-            Ok(cp.clone()),
+            Ok(cp),
         );
 
         // Specify a parent of a readable folder as input.
@@ -270,8 +274,8 @@ system_path=[{fake_cp:?}]
             checker.check(
                 exec_with_parent_of_readable_folder,
                 &cwd,
-                &[root_path.clone()],
-                &[dest_path.clone()]
+                std::slice::from_ref(&root_path),
+                std::slice::from_ref(&dest_path)
             ),
             Err(ReadablePathNotInReadableFolders {
                 file: root_path.parent().unwrap().to_path_buf(),

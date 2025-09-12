@@ -12,6 +12,7 @@
 //! issue requests and receive strongly-typed results.
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI64;
 use std::sync::atomic::Ordering;
@@ -82,8 +83,8 @@ impl McpClient {
     /// Caller is responsible for sending the `initialize` request. See
     /// [`initialize`](Self::initialize) for details.
     pub async fn new_stdio_client(
-        program: String,
-        args: Vec<String>,
+        program: OsString,
+        args: Vec<OsString>,
         env: Option<HashMap<String, String>>,
     ) -> std::io::Result<Self> {
         let mut child = Command::new(program)
@@ -128,10 +129,7 @@ impl McpClient {
                                 error!("failed to write newline to child stdin");
                                 break;
                             }
-                            if stdin.flush().await.is_err() {
-                                error!("failed to flush child stdin");
-                                break;
-                            }
+                            // No explicit flush needed on a pipe; write_all is sufficient.
                         }
                         Err(e) => error!("failed to serialize JSONRPCMessage: {e}"),
                     }
@@ -364,7 +362,11 @@ impl McpClient {
             }
         };
 
-        if let Some(tx) = pending.lock().await.remove(&id) {
+        let tx_opt = {
+            let mut guard = pending.lock().await;
+            guard.remove(&id)
+        };
+        if let Some(tx) = tx_opt {
             // Ignore send errors – the receiver might have been dropped.
             let _ = tx.send(JSONRPCMessage::Response(resp));
         } else {
@@ -382,7 +384,11 @@ impl McpClient {
             RequestId::String(_) => return, // see comment above
         };
 
-        if let Some(tx) = pending.lock().await.remove(&id) {
+        let tx_opt = {
+            let mut guard = pending.lock().await;
+            guard.remove(&id)
+        };
+        if let Some(tx) = tx_opt {
             let _ = tx.send(JSONRPCMessage::Error(err));
         }
     }

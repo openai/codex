@@ -1,0 +1,13 @@
+[package]
+name = "core_test_support"
+version = { workspace = true }
+edition = "2024"
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+codex-core = { path = "../.." }
+serde_json = "1"
+tempfile = "3"
+tokio = { version = "1", features = ["time"] }

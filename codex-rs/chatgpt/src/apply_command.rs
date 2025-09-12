@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::Parser;
 use codex_common::CliConfigOverrides;
 use codex_core::config::Config;
@@ -17,7 +19,10 @@ pub struct ApplyCommand {
     #[clap(flatten)]
     pub config_overrides: CliConfigOverrides,
 }
-pub async fn run_apply_command(apply_cli: ApplyCommand) -> anyhow::Result<()> {
+pub async fn run_apply_command(
+    apply_cli: ApplyCommand,
+    cwd: Option<PathBuf>,
+) -> anyhow::Result<()> {
     let config = Config::load_with_cli_overrides(
         apply_cli
             .config_overrides
@@ -29,10 +34,13 @@ pub async fn run_apply_command(apply_cli: ApplyCommand) -> anyhow::Result<()> {
     init_chatgpt_token_from_auth(&config.codex_home).await?;
 
     let task_response = get_task(&config, apply_cli.task_id).await?;
-    apply_diff_from_task(task_response).await
+    apply_diff_from_task(task_response, cwd).await
 }
 
-pub async fn apply_diff_from_task(task_response: GetTaskResponse) -> anyhow::Result<()> {
+pub async fn apply_diff_from_task(
+    task_response: GetTaskResponse,
+    cwd: Option<PathBuf>,
+) -> anyhow::Result<()> {
     let diff_turn = match task_response.current_diff_task_turn {
         Some(turn) => turn,
         None => anyhow::bail!("No diff turn found"),
@@ -42,13 +50,17 @@ pub async fn apply_diff_from_task(task_response: GetTaskResponse) -> anyhow::Res
         _ => None,
     });
     match output_diff {
-        Some(output_diff) => apply_diff(&output_diff.diff).await,
+        Some(output_diff) => apply_diff(&output_diff.diff, cwd).await,
         None => anyhow::bail!("No PR output item found"),
     }
 }
 
-async fn apply_diff(diff: &str) -> anyhow::Result<()> {
-    let toplevel_output = tokio::process::Command::new("git")
+async fn apply_diff(diff: &str, cwd: Option<PathBuf>) -> anyhow::Result<()> {
+    let mut cmd = tokio::process::Command::new("git");
+    if let Some(cwd) = cwd {
+        cmd.current_dir(cwd);
+    }
+    let toplevel_output = cmd
         .args(vec!["rev-parse", "--show-toplevel"])
         .output()
         .await?;

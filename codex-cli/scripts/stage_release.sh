@@ -7,18 +7,8 @@
 # Usage:
 #
 #   --tmp <dir>  : Use <dir> instead of a freshly created temp directory.
-#   --native     : Bundle the pre-built Rust CLI binaries for Linux alongside
-#                  the JavaScript implementation (a so-called "fat" package).
 #   -h|--help    : Print usage.
 #
-# When --native is supplied we copy the linux-sandbox binaries (as before) and
-# additionally fetch / unpack the two Rust targets that we currently support:
-#   - x86_64-unknown-linux-musl
-#   - aarch64-unknown-linux-musl
-#
-# NOTE: This script is intended to be run from the repository root via
-#       `pnpm --filter codex-cli stage-release ...` or inside codex-cli with the
-#       helper script entry in package.json (`pnpm stage-release ...`).
 # -----------------------------------------------------------------------------
 
 set -euo pipefail
@@ -27,11 +17,10 @@ set -euo pipefail
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [--tmp DIR] [--native] [--version VERSION]
+Usage: $(basename "$0") [--tmp DIR] [--version VERSION]
 
 Options
   --tmp DIR   Use DIR to stage the release (defaults to a fresh mktemp dir)
-  --native    Bundle Rust binaries for Linux (fat package)
   --version   Specify the version to release (defaults to a timestamp-based version)
   -h, --help  Show this help
 
@@ -42,7 +31,6 @@ EOF
 }
 
 TMPDIR=""
-INCLUDE_NATIVE=0
 # Default to a timestamp-based version (keep same scheme as before)
 VERSION="$(printf '0.1.%d' "$(date +%y%m%d%H%M)")"
 WORKFLOW_URL=""
@@ -56,9 +44,6 @@ while [[ $# -gt 0 ]]; do
       ;;
     --tmp=*)
       TMPDIR="${1#*=}"
-      ;;
-    --native)
-      INCLUDE_NATIVE=1
       ;;
     --version)
       shift || { echo "--version requires an argument"; usage 1; }
@@ -106,15 +91,10 @@ pushd "$CODEX_CLI_ROOT" >/dev/null
 
 # 1. Build the JS artifacts ---------------------------------------------------
 
-pnpm install
-pnpm build
-
 # Paths inside the staged package
 mkdir -p "$TMPDIR/bin"
 
 cp -r bin/codex.js "$TMPDIR/bin/codex.js"
-cp -r dist "$TMPDIR/dist"
-cp -r src "$TMPDIR/src" # keep source for TS sourcemaps
 cp ../README.md "$TMPDIR" || true # README is one level up - ignore if missing
 
 # Modify package.json - bump version and optionally add the native directory to
@@ -126,29 +106,15 @@ jq --arg version "$VERSION" \
 
 # 2. Native runtime deps (sandbox plus optional Rust binaries)
 
-if [[ "$INCLUDE_NATIVE" -eq 1 ]]; then
-  ./scripts/install_native_deps.sh --full-native --workflow-url "$WORKFLOW_URL" "$TMPDIR"
-  touch "${TMPDIR}/bin/use-native"
-else
-  ./scripts/install_native_deps.sh "$TMPDIR"
-fi
+./scripts/install_native_deps.sh --workflow-url "$WORKFLOW_URL" "$TMPDIR"
 
 popd >/dev/null
 
 echo "Staged version $VERSION for release in $TMPDIR"
 
-if [[ "$INCLUDE_NATIVE" -eq 1 ]]; then
-  echo "Verify the CLI:"
-  echo "    node ${TMPDIR}/bin/codex.js --version"
-  echo "    node ${TMPDIR}/bin/codex.js --help"
-else
-  echo "Test Node:"
-  echo "    node ${TMPDIR}/bin/codex.js --help"
-fi
+echo "Verify the CLI:"
+echo "    node ${TMPDIR}/bin/codex.js --version"
+echo "    node ${TMPDIR}/bin/codex.js --help"
 
 # Print final hint for convenience
-if [[ "$INCLUDE_NATIVE" -eq 1 ]]; then
-  echo "Next:  cd \"$TMPDIR\" && npm publish --tag native"
-else
-  echo "Next:  cd \"$TMPDIR\" && npm publish"
-fi
+echo "Next:  cd \"$TMPDIR\" && npm publish"
