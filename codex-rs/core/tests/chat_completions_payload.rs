@@ -343,3 +343,19 @@ async fn suppresses_duplicate_assistant_messages() {
         Value::String("dup".into())
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn includes_stream_options_with_include_usage() {
+    if network_disabled() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+        );
+        return;
+    }
+
+    let body = run_request(vec![user_message("test")]).await;
+    // Verify that stream_options is present and includes include_usage: true
+    assert_eq!(body["stream"], Value::Bool(true));
+    assert!(body["stream_options"].is_object());
+    assert_eq!(body["stream_options"]["include_usage"], Value::Bool(true));
+}
