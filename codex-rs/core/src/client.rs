@@ -193,6 +193,15 @@ impl ModelClient {
             None
         };
 
+        // In general, we want to explicitly send `store: false` when using the Responses API,
+        // but in practice, the Azure Responses API rejects `store: false`:
+        //
+        // - If store = false and id is sent an error is thrown that ID is not found
+        // - If store = false and id is not sent an error is thrown that ID is required
+        //
+        // For Azure, we send `store: true` and preserve reasoning item IDs.
+        let azure_workaround = self.provider.is_azure_responses_endpoint();
+
         let payload = ResponsesApiRequest {
             model: &self.config.model,
             instructions: &full_instructions,
@@ -201,12 +210,18 @@ impl ModelClient {
             tool_choice: "auto",
             parallel_tool_calls: false,
             reasoning,
-            store: false,
+            store: azure_workaround,
             stream: true,
             include,
             prompt_cache_key: Some(self.conversation_id.to_string()),
             text,
         };
+
+        let mut payload_json = serde_json::to_value(&payload)?;
+        if azure_workaround {
+            attach_item_ids(&mut payload_json, &input_with_instructions);
+        }
+        let payload_body = serde_json::to_string(&payload_json)?;
 
         let mut attempt = 0;
         let max_retries = self.provider.request_max_retries();
@@ -220,7 +235,7 @@ impl ModelClient {
             trace!(
                 "POST to {}: {}",
                 self.provider.get_full_url(&auth),
-                serde_json::to_string(&payload)?
+                payload_body.as_str()
             );
 
             let mut req_builder = self
@@ -234,7 +249,7 @@ impl ModelClient {
                 .header("conversation_id", self.conversation_id.to_string())
                 .header("session_id", self.conversation_id.to_string())
                 .header(reqwest::header::ACCEPT, "text/event-stream")
-                .json(&payload);
+                .json(&payload_json);
 
             if let Some(auth) = auth.as_ref()
                 && auth.mode == AuthMode::ChatGPT
@@ -429,6 +444,27 @@ struct ResponseCompletedInputTokensDetails {
 #[derive(Debug, Deserialize)]
 struct ResponseCompletedOutputTokensDetails {
     reasoning_tokens: u64,
+}
+
+fn attach_item_ids(payload_json: &mut Value, original_items: &[ResponseItem]) {
+    let Some(input_value) = payload_json.get_mut("input") else {
+        return;
+    };
+    let serde_json::Value::Array(items) = input_value else {
+        return;
+    };
+
+    for (value, item) in items.iter_mut().zip(original_items.iter()) {
+        if let ResponseItem::Reasoning { id, .. } = item {
+            if id.is_empty() {
+                continue;
+            }
+
+            if let Some(obj) = value.as_object_mut() {
+                obj.insert("id".to_string(), Value::String(id.clone()));
+            }
+        }
+    }
 }
 
 async fn process_sse<S>(
