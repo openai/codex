@@ -587,26 +587,6 @@ mod tests {
     }
 
     #[cfg(unix)]
-    #[tokio::test]
-    async fn correct_path_resolution() -> Result<(), UnifiedExecError> {
-        let manager = UnifiedExecSessionManager::default();
-        let result = manager
-            .handle_request(UnifiedExecRequest {
-                session_id: None,
-                input_chunks: &["echo".to_string(), "codex".to_string()],
-                timeout_ms: Some(1_500),
-            })
-            .await?;
-
-        assert!(result.session_id.is_none());
-        assert!(result.output.contains("codex"));
-
-        assert!(manager.sessions.lock().await.is_empty());
-
-        Ok(())
-    }
-
-    #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn reusing_completed_session_returns_unknown_session() -> Result<(), UnifiedExecError> {
         let manager = UnifiedExecSessionManager::default();

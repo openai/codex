@@ -8,7 +8,6 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
-use codex_protocol::mcp_protocol::AuthMode;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::wait_for_event;
@@ -490,79 +489,6 @@ async fn chatgpt_auth_sends_correct_request() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn prefers_chatgpt_token_when_config_prefers_chatgpt() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
-
-    // Mock server
-    let server = MockServer::start().await;
-
-    let first = ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_raw(sse_completed("resp1"), "text/event-stream");
-
-    // Expect ChatGPT base path and correct headers
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .and(header_regex("Authorization", r"Bearer Access-123"))
-        .and(header_regex("chatgpt-account-id", r"acc-123"))
-        .respond_with(first)
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
-
-    // Init session
-    let codex_home = TempDir::new().unwrap();
-    // Write auth.json that contains both API key and ChatGPT tokens for a plan that should prefer ChatGPT.
-    let _jwt = write_auth_json(
-        &codex_home,
-        Some("sk-test-key"),
-        "pro",
-        "Access-123",
-        Some("acc-123"),
-    );
-
-    let mut config = load_default_config_for_test(&codex_home);
-    config.model_provider = model_provider;
-    config.preferred_auth_method = AuthMode::ChatGPT;
-
-    let auth_manager =
-        match CodexAuth::from_codex_home(codex_home.path(), config.preferred_auth_method) {
-            Ok(Some(auth)) => codex_core::AuthManager::from_auth_for_testing(auth),
-            Ok(None) => panic!("No CodexAuth found in codex_home"),
-            Err(e) => panic!("Failed to load CodexAuth: {e}"),
-        };
-    let conversation_manager = ConversationManager::new(auth_manager);
-    let NewConversation {
-        conversation: codex,
-        ..
-    } = conversation_manager
-        .new_conversation(config)
-        .await
-        .expect("create new conversation");
-
-    codex
-        .submit(Op::UserInput {
-            items: vec![InputItem::Text {
-                text: "hello".into(),
-            }],
-        })
-        .await
-        .unwrap();
-
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
@@ -606,14 +532,12 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
 
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = model_provider;
-    config.preferred_auth_method = AuthMode::ApiKey;
 
-    let auth_manager =
-        match CodexAuth::from_codex_home(codex_home.path(), config.preferred_auth_method) {
-            Ok(Some(auth)) => codex_core::AuthManager::from_auth_for_testing(auth),
-            Ok(None) => panic!("No CodexAuth found in codex_home"),
-            Err(e) => panic!("Failed to load CodexAuth: {e}"),
-        };
+    let auth_manager = match CodexAuth::from_codex_home(codex_home.path()) {
+        Ok(Some(auth)) => codex_core::AuthManager::from_auth_for_testing(auth),
+        Ok(None) => panic!("No CodexAuth found in codex_home"),
+        Err(e) => panic!("Failed to load CodexAuth: {e}"),
+    };
     let conversation_manager = ConversationManager::new(auth_manager);
     let NewConversation {
         conversation: codex,

@@ -15,11 +15,11 @@ use crate::model_provider_info::built_in_model_providers;
 use crate::openai_model_info::get_model_info;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
+use anyhow::Context;
 use codex_protocol::config_types::ReasoningEffort;
 use codex_protocol::config_types::ReasoningSummary;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::config_types::Verbosity;
-use codex_protocol::mcp_protocol::AuthMode;
 use codex_protocol::mcp_protocol::Tools;
 use codex_protocol::mcp_protocol::UserSavedConfig;
 use dirs::home_dir;
@@ -32,6 +32,7 @@ use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
 
 const OPENAI_DEFAULT_MODEL: &str = "gpt-5";
+pub const GPT5_HIGH_MODEL: &str = "gpt-5-high";
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
@@ -129,9 +130,6 @@ pub struct Config {
     /// output will be hyperlinked using the specified URI scheme.
     pub file_opener: UriBasedFileOpener,
 
-    /// Collection of settings that are specific to the TUI.
-    pub tui: Tui,
-
     /// Path to the `codex-linux-sandbox` executable. This must be set if
     /// [`crate::exec::SandboxType::LinuxSeccomp`] is used. Note that this
     /// cannot be set in the config file: it must be set in code via
@@ -166,9 +164,6 @@ pub struct Config {
     pub include_apply_patch_tool: bool,
 
     pub tools_web_search_request: bool,
-
-    /// If set to `true`, the API key will be signed with the `originator` header.
-    pub preferred_auth_method: AuthMode,
 
     pub use_experimental_streamable_shell_tool: bool,
 
@@ -355,6 +350,107 @@ pub fn set_project_trusted(codex_home: &Path, project_path: &Path) -> anyhow::Re
     Ok(())
 }
 
+fn ensure_profile_table<'a>(
+    doc: &'a mut DocumentMut,
+    profile_name: &str,
+) -> anyhow::Result<&'a mut toml_edit::Table> {
+    let mut created_profiles_table = false;
+    {
+        let root = doc.as_table_mut();
+        let needs_table = !root.contains_key("profiles")
+            || root
+                .get("profiles")
+                .and_then(|item| item.as_table())
+                .is_none();
+        if needs_table {
+            root.insert("profiles", toml_edit::table());
+            created_profiles_table = true;
+        }
+    }
+
+    let Some(profiles_table) = doc["profiles"].as_table_mut() else {
+        return Err(anyhow::anyhow!(
+            "profiles table missing after initialization"
+        ));
+    };
+
+    if created_profiles_table {
+        profiles_table.set_implicit(true);
+    }
+
+    let needs_profile_table = !profiles_table.contains_key(profile_name)
+        || profiles_table
+            .get(profile_name)
+            .and_then(|item| item.as_table())
+            .is_none();
+    if needs_profile_table {
+        profiles_table.insert(profile_name, toml_edit::table());
+    }
+
+    let Some(profile_table) = profiles_table
+        .get_mut(profile_name)
+        .and_then(|item| item.as_table_mut())
+    else {
+        return Err(anyhow::anyhow!(format!(
+            "profile table missing for {profile_name}"
+        )));
+    };
+
+    profile_table.set_implicit(false);
+    Ok(profile_table)
+}
+
+// TODO(jif) refactor config persistence.
+pub async fn persist_model_selection(
+    codex_home: &Path,
+    active_profile: Option<&str>,
+    model: &str,
+    effort: Option<ReasoningEffort>,
+) -> anyhow::Result<()> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let serialized = match tokio::fs::read_to_string(&config_path).await {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(err.into()),
+    };
+
+    let mut doc = if serialized.is_empty() {
+        DocumentMut::new()
+    } else {
+        serialized.parse::<DocumentMut>()?
+    };
+
+    if let Some(profile_name) = active_profile {
+        let profile_table = ensure_profile_table(&mut doc, profile_name)?;
+        profile_table["model"] = toml_edit::value(model);
+        if let Some(effort) = effort {
+            profile_table["model_reasoning_effort"] = toml_edit::value(effort.to_string());
+        }
+    } else {
+        let table = doc.as_table_mut();
+        table["model"] = toml_edit::value(model);
+        if let Some(effort) = effort {
+            table["model_reasoning_effort"] = toml_edit::value(effort.to_string());
+        }
+    }
+
+    // TODO(jif) refactor the home creation
+    tokio::fs::create_dir_all(codex_home)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to create Codex home directory at {}",
+                codex_home.display()
+            )
+        })?;
+
+    tokio::fs::write(&config_path, doc.to_string())
+        .await
+        .with_context(|| format!("failed to persist config.toml at {}", config_path.display()))?;
+
+    Ok(())
+}
+
 /// Apply a single dotted-path override onto a TOML value.
 fn apply_toml_override(root: &mut TomlValue, path: &str, value: TomlValue) {
     use toml::value::Table;
@@ -399,7 +495,7 @@ fn apply_toml_override(root: &mut TomlValue, path: &str, value: TomlValue) {
 }
 
 /// Base config deserialized from ~/.codex/config.toml.
-#[derive(Deserialize, Debug, Clone, Default)]
+#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ConfigToml {
     /// Optional override of model selection.
     pub model: Option<String>,
@@ -494,9 +590,6 @@ pub struct ConfigToml {
 
     pub projects: Option<HashMap<String, ProjectConfig>>,
 
-    /// If set to `true`, the API key will be signed with the `originator` header.
-    pub preferred_auth_method: Option<AuthMode>,
-
     /// Nested tools section for feature toggles
     pub tools: Option<ToolsToml>,
 
@@ -534,7 +627,7 @@ pub struct ProjectConfig {
     pub trust_level: Option<String>,
 }
 
-#[derive(Deserialize, Debug, Clone, Default)]
+#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ToolsToml {
     #[serde(default, alias = "web_search_request")]
     pub web_search: Option<bool>,
@@ -811,7 +904,6 @@ impl Config {
             codex_home,
             history,
             file_opener: cfg.file_opener.unwrap_or(UriBasedFileOpener::VsCode),
-            tui: cfg.tui.unwrap_or_default(),
             codex_linux_sandbox_exe,
 
             hide_agent_reasoning: cfg.hide_agent_reasoning.unwrap_or(false),
@@ -837,13 +929,12 @@ impl Config {
             include_plan_tool: include_plan_tool.unwrap_or(false),
             include_apply_patch_tool: include_apply_patch_tool.unwrap_or(false),
             tools_web_search_request,
-            preferred_auth_method: cfg.preferred_auth_method.unwrap_or(AuthMode::ChatGPT),
             use_experimental_streamable_shell_tool: cfg
                 .experimental_use_exec_command_tool
                 .unwrap_or(false),
             use_experimental_unified_exec_tool: cfg
                 .experimental_use_unified_exec_tool
-                .unwrap_or(true),
+                .unwrap_or(false),
             include_view_image_tool,
             active_profile: active_profile_name,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
@@ -956,6 +1047,7 @@ mod tests {
 
     use super::*;
     use pretty_assertions::assert_eq;
+
     use tempfile::TempDir;
 
     #[test]
@@ -1044,6 +1136,145 @@ exclude_slash_tmp = true
             },
             sandbox_workspace_write_cfg.derive_sandbox_policy(sandbox_mode_override)
         );
+    }
+
+    #[tokio::test]
+    async fn persist_model_selection_updates_defaults() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        persist_model_selection(
+            codex_home.path(),
+            None,
+            "gpt-5-high-new",
+            Some(ReasoningEffort::High),
+        )
+        .await?;
+
+        let serialized =
+            tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        assert_eq!(parsed.model.as_deref(), Some("gpt-5-high-new"));
+        assert_eq!(parsed.model_reasoning_effort, Some(ReasoningEffort::High));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persist_model_selection_overwrites_existing_model() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+
+        tokio::fs::write(
+            &config_path,
+            r#"
+model = "gpt-5"
+model_reasoning_effort = "medium"
+
+[profiles.dev]
+model = "gpt-4.1"
+"#,
+        )
+        .await?;
+
+        persist_model_selection(
+            codex_home.path(),
+            None,
+            "o4-mini",
+            Some(ReasoningEffort::High),
+        )
+        .await?;
+
+        let serialized = tokio::fs::read_to_string(config_path).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        assert_eq!(parsed.model.as_deref(), Some("o4-mini"));
+        assert_eq!(parsed.model_reasoning_effort, Some(ReasoningEffort::High));
+        assert_eq!(
+            parsed
+                .profiles
+                .get("dev")
+                .and_then(|profile| profile.model.as_deref()),
+            Some("gpt-4.1"),
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persist_model_selection_updates_profile() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        persist_model_selection(
+            codex_home.path(),
+            Some("dev"),
+            "gpt-5-high-new",
+            Some(ReasoningEffort::Low),
+        )
+        .await?;
+
+        let serialized =
+            tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+        let profile = parsed
+            .profiles
+            .get("dev")
+            .expect("profile should be created");
+
+        assert_eq!(profile.model.as_deref(), Some("gpt-5-high-new"));
+        assert_eq!(profile.model_reasoning_effort, Some(ReasoningEffort::Low));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn persist_model_selection_updates_existing_profile() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+        let config_path = codex_home.path().join(CONFIG_TOML_FILE);
+
+        tokio::fs::write(
+            &config_path,
+            r#"
+[profiles.dev]
+model = "gpt-4"
+model_reasoning_effort = "medium"
+
+[profiles.prod]
+model = "gpt-5"
+"#,
+        )
+        .await?;
+
+        persist_model_selection(
+            codex_home.path(),
+            Some("dev"),
+            "o4-high",
+            Some(ReasoningEffort::Medium),
+        )
+        .await?;
+
+        let serialized = tokio::fs::read_to_string(config_path).await?;
+        let parsed: ConfigToml = toml::from_str(&serialized)?;
+
+        let dev_profile = parsed
+            .profiles
+            .get("dev")
+            .expect("dev profile should survive updates");
+        assert_eq!(dev_profile.model.as_deref(), Some("o4-high"));
+        assert_eq!(
+            dev_profile.model_reasoning_effort,
+            Some(ReasoningEffort::Medium)
+        );
+
+        assert_eq!(
+            parsed
+                .profiles
+                .get("prod")
+                .and_then(|profile| profile.model.as_deref()),
+            Some("gpt-5"),
+        );
+
+        Ok(())
     }
 
     struct PrecedenceTestFixture {
@@ -1204,7 +1435,6 @@ model_verbosity = "high"
                 codex_home: fixture.codex_home(),
                 history: History::default(),
                 file_opener: UriBasedFileOpener::VsCode,
-                tui: Tui::default(),
                 codex_linux_sandbox_exe: None,
                 hide_agent_reasoning: false,
                 show_raw_agent_reasoning: false,
@@ -1217,9 +1447,8 @@ model_verbosity = "high"
                 include_plan_tool: false,
                 include_apply_patch_tool: false,
                 tools_web_search_request: false,
-                preferred_auth_method: AuthMode::ChatGPT,
                 use_experimental_streamable_shell_tool: false,
-                use_experimental_unified_exec_tool: true,
+                use_experimental_unified_exec_tool: false,
                 include_view_image_tool: true,
                 active_profile: Some("o3".to_string()),
                 disable_paste_burst: false,
@@ -1262,7 +1491,6 @@ model_verbosity = "high"
             codex_home: fixture.codex_home(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
-            tui: Tui::default(),
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
@@ -1275,9 +1503,8 @@ model_verbosity = "high"
             include_plan_tool: false,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
-            preferred_auth_method: AuthMode::ChatGPT,
             use_experimental_streamable_shell_tool: false,
-            use_experimental_unified_exec_tool: true,
+            use_experimental_unified_exec_tool: false,
             include_view_image_tool: true,
             active_profile: Some("gpt3".to_string()),
             disable_paste_burst: false,
@@ -1335,7 +1562,6 @@ model_verbosity = "high"
             codex_home: fixture.codex_home(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
-            tui: Tui::default(),
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
@@ -1348,9 +1574,8 @@ model_verbosity = "high"
             include_plan_tool: false,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
-            preferred_auth_method: AuthMode::ChatGPT,
             use_experimental_streamable_shell_tool: false,
-            use_experimental_unified_exec_tool: true,
+            use_experimental_unified_exec_tool: false,
             include_view_image_tool: true,
             active_profile: Some("zdr".to_string()),
             disable_paste_burst: false,
@@ -1394,7 +1619,6 @@ model_verbosity = "high"
             codex_home: fixture.codex_home(),
             history: History::default(),
             file_opener: UriBasedFileOpener::VsCode,
-            tui: Tui::default(),
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
@@ -1407,9 +1631,8 @@ model_verbosity = "high"
             include_plan_tool: false,
             include_apply_patch_tool: false,
             tools_web_search_request: false,
-            preferred_auth_method: AuthMode::ChatGPT,
             use_experimental_streamable_shell_tool: false,
-            use_experimental_unified_exec_tool: true,
+            use_experimental_unified_exec_tool: false,
             include_view_image_tool: true,
             active_profile: Some("gpt5".to_string()),
             disable_paste_burst: false,

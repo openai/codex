@@ -9,5 +9,6 @@ mod interrupt;
 mod list_resume;
 mod login;
 mod send_message;
+mod set_default_model;
 mod user_agent;
 mod user_info;

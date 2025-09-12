@@ -42,7 +42,7 @@ impl ServerOptions {
     pub fn new(codex_home: PathBuf, client_id: String) -> Self {
         Self {
             codex_home,
-            client_id: client_id.to_string(),
+            client_id,
             issuer: DEFAULT_ISSUER.to_string(),
             port: DEFAULT_PORT,
             open_browser: true,
@@ -126,7 +126,7 @@ pub fn run_login_server(opts: ServerOptions) -> io::Result<LoginServer> {
     let shutdown_notify = Arc::new(tokio::sync::Notify::new());
     let server_handle = {
         let shutdown_notify = shutdown_notify.clone();
-        let server = server.clone();
+        let server = server;
         tokio::spawn(async move {
             let result = loop {
                 tokio::select! {

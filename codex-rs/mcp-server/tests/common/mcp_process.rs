@@ -18,11 +18,13 @@ use codex_protocol::mcp_protocol::CancelLoginChatGptParams;
 use codex_protocol::mcp_protocol::GetAuthStatusParams;
 use codex_protocol::mcp_protocol::InterruptConversationParams;
 use codex_protocol::mcp_protocol::ListConversationsParams;
+use codex_protocol::mcp_protocol::LoginApiKeyParams;
 use codex_protocol::mcp_protocol::NewConversationParams;
 use codex_protocol::mcp_protocol::RemoveConversationListenerParams;
 use codex_protocol::mcp_protocol::ResumeConversationParams;
 use codex_protocol::mcp_protocol::SendUserMessageParams;
 use codex_protocol::mcp_protocol::SendUserTurnParams;
+use codex_protocol::mcp_protocol::SetDefaultModelParams;
 
 use mcp_types::CallToolRequestParams;
 use mcp_types::ClientCapabilities;
@@ -300,6 +302,15 @@ impl McpProcess {
         self.send_request("userInfo", None).await
     }
 
+    /// Send a `setDefaultModel` JSON-RPC request.
+    pub async fn send_set_default_model_request(
+        &mut self,
+        params: SetDefaultModelParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("setDefaultModel", params).await
+    }
+
     /// Send a `listConversations` JSON-RPC request.
     pub async fn send_list_conversations_request(
         &mut self,
@@ -316,6 +327,15 @@ impl McpProcess {
     ) -> anyhow::Result<i64> {
         let params = Some(serde_json::to_value(params)?);
         self.send_request("resumeConversation", params).await
+    }
+
+    /// Send a `loginApiKey` JSON-RPC request.
+    pub async fn send_login_api_key_request(
+        &mut self,
+        params: LoginApiKeyParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("loginApiKey", params).await
     }
 
     /// Send a `loginChatGpt` JSON-RPC request.
