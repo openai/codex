@@ -95,6 +95,10 @@ enum ActivePopup {
     File(FileSearchPopup),
 }
 
+const FOOTER_HINT_HEIGHT: u16 = 1;
+const FOOTER_SPACING_HEIGHT: u16 = 1;
+const FOOTER_HEIGHT_WITH_HINT: u16 = FOOTER_HINT_HEIGHT + FOOTER_SPACING_HEIGHT;
+
 impl ChatComposer {
     pub fn new(
         has_input_focus: bool,
@@ -134,20 +138,20 @@ impl ChatComposer {
     pub fn desired_height(&self, width: u16) -> u16 {
         self.textarea.desired_height(width - 1)
             + match &self.active_popup {
-                ActivePopup::None => 1u16,
+                ActivePopup::None => FOOTER_HEIGHT_WITH_HINT,
                 ActivePopup::Command(c) => c.calculate_required_height(),
                 ActivePopup::File(c) => c.calculate_required_height(),
             }
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        let popup_height = match &self.active_popup {
-            ActivePopup::Command(popup) => popup.calculate_required_height(),
-            ActivePopup::File(popup) => popup.calculate_required_height(),
-            ActivePopup::None => 1,
+        let popup_constraint = match &self.active_popup {
+            ActivePopup::Command(popup) => Constraint::Max(popup.calculate_required_height()),
+            ActivePopup::File(popup) => Constraint::Max(popup.calculate_required_height()),
+            ActivePopup::None => Constraint::Max(FOOTER_HEIGHT_WITH_HINT),
         };
         let [textarea_rect, _] =
-            Layout::vertical([Constraint::Min(1), Constraint::Max(popup_height)]).areas(area);
+            Layout::vertical([Constraint::Min(1), popup_constraint]).areas(area);
         let mut textarea_rect = textarea_rect;
         textarea_rect.width = textarea_rect.width.saturating_sub(1);
         textarea_rect.x += 1;
@@ -1223,13 +1227,16 @@ impl ChatComposer {
 
 impl WidgetRef for ChatComposer {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let popup_height = match &self.active_popup {
-            ActivePopup::Command(popup) => popup.calculate_required_height(),
-            ActivePopup::File(popup) => popup.calculate_required_height(),
-            ActivePopup::None => 1,
+        let (popup_constraint, hint_spacing) = match &self.active_popup {
+            ActivePopup::Command(popup) => (Constraint::Max(popup.calculate_required_height()), 0),
+            ActivePopup::File(popup) => (Constraint::Max(popup.calculate_required_height()), 0),
+            ActivePopup::None => (
+                Constraint::Length(FOOTER_HEIGHT_WITH_HINT),
+                FOOTER_SPACING_HEIGHT,
+            ),
         };
         let [textarea_rect, popup_rect] =
-            Layout::vertical([Constraint::Min(1), Constraint::Max(popup_height)]).areas(area);
+            Layout::vertical([Constraint::Min(1), popup_constraint]).areas(area);
         match &self.active_popup {
             ActivePopup::Command(popup) => {
                 popup.render_ref(popup_rect, buf);
@@ -1238,7 +1245,16 @@ impl WidgetRef for ChatComposer {
                 popup.render_ref(popup_rect, buf);
             }
             ActivePopup::None => {
-                let bottom_line_rect = popup_rect;
+                let hint_rect = if hint_spacing > 0 {
+                    let [_, hint_rect] = Layout::vertical([
+                        Constraint::Length(hint_spacing),
+                        Constraint::Length(FOOTER_HINT_HEIGHT),
+                    ])
+                    .areas(popup_rect);
+                    hint_rect
+                } else {
+                    popup_rect
+                };
                 let mut hint: Vec<Span<'static>> = if self.ctrl_c_quit_hint {
                     let ctrl_c_followup = if self.is_task_running {
                         " to interrupt"
@@ -1309,7 +1325,7 @@ impl WidgetRef for ChatComposer {
 
                 Line::from(hint)
                     .style(Style::default().dim())
-                    .render_ref(bottom_line_rect, buf);
+                    .render_ref(hint_rect, buf);
             }
         }
         let border_style = if self.has_focus {
@@ -1344,6 +1360,7 @@ mod tests {
     use super::*;
     use image::ImageBuffer;
     use image::Rgba;
+    use pretty_assertions::assert_eq;
     use std::path::PathBuf;
     use tempfile::tempdir;
 
@@ -1355,6 +1372,60 @@ mod tests {
     use crate::bottom_pane::chat_composer::LARGE_PASTE_CHAR_THRESHOLD;
     use crate::bottom_pane::textarea::TextArea;
     use tokio::sync::mpsc::unbounded_channel;
+
+    #[test]
+    fn footer_hint_row_is_separated_from_composer() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let area = Rect::new(0, 0, 40, 6);
+        let mut buf = Buffer::empty(area);
+        composer.render_ref(area, &mut buf);
+
+        let row_to_string = |y: u16| {
+            let mut row = String::new();
+            for x in 0..area.width {
+                row.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
+            }
+            row
+        };
+
+        let mut hint_row: Option<(u16, String)> = None;
+        for y in 0..area.height {
+            let row = row_to_string(y);
+            if row.contains(" send") {
+                hint_row = Some((y, row));
+                break;
+            }
+        }
+
+        let (hint_row_idx, hint_row_contents) =
+            hint_row.expect("expected footer hint row to be rendered");
+        assert_eq!(
+            hint_row_idx,
+            area.height - 1,
+            "hint row should occupy the bottom line: {hint_row_contents:?}",
+        );
+
+        assert!(
+            hint_row_idx > 0,
+            "expected a spacing row above the footer hints",
+        );
+
+        let spacing_row = row_to_string(hint_row_idx - 1);
+        assert_eq!(
+            spacing_row.trim(),
+            "",
+            "expected blank spacing row above hints but saw: {spacing_row:?}",
+        );
+    }
 
     #[test]
     fn test_current_at_token_basic_cases() {
