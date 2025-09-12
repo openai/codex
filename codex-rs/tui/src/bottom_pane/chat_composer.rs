@@ -148,7 +148,7 @@ impl ChatComposer {
         let popup_constraint = match &self.active_popup {
             ActivePopup::Command(popup) => Constraint::Max(popup.calculate_required_height()),
             ActivePopup::File(popup) => Constraint::Max(popup.calculate_required_height()),
-            ActivePopup::None => Constraint::Length(FOOTER_HEIGHT_WITH_HINT),
+            ActivePopup::None => Constraint::Max(FOOTER_HEIGHT_WITH_HINT),
         };
         let [textarea_rect, _] =
             Layout::vertical([Constraint::Min(1), popup_constraint]).areas(area);
