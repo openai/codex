@@ -350,7 +350,7 @@ impl PagerView {
 pub(crate) struct TranscriptOverlay {
     view: PagerView,
     cells: Vec<Arc<dyn HistoryCell>>,
-    highlight_cell: Option<Arc<dyn HistoryCell>>,
+    highlight_cell: Option<usize>,
     is_done: bool,
 }
 
@@ -358,7 +358,7 @@ impl TranscriptOverlay {
     pub(crate) fn new(transcript_cells: Vec<Arc<dyn HistoryCell>>) -> Self {
         Self {
             view: PagerView::new(
-                Self::render_cells_to_texts(&transcript_cells, &None),
+                Self::render_cells_to_texts(&transcript_cells, None),
                 "T R A N S C R I P T".to_string(),
                 usize::MAX,
             ),
@@ -370,18 +370,16 @@ impl TranscriptOverlay {
 
     fn render_cells_to_texts(
         cells: &[Arc<dyn HistoryCell>],
-        highlight_cell: &Option<Arc<dyn HistoryCell>>,
+        highlight_cell: Option<usize>,
     ) -> Vec<Text<'static>> {
         let mut texts: Vec<Text<'static>> = Vec::new();
         let mut first = true;
-        for cell in cells {
+        for (idx, cell) in cells.iter().enumerate() {
             let mut lines: Vec<Line<'static>> = Vec::new();
             if !cell.is_stream_continuation() && !first {
                 lines.push(Line::from(""));
             }
-            let cell_lines = if let Some(highlight_cell) = highlight_cell
-                && Arc::ptr_eq(cell, highlight_cell)
-            {
+            let cell_lines = if Some(idx) == highlight_cell {
                 cell.transcript_lines()
                     .into_iter()
                     .map(|l| l.reversed())
@@ -412,13 +410,11 @@ impl TranscriptOverlay {
         }
     }
 
-    pub(crate) fn set_highlight_cell(&mut self, cell: Option<Arc<dyn HistoryCell>>) {
+    pub(crate) fn set_highlight_cell(&mut self, cell: Option<usize>) {
         self.highlight_cell = cell;
         self.view.wrap_cache = None;
-        self.view.texts = Self::render_cells_to_texts(&self.cells, &self.highlight_cell);
-        if let Some(target) = &self.highlight_cell
-            && let Some(idx) = self.cells.iter().position(|c| Arc::ptr_eq(c, target))
-        {
+        self.view.texts = Self::render_cells_to_texts(&self.cells, self.highlight_cell);
+        if let Some(idx) = self.highlight_cell {
             self.view.scroll_chunk_into_view(idx);
         }
     }

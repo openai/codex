@@ -194,11 +194,11 @@ impl App {
             let cell = self
                 .transcript_cells
                 .iter()
-                .filter(|c| c.as_any().is::<UserHistoryCell>())
+                .enumerate()
+                .filter(|(_, c)| c.as_any().is::<UserHistoryCell>())
                 .nth(nth_user_message);
-            tracing::info!("cell: {:?}", cell);
-            if let Some(cell) = cell {
-                t.set_highlight_cell(Some(cell.clone()));
+            if let Some((idx, _)) = cell {
+                t.set_highlight_cell(Some(idx));
             }
         }
     }
