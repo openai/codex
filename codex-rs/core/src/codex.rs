@@ -3238,10 +3238,7 @@ mod tests {
         let (rollout_items, expected) = sample_rollout(&session, &turn_context);
 
         tokio_test::block_on(
-            session.record_initial_history(
-                &turn_context,
-                InitialHistory::Forked(rollout_items.clone()),
-            ),
+            session.record_initial_history(&turn_context, InitialHistory::Forked(rollout_items)),
         );
 
         let actual = session.state.lock_unchecked().history.contents();
