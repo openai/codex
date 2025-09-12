@@ -240,10 +240,10 @@ impl ModelClient {
             let res = req_builder.send().await;
             if let Ok(resp) = &res {
                 trace!(
-                    "Response status: {}, request-id: {}",
+                    "Response status: {}, cf-ray: {}",
                     resp.status(),
                     resp.headers()
-                        .get("x-request-id")
+                        .get("cf-ray")
                         .map(|v| v.to_str().unwrap_or_default())
                         .unwrap_or_default()
                 );
