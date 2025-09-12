@@ -853,18 +853,6 @@ impl InitialHistory {
             InitialHistory::Forked(items) => items.clone(),
         }
     }
-    pub fn get_last_compact_index(&self) -> Option<usize> {
-        match self {
-            InitialHistory::New => None,
-            InitialHistory::Resumed(resumed) => resumed
-                .history
-                .iter()
-                .rposition(|ri| matches!(ri, RolloutItem::Compacted(_))),
-            InitialHistory::Forked(items) => items
-                .iter()
-                .rposition(|ri| matches!(ri, RolloutItem::Compacted(_))),
-        }
-    }
 
     pub fn get_event_msgs(&self) -> Option<Vec<EventMsg>> {
         match self {
