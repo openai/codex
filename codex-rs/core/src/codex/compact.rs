@@ -18,7 +18,6 @@ use crate::protocol::EventMsg;
 use crate::protocol::InputItem;
 use crate::protocol::TaskCompleteEvent;
 use crate::protocol::TaskStartedEvent;
-use crate::protocol::TokenCountEvent;
 use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnContextItem;
@@ -135,8 +134,7 @@ async fn run_compact_task_inner(
     sess.persist_rollout_items(&[rollout_item]).await;
 
     loop {
-        let attempt_result =
-            drain_to_completed(&sess, turn_context.as_ref(), &sub_id, &prompt).await;
+        let attempt_result = drain_to_completed(&sess, turn_context.as_ref(), &prompt).await;
 
         match attempt_result {
             Ok(()) => {
@@ -186,7 +184,6 @@ async fn run_compact_task_inner(
     {
         let mut state = sess.state.lock_unchecked();
         state.history.replace(new_history);
-        state.token_info = None;
     }
 
     let rollout_item = RolloutItem::Compacted(CompactedItem {
@@ -311,7 +308,6 @@ fn build_compacted_history(
 async fn drain_to_completed(
     sess: &Session,
     turn_context: &TurnContext,
-    sub_id: &str,
     prompt: &Prompt,
 ) -> CodexResult<()> {
     let mut stream = turn_context.client.clone().stream(prompt).await?;
