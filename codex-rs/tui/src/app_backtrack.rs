@@ -98,7 +98,6 @@ impl App {
         base_id: ConversationId,
         nth_user_message: usize,
     ) {
-        tracing::info!("request_backtrack: {}", nth_user_message);
         self.backtrack.pending = Some((base_id, nth_user_message, prefill));
         self.app_event_tx.send(crate::app_event::AppEvent::CodexOp(
             codex_core::protocol::Op::GetPath,
@@ -166,7 +165,6 @@ impl App {
             .filter_map(|c| c.as_any().downcast_ref::<UserHistoryCell>())
             .count() as i64
             - 1;
-        tracing::info!("last_user_cell_position: {}", last_user_cell_position);
         if last_user_cell_position >= 0 {
             self.apply_backtrack_selection(last_user_cell_position as usize);
         }
@@ -217,7 +215,6 @@ impl App {
     /// Handle Enter in overlay backtrack preview: confirm selection and reset state.
     fn overlay_confirm_backtrack(&mut self, tui: &mut tui::Tui) {
         let nth_user_message = self.backtrack.nth_user_message;
-        tracing::info!("overlay_confirm_backtrack: {}", nth_user_message);
         if let Some(base_id) = self.backtrack.base_id {
             let user_cells = self
                 .transcript_cells
@@ -247,10 +244,6 @@ impl App {
     /// Confirm a primed backtrack from the main view (no overlay visible).
     /// Computes the prefill from the selected user message and requests history.
     pub(crate) fn confirm_backtrack_from_main(&mut self) {
-        tracing::info!(
-            "confirm_backtrack_from_main: {}",
-            self.backtrack.nth_user_message
-        );
         if let Some(base_id) = self.backtrack.base_id {
             let prefill = self
                 .transcript_cells
@@ -356,7 +349,6 @@ impl App {
 
     /// Trim transcript_cells to preserve only content up to the selected user message.
     fn trim_transcript_for_backtrack(&mut self, nth_user_message: usize) {
-        tracing::info!("trim_transcript_for_backtrack: {}", nth_user_message);
         let cut_idx = self
             .transcript_cells
             .iter()
@@ -370,7 +362,6 @@ impl App {
             })
             .nth(nth_user_message - 1)
             .unwrap_or(self.transcript_cells.len());
-        tracing::info!("cut_idx: {}", cut_idx);
         self.transcript_cells.truncate(cut_idx);
     }
 }
