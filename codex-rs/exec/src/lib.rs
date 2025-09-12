@@ -3,10 +3,6 @@ mod event_processor;
 mod event_processor_with_human_output;
 mod event_processor_with_json_output;
 
-use std::io::IsTerminal;
-use std::io::Read;
-use std::path::PathBuf;
-
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
 pub use cli::Cli;
@@ -16,7 +12,6 @@ use codex_core::ConversationManager;
 use codex_core::NewConversation;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
-use codex_core::config_types::OtelExporterKind;
 use codex_core::git_info::get_git_repo_root;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::Event;
@@ -28,10 +23,13 @@ use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
 use event_processor_with_human_output::EventProcessorWithHumanOutput;
 use event_processor_with_json_output::EventProcessorWithJsonOutput;
+use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
+use std::io::IsTerminal;
+use std::io::Read;
+use std::path::PathBuf;
 use tracing::debug;
 use tracing::error;
 use tracing::info;
-use tracing_opentelemetry::OpenTelemetryLayer;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::prelude::*;
 
@@ -183,10 +181,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     #[allow(clippy::print_stderr)]
     let otel = match otel {
         Ok(otel) => otel,
-        Err(e) if config.otel.exporter == OtelExporterKind::OtlpFile => {
-            eprintln!("Could not create trace log file: {e}");
-            std::process::exit(1);
-        }
         Err(e) => {
             eprintln!("Could not create otel exporter: {e}");
             std::process::exit(1);
@@ -194,8 +188,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     };
 
     if let Some(provider) = otel {
-        let tracer = provider.tracer();
-        let otel_layer = OpenTelemetryLayer::new(tracer).with_filter(
+        let otel_layer = OpenTelemetryTracingBridge::new(&provider.logger).with_filter(
             tracing_subscriber::filter::filter_fn(codex_core::otel_init::codex_export_filter),
         );
 

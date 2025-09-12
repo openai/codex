@@ -121,7 +121,9 @@ use crate::unified_exec::UnifiedExecSessionManager;
 use crate::user_instructions::UserInstructions;
 use crate::user_notification::UserNotification;
 use crate::util::backoff;
-use codex_otel::trace_manager::{ToolDecisionOutcome, ToolDecisionSource, TraceManager};
+use codex_otel::otel_event_manager::OtelEventManager;
+use codex_otel::otel_event_manager::ToolDecisionOutcome;
+use codex_otel::otel_event_manager::ToolDecisionSource;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::custom_prompts::CustomPrompt;
@@ -459,7 +461,7 @@ impl Session {
             }
         }
 
-        let trace_manager = TraceManager::new(
+        let otel_event_manager = OtelEventManager::new(
             conversation_id,
             config.model.as_str(),
             config.model_family.slug.as_str(),
@@ -474,7 +476,7 @@ impl Session {
         let client = ModelClient::new(
             config.clone(),
             Some(auth_manager.clone()),
-            trace_manager,
+            otel_event_manager,
             provider.clone(),
             model_reasoning_effort,
             model_reasoning_summary,
@@ -1188,6 +1190,13 @@ impl AgentTask {
     }
 }
 
+#[tracing::instrument(
+    name = "codex.conversation",
+    skip_all,
+    fields(
+        conversation.id = %sess.conversation_id,
+    )
+)]
 async fn submission_loop(
     sess: Arc<Session>,
     turn_context: TurnContext,
@@ -1238,7 +1247,7 @@ async fn submission_loop(
                     updated_config.model_context_window = Some(model_info.context_window);
                 }
 
-                let trace_manager = prev.client.get_trace_manager().with_model(
+                let otel_event_manager = prev.client.get_otel_event_manager().with_model(
                     updated_config.model.as_str(),
                     updated_config.model_family.slug.as_str(),
                 );
@@ -1246,7 +1255,7 @@ async fn submission_loop(
                 let client = ModelClient::new(
                     Arc::new(updated_config),
                     auth_manager,
-                    trace_manager,
+                    otel_event_manager,
                     provider,
                     effective_effort,
                     effective_summary,
@@ -1299,7 +1308,10 @@ async fn submission_loop(
                 }
             }
             Op::UserInput { items } => {
-                let _ = turn_context.client.get_trace_manager().user_prompt(&items);
+                turn_context
+                    .client
+                    .get_otel_event_manager()
+                    .user_prompt(&items);
                 // attempt to inject input into current task
                 if let Err(items) = sess.inject_input(items) {
                     // no current task, spawn a new one
@@ -1317,7 +1329,10 @@ async fn submission_loop(
                 effort,
                 summary,
             } => {
-                let _ = turn_context.client.get_trace_manager().user_prompt(&items);
+                turn_context
+                    .client
+                    .get_otel_event_manager()
+                    .user_prompt(&items);
                 // attempt to inject input into current task
                 if let Err(items) = sess.inject_input(items) {
                     // Derive a fresh TurnContext for this turn using the provided overrides.
@@ -1336,17 +1351,18 @@ async fn submission_loop(
                         per_turn_config.model_context_window = Some(model_info.context_window);
                     }
 
-                    let trace_manager = turn_context.client.get_trace_manager().with_model(
-                        per_turn_config.model.as_str(),
-                        per_turn_config.model_family.slug.as_str(),
-                    );
+                    let otel_event_manager =
+                        turn_context.client.get_otel_event_manager().with_model(
+                            per_turn_config.model.as_str(),
+                            per_turn_config.model_family.slug.as_str(),
+                        );
 
                     // Build a new client with per‑turn reasoning settings.
                     // Reuse the same provider and session id; auth defaults to env/API key.
                     let client = ModelClient::new(
                         Arc::new(per_turn_config),
                         auth_manager,
-                        trace_manager,
+                        otel_event_manager,
                         provider,
                         effort,
                         summary,
@@ -2730,7 +2746,7 @@ async fn handle_container_exec_with_params(
     sub_id: String,
     call_id: String,
 ) -> ResponseInputItem {
-    let trace_manager = turn_context.client.get_trace_manager();
+    let otel_event_manager = turn_context.client.get_otel_event_manager();
     let mut auto_approved_via_user = false;
 
     // check if this was a patch, and apply it if so
@@ -2834,11 +2850,7 @@ async fn handle_container_exec_with_params(
                 ToolDecisionSource::Config
             };
 
-            trace_manager.tool_decision(
-                tool_name,
-                ToolDecisionOutcome::Accept,
-                source,
-            );
+            otel_event_manager.tool_decision(tool_name, ToolDecisionOutcome::Accept, source);
 
             sandbox_type
         }
@@ -2854,14 +2866,14 @@ async fn handle_container_exec_with_params(
                 .await;
             match rx_approve.await.unwrap_or_default() {
                 ReviewDecision::Approved => {
-                    trace_manager.tool_decision(
+                    otel_event_manager.tool_decision(
                         tool_name,
                         ToolDecisionOutcome::Accept,
                         ToolDecisionSource::UserTemporary,
                     );
                 }
                 ReviewDecision::ApprovedForSession => {
-                    trace_manager.tool_decision(
+                    otel_event_manager.tool_decision(
                         tool_name,
                         ToolDecisionOutcome::Accept,
                         ToolDecisionSource::UserForSession,
@@ -2869,7 +2881,7 @@ async fn handle_container_exec_with_params(
                     sess.add_approved_command(params.command.clone());
                 }
                 ReviewDecision::Denied => {
-                    trace_manager.tool_decision(
+                    otel_event_manager.tool_decision(
                         tool_name,
                         ToolDecisionOutcome::Reject,
                         ToolDecisionSource::UserReject,
@@ -2883,7 +2895,7 @@ async fn handle_container_exec_with_params(
                     };
                 }
                 ReviewDecision::Abort => {
-                    trace_manager.tool_decision(
+                    otel_event_manager.tool_decision(
                         tool_name,
                         ToolDecisionOutcome::Reject,
                         ToolDecisionSource::UserAbort,
@@ -2904,7 +2916,7 @@ async fn handle_container_exec_with_params(
             SandboxType::None
         }
         SafetyCheck::Reject { reason } => {
-            trace_manager.tool_decision(
+            otel_event_manager.tool_decision(
                 tool_name,
                 ToolDecisionOutcome::Reject,
                 ToolDecisionSource::Config,

@@ -1,11 +1,8 @@
 pub mod config;
 
-#[cfg(feature = "otel")]
-mod file_exporter;
-
+pub mod otel_event_manager;
 #[cfg(feature = "otel")]
 pub mod otel_provider;
-pub mod trace_manager;
 
 #[cfg(not(feature = "otel"))]
 mod imp {

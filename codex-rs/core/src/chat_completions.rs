@@ -1,4 +1,5 @@
 use std::time::Duration;
+use std::time::Instant;
 
 use crate::ModelProviderInfo;
 use crate::client_common::Prompt;
@@ -10,7 +11,7 @@ use crate::model_family::ModelFamily;
 use crate::openai_tools::create_tools_json_for_chat_completions_api;
 use crate::util::backoff;
 use bytes::Bytes;
-use codex_otel::trace_manager::TraceManager;
+use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ResponseItem;
@@ -25,7 +26,6 @@ use std::task::Context;
 use std::task::Poll;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
-use tracing::Instrument;
 use tracing::debug;
 use tracing::trace;
 
@@ -35,7 +35,7 @@ pub(crate) async fn stream_chat_completions(
     model_family: &ModelFamily,
     client: &reqwest::Client,
     provider: &ModelProviderInfo,
-    trace_manager: &TraceManager,
+    otel_event_manager: &OtelEventManager,
 ) -> Result<ResponseStream> {
     // Build messages array
     let mut messages = Vec::<serde_json::Value>::new();
@@ -277,63 +277,61 @@ pub(crate) async fn stream_chat_completions(
         "tools": tools_json,
     });
 
-    debug!(
-        "POST to {}: {}",
-        provider.get_full_url(&None),
-        serde_json::to_string_pretty(&payload).unwrap_or_default()
-    );
+    let payload_str = serde_json::to_string_pretty(&payload).unwrap_or_default();
+
+    debug!("POST to {}: {}", provider.get_full_url(&None), payload_str);
 
     let mut attempt = 0;
     let max_retries = provider.request_max_retries();
     loop {
         attempt += 1;
 
-        let request_span = trace_manager.request(&prompt.input);
-
         let req_builder = provider.create_request_builder(client, &None).await?;
 
-        let tracing_headers = TraceManager::headers(&request_span);
+        let start = Instant::now();
 
         let res = req_builder
             .header(reqwest::header::ACCEPT, "text/event-stream")
-            .headers(tracing_headers)
             .json(&payload)
             .send()
-            .instrument(request_span.span())
             .await;
+
+        let request_id = if let Ok(resp) = &res {
+            Some(
+                resp.headers()
+                    .get("x-request-id")
+                    .map(|v| v.to_str().unwrap_or_default())
+                    .unwrap_or_default()
+                    .to_string(),
+            )
+        } else {
+            None
+        };
+
+        otel_event_manager.request(request_id, attempt, start.elapsed(), &res);
 
         match res {
             Ok(resp) if resp.status().is_success() => {
-                request_span.status_code(resp.status());
                 let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
                 let stream = resp.bytes_stream().map_err(CodexErr::Reqwest);
                 tokio::spawn(process_chat_sse(
                     stream,
                     tx_event,
                     provider.stream_idle_timeout(),
-                    trace_manager.clone(),
+                    otel_event_manager.clone(),
                 ));
                 return Ok(ResponseStream { rx_event });
             }
             Ok(res) => {
                 let status = res.status();
-                let mut log_message = status.to_string();
-                request_span.status_code(status);
                 if !(status == StatusCode::TOO_MANY_REQUESTS || status.is_server_error()) {
                     let body = (res.text().await).unwrap_or_default();
-                    if !body.is_empty() {
-                        log_message = format!("{log_message}: {body}");
-                    }
-                    request_span.error(attempt, Some(status), &log_message);
                     return Err(CodexErr::UnexpectedStatus(status, body));
                 }
 
                 if attempt > max_retries {
-                    request_span.error(attempt, Some(status), &log_message);
                     return Err(CodexErr::RetryLimit(status));
                 }
-
-                request_span.error(attempt, Some(status), &log_message);
 
                 let retry_after_secs = res
                     .headers()
@@ -347,8 +345,6 @@ pub(crate) async fn stream_chat_completions(
                 tokio::time::sleep(delay).await;
             }
             Err(e) => {
-                let error_message = format!("{e:#}");
-                request_span.error(attempt, None, &error_message);
                 if attempt > max_retries {
                     return Err(e.into());
                 }
@@ -366,7 +362,7 @@ async fn process_chat_sse<S>(
     stream: S,
     tx_event: mpsc::Sender<Result<ResponseEvent>>,
     idle_timeout: Duration,
-    trace_manager: TraceManager,
+    otel_event_manager: OtelEventManager,
 ) where
     S: Stream<Item = Result<Bytes>> + Unpin,
 {
@@ -389,14 +385,13 @@ async fn process_chat_sse<S>(
     let mut assistant_text = String::new();
     let mut reasoning_text = String::new();
 
-    let sse_span = trace_manager.response();
-
     loop {
-        let sse = match timeout(idle_timeout, stream.next().instrument(sse_span.span())).await {
+        let start = Instant::now();
+        let sse = match timeout(idle_timeout, stream.next()).await {
             Ok(Some(Ok(ev))) => ev,
             Ok(Some(Err(e))) => {
                 let error = e.to_string();
-                sse_span.error(error.as_str());
+                otel_event_manager.sse_event_failed(None, start.elapsed(), error.as_str());
                 let _ = tx_event.send(Err(CodexErr::Stream(error, None))).await;
                 return;
             }
@@ -412,7 +407,7 @@ async fn process_chat_sse<S>(
             }
             Err(_) => {
                 let error = "idle timeout waiting for SSE";
-                sse_span.error(error);
+                otel_event_manager.sse_event_failed(None, start.elapsed(), error);
                 let _ = tx_event
                     .send(Err(CodexErr::Stream(error.into(), None)))
                     .await;
@@ -420,10 +415,9 @@ async fn process_chat_sse<S>(
             }
         };
 
-        sse_span.body(sse.data.as_str());
-
         // OpenAI Chat streaming sends a literal string "[DONE]" when finished.
         if sse.data.trim() == "[DONE]" {
+            otel_event_manager.sse_event(sse.event, start.elapsed());
             // Emit any finalized items before closing so downstream consumers receive
             // terminal events for both assistant content and raw reasoning.
             if !assistant_text.is_empty() {
@@ -463,11 +457,12 @@ async fn process_chat_sse<S>(
             Ok(v) => v,
             Err(e) => {
                 let error = format!("Failed to parse SSE event: {e}, data: {}", &sse.data);
-                sse_span.error(error.as_str());
+                otel_event_manager.sse_event_failed(None, start.elapsed(), error.as_str());
                 continue;
             }
         };
         trace!("chat_completions received SSE chunk: {chunk:?}");
+        otel_event_manager.sse_event(sse.event, start.elapsed());
 
         let choice_opt = chunk.get("choices").and_then(|c| c.get(0));
 

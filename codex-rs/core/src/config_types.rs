@@ -92,7 +92,6 @@ pub enum OtelHttpProtocol {
 #[serde(rename_all = "kebab-case")]
 pub enum OtelExporterKind {
     None,
-    OtlpFile,
     OtlpHttp {
         endpoint: String,
         headers: HashMap<String, String>,
@@ -104,27 +103,14 @@ pub enum OtelExporterKind {
     },
 }
 
-#[derive(Deserialize, Debug, Clone, PartialEq)]
-#[serde(rename_all = "kebab-case")]
-pub enum OtelSampler {
-    AlwaysOn,
-    TraceIdRatioBased { ratio: f64 },
-}
-
 /// OTEL settings loaded from config.toml. Fields are optional so we can apply defaults.
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct OtelConfigToml {
-    /// Enable or disable OTEL entirely. Defaults to false.
-    pub enabled: Option<bool>,
-
     /// Log user prompt in traces
     pub log_user_prompt: Option<bool>,
 
     /// Mark traces with environment (dev, staging, prod, test). Defaults to dev.
     pub environment: Option<String>,
-
-    /// Sampler strategy, defaults to AlwaysOn
-    pub sampler: Option<OtelSampler>,
 
     /// Exporter to use. Defaults to `otlp-file`.
     pub exporter: Option<OtelExporterKind>,
@@ -133,10 +119,8 @@ pub struct OtelConfigToml {
 /// Effective OTEL settings after defaults are applied.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OtelConfig {
-    pub enabled: bool,
     pub log_user_prompt: bool,
     pub environment: String,
-    pub sampler: OtelSampler,
     pub exporter: OtelExporterKind,
 }
 

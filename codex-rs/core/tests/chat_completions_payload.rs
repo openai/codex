@@ -11,7 +11,7 @@ use codex_core::ReasoningItemContent;
 use codex_core::ResponseItem;
 use codex_core::WireApi;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
-use codex_otel::trace_manager::TraceManager;
+use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::mcp_protocol::AuthMode;
 use codex_protocol::mcp_protocol::ConversationId;
 use core_test_support::load_default_config_for_test;
@@ -74,7 +74,7 @@ async fn run_request(input: Vec<ResponseItem>) -> Value {
 
     let conversation_id = ConversationId::new();
 
-    let trace_manager = TraceManager::new(
+    let trace_manager = OtelEventManager::new(
         conversation_id,
         config.model.as_str(),
         config.model_family.slug.as_str(),

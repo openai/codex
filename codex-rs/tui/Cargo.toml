@@ -81,7 +81,7 @@ tracing = { version = "0.1.41", features = ["log"] }
 tracing-appender = "0.2.3"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 pulldown-cmark = "0.10"
-tracing-opentelemetry = { version = "0.31.0" }
+opentelemetry-appender-tracing = "0.30.1"
 unicode-segmentation = "1.12.0"
 unicode-width = "0.1"
 url = "2"

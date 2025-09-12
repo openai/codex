@@ -786,6 +786,7 @@ dependencies = [
  "codex-protocol",
  "core_test_support",
  "libc",
+ "opentelemetry-appender-tracing",
  "owo-colors",
  "predicates",
  "serde_json",
@@ -932,6 +933,7 @@ dependencies = [
  "codex-mcp-client",
  "codex-protocol",
  "opentelemetry",
+ "opentelemetry-appender-tracing",
  "opentelemetry-http",
  "opentelemetry-otlp",
  "opentelemetry-proto",
@@ -1014,6 +1016,7 @@ dependencies = [
  "libc",
  "mcp-types",
  "once_cell",
+ "opentelemetry-appender-tracing",
  "path-clean",
  "pathdiff",
  "pretty_assertions",
@@ -1033,7 +1036,6 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "tracing-appender",
- "tracing-opentelemetry",
  "tracing-subscriber",
  "unicode-segmentation",
  "unicode-width 0.1.14",
@@ -3236,6 +3238,18 @@ dependencies = [
  "pin-project-lite",
  "thiserror 2.0.16",
  "tracing",
+]
+
+[[package]]
+name = "opentelemetry-appender-tracing"
+version = "0.30.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e68f63eca5fad47e570e00e893094fc17be959c80c79a7d6ec1abdd5ae6ffc16"
+dependencies = [
+ "opentelemetry",
+ "tracing",
+ "tracing-core",
+ "tracing-subscriber",
 ]
 
 [[package]]

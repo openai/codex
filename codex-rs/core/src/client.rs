@@ -2,6 +2,7 @@ use std::io::BufRead;
 use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Duration;
+use std::time::Instant;
 
 use crate::AuthManager;
 use bytes::Bytes;
@@ -17,7 +18,6 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_util::io::ReaderStream;
-use tracing::Instrument;
 use tracing::debug;
 use tracing::trace;
 use tracing::warn;
@@ -44,7 +44,7 @@ use crate::openai_tools::create_tools_json_for_responses_api;
 use crate::protocol::TokenUsage;
 use crate::token_data::PlanType;
 use crate::util::backoff;
-use codex_otel::trace_manager::TraceManager;
+use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ResponseItem;
@@ -71,7 +71,7 @@ struct Error {
 pub struct ModelClient {
     config: Arc<Config>,
     auth_manager: Option<Arc<AuthManager>>,
-    trace_manager: TraceManager,
+    otel_event_manager: OtelEventManager,
     client: reqwest::Client,
     provider: ModelProviderInfo,
     conversation_id: ConversationId,
@@ -83,7 +83,7 @@ impl ModelClient {
     pub fn new(
         config: Arc<Config>,
         auth_manager: Option<Arc<AuthManager>>,
-        trace_manager: TraceManager,
+        otel_event_manager: OtelEventManager,
         provider: ModelProviderInfo,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
@@ -94,7 +94,7 @@ impl ModelClient {
         Self {
             config,
             auth_manager,
-            trace_manager,
+            otel_event_manager,
             client,
             provider,
             conversation_id,
@@ -128,7 +128,7 @@ impl ModelClient {
                     &self.config.model_family,
                     &self.client,
                     &self.provider,
-                    &self.trace_manager,
+                    &self.otel_event_manager,
                 )
                 .await?;
 
@@ -165,8 +165,12 @@ impl ModelClient {
         if let Some(path) = &*CODEX_RS_SSE_FIXTURE {
             // short circuit for tests
             warn!(path, "Streaming from fixture");
-            return stream_from_fixture(path, self.provider.clone(), self.trace_manager.clone())
-                .await;
+            return stream_from_fixture(
+                path,
+                self.provider.clone(),
+                self.otel_event_manager.clone(),
+            )
+            .await;
         }
 
         let auth_manager = self.auth_manager.clone();
@@ -245,8 +249,6 @@ impl ModelClient {
                 payload_body.as_str()
             );
 
-            let request_span = self.trace_manager.request(&input_with_instructions);
-
             let mut req_builder = self
                 .provider
                 .create_request_builder(&self.client, &auth)
@@ -267,13 +269,10 @@ impl ModelClient {
                 req_builder = req_builder.header("chatgpt-account-id", account_id);
             }
 
-            let tracing_headers = TraceManager::headers(&request_span);
+            let start = Instant::now();
+            let res = req_builder.send().await;
 
-            req_builder = req_builder.headers(tracing_headers);
-
-            let res = req_builder.send().instrument(request_span.span()).await;
-
-            if let Ok(resp) = &res {
+            let request_id = if let Ok(resp) = &res {
                 let request_id = resp
                     .headers()
                     .get("x-request-id")
@@ -287,12 +286,16 @@ impl ModelClient {
                         .map(|v| v.to_str().unwrap_or_default())
                         .unwrap_or_default()
                 );
-                request_span.request_id(request_id);
-            }
+                Some(request_id.to_string())
+            } else {
+                None
+            };
+
+            self.otel_event_manager
+                .request(request_id, attempt, start.elapsed(), &res);
 
             match res {
                 Ok(resp) if resp.status().is_success() => {
-                    request_span.status_code(resp.status());
                     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
 
                     // spawn task to process SSE
@@ -301,14 +304,13 @@ impl ModelClient {
                         stream,
                         tx_event,
                         self.provider.stream_idle_timeout(),
-                        self.trace_manager.clone(),
+                        self.otel_event_manager.clone(),
                     ));
 
                     return Ok(ResponseStream { rx_event });
                 }
                 Ok(res) => {
                     let status = res.status();
-                    let mut log_message = status.to_string();
 
                     // Pull out Retry‑After header if present.
                     let retry_after_secs = res
@@ -329,10 +331,6 @@ impl ModelClient {
                         || status.is_server_error())
                     {
                         let body = res.text().await.unwrap_or_default();
-                        if !body.is_empty() {
-                            log_message = format!("{log_message}: {body}");
-                        }
-                        request_span.error(attempt, Some(status), &log_message);
                         return Err(CodexErr::UnexpectedStatus(status, body));
                     }
 
@@ -344,20 +342,17 @@ impl ModelClient {
                                     .plan_type
                                     .or_else(|| auth.as_ref().and_then(|a| a.get_plan_type()));
                                 let resets_in_seconds = error.resets_in_seconds;
-                                request_span.error(attempt, Some(status), &log_message);
                                 return Err(CodexErr::UsageLimitReached(UsageLimitReachedError {
                                     plan_type,
                                     resets_in_seconds,
                                 }));
                             } else if error.r#type.as_deref() == Some("usage_not_included") {
-                                request_span.error(attempt, Some(status), &log_message);
                                 return Err(CodexErr::UsageNotIncluded);
                             }
                         }
                     }
 
                     if attempt > max_retries {
-                        request_span.error(attempt, Some(status), &log_message);
                         if status == StatusCode::INTERNAL_SERVER_ERROR {
                             return Err(CodexErr::InternalServerError);
                         }
@@ -365,16 +360,12 @@ impl ModelClient {
                         return Err(CodexErr::RetryLimit(status));
                     }
 
-                    request_span.error(attempt, Some(status), &log_message);
-
                     let delay = retry_after_secs
                         .map(|s| Duration::from_millis(s * 1_000))
                         .unwrap_or_else(|| backoff(attempt));
                     tokio::time::sleep(delay).await;
                 }
                 Err(e) => {
-                    let error_message = format!("{e:#}");
-                    request_span.error(attempt, None, &error_message);
                     if attempt > max_retries {
                         return Err(e.into());
                     }
@@ -389,8 +380,8 @@ impl ModelClient {
         self.provider.clone()
     }
 
-    pub fn get_trace_manager(&self) -> TraceManager {
-        self.trace_manager.clone()
+    pub fn get_otel_event_manager(&self) -> OtelEventManager {
+        self.otel_event_manager.clone()
     }
 
     /// Returns the currently configured model slug.
@@ -508,7 +499,7 @@ async fn process_sse<S>(
     stream: S,
     tx_event: mpsc::Sender<Result<ResponseEvent>>,
     idle_timeout: Duration,
-    trace_manager: TraceManager,
+    otel_event_manager: OtelEventManager,
 ) where
     S: Stream<Item = Result<Bytes>> + Unpin,
 {
@@ -519,15 +510,14 @@ async fn process_sse<S>(
     let mut response_completed: Option<ResponseCompleted> = None;
     let mut response_error: Option<CodexErr> = None;
 
-    let sse_span = trace_manager.response();
-
     loop {
-        let sse = match timeout(idle_timeout, stream.next().instrument(sse_span.span())).await {
+        let start = Instant::now();
+        let sse = match timeout(idle_timeout, stream.next()).await {
             Ok(Some(Ok(sse))) => sse,
             Ok(Some(Err(e))) => {
                 debug!("SSE Error: {e:#}");
                 let error = e.to_string();
-                sse_span.error(error.as_str());
+                otel_event_manager.sse_event_failed(None, start.elapsed(), error.as_str());
                 let event = CodexErr::Stream(error, None);
                 let _ = tx_event.send(Err(event)).await;
                 return;
@@ -539,7 +529,8 @@ async fn process_sse<S>(
                         usage,
                     }) => {
                         if let Some(token_usage) = &usage {
-                            sse_span.token_usage(
+                            otel_event_manager.sse_event_completed(
+                                start.elapsed(),
                                 token_usage.input_tokens,
                                 token_usage.output_tokens,
                                 token_usage
@@ -566,7 +557,11 @@ async fn process_sse<S>(
                         ));
 
                         if let CodexErr::Stream(message, _) = &error {
-                            sse_span.error(message.as_str());
+                            otel_event_manager.sse_event_failed(
+                                None,
+                                start.elapsed(),
+                                message.as_str(),
+                            );
                         }
 
                         let _ = tx_event.send(Err(error)).await;
@@ -577,7 +572,7 @@ async fn process_sse<S>(
             Err(_) => {
                 let error = "idle timeout waiting for SSE";
 
-                sse_span.error(error);
+                otel_event_manager.sse_event_failed(None, start.elapsed(), error);
 
                 let _ = tx_event
                     .send(Err(CodexErr::Stream(error.into(), None)))
@@ -589,13 +584,11 @@ async fn process_sse<S>(
         let raw = sse.data.clone();
         trace!("SSE event: {}", raw);
 
-        sse_span.body(raw.as_str());
-
         let event: SseEvent = match serde_json::from_str(&sse.data) {
             Ok(event) => event,
             Err(e) => {
                 let error = format!("Failed to parse SSE event: {e}, data: {}", &sse.data);
-                sse_span.error(error.as_str());
+                otel_event_manager.sse_event_failed(None, start.elapsed(), error.as_str());
                 debug!(error);
                 continue;
             }
@@ -621,13 +614,18 @@ async fn process_sse<S>(
             // The fix is to forward the incremental events *as they come* and
             // drop the duplicated list inside `response.completed`.
             "response.output_item.done" => {
-                let Some(item_val) = event.item else { continue };
+                let Some(item_val) = event.item else {
+                    otel_event_manager.sse_event(event.kind, start.elapsed());
+                    continue
+                };
                 let Ok(item) = serde_json::from_value::<ResponseItem>(item_val) else {
                     let error = "failed to parse ResponseItem from output_item.done";
                     debug!(error);
-                    sse_span.error(error);
+                    otel_event_manager.sse_event_failed(Some(event.kind), start.elapsed(), error);
                     continue;
                 };
+
+                otel_event_manager.sse_event(event.kind, start.elapsed());
 
                 let event = ResponseEvent::OutputItemDone(item);
                 if tx_event.send(Ok(event)).await.is_err() {
@@ -635,6 +633,7 @@ async fn process_sse<S>(
                 }
             }
             "response.output_text.delta" => {
+                otel_event_manager.sse_event(event.kind, start.elapsed());
                 if let Some(delta) = event.delta {
                     let event = ResponseEvent::OutputTextDelta(delta);
                     if tx_event.send(Ok(event)).await.is_err() {
@@ -643,6 +642,7 @@ async fn process_sse<S>(
                 }
             }
             "response.reasoning_summary_text.delta" => {
+                otel_event_manager.sse_event(event.kind, start.elapsed());
                 if let Some(delta) = event.delta {
                     let event = ResponseEvent::ReasoningSummaryDelta(delta);
                     if tx_event.send(Ok(event)).await.is_err() {
@@ -651,6 +651,7 @@ async fn process_sse<S>(
                 }
             }
             "response.reasoning_text.delta" => {
+                otel_event_manager.sse_event(event.kind, start.elapsed());
                 if let Some(delta) = event.delta {
                     let event = ResponseEvent::ReasoningContentDelta(delta);
                     if tx_event.send(Ok(event)).await.is_err() {
@@ -659,6 +660,7 @@ async fn process_sse<S>(
                 }
             }
             "response.created" => {
+                otel_event_manager.sse_event(event.kind, start.elapsed());
                 if event.response.is_some() {
                     let _ = tx_event.send(Ok(ResponseEvent::Created {})).await;
                 }
@@ -671,8 +673,6 @@ async fn process_sse<S>(
                         None,
                     ));
 
-                    sse_span.error(error_message);
-
                     let error = resp_val.get("error");
 
                     if let Some(error) = error {
@@ -680,15 +680,17 @@ async fn process_sse<S>(
                             Ok(error) => {
                                 let delay = try_parse_retry_after(&error);
                                 let message = error.message.unwrap_or_default();
-                                sse_span.error(message.as_str());
+                                otel_event_manager.sse_event_failed(Some(event.kind), start.elapsed(), message.as_str());
                                 response_error = Some(CodexErr::Stream(message, delay));
                             }
                             Err(e) => {
                                 let error_message = format!("failed to parse ErrorResponse: {e}");
                                 debug!(error_message);
-                                sse_span.error(error_message.as_str());
+                                otel_event_manager.sse_event_failed(Some(event.kind), start.elapsed(), error_message.as_str());
                             }
                         }
+                    } else {
+                        otel_event_manager.sse_event_failed(Some(event.kind), start.elapsed(), error_message);
                     }
                 }
             }
@@ -702,7 +704,7 @@ async fn process_sse<S>(
                         Err(e) => {
                             let error_message = format!("failed to parse ResponseCompleted: {e}");
                             debug!(error_message);
-                            sse_span.error(error_message.as_str());
+                            otel_event_manager.sse_event_failed(Some(event.kind), start.elapsed(), error_message.as_str());
                             continue;
                         }
                     };
@@ -715,6 +717,7 @@ async fn process_sse<S>(
             | "response.in_progress"
             | "response.output_text.done" => {}
             "response.output_item.added" => {
+                otel_event_manager.sse_event(event.kind, start.elapsed());
                 if let Some(item) = event.item.as_ref() {
                     // Detect web_search_call begin and forward a synthetic event upstream.
                     if let Some(ty) = item.get("type").and_then(|v| v.as_str())
@@ -734,13 +737,18 @@ async fn process_sse<S>(
             }
             "response.reasoning_summary_part.added" => {
                 // Boundary between reasoning summary sections (e.g., titles).
+                otel_event_manager.sse_event(event.kind, start.elapsed());
                 let event = ResponseEvent::ReasoningSummaryPartAdded;
                 if tx_event.send(Ok(event)).await.is_err() {
                     return;
                 }
             }
-            "response.reasoning_summary_text.done" => {}
-            _ => {}
+            "response.reasoning_summary_text.done" => {
+                otel_event_manager.sse_event(event.kind, start.elapsed());
+            }
+            _ => {
+                otel_event_manager.sse_event(event.kind, start.elapsed());
+            }
         }
     }
 }
@@ -749,7 +757,7 @@ async fn process_sse<S>(
 async fn stream_from_fixture(
     path: impl AsRef<Path>,
     provider: ModelProviderInfo,
-    trace_manager: TraceManager,
+    otel_event_manager: OtelEventManager,
 ) -> Result<ResponseStream> {
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
     let f = std::fs::File::open(path.as_ref())?;
@@ -768,7 +776,7 @@ async fn stream_from_fixture(
         stream,
         tx_event,
         provider.stream_idle_timeout(),
-        trace_manager,
+        otel_event_manager,
     ));
     Ok(ResponseStream { rx_event })
 }
@@ -824,7 +832,7 @@ mod tests {
     async fn collect_events(
         chunks: &[&[u8]],
         provider: ModelProviderInfo,
-        trace_manager: TraceManager,
+        otel_event_manager: OtelEventManager,
     ) -> Vec<Result<ResponseEvent>> {
         let mut builder = IoBuilder::new();
         for chunk in chunks {
@@ -838,7 +846,7 @@ mod tests {
             stream,
             tx,
             provider.stream_idle_timeout(),
-            trace_manager,
+            otel_event_manager,
         ));
 
         let mut events = Vec::new();
@@ -853,7 +861,7 @@ mod tests {
     async fn run_sse(
         events: Vec<serde_json::Value>,
         provider: ModelProviderInfo,
-        trace_manager: TraceManager,
+        otel_event_manager: OtelEventManager,
     ) -> Vec<ResponseEvent> {
         let mut body = String::new();
         for e in events {
@@ -874,7 +882,7 @@ mod tests {
             stream,
             tx,
             provider.stream_idle_timeout(),
-            trace_manager,
+            otel_event_manager,
         ));
 
         let mut out = Vec::new();
@@ -935,7 +943,7 @@ mod tests {
             requires_openai_auth: false,
         };
 
-        let trace_manager = TraceManager::new(
+        let otel_event_manager = OtelEventManager::new(
             ConversationId::new(),
             "test",
             "test",
@@ -948,7 +956,7 @@ mod tests {
         let events = collect_events(
             &[sse1.as_bytes(), sse2.as_bytes(), sse3.as_bytes()],
             provider,
-            trace_manager,
+            otel_event_manager,
         )
         .await;
 
@@ -1006,7 +1014,7 @@ mod tests {
             requires_openai_auth: false,
         };
 
-        let trace_manager = TraceManager::new(
+        let otel_event_manager = OtelEventManager::new(
             ConversationId::new(),
             "test",
             "test",
@@ -1016,7 +1024,7 @@ mod tests {
             "test".to_string(),
         );
 
-        let events = collect_events(&[sse1.as_bytes()], provider, trace_manager).await;
+        let events = collect_events(&[sse1.as_bytes()], provider, otel_event_manager).await;
 
         assert_eq!(events.len(), 2);
 
@@ -1050,7 +1058,7 @@ mod tests {
             requires_openai_auth: false,
         };
 
-        let trace_manager = TraceManager::new(
+        let otel_event_manager = OtelEventManager::new(
             ConversationId::new(),
             "test",
             "test",
@@ -1060,7 +1068,7 @@ mod tests {
             "test".to_string(),
         );
 
-        let events = collect_events(&[sse1.as_bytes()], provider, trace_manager).await;
+        let events = collect_events(&[sse1.as_bytes()], provider, otel_event_manager).await;
 
         assert_eq!(events.len(), 1);
 
@@ -1165,7 +1173,7 @@ mod tests {
                 requires_openai_auth: false,
             };
 
-            let trace_manager = TraceManager::new(
+            let otel_event_manager = OtelEventManager::new(
                 ConversationId::new(),
                 "test",
                 "test",
@@ -1175,7 +1183,7 @@ mod tests {
                 "test".to_string(),
             );
 
-            let out = run_sse(evs, provider, trace_manager).await;
+            let out = run_sse(evs, provider, otel_event_manager).await;
             assert_eq!(out.len(), case.expected_len, "case {}", case.name);
             assert!(
                 (case.expect_first)(&out[0]),
