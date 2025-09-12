@@ -187,6 +187,13 @@ impl ModelClient {
             None
         };
 
+        // In general, we want to explicitly send `store: false` when using the Responses API,
+        // but in practice, the Azure Responses API rejects `store: false`:
+        //
+        // - If store = false and id is sent an error is thrown that ID is not found
+        // - If store = false and id is not sent an error is thrown that ID is required
+        //
+        // For Azure, we send `store: true` and preserve reasoning item IDs.
         let azure_workaround = self.provider.is_azure_responses_endpoint();
 
         let payload = ResponsesApiRequest {
