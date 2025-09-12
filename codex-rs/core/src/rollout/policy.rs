@@ -39,7 +39,7 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::AgentReasoning(_)
         | EventMsg::AgentReasoningRawContent(_)
         | EventMsg::TokenCount(_)
-        | EventMsg::EnteredReviewMode
+        | EventMsg::EnteredReviewMode(_)
         | EventMsg::ExitedReviewMode(_) => true,
         EventMsg::Error(_)
         | EventMsg::TaskStarted(_)

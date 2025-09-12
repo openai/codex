@@ -18,6 +18,7 @@ use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
 use codex_protocol::mcp_protocol::ConversationId;
 use codex_protocol::protocol::ConversationPathResponseEvent;
+use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::TaskStartedEvent;
 use codex_protocol::protocol::TurnAbortReason;
@@ -1474,13 +1475,13 @@ async fn submission_loop(
                 };
                 sess.send_event(event).await;
             }
-            Op::Review { prompt } => {
+            Op::Review { review_request } => {
                 spawn_review_thread(
                     sess.clone(),
                     config.clone(),
                     turn_context.clone(),
                     sub.id,
-                    prompt,
+                    review_request,
                 )
                 .await;
             }
@@ -1498,7 +1499,7 @@ async fn spawn_review_thread(
     config: Arc<Config>,
     parent_turn_context: Arc<TurnContext>,
     sub_id: String,
-    prompt: String,
+    review_request: ReviewRequest,
 ) {
     let model = config.review_model.clone();
     let review_model_family = find_family_for_model(&model)
@@ -1550,7 +1551,9 @@ async fn spawn_review_thread(
     };
 
     // Seed the child task with the review prompt as the initial user message.
-    let input: Vec<InputItem> = vec![InputItem::Text { text: prompt }];
+    let input: Vec<InputItem> = vec![InputItem::Text {
+        text: review_request.prompt.clone(),
+    }];
     let tc = Arc::new(review_turn_context);
 
     // Clone sub_id for the upcoming announcement before moving it into the task.
@@ -1561,7 +1564,7 @@ async fn spawn_review_thread(
     // Announce entering review mode so UIs can switch modes.
     sess.send_event(Event {
         id: sub_id_for_event,
-        msg: EventMsg::EnteredReviewMode,
+        msg: EventMsg::EnteredReviewMode(review_request),
     })
     .await;
 }

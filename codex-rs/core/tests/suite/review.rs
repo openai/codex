@@ -11,6 +11,7 @@ use codex_core::protocol::ReviewCodeLocation;
 use codex_core::protocol::ReviewFinding;
 use codex_core::protocol::ReviewLineRange;
 use codex_core::protocol::ReviewOutputEvent;
+use codex_core::protocol::ReviewRequest;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id_from_str;
@@ -76,13 +77,16 @@ async fn review_op_emits_lifecycle_and_review_output() {
     // Submit review request.
     codex
         .submit(Op::Review {
-            prompt: "Please review my changes".to_string(),
+            review_request: ReviewRequest {
+                prompt: "Please review my changes".to_string(),
+                user_facing_hint: "my changes".to_string(),
+            },
         })
         .await
         .unwrap();
 
     // Verify lifecycle: Entered -> Exited(Some(review)) -> TaskComplete.
-    let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode)).await;
+    let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
     let closed = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExitedReviewMode(_))).await;
     let review = match closed {
         EventMsg::ExitedReviewMode(Some(r)) => r,
@@ -136,12 +140,15 @@ async fn review_op_with_plain_text_emits_review_fallback() {
 
     codex
         .submit(Op::Review {
-            prompt: "Plain text review".to_string(),
+            review_request: ReviewRequest {
+                prompt: "Plain text review".to_string(),
+                user_facing_hint: "plain text review".to_string(),
+            },
         })
         .await
         .unwrap();
 
-    let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode)).await;
+    let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
     let closed = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExitedReviewMode(_))).await;
     let review = match closed {
         EventMsg::ExitedReviewMode(Some(r)) => r,
@@ -203,7 +210,10 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
 
     codex
         .submit(Op::Review {
-            prompt: "check structured".to_string(),
+            review_request: ReviewRequest {
+                prompt: "check structured".to_string(),
+                user_facing_hint: "check structured".to_string(),
+            },
         })
         .await
         .unwrap();
@@ -223,7 +233,7 @@ async fn review_does_not_emit_agent_message_on_structured_output() {
             EventMsg::AgentMessage(_) => {
                 panic!("unexpected AgentMessage during review with structured output")
             }
-            EventMsg::EnteredReviewMode => saw_entered = true,
+            EventMsg::EnteredReviewMode(_) => saw_entered = true,
             EventMsg::ExitedReviewMode(_) => saw_exited = true,
             _ => {}
         }
@@ -259,13 +269,16 @@ async fn review_uses_custom_review_model_from_config() {
 
     codex
         .submit(Op::Review {
-            prompt: "use custom model".to_string(),
+            review_request: ReviewRequest {
+                prompt: "use custom model".to_string(),
+                user_facing_hint: "use custom model".to_string(),
+            },
         })
         .await
         .unwrap();
 
     // Wait for completion
-    let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode)).await;
+    let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
     let _closed = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExitedReviewMode(None))).await;
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
@@ -372,12 +385,15 @@ async fn review_input_isolated_from_parent_history() {
     let review_prompt = "Please review only this".to_string();
     codex
         .submit(Op::Review {
-            prompt: review_prompt.clone(),
+            review_request: ReviewRequest {
+                prompt: review_prompt.clone(),
+                user_facing_hint: review_prompt.clone(),
+            },
         })
         .await
         .unwrap();
 
-    let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode)).await;
+    let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
     let _closed = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExitedReviewMode(None))).await;
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
@@ -423,11 +439,14 @@ async fn review_history_does_not_leak_into_parent_session() {
     // 1) Run a review turn that produces an assistant message (isolated in child).
     codex
         .submit(Op::Review {
-            prompt: "Start a review".to_string(),
+            review_request: ReviewRequest {
+                prompt: "Start a review".to_string(),
+                user_facing_hint: "Start a review".to_string(),
+            },
         })
         .await
         .unwrap();
-    let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode)).await;
+    let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
     let _closed = wait_for_event(&codex, |ev| {
         matches!(ev, EventMsg::ExitedReviewMode(Some(_)))
     })

@@ -168,7 +168,7 @@ pub enum Op {
     Compact,
 
     /// Request a code review from the agent.
-    Review { prompt: String },
+    Review { review_request: ReviewRequest },
 
     /// Request to shut down codex instance.
     Shutdown,
@@ -510,7 +510,7 @@ pub enum EventMsg {
     ConversationPath(ConversationPathResponseEvent),
 
     /// Entered review mode.
-    EnteredReviewMode,
+    EnteredReviewMode(ReviewRequest),
 
     /// Exited review mode with an optional final result to apply.
     ExitedReviewMode(Option<ReviewOutputEvent>),
@@ -970,6 +970,13 @@ pub struct GitInfo {
     /// Repository URL (if available from remote)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repository_url: Option<String>,
+}
+
+/// Review request sent to the review session.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS)]
+pub struct ReviewRequest {
+    pub prompt: String,
+    pub user_facing_hint: String,
 }
 
 /// Structured review result produced by a child review session.
