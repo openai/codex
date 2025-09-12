@@ -10,9 +10,6 @@ use std::time::Duration;
 
 use crate::AuthManager;
 use crate::client_common::REVIEW_PROMPT;
-use crate::config_edit::CONFIG_KEY_EFFORT;
-use crate::config_edit::CONFIG_KEY_MODEL;
-use crate::config_edit::persist_non_null_overrides;
 use crate::event_mapping::map_response_item_to_event_messages;
 use async_channel::Receiver;
 use async_channel::Sender;
