@@ -1056,8 +1056,7 @@ pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
     // Use a hair space (U+200A) to create a subtle, near-invisible separation
     // before the text. VS16 is intentionally omitted to keep spacing tighter
     // in terminals like Ghostty.
-    let lines: Vec<Line<'static>> =
-        vec![vec![padded_emoji("■").red().bold(), message.red()].into()];
+    let lines: Vec<Line<'static>> = vec![vec![format!("■ {message}").red()].into()];
     PlainHistoryCell { lines }
 }
 
