@@ -11,17 +11,14 @@ use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::protocol::AgentMessageEvent;
 use crate::protocol::CompactedItem;
-use crate::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use crate::protocol::ErrorEvent;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
 use crate::protocol::InputItem;
+use crate::protocol::InputMessageKind;
 use crate::protocol::TaskCompleteEvent;
 use crate::protocol::TaskStartedEvent;
-use crate::protocol::TokenUsage;
-use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnContextItem;
-use crate::protocol::USER_INSTRUCTIONS_OPEN_TAG;
 use crate::util::backoff;
 use askama::Template;
 use codex_protocol::models::ContentItem;
@@ -207,21 +204,6 @@ async fn run_compact_task_inner(
     sess.send_event(event).await;
 }
 
-pub(super) fn update_token_usage_info(
-    sess: &Session,
-    turn_context: &TurnContext,
-    token_usage: &Option<TokenUsage>,
-) -> Option<TokenUsageInfo> {
-    let mut state = sess.state.lock_unchecked();
-    let info = TokenUsageInfo::new_or_append(
-        &state.token_info,
-        token_usage,
-        turn_context.client.get_model_context_window(),
-    );
-    state.token_info = info.clone();
-    info
-}
-
 fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
     let mut pieces = Vec::new();
     for item in content {
@@ -255,22 +237,10 @@ fn collect_user_messages(items: &[ResponseItem]) -> Vec<String> {
 }
 
 fn is_session_prefix_message(text: &str) -> bool {
-    let trimmed = text.trim_start();
-    starts_with_tag_ignore_ascii_case(trimmed, USER_INSTRUCTIONS_OPEN_TAG)
-        || starts_with_tag_ignore_ascii_case(trimmed, ENVIRONMENT_CONTEXT_OPEN_TAG)
-}
-
-fn starts_with_tag_ignore_ascii_case(text: &str, tag: &str) -> bool {
-    let text_bytes = text.as_bytes();
-    let tag_bytes = tag.as_bytes();
-    if text_bytes.len() < tag_bytes.len() {
-        return false;
-    }
-    text_bytes
-        .iter()
-        .zip(tag_bytes.iter())
-        .take(tag_bytes.len())
-        .all(|(a, b)| a.eq_ignore_ascii_case(b))
+    matches!(
+        InputMessageKind::from(("user", text)),
+        InputMessageKind::UserInstructions | InputMessageKind::EnvironmentContext
+    )
 }
 
 fn build_compacted_history(

@@ -718,6 +718,21 @@ impl Session {
         }
     }
 
+    fn update_token_usage_info(
+        &self,
+        turn_context: &TurnContext,
+        token_usage: &Option<TokenUsage>,
+    ) -> Option<TokenUsageInfo> {
+        let mut state = self.state.lock_unchecked();
+        let info = TokenUsageInfo::new_or_append(
+            &state.token_info,
+            token_usage,
+            turn_context.client.get_model_context_window(),
+        );
+        state.token_info = info.clone();
+        info
+    }
+
     /// Record a user input item to conversation history and also persist a
     /// corresponding UserMessage EventMsg to rollout.
     async fn record_input_and_rollout_usermsg(&self, response_input: &ResponseInputItem) {
@@ -1902,7 +1917,7 @@ async fn try_run_turn(
                 response_id: _,
                 token_usage,
             } => {
-                let info = compact::update_token_usage_info(sess, turn_context, &token_usage);
+                let info = sess.update_token_usage_info(turn_context, &token_usage);
                 let _ = sess
                     .send_event(Event {
                         id: sub_id.to_string(),
