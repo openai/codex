@@ -20,7 +20,7 @@ pub(crate) struct BacktrackState {
     /// Session id of the base conversation to fork from.
     pub(crate) base_id: Option<ConversationId>,
     /// Index in the transcript of the last user message.
-    pub(crate) position: usize,
+    pub(crate) nth_user_message: usize,
     /// True when the transcript overlay is showing a backtrack preview.
     pub(crate) overlay_preview_active: bool,
     /// Pending fork request: (base_id, nth_user_message, prefill).
@@ -98,6 +98,7 @@ impl App {
         base_id: ConversationId,
         nth_user_message: usize,
     ) {
+        tracing::info!("request_backtrack: {}", nth_user_message);
         self.backtrack.pending = Some((base_id, nth_user_message, prefill));
         self.app_event_tx.send(crate::app_event::AppEvent::CodexOp(
             codex_core::protocol::Op::GetPath,
@@ -140,7 +141,7 @@ impl App {
     /// Initialize backtrack state and show composer hint.
     fn prime_backtrack(&mut self) {
         self.backtrack.primed = true;
-        self.backtrack.position = usize::MAX;
+        self.backtrack.nth_user_message = usize::MAX;
         self.backtrack.base_id = self.chat_widget.conversation_id();
         self.chat_widget.show_esc_backtrack_hint();
     }
@@ -174,12 +175,11 @@ impl App {
 
     /// Step selection to the next older user message and update overlay.
     fn step_backtrack_and_highlight(&mut self, tui: &mut tui::Tui) {
-        tracing::info!("step_backtrack_and_highlight: {}", self.backtrack.position);
         let last_user_cell_position = self
             .transcript_cells
             .iter()
             .filter(|c| c.as_any().is::<UserHistoryCell>())
-            .take(self.backtrack.position)
+            .take(self.backtrack.nth_user_message)
             .count()
             .saturating_sub(1);
         self.apply_backtrack_selection(last_user_cell_position);
@@ -188,8 +188,7 @@ impl App {
 
     /// Apply a computed backtrack selection to the overlay and internal counter.
     fn apply_backtrack_selection(&mut self, nth_user_message: usize) {
-        tracing::info!("apply_backtrack_selection: {}", nth_user_message);
-        self.backtrack.position = nth_user_message;
+        self.backtrack.nth_user_message = nth_user_message;
         if let Some(Overlay::Transcript(t)) = &mut self.overlay {
             let cell = self
                 .transcript_cells
@@ -217,6 +216,8 @@ impl App {
 
     /// Handle Enter in overlay backtrack preview: confirm selection and reset state.
     fn overlay_confirm_backtrack(&mut self, tui: &mut tui::Tui) {
+        let nth_user_message = self.backtrack.nth_user_message;
+        tracing::info!("overlay_confirm_backtrack: {}", nth_user_message);
         if let Some(base_id) = self.backtrack.base_id {
             let user_cells = self
                 .transcript_cells
@@ -224,11 +225,11 @@ impl App {
                 .filter_map(|c| c.as_any().downcast_ref::<UserHistoryCell>())
                 .collect::<Vec<_>>();
             let prefill = user_cells
-                .get(self.backtrack.position)
+                .get(nth_user_message)
                 .map(|c| c.message.clone())
                 .unwrap_or_default();
             self.close_transcript_overlay(tui);
-            self.request_backtrack(prefill, base_id, self.backtrack.position);
+            self.request_backtrack(prefill, base_id, nth_user_message);
         }
         self.reset_backtrack_state();
     }
@@ -246,14 +247,20 @@ impl App {
     /// Confirm a primed backtrack from the main view (no overlay visible).
     /// Computes the prefill from the selected user message and requests history.
     pub(crate) fn confirm_backtrack_from_main(&mut self) {
+        tracing::info!(
+            "confirm_backtrack_from_main: {}",
+            self.backtrack.nth_user_message
+        );
         if let Some(base_id) = self.backtrack.base_id {
             let prefill = self
                 .transcript_cells
-                .get(self.backtrack.position)
+                .iter()
+                .filter(|c| c.as_any().is::<UserHistoryCell>())
+                .nth(self.backtrack.nth_user_message)
                 .and_then(|c| c.as_any().downcast_ref::<UserHistoryCell>())
                 .map(|c| c.message.clone())
                 .unwrap_or_default();
-            self.request_backtrack(prefill, base_id, self.backtrack.position);
+            self.request_backtrack(prefill, base_id, self.backtrack.nth_user_message);
         }
         self.reset_backtrack_state();
     }
@@ -262,7 +269,7 @@ impl App {
     pub(crate) fn reset_backtrack_state(&mut self) {
         self.backtrack.primed = false;
         self.backtrack.base_id = None;
-        self.backtrack.position = usize::MAX;
+        self.backtrack.nth_user_message = usize::MAX;
         // In case a hint is somehow still visible (e.g., race with overlay open/close).
         self.chat_widget.clear_esc_backtrack_hint();
     }
@@ -349,6 +356,7 @@ impl App {
 
     /// Trim transcript_cells to preserve only content up to the selected user message.
     fn trim_transcript_for_backtrack(&mut self, nth_user_message: usize) {
+        tracing::info!("trim_transcript_for_backtrack: {}", nth_user_message);
         let cut_idx = self
             .transcript_cells
             .iter()
@@ -362,6 +370,7 @@ impl App {
             })
             .nth(nth_user_message - 1)
             .unwrap_or(self.transcript_cells.len());
+        tracing::info!("cut_idx: {}", cut_idx);
         self.transcript_cells.truncate(cut_idx);
     }
 }

@@ -466,7 +466,7 @@ impl App {
                 kind: KeyEventKind::Press,
                 ..
             } if self.backtrack.primed
-                && self.backtrack.position != usize::MAX
+                && self.backtrack.nth_user_message != usize::MAX
                 && self.chat_widget.composer_is_empty() =>
             {
                 // Delegate to helper for clarity; preserves behavior.
