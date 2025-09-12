@@ -1692,7 +1692,6 @@ async fn run_task(
                     });
                     break;
                 }
-                sess.enqueue_pending_responses(responses);
                 continue;
             }
             Err(e) => {
