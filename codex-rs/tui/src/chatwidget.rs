@@ -1191,9 +1191,13 @@ impl ChatWidget {
                 tracing::info!(
                     "New model: {}, New effort: {}, Current model: {}, Current effort: {}",
                     model_slug.clone(),
-                    effort,
+                    effort
+                        .map(|effort| effort.to_string())
+                        .unwrap_or_else(|| "none".to_string()),
                     current_model,
                     current_effort
+                        .map(|effort| effort.to_string())
+                        .unwrap_or_else(|| "none".to_string())
                 );
             })];
             items.push(SelectionItem {
@@ -1264,7 +1268,7 @@ impl ChatWidget {
     }
 
     /// Set the reasoning effort in the widget's config copy.
-    pub(crate) fn set_reasoning_effort(&mut self, effort: ReasoningEffortConfig) {
+    pub(crate) fn set_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
         self.config.model_reasoning_effort = effort;
     }
 

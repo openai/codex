@@ -337,7 +337,7 @@ impl App {
         }
     }
 
-    fn on_update_reasoning_effort(&mut self, effort: ReasoningEffortConfig) {
+    fn on_update_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
         let changed = self.config.model_reasoning_effort != effort;
         self.chat_widget.set_reasoning_effort(effort);
         self.config.model_reasoning_effort = effort;
@@ -372,17 +372,18 @@ impl App {
 
         let model = self.config.model.clone();
         let effort = self.config.model_reasoning_effort;
+        let effort_label = effort
+            .map(|effort| effort.to_string())
+            .unwrap_or_else(|| "none".to_string());
         let codex_home = self.config.codex_home.clone();
 
         match scope {
             SaveScope::Profile(profile) => {
-                match persist_model_selection(&codex_home, Some(profile), &model, Some(effort))
-                    .await
-                {
+                match persist_model_selection(&codex_home, Some(profile), &model, effort).await {
                     Ok(()) => {
                         self.model_saved_to_profile = true;
                         self.chat_widget.add_info_message(format!(
-                            "Saved model {model} ({effort}) for profile `{profile}`. Press Ctrl+S again to make this your global default."
+                            "Saved model {model} ({effort_label}) for profile `{profile}`. Press Ctrl+S again to make this your global default."
                         ));
                     }
                     Err(err) => {
@@ -397,11 +398,11 @@ impl App {
                 }
             }
             SaveScope::Global => {
-                match persist_model_selection(&codex_home, None, &model, Some(effort)).await {
+                match persist_model_selection(&codex_home, None, &model, effort).await {
                     Ok(()) => {
                         self.model_saved_to_global = true;
                         self.chat_widget.add_info_message(format!(
-                            "Saved model {model} ({effort}) as your global default."
+                            "Saved model {model} ({effort_label}) as your global default."
                         ));
                     }
                     Err(err) => {
@@ -537,19 +538,19 @@ mod tests {
         let mut app = make_test_app();
         app.model_saved_to_profile = true;
         app.model_saved_to_global = true;
-        app.config.model_reasoning_effort = ReasoningEffortConfig::Medium;
+        app.config.model_reasoning_effort = Some(ReasoningEffortConfig::Medium);
         app.chat_widget
-            .set_reasoning_effort(ReasoningEffortConfig::Medium);
+            .set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
 
-        app.on_update_reasoning_effort(ReasoningEffortConfig::High);
+        app.on_update_reasoning_effort(Some(ReasoningEffortConfig::High));
 
         assert_eq!(
             app.config.model_reasoning_effort,
-            ReasoningEffortConfig::High
+            Some(ReasoningEffortConfig::High)
         );
         assert_eq!(
             app.chat_widget.config_ref().model_reasoning_effort,
-            ReasoningEffortConfig::High
+            Some(ReasoningEffortConfig::High)
         );
         assert!(!app.model_saved_to_profile);
         assert!(!app.model_saved_to_global);
