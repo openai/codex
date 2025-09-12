@@ -17,7 +17,10 @@ pub fn create_config_summary_entries(config: &Config) -> Vec<(&'static str, Stri
     {
         entries.push((
             "reasoning effort",
-            config.model_reasoning_effort.to_string(),
+            config
+                .model_reasoning_effort
+                .map(|effort| effort.to_string())
+                .unwrap_or_else(|| "none".to_string()),
         ));
         entries.push((
             "reasoning summaries",

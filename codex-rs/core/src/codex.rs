@@ -323,7 +323,7 @@ struct ConfigureSession {
     /// If not specified, server will use its default model.
     model: String,
 
-    model_reasoning_effort: ReasoningEffortConfig,
+    model_reasoning_effort: Option<ReasoningEffortConfig>,
     model_reasoning_summary: ReasoningSummaryConfig,
 
     /// Model instructions that are appended to the base instructions.

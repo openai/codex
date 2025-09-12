@@ -441,6 +441,7 @@ async fn chatgpt_auth_sends_correct_request() {
     // Init session
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home);
+    let include_reasoning = config.model_reasoning_effort.is_some();
     config.model_provider = model_provider;
     let conversation_manager = ConversationManager::with_auth(create_dummy_codex_auth());
     let NewConversation {
@@ -482,10 +483,18 @@ async fn chatgpt_auth_sends_correct_request() {
     );
     assert_eq!(request_chatgpt_account_id.to_str().unwrap(), "account_id");
     assert!(request_body["stream"].as_bool().unwrap());
-    assert_eq!(
-        request_body["include"][0].as_str().unwrap(),
-        "reasoning.encrypted_content"
-    );
+    if include_reasoning {
+        assert_eq!(
+            request_body["include"][0].as_str().unwrap(),
+            "reasoning.encrypted_content"
+        );
+    } else {
+        assert!(
+            request_body["include"]
+                .as_array()
+                .is_none_or(|items| items.is_empty())
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

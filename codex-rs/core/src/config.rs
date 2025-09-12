@@ -140,7 +140,7 @@ pub struct Config {
 
     /// Value to use for `reasoning.effort` when making a request using the
     /// Responses API.
-    pub model_reasoning_effort: ReasoningEffort,
+    pub model_reasoning_effort: Option<ReasoningEffort>,
 
     /// If not "none", the value to use for `reasoning.summary` when making a
     /// request using the Responses API.
@@ -423,14 +423,24 @@ pub async fn persist_model_selection(
     if let Some(profile_name) = active_profile {
         let profile_table = ensure_profile_table(&mut doc, profile_name)?;
         profile_table["model"] = toml_edit::value(model);
-        if let Some(effort) = effort {
-            profile_table["model_reasoning_effort"] = toml_edit::value(effort.to_string());
+        match effort {
+            Some(effort) => {
+                profile_table["model_reasoning_effort"] = toml_edit::value(effort.to_string());
+            }
+            None => {
+                profile_table.remove("model_reasoning_effort");
+            }
         }
     } else {
         let table = doc.as_table_mut();
         table["model"] = toml_edit::value(model);
-        if let Some(effort) = effort {
-            table["model_reasoning_effort"] = toml_edit::value(effort.to_string());
+        match effort {
+            Some(effort) => {
+                table["model_reasoning_effort"] = toml_edit::value(effort.to_string());
+            }
+            None => {
+                table.remove("model_reasoning_effort");
+            }
         }
     }
 
@@ -913,8 +923,7 @@ impl Config {
                 .unwrap_or(false),
             model_reasoning_effort: config_profile
                 .model_reasoning_effort
-                .or(cfg.model_reasoning_effort)
-                .unwrap_or_default(),
+                .or(cfg.model_reasoning_effort),
             model_reasoning_summary: config_profile
                 .model_reasoning_summary
                 .or(cfg.model_reasoning_summary)
@@ -1438,7 +1447,7 @@ model_verbosity = "high"
                 codex_linux_sandbox_exe: None,
                 hide_agent_reasoning: false,
                 show_raw_agent_reasoning: false,
-                model_reasoning_effort: ReasoningEffort::High,
+                model_reasoning_effort: Some(ReasoningEffort::High),
                 model_reasoning_summary: ReasoningSummary::Detailed,
                 model_verbosity: None,
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
@@ -1494,7 +1503,7 @@ model_verbosity = "high"
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
-            model_reasoning_effort: ReasoningEffort::default(),
+            model_reasoning_effort: None,
             model_reasoning_summary: ReasoningSummary::default(),
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
@@ -1565,7 +1574,7 @@ model_verbosity = "high"
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
-            model_reasoning_effort: ReasoningEffort::default(),
+            model_reasoning_effort: None,
             model_reasoning_summary: ReasoningSummary::default(),
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
@@ -1622,7 +1631,7 @@ model_verbosity = "high"
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
-            model_reasoning_effort: ReasoningEffort::High,
+            model_reasoning_effort: Some(ReasoningEffort::High),
             model_reasoning_summary: ReasoningSummary::Detailed,
             model_verbosity: Some(Verbosity::High),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),

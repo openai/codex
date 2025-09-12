@@ -72,7 +72,7 @@ pub struct ModelClient {
     client: reqwest::Client,
     provider: ModelProviderInfo,
     conversation_id: ConversationId,
-    effort: ReasoningEffortConfig,
+    effort: Option<ReasoningEffortConfig>,
     summary: ReasoningSummaryConfig,
 }
 
@@ -81,7 +81,7 @@ impl ModelClient {
         config: Arc<Config>,
         auth_manager: Option<Arc<AuthManager>>,
         provider: ModelProviderInfo,
-        effort: ReasoningEffortConfig,
+        effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
         conversation_id: ConversationId,
     ) -> Self {
@@ -356,7 +356,7 @@ impl ModelClient {
     }
 
     /// Returns the current reasoning effort setting.
-    pub fn get_reasoning_effort(&self) -> ReasoningEffortConfig {
+    pub fn get_reasoning_effort(&self) -> Option<ReasoningEffortConfig> {
         self.effort
     }
 
