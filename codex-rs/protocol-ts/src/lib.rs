@@ -40,6 +40,7 @@ pub fn generate_ts(out_dir: &Path, prettier: Option<&Path>) -> Result<()> {
     codex_protocol::mcp_protocol::ApplyPatchApprovalResponse::export_all_to(out_dir)?;
     codex_protocol::mcp_protocol::ExecCommandApprovalResponse::export_all_to(out_dir)?;
     codex_protocol::mcp_protocol::GetUserSavedConfigResponse::export_all_to(out_dir)?;
+    codex_protocol::mcp_protocol::SetDefaultModelResponse::export_all_to(out_dir)?;
     codex_protocol::mcp_protocol::GetUserAgentResponse::export_all_to(out_dir)?;
     codex_protocol::mcp_protocol::UserInfoResponse::export_all_to(out_dir)?;
 
