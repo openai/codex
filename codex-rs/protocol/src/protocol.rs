@@ -865,38 +865,7 @@ impl InitialHistory {
                 .rposition(|ri| matches!(ri, RolloutItem::Compacted(_))),
         }
     }
-    pub fn get_response_items(&self) -> Vec<ResponseItem> {
-        // TODO: use build_compacted_history when it's merged
-        let from_index = self.get_last_compact_index().unwrap_or(0);
-        match self {
-            InitialHistory::New => Vec::new(),
-            InitialHistory::Resumed(resumed) => resumed
-                .history
-                .iter()
-                .enumerate()
-                .skip(from_index)
-                .filter_map(|(idx, ri)| match ri {
-                    RolloutItem::ResponseItem(item) => Some(item.clone()),
-                    RolloutItem::Compacted(item) if idx == from_index => {
-                        Some(ResponseItem::from(item.clone()))
-                    }
-                    _ => None,
-                })
-                .collect(),
-            InitialHistory::Forked(items) => items
-                .iter()
-                .enumerate()
-                .skip(from_index)
-                .filter_map(|(idx, ri)| match ri {
-                    RolloutItem::ResponseItem(item) => Some(item.clone()),
-                    RolloutItem::Compacted(item) if idx == from_index => {
-                        Some(ResponseItem::from(item.clone()))
-                    }
-                    _ => None,
-                })
-                .collect(),
-        }
-    }
+
     pub fn get_event_msgs(&self) -> Option<Vec<EventMsg>> {
         match self {
             InitialHistory::New => None,
