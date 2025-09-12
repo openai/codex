@@ -160,17 +160,17 @@ fn main() -> anyhow::Result<()> {
 async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     let MultitoolCli {
         config_overrides: root_config_overrides,
-        interactive,
+        mut interactive,
         subcommand,
     } = MultitoolCli::parse();
 
-    let mut interactive_cli = Some(interactive);
-
     match subcommand {
         None => {
-            let mut tui_cli = interactive_cli.take().expect("interactive cli unavailable");
-            prepend_config_flags(&mut tui_cli.config_overrides, root_config_overrides.clone());
-            let usage = codex_tui::run_main(tui_cli, codex_linux_sandbox_exe).await?;
+            prepend_config_flags(
+                &mut interactive.config_overrides,
+                root_config_overrides.clone(),
+            );
+            let usage = codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
             if !usage.is_zero() {
                 println!("{}", codex_core::protocol::FinalOutput::from(usage));
             }
@@ -189,18 +189,17 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         Some(Subcommand::Resume(ResumeCommand { session_id, last })) => {
             // Start with the parsed interactive CLI so resume shares the same
             // configuration surface area as `codex` without additional flags.
-            let mut tui_cli = interactive_cli
-                .take()
-                .expect("interactive cli unavailable for resume");
-
             let resume_session_id = session_id;
-            tui_cli.resume_picker = resume_session_id.is_none() && !last;
-            tui_cli.resume_last = last;
-            tui_cli.resume_session_id = resume_session_id;
+            interactive.resume_picker = resume_session_id.is_none() && !last;
+            interactive.resume_last = last;
+            interactive.resume_session_id = resume_session_id;
 
             // Propagate any root-level config overrides (e.g. `-c key=value`).
-            prepend_config_flags(&mut tui_cli.config_overrides, root_config_overrides.clone());
-            codex_tui::run_main(tui_cli, codex_linux_sandbox_exe).await?;
+            prepend_config_flags(
+                &mut interactive.config_overrides,
+                root_config_overrides.clone(),
+            );
+            codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
         }
         Some(Subcommand::Login(mut login_cli)) => {
             prepend_config_flags(
