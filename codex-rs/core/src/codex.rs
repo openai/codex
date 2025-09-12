@@ -201,7 +201,7 @@ impl Codex {
             config.clone(),
             auth_manager.clone(),
             tx_event.clone(),
-            conversation_history.clone(),
+            conversation_history,
         )
         .await
         .map_err(|e| {
