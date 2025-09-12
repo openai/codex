@@ -1,4 +1,5 @@
 use codex_core::protocol::TokenUsageInfo;
+use codex_protocol::num_format::format_si_suffix;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
@@ -79,6 +80,7 @@ pub(crate) struct ChatComposer {
     has_focus: bool,
     attached_images: Vec<AttachedImage>,
     placeholder_text: String,
+    is_task_running: bool,
     // Non-bracketed paste burst tracker.
     paste_burst: PasteBurst,
     // When true, disables paste-burst logic and inserts characters immediately.
@@ -92,6 +94,10 @@ enum ActivePopup {
     Command(CommandPopup),
     File(FileSearchPopup),
 }
+
+const FOOTER_HINT_HEIGHT: u16 = 1;
+const FOOTER_SPACING_HEIGHT: u16 = 1;
+const FOOTER_HEIGHT_WITH_HINT: u16 = FOOTER_HINT_HEIGHT + FOOTER_SPACING_HEIGHT;
 
 impl ChatComposer {
     pub fn new(
@@ -119,6 +125,7 @@ impl ChatComposer {
             has_focus: has_input_focus,
             attached_images: Vec::new(),
             placeholder_text,
+            is_task_running: false,
             paste_burst: PasteBurst::default(),
             disable_paste_burst: false,
             custom_prompts: Vec::new(),
@@ -131,20 +138,20 @@ impl ChatComposer {
     pub fn desired_height(&self, width: u16) -> u16 {
         self.textarea.desired_height(width - 1)
             + match &self.active_popup {
-                ActivePopup::None => 1u16,
+                ActivePopup::None => FOOTER_HEIGHT_WITH_HINT,
                 ActivePopup::Command(c) => c.calculate_required_height(),
                 ActivePopup::File(c) => c.calculate_required_height(),
             }
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        let popup_height = match &self.active_popup {
-            ActivePopup::Command(popup) => popup.calculate_required_height(),
-            ActivePopup::File(popup) => popup.calculate_required_height(),
-            ActivePopup::None => 1,
+        let popup_constraint = match &self.active_popup {
+            ActivePopup::Command(popup) => Constraint::Max(popup.calculate_required_height()),
+            ActivePopup::File(popup) => Constraint::Max(popup.calculate_required_height()),
+            ActivePopup::None => Constraint::Max(FOOTER_HEIGHT_WITH_HINT),
         };
         let [textarea_rect, _] =
-            Layout::vertical([Constraint::Min(1), Constraint::Max(popup_height)]).areas(area);
+            Layout::vertical([Constraint::Min(1), popup_constraint]).areas(area);
         let mut textarea_rect = textarea_rect;
         textarea_rect.width = textarea_rect.width.saturating_sub(1);
         textarea_rect.x += 1;
@@ -240,6 +247,10 @@ impl ChatComposer {
 
     /// Replace the entire composer content with `text` and reset cursor.
     pub(crate) fn set_text_content(&mut self, text: String) {
+        // Clear any existing content, placeholders, and attachments first.
+        self.textarea.set_text("");
+        self.pending_pastes.clear();
+        self.attached_images.clear();
         self.textarea.set_text(&text);
         self.textarea.set_cursor(0);
         self.sync_command_popup();
@@ -480,7 +491,7 @@ impl ChatComposer {
             } => {
                 // Hide popup without modifying text, remember token to avoid immediate reopen.
                 if let Some(tok) = Self::current_at_token(&self.textarea) {
-                    self.dismissed_file_popup_token = Some(tok.to_string());
+                    self.dismissed_file_popup_token = Some(tok);
                 }
                 self.active_popup = ActivePopup::None;
                 (InputResult::None, true)
@@ -539,7 +550,7 @@ impl ChatComposer {
                             Some(ext) if ext == "jpg" || ext == "jpeg" => "JPEG",
                             _ => "IMG",
                         };
-                        self.attach_image(path_buf.clone(), w, h, format_label);
+                        self.attach_image(path_buf, w, h, format_label);
                         // Add a trailing space to keep typing fluid.
                         self.textarea.insert_str(" ");
                     } else {
@@ -1205,6 +1216,10 @@ impl ChatComposer {
         self.has_focus = has_focus;
     }
 
+    pub fn set_task_running(&mut self, running: bool) {
+        self.is_task_running = running;
+    }
+
     pub(crate) fn set_esc_backtrack_hint(&mut self, show: bool) {
         self.esc_backtrack_hint = show;
     }
@@ -1212,13 +1227,16 @@ impl ChatComposer {
 
 impl WidgetRef for ChatComposer {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let popup_height = match &self.active_popup {
-            ActivePopup::Command(popup) => popup.calculate_required_height(),
-            ActivePopup::File(popup) => popup.calculate_required_height(),
-            ActivePopup::None => 1,
+        let (popup_constraint, hint_spacing) = match &self.active_popup {
+            ActivePopup::Command(popup) => (Constraint::Max(popup.calculate_required_height()), 0),
+            ActivePopup::File(popup) => (Constraint::Max(popup.calculate_required_height()), 0),
+            ActivePopup::None => (
+                Constraint::Length(FOOTER_HEIGHT_WITH_HINT),
+                FOOTER_SPACING_HEIGHT,
+            ),
         };
         let [textarea_rect, popup_rect] =
-            Layout::vertical([Constraint::Min(1), Constraint::Max(popup_height)]).areas(area);
+            Layout::vertical([Constraint::Min(1), popup_constraint]).areas(area);
         match &self.active_popup {
             ActivePopup::Command(popup) => {
                 popup.render_ref(popup_rect, buf);
@@ -1227,13 +1245,27 @@ impl WidgetRef for ChatComposer {
                 popup.render_ref(popup_rect, buf);
             }
             ActivePopup::None => {
-                let bottom_line_rect = popup_rect;
+                let hint_rect = if hint_spacing > 0 {
+                    let [_, hint_rect] = Layout::vertical([
+                        Constraint::Length(hint_spacing),
+                        Constraint::Length(FOOTER_HINT_HEIGHT),
+                    ])
+                    .areas(popup_rect);
+                    hint_rect
+                } else {
+                    popup_rect
+                };
                 let mut hint: Vec<Span<'static>> = if self.ctrl_c_quit_hint {
+                    let ctrl_c_followup = if self.is_task_running {
+                        " to interrupt"
+                    } else {
+                        " to quit"
+                    };
                     vec![
                         " ".into(),
                         key_hint::ctrl('C'),
                         " again".into(),
-                        " to quit".into(),
+                        ctrl_c_followup.into(),
                     ]
                 } else {
                     let newline_hint_key = if self.use_shift_enter_hint {
@@ -1265,8 +1297,11 @@ impl WidgetRef for ChatComposer {
                     let token_usage = &token_usage_info.total_token_usage;
                     hint.push("   ".into());
                     hint.push(
-                        Span::from(format!("{} tokens used", token_usage.blended_total()))
-                            .style(Style::default().add_modifier(Modifier::DIM)),
+                        Span::from(format!(
+                            "{} tokens used",
+                            format_si_suffix(token_usage.blended_total())
+                        ))
+                        .style(Style::default().add_modifier(Modifier::DIM)),
                     );
                     let last_token_usage = &token_usage_info.last_token_usage;
                     if let Some(context_window) = token_usage_info.model_context_window {
@@ -1290,7 +1325,7 @@ impl WidgetRef for ChatComposer {
 
                 Line::from(hint)
                     .style(Style::default().dim())
-                    .render_ref(bottom_line_rect, buf);
+                    .render_ref(hint_rect, buf);
             }
         }
         let border_style = if self.has_focus {
@@ -1325,6 +1360,7 @@ mod tests {
     use super::*;
     use image::ImageBuffer;
     use image::Rgba;
+    use pretty_assertions::assert_eq;
     use std::path::PathBuf;
     use tempfile::tempdir;
 
@@ -1336,6 +1372,60 @@ mod tests {
     use crate::bottom_pane::chat_composer::LARGE_PASTE_CHAR_THRESHOLD;
     use crate::bottom_pane::textarea::TextArea;
     use tokio::sync::mpsc::unbounded_channel;
+
+    #[test]
+    fn footer_hint_row_is_separated_from_composer() {
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        let area = Rect::new(0, 0, 40, 6);
+        let mut buf = Buffer::empty(area);
+        composer.render_ref(area, &mut buf);
+
+        let row_to_string = |y: u16| {
+            let mut row = String::new();
+            for x in 0..area.width {
+                row.push(buf[(x, y)].symbol().chars().next().unwrap_or(' '));
+            }
+            row
+        };
+
+        let mut hint_row: Option<(u16, String)> = None;
+        for y in 0..area.height {
+            let row = row_to_string(y);
+            if row.contains(" send") {
+                hint_row = Some((y, row));
+                break;
+            }
+        }
+
+        let (hint_row_idx, hint_row_contents) =
+            hint_row.expect("expected footer hint row to be rendered");
+        assert_eq!(
+            hint_row_idx,
+            area.height - 1,
+            "hint row should occupy the bottom line: {hint_row_contents:?}",
+        );
+
+        assert!(
+            hint_row_idx > 0,
+            "expected a spacing row above the footer hints",
+        );
+
+        let spacing_row = row_to_string(hint_row_idx - 1);
+        assert_eq!(
+            spacing_row.trim(),
+            "",
+            "expected blank spacing row above hints but saw: {spacing_row:?}",
+        );
+    }
 
     #[test]
     fn test_current_at_token_basic_cases() {
@@ -2104,7 +2194,7 @@ mod tests {
 
         // Re-add and test backspace in middle: should break the placeholder string
         // and drop the image mapping (same as text placeholder behavior).
-        composer.attach_image(path.clone(), 20, 10, "PNG");
+        composer.attach_image(path, 20, 10, "PNG");
         let placeholder2 = composer.attached_images[0].placeholder.clone();
         // Move cursor to roughly middle of placeholder
         if let Some(start_pos) = composer.textarea.text().find(&placeholder2) {
@@ -2163,7 +2253,7 @@ mod tests {
         let path1 = PathBuf::from("/tmp/image_dup1.png");
         let path2 = PathBuf::from("/tmp/image_dup2.png");
 
-        composer.attach_image(path1.clone(), 10, 5, "PNG");
+        composer.attach_image(path1, 10, 5, "PNG");
         // separate placeholders with a space for clarity
         composer.handle_paste(" ".into());
         composer.attach_image(path2.clone(), 10, 5, "PNG");
@@ -2212,7 +2302,7 @@ mod tests {
         assert!(composer.textarea.text().starts_with("[image 3x2 PNG] "));
 
         let imgs = composer.take_recent_submission_images();
-        assert_eq!(imgs, vec![tmp_path.clone()]);
+        assert_eq!(imgs, vec![tmp_path]);
     }
 
     #[test]

@@ -254,6 +254,11 @@ impl TextArea {
             } => self.delete_backward(1),
             KeyEvent {
                 code: KeyCode::Delete,
+                modifiers: KeyModifiers::ALT,
+                ..
+            }  => self.delete_forward_word(),
+            KeyEvent {
+                code: KeyCode::Delete,
                 ..
             }
             | KeyEvent {
@@ -433,6 +438,18 @@ impl TextArea {
     pub fn delete_backward_word(&mut self) {
         let start = self.beginning_of_previous_word();
         self.replace_range(start..self.cursor_pos, "");
+    }
+
+    /// Delete text to the right of the cursor using "word" semantics.
+    ///
+    /// Deletes from the current cursor position through the end of the next word as determined
+    /// by `end_of_next_word()`. Any whitespace (including newlines) between the cursor and that
+    /// word is included in the deletion.
+    pub fn delete_forward_word(&mut self) {
+        let end = self.end_of_next_word();
+        if end > self.cursor_pos {
+            self.replace_range(self.cursor_pos..end, "");
+        }
     }
 
     pub fn kill_to_end_of_line(&mut self) {
@@ -632,9 +649,7 @@ impl TextArea {
     }
 
     fn add_element(&mut self, range: Range<usize>) {
-        let elem = TextElement {
-            range: range.clone(),
-        };
+        let elem = TextElement { range };
         self.elements.push(elem);
         self.elements.sort_by_key(|e| e.range.start);
     }
@@ -1105,6 +1120,79 @@ mod tests {
     }
 
     #[test]
+    fn delete_forward_word_variants() {
+        let mut t = ta_with("hello   world ");
+        t.set_cursor(0);
+        t.delete_forward_word();
+        assert_eq!(t.text(), "   world ");
+        assert_eq!(t.cursor(), 0);
+
+        let mut t = ta_with("hello   world ");
+        t.set_cursor(1);
+        t.delete_forward_word();
+        assert_eq!(t.text(), "h   world ");
+        assert_eq!(t.cursor(), 1);
+
+        let mut t = ta_with("hello   world");
+        t.set_cursor(t.text().len());
+        t.delete_forward_word();
+        assert_eq!(t.text(), "hello   world");
+        assert_eq!(t.cursor(), t.text().len());
+
+        let mut t = ta_with("foo   \nbar");
+        t.set_cursor(3);
+        t.delete_forward_word();
+        assert_eq!(t.text(), "foo");
+        assert_eq!(t.cursor(), 3);
+
+        let mut t = ta_with("foo\nbar");
+        t.set_cursor(3);
+        t.delete_forward_word();
+        assert_eq!(t.text(), "foo");
+        assert_eq!(t.cursor(), 3);
+
+        let mut t = ta_with("hello   world ");
+        t.set_cursor(t.text().len() + 10);
+        t.delete_forward_word();
+        assert_eq!(t.text(), "hello   world ");
+        assert_eq!(t.cursor(), t.text().len());
+    }
+
+    #[test]
+    fn delete_forward_word_handles_atomic_elements() {
+        let mut t = TextArea::new();
+        t.insert_element("<element>");
+        t.insert_str(" tail");
+
+        t.set_cursor(0);
+        t.delete_forward_word();
+        assert_eq!(t.text(), " tail");
+        assert_eq!(t.cursor(), 0);
+
+        let mut t = TextArea::new();
+        t.insert_str("   ");
+        t.insert_element("<element>");
+        t.insert_str(" tail");
+
+        t.set_cursor(0);
+        t.delete_forward_word();
+        assert_eq!(t.text(), " tail");
+        assert_eq!(t.cursor(), 0);
+
+        let mut t = TextArea::new();
+        t.insert_str("prefix ");
+        t.insert_element("<element>");
+        t.insert_str(" tail");
+
+        // cursor in the middle of the element, delete_forward_word deletes the element
+        let elem_range = t.elements[0].range.clone();
+        t.cursor_pos = elem_range.start + (elem_range.len() / 2);
+        t.delete_forward_word();
+        assert_eq!(t.text(), "prefix  tail");
+        assert_eq!(t.cursor(), elem_range.start);
+    }
+
+    #[test]
     fn cursor_left_and_right_handle_graphemes() {
         let mut t = ta_with("a👍b");
         t.set_cursor(t.text().len());
@@ -1172,6 +1260,21 @@ mod tests {
         t.input(KeyEvent::new(KeyCode::Backspace, KeyModifiers::ALT));
         assert_eq!(t.text(), "hello ");
         assert_eq!(t.cursor(), 6);
+    }
+
+    #[test]
+    fn delete_forward_word_with_without_alt_modifier() {
+        let mut t = ta_with("hello world");
+        t.set_cursor(0);
+        t.input(KeyEvent::new(KeyCode::Delete, KeyModifiers::ALT));
+        assert_eq!(t.text(), " world");
+        assert_eq!(t.cursor(), 0);
+
+        let mut t = ta_with("hello");
+        t.set_cursor(0);
+        t.input(KeyEvent::new(KeyCode::Delete, KeyModifiers::NONE));
+        assert_eq!(t.text(), "ello");
+        assert_eq!(t.cursor(), 0);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use codex_core::protocol::ConversationHistoryResponseEvent;
+use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::Event;
 use codex_file_search::FileMatch;
 
@@ -46,7 +46,7 @@ pub(crate) enum AppEvent {
     CommitTick,
 
     /// Update the current reasoning effort in the running app and widget.
-    UpdateReasoningEffort(ReasoningEffort),
+    UpdateReasoningEffort(Option<ReasoningEffort>),
 
     /// Update the current model slug in the running app and widget.
     UpdateModel(String),
@@ -58,5 +58,5 @@ pub(crate) enum AppEvent {
     UpdateSandboxPolicy(SandboxPolicy),
 
     /// Forwarded conversation history snapshot from the current conversation.
-    ConversationHistory(ConversationHistoryResponseEvent),
+    ConversationHistory(ConversationPathResponseEvent),
 }

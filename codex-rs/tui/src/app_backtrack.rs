@@ -1,26 +1,30 @@
+use std::path::PathBuf;
+
 use crate::app::App;
 use crate::backtrack_helpers;
 use crate::pager_overlay::Overlay;
 use crate::tui;
 use crate::tui::TuiEvent;
-use codex_core::protocol::ConversationHistoryResponseEvent;
+use codex_core::protocol::ConversationPathResponseEvent;
+use codex_protocol::mcp_protocol::ConversationId;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
 use crossterm::event::KeyEventKind;
+
 /// Aggregates all backtrack-related state used by the App.
 #[derive(Default)]
 pub(crate) struct BacktrackState {
     /// True when Esc has primed backtrack mode in the main view.
     pub(crate) primed: bool,
     /// Session id of the base conversation to fork from.
-    pub(crate) base_id: Option<uuid::Uuid>,
+    pub(crate) base_id: Option<ConversationId>,
     /// Current step count (Nth last user message).
     pub(crate) count: usize,
     /// True when the transcript overlay is showing a backtrack preview.
     pub(crate) overlay_preview_active: bool,
     /// Pending fork request: (base_id, drop_count, prefill).
-    pub(crate) pending: Option<(uuid::Uuid, usize, String)>,
+    pub(crate) pending: Option<(ConversationId, usize, String)>,
 }
 
 impl App {
@@ -91,12 +95,12 @@ impl App {
     pub(crate) fn request_backtrack(
         &mut self,
         prefill: String,
-        base_id: uuid::Uuid,
+        base_id: ConversationId,
         drop_last_messages: usize,
     ) {
         self.backtrack.pending = Some((base_id, drop_last_messages, prefill));
         self.app_event_tx.send(crate::app_event::AppEvent::CodexOp(
-            codex_core::protocol::Op::GetHistory,
+            codex_core::protocol::Op::GetPath,
         ));
     }
 
@@ -135,7 +139,7 @@ impl App {
     fn prime_backtrack(&mut self) {
         self.backtrack.primed = true;
         self.backtrack.count = 0;
-        self.backtrack.base_id = self.chat_widget.session_id();
+        self.backtrack.base_id = self.chat_widget.conversation_id();
         self.chat_widget.show_esc_backtrack_hint();
     }
 
@@ -151,7 +155,7 @@ impl App {
     /// When overlay is already open, begin preview mode and select latest user message.
     fn begin_overlay_backtrack_preview(&mut self, tui: &mut tui::Tui) {
         self.backtrack.primed = true;
-        self.backtrack.base_id = self.chat_widget.session_id();
+        self.backtrack.base_id = self.chat_widget.conversation_id();
         self.backtrack.overlay_preview_active = true;
         let sel = self.compute_backtrack_selection(tui, 1);
         self.apply_backtrack_selection(sel);
@@ -263,7 +267,7 @@ impl App {
     pub(crate) async fn on_conversation_history_for_backtrack(
         &mut self,
         tui: &mut tui::Tui,
-        ev: ConversationHistoryResponseEvent,
+        ev: ConversationPathResponseEvent,
     ) -> Result<()> {
         if let Some((base_id, _, _)) = self.backtrack.pending.as_ref()
             && ev.conversation_id == *base_id
@@ -279,14 +283,14 @@ impl App {
     async fn fork_and_switch_to_new_conversation(
         &mut self,
         tui: &mut tui::Tui,
-        ev: ConversationHistoryResponseEvent,
+        ev: ConversationPathResponseEvent,
         drop_count: usize,
         prefill: String,
     ) {
         let cfg = self.chat_widget.config_ref().clone();
         // Perform the fork via a thin wrapper for clarity/testability.
         let result = self
-            .perform_fork(ev.entries.clone(), drop_count, cfg.clone())
+            .perform_fork(ev.path.clone(), drop_count, cfg.clone())
             .await;
         match result {
             Ok(new_conv) => {
@@ -299,13 +303,11 @@ impl App {
     /// Thin wrapper around ConversationManager::fork_conversation.
     async fn perform_fork(
         &self,
-        entries: Vec<codex_protocol::models::ResponseItem>,
+        path: PathBuf,
         drop_count: usize,
         cfg: codex_core::config::Config,
     ) -> codex_core::error::Result<codex_core::NewConversation> {
-        self.server
-            .fork_conversation(entries, drop_count, cfg)
-            .await
+        self.server.fork_conversation(drop_count, cfg, path).await
     }
 
     /// Install a forked conversation into the ChatWidget and update UI to reflect selection.
@@ -333,7 +335,7 @@ impl App {
         self.trim_transcript_for_backtrack(drop_count);
         self.render_transcript_once(tui);
         if !prefill.is_empty() {
-            self.chat_widget.insert_str(prefill);
+            self.chat_widget.set_composer_text(prefill.to_string());
         }
         tui.frame_requester().schedule_frame();
     }

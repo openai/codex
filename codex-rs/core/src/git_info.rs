@@ -3,6 +3,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use codex_protocol::mcp_protocol::GitSha;
+use codex_protocol::protocol::GitInfo;
 use futures::future::join_all;
 use serde::Deserialize;
 use serde::Serialize;
@@ -42,19 +43,6 @@ pub fn get_git_repo_root(base_dir: &Path) -> Option<PathBuf> {
 
 /// Timeout for git commands to prevent freezing on large repositories
 const GIT_COMMAND_TIMEOUT: TokioDuration = TokioDuration::from_secs(5);
-
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct GitInfo {
-    /// Current commit hash (SHA)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub commit_hash: Option<String>,
-    /// Current branch name
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub branch: Option<String>,
-    /// Repository URL (if available from remote)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub repository_url: Option<String>,
-}
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct GitDiffToRemote {
@@ -814,7 +802,7 @@ mod tests {
     async fn resolve_root_git_project_for_trust_regular_repo_returns_repo_root() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let repo_path = create_test_git_repo(&temp_dir).await;
-        let expected = std::fs::canonicalize(&repo_path).unwrap().to_path_buf();
+        let expected = std::fs::canonicalize(&repo_path).unwrap();
 
         assert_eq!(
             resolve_root_git_project_for_trust(&repo_path),
@@ -822,10 +810,7 @@ mod tests {
         );
         let nested = repo_path.join("sub/dir");
         std::fs::create_dir_all(&nested).unwrap();
-        assert_eq!(
-            resolve_root_git_project_for_trust(&nested),
-            Some(expected.clone())
-        );
+        assert_eq!(resolve_root_git_project_for_trust(&nested), Some(expected));
     }
 
     #[tokio::test]

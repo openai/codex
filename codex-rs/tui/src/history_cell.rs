@@ -27,6 +27,8 @@ use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TokenUsage;
+use codex_protocol::mcp_protocol::ConversationId;
+use codex_protocol::num_format::format_with_separators;
 use codex_protocol::parse_command::ParsedCommand;
 use image::DynamicImage;
 use image::ImageReader;
@@ -49,7 +51,6 @@ use std::time::Duration;
 use std::time::Instant;
 use tracing::error;
 use unicode_width::UnicodeWidthStr;
-use uuid::Uuid;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CommandOutput {
@@ -600,10 +601,12 @@ pub(crate) fn new_session_info(
 ) -> PlainHistoryCell {
     let SessionConfiguredEvent {
         model,
+        reasoning_effort: _,
         session_id: _,
         history_log_id: _,
         history_entry_count: _,
         initial_messages: _,
+        rollout_path: _,
     } = event;
     if is_first_event {
         let cwd_str = match relativize_to_home(&config.cwd) {
@@ -695,7 +698,7 @@ fn spinner(start_time: Option<Instant>) -> Span<'static> {
 
 pub(crate) fn new_active_mcp_tool_call(invocation: McpInvocation) -> PlainHistoryCell {
     let title_line = Line::from(vec!["tool".magenta(), " running...".dim()]);
-    let lines: Vec<Line> = vec![title_line, format_mcp_invocation(invocation.clone())];
+    let lines: Vec<Line> = vec![title_line, format_mcp_invocation(invocation)];
 
     PlainHistoryCell { lines }
 }
@@ -821,7 +824,7 @@ pub(crate) fn new_completed_mcp_tool_call(
 pub(crate) fn new_status_output(
     config: &Config,
     usage: &TokenUsage,
-    session_id: &Option<Uuid>,
+    session_id: &Option<ConversationId>,
 ) -> PlainHistoryCell {
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push("/status".magenta().into());
@@ -964,7 +967,7 @@ pub(crate) fn new_status_output(
     // Input: <input> [+ <cached> cached]
     let mut input_line_spans: Vec<Span<'static>> = vec![
         "  • Input: ".into(),
-        usage.non_cached_input().to_string().into(),
+        format_with_separators(usage.non_cached_input()).into(),
     ];
     if usage.cached_input_tokens > 0 {
         let cached = usage.cached_input_tokens;
@@ -974,12 +977,12 @@ pub(crate) fn new_status_output(
     // Output: <output>
     lines.push(Line::from(vec![
         "  • Output: ".into(),
-        usage.output_tokens.to_string().into(),
+        format_with_separators(usage.output_tokens).into(),
     ]));
     // Total: <total>
     lines.push(Line::from(vec![
         "  • Total: ".into(),
-        usage.blended_total().to_string().into(),
+        format_with_separators(usage.blended_total()).into(),
     ]));
 
     PlainHistoryCell { lines }
@@ -1050,12 +1053,21 @@ pub(crate) fn new_mcp_tools_output(
     PlainHistoryCell { lines }
 }
 
+pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHistoryCell {
+    let mut line = vec!["> ".into(), message.into()];
+    if let Some(hint) = hint {
+        line.push(" ".into());
+        line.push(hint.dark_gray());
+    }
+    let lines: Vec<Line<'static>> = vec![line.into()];
+    PlainHistoryCell { lines }
+}
+
 pub(crate) fn new_error_event(message: String) -> PlainHistoryCell {
     // Use a hair space (U+200A) to create a subtle, near-invisible separation
     // before the text. VS16 is intentionally omitted to keep spacing tighter
     // in terminals like Ghostty.
-    let lines: Vec<Line<'static>> =
-        vec![vec![padded_emoji("🖐").red().bold(), " ".into(), message.into()].into()];
+    let lines: Vec<Line<'static>> = vec![vec![format!("■ {message}").red()].into()];
     PlainHistoryCell { lines }
 }
 
@@ -1177,13 +1189,14 @@ pub(crate) fn new_proposed_command(command: &[String]) -> PlainHistoryCell {
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push(Line::from(vec!["• ".into(), "Proposed Command".bold()]));
 
-    let cmd_lines: Vec<Line<'static>> = cmd
-        .lines()
-        .map(|part| Line::from(part.to_string()))
-        .collect();
+    let highlighted_lines = crate::render::highlight::highlight_bash_to_lines(&cmd);
     let initial_prefix: Span<'static> = "  └ ".dim();
     let subsequent_prefix: Span<'static> = "    ".into();
-    lines.extend(prefix_lines(cmd_lines, initial_prefix, subsequent_prefix));
+    lines.extend(prefix_lines(
+        highlighted_lines,
+        initial_prefix,
+        subsequent_prefix,
+    ));
 
     PlainHistoryCell { lines }
 }
@@ -1321,7 +1334,7 @@ fn format_mcp_invocation<'a>(invocation: McpInvocation) -> Line<'a> {
     let invocation_spans = vec![
         invocation.server.clone().cyan(),
         ".".into(),
-        invocation.tool.clone().cyan(),
+        invocation.tool.cyan(),
         "(".into(),
         args_str.dim(),
         ")".into(),

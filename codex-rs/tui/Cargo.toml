@@ -44,7 +44,7 @@ crossterm = { version = "0.28.1", features = [
     "event-stream",
 ] }
 diffy = "0.4.2"
-image = { version = "^0.25.6", default-features = false, features = [
+image = { version = "^0.25.8", default-features = false, features = [
     "jpeg",
     "png",
 ] }
@@ -59,9 +59,7 @@ ratatui = { version = "0.29.0", features = [
     "unstable-rendered-line-info",
     "unstable-widget-ref",
 ] }
-ratatui-image = "8.0.0"
 regex-lite = "0.1"
-reqwest = { version = "0.12", features = ["json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 shlex = "1.3.0"
@@ -81,12 +79,10 @@ tokio-stream = "0.1.17"
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-appender = "0.2.3"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
-tui-input = "0.14.0"
-tui-markdown = "0.3.3"
+pulldown-cmark = "0.10"
 unicode-segmentation = "1.12.0"
 unicode-width = "0.1"
 url = "2"
-uuid = "1"
 pathdiff = "0.2"
 
 [target.'cfg(unix)'.dependencies]
@@ -100,7 +96,7 @@ arboard = "3"
 
 [dev-dependencies]
 chrono = { version = "0.4", features = ["serde"] }
-insta = "1.43.1"
+insta = "1.43.2"
 pretty_assertions = "1"
 rand = "0.9"
 vt100 = "0.16.2"

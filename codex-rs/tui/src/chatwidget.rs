@@ -85,7 +85,7 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_file_search::FileMatch;
-use uuid::Uuid;
+use codex_protocol::mcp_protocol::ConversationId;
 
 // Track information about an in-flight exec command.
 struct RunningCommand {
@@ -121,7 +121,7 @@ pub(crate) struct ChatWidget {
     reasoning_buffer: String,
     // Accumulates full reasoning content for transcript-only recording
     full_reasoning_buffer: String,
-    session_id: Option<Uuid>,
+    conversation_id: Option<ConversationId>,
     frame_requester: FrameRequester,
     // Whether to include the initial welcome banner on session configured
     show_welcome_banner: bool,
@@ -163,7 +163,7 @@ impl ChatWidget {
     fn on_session_configured(&mut self, event: codex_core::protocol::SessionConfiguredEvent) {
         self.bottom_pane
             .set_history_metadata(event.history_log_id, event.history_entry_count);
-        self.session_id = Some(event.session_id);
+        self.conversation_id = Some(event.session_id);
         let initial_messages = event.initial_messages.clone();
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);
@@ -289,7 +289,9 @@ impl ChatWidget {
     /// separated by newlines rather than auto‑submitting the next one.
     fn on_interrupted_turn(&mut self) {
         // Finalize, log a gentle prompt, and clear running state.
-        self.finalize_turn_with_error_message("Tell the model what to do differently".to_owned());
+        self.finalize_turn_with_error_message(
+            "Conversation interrupted - tell the model what to do differently".to_owned(),
+        );
 
         // If any messages were queued during the task, restore them into the composer.
         if !self.queued_user_messages.is_empty() {
@@ -574,14 +576,14 @@ impl ChatWidget {
                 self.active_exec_cell = Some(history_cell::new_active_exec_command(
                     ev.call_id.clone(),
                     ev.command.clone(),
-                    ev.parsed_cmd.clone(),
+                    ev.parsed_cmd,
                 ));
             }
         } else {
             self.active_exec_cell = Some(history_cell::new_active_exec_command(
                 ev.call_id.clone(),
                 ev.command.clone(),
-                ev.parsed_cmd.clone(),
+                ev.parsed_cmd,
             ));
         }
 
@@ -660,7 +662,7 @@ impl ChatWidget {
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
-            session_id: None,
+            conversation_id: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: true,
             suppress_session_configured_redraw: false,
@@ -712,7 +714,7 @@ impl ChatWidget {
             interrupts: InterruptManager::new(),
             reasoning_buffer: String::new(),
             full_reasoning_buffer: String::new(),
-            session_id: None,
+            conversation_id: None,
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: false,
             suppress_session_configured_redraw: true,
@@ -804,7 +806,7 @@ impl ChatWidget {
             "attach_image path={path:?} width={width} height={height} format={format_label}",
         );
         self.bottom_pane
-            .attach_image(path.clone(), width, height, format_label);
+            .attach_image(path, width, height, format_label);
         self.request_redraw();
     }
 
@@ -986,7 +988,7 @@ impl ChatWidget {
 
         // Only show the text portion in conversation history.
         if !text.is_empty() {
-            self.add_to_history(history_cell::new_user_prompt(text.clone()));
+            self.add_to_history(history_cell::new_user_prompt(text));
         }
     }
 
@@ -1055,10 +1057,10 @@ impl ChatWidget {
             EventMsg::PlanUpdate(update) => self.on_plan_update(update),
             EventMsg::ExecApprovalRequest(ev) => {
                 // For replayed events, synthesize an empty id (these should not occur).
-                self.on_exec_approval_request(id.clone().unwrap_or_default(), ev)
+                self.on_exec_approval_request(id.unwrap_or_default(), ev)
             }
             EventMsg::ApplyPatchApprovalRequest(ev) => {
-                self.on_apply_patch_approval_request(id.clone().unwrap_or_default(), ev)
+                self.on_apply_patch_approval_request(id.unwrap_or_default(), ev)
             }
             EventMsg::ExecCommandBegin(ev) => self.on_exec_command_begin(ev),
             EventMsg::ExecCommandOutputDelta(delta) => self.on_exec_command_output_delta(delta),
@@ -1083,7 +1085,7 @@ impl ChatWidget {
                     self.on_user_message_event(ev);
                 }
             }
-            EventMsg::ConversationHistory(ev) => {
+            EventMsg::ConversationPath(ev) => {
                 self.app_event_tx
                     .send(crate::app_event::AppEvent::ConversationHistory(ev));
             }
@@ -1159,7 +1161,7 @@ impl ChatWidget {
         self.add_to_history(history_cell::new_status_output(
             &self.config,
             usage_ref,
-            &self.session_id,
+            &self.conversation_id,
         ));
     }
 
@@ -1191,9 +1193,13 @@ impl ChatWidget {
                 tracing::info!(
                     "New model: {}, New effort: {}, Current model: {}, Current effort: {}",
                     model_slug.clone(),
-                    effort,
+                    effort
+                        .map(|effort| effort.to_string())
+                        .unwrap_or_else(|| "none".to_string()),
                     current_model,
                     current_effort
+                        .map(|effort| effort.to_string())
+                        .unwrap_or_else(|| "none".to_string())
                 );
             })];
             items.push(SelectionItem {
@@ -1207,7 +1213,7 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(
             "Select model and reasoning level".to_string(),
             Some("Switch between OpenAI models for this and future Codex CLI session".to_string()),
-            Some("Press Enter to confirm or Esc to go back".to_string()),
+            Some("Press Enter to confirm, Esc to go back, Ctrl+S to save".to_string()),
             items,
         );
     }
@@ -1264,13 +1270,23 @@ impl ChatWidget {
     }
 
     /// Set the reasoning effort in the widget's config copy.
-    pub(crate) fn set_reasoning_effort(&mut self, effort: ReasoningEffortConfig) {
+    pub(crate) fn set_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
         self.config.model_reasoning_effort = effort;
     }
 
     /// Set the model in the widget's config copy.
     pub(crate) fn set_model(&mut self, model: String) {
         self.config.model = model;
+    }
+
+    pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
+        self.add_to_history(history_cell::new_info_event(message, hint));
+        self.request_redraw();
+    }
+
+    pub(crate) fn add_error_message(&mut self, message: String) {
+        self.add_to_history(history_cell::new_error_event(message));
+        self.request_redraw();
     }
 
     pub(crate) fn add_mcp_output(&mut self) {
@@ -1288,15 +1304,17 @@ impl ChatWidget {
 
     /// Handle Ctrl-C key press.
     fn on_ctrl_c(&mut self) {
-        if self.bottom_pane.on_ctrl_c() == CancellationEvent::Ignored {
-            if self.bottom_pane.is_task_running() {
-                self.submit_op(Op::Interrupt);
-            } else if self.bottom_pane.ctrl_c_quit_hint_visible() {
-                self.submit_op(Op::Shutdown);
-            } else {
-                self.bottom_pane.show_ctrl_c_quit_hint();
-            }
+        if self.bottom_pane.on_ctrl_c() == CancellationEvent::Handled {
+            return;
         }
+
+        if self.bottom_pane.is_task_running() {
+            self.bottom_pane.show_ctrl_c_quit_hint();
+            self.submit_op(Op::Interrupt);
+            return;
+        }
+
+        self.submit_op(Op::Shutdown);
     }
 
     pub(crate) fn composer_is_empty(&self) -> bool {
@@ -1312,6 +1330,11 @@ impl ChatWidget {
 
     pub(crate) fn insert_str(&mut self, text: &str) {
         self.bottom_pane.insert_str(text);
+    }
+
+    /// Replace the composer content with the provided text and reset cursor.
+    pub(crate) fn set_composer_text(&mut self, text: String) {
+        self.bottom_pane.set_composer_text(text);
     }
 
     pub(crate) fn show_esc_backtrack_hint(&mut self) {
@@ -1358,8 +1381,8 @@ impl ChatWidget {
             .unwrap_or_default()
     }
 
-    pub(crate) fn session_id(&self) -> Option<Uuid> {
-        self.session_id
+    pub(crate) fn conversation_id(&self) -> Option<ConversationId> {
+        self.conversation_id
     }
 
     /// Return a reference to the widget's current config (includes any
@@ -1434,4 +1457,4 @@ fn extract_first_bold(s: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
