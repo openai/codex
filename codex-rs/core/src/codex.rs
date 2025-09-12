@@ -3223,7 +3223,7 @@ mod tests {
             &turn_context,
             InitialHistory::Resumed(ResumedHistory {
                 conversation_id: ConversationId::default(),
-                history: rollout_items.clone(),
+                history: rollout_items,
                 rollout_path: PathBuf::from("/tmp/resume.jsonl"),
             }),
         ));
