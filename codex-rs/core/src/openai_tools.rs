@@ -290,7 +290,7 @@ fn create_shell_tool_for_sandbox(sandbox_policy: &SandboxPolicy) -> OpenAiTool {
 
     OpenAiTool::Function(ResponsesApiTool {
         name: "shell".to_string(),
-        description: "Runs a shell command and returns its output".to_string(),
+        description: "Runs a shell command and returns its output.".to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -1116,7 +1116,7 @@ mod tests {
         };
         assert_eq!(name, "shell");
 
-        let expected = "Runs a shell command and returns its output";
+        let expected = "Runs a shell command and returns its output.";
         assert_eq!(description, expected);
     }
 
@@ -1131,7 +1131,7 @@ mod tests {
         };
         assert_eq!(name, "shell");
 
-        let expected = "Runs a shell command and returns its output";
+        let expected = "Runs a shell command and returns its output.";
         assert_eq!(description, expected);
     }
 
