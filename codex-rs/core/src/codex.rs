@@ -1829,10 +1829,8 @@ fn parse_review_output_event(text: &str) -> ReviewOutputEvent {
     // Not JSON – return a structured ReviewOutputEvent that carries
     // the plain text as the overall explanation.
     ReviewOutputEvent {
-        findings: Vec::new(),
-        overall_correctness: String::new(),
         overall_explanation: text.to_string(),
-        overall_confidence_score: 1.0,
+        ..Default::default()
     }
 }
 
