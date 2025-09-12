@@ -1460,7 +1460,7 @@ async fn submission_loop(
                 spawn_review_thread(
                     sess.clone(),
                     config.clone(),
-                    Arc::clone(&turn_context),
+                    turn_context.clone(),
                     sub.id,
                     prompt,
                 )
