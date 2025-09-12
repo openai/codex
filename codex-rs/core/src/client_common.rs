@@ -143,7 +143,10 @@ pub(crate) fn create_reasoning_param_for_request(
         return None;
     }
 
-    effort.map(|effort| Reasoning { effort, summary })
+    Some(Reasoning {
+        effort: effort.unwrap_or_default(),
+        summary,
+    })
 }
 
 pub(crate) fn create_text_param_for_request(
