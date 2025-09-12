@@ -1,0 +1,8 @@
+---
+source: tui/src/bottom_pane/chat_composer.rs
+expression: terminal.backend()
+---
+"▌ Ask Codex to do anything                                                                                              "
+"▌                                                                                                                       "
+"▌                                                                                                                       "
+" ⏎ send   ⌃J newline   ⌃T transcript   ⌃C quit   very-long-repository...-with-many-segments:feature/super.../branch/name"
