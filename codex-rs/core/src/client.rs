@@ -18,7 +18,6 @@ use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_util::io::ReaderStream;
 use tracing::debug;
-use tracing::info;
 use tracing::trace;
 use tracing::warn;
 
@@ -172,8 +171,6 @@ impl ModelClient {
             self.effort,
             self.summary,
         );
-
-        info!("reasoning: {:?}", self.config.model_family);
 
         let include: Vec<String> = if reasoning.is_some() {
             vec!["reasoning.encrypted_content".to_string()]
