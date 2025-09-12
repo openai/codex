@@ -842,6 +842,7 @@ impl InitialHistory {
         }
     }
     pub fn get_response_items(&self) -> Vec<ResponseItem> {
+        // TODO: use build_compacted_history when it's merged
         let from_index = self.get_last_compact_index().unwrap_or(0);
         match self {
             InitialHistory::New => Vec::new(),
