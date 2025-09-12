@@ -206,7 +206,7 @@ impl ModelClient {
 
         let mut payload_json = serde_json::to_value(&payload)?;
         if azure_workaround {
-            attach_reasoning_ids(&mut payload_json, &input_with_instructions);
+            attach_item_ids(&mut payload_json, &input_with_instructions);
         }
         let payload_body = serde_json::to_string(&payload_json)?;
 
@@ -433,7 +433,7 @@ struct ResponseCompletedOutputTokensDetails {
     reasoning_tokens: u64,
 }
 
-fn attach_reasoning_ids(payload_json: &mut Value, original_items: &[ResponseItem]) {
+fn attach_item_ids(payload_json: &mut Value, original_items: &[ResponseItem]) {
     let Some(input_value) = payload_json.get_mut("input") else {
         return;
     };
