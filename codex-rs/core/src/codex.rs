@@ -1,7 +1,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::mem;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
@@ -268,7 +267,6 @@ struct State {
     pending_input: Vec<ResponseInputItem>,
     history: ConversationHistory,
     token_info: Option<TokenUsageInfo>,
-    is_review_mode: bool,
 }
 
 /// Context for an initialized model agent
@@ -957,11 +955,6 @@ impl Session {
         state.pending_approvals.clear();
         state.pending_input.clear();
         if let Some(task) = state.current_task.take() {
-            let sub_id = task.sub_id.clone();
-            let sess = task.sess.clone();
-            tokio::spawn(async move {
-                try_exit_review_mode(sess, sub_id, None).await;
-            });
             task.abort(TurnAbortReason::Interrupted);
         }
     }
@@ -1017,11 +1010,19 @@ pub(crate) struct ApplyPatchCommandContext {
     pub(crate) changes: HashMap<PathBuf, FileChange>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum AgentTaskKind {
+    Regular,
+    Review,
+    Compact,
+}
+
 /// A series of Turns in response to user input.
 pub(crate) struct AgentTask {
     sess: Arc<Session>,
     sub_id: String,
     handle: AbortHandle,
+    kind: AgentTaskKind,
 }
 
 impl AgentTask {
@@ -1042,6 +1043,28 @@ impl AgentTask {
             sess,
             sub_id,
             handle,
+            kind: AgentTaskKind::Regular,
+        }
+    }
+
+    fn review(
+        sess: Arc<Session>,
+        turn_context: Arc<TurnContext>,
+        sub_id: String,
+        input: Vec<InputItem>,
+    ) -> Self {
+        let handle = {
+            let sess = sess.clone();
+            let sub_id = sub_id.clone();
+            let tc = Arc::clone(&turn_context);
+            tokio::spawn(async move { run_task(sess, tc.as_ref(), sub_id, input).await })
+                .abort_handle()
+        };
+        Self {
+            sess,
+            sub_id,
+            handle,
+            kind: AgentTaskKind::Review,
         }
     }
 
@@ -1065,12 +1088,20 @@ impl AgentTask {
             sess,
             sub_id,
             handle,
+            kind: AgentTaskKind::Compact,
         }
     }
 
     fn abort(self, reason: TurnAbortReason) {
         // TOCTOU?
         if !self.handle.is_finished() {
+            if self.kind == AgentTaskKind::Review {
+                let sess = self.sess.clone();
+                let sub_id = self.sub_id.clone();
+                tokio::spawn(async move {
+                    try_exit_review_mode(sess, sub_id, None).await;
+                });
+            }
             self.handle.abort();
             let event = Event {
                 id: self.sub_id,
@@ -1483,24 +1514,15 @@ async fn spawn_review_thread(
 
     // Clone sub_id for the upcoming announcement before moving it into the task.
     let sub_id_for_event = sub_id.clone();
-    let task = AgentTask::spawn(sess.clone(), tc.clone(), sub_id, input);
+    let task = AgentTask::review(sess.clone(), tc.clone(), sub_id, input);
     sess.set_task(task);
 
-    {
-        // Mark session as being in review mode before notifying UIs.
-        let mut st = sess.state.lock_unchecked();
-        st.is_review_mode = true;
-    }
-
     // Announce entering review mode so UIs can switch modes.
-    trace!("emitting EnteredReviewMode");
-    let _ = sess
-        .tx_event
-        .send(Event {
-            id: sub_id_for_event,
-            msg: EventMsg::EnteredReviewMode,
-        })
-        .await;
+    sess.send_event(Event {
+        id: sub_id_for_event,
+        msg: EventMsg::EnteredReviewMode,
+    })
+    .await;
 }
 
 /// Takes a user message as input and runs a loop where, at each turn, the model
@@ -1746,7 +1768,7 @@ async fn run_task(
     // If parsing fails, construct a minimal ReviewOutputEvent using the plain
     // text as the overall explanation. Else, just exit review mode with None.
     //
-    // Also sets Session State's is_review_mode => false.
+    // Emits an ExitedReviewMode event with the parsed review output.
     if turn_context.is_review_mode {
         try_exit_review_mode(
             sess.clone(),
@@ -3143,25 +3165,17 @@ fn convert_call_tool_result_to_function_call_output_payload(
     }
 }
 
-/// Sets session state's is_review_mode = false, and
-/// emits an ExitedReviewMode Event with optional ReviewOutput.
+/// Emits an ExitedReviewMode Event with optional ReviewOutput.
 async fn try_exit_review_mode(
     session: Arc<Session>,
     task_sub_id: String,
     res: Option<ReviewOutputEvent>,
 ) {
-    let is_review_mode = {
-        let mut st = session.state.lock_unchecked();
-        mem::take(&mut st.is_review_mode)
+    let event = Event {
+        id: task_sub_id,
+        msg: EventMsg::ExitedReviewMode(res),
     };
-
-    if is_review_mode {
-        let event = Event {
-            id: task_sub_id,
-            msg: EventMsg::ExitedReviewMode(res),
-        };
-        session.send_event(event).await;
-    }
+    session.send_event(event).await;
 }
 
 #[cfg(test)]
