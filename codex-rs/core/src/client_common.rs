@@ -19,6 +19,9 @@ use tokio::sync::mpsc;
 /// with this content.
 const BASE_INSTRUCTIONS: &str = include_str!("../prompt.md");
 
+/// Review thread system prompt. Edit `core/src/review_prompt.md` to customize.
+pub const REVIEW_PROMPT: &str = include_str!("../review_prompt.md");
+
 /// API request payload for a single model turn
 #[derive(Default, Debug, Clone)]
 pub struct Prompt {
