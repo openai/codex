@@ -32,7 +32,7 @@ use toml::Value as TomlValue;
 use toml_edit::DocumentMut;
 
 const OPENAI_DEFAULT_MODEL: &str = "gpt-5";
-pub const GPT5_HIGH_MODEL: &str = "gpt-5-high";
+pub const GPT5_HIGH_MODEL: &str = "gpt-5-high-new";
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of

@@ -1053,9 +1053,13 @@ pub(crate) fn new_mcp_tools_output(
     PlainHistoryCell { lines }
 }
 
-pub(crate) fn new_info_event(message: String) -> PlainHistoryCell {
-    let lines: Vec<Line<'static>> =
-        vec![vec![padded_emoji("💾").green(), " ".into(), message.into()].into()];
+pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHistoryCell {
+    let mut line = vec!["> ".into(), message.into()];
+    if let Some(hint) = hint {
+        line.push(" ".into());
+        line.push(hint.dark_gray());
+    }
+    let lines: Vec<Line<'static>> = vec![line.into()];
     PlainHistoryCell { lines }
 }
 
