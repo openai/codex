@@ -90,6 +90,7 @@ async fn test_codex_jsonrpc_conversation_flow() {
     let NewConversationResponse {
         conversation_id,
         model,
+        reasoning_effort: _,
         rollout_path: _,
     } = new_conv_resp;
     assert_eq!(model, "mock-model");

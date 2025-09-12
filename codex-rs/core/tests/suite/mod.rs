@@ -7,6 +7,7 @@ mod exec;
 mod exec_stream_events;
 mod fork_conversation;
 mod live_cli;
+mod model_overrides;
 mod prompt_caching;
 mod review;
 mod seatbelt;

@@ -499,7 +499,7 @@ fn apply_toml_override(root: &mut TomlValue, path: &str, value: TomlValue) {
 }
 
 /// Base config deserialized from ~/.codex/config.toml.
-#[derive(Deserialize, Debug, Clone, Default)]
+#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ConfigToml {
     /// Optional override of model selection.
     pub model: Option<String>,
@@ -633,7 +633,7 @@ pub struct ProjectConfig {
     pub trust_level: Option<String>,
 }
 
-#[derive(Deserialize, Debug, Clone, Default)]
+#[derive(Deserialize, Debug, Clone, Default, PartialEq)]
 pub struct ToolsToml {
     #[serde(default, alias = "web_search_request")]
     pub web_search: Option<bool>,

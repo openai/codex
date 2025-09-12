@@ -1453,4 +1453,4 @@ fn extract_first_bold(s: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

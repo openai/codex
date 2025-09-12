@@ -601,6 +601,7 @@ pub(crate) fn new_session_info(
 ) -> PlainHistoryCell {
     let SessionConfiguredEvent {
         model,
+        reasoning_effort: _,
         session_id: _,
         history_log_id: _,
         history_entry_count: _,

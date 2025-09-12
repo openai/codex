@@ -509,6 +509,7 @@ impl Session {
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
                 model,
+                reasoning_effort: model_reasoning_effort,
                 history_log_id,
                 history_entry_count,
                 initial_messages,
@@ -1212,21 +1213,6 @@ async fn submission_loop(
                 turn_context = Arc::new(new_turn_context);
 
                 // Optionally persist changes to model / effort
-                let effort_str = effort.map(|_| effective_effort.to_string());
-
-                if let Err(e) = persist_non_null_overrides(
-                    &config.codex_home,
-                    config.active_profile.as_deref(),
-                    &[
-                        (&[CONFIG_KEY_MODEL], model.as_deref()),
-                        (&[CONFIG_KEY_EFFORT], effort_str.as_deref()),
-                    ],
-                )
-                .await
-                {
-                    warn!("failed to persist overrides: {e:#}");
-                }
-
                 if cwd.is_some() || approval_policy.is_some() || sandbox_policy.is_some() {
                     sess.record_conversation_items(&[ResponseItem::from(EnvironmentContext::new(
                         cwd,

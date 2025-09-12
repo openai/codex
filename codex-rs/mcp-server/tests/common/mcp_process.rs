@@ -24,6 +24,7 @@ use codex_protocol::mcp_protocol::RemoveConversationListenerParams;
 use codex_protocol::mcp_protocol::ResumeConversationParams;
 use codex_protocol::mcp_protocol::SendUserMessageParams;
 use codex_protocol::mcp_protocol::SendUserTurnParams;
+use codex_protocol::mcp_protocol::SetDefaultModelParams;
 
 use mcp_types::CallToolRequestParams;
 use mcp_types::ClientCapabilities;
@@ -299,6 +300,15 @@ impl McpProcess {
     /// Send a `userInfo` JSON-RPC request.
     pub async fn send_user_info_request(&mut self) -> anyhow::Result<i64> {
         self.send_request("userInfo", None).await
+    }
+
+    /// Send a `setDefaultModel` JSON-RPC request.
+    pub async fn send_set_default_model_request(
+        &mut self,
+        params: SetDefaultModelParams,
+    ) -> anyhow::Result<i64> {
+        let params = Some(serde_json::to_value(params)?);
+        self.send_request("setDefaultModel", params).await
     }
 
     /// Send a `listConversations` JSON-RPC request.
