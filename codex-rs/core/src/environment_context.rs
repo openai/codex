@@ -63,7 +63,7 @@ impl EnvironmentContext {
                     if writable_roots.is_empty() {
                         None
                     } else {
-                        Some(writable_roots.clone())
+                        Some(writable_roots)
                     }
                 }
                 _ => None,

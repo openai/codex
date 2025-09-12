@@ -561,7 +561,6 @@ dependencies = [
  "clap",
  "codex-common",
  "codex-core",
- "codex-protocol",
  "serde",
  "serde_json",
  "tempfile",

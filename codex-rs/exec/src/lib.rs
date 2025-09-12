@@ -187,10 +187,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         std::process::exit(1);
     }
 
-    let conversation_manager = ConversationManager::new(AuthManager::shared(
-        config.codex_home.clone(),
-        config.preferred_auth_method,
-    ));
+    let conversation_manager =
+        ConversationManager::new(AuthManager::shared(config.codex_home.clone()));
     let NewConversation {
         conversation_id: _,
         conversation,

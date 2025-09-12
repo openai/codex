@@ -9,9 +9,6 @@ use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use crate::AuthManager;
-use crate::config_edit::CONFIG_KEY_EFFORT;
-use crate::config_edit::CONFIG_KEY_MODEL;
-use crate::config_edit::persist_non_null_overrides;
 use crate::event_mapping::map_response_item_to_event_messages;
 use async_channel::Receiver;
 use async_channel::Sender;
@@ -19,11 +16,13 @@ use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
 use codex_protocol::mcp_protocol::ConversationId;
+use codex_protocol::protocol::CompactedItem;
 use codex_protocol::protocol::ConversationPathResponseEvent;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::TaskStartedEvent;
 use codex_protocol::protocol::TurnAbortReason;
 use codex_protocol::protocol::TurnAbortedEvent;
+use codex_protocol::protocol::TurnContextItem;
 use futures::prelude::*;
 use mcp_types::CallToolResult;
 use serde::Deserialize;
@@ -212,12 +211,7 @@ impl Codex {
         let conversation_id = session.conversation_id;
 
         // This task will run until Op::Shutdown is received.
-        tokio::spawn(submission_loop(
-            session.clone(),
-            turn_context,
-            config,
-            rx_sub,
-        ));
+        tokio::spawn(submission_loop(session, turn_context, config, rx_sub));
         let codex = Codex {
             next_id: AtomicU64::new(0),
             tx_sub,
@@ -329,7 +323,7 @@ struct ConfigureSession {
     /// If not specified, server will use its default model.
     model: String,
 
-    model_reasoning_effort: ReasoningEffortConfig,
+    model_reasoning_effort: Option<ReasoningEffortConfig>,
     model_reasoning_summary: ReasoningSummaryConfig,
 
     /// Model instructions that are appended to the base instructions.
@@ -508,6 +502,7 @@ impl Session {
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
                 model,
+                reasoning_effort: model_reasoning_effort,
                 history_log_id,
                 history_entry_count,
                 initial_messages,
@@ -1072,7 +1067,7 @@ impl AgentTask {
                 id: self.sub_id,
                 msg: EventMsg::TurnAborted(TurnAbortedEvent { reason }),
             };
-            let sess = self.sess.clone();
+            let sess = self.sess;
             tokio::spawn(async move {
                 sess.send_event(event).await;
             });
@@ -1172,21 +1167,6 @@ async fn submission_loop(
                 turn_context = Arc::new(new_turn_context);
 
                 // Optionally persist changes to model / effort
-                let effort_str = effort.map(|_| effective_effort.to_string());
-
-                if let Err(e) = persist_non_null_overrides(
-                    &config.codex_home,
-                    config.active_profile.as_deref(),
-                    &[
-                        (&[CONFIG_KEY_MODEL], model.as_deref()),
-                        (&[CONFIG_KEY_EFFORT], effort_str.as_deref()),
-                    ],
-                )
-                .await
-                {
-                    warn!("failed to persist overrides: {e:#}");
-                }
-
                 if cwd.is_some() || approval_policy.is_some() || sandbox_policy.is_some() {
                     sess.record_conversation_items(&[ResponseItem::from(EnvironmentContext::new(
                         cwd,
@@ -1770,7 +1750,7 @@ async fn try_run_turn(
                 }
             })
             .map(|call_id| ResponseItem::CustomToolCallOutput {
-                call_id: call_id.clone(),
+                call_id,
                 output: "aborted".to_string(),
             })
             .collect::<Vec<_>>()
@@ -1786,6 +1766,15 @@ async fn try_run_turn(
         })
     };
 
+    let rollout_item = RolloutItem::TurnContext(TurnContextItem {
+        cwd: turn_context.cwd.clone(),
+        approval_policy: turn_context.approval_policy,
+        sandbox_policy: turn_context.sandbox_policy.clone(),
+        model: turn_context.client.get_model(),
+        effort: turn_context.client.get_reasoning_effort(),
+        summary: turn_context.client.get_reasoning_summary(),
+    });
+    sess.persist_rollout_items(&[rollout_item]).await;
     let mut stream = turn_context.client.clone().stream(&prompt).await?;
 
     let mut output = Vec::new();
@@ -1968,10 +1957,14 @@ async fn run_compact_task(
 
     sess.remove_task(&sub_id);
 
-    {
+    let rollout_item = {
         let mut state = sess.state.lock_unchecked();
         state.history.keep_last_messages(1);
-    }
+        RolloutItem::Compacted(CompactedItem {
+            message: state.history.last_agent_message(),
+        })
+    };
+    sess.persist_rollout_items(&[rollout_item]).await;
 
     let event = Event {
         id: sub_id.clone(),
@@ -2708,6 +2701,20 @@ async fn handle_sandbox_error(
     let sub_id = exec_command_context.sub_id.clone();
     let cwd = exec_command_context.cwd.clone();
 
+    // if the command timed out, we can simply return this failure to the model
+    if matches!(error, SandboxErr::Timeout) {
+        return ResponseInputItem::FunctionCallOutput {
+            call_id,
+            output: FunctionCallOutputPayload {
+                content: format!(
+                    "command timed out after {} milliseconds",
+                    params.timeout_duration().as_millis()
+                ),
+                success: Some(false),
+            },
+        };
+    }
+
     // Early out if either the user never wants to be asked for approval, or
     // we're letting the model manage escalation requests. Otherwise, continue
     match turn_context.approval_policy {
@@ -2723,20 +2730,6 @@ async fn handle_sandbox_error(
             };
         }
         AskForApproval::UnlessTrusted | AskForApproval::OnFailure => (),
-    }
-
-    // similarly, if the command timed out, we can simply return this failure to the model
-    if matches!(error, SandboxErr::Timeout) {
-        return ResponseInputItem::FunctionCallOutput {
-            call_id,
-            output: FunctionCallOutputPayload {
-                content: format!(
-                    "command timed out after {} milliseconds",
-                    params.timeout_duration().as_millis()
-                ),
-                success: Some(false),
-            },
-        };
     }
 
     // Note that when `error` is `SandboxErr::Denied`, it could be a false
@@ -2997,6 +2990,15 @@ async fn drain_to_completed(
     sub_id: &str,
     prompt: &Prompt,
 ) -> CodexResult<()> {
+    let rollout_item = RolloutItem::TurnContext(TurnContextItem {
+        cwd: turn_context.cwd.clone(),
+        approval_policy: turn_context.approval_policy,
+        sandbox_policy: turn_context.sandbox_policy.clone(),
+        model: turn_context.client.get_model(),
+        effort: turn_context.client.get_reasoning_effort(),
+        summary: turn_context.client.get_reasoning_summary(),
+    });
+    sess.persist_rollout_items(&[rollout_item]).await;
     let mut stream = turn_context.client.clone().stream(prompt).await?;
     loop {
         let maybe_event = stream.next().await;
@@ -3130,7 +3132,7 @@ mod tests {
             exit_code: 0,
             stdout: StreamOutput::new(String::new()),
             stderr: StreamOutput::new(String::new()),
-            aggregated_output: StreamOutput::new(full.clone()),
+            aggregated_output: StreamOutput::new(full),
             duration: StdDuration::from_secs(1),
         };
 
@@ -3164,7 +3166,7 @@ mod tests {
     fn model_truncation_respects_byte_budget() {
         // Construct a large output (about 100kB) so byte budget dominates
         let big_line = "x".repeat(100);
-        let full = std::iter::repeat_n(big_line.clone(), 1000)
+        let full = std::iter::repeat_n(big_line, 1000)
             .collect::<Vec<_>>()
             .join("\n");
 
