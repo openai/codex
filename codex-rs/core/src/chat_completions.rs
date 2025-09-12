@@ -277,9 +277,11 @@ pub(crate) async fn stream_chat_completions(
         "tools": tools_json,
     });
 
-    let payload_str = serde_json::to_string_pretty(&payload).unwrap_or_default();
-
-    debug!("POST to {}: {}", provider.get_full_url(&None), payload_str);
+    debug!(
+        "POST to {}: {}",
+        provider.get_full_url(&None),
+        serde_json::to_string_pretty(&payload).unwrap_or_default()
+    );
 
     let mut attempt = 0;
     let max_retries = provider.request_max_retries();
@@ -296,19 +298,21 @@ pub(crate) async fn stream_chat_completions(
             .send()
             .await;
 
-        let request_id = if let Ok(resp) = &res {
-            Some(
-                resp.headers()
-                    .get("x-request-id")
-                    .map(|v| v.to_str().unwrap_or_default())
-                    .unwrap_or_default()
-                    .to_string(),
-            )
+        let cf_ray = if let Ok(resp) = &res {
+            let cf_ray = resp
+                .headers()
+                .get("cf-ray")
+                .map(|v| v.to_str().unwrap_or_default())
+                .unwrap_or_default()
+                .to_string();
+
+            trace!("Response status: {}, cf-ray: {}", resp.status(), cf_ray);
+            Some(cf_ray)
         } else {
             None
         };
 
-        otel_event_manager.request(request_id, attempt, start.elapsed(), &res);
+        otel_event_manager.request(cf_ray, attempt, start.elapsed(), &res);
 
         match res {
             Ok(resp) if resp.status().is_success() => {

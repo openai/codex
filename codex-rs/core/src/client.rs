@@ -272,27 +272,22 @@ impl ModelClient {
             let start = Instant::now();
             let res = req_builder.send().await;
 
-            let request_id = if let Ok(resp) = &res {
-                let request_id = resp
+            let cf_ray = if let Ok(resp) = &res {
+                let cf_ray = resp
                     .headers()
-                    .get("x-request-id")
+                    .get("cf-ray")
                     .map(|v| v.to_str().unwrap_or_default())
-                    .unwrap_or_default();
-                trace!(
-                    "Response status: {}, cf-ray: {}",
-                    resp.status(),
-                    resp.headers()
-                        .get("cf-ray")
-                        .map(|v| v.to_str().unwrap_or_default())
-                        .unwrap_or_default()
-                );
-                Some(request_id.to_string())
+                    .unwrap_or_default()
+                    .to_string();
+
+                trace!("Response status: {}, cf-ray: {}", resp.status(), cf_ray);
+                Some(cf_ray)
             } else {
                 None
             };
 
             self.otel_event_manager
-                .request(request_id, attempt, start.elapsed(), &res);
+                .request(cf_ray, attempt, start.elapsed(), &res);
 
             match res {
                 Ok(resp) if resp.status().is_success() => {
@@ -326,10 +321,18 @@ impl ModelClient {
                         let _ = manager.refresh_token().await;
                     }
 
+                    // The OpenAI Responses endpoint returns structured JSON bodies even for 4xx/5xx
+                    // errors. When we bubble early with only the HTTP status the caller sees an opaque
+                    // "unexpected status 400 Bad Request" which makes debugging nearly impossible.
+                    // Instead, read (and include) the response text so higher layers and users see the
+                    // exact error message (e.g. "Unknown parameter: 'input[0].metadata'"). The body is
+                    // small and this branch only runs on error paths so the extra allocation is
+                    // negligible.
                     if !(status == StatusCode::TOO_MANY_REQUESTS
                         || status == StatusCode::UNAUTHORIZED
                         || status.is_server_error())
                     {
+                        // Surface the error body to callers. Use `unwrap_or_default` per Clippy.
                         let body = res.text().await.unwrap_or_default();
                         return Err(CodexErr::UnexpectedStatus(status, body));
                     }
@@ -338,6 +341,9 @@ impl ModelClient {
                         let body = res.json::<ErrorResponse>().await.ok();
                         if let Some(ErrorResponse { error }) = body {
                             if error.r#type.as_deref() == Some("usage_limit_reached") {
+                                // Prefer the plan_type provided in the error message if present
+                                // because it's more up to date than the one encoded in the auth
+                                // token.
                                 let plan_type = error
                                     .plan_type
                                     .or_else(|| auth.as_ref().and_then(|a| a.get_plan_type()));
@@ -948,7 +954,7 @@ mod tests {
             "test",
             "test",
             None,
-            AuthMode::ChatGPT,
+            Some(AuthMode::ChatGPT),
             false,
             "test".to_string(),
         );
@@ -1019,7 +1025,7 @@ mod tests {
             "test",
             "test",
             None,
-            AuthMode::ChatGPT,
+            Some(AuthMode::ChatGPT),
             false,
             "test".to_string(),
         );
@@ -1063,7 +1069,7 @@ mod tests {
             "test",
             "test",
             None,
-            AuthMode::ChatGPT,
+            Some(AuthMode::ChatGPT),
             false,
             "test".to_string(),
         );
@@ -1178,7 +1184,7 @@ mod tests {
                 "test",
                 "test",
                 None,
-                AuthMode::ChatGPT,
+                Some(AuthMode::ChatGPT),
                 false,
                 "test".to_string(),
             );

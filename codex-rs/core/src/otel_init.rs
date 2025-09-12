@@ -55,11 +55,8 @@ pub fn build_provider(
     })
 }
 
-/// Filter predicate for exporting only Codex-owned spans via OTEL.
-///
-/// Keeps spans that either:
-/// - use our naming convention (names starting with "codex.")
-/// - originate from our crates (targets starting with "codex_")
+/// Filter predicate for exporting only Codex-owned events via OTEL.
+/// Keeps events that originated from codex_otel module
 pub fn codex_export_filter(meta: &tracing::Metadata<'_>) -> bool {
     meta.target().starts_with("codex_otel")
 }

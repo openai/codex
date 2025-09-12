@@ -411,74 +411,101 @@ Currently, `CODEX_SANDBOX_NETWORK_DISABLED=1` is also added to the environment, 
 
 ## otel
 
-OTEL tracing lets you capture structured traces from Codex runs so you can spot
-performance issues or diagnose unexpected behaviour without relying solely on
-logs.
-
-Codex can export [OpenTelemetry](https://opentelemetry.io/) traces for the spans it emits through the `tracing` crate. OTEL export is **disabled by default** so that local runs stay self‑contained; you explicitly opt in by adding an `[otel]` table to `config.toml` (or by passing `--config otel.enabled=true` on the command line).
-
-> Looking for the full tracing reference? See [otel.md](otel.md) for a deeper explanation of what gets traced and how to ship spans to an OTLP collector.
+Codex can emit [OpenTelemetry](https://opentelemetry.io/) **log events** that
+describe each run: outbound API requests, streamed responses, user input,
+tool-approval decisions, and the result of every tool invocation. Export is
+**disabled by default** so local runs remain self-contained. Opt in by adding an
+`[otel]` table and choosing an exporter.
 
 ```toml
 [otel]
-enabled = true              # defaults to false
-environment = "staging"     # defaults to "dev"
-exporter = "otlp-file"      # defaults to "otlp-file" when OTEL export is enabled
-sampler = "always-on"       # defaults to "always-on"
+environment = "staging"   # defaults to "dev"
+exporter = "none"          # defaults to "none"; set to otlp-http or otlp-grpc to send events
+log_user_prompt = false    # defaults to false; redact prompt text unless explicitly enabled
 ```
 
-When OTEL tracing is enabled Codex tags every exported span with `service.name = "codex-cli"`, the CLI version, and an `env` attribute so downstream collectors can differentiate dev/staging/prod traces. Only spans that originate from a `codex_` Rust module are forwarded to the exporter.
+Codex tags every exported event with `service.name = "codex-cli"`, the CLI
+version, and an `env` attribute so downstream collectors can distinguish
+dev/staging/prod traffic. Only telemetry produced inside the `codex_otel`
+crate—the events listed below—is forwarded to the exporter.
 
-Codex never pushes spans to an OpenAI endpoint. You must configure either the
-local file exporter or an OTLP collector you operate; if no exporter settings
-are provided nothing is sent anywhere.
+### Event catalog
+
+Every event shares a common set of metadata fields: `event.timestamp`,
+`conversation.id`, `app.version`, `auth_mode` (when available),
+`user.account_id` (when available), `terminal.type`, `model`, and `slug`.
+
+With OTEL enabled Codex emits the following event types (in addition to the
+metadata above):
+
+- `codex.api_request`
+  - `cf_ray` (optional)
+  - `attempt`
+  - `duration_ms`
+  - `http.response.status_code` (optional)
+  - `error.message` (failures)
+- `codex.sse_event`
+  - `event.kind`
+  - `duration_ms`
+  - `error.message` (failures)
+  - `input_token_count` (completion only)
+  - `output_token_count` (completion only)
+  - `cached_token_count` (completion only, optional)
+  - `reasoning_token_count` (completion only, optional)
+  - `tool_token_count` (completion only)
+- `codex.user_prompt`
+  - `prompt_length`
+  - `prompt` (redacted unless `log_user_prompt = true`)
+- `codex.tool_decision`
+  - `tool_name`
+  - `call_id`
+  - `decision` (`approved`, `approved_for_session`, `denied`, or `abort`)
+  - `source` (`config` or `user`)
+- `codex.tool_result`
+  - `tool_name`
+  - `call_id`
+  - `arguments`
+  - `duration_ms` (execution time for the tool)
+  - `success` (`"true"` or `"false"`)
+  - `output`
 
 ### Choosing an exporter
 
-Set `otel.exporter` to control where traces go:
+Set `otel.exporter` to control where events go:
 
-- `none` – leaves tracing enabled locally but skips exporting spans entirely. Useful when you only want local console logging without touching disk or the network.
-- `otlp-file` – writes OTLP trace payloads (`ExportTraceServiceRequest` JSON objects) to `$CODEX_HOME/traces/YYYY/MM/DD/trace-<timestamp>-<run-id>.jsonl`. Each run of Codex generates a new file, making it easy to attach the trace bundle to bug reports or load it into an OTLP-aware tool locally.
-- `otlp-http` – posts spans to an OTLP/HTTP collector. Specify the endpoint,
-  choose whether Codex should send protobuf (`protocol = "binary"`) or JSON
-  payloads, and pass along any headers your collector expects:
+- `none` – leaves instrumentation active but skips exporting. This is the
+  default.
+- `otlp-http` – posts OTLP log records to an OTLP/HTTP collector. Specify the
+  endpoint, protocol, and headers your collector expects:
 
   ```toml
   [otel]
-  enabled = true
   exporter = { otlp-http = {
-    endpoint = "https://otel.example.com/v1/traces",
+    endpoint = "https://otel.example.com/v1/logs",
     protocol = "binary",
     headers = { "x-otlp-api-key" = "${OTLP_TOKEN}" }
   }}
   ```
 
-- `otlp-grpc` – streams spans to an OTLP/gRPC collector. Provide the gRPC endpoint and headers that should be attached as gRPC metadata:
+- `otlp-grpc` – streams OTLP log records over gRPC. Provide the endpoint and any
+  metadata headers:
 
   ```toml
   [otel]
-  enabled = true
   exporter = { otlp-grpc = {
     endpoint = "https://otel.example.com:4317",
     headers = { "x-otlp-meta" = "abc123" }
   }}
   ```
 
-All exporters run on a background batch worker. Codex shuts the worker down on exit so that spans are flushed before the process terminates.
+If the exporter is `none` nothing is written anywhere; otherwise you must run or point to your
+own collector. All exporters run on a background batch worker that is flushed on
+shutdown.
 
-### Sampling
-
-By default Codex exports **every** span (`sampler = "always-on"`). To reduce trace volume for production deployments you can switch to ratio-based sampling:
-
-```toml
-[otel]
-enabled = true
-sampler = { trace-id-ratio-based = { ratio = 0.10 } }  # keep ~10% of traces
-```
-
-This sampler is applied at trace start time, so either the entire trace is kept or it is dropped. Ratios are expressed as a floating point number between `0.0` and `1.0`.
-
-If you build Codex from source the OTEL crate is behind an `otel` feature flag; the official prebuilt binaries ship with the feature enabled. When the feature is disabled the tracing hooks become no-ops so the CLI continues to function without the extra dependencies.
+If you build Codex from source the OTEL crate is still behind an `otel` feature
+flag; the official prebuilt binaries ship with the feature enabled. When the
+feature is disabled the telemetry hooks become no-ops so the CLI continues to
+function without the extra dependencies.
 
 ## notify
 

@@ -789,7 +789,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "tracing",
- "tracing-opentelemetry",
  "tracing-subscriber",
  "wiremock",
 ]
@@ -923,28 +922,16 @@ name = "codex-otel"
 version = "0.0.0"
 dependencies = [
  "chrono",
- "codex-mcp-client",
  "codex-protocol",
  "opentelemetry",
- "opentelemetry-appender-tracing",
- "opentelemetry-http",
  "opentelemetry-otlp",
- "opentelemetry-proto",
  "opentelemetry-semantic-conventions",
  "opentelemetry_sdk",
  "reqwest",
  "serde",
- "serde_json",
  "strum_macros 0.27.2",
- "tempfile",
- "time",
- "tokio",
  "tonic",
  "tracing",
- "tracing-opentelemetry",
- "tracing-subscriber",
- "uuid",
- "walkdir",
 ]
 
 [[package]]
@@ -5308,24 +5295,6 @@ dependencies = [
  "log",
  "once_cell",
  "tracing-core",
-]
-
-[[package]]
-name = "tracing-opentelemetry"
-version = "0.31.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ddcf5959f39507d0d04d6413119c04f33b623f4f951ebcbdddddfad2d0623a9c"
-dependencies = [
- "js-sys",
- "once_cell",
- "opentelemetry",
- "opentelemetry_sdk",
- "smallvec",
- "tracing",
- "tracing-core",
- "tracing-log",
- "tracing-subscriber",
- "web-time",
 ]
 
 [[package]]
