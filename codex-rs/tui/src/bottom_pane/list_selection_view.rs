@@ -137,11 +137,12 @@ impl BottomPaneView for ListSelectionView {
 
     fn desired_height(&self, _width: u16) -> u16 {
         let rows = (self.items.len()).clamp(1, MAX_POPUP_ROWS);
-        // +1 for the title row, +1 for optional subtitle, +1 for optional footer
-        let mut height = rows as u16 + 1;
+        // +1 for the title row, +1 for a spacer line beneath the header,
+        // +1 for optional subtitle, +1 for optional footer
+        let mut height = rows as u16 + 2;
         if self.subtitle.is_some() {
-            // +1 for subtitle, +1 for a blank spacer line beneath it
-            height = height.saturating_add(2);
+            // +1 for subtitle (the spacer is accounted for above)
+            height = height.saturating_add(1);
         }
         if self.footer_hint.is_some() {
             height = height.saturating_add(2);
@@ -178,16 +179,17 @@ impl BottomPaneView for ListSelectionView {
                 vec![Self::dim_prefix_span(), sub.clone().dim()];
             let subtitle_para = Paragraph::new(Line::from(subtitle_spans));
             subtitle_para.render(subtitle_area, buf);
-            // Render the extra spacer line with the dimmed prefix to align with title/subtitle
-            let spacer_area = Rect {
-                x: area.x,
-                y: next_y.saturating_add(1),
-                width: area.width,
-                height: 1,
-            };
-            Self::render_dim_prefix_line(spacer_area, buf);
-            next_y = next_y.saturating_add(2);
+            next_y = next_y.saturating_add(1);
         }
+
+        let spacer_area = Rect {
+            x: area.x,
+            y: next_y,
+            width: area.width,
+            height: 1,
+        };
+        Self::render_dim_prefix_line(spacer_area, buf);
+        next_y = next_y.saturating_add(1);
 
         let footer_reserved = if self.footer_hint.is_some() { 2 } else { 0 };
         let rows_area = Rect {
@@ -243,5 +245,80 @@ impl BottomPaneView for ListSelectionView {
             let footer_para = Paragraph::new(hint.clone().dim());
             footer_para.render(footer_area, buf);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BottomPaneView;
+    use super::*;
+    use crate::app_event::AppEvent;
+    use insta::assert_snapshot;
+    use ratatui::layout::Rect;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    fn make_selection_view(subtitle: Option<&str>) -> ListSelectionView {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        let tx = AppEventSender::new(tx_raw);
+        let items = vec![
+            SelectionItem {
+                name: "Read Only".to_string(),
+                description: Some("Codex can read files".to_string()),
+                is_current: true,
+                actions: vec![],
+            },
+            SelectionItem {
+                name: "Full Access".to_string(),
+                description: Some("Codex can edit files".to_string()),
+                is_current: false,
+                actions: vec![],
+            },
+        ];
+        ListSelectionView::new(
+            "Select Approval Mode".to_string(),
+            subtitle.map(str::to_string),
+            Some("Press Enter to confirm or Esc to go back".to_string()),
+            items,
+            tx,
+        )
+    }
+
+    fn render_lines(view: &ListSelectionView) -> String {
+        let width = 48;
+        let height = BottomPaneView::desired_height(view, width);
+        let area = Rect::new(0, 0, width, height);
+        let mut buf = Buffer::empty(area);
+        view.render(area, &mut buf);
+
+        let lines: Vec<String> = (0..area.height)
+            .map(|row| {
+                let mut line = String::new();
+                for col in 0..area.width {
+                    let symbol = buf[(area.x + col, area.y + row)].symbol();
+                    if symbol.is_empty() {
+                        line.push(' ');
+                    } else {
+                        line.push_str(symbol);
+                    }
+                }
+                line
+            })
+            .collect();
+        lines.join("\n")
+    }
+
+    #[test]
+    fn renders_blank_line_between_title_and_items_without_subtitle() {
+        let view = make_selection_view(None);
+        assert_snapshot!(
+            "list_selection_spacing_without_subtitle",
+            render_lines(&view)
+        );
+    }
+
+    #[test]
+    fn renders_blank_line_between_subtitle_and_items() {
+        let view = make_selection_view(Some("Switch between Codex approval presets"));
+        assert_snapshot!("list_selection_spacing_with_subtitle", render_lines(&view));
     }
 }

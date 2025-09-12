@@ -289,7 +289,9 @@ impl ChatWidget {
     /// separated by newlines rather than auto‑submitting the next one.
     fn on_interrupted_turn(&mut self) {
         // Finalize, log a gentle prompt, and clear running state.
-        self.finalize_turn_with_error_message("Tell the model what to do differently".to_owned());
+        self.finalize_turn_with_error_message(
+            "Conversation interrupted - tell the model what to do differently".to_owned(),
+        );
 
         // If any messages were queued during the task, restore them into the composer.
         if !self.queued_user_messages.is_empty() {
@@ -1193,9 +1195,13 @@ impl ChatWidget {
                 tracing::info!(
                     "New model: {}, New effort: {}, Current model: {}, Current effort: {}",
                     model_slug.clone(),
-                    effort,
+                    effort
+                        .map(|effort| effort.to_string())
+                        .unwrap_or_else(|| "none".to_string()),
                     current_model,
                     current_effort
+                        .map(|effort| effort.to_string())
+                        .unwrap_or_else(|| "none".to_string())
                 );
             })];
             items.push(SelectionItem {
@@ -1266,7 +1272,7 @@ impl ChatWidget {
     }
 
     /// Set the reasoning effort in the widget's config copy.
-    pub(crate) fn set_reasoning_effort(&mut self, effort: ReasoningEffortConfig) {
+    pub(crate) fn set_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
         self.config.model_reasoning_effort = effort;
     }
 

@@ -59,6 +59,9 @@ pub struct Config {
     /// Maximum number of output tokens.
     pub model_max_output_tokens: Option<u64>,
 
+    /// Token usage threshold triggering auto-compaction of conversation history.
+    pub model_auto_compact_token_limit: Option<i64>,
+
     /// Key into the model_providers map that specifies which provider to use.
     pub model_provider_id: String,
 
@@ -144,7 +147,7 @@ pub struct Config {
 
     /// Value to use for `reasoning.effort` when making a request using the
     /// Responses API.
-    pub model_reasoning_effort: ReasoningEffort,
+    pub model_reasoning_effort: Option<ReasoningEffort>,
 
     /// If not "none", the value to use for `reasoning.summary` when making a
     /// request using the Responses API.
@@ -427,14 +430,24 @@ pub async fn persist_model_selection(
     if let Some(profile_name) = active_profile {
         let profile_table = ensure_profile_table(&mut doc, profile_name)?;
         profile_table["model"] = toml_edit::value(model);
-        if let Some(effort) = effort {
-            profile_table["model_reasoning_effort"] = toml_edit::value(effort.to_string());
+        match effort {
+            Some(effort) => {
+                profile_table["model_reasoning_effort"] = toml_edit::value(effort.to_string());
+            }
+            None => {
+                profile_table.remove("model_reasoning_effort");
+            }
         }
     } else {
         let table = doc.as_table_mut();
         table["model"] = toml_edit::value(model);
-        if let Some(effort) = effort {
-            table["model_reasoning_effort"] = toml_edit::value(effort.to_string());
+        match effort {
+            Some(effort) => {
+                table["model_reasoning_effort"] = toml_edit::value(effort.to_string());
+            }
+            None => {
+                table.remove("model_reasoning_effort");
+            }
         }
     }
 
@@ -514,6 +527,9 @@ pub struct ConfigToml {
 
     /// Maximum number of output tokens.
     pub model_max_output_tokens: Option<u64>,
+
+    /// Token usage threshold triggering auto-compaction of conversation history.
+    pub model_auto_compact_token_limit: Option<i64>,
 
     /// Default approval policy for executing commands.
     pub approval_policy: Option<AskForApproval>,
@@ -875,6 +891,11 @@ impl Config {
                 .as_ref()
                 .map(|info| info.max_output_tokens)
         });
+        let model_auto_compact_token_limit = cfg.model_auto_compact_token_limit.or_else(|| {
+            openai_model_info
+                .as_ref()
+                .and_then(|info| info.auto_compact_token_limit)
+        });
 
         let experimental_resume = cfg.experimental_resume;
 
@@ -900,6 +921,7 @@ impl Config {
             model_family,
             model_context_window,
             model_max_output_tokens,
+            model_auto_compact_token_limit,
             model_provider_id,
             model_provider,
             cwd: resolved_cwd,
@@ -927,8 +949,7 @@ impl Config {
                 .unwrap_or(false),
             model_reasoning_effort: config_profile
                 .model_reasoning_effort
-                .or(cfg.model_reasoning_effort)
-                .unwrap_or_default(),
+                .or(cfg.model_reasoning_effort),
             model_reasoning_summary: config_profile
                 .model_reasoning_summary
                 .or(cfg.model_reasoning_summary)
@@ -1440,6 +1461,7 @@ model_verbosity = "high"
                 model_family: find_family_for_model("o3").expect("known model slug"),
                 model_context_window: Some(200_000),
                 model_max_output_tokens: Some(100_000),
+                model_auto_compact_token_limit: None,
                 model_provider_id: "openai".to_string(),
                 model_provider: fixture.openai_provider.clone(),
                 approval_policy: AskForApproval::Never,
@@ -1457,7 +1479,7 @@ model_verbosity = "high"
                 codex_linux_sandbox_exe: None,
                 hide_agent_reasoning: false,
                 show_raw_agent_reasoning: false,
-                model_reasoning_effort: ReasoningEffort::High,
+                model_reasoning_effort: Some(ReasoningEffort::High),
                 model_reasoning_summary: ReasoningSummary::Detailed,
                 model_verbosity: None,
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
@@ -1497,6 +1519,7 @@ model_verbosity = "high"
             model_family: find_family_for_model("gpt-3.5-turbo").expect("known model slug"),
             model_context_window: Some(16_385),
             model_max_output_tokens: Some(4_096),
+            model_auto_compact_token_limit: None,
             model_provider_id: "openai-chat-completions".to_string(),
             model_provider: fixture.openai_chat_completions_provider.clone(),
             approval_policy: AskForApproval::UnlessTrusted,
@@ -1514,7 +1537,7 @@ model_verbosity = "high"
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
-            model_reasoning_effort: ReasoningEffort::default(),
+            model_reasoning_effort: None,
             model_reasoning_summary: ReasoningSummary::default(),
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
@@ -1569,6 +1592,7 @@ model_verbosity = "high"
             model_family: find_family_for_model("o3").expect("known model slug"),
             model_context_window: Some(200_000),
             model_max_output_tokens: Some(100_000),
+            model_auto_compact_token_limit: None,
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
             approval_policy: AskForApproval::OnFailure,
@@ -1586,7 +1610,7 @@ model_verbosity = "high"
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
-            model_reasoning_effort: ReasoningEffort::default(),
+            model_reasoning_effort: None,
             model_reasoning_summary: ReasoningSummary::default(),
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
@@ -1627,6 +1651,7 @@ model_verbosity = "high"
             model_family: find_family_for_model("gpt-5").expect("known model slug"),
             model_context_window: Some(272_000),
             model_max_output_tokens: Some(128_000),
+            model_auto_compact_token_limit: None,
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
             approval_policy: AskForApproval::OnFailure,
@@ -1644,7 +1669,7 @@ model_verbosity = "high"
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
-            model_reasoning_effort: ReasoningEffort::High,
+            model_reasoning_effort: Some(ReasoningEffort::High),
             model_reasoning_summary: ReasoningSummary::Detailed,
             model_verbosity: Some(Verbosity::High),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),

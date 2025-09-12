@@ -280,7 +280,7 @@ mod tests {
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
                 model: "gpt-4o".to_string(),
-                reasoning_effort: ReasoningEffort::default(),
+                reasoning_effort: Some(ReasoningEffort::default()),
                 history_log_id: 1,
                 history_entry_count: 1000,
                 initial_messages: None,
@@ -314,7 +314,7 @@ mod tests {
         let session_configured_event = SessionConfiguredEvent {
             session_id: conversation_id,
             model: "gpt-4o".to_string(),
-            reasoning_effort: ReasoningEffort::default(),
+            reasoning_effort: Some(ReasoningEffort::default()),
             history_log_id: 1,
             history_entry_count: 1000,
             initial_messages: None,
