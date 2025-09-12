@@ -32,13 +32,6 @@ use futures::prelude::*;
 pub(super) const COMPACT_TRIGGER_TEXT: &str = "Start Summarization";
 const SUMMARIZATION_PROMPT: &str = include_str!("../../templates/compact/prompt.md");
 
-fn auto_compact_token_limit(turn_context: &TurnContext) -> i64 {
-    turn_context
-        .client
-        .get_auto_compact_token_limit()
-        .unwrap_or(i64::MAX)
-}
-
 #[derive(Template)]
 #[template(path = "compact/history_bridge.md", escape = "none")]
 struct HistoryBridgeTemplate<'a> {
@@ -192,7 +185,6 @@ async fn run_compact_task_inner(
         let mut state = sess.state.lock_unchecked();
         state.history.replace(new_history);
         state.token_info = None;
-        state.token_limit_reached = false;
     }
 
     let rollout_item = RolloutItem::Compacted(CompactedItem {
@@ -227,12 +219,6 @@ pub(super) fn update_token_usage_info(
         token_usage,
         turn_context.client.get_model_context_window(),
     );
-    let limit = auto_compact_token_limit(turn_context);
-    if let Some(info) = &info
-        && (info.last_token_usage.tokens_in_context_window() as i64) >= limit
-    {
-        state.token_limit_reached = true;
-    }
     state.token_info = info.clone();
     info
 }

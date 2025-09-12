@@ -14,17 +14,15 @@ pub(crate) struct ModelInfo {
     pub(crate) max_output_tokens: u64,
 
     /// Token threshold where we should automatically compact conversation history.
-    pub(crate) auto_compact_token_limit: i64,
+    pub(crate) auto_compact_token_limit: Option<i64>,
 }
-
-pub(crate) const DEFAULT_AUTO_COMPACT_TOKEN_LIMIT: i64 = 256_000;
 
 impl ModelInfo {
     const fn new(context_window: u64, max_output_tokens: u64) -> Self {
         Self {
             context_window,
             max_output_tokens,
-            auto_compact_token_limit: DEFAULT_AUTO_COMPACT_TOKEN_LIMIT,
+            auto_compact_token_limit: None,
         }
     }
 }

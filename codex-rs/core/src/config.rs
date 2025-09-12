@@ -776,7 +776,7 @@ impl Config {
         let model_auto_compact_token_limit = cfg.model_auto_compact_token_limit.or_else(|| {
             openai_model_info
                 .as_ref()
-                .map(|info| info.auto_compact_token_limit)
+                .and_then(|info| info.auto_compact_token_limit)
         });
 
         let experimental_resume = cfg.experimental_resume;
@@ -1194,7 +1194,7 @@ model_verbosity = "high"
                 model_family: find_family_for_model("o3").expect("known model slug"),
                 model_context_window: Some(200_000),
                 model_max_output_tokens: Some(100_000),
-                model_auto_compact_token_limit: Some(256_000),
+                model_auto_compact_token_limit: None,
                 model_provider_id: "openai".to_string(),
                 model_provider: fixture.openai_provider.clone(),
                 approval_policy: AskForApproval::Never,
@@ -1252,7 +1252,7 @@ model_verbosity = "high"
             model_family: find_family_for_model("gpt-3.5-turbo").expect("known model slug"),
             model_context_window: Some(16_385),
             model_max_output_tokens: Some(4_096),
-            model_auto_compact_token_limit: Some(256_000),
+            model_auto_compact_token_limit: None,
             model_provider_id: "openai-chat-completions".to_string(),
             model_provider: fixture.openai_chat_completions_provider.clone(),
             approval_policy: AskForApproval::UnlessTrusted,
@@ -1325,7 +1325,7 @@ model_verbosity = "high"
             model_family: find_family_for_model("o3").expect("known model slug"),
             model_context_window: Some(200_000),
             model_max_output_tokens: Some(100_000),
-            model_auto_compact_token_limit: Some(256_000),
+            model_auto_compact_token_limit: None,
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
             approval_policy: AskForApproval::OnFailure,
@@ -1384,7 +1384,7 @@ model_verbosity = "high"
             model_family: find_family_for_model("gpt-5").expect("known model slug"),
             model_context_window: Some(272_000),
             model_max_output_tokens: Some(128_000),
-            model_auto_compact_token_limit: Some(256_000),
+            model_auto_compact_token_limit: None,
             model_provider_id: "openai".to_string(),
             model_provider: fixture.openai_provider.clone(),
             approval_policy: AskForApproval::OnFailure,

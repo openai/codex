@@ -103,6 +103,7 @@ use crate::protocol::SessionConfiguredEvent;
 use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
 use crate::protocol::TaskCompleteEvent;
+use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnDiffEvent;
 use crate::protocol::WebSearchBeginEvent;
@@ -267,7 +268,6 @@ struct State {
     pending_input: Vec<ResponseInputItem>,
     history: ConversationHistory,
     token_info: Option<TokenUsageInfo>,
-    token_limit_reached: bool,
     next_internal_sub_id: u64,
 }
 
@@ -536,15 +536,6 @@ impl Session {
         {
             state.current_task.take();
         }
-    }
-
-    fn take_token_limit_reached(&self) -> bool {
-        let mut state = self.state.lock_unchecked();
-        let should_compact = state.token_limit_reached;
-        if should_compact {
-            state.token_limit_reached = false;
-        }
-        should_compact
     }
 
     fn next_internal_sub_id(&self) -> String {
@@ -1539,8 +1530,14 @@ async fn run_task(
             Ok(turn_output) => {
                 let TurnRunResult {
                     processed_items,
-                    token_limit_reached,
+                    total_token_usage,
                 } = turn_output;
+                let limit = turn_context
+                    .client
+                    .get_auto_compact_token_limit()
+                    .unwrap_or(i64::MAX);
+                let token_limit_reached = total_token_usage
+                    .is_some_and(|usage| (usage.tokens_in_context_window() as i64) >= limit);
                 let mut items_to_record_in_conversation_history = Vec::<ResponseItem>::new();
                 let mut responses = Vec::<ResponseInputItem>::new();
                 for processed_response_item in processed_items {
@@ -1754,7 +1751,7 @@ struct ProcessedResponseItem {
 #[derive(Debug)]
 struct TurnRunResult {
     processed_items: Vec<ProcessedResponseItem>,
-    token_limit_reached: bool,
+    total_token_usage: Option<TokenUsage>,
 }
 
 async fn try_run_turn(
@@ -1882,7 +1879,6 @@ async fn try_run_turn(
                 token_usage,
             } => {
                 let info = compact::update_token_usage_info(sess, turn_context, &token_usage);
-                let token_limit_reached = sess.take_token_limit_reached();
                 let _ = sess
                     .send_event(Event {
                         id: sub_id.to_string(),
@@ -1902,7 +1898,7 @@ async fn try_run_turn(
 
                 let result = TurnRunResult {
                     processed_items: output,
-                    token_limit_reached,
+                    total_token_usage: token_usage.clone(),
                 };
 
                 return Ok(result);
