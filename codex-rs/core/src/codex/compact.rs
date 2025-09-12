@@ -11,6 +11,7 @@ use crate::error::CodexErr;
 use crate::error::Result as CodexResult;
 use crate::protocol::AgentMessageEvent;
 use crate::protocol::CompactedItem;
+use crate::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use crate::protocol::ErrorEvent;
 use crate::protocol::Event;
 use crate::protocol::EventMsg;
@@ -21,6 +22,7 @@ use crate::protocol::TokenCountEvent;
 use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnContextItem;
+use crate::protocol::USER_INSTRUCTIONS_OPEN_TAG;
 use crate::util::backoff;
 use askama::Template;
 use codex_protocol::models::ContentItem;
@@ -251,7 +253,27 @@ fn collect_user_messages(items: &[ResponseItem]) -> Vec<String> {
             }
             _ => None,
         })
+        .filter(|text| !is_session_prefix_message(text))
         .collect()
+}
+
+fn is_session_prefix_message(text: &str) -> bool {
+    let trimmed = text.trim_start();
+    starts_with_tag_ignore_ascii_case(trimmed, USER_INSTRUCTIONS_OPEN_TAG)
+        || starts_with_tag_ignore_ascii_case(trimmed, ENVIRONMENT_CONTEXT_OPEN_TAG)
+}
+
+fn starts_with_tag_ignore_ascii_case(text: &str, tag: &str) -> bool {
+    let text_bytes = text.as_bytes();
+    let tag_bytes = tag.as_bytes();
+    if text_bytes.len() < tag_bytes.len() {
+        return false;
+    }
+    text_bytes
+        .iter()
+        .zip(tag_bytes.iter())
+        .take(tag_bytes.len())
+        .all(|(a, b)| a.eq_ignore_ascii_case(b))
 }
 
 fn build_compacted_history(
@@ -306,20 +328,7 @@ async fn drain_to_completed(
                 let mut state = sess.state.lock_unchecked();
                 state.history.record_items(std::slice::from_ref(&item));
             }
-            Ok(ResponseEvent::Completed {
-                response_id: _,
-                token_usage,
-            }) => {
-                let info = update_token_usage_info(sess, turn_context, &token_usage);
-
-                sess.tx_event
-                    .send(Event {
-                        id: sub_id.to_string(),
-                        msg: EventMsg::TokenCount(TokenCountEvent { info }),
-                    })
-                    .await
-                    .ok();
-
+            Ok(ResponseEvent::Completed { .. }) => {
                 return Ok(());
             }
             Ok(_) => continue,
@@ -391,5 +400,36 @@ mod tests {
         let collected = collect_user_messages(&items);
 
         assert_eq!(vec!["first\nsecond".to_string()], collected);
+    }
+
+    #[test]
+    fn collect_user_messages_filters_session_prefix_entries() {
+        let items = vec![
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "<user_instructions>do things</user_instructions>".to_string(),
+                }],
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "<ENVIRONMENT_CONTEXT>cwd=/tmp</ENVIRONMENT_CONTEXT>".to_string(),
+                }],
+            },
+            ResponseItem::Message {
+                id: None,
+                role: "user".to_string(),
+                content: vec![ContentItem::InputText {
+                    text: "real user message".to_string(),
+                }],
+            },
+        ];
+
+        let collected = collect_user_messages(&items);
+
+        assert_eq!(vec!["real user message".to_string()], collected);
     }
 }

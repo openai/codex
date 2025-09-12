@@ -1486,6 +1486,7 @@ async fn run_task(
     // Although from the perspective of codex.rs, TurnDiffTracker has the lifecycle of a Task which contains
     // many turns, from the perspective of the user, it is a single turn.
     let mut turn_diff_tracker = TurnDiffTracker::new();
+    let mut auto_compact_attempted = false;
 
     loop {
         // Note that pending_input would be something like a message the user
@@ -1536,8 +1537,12 @@ async fn run_task(
                     .client
                     .get_auto_compact_token_limit()
                     .unwrap_or(i64::MAX);
-                let token_limit_reached = total_token_usage
-                    .is_some_and(|usage| (usage.tokens_in_context_window() as i64) >= limit);
+                let total_usage_tokens = total_token_usage
+                    .as_ref()
+                    .map(|usage| usage.tokens_in_context_window());
+                let token_limit_reached = total_usage_tokens
+                    .map(|tokens| (tokens as i64) >= limit)
+                    .unwrap_or(false);
                 let mut items_to_record_in_conversation_history = Vec::<ResponseItem>::new();
                 let mut responses = Vec::<ResponseInputItem>::new();
                 for processed_response_item in processed_items {
@@ -1638,6 +1643,23 @@ async fn run_task(
                 }
 
                 if token_limit_reached {
+                    if auto_compact_attempted {
+                        let limit_str = limit.to_string();
+                        let current_tokens = total_usage_tokens
+                            .map(|tokens| tokens.to_string())
+                            .unwrap_or_else(|| "unknown".to_string());
+                        let event = Event {
+                            id: sub_id.clone(),
+                            msg: EventMsg::Error(ErrorEvent {
+                                message: format!(
+                                    "Conversation is still above the token limit after automatic summarization (limit {limit_str}, current {current_tokens}). Please start a new session or trim your input."
+                                ),
+                            }),
+                        };
+                        sess.send_event(event).await;
+                        break;
+                    }
+                    auto_compact_attempted = true;
                     compact::run_inline_auto_compact_task(sess.clone(), turn_context.clone()).await;
                     continue;
                 }
