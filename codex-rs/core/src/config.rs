@@ -985,31 +985,16 @@ impl Config {
                 use crate::config_types::OtelConfig;
                 use crate::config_types::OtelConfigToml;
                 use crate::config_types::OtelExporterKind;
-                use crate::config_types::OtelSampler;
                 let t: OtelConfigToml = cfg.otel.unwrap_or_default();
-                let enabled = t.enabled.unwrap_or(false);
                 let log_user_prompt = t.log_user_prompt.unwrap_or(false);
                 let environment = t
                     .environment
                     .unwrap_or(DEFAULT_OTEL_ENVIRONMENT.to_string());
-                if !enabled {
-                    OtelConfig {
-                        enabled,
-                        log_user_prompt,
-                        environment,
-                        sampler: OtelSampler::AlwaysOn,
-                        exporter: OtelExporterKind::None,
-                    }
-                } else {
-                    let sampler = t.sampler.unwrap_or(OtelSampler::AlwaysOn);
-                    let exporter = t.exporter.unwrap_or(OtelExporterKind::OtlpFile);
-                    OtelConfig {
-                        enabled,
-                        log_user_prompt,
-                        environment,
-                        sampler,
-                        exporter,
-                    }
+                let exporter = t.exporter.unwrap_or(OtelExporterKind::None);
+                OtelConfig {
+                    log_user_prompt,
+                    environment,
+                    exporter,
                 }
             },
         };
@@ -1533,11 +1518,9 @@ model_verbosity = "high"
                 active_profile: Some("o3".to_string()),
                 disable_paste_burst: false,
                 otel: crate::config_types::OtelConfig {
-                    enabled: false,
                     log_user_prompt: false,
                     environment: DEFAULT_OTEL_ENVIRONMENT.to_string(),
                     exporter: crate::config_types::OtelExporterKind::None,
-                    sampler: crate::config_types::OtelSampler::AlwaysOn,
                 },
             },
             o3_profile_config
@@ -1598,11 +1581,9 @@ model_verbosity = "high"
             active_profile: Some("gpt3".to_string()),
             disable_paste_burst: false,
             otel: crate::config_types::OtelConfig {
-                enabled: false,
                 log_user_prompt: false,
                 environment: DEFAULT_OTEL_ENVIRONMENT.to_string(),
                 exporter: crate::config_types::OtelExporterKind::None,
-                sampler: crate::config_types::OtelSampler::AlwaysOn,
             },
         };
 
@@ -1678,11 +1659,9 @@ model_verbosity = "high"
             active_profile: Some("zdr".to_string()),
             disable_paste_burst: false,
             otel: crate::config_types::OtelConfig {
-                enabled: false,
                 log_user_prompt: false,
                 environment: DEFAULT_OTEL_ENVIRONMENT.to_string(),
                 exporter: crate::config_types::OtelExporterKind::None,
-                sampler: crate::config_types::OtelSampler::AlwaysOn,
             },
         };
 
@@ -1744,11 +1723,9 @@ model_verbosity = "high"
             active_profile: Some("gpt5".to_string()),
             disable_paste_burst: false,
             otel: crate::config_types::OtelConfig {
-                enabled: false,
                 log_user_prompt: false,
                 environment: DEFAULT_OTEL_ENVIRONMENT.to_string(),
                 exporter: crate::config_types::OtelExporterKind::None,
-                sampler: crate::config_types::OtelSampler::AlwaysOn,
             },
         };
 

@@ -20,6 +20,7 @@ use codex_core::protocol::SandboxPolicy;
 use codex_ollama::DEFAULT_OSS_MODEL;
 use codex_protocol::config_types::SandboxMode;
 use codex_protocol::mcp_protocol::AuthMode;
+use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
 use std::fs::OpenOptions;
 use std::path::PathBuf;
 use tracing::error;
@@ -241,10 +242,6 @@ pub async fn run_main(
     #[allow(clippy::print_stderr)]
     let otel = match otel {
         Ok(otel) => otel,
-        Err(e) if config.otel.exporter == OtelExporterKind::OtlpFile => {
-            eprintln!("Could not create trace log file: {e}");
-            std::process::exit(1);
-        }
         Err(e) => {
             eprintln!("Could not create otel exporter: {e}");
             std::process::exit(1);
@@ -252,8 +249,7 @@ pub async fn run_main(
     };
 
     if let Some(provider) = otel.as_ref() {
-        let tracer = provider.tracer();
-        let otel_layer = tracing_opentelemetry::OpenTelemetryLayer::new(tracer).with_filter(
+        let otel_layer = OpenTelemetryTracingBridge::new(&provider.logger).with_filter(
             tracing_subscriber::filter::filter_fn(codex_core::otel_init::codex_export_filter),
         );
 

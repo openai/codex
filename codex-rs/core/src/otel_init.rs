@@ -1,10 +1,8 @@
 use crate::config::Config;
 use crate::config_types::OtelExporterKind as Kind;
 use crate::config_types::OtelHttpProtocol as Protocol;
-use crate::config_types::OtelSampler as Sampler;
 use codex_otel::config::OtelExporter;
 use codex_otel::config::OtelHttpProtocol;
-use codex_otel::config::OtelSampler;
 use codex_otel::config::OtelSettings;
 use codex_otel::otel_provider::OtelProvider;
 use std::error::Error;
@@ -20,7 +18,6 @@ pub fn build_provider(
 ) -> Result<Option<OtelProvider>, Box<dyn Error>> {
     let exporter = match &config.otel.exporter {
         Kind::None => OtelExporter::None,
-        Kind::OtlpFile => OtelExporter::OtlpFile,
         Kind::OtlpHttp {
             endpoint,
             headers,
@@ -49,18 +46,11 @@ pub fn build_provider(
         },
     };
 
-    let sampler = match config.otel.sampler {
-        Sampler::AlwaysOn => OtelSampler::AlwaysOn,
-        Sampler::TraceIdRatioBased { ratio } => OtelSampler::TraceIdRatioBased(ratio),
-    };
-
     OtelProvider::from(&OtelSettings {
-        enabled: config.otel.enabled,
         service_name: SERVICE_NAME.to_string(),
         service_version: service_version.to_string(),
         codex_home: config.codex_home.clone(),
         environment: config.otel.environment.to_string(),
-        sampler,
         exporter,
     })
 }
@@ -71,5 +61,5 @@ pub fn build_provider(
 /// - use our naming convention (names starting with "codex.")
 /// - originate from our crates (targets starting with "codex_")
 pub fn codex_export_filter(meta: &tracing::Metadata<'_>) -> bool {
-    meta.target().starts_with("codex_")
+    meta.target().starts_with("codex_otel")
 }
