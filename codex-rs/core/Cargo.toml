@@ -13,6 +13,7 @@ workspace = true
 
 [dependencies]
 anyhow = "1"
+askama = "0.12"
 async-channel = "2.3.1"
 base64 = "0.22"
 bytes = "1.10.1"

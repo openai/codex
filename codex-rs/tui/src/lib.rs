@@ -380,11 +380,12 @@ async fn run_ratatui_app(
 
         if switch_to_new_model {
             config.model = GPT5_HIGH_MODEL.to_owned();
+            config.model_reasoning_effort = None;
             if let Err(e) = persist_model_selection(
                 &config.codex_home,
                 active_profile.as_deref(),
                 &config.model,
-                None,
+                config.model_reasoning_effort,
             )
             .await
             {

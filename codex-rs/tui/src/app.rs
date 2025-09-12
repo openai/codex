@@ -327,17 +327,19 @@ impl App {
     fn show_model_save_hint(&mut self) {
         let model = self.config.model.clone();
         if self.active_profile.is_some() {
-            self.chat_widget.add_info_message(format!(
-                "Model switched to {model}. Press Ctrl+S to save it for this profile, then press Ctrl+S again to set it as your global default."
-            ));
+            self.chat_widget.add_info_message(
+                format!("Model changed to {model} for the current session"),
+                Some("(ctrl+s to set as profile default)".to_string()),
+            );
         } else {
-            self.chat_widget.add_info_message(format!(
-                "Model switched to {model}. Press Ctrl+S to save it as your global default."
-            ));
+            self.chat_widget.add_info_message(
+                format!("Model changed to {model} for the current session"),
+                Some("(ctrl+s to set as default)".to_string()),
+            );
         }
     }
 
-    fn on_update_reasoning_effort(&mut self, effort: ReasoningEffortConfig) {
+    fn on_update_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
         let changed = self.config.model_reasoning_effort != effort;
         self.chat_widget.set_reasoning_effort(effort);
         self.config.model_reasoning_effort = effort;
@@ -376,14 +378,13 @@ impl App {
 
         match scope {
             SaveScope::Profile(profile) => {
-                match persist_model_selection(&codex_home, Some(profile), &model, Some(effort))
-                    .await
-                {
+                match persist_model_selection(&codex_home, Some(profile), &model, effort).await {
                     Ok(()) => {
                         self.model_saved_to_profile = true;
-                        self.chat_widget.add_info_message(format!(
-                            "Saved model {model} ({effort}) for profile `{profile}`. Press Ctrl+S again to make this your global default."
-                        ));
+                        self.chat_widget.add_info_message(
+                            format!("Profile model changed to {model} for all sessions"),
+                            Some("(view global config in config.toml)".to_string()),
+                        );
                     }
                     Err(err) => {
                         tracing::error!(
@@ -397,12 +398,13 @@ impl App {
                 }
             }
             SaveScope::Global => {
-                match persist_model_selection(&codex_home, None, &model, Some(effort)).await {
+                match persist_model_selection(&codex_home, None, &model, effort).await {
                     Ok(()) => {
                         self.model_saved_to_global = true;
-                        self.chat_widget.add_info_message(format!(
-                            "Saved model {model} ({effort}) as your global default."
-                        ));
+                        self.chat_widget.add_info_message(
+                            format!("Default model changed to {model} for all sessions"),
+                            Some("(view global config in config.toml)".to_string()),
+                        )
                     }
                     Err(err) => {
                         tracing::error!(
@@ -419,6 +421,7 @@ impl App {
                 self.chat_widget.add_info_message(
                     "Model preference already saved globally; no further action needed."
                         .to_string(),
+                    None,
                 );
             }
         }
@@ -537,19 +540,19 @@ mod tests {
         let mut app = make_test_app();
         app.model_saved_to_profile = true;
         app.model_saved_to_global = true;
-        app.config.model_reasoning_effort = ReasoningEffortConfig::Medium;
+        app.config.model_reasoning_effort = Some(ReasoningEffortConfig::Medium);
         app.chat_widget
-            .set_reasoning_effort(ReasoningEffortConfig::Medium);
+            .set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
 
-        app.on_update_reasoning_effort(ReasoningEffortConfig::High);
+        app.on_update_reasoning_effort(Some(ReasoningEffortConfig::High));
 
         assert_eq!(
             app.config.model_reasoning_effort,
-            ReasoningEffortConfig::High
+            Some(ReasoningEffortConfig::High)
         );
         assert_eq!(
             app.chat_widget.config_ref().model_reasoning_effort,
-            ReasoningEffortConfig::High
+            Some(ReasoningEffortConfig::High)
         );
         assert!(!app.model_saved_to_profile);
         assert!(!app.model_saved_to_global);

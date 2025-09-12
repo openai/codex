@@ -2,4 +2,4 @@
 source: tui/src/chatwidget/tests.rs
 expression: blob
 ---
-🖐  '/model' is disabled while a task is in progress.
+■ '/model' is disabled while a task is in progress.

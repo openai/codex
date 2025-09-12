@@ -20,7 +20,7 @@ use codex_core::config::ConfigToml;
 use codex_core::config::load_config_as_toml;
 use codex_core::config_edit::CONFIG_KEY_EFFORT;
 use codex_core::config_edit::CONFIG_KEY_MODEL;
-use codex_core::config_edit::persist_non_null_overrides;
+use codex_core::config_edit::persist_overrides_and_clear_if_none;
 use codex_core::default_client::get_codex_user_agent;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
@@ -519,7 +519,7 @@ impl CodexMessageProcessor {
             (&[CONFIG_KEY_EFFORT], effort_str.as_deref()),
         ];
 
-        match persist_non_null_overrides(
+        match persist_overrides_and_clear_if_none(
             &self.config.codex_home,
             self.config.active_profile.as_deref(),
             &overrides,
