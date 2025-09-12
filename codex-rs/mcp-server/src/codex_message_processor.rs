@@ -18,6 +18,9 @@ use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
 use codex_core::config::load_config_as_toml;
+use codex_core::config_edit::CONFIG_KEY_EFFORT;
+use codex_core::config_edit::CONFIG_KEY_MODEL;
+use codex_core::config_edit::persist_non_null_overrides;
 use codex_core::default_client::get_codex_user_agent;
 use codex_core::exec::ExecParams;
 use codex_core::exec_env::create_env;
@@ -71,6 +74,8 @@ use codex_protocol::mcp_protocol::SendUserMessageResponse;
 use codex_protocol::mcp_protocol::SendUserTurnParams;
 use codex_protocol::mcp_protocol::SendUserTurnResponse;
 use codex_protocol::mcp_protocol::ServerNotification;
+use codex_protocol::mcp_protocol::SetDefaultModelParams;
+use codex_protocol::mcp_protocol::SetDefaultModelResponse;
 use codex_protocol::mcp_protocol::UserInfoResponse;
 use codex_protocol::mcp_protocol::UserSavedConfig;
 use codex_protocol::models::ContentItem;
@@ -191,6 +196,9 @@ impl CodexMessageProcessor {
             }
             ClientRequest::GetUserSavedConfig { request_id } => {
                 self.get_user_saved_config(request_id).await;
+            }
+            ClientRequest::SetDefaultModel { request_id, params } => {
+                self.set_default_model(request_id, params).await;
             }
             ClientRequest::GetUserAgent { request_id } => {
                 self.get_user_agent(request_id).await;
@@ -497,6 +505,40 @@ impl CodexMessageProcessor {
 
         let response = UserInfoResponse { alleged_user_email };
         self.outgoing.send_response(request_id, response).await;
+    }
+
+    async fn set_default_model(&self, request_id: RequestId, params: SetDefaultModelParams) {
+        let SetDefaultModelParams {
+            model,
+            reasoning_effort,
+        } = params;
+        let effort_str = reasoning_effort.map(|effort| effort.to_string());
+
+        let overrides: [(&[&str], Option<&str>); 2] = [
+            (&[CONFIG_KEY_MODEL], model.as_deref()),
+            (&[CONFIG_KEY_EFFORT], effort_str.as_deref()),
+        ];
+
+        match persist_non_null_overrides(
+            &self.config.codex_home,
+            self.config.active_profile.as_deref(),
+            &overrides,
+        )
+        .await
+        {
+            Ok(()) => {
+                let response = SetDefaultModelResponse {};
+                self.outgoing.send_response(request_id, response).await;
+            }
+            Err(err) => {
+                let error = JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to persist overrides: {err}"),
+                    data: None,
+                };
+                self.outgoing.send_error(request_id, error).await;
+            }
+        }
     }
 
     async fn exec_one_off_command(&self, request_id: RequestId, params: ExecOneOffCommandParams) {
