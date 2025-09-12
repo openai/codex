@@ -81,7 +81,8 @@ pub enum Op {
         model: String,
 
         /// Will only be honored if the model is configured to use reasoning.
-        effort: ReasoningEffortConfig,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        effort: Option<ReasoningEffortConfig>,
 
         /// Will only be honored if the model is configured to use reasoning.
         summary: ReasoningSummaryConfig,
@@ -111,8 +112,11 @@ pub enum Op {
         model: Option<String>,
 
         /// Updated reasoning effort (honored only for reasoning-capable models).
+        ///
+        /// Use `Some(Some(_))` to set a specific effort, `Some(None)` to clear
+        /// the effort, or `None` to leave the existing value unchanged.
         #[serde(skip_serializing_if = "Option::is_none")]
-        effort: Option<ReasoningEffortConfig>,
+        effort: Option<Option<ReasoningEffortConfig>>,
 
         /// Updated reasoning summary preference (honored only for reasoning-capable models).
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -913,7 +917,8 @@ pub struct TurnContextItem {
     pub approval_policy: AskForApproval,
     pub sandbox_policy: SandboxPolicy,
     pub model: String,
-    pub effort: ReasoningEffortConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<ReasoningEffortConfig>,
     pub summary: ReasoningSummaryConfig,
 }
 
@@ -1082,7 +1087,8 @@ pub struct SessionConfiguredEvent {
     pub model: String,
 
     /// The effort the model is putting into reasoning about the user's request.
-    pub reasoning_effort: ReasoningEffortConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffortConfig>,
 
     /// Identifier of the history log file (inode on Unix, 0 otherwise).
     pub history_log_id: u64,
@@ -1172,7 +1178,7 @@ mod tests {
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
                 model: "codex-mini-latest".to_string(),
-                reasoning_effort: ReasoningEffortConfig::default(),
+                reasoning_effort: Some(ReasoningEffortConfig::default()),
                 history_log_id: 0,
                 history_entry_count: 0,
                 initial_messages: None,

@@ -136,14 +136,14 @@ pub(crate) struct ResponsesApiRequest<'a> {
 
 pub(crate) fn create_reasoning_param_for_request(
     model_family: &ModelFamily,
-    effort: ReasoningEffortConfig,
+    effort: Option<ReasoningEffortConfig>,
     summary: ReasoningSummaryConfig,
 ) -> Option<Reasoning> {
-    if model_family.supports_reasoning_summaries {
-        Some(Reasoning { effort, summary })
-    } else {
-        None
+    if !model_family.supports_reasoning_summaries {
+        return None;
     }
+
+    effort.map(|effort| Reasoning { effort, summary })
 }
 
 pub(crate) fn create_text_param_for_request(

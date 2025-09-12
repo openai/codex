@@ -36,7 +36,7 @@ async fn override_turn_context_does_not_persist_when_config_exists() {
             approval_policy: None,
             sandbox_policy: None,
             model: Some("o3".to_string()),
-            effort: Some(ReasoningEffort::High),
+            effort: Some(Some(ReasoningEffort::High)),
             summary: None,
         })
         .await
@@ -76,7 +76,7 @@ async fn override_turn_context_does_not_create_config_file() {
             approval_policy: None,
             sandbox_policy: None,
             model: Some("o3".to_string()),
-            effort: Some(ReasoningEffort::Medium),
+            effort: Some(Some(ReasoningEffort::Medium)),
             summary: None,
         })
         .await
