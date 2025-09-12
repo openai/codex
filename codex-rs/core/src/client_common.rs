@@ -81,8 +81,10 @@ pub enum ResponseEvent {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct Reasoning {
-    pub(crate) effort: ReasoningEffortConfig,
-    pub(crate) summary: ReasoningSummaryConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) effort: Option<ReasoningEffortConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) summary: Option<ReasoningSummaryConfig>,
 }
 
 /// Controls under the `text` field in the Responses API for GPT-5.
@@ -144,8 +146,8 @@ pub(crate) fn create_reasoning_param_for_request(
     }
 
     Some(Reasoning {
-        effort: effort.unwrap_or_default(),
-        summary,
+        effort,
+        summary: Some(summary),
     })
 }
 
