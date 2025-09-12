@@ -666,6 +666,7 @@ dependencies = [
  "bytes",
  "chrono",
  "codex-apply-patch",
+ "codex-file-search",
  "codex-mcp-client",
  "codex-protocol",
  "core_test_support",
@@ -733,6 +734,8 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "uuid",
+ "walkdir",
  "wiremock",
 ]
 
