@@ -124,13 +124,31 @@ impl HistoryCell for UserHistoryCell {
 pub(crate) struct AgentMessageCell {
     lines: Vec<Line<'static>>,
     is_first_line: bool,
+    // Optional role label for transcripts (e.g., "codex"). When `None`, no label is
+    // inserted in transcript output even if this is the first line.
+    transcript_label: Option<&'static str>,
 }
 
 impl AgentMessageCell {
+    // Default constructor for normal assistant responses (transcript shows "codex").
     pub(crate) fn new(lines: Vec<Line<'static>>, is_first_line: bool) -> Self {
         Self {
             lines,
             is_first_line,
+            transcript_label: Some("codex"),
+        }
+    }
+
+    // Constructor that allows suppressing the transcript role label.
+    pub(crate) fn new_with_label(
+        lines: Vec<Line<'static>>,
+        is_first_line: bool,
+        transcript_label: Option<&'static str>,
+    ) -> Self {
+        Self {
+            lines,
+            is_first_line,
+            transcript_label,
         }
     }
 }
@@ -152,7 +170,9 @@ impl HistoryCell for AgentMessageCell {
     fn transcript_lines(&self) -> Vec<Line<'static>> {
         let mut out: Vec<Line<'static>> = Vec::new();
         if self.is_first_line {
-            out.push("codex".magenta().bold().into());
+            if let Some(label) = self.transcript_label {
+                out.push(label.magenta().bold().into());
+            }
         }
         out.extend(self.lines.clone());
         out
@@ -1231,18 +1251,24 @@ pub(crate) fn new_reasoning_summary_block(
                     let summary_buffer = full_reasoning_buffer[after_close_idx..].to_string();
 
                     let mut header_lines: Vec<Line<'static>> = Vec::new();
-                    header_lines.push(Line::from("Thinking".magenta().italic()));
+                    header_lines.push(Line::from("Thinking".magenta().bold()));
                     append_markdown(&header_buffer, &mut header_lines, config);
 
+                    // Ensure exactly one blank line between the first reasoning header
+                    // and its summary text. Move the spacing to the beginning of the
+                    // summary block instead of after the "Thinking" header.
                     let mut summary_lines: Vec<Line<'static>> = Vec::new();
-                    summary_lines.push(Line::from("Thinking".magenta().bold()));
+                    summary_lines.push(Line::from(""));
+                    let summary_buffer = summary_buffer
+                        .trim_start_matches(|c: char| c == '\n' || c == '\r' || c == ' ')
+                        .to_string();
                     append_markdown(&summary_buffer, &mut summary_lines, config);
 
+                    // Show thinking in the main TUI using the agent message layout,
+                    // but suppress the "codex" label in the transcript for both parts.
                     return vec![
-                        Box::new(TranscriptOnlyHistoryCell {
-                            lines: header_lines,
-                        }),
-                        Box::new(AgentMessageCell::new(summary_lines, true)),
+                        Box::new(AgentMessageCell::new_with_label(header_lines, true, None)),
+                        Box::new(AgentMessageCell::new_with_label(summary_lines, false, None)),
                     ];
                 }
             }
@@ -1899,9 +1925,8 @@ mod tests {
 
         let summary_lines = render_transcript(cells[1].as_ref());
 
-        assert_eq!(
-            summary_lines,
-            vec!["codex", "Thinking", "We should fix the bug next."]
-        )
+        // The thinking section must not add the "codex" label to the transcript
+        // and should include a blank line between the first reasoning header and its summary.
+        assert_eq!(summary_lines, vec!["", "We should fix the bug next."])
     }
 }
