@@ -17,6 +17,8 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_otel::otel_event_manager::OtelEventManager;
+use codex_protocol::mcp_protocol::AuthMode;
 use codex_protocol::mcp_protocol::ConversationId;
 use codex_protocol::models::ReasoningItemReasoningSummary;
 use codex_protocol::models::WebSearchAction;
@@ -685,13 +687,26 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
     let summary = config.model_reasoning_summary;
     let config = Arc::new(config);
 
+    let conversation_id = ConversationId::new();
+
+    let otel_event_manager = OtelEventManager::new(
+        conversation_id,
+        config.model.as_str(),
+        config.model_family.slug.as_str(),
+        None,
+        Some(AuthMode::ChatGPT),
+        false,
+        "test".to_string(),
+    );
+
     let client = ModelClient::new(
         Arc::clone(&config),
         None,
+        otel_event_manager,
         provider,
         effort,
         summary,
-        ConversationId::new(),
+        conversation_id,
     );
 
     let mut prompt = Prompt::default();

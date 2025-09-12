@@ -40,7 +40,7 @@ impl OtelProvider {
             ])
             .build();
 
-        let mut builder = SdkLoggerProvider::builder().with_resource(resource.clone());
+        let mut builder = SdkLoggerProvider::builder().with_resource(resource);
 
         match &settings.exporter {
             OtelExporter::None => {

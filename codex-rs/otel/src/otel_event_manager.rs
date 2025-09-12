@@ -3,6 +3,7 @@ use chrono::Utc;
 use codex_protocol::mcp_protocol::AuthMode;
 use codex_protocol::mcp_protocol::ConversationId;
 use codex_protocol::protocol::InputItem;
+use codex_protocol::protocol::ReviewDecision;
 use reqwest::Error;
 use reqwest::Response;
 use serde::Serialize;
@@ -11,25 +12,15 @@ use strum_macros::Display;
 
 #[derive(Debug, Clone, Serialize, Display)]
 #[serde(rename_all = "snake_case")]
-pub enum ToolDecisionOutcome {
-    Accept,
-    Reject,
-}
-
-#[derive(Debug, Clone, Serialize, Display)]
-#[serde(rename_all = "snake_case")]
 pub enum ToolDecisionSource {
     Config,
-    UserForSession,
-    UserTemporary,
-    UserAbort,
-    UserReject,
+    User,
 }
 
 #[derive(Debug, Clone)]
 pub struct OtelEventMetadata {
     conversation_id: ConversationId,
-    auth_mode: AuthMode,
+    auth_mode: Option<String>,
     account_id: Option<String>,
     model: String,
     slug: String,
@@ -49,14 +40,14 @@ impl OtelEventManager {
         model: &str,
         slug: &str,
         account_id: Option<String>,
-        auth_mode: AuthMode,
+        auth_mode: Option<AuthMode>,
         log_user_prompts: bool,
         terminal_type: String,
     ) -> OtelEventManager {
         Self {
             metadata: OtelEventMetadata {
                 conversation_id,
-                auth_mode,
+                auth_mode: auth_mode.map(|m| m.to_string()),
                 account_id,
                 model: model.to_owned(),
                 slug: slug.to_owned(),
@@ -76,7 +67,7 @@ impl OtelEventManager {
 
     pub fn request(
         &self,
-        request_id: Option<String>,
+        cf_ray: Option<String>,
         attempt: u64,
         duration: Duration,
         response: &Result<Response, Error>,
@@ -92,12 +83,12 @@ impl OtelEventManager {
             event.timestamp = %timestamp(),
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
-            auth_mode = %self.metadata.auth_mode,
+            auth_mode = self.metadata.auth_mode,
             user.account_id = self.metadata.account_id,
             terminal.type = %self.metadata.terminal_type,
             model = %self.metadata.model,
             slug = %self.metadata.slug,
-            request_id = request_id,
+            cf_ray = cf_ray,
             duration_ms = %duration.as_millis(),
             http.response.status_code = status,
             error.message = error,
@@ -113,7 +104,7 @@ impl OtelEventManager {
             event.kind = %kind,
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
-            auth_mode = %self.metadata.auth_mode,
+            auth_mode = self.metadata.auth_mode,
             user.account_id = self.metadata.account_id,
             terminal.type = %self.metadata.terminal_type,
             model = %self.metadata.model,
@@ -130,7 +121,7 @@ impl OtelEventManager {
             event.kind = kind,
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
-            auth_mode = %self.metadata.auth_mode,
+            auth_mode = self.metadata.auth_mode,
             user.account_id = self.metadata.account_id,
             terminal.type = %self.metadata.terminal_type,
             model = %self.metadata.model,
@@ -156,7 +147,7 @@ impl OtelEventManager {
             event.kind = "response.completed",
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
-            auth_mode = %self.metadata.auth_mode,
+            auth_mode = self.metadata.auth_mode,
             user.account_id = self.metadata.account_id,
             terminal.type = %self.metadata.terminal_type,
             model = %self.metadata.model,
@@ -191,7 +182,7 @@ impl OtelEventManager {
             event.timestamp = %timestamp(),
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
-            auth_mode = %self.metadata.auth_mode,
+            auth_mode = self.metadata.auth_mode,
             user.account_id = self.metadata.account_id,
             terminal.type = %self.metadata.terminal_type,
             model = %self.metadata.model,
@@ -204,7 +195,8 @@ impl OtelEventManager {
     pub fn tool_decision(
         &self,
         tool_name: &str,
-        outcome: ToolDecisionOutcome,
+        call_id: &str,
+        decision: ReviewDecision,
         source: ToolDecisionSource,
     ) {
         tracing::event!(
@@ -213,14 +205,46 @@ impl OtelEventManager {
             event.timestamp = %timestamp(),
             conversation.id = %self.metadata.conversation_id,
             app.version = %self.metadata.app_version,
-            auth_mode = %self.metadata.auth_mode,
+            auth_mode = self.metadata.auth_mode,
             user.account_id = self.metadata.account_id,
             terminal.type = %self.metadata.terminal_type,
             model = %self.metadata.model,
             slug = %self.metadata.slug,
             tool_name = %tool_name,
-            decision = outcome.to_string(),
+            call_id = %call_id,
+            decision = decision.to_string().to_lowercase(),
             source = source.to_string(),
+        );
+    }
+
+    pub fn tool_result(
+        &self,
+        tool_name: &str,
+        call_id: &str,
+        arguments: &str,
+        duration: Duration,
+        success: bool,
+        output: String,
+    ) {
+        let success_str = if success { "true" } else { "false" };
+
+        tracing::event!(
+            tracing::Level::INFO,
+            event.name = "codex.tool_result",
+            event.timestamp = %timestamp(),
+            conversation.id = %self.metadata.conversation_id,
+            app.version = %self.metadata.app_version,
+            auth_mode = self.metadata.auth_mode,
+            user.account_id = self.metadata.account_id,
+            terminal.type = %self.metadata.terminal_type,
+            model = %self.metadata.model,
+            slug = %self.metadata.slug,
+            tool_name = %tool_name,
+            call_id = %call_id,
+            arguments = %arguments,
+            duration_ms = %duration.as_millis(),
+            success = %success_str,
+            output = %output,
         );
     }
 }

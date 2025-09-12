@@ -80,7 +80,6 @@ use crate::onboarding::onboarding_screen::run_onboarding_app;
 use crate::tui::Tui;
 pub use cli::Cli;
 use codex_core::internal_storage::InternalStorage;
-use codex_core::config_types::OtelExporterKind;
 
 // (tests access modules directly within the crate)
 

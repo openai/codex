@@ -16,44 +16,22 @@ workspace = true
 # Downstream crates can enable via `features = ["otel"]`.
 default = []
 otel = [
-  "tracing-subscriber",
-  "tracing-opentelemetry",
   "opentelemetry",
   "opentelemetry_sdk",
   "opentelemetry-otlp",
-  "opentelemetry-proto",
-  "tokio",
   "tonic",
-  "serde_json",
 ]
 
 [dependencies]
 # Optional to keep build lean unless feature enabled
 codex-protocol = { path = "../protocol" }
-codex-mcp-client = { path = "../mcp-client" }
 chrono = "0.4.42"
 tracing = { version = "0.1" }
-tracing-subscriber = { version = "0.3", features = ["registry", "fmt"], optional = true }
-tracing-opentelemetry = { version = "0.31.0", optional = true }
 opentelemetry = { version = "0.30.0", features = ["logs"], optional = true }
 opentelemetry_sdk = { version = "0.30.0", features = ["logs", "rt-tokio"], optional = true }
-opentelemetry-otlp = { version = "0.30.0", features = ["grpc-tonic", "http-proto", "http-json", "trace", "reqwest", "reqwest-rustls"], optional = true }
-opentelemetry-proto = { version = "0.30.0", features = ["gen-tonic"], optional = true }
-opentelemetry-appender-tracing = { version = "0.30.0" }
-tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros"], optional = true }
+opentelemetry-otlp = { version = "0.30.0", features = ["grpc-tonic", "http-proto", "http-json", "reqwest", "reqwest-rustls"], optional = true }
 tonic = { version = "0.13.1", optional = true }
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", optional = true }
 strum_macros = "0.27.2"
-uuid = { version = "1.18.1", features = ["v4"] }
-time = { version = "0.3", features = ["formatting", "parsing", "local-offset", "macros"] }
-walkdir = "2.5.0"
 opentelemetry-semantic-conventions = "0.30.0"
 reqwest = "0.12.23"
-opentelemetry-http = "0.30.0"
-
-[dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-tracing-subscriber = { version = "0.3", features = ["registry"] }
-tempfile = "3"
-walkdir = { version = "2.5.0" }

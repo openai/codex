@@ -67,12 +67,12 @@ async fn run_stream(sse_body: &str) -> Vec<ResponseEvent> {
 
     let conversation_id = ConversationId::new();
 
-    let trace_manager = OtelEventManager::new(
+    let otel_event_manager = OtelEventManager::new(
         conversation_id,
         config.model.as_str(),
         config.model_family.slug.as_str(),
         None,
-        AuthMode::ChatGPT,
+        Some(AuthMode::ChatGPT),
         false,
         "test".to_string(),
     );
@@ -80,7 +80,7 @@ async fn run_stream(sse_body: &str) -> Vec<ResponseEvent> {
     let client = ModelClient::new(
         Arc::clone(&config),
         None,
-        trace_manager,
+        otel_event_manager,
         provider,
         effort,
         summary,

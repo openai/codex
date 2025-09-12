@@ -39,7 +39,6 @@ tokio = { version = "1", features = [
 ] }
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
-tracing-opentelemetry = "0.31.0"
 opentelemetry-appender-tracing = "0.30.1"
 
 [dev-dependencies]

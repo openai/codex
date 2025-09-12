@@ -14,7 +14,6 @@ use std::ops::Deref;
 use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
-use strum_macros::Display;
 use tokio::sync::mpsc;
 
 /// Review thread system prompt. Edit `core/src/review_prompt.md` to customize.
@@ -65,8 +64,7 @@ impl Prompt {
     }
 }
 
-#[derive(Debug, Display)]
-#[strum(serialize_all = "snake_case")]
+#[derive(Debug)]
 pub enum ResponseEvent {
     Created,
     OutputItemDone(ResponseItem),

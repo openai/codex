@@ -3,8 +3,6 @@ mod event_processor;
 mod event_processor_with_human_output;
 mod event_processor_with_json_output;
 
-use crate::event_processor::CodexStatus;
-use crate::event_processor::EventProcessor;
 pub use cli::Cli;
 use codex_core::AuthManager;
 use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
