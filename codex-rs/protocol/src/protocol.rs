@@ -956,6 +956,17 @@ pub struct ReviewOutputEvent {
     pub overall_confidence_score: f32,
 }
 
+impl Default for ReviewOutputEvent {
+    fn default() -> Self {
+        Self {
+            findings: Vec::new(),
+            overall_correctness: String::default(),
+            overall_explanation: String::default(),
+            overall_confidence_score: 0.0,
+        }
+    }
+}
+
 /// A single review finding describing an observed issue or recommendation.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS)]
 pub struct ReviewFinding {

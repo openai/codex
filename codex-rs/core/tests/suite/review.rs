@@ -150,10 +150,8 @@ async fn review_op_with_plain_text_emits_review_fallback() {
 
     // Expect a structured fallback carrying the plain text.
     let expected = ReviewOutputEvent {
-        findings: vec![],
-        overall_correctness: String::new(),
         overall_explanation: "just plain text".to_string(),
-        overall_confidence_score: 1.0,
+        ..Default::default()
     };
     assert_eq!(expected, review);
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
