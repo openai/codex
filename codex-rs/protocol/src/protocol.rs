@@ -712,18 +712,38 @@ where
         let (_role, message) = value;
         let message = message.as_ref();
         let trimmed = message.trim();
-        if trimmed.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG)
-            && trimmed.ends_with(ENVIRONMENT_CONTEXT_CLOSE_TAG)
+        if starts_with_ignore_ascii_case(trimmed, ENVIRONMENT_CONTEXT_OPEN_TAG)
+            && ends_with_ignore_ascii_case(trimmed, ENVIRONMENT_CONTEXT_CLOSE_TAG)
         {
             InputMessageKind::EnvironmentContext
-        } else if trimmed.starts_with(USER_INSTRUCTIONS_OPEN_TAG)
-            && trimmed.ends_with(USER_INSTRUCTIONS_CLOSE_TAG)
+        } else if starts_with_ignore_ascii_case(trimmed, USER_INSTRUCTIONS_OPEN_TAG)
+            && ends_with_ignore_ascii_case(trimmed, USER_INSTRUCTIONS_CLOSE_TAG)
         {
             InputMessageKind::UserInstructions
         } else {
             InputMessageKind::Plain
         }
     }
+}
+
+fn starts_with_ignore_ascii_case(text: &str, prefix: &str) -> bool {
+    let text_bytes = text.as_bytes();
+    let prefix_bytes = prefix.as_bytes();
+    text_bytes.len() >= prefix_bytes.len()
+        && text_bytes
+            .iter()
+            .zip(prefix_bytes.iter())
+            .all(|(a, b)| a.eq_ignore_ascii_case(b))
+}
+
+fn ends_with_ignore_ascii_case(text: &str, suffix: &str) -> bool {
+    let text_bytes = text.as_bytes();
+    let suffix_bytes = suffix.as_bytes();
+    text_bytes.len() >= suffix_bytes.len()
+        && text_bytes[text_bytes.len() - suffix_bytes.len()..]
+            .iter()
+            .zip(suffix_bytes.iter())
+            .all(|(a, b)| a.eq_ignore_ascii_case(b))
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
