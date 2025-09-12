@@ -73,6 +73,9 @@ enum Subcommand {
     #[clap(visible_alias = "a")]
     Apply(ApplyCommand),
 
+    /// Resume a previous interactive session (picker by default; use --last to continue the most recent).
+    Resume(ResumeCommand),
+
     /// Internal: generate TypeScript protocol bindings.
     #[clap(hide = true)]
     GenerateTs(GenerateTsCommand),
@@ -83,6 +86,21 @@ struct CompletionCommand {
     /// Shell to generate completions for
     #[clap(value_enum, default_value_t = Shell::Bash)]
     shell: Shell,
+}
+
+#[derive(Debug, Parser)]
+struct ResumeCommand {
+    #[clap(skip)]
+    config_overrides: CliConfigOverrides,
+
+    /// Conversation/session id (UUID). When provided, resumes this session.
+    /// If omitted, use --last to pick the most recent recorded session.
+    #[arg(value_name = "SESSION_ID")]
+    session_id: Option<String>,
+
+    /// Continue the most recent session without showing the picker.
+    #[arg(long = "last", default_value_t = false)]
+    last: bool,
 }
 
 #[derive(Debug, Parser)]
@@ -160,6 +178,32 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
         }
         Some(Subcommand::Mcp) => {
             codex_mcp_server::run_main(codex_linux_sandbox_exe, cli.config_overrides).await?;
+        }
+        Some(Subcommand::Resume(resume_cli)) => {
+            // Build a TUI CLI instance in resume/continue mode and invoke the TUI runner.
+            let mut tui_cli = TuiCli {
+                prompt: None,
+                images: Vec::new(),
+                // hidden flags in TUI CLI; we set them programmatically
+                resume_picker: resume_cli.session_id.is_none() && !resume_cli.last,
+                resume_last: resume_cli.last,
+                resume_session_id: resume_cli.session_id,
+                model: None,
+                oss: false,
+                config_profile: None,
+                sandbox_mode: None,
+                approval_policy: None,
+                full_auto: false,
+                dangerously_bypass_approvals_and_sandbox: false,
+                cwd: None,
+                web_search: false,
+                config_overrides: CliConfigOverrides {
+                    raw_overrides: Vec::new(),
+                },
+            };
+            // Prepend any root-level -c overrides so TUI can see them.
+            prepend_config_flags(&mut tui_cli.config_overrides, resume_cli.config_overrides);
+            codex_tui::run_main(tui_cli, codex_linux_sandbox_exe).await?;
         }
         Some(Subcommand::Login(mut login_cli)) => {
             prepend_config_flags(&mut login_cli.config_overrides, cli.config_overrides);

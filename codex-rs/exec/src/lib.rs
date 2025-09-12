@@ -30,11 +30,14 @@ use tracing::error;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
+use crate::cli::Command as ExecCommand;
 use crate::event_processor::CodexStatus;
 use crate::event_processor::EventProcessor;
+use codex_core::find_conversation_path_by_id_str;
 
 pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()> {
     let Cli {
+        command,
         images,
         model: model_cli_arg,
         oss,
@@ -51,8 +54,15 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         config_overrides,
     } = cli;
 
-    // Determine the prompt based on CLI arg and/or stdin.
-    let prompt = match prompt {
+    // Determine the prompt source (parent or subcommand) and read from stdin if needed.
+    let prompt_arg = match &command {
+        // Allow prompt before the subcommand by falling back to the parent-level prompt
+        // when the Resume subcommand did not provide its own prompt.
+        Some(ExecCommand::Resume(args)) => args.prompt.clone().or(prompt),
+        None => prompt,
+    };
+
+    let prompt = match prompt_arg {
         Some(p) if p != "-" => p,
         // Either `-` was passed or no positional arg.
         maybe_dash => {
@@ -161,7 +171,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         }
     };
 
-    let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides)?;
+    let mut config = Config::load_with_cli_overrides(cli_kv_overrides, overrides)?;
     let mut event_processor: Box<dyn EventProcessor> = if json_mode {
         Box::new(EventProcessorWithJsonOutput::new(last_message_file.clone()))
     } else {
@@ -189,6 +199,26 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     let conversation_manager =
         ConversationManager::new(AuthManager::shared(config.codex_home.clone()));
+
+    // Handle resume subcommand by resolving a rollout path and setting experimental_resume.
+    if let Some(ExecCommand::Resume(args)) = command {
+        let resume_path = if args.last {
+            match codex_core::RolloutRecorder::list_conversations(&config.codex_home, 1, None).await
+            {
+                Ok(page) => page.items.first().map(|it| it.path.clone()),
+                Err(_) => None,
+            }
+        } else if let Some(id_str) = args.session_id.as_deref() {
+            find_conversation_path_by_id_str(&config.codex_home, id_str).await?
+        } else {
+            None
+        };
+
+        if let Some(path) = resume_path {
+            config.experimental_resume = Some(path);
+        }
+    }
+
     let NewConversation {
         conversation_id: _,
         conversation,

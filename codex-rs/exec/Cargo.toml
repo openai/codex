@@ -46,4 +46,6 @@ core_test_support = { path = "../core/tests/common" }
 libc = "0.2"
 predicates = "3"
 tempfile = "3.13.0"
+uuid = "1"
+walkdir = "2"
 wiremock = "0.6"

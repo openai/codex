@@ -204,7 +204,6 @@ impl RolloutRecorder {
 
     pub(crate) async fn get_rollout_history(path: &Path) -> std::io::Result<InitialHistory> {
         info!("Resuming rollout from {path:?}");
-        tracing::error!("Resuming rollout from {path:?}");
         let text = tokio::fs::read_to_string(path).await?;
         if text.trim().is_empty() {
             return Err(IoError::other("empty session file"));
@@ -254,7 +253,7 @@ impl RolloutRecorder {
             }
         }
 
-        tracing::error!(
+        info!(
             "Resumed rollout with {} items, conversation ID: {:?}",
             items.len(),
             conversation_id
