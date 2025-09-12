@@ -1083,8 +1083,7 @@ impl AgentTask {
             let sess = sess.clone();
             let sub_id = sub_id.clone();
             let tc = Arc::clone(&turn_context);
-            tokio::spawn(async move { run_task(sess, tc.as_ref(), sub_id, input).await })
-                .abort_handle()
+            tokio::spawn(async move { run_task(sess, tc, sub_id, input).await }).abort_handle()
         };
         Self {
             sess,
