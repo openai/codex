@@ -26,46 +26,15 @@ use super::list::Cursor;
 use super::list::get_conversations;
 use super::policy::is_persisted_response_item;
 use crate::config::Config;
-use crate::conversation_manager::InitialHistory;
-use crate::conversation_manager::ResumedHistory;
 use crate::default_client::ORIGINATOR;
-use crate::git_info::GitInfo;
 use crate::git_info::collect_git_info;
-use crate::protocol::EventMsg;
 use codex_protocol::models::ResponseItem;
-
-#[derive(Serialize, Deserialize, Clone, Default, Debug)]
-pub struct SessionMeta {
-    pub id: ConversationId,
-    pub timestamp: String,
-    pub cwd: PathBuf,
-    pub originator: String,
-    pub cli_version: String,
-    pub instructions: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct SessionMetaLine {
-    #[serde(flatten)]
-    meta: SessionMeta,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    git: Option<GitInfo>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(tag = "type", content = "payload", rename_all = "snake_case")]
-pub enum RolloutItem {
-    SessionMeta(SessionMetaLine),
-    ResponseItem(ResponseItem),
-    EventMsg(EventMsg),
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-pub(crate) struct RolloutLine {
-    pub(crate) timestamp: String,
-    #[serde(flatten)]
-    pub(crate) item: RolloutItem,
-}
+use codex_protocol::protocol::InitialHistory;
+use codex_protocol::protocol::ResumedHistory;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
+use codex_protocol::protocol::SessionMeta;
+use codex_protocol::protocol::SessionMetaLine;
 
 #[derive(Serialize, Deserialize, Default, Clone)]
 pub struct SessionStateSnapshot {}
@@ -108,7 +77,13 @@ pub enum RolloutRecorderParams {
 
 enum RolloutCmd {
     AddItems(Vec<RolloutItem>),
-    Shutdown { ack: oneshot::Sender<()> },
+    /// Ensure all prior writes are processed; respond when flushed.
+    Flush {
+        ack: oneshot::Sender<()>,
+    },
+    Shutdown {
+        ack: oneshot::Sender<()>,
+    },
 }
 
 impl RolloutRecorderParams {
@@ -125,7 +100,6 @@ impl RolloutRecorderParams {
 }
 
 impl RolloutRecorder {
-    #[allow(dead_code)]
     /// List conversations (rollout files) under the provided Codex home directory.
     pub async fn list_conversations(
         codex_home: &Path,
@@ -217,6 +191,17 @@ impl RolloutRecorder {
             .map_err(|e| IoError::other(format!("failed to queue rollout items: {e}")))
     }
 
+    /// Flush all queued writes and wait until they are committed by the writer task.
+    pub async fn flush(&self) -> std::io::Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(RolloutCmd::Flush { ack: tx })
+            .await
+            .map_err(|e| IoError::other(format!("failed to queue rollout flush: {e}")))?;
+        rx.await
+            .map_err(|e| IoError::other(format!("failed waiting for rollout flush: {e}")))
+    }
+
     pub(crate) async fn get_rollout_history(path: &Path) -> std::io::Result<InitialHistory> {
         info!("Resuming rollout from {path:?}");
         tracing::error!("Resuming rollout from {path:?}");
@@ -243,15 +228,21 @@ impl RolloutRecorder {
             match serde_json::from_value::<RolloutLine>(v.clone()) {
                 Ok(rollout_line) => match rollout_line.item {
                     RolloutItem::SessionMeta(session_meta_line) => {
-                        tracing::error!(
-                            "Parsed conversation ID from rollout file: {:?}",
-                            session_meta_line.meta.id
-                        );
-                        conversation_id = Some(session_meta_line.meta.id);
+                        // Use the FIRST SessionMeta encountered in the file as the canonical
+                        // conversation id and main session information. Keep all items intact.
+                        if conversation_id.is_none() {
+                            conversation_id = Some(session_meta_line.meta.id);
+                        }
                         items.push(RolloutItem::SessionMeta(session_meta_line));
                     }
                     RolloutItem::ResponseItem(item) => {
                         items.push(RolloutItem::ResponseItem(item));
+                    }
+                    RolloutItem::Compacted(item) => {
+                        items.push(RolloutItem::Compacted(item));
+                    }
+                    RolloutItem::TurnContext(item) => {
+                        items.push(RolloutItem::TurnContext(item));
                     }
                     RolloutItem::EventMsg(_ev) => {
                         items.push(RolloutItem::EventMsg(_ev));
@@ -281,6 +272,10 @@ impl RolloutRecorder {
             history: items,
             rollout_path: path.to_path_buf(),
         }))
+    }
+
+    pub(crate) fn get_rollout_path(&self) -> PathBuf {
+        self.rollout_path.clone()
     }
 
     pub async fn shutdown(&self) -> std::io::Result<()> {
@@ -382,6 +377,14 @@ async fn rollout_writer(
                         writer.write_rollout_item(item).await?;
                     }
                 }
+            }
+            RolloutCmd::Flush { ack } => {
+                // Ensure underlying file is flushed and then ack.
+                if let Err(e) = writer.file.flush().await {
+                    let _ = ack.send(());
+                    return Err(e);
+                }
+                let _ = ack.send(());
             }
             RolloutCmd::Shutdown { ack } => {
                 let _ = ack.send(());

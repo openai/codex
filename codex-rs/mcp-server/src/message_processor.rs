@@ -14,6 +14,8 @@ use codex_protocol::mcp_protocol::ConversationId;
 use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::config::Config;
+use codex_core::default_client::USER_AGENT_SUFFIX;
+use codex_core::default_client::get_codex_user_agent;
 use codex_core::protocol::Submission;
 use mcp_types::CallToolRequestParams;
 use mcp_types::CallToolResult;
@@ -54,8 +56,7 @@ impl MessageProcessor {
         config: Arc<Config>,
     ) -> Self {
         let outgoing = Arc::new(outgoing);
-        let auth_manager =
-            AuthManager::shared(config.codex_home.clone(), config.preferred_auth_method);
+        let auth_manager = AuthManager::shared(config.codex_home.clone());
         let conversation_manager = Arc::new(ConversationManager::new(auth_manager.clone()));
         let codex_message_processor = CodexMessageProcessor::new(
             auth_manager,
@@ -208,6 +209,14 @@ impl MessageProcessor {
             return;
         }
 
+        let client_info = params.client_info;
+        let name = client_info.name;
+        let version = client_info.version;
+        let user_agent_suffix = format!("{name}; {version}");
+        if let Ok(mut suffix) = USER_AGENT_SUFFIX.lock() {
+            *suffix = Some(user_agent_suffix);
+        }
+
         self.initialized = true;
 
         // Build a minimal InitializeResult. Fill with placeholders.
@@ -228,6 +237,7 @@ impl MessageProcessor {
                 name: "codex-mcp-server".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 title: Some("Codex".to_string()),
+                user_agent: Some(get_codex_user_agent()),
             },
         };
 
@@ -521,7 +531,6 @@ impl MessageProcessor {
 
         // Spawn the long-running reply handler.
         tokio::spawn({
-            let codex = codex.clone();
             let outgoing = outgoing.clone();
             let prompt = prompt.clone();
             let running_requests_id_to_codex_uuid = running_requests_id_to_codex_uuid.clone();

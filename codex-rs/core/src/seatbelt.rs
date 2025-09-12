@@ -153,7 +153,7 @@ mod tests {
         // Build a policy that only includes the two test roots as writable and
         // does not automatically include defaults TMPDIR or /tmp.
         let policy = SandboxPolicy::WorkspaceWrite {
-            writable_roots: vec![root_with_git.clone(), root_without_git.clone()],
+            writable_roots: vec![root_with_git, root_without_git],
             network_access: false,
             exclude_tmpdir_env_var: true,
             exclude_slash_tmp: true,

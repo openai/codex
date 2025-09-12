@@ -1,3 +1,4 @@
+use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 
 /// Transcript of conversation history
@@ -58,6 +59,26 @@ impl ConversationHistory {
         // Preserve chronological order (oldest to newest) within the kept slice.
         kept.reverse();
         self.items = kept;
+    }
+
+    pub(crate) fn last_agent_message(&self) -> String {
+        for item in self.items.iter().rev() {
+            if let ResponseItem::Message { role, content, .. } = item
+                && role == "assistant"
+            {
+                return content
+                    .iter()
+                    .find_map(|ci| {
+                        if let ContentItem::OutputText { text } = ci {
+                            Some(text.clone())
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or_default();
+            }
+        }
+        String::new()
     }
 }
 

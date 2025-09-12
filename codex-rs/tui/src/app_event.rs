@@ -1,4 +1,4 @@
-use codex_core::protocol::ConversationHistoryResponseEvent;
+use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::Event;
 use codex_file_search::FileMatch;
 
@@ -58,5 +58,5 @@ pub(crate) enum AppEvent {
     UpdateSandboxPolicy(SandboxPolicy),
 
     /// Forwarded conversation history snapshot from the current conversation.
-    ConversationHistory(ConversationHistoryResponseEvent),
+    ConversationHistory(ConversationPathResponseEvent),
 }

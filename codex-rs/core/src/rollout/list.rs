@@ -10,9 +10,9 @@ use time::macros::format_description;
 use uuid::Uuid;
 
 use super::SESSIONS_SUBDIR;
-use super::recorder::RolloutItem;
-use super::recorder::RolloutLine;
 use crate::protocol::EventMsg;
+use codex_protocol::protocol::RolloutItem;
+use codex_protocol::protocol::RolloutLine;
 
 /// Returned page of conversation summaries.
 #[derive(Debug, Default, PartialEq)]
@@ -317,6 +317,12 @@ async fn read_head_and_flags(
                 if let Ok(val) = serde_json::to_value(item) {
                     head.push(val);
                 }
+            }
+            RolloutItem::TurnContext(_) => {
+                // Not included in `head`; skip.
+            }
+            RolloutItem::Compacted(_) => {
+                // Not included in `head`; skip.
             }
             RolloutItem::EventMsg(ev) => {
                 if matches!(ev, EventMsg::UserMessage(_)) {
