@@ -207,3 +207,84 @@ fn exec_resume_by_id_appends_to_existing_file() -> anyhow::Result<()> {
     assert!(content.contains(&marker2));
     Ok(())
 }
+
+#[test]
+fn exec_resume_preserves_cli_configuration_overrides() -> anyhow::Result<()> {
+    let home = TempDir::new()?;
+    let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/cli_responses_fixture.sse");
+
+    let marker = format!("resume-config-{}", Uuid::new_v4());
+    let prompt = format!("echo {marker}");
+
+    Command::cargo_bin("codex-exec")
+        .context("should find binary for codex-exec")?
+        .env("CODEX_HOME", home.path())
+        .env("OPENAI_API_KEY", "dummy")
+        .env("CODEX_RS_SSE_FIXTURE", &fixture)
+        .env("OPENAI_BASE_URL", "http://unused.local")
+        .arg("--skip-git-repo-check")
+        .arg("--sandbox")
+        .arg("workspace-write")
+        .arg("--model")
+        .arg("gpt-5")
+        .arg("-C")
+        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg(&prompt)
+        .assert()
+        .success();
+
+    let sessions_dir = home.path().join("sessions");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut path = None;
+    while Instant::now() < deadline && path.is_none() {
+        path = find_session_file_containing_marker(&sessions_dir, &marker);
+        if path.is_none() {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+    let path = path.expect("no session file found after first run");
+
+    let marker2 = format!("resume-config-2-{}", Uuid::new_v4());
+    let prompt2 = format!("echo {marker2}");
+
+    let output = Command::cargo_bin("codex-exec")
+        .context("should find binary for codex-exec")?
+        .env("CODEX_HOME", home.path())
+        .env("OPENAI_API_KEY", "dummy")
+        .env("CODEX_RS_SSE_FIXTURE", &fixture)
+        .env("OPENAI_BASE_URL", "http://unused.local")
+        .arg("--skip-git-repo-check")
+        .arg("--sandbox")
+        .arg("workspace-write")
+        .arg("--model")
+        .arg("gpt-5-high")
+        .arg("-C")
+        .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg(&prompt2)
+        .arg("resume")
+        .arg("--last")
+        .output()
+        .context("resume run should succeed")?;
+
+    assert!(output.status.success(), "resume run failed: {output:?}");
+
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(
+        stdout.contains("model: gpt-5-high"),
+        "stdout missing model override: {stdout}"
+    );
+    assert!(
+        stdout.contains("sandbox: workspace-write"),
+        "stdout missing sandbox override: {stdout}"
+    );
+
+    let resumed_path = find_session_file_containing_marker(&sessions_dir, &marker2)
+        .expect("no resumed session file containing marker2");
+    assert_eq!(resumed_path, path, "resume should append to same file");
+
+    let content = std::fs::read_to_string(&resumed_path)?;
+    assert!(content.contains(&marker));
+    assert!(content.contains(&marker2));
+    Ok(())
+}
