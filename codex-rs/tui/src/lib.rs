@@ -122,6 +122,7 @@ pub async fn run_main(
 
     let overrides = ConfigOverrides {
         model,
+        review_model: None,
         approval_policy,
         sandbox_mode,
         cwd,
