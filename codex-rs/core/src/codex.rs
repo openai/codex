@@ -505,6 +505,7 @@ impl Session {
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
                 model,
+                reasoning_effort: model_reasoning_effort,
                 history_log_id,
                 history_entry_count,
                 initial_messages,

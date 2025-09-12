@@ -593,6 +593,7 @@ impl CodexMessageProcessor {
                 let response = NewConversationResponse {
                     conversation_id,
                     model: session_configured.model,
+                    reasoning_effort: session_configured.reasoning_effort,
                     rollout_path: session_configured.rollout_path,
                 };
                 self.outgoing.send_response(request_id, response).await;

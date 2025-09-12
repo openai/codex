@@ -138,6 +138,7 @@ fn resumed_initial_messages_render_history() {
     let configured = codex_core::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         model: "test-model".to_string(),
+        reasoning_effort: ReasoningEffortConfig::default(),
         history_log_id: 0,
         history_entry_count: 0,
         initial_messages: Some(vec![
