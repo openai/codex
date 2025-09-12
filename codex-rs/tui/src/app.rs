@@ -327,13 +327,15 @@ impl App {
     fn show_model_save_hint(&mut self) {
         let model = self.config.model.clone();
         if self.active_profile.is_some() {
-            self.chat_widget.add_info_message(format!(
-                "Model switched to {model}. Press Ctrl+S to save it for this profile, then press Ctrl+S again to set it as your global default."
-            ));
+            self.chat_widget.add_info_message(
+                format!("Model changed to {model} for the current session"),
+                Some("(ctrl+s to set as profile default)".to_string()),
+            );
         } else {
-            self.chat_widget.add_info_message(format!(
-                "Model switched to {model}. Press Ctrl+S to save it as your global default."
-            ));
+            self.chat_widget.add_info_message(
+                format!("Model changed to {model} for the current session"),
+                Some("(ctrl+s to set as default)".to_string()),
+            );
         }
     }
 
@@ -372,9 +374,6 @@ impl App {
 
         let model = self.config.model.clone();
         let effort = self.config.model_reasoning_effort;
-        let effort_label = effort
-            .map(|effort| effort.to_string())
-            .unwrap_or_else(|| "none".to_string());
         let codex_home = self.config.codex_home.clone();
 
         match scope {
@@ -382,9 +381,10 @@ impl App {
                 match persist_model_selection(&codex_home, Some(profile), &model, effort).await {
                     Ok(()) => {
                         self.model_saved_to_profile = true;
-                        self.chat_widget.add_info_message(format!(
-                            "Saved model {model} ({effort_label}) for profile `{profile}`. Press Ctrl+S again to make this your global default."
-                        ));
+                        self.chat_widget.add_info_message(
+                            format!("Profile model changed to {model} for all sessions"),
+                            Some("(view global config in config.toml)".to_string()),
+                        );
                     }
                     Err(err) => {
                         tracing::error!(
@@ -401,9 +401,10 @@ impl App {
                 match persist_model_selection(&codex_home, None, &model, effort).await {
                     Ok(()) => {
                         self.model_saved_to_global = true;
-                        self.chat_widget.add_info_message(format!(
-                            "Saved model {model} ({effort_label}) as your global default."
-                        ));
+                        self.chat_widget.add_info_message(
+                            format!("Default model changed to {model} for all sessions"),
+                            Some("(view global config in config.toml)".to_string()),
+                        )
                     }
                     Err(err) => {
                         tracing::error!(
@@ -420,6 +421,7 @@ impl App {
                 self.chat_widget.add_info_message(
                     "Model preference already saved globally; no further action needed."
                         .to_string(),
+                    None,
                 );
             }
         }
