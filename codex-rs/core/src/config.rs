@@ -923,8 +923,7 @@ impl Config {
                 .unwrap_or(false),
             model_reasoning_effort: config_profile
                 .model_reasoning_effort
-                .or(cfg.model_reasoning_effort)
-                .or(Some(ReasoningEffort::default())),
+                .or(cfg.model_reasoning_effort),
             model_reasoning_summary: config_profile
                 .model_reasoning_summary
                 .or(cfg.model_reasoning_summary)
@@ -1504,7 +1503,7 @@ model_verbosity = "high"
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
-            model_reasoning_effort: Some(ReasoningEffort::default()),
+            model_reasoning_effort: None,
             model_reasoning_summary: ReasoningSummary::default(),
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
@@ -1575,7 +1574,7 @@ model_verbosity = "high"
             codex_linux_sandbox_exe: None,
             hide_agent_reasoning: false,
             show_raw_agent_reasoning: false,
-            model_reasoning_effort: Some(ReasoningEffort::default()),
+            model_reasoning_effort: None,
             model_reasoning_summary: ReasoningSummary::default(),
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
