@@ -41,23 +41,15 @@ impl Shell {
             Shell::PowerShell(ps) => {
                 // If model generated a bash command, prefer a detected bash fallback
                 if let Some(script) = strip_bash_lc(&command) {
-                    return match &ps.bash_exe_fallback {
-                        Some(bash) => Some(vec![
-                            bash.to_string_lossy().to_string(),
-                            "-lc".to_string(),
-                            script,
-                        ]),
-
-                        // No bash fallback → run the script under PowerShell.
-                        // It will likely fail (except for some simple commands), but the error
-                        // should give a clue to the model to fix upon retry that it's running under PowerShell.
-                        None => Some(vec![
-                            ps.exe.clone(),
-                            "-NoProfile".to_string(),
-                            "-Command".to_string(),
-                            script,
-                        ]),
-                    };
+                    // Force PowerShell usage on Windows. Wrap in a script block to avoid
+                    // quoting/escaping issues and to prevent any outer shell from eating symbols.
+                    let script_block = format!("& {{ {script} }}");
+                    return Some(vec![
+                        ps.exe.clone(),
+                        "-NoProfile".to_string(),
+                        "-Command".to_string(),
+                        script_block,
+                    ]);
                 }
 
                 // Not a bash command. If model did not generate a PowerShell command,
@@ -69,15 +61,18 @@ impl Shell {
                         return Some(command);
                     }
 
-                    let joined = shlex::try_join(command.iter().map(|s| s.as_str())).ok();
-                    return joined.map(|arg| {
-                        vec![
+                    if needs_powershell_shell(&command) {
+                        let script = build_powershell_command_script(&command);
+                        let script_block = format!("& {{ {script} }}");
+                        return Some(vec![
                             ps.exe.clone(),
                             "-NoProfile".to_string(),
                             "-Command".to_string(),
-                            arg,
-                        ]
-                    });
+                            script_block,
+                        ]);
+                    } else {
+                        return Some(command);
+                    }
                 }
 
                 // Model generated a PowerShell command. Run it.
@@ -131,6 +126,80 @@ fn strip_bash_lc(command: &Vec<String>) -> Option<String> {
     }
 }
 
+/// Determines if the tokens require a shell (PowerShell) to interpret
+/// operators like pipelines, logical chaining, redirections, or grouping.
+fn needs_powershell_shell(tokens: &[String]) -> bool {
+    tokens.iter().any(|t| is_powershell_operator(t))
+}
+
+fn is_powershell_operator(token: &str) -> bool {
+    matches!(
+        token,
+        "|" | "||"
+            | "&&"
+            | ";"
+            | "<"
+            | ">"
+            | ">>"
+            | "1>"
+            | "1>>"
+            | "2>"
+            | "2>>"
+            | "2>&1"
+            | "1>&2"
+            | "("
+            | ")"
+    )
+}
+
+/// Quote a single token for safe use in a PowerShell script. Uses single-quoted
+/// strings and doubles any single quotes inside.
+fn ps_quote(token: &str) -> String {
+    // In PowerShell, single-quoted strings are literal; to escape a single quote,
+    // double it.
+    let mut s = String::with_capacity(token.len() + 2);
+    s.push('\'');
+    for ch in token.chars() {
+        if ch == '\'' {
+            s.push('\'');
+            s.push('\'');
+        } else {
+            s.push(ch);
+        }
+    }
+    s.push('\'');
+    s
+}
+
+/// Builds a PowerShell `-Command` script that executes the provided tokens
+/// faithfully, preserving operators and quoting arguments/paths.
+fn build_powershell_command_script(tokens: &[String]) -> String {
+    // We try to reconstruct commands separated by operators and invoke commands via
+    // the call operator `&` so that paths and bare words are executed reliably.
+    let mut parts: Vec<String> = Vec::with_capacity(tokens.len() * 2);
+    let mut expect_command = true;
+
+    for tok in tokens {
+        if is_powershell_operator(tok) {
+            parts.push(tok.clone());
+            // After pipeline/logical/grouping operators, expect the next token to be a command.
+            expect_command = matches!(tok.as_str(), "|" | "||" | "&&" | ";" | "(");
+            continue;
+        }
+
+        if expect_command {
+            parts.push("&".to_string());
+            parts.push(ps_quote(tok));
+            expect_command = false;
+        } else {
+            parts.push(ps_quote(tok));
+        }
+    }
+
+    // Join with spaces; quoting ensures literal interpretation where needed.
+    parts.join(" ")
+}
+
 #[cfg(unix)]
 fn detect_default_user_shell() -> Shell {
     use libc::getpwuid;
@@ -174,40 +243,49 @@ pub async fn default_user_shell() -> Shell {
 pub async fn default_user_shell() -> Shell {
     use tokio::process::Command;
 
-    // Prefer PowerShell 7+ (`pwsh`) if available, otherwise fall back to Windows PowerShell.
-    let has_pwsh = Command::new("pwsh")
-        .arg("-NoLogo")
-        .arg("-NoProfile")
-        .arg("-Command")
-        .arg("$PSVersionTable.PSVersion.Major")
-        .output()
-        .await
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-    let bash_exe = if Command::new("bash.exe")
-        .arg("--version")
-        .output()
-        .await
-        .ok()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+    // Prefer pwsh.exe (PowerShell 7+) with the highest weight.
+    // Only fall back to Windows PowerShell if pwsh is not available.
+    // Detect optional bash fallback (e.g., Git Bash) to support `bash -lc` patterns.
+    let bash_exe = if Command::new("bash.exe").arg("--version")
+        .output().await.ok().map(|o| o.status.success()).unwrap_or(false)
     {
         which::which("bash.exe").ok()
+    } else if let Ok(path) = which::which(r"C:\Program Files\Git\bin\bash.exe") {
+        Some(path)
     } else {
         None
     };
 
-    if has_pwsh {
-        Shell::PowerShell(PowerShellConfig {
+    // Helper: probe a PowerShell flavor by asking for major version.
+    async fn probe_ps(exe: &str) -> bool {
+        Command::new(exe)
+            .arg("-NoLogo").arg("-NoProfile")
+            .arg("-Command").arg("$PSVersionTable.PSVersion.Major")
+            .output().await
+            .map(|o| o.status.success()).unwrap_or(false)
+    }
+
+    // 1) Highest priority: pwsh.exe
+    if probe_ps("pwsh").await || probe_ps("pwsh.exe").await {
+        return Shell::PowerShell(PowerShellConfig {
             exe: "pwsh.exe".to_string(),
             bash_exe_fallback: bash_exe,
-        })
-    } else {
-        Shell::PowerShell(PowerShellConfig {
+        });
+    }
+
+    // 2) Fallback: Windows PowerShell
+    if probe_ps("powershell").await || probe_ps("powershell.exe").await {
+        return Shell::PowerShell(PowerShellConfig {
             exe: "powershell.exe".to_string(),
             bash_exe_fallback: bash_exe,
-        })
+        });
     }
+
+    // 3) Final fallback: choose pwsh.exe to encourage modern path (errors will guide setup).
+    Shell::PowerShell(PowerShellConfig {
+        exe: "pwsh.exe".to_string(),
+        bash_exe_fallback: bash_exe,
+    })
 }
 
 #[cfg(all(not(target_os = "windows"), not(unix)))]
@@ -482,7 +560,7 @@ mod tests_windows {
                     bash_exe_fallback: None,
                 }),
                 vec!["bash", "-lc", "echo hello"],
-                vec!["pwsh.exe", "-NoProfile", "-Command", "echo hello"],
+                vec!["pwsh.exe", "-NoProfile", "-Command", "& { echo hello }"],
             ),
             (
                 Shell::PowerShell(PowerShellConfig {
@@ -490,7 +568,12 @@ mod tests_windows {
                     bash_exe_fallback: None,
                 }),
                 vec!["bash", "-lc", "echo hello"],
-                vec!["powershell.exe", "-NoProfile", "-Command", "echo hello"],
+                vec![
+                    "powershell.exe",
+                    "-NoProfile",
+                    "-Command",
+                    "& { echo hello }",
+                ],
             ),
             (
                 Shell::PowerShell(PowerShellConfig {
@@ -498,7 +581,7 @@ mod tests_windows {
                     bash_exe_fallback: Some(PathBuf::from("bash.exe")),
                 }),
                 vec!["bash", "-lc", "echo hello"],
-                vec!["bash.exe", "-lc", "echo hello"],
+                vec!["pwsh.exe", "-NoProfile", "-Command", "& { echo hello }"],
             ),
             (
                 Shell::PowerShell(PowerShellConfig {
@@ -511,9 +594,10 @@ mod tests_windows {
                     "apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: destination_file.txt\n-original content\n+modified content\n*** End Patch\nEOF",
                 ],
                 vec![
-                    "bash.exe",
-                    "-lc",
-                    "apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: destination_file.txt\n-original content\n+modified content\n*** End Patch\nEOF",
+                    "pwsh.exe",
+                    "-NoProfile",
+                    "-Command",
+                    "& { apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: destination_file.txt\n-original content\n+modified content\n*** End Patch\nEOF }",
                 ],
             ),
             (
@@ -522,7 +606,7 @@ mod tests_windows {
                     bash_exe_fallback: Some(PathBuf::from("bash.exe")),
                 }),
                 vec!["echo", "hello"],
-                vec!["pwsh.exe", "-NoProfile", "-Command", "echo hello"],
+                vec!["echo", "hello"],
             ),
             (
                 Shell::PowerShell(PowerShellConfig {
