@@ -11,7 +11,7 @@ use codex_core::RolloutRecorder;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
-use codex_core::config::GPT5_HIGH_MODEL;
+use codex_core::config::SWIFTFOX_MEDIUM_MODEL;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config::persist_model_selection;
@@ -380,7 +380,7 @@ async fn run_ratatui_app(
         let switch_to_new_model = upgrade_decision == ModelUpgradeDecision::Switch;
 
         if switch_to_new_model {
-            config.model = GPT5_HIGH_MODEL.to_owned();
+            config.model = SWIFTFOX_MEDIUM_MODEL.to_owned();
             config.model_reasoning_effort = None;
             if let Err(e) = persist_model_selection(
                 &config.codex_home,
