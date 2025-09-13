@@ -104,7 +104,8 @@ async fn fork_conversation_twice_drops_to_first_message() {
         items
     };
 
-    // Compute expected prefixes after each fork by truncating base rollout at nth-from-last user input.
+    // Compute expected prefixes after each fork by truncating base rollout
+    // strictly before the nth user input (0-based).
     let base_items = read_items(&base_path);
     let find_user_input_positions = |items: &[RolloutItem]| -> Vec<usize> {
         let mut pos = Vec::new();
@@ -126,11 +127,8 @@ async fn fork_conversation_twice_drops_to_first_message() {
     };
     let user_inputs = find_user_input_positions(&base_items);
 
-    // After dropping last user input (n=1), cut strictly before that input if present, else empty.
-    let cut1 = user_inputs
-        .get(user_inputs.len().saturating_sub(1))
-        .copied()
-        .unwrap_or(0);
+    // After cutting at nth user input (n=1 → second user message), cut strictly before that input.
+    let cut1 = user_inputs.get(1).copied().unwrap_or(0);
     let expected_after_first: Vec<RolloutItem> = base_items[..cut1].to_vec();
 
     // After dropping again (n=1 on fork1), compute expected relative to fork1's rollout.
@@ -161,12 +159,12 @@ async fn fork_conversation_twice_drops_to_first_message() {
         serde_json::to_value(&expected_after_first).unwrap()
     );
 
-    // Fork again with n=1 → drops the (new) last user message, leaving only the first.
+    // Fork again with n=0 → drops the (new) last user message, leaving only the first.
     let NewConversation {
         conversation: codex_fork2,
         ..
     } = conversation_manager
-        .fork_conversation(1, config_for_fork.clone(), fork1_path.clone())
+        .fork_conversation(0, config_for_fork.clone(), fork1_path.clone())
         .await
         .expect("fork 2");
 
