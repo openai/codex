@@ -169,8 +169,8 @@ impl ConversationManager {
     }
 }
 
-/// Return a prefix of `items` obtained by dropping the last `n` user messages
-/// and all items that follow them.
+/// Return a prefix of `items` obtained by cutting strictly before the nth user message
+/// (0-based) and all items that follow it.
 fn truncate_after_nth_user_message(history: InitialHistory, n: usize) -> InitialHistory {
     // Work directly on rollout items, and cut the vector at the nth user message input.
     let items: Vec<RolloutItem> = history.get_rollout_items();
@@ -185,8 +185,8 @@ fn truncate_after_nth_user_message(history: InitialHistory, n: usize) -> Initial
         }
     }
 
-    // If fewer than n user messages exist, treat as empty.
-    if user_positions.len() < n {
+    // If fewer than or equal to n user messages exist, treat as empty (out of range).
+    if user_positions.len() <= n {
         return InitialHistory::New;
     }
 
