@@ -1,5 +1,9 @@
 use codex_core::CodexAuth;
+use codex_core::ContentItem;
 use codex_core::ConversationManager;
+use codex_core::LocalShellAction;
+use codex_core::LocalShellExecAction;
+use codex_core::LocalShellStatus;
 use codex_core::ModelClient;
 use codex_core::ModelProviderInfo;
 use codex_core::NewConversation;
@@ -15,6 +19,7 @@ use codex_core::protocol::Op;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use codex_protocol::mcp_protocol::ConversationId;
 use codex_protocol::models::ReasoningItemReasoningSummary;
+use codex_protocol::models::WebSearchAction;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::wait_for_event;
@@ -699,6 +704,45 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
         }]),
         encrypted_content: None,
     });
+    prompt.input.push(ResponseItem::Message {
+        id: Some("message-id".into()),
+        role: "assistant".into(),
+        content: vec![ContentItem::OutputText {
+            text: "message".into(),
+        }],
+    });
+    prompt.input.push(ResponseItem::WebSearchCall {
+        id: Some("web-search-id".into()),
+        status: Some("completed".into()),
+        action: WebSearchAction::Search {
+            query: "weather".into(),
+        },
+    });
+    prompt.input.push(ResponseItem::FunctionCall {
+        id: Some("function-id".into()),
+        name: "do_thing".into(),
+        arguments: "{}".into(),
+        call_id: "function-call-id".into(),
+    });
+    prompt.input.push(ResponseItem::LocalShellCall {
+        id: Some("local-shell-id".into()),
+        call_id: Some("local-shell-call-id".into()),
+        status: LocalShellStatus::Completed,
+        action: LocalShellAction::Exec(LocalShellExecAction {
+            command: vec!["echo".into(), "hello".into()],
+            timeout_ms: None,
+            working_directory: None,
+            env: None,
+            user: None,
+        }),
+    });
+    prompt.input.push(ResponseItem::CustomToolCall {
+        id: Some("custom-tool-id".into()),
+        status: Some("completed".into()),
+        call_id: "custom-tool-call-id".into(),
+        name: "custom_tool".into(),
+        input: "{}".into(),
+    });
 
     let mut stream = client
         .stream(&prompt)
@@ -722,10 +766,13 @@ async fn azure_responses_request_includes_store_and_reasoning_ids() {
 
     assert_eq!(body["store"], serde_json::Value::Bool(true));
     assert_eq!(body["stream"], serde_json::Value::Bool(true));
-    assert_eq!(
-        body["input"][0]["id"],
-        serde_json::Value::String("reasoning-id".into())
-    );
+    assert_eq!(body["input"].as_array().map(Vec::len), Some(6));
+    assert_eq!(body["input"][0]["id"].as_str(), Some("reasoning-id"));
+    assert_eq!(body["input"][1]["id"].as_str(), Some("message-id"));
+    assert_eq!(body["input"][2]["id"].as_str(), Some("web-search-id"));
+    assert_eq!(body["input"][3]["id"].as_str(), Some("function-id"));
+    assert_eq!(body["input"][4]["id"].as_str(), Some("local-shell-id"));
+    assert_eq!(body["input"][5]["id"].as_str(), Some("custom-tool-id"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
