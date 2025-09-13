@@ -63,6 +63,10 @@ pub struct Cli {
     #[arg(long = "output-last-message")]
     pub last_message_file: Option<PathBuf>,
 
+    /// Timezone preference for displaying timestamps. Can be "utc", "local", or an offset in seconds from UTC.
+    #[arg(long = "timezone", short = 't')]
+    pub timezone: Option<String>,
+
     /// Initial instructions for the agent. If not provided as an argument (or
     /// if `-` is used), instructions are read from stdin.
     #[arg(value_name = "PROMPT")]

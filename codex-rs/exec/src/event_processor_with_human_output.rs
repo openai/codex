@@ -66,6 +66,7 @@ pub(crate) struct EventProcessorWithHumanOutput {
     reasoning_started: bool,
     raw_reasoning_started: bool,
     last_message_path: Option<PathBuf>,
+    timezone_preference: String,
 }
 
 impl EventProcessorWithHumanOutput {
@@ -94,6 +95,7 @@ impl EventProcessorWithHumanOutput {
                 reasoning_started: false,
                 raw_reasoning_started: false,
                 last_message_path,
+                timezone_preference: config.timezone_preference.clone(),
             }
         } else {
             Self {
@@ -112,8 +114,14 @@ impl EventProcessorWithHumanOutput {
                 reasoning_started: false,
                 raw_reasoning_started: false,
                 last_message_path,
+                timezone_preference: config.timezone_preference.clone(),
             }
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn timezone_preference(&self) -> &str {
+        &self.timezone_preference
     }
 }
 
@@ -131,7 +139,9 @@ struct PatchApplyBegin {
 macro_rules! ts_println {
     ($self:ident, $($arg:tt)*) => {{
         let now = chrono::Utc::now();
-        let formatted = now.format("[%Y-%m-%dT%H:%M:%S]");
+        let timezone_pref = codex_core::timezone::TimezonePreference::from_config(&$self.timezone_preference);
+        let formatted_time = codex_core::timezone::format_timestamp(now, &timezone_pref);
+        let formatted = format!("[{}]", formatted_time);
         print!("{} ", formatted.style($self.dimmed));
         println!($($arg)*);
     }};

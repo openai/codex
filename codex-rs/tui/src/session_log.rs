@@ -12,6 +12,7 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::app_event::AppEvent;
+use codex_core::timezone;
 
 static LOGGER: Lazy<SessionLogger> = Lazy::new(SessionLogger::new);
 
@@ -77,8 +78,7 @@ impl SessionLogger {
 }
 
 fn now_ts() -> String {
-    // RFC3339 for readability; consumers can parse as needed.
-    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    timezone::now_ts()
 }
 
 pub(crate) fn maybe_init(config: &Config) {

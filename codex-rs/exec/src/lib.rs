@@ -2,6 +2,8 @@ mod cli;
 mod event_processor;
 mod event_processor_with_human_output;
 mod event_processor_with_json_output;
+#[cfg(test)]
+mod timezone_test;
 
 use std::io::IsTerminal;
 use std::io::Read;
@@ -47,6 +49,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         last_message_file,
         json: json_mode,
         sandbox_mode: sandbox_mode_cli_arg,
+        timezone,
         prompt,
         config_overrides,
     } = cli;
@@ -97,6 +100,47 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
 
     // TODO(mbolin): Take a more thoughtful approach to logging.
     let default_level = "error";
+
+    // Create a custom timer that uses our timezone preference
+    pub struct CustomTimer {
+        pub timezone_preference: String,
+    }
+
+    impl tracing_subscriber::fmt::time::FormatTime for CustomTimer {
+        fn format_time(
+            &self,
+            w: &mut tracing_subscriber::fmt::format::Writer<'_>,
+        ) -> std::fmt::Result {
+            let now = chrono::Utc::now();
+            let timezone_pref =
+                codex_core::timezone::TimezonePreference::from_config(&self.timezone_preference);
+            let formatted = codex_core::timezone::format_timestamp(now, &timezone_pref);
+            write!(w, "{formatted}")
+        }
+    }
+
+    // We need to get the timezone preference early, but we don't have the full config yet
+    // So we'll use a simple approach: check CLI args, -c overrides, and environment
+    let timezone_preference = timezone
+        .clone()
+        .or_else(|| {
+            // Check if timezone_preference is set via -c parameter
+            config_overrides
+                .raw_overrides
+                .iter()
+                .find_map(|override_str| {
+                    if override_str.starts_with("timezone_preference=") {
+                        override_str
+                            .strip_prefix("timezone_preference=")
+                            .map(|s| s.trim_matches('"').to_string())
+                    } else {
+                        None
+                    }
+                })
+        })
+        .or_else(|| std::env::var("CODEX_TIMEZONE").ok())
+        .unwrap_or_else(|| "utc".to_string());
+
     let _ = tracing_subscriber::fmt()
         // Fallback to the `default_level` log filter if the environment
         // variable is not set _or_ contains an invalid value
@@ -105,6 +149,9 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
                 .or_else(|_| EnvFilter::try_new(default_level))
                 .unwrap_or_else(|_| EnvFilter::new(default_level)),
         )
+        .with_timer(CustomTimer {
+            timezone_preference,
+        })
         .with_ansi(stderr_with_ansi)
         .with_writer(std::io::stderr)
         .try_init();
@@ -152,6 +199,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         include_view_image_tool: None,
         show_raw_agent_reasoning: oss.then_some(true),
         tools_web_search_request: None,
+        timezone_preference: timezone,
     };
     // Parse `-c` overrides.
     let cli_kv_overrides = match config_overrides.parse_overrides() {

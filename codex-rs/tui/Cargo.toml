@@ -24,7 +24,7 @@ workspace = true
 anyhow = "1"
 async-stream = "0.3.6"
 base64 = "0.22.1"
-chrono = { version = "0.4", features = ["serde"] }
+chrono = { version = "0.4", features = ["serde", "clock"] }
 clap = { version = "4", features = ["derive"] }
 codex-ansi-escape = { path = "../ansi-escape" }
 codex-arg0 = { path = "../arg0" }
