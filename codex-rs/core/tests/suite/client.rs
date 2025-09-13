@@ -1,18 +1,32 @@
 use codex_core::CodexAuth;
+use codex_core::ContentItem;
 use codex_core::ConversationManager;
+use codex_core::LocalShellAction;
+use codex_core::LocalShellExecAction;
+use codex_core::LocalShellStatus;
+use codex_core::ModelClient;
 use codex_core::ModelProviderInfo;
 use codex_core::NewConversation;
+use codex_core::Prompt;
+use codex_core::ReasoningItemContent;
+use codex_core::ResponseEvent;
+use codex_core::ResponseItem;
 use codex_core::WireApi;
 use codex_core::built_in_model_providers;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
+use codex_protocol::mcp_protocol::ConversationId;
+use codex_protocol::models::ReasoningItemReasoningSummary;
+use codex_protocol::models::WebSearchAction;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::wait_for_event;
+use futures::StreamExt;
 use serde_json::json;
 use std::io::Write;
+use std::sync::Arc;
 use tempfile::TempDir;
 use uuid::Uuid;
 use wiremock::Mock;
@@ -618,6 +632,147 @@ async fn includes_user_instructions_message_in_request() {
     assert_message_role(&request_body["input"][1], "user");
     assert_message_starts_with(&request_body["input"][1], "<environment_context>");
     assert_message_ends_with(&request_body["input"][1], "</environment_context>");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn azure_responses_request_includes_store_and_reasoning_ids() {
+    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+        );
+        return;
+    }
+
+    let server = MockServer::start().await;
+
+    let sse_body = concat!(
+        "data: {\"type\":\"response.created\",\"response\":{}}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\"}}\n\n",
+    );
+
+    let template = ResponseTemplate::new(200)
+        .insert_header("content-type", "text/event-stream")
+        .set_body_raw(sse_body, "text/event-stream");
+
+    Mock::given(method("POST"))
+        .and(path("/openai/responses"))
+        .respond_with(template)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let provider = ModelProviderInfo {
+        name: "azure".into(),
+        base_url: Some(format!("{}/openai", server.uri())),
+        env_key: None,
+        env_key_instructions: None,
+        wire_api: WireApi::Responses,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: Some(0),
+        stream_max_retries: Some(0),
+        stream_idle_timeout_ms: Some(5_000),
+        requires_openai_auth: false,
+    };
+
+    let codex_home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&codex_home);
+    config.model_provider_id = provider.name.clone();
+    config.model_provider = provider.clone();
+    let effort = config.model_reasoning_effort;
+    let summary = config.model_reasoning_summary;
+    let config = Arc::new(config);
+
+    let client = ModelClient::new(
+        Arc::clone(&config),
+        None,
+        provider,
+        effort,
+        summary,
+        ConversationId::new(),
+    );
+
+    let mut prompt = Prompt::default();
+    prompt.input.push(ResponseItem::Reasoning {
+        id: "reasoning-id".into(),
+        summary: vec![ReasoningItemReasoningSummary::SummaryText {
+            text: "summary".into(),
+        }],
+        content: Some(vec![ReasoningItemContent::ReasoningText {
+            text: "content".into(),
+        }]),
+        encrypted_content: None,
+    });
+    prompt.input.push(ResponseItem::Message {
+        id: Some("message-id".into()),
+        role: "assistant".into(),
+        content: vec![ContentItem::OutputText {
+            text: "message".into(),
+        }],
+    });
+    prompt.input.push(ResponseItem::WebSearchCall {
+        id: Some("web-search-id".into()),
+        status: Some("completed".into()),
+        action: WebSearchAction::Search {
+            query: "weather".into(),
+        },
+    });
+    prompt.input.push(ResponseItem::FunctionCall {
+        id: Some("function-id".into()),
+        name: "do_thing".into(),
+        arguments: "{}".into(),
+        call_id: "function-call-id".into(),
+    });
+    prompt.input.push(ResponseItem::LocalShellCall {
+        id: Some("local-shell-id".into()),
+        call_id: Some("local-shell-call-id".into()),
+        status: LocalShellStatus::Completed,
+        action: LocalShellAction::Exec(LocalShellExecAction {
+            command: vec!["echo".into(), "hello".into()],
+            timeout_ms: None,
+            working_directory: None,
+            env: None,
+            user: None,
+        }),
+    });
+    prompt.input.push(ResponseItem::CustomToolCall {
+        id: Some("custom-tool-id".into()),
+        status: Some("completed".into()),
+        call_id: "custom-tool-call-id".into(),
+        name: "custom_tool".into(),
+        input: "{}".into(),
+    });
+
+    let mut stream = client
+        .stream(&prompt)
+        .await
+        .expect("responses stream to start");
+
+    while let Some(event) = stream.next().await {
+        if let Ok(ResponseEvent::Completed { .. }) = event {
+            break;
+        }
+    }
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("mock server collected requests");
+    assert_eq!(requests.len(), 1, "expected a single request");
+    let body: serde_json::Value = requests[0]
+        .body_json()
+        .expect("request body to be valid JSON");
+
+    assert_eq!(body["store"], serde_json::Value::Bool(true));
+    assert_eq!(body["stream"], serde_json::Value::Bool(true));
+    assert_eq!(body["input"].as_array().map(Vec::len), Some(6));
+    assert_eq!(body["input"][0]["id"].as_str(), Some("reasoning-id"));
+    assert_eq!(body["input"][1]["id"].as_str(), Some("message-id"));
+    assert_eq!(body["input"][2]["id"].as_str(), Some("web-search-id"));
+    assert_eq!(body["input"][3]["id"].as_str(), Some("function-id"));
+    assert_eq!(body["input"][4]["id"].as_str(), Some("local-shell-id"));
+    assert_eq!(body["input"][5]["id"].as_str(), Some("custom-tool-id"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

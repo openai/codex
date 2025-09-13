@@ -14,6 +14,7 @@ use codex_core::config::Config;
 use codex_core::config::persist_model_selection;
 use codex_core::model_family::find_family_for_model;
 use codex_core::protocol::TokenUsage;
+use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use color_eyre::eyre::Result;
 use color_eyre::eyre::WrapErr;
 use crossterm::event::KeyCode;
@@ -297,7 +298,7 @@ impl App {
                 self.chat_widget.apply_file_search_result(query, matches);
             }
             AppEvent::UpdateReasoningEffort(effort) => {
-                self.chat_widget.set_reasoning_effort(effort);
+                self.on_update_reasoning_effort(effort);
             }
             AppEvent::UpdateModel(model) => {
                 self.chat_widget.set_model(model.clone());
@@ -326,13 +327,29 @@ impl App {
     fn show_model_save_hint(&mut self) {
         let model = self.config.model.clone();
         if self.active_profile.is_some() {
-            self.chat_widget.add_info_message(format!(
-                "Model switched to {model}. Press Ctrl+S to save it for this profile, then press Ctrl+S again to set it as your global default."
-            ));
+            self.chat_widget.add_info_message(
+                format!("Model changed to {model} for the current session"),
+                Some("(ctrl+s to set as profile default)".to_string()),
+            );
         } else {
-            self.chat_widget.add_info_message(format!(
-                "Model switched to {model}. Press Ctrl+S to save it as your global default."
-            ));
+            self.chat_widget.add_info_message(
+                format!("Model changed to {model} for the current session"),
+                Some("(ctrl+s to set as default)".to_string()),
+            );
+        }
+    }
+
+    fn on_update_reasoning_effort(&mut self, effort: Option<ReasoningEffortConfig>) {
+        let changed = self.config.model_reasoning_effort != effort;
+        self.chat_widget.set_reasoning_effort(effort);
+        self.config.model_reasoning_effort = effort;
+        if changed {
+            let show_hint = self.model_saved_to_profile || self.model_saved_to_global;
+            self.model_saved_to_profile = false;
+            self.model_saved_to_global = false;
+            if show_hint {
+                self.show_model_save_hint();
+            }
         }
     }
 
@@ -361,14 +378,13 @@ impl App {
 
         match scope {
             SaveScope::Profile(profile) => {
-                match persist_model_selection(&codex_home, Some(profile), &model, Some(effort))
-                    .await
-                {
+                match persist_model_selection(&codex_home, Some(profile), &model, effort).await {
                     Ok(()) => {
                         self.model_saved_to_profile = true;
-                        self.chat_widget.add_info_message(format!(
-                            "Saved model {model} ({effort}) for profile `{profile}`. Press Ctrl+S again to make this your global default."
-                        ));
+                        self.chat_widget.add_info_message(
+                            format!("Profile model changed to {model} for all sessions"),
+                            Some("(view global config in config.toml)".to_string()),
+                        );
                     }
                     Err(err) => {
                         tracing::error!(
@@ -382,12 +398,13 @@ impl App {
                 }
             }
             SaveScope::Global => {
-                match persist_model_selection(&codex_home, None, &model, Some(effort)).await {
+                match persist_model_selection(&codex_home, None, &model, effort).await {
                     Ok(()) => {
                         self.model_saved_to_global = true;
-                        self.chat_widget.add_info_message(format!(
-                            "Saved model {model} ({effort}) as your global default."
-                        ));
+                        self.chat_widget.add_info_message(
+                            format!("Default model changed to {model} for all sessions"),
+                            Some("(view global config in config.toml)".to_string()),
+                        )
                     }
                     Err(err) => {
                         tracing::error!(
@@ -404,6 +421,7 @@ impl App {
                 self.chat_widget.add_info_message(
                     "Model preference already saved globally; no further action needed."
                         .to_string(),
+                    None,
                 );
             }
         }
@@ -474,5 +492,69 @@ impl App {
                 // Ignore Release key events.
             }
         };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_backtrack::BacktrackState;
+    use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
+    use crate::file_search::FileSearchManager;
+    use codex_core::CodexAuth;
+    use codex_core::ConversationManager;
+    use ratatui::text::Line;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
+
+    fn make_test_app() -> App {
+        let (chat_widget, app_event_tx, _rx, _op_rx) = make_chatwidget_manual_with_sender();
+        let config = chat_widget.config_ref().clone();
+
+        let server = Arc::new(ConversationManager::with_auth(CodexAuth::from_api_key(
+            "Test API Key",
+        )));
+        let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
+
+        App {
+            server,
+            app_event_tx,
+            chat_widget,
+            config,
+            active_profile: None,
+            model_saved_to_profile: false,
+            model_saved_to_global: false,
+            file_search,
+            transcript_lines: Vec::<Line<'static>>::new(),
+            overlay: None,
+            deferred_history_lines: Vec::new(),
+            has_emitted_history_lines: false,
+            enhanced_keys_supported: false,
+            commit_anim_running: Arc::new(AtomicBool::new(false)),
+            backtrack: BacktrackState::default(),
+        }
+    }
+
+    #[test]
+    fn update_reasoning_effort_updates_config_and_resets_flags() {
+        let mut app = make_test_app();
+        app.model_saved_to_profile = true;
+        app.model_saved_to_global = true;
+        app.config.model_reasoning_effort = Some(ReasoningEffortConfig::Medium);
+        app.chat_widget
+            .set_reasoning_effort(Some(ReasoningEffortConfig::Medium));
+
+        app.on_update_reasoning_effort(Some(ReasoningEffortConfig::High));
+
+        assert_eq!(
+            app.config.model_reasoning_effort,
+            Some(ReasoningEffortConfig::High)
+        );
+        assert_eq!(
+            app.chat_widget.config_ref().model_reasoning_effort,
+            Some(ReasoningEffortConfig::High)
+        );
+        assert!(!app.model_saved_to_profile);
+        assert!(!app.model_saved_to_global);
     }
 }
