@@ -88,6 +88,10 @@ pub struct Cli {
     #[arg(long = "search", default_value_t = false)]
     pub web_search: bool,
 
+    /// Disable the status line above the key hints.
+    #[arg(long = "no-status-line", default_value_t = false)]
+    pub no_status_line: bool,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 }

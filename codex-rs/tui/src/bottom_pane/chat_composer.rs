@@ -38,6 +38,8 @@ use crate::bottom_pane::textarea::TextAreaState;
 use crate::clipboard_paste::normalize_pasted_path;
 use crate::clipboard_paste::pasted_image_format;
 use crate::key_hint;
+use crate::status_line::StatusLineWidget;
+use crate::tui::FrameRequester;
 use codex_file_search::FileMatch;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -73,6 +75,7 @@ pub(crate) struct ChatComposer {
     ctrl_c_quit_hint: bool,
     esc_backtrack_hint: bool,
     use_shift_enter_hint: bool,
+    status_line: StatusLineWidget,
     dismissed_file_popup_token: Option<String>,
     current_file_query: Option<String>,
     pending_pastes: Vec<(String, String)>,
@@ -97,7 +100,8 @@ enum ActivePopup {
 
 const FOOTER_HINT_HEIGHT: u16 = 1;
 const FOOTER_SPACING_HEIGHT: u16 = 1;
-const FOOTER_HEIGHT_WITH_HINT: u16 = FOOTER_HINT_HEIGHT + FOOTER_SPACING_HEIGHT;
+// Status line renders above hints; height is computed dynamically
+// using `status_line.desired_height()`.
 
 impl ChatComposer {
     pub fn new(
@@ -106,6 +110,7 @@ impl ChatComposer {
         enhanced_keys_supported: bool,
         placeholder_text: String,
         disable_paste_burst: bool,
+        frame_requester: FrameRequester,
     ) -> Self {
         let use_shift_enter_hint = enhanced_keys_supported;
 
@@ -118,6 +123,7 @@ impl ChatComposer {
             ctrl_c_quit_hint: false,
             esc_backtrack_hint: false,
             use_shift_enter_hint,
+            status_line: StatusLineWidget::new(frame_requester),
             dismissed_file_popup_token: None,
             current_file_query: None,
             pending_pastes: Vec::new(),
@@ -136,19 +142,25 @@ impl ChatComposer {
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
-        self.textarea.desired_height(width - 1)
-            + match &self.active_popup {
-                ActivePopup::None => FOOTER_HEIGHT_WITH_HINT,
-                ActivePopup::Command(c) => c.calculate_required_height(),
-                ActivePopup::File(c) => c.calculate_required_height(),
+        let base = self.textarea.desired_height(width - 1);
+        match &self.active_popup {
+            ActivePopup::None => {
+                base + FOOTER_SPACING_HEIGHT
+                    + FOOTER_HINT_HEIGHT
+                    + self.status_line.desired_height()
             }
+            ActivePopup::Command(c) => base + c.calculate_required_height(),
+            ActivePopup::File(c) => base + c.calculate_required_height(),
+        }
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         let popup_constraint = match &self.active_popup {
             ActivePopup::Command(popup) => Constraint::Max(popup.calculate_required_height()),
             ActivePopup::File(popup) => Constraint::Max(popup.calculate_required_height()),
-            ActivePopup::None => Constraint::Max(FOOTER_HEIGHT_WITH_HINT),
+            ActivePopup::None => Constraint::Max(
+                FOOTER_SPACING_HEIGHT + FOOTER_HINT_HEIGHT + self.status_line.desired_height(),
+            ),
         };
         let [textarea_rect, _] =
             Layout::vertical([Constraint::Min(1), popup_constraint]).areas(area);
@@ -1231,7 +1243,9 @@ impl WidgetRef for ChatComposer {
             ActivePopup::Command(popup) => (Constraint::Max(popup.calculate_required_height()), 0),
             ActivePopup::File(popup) => (Constraint::Max(popup.calculate_required_height()), 0),
             ActivePopup::None => (
-                Constraint::Length(FOOTER_HEIGHT_WITH_HINT),
+                Constraint::Length(
+                    FOOTER_SPACING_HEIGHT + FOOTER_HINT_HEIGHT + self.status_line.desired_height(),
+                ),
                 FOOTER_SPACING_HEIGHT,
             ),
         };
@@ -1245,16 +1259,25 @@ impl WidgetRef for ChatComposer {
                 popup.render_ref(popup_rect, buf);
             }
             ActivePopup::None => {
-                let hint_rect = if hint_spacing > 0 {
-                    let [_, hint_rect] = Layout::vertical([
+                let (status_h, status_rect, hint_rect) = if hint_spacing > 0 {
+                    let status_h = self.status_line.desired_height();
+                    let [_, footer_rect] = Layout::vertical([
                         Constraint::Length(hint_spacing),
-                        Constraint::Length(FOOTER_HINT_HEIGHT),
+                        Constraint::Length(status_h + FOOTER_HINT_HEIGHT),
                     ])
                     .areas(popup_rect);
-                    hint_rect
+                    let [status_rect, hint_rect] = Layout::vertical([
+                        Constraint::Length(status_h),
+                        Constraint::Length(FOOTER_HINT_HEIGHT),
+                    ])
+                    .areas(footer_rect);
+                    (status_h, status_rect, hint_rect)
                 } else {
-                    popup_rect
+                    (0, Rect::ZERO, popup_rect)
                 };
+                if status_h > 0 {
+                    self.status_line.render_ref(status_rect, buf);
+                }
                 let mut hint: Vec<Span<'static>> = if self.ctrl_c_quit_hint {
                     let ctrl_c_followup = if self.is_task_running {
                         " to interrupt"
@@ -1383,6 +1406,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            crate::tui::FrameRequester::test_dummy(),
         );
 
         let area = Rect::new(0, 0, 40, 6);
@@ -1590,6 +1614,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            crate::tui::FrameRequester::test_dummy(),
         );
 
         let needs_redraw = composer.handle_paste("hello".to_string());
@@ -1619,6 +1644,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            crate::tui::FrameRequester::test_dummy(),
         );
 
         // Ensure composer is empty and press Enter.
@@ -1646,6 +1672,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            crate::tui::FrameRequester::test_dummy(),
         );
 
         let large = "x".repeat(LARGE_PASTE_CHAR_THRESHOLD + 10);
@@ -1681,6 +1708,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            crate::tui::FrameRequester::test_dummy(),
         );
 
         composer.handle_paste(large);
@@ -1722,6 +1750,7 @@ mod tests {
                 false,
                 "Ask Codex to do anything".to_string(),
                 false,
+                crate::tui::FrameRequester::test_dummy(),
             );
 
             if let Some(text) = input {
@@ -1765,6 +1794,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            crate::tui::FrameRequester::test_dummy(),
         );
 
         // Type "/mo" humanlike so paste-burst doesn’t interfere.
@@ -1793,6 +1823,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            crate::tui::FrameRequester::test_dummy(),
         );
         type_chars_humanlike(&mut composer, &['/', 'm', 'o']);
 
@@ -1836,6 +1867,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            crate::tui::FrameRequester::test_dummy(),
         );
 
         // Type the slash command.
@@ -1873,6 +1905,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            crate::tui::FrameRequester::test_dummy(),
         );
 
         type_chars_humanlike(&mut composer, &['/', 'c']);
@@ -1898,6 +1931,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            crate::tui::FrameRequester::test_dummy(),
         );
 
         type_chars_humanlike(&mut composer, &['/', 'm', 'e', 'n', 't', 'i', 'o', 'n']);
@@ -1933,6 +1967,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            crate::tui::FrameRequester::test_dummy(),
         );
 
         // Define test cases: (paste content, is_large)
@@ -2012,6 +2047,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            crate::tui::FrameRequester::test_dummy(),
         );
 
         // Define test cases: (content, is_large)
@@ -2084,6 +2120,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            crate::tui::FrameRequester::test_dummy(),
         );
 
         // Define test cases: (cursor_position_from_end, expected_pending_count)
@@ -2132,6 +2169,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            crate::tui::FrameRequester::test_dummy(),
         );
         let path = PathBuf::from("/tmp/image1.png");
         composer.attach_image(path.clone(), 32, 16, "PNG");
@@ -2156,6 +2194,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            crate::tui::FrameRequester::test_dummy(),
         );
         let path = PathBuf::from("/tmp/image2.png");
         composer.attach_image(path.clone(), 10, 5, "PNG");
@@ -2181,6 +2220,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            crate::tui::FrameRequester::test_dummy(),
         );
         let path = PathBuf::from("/tmp/image3.png");
         composer.attach_image(path.clone(), 20, 10, "PNG");
@@ -2222,6 +2262,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            crate::tui::FrameRequester::test_dummy(),
         );
 
         // Insert an image placeholder at the start
@@ -2248,6 +2289,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            crate::tui::FrameRequester::test_dummy(),
         );
 
         let path1 = PathBuf::from("/tmp/image_dup1.png");
@@ -2295,6 +2337,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            crate::tui::FrameRequester::test_dummy(),
         );
 
         let needs_redraw = composer.handle_paste(tmp_path.to_string_lossy().to_string());
@@ -2317,6 +2360,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            crate::tui::FrameRequester::test_dummy(),
         );
 
         // Inject prompts as if received via event.
@@ -2351,6 +2395,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            crate::tui::FrameRequester::test_dummy(),
         );
 
         let count = 32;
@@ -2395,6 +2440,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            crate::tui::FrameRequester::test_dummy(),
         );
 
         let count = LARGE_PASTE_CHAR_THRESHOLD + 1; // > threshold to trigger placeholder
@@ -2427,6 +2473,7 @@ mod tests {
             false,
             "Ask Codex to do anything".to_string(),
             false,
+            crate::tui::FrameRequester::test_dummy(),
         );
 
         let count = LARGE_PASTE_CHAR_THRESHOLD; // 1000 in current config
