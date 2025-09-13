@@ -1,0 +1,43 @@
+name: Test Nix Flake
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  nix-flake-check:
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+      - name: nix flake check for all platforms
+        run: |
+          nix flake check --all-systems
+  nix-build-linux:
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+      - name: nix build . for x86_64-linux
+        run: nix build .
+  nix-build-macos:
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          submodules: recursive
+      - uses: cachix/install-nix-action@v31
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+      - name: nix build for x86_64-darwin
+        run: nix build .
