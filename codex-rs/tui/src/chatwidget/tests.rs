@@ -138,7 +138,7 @@ fn resumed_initial_messages_render_history() {
     let configured = codex_core::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         model: "test-model".to_string(),
-        reasoning_effort: ReasoningEffortConfig::default(),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
         history_entry_count: 0,
         initial_messages: Some(vec![
@@ -245,6 +245,17 @@ fn make_chatwidget_manual() -> (
         suppress_session_configured_redraw: false,
     };
     (widget, rx, op_rx)
+}
+
+pub(crate) fn make_chatwidget_manual_with_sender() -> (
+    ChatWidget,
+    AppEventSender,
+    tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    tokio::sync::mpsc::UnboundedReceiver<Op>,
+) {
+    let (widget, rx, op_rx) = make_chatwidget_manual();
+    let app_event_tx = widget.app_event_tx.clone();
+    (widget, app_event_tx, rx, op_rx)
 }
 
 fn drain_insert_history(
