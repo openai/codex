@@ -19,8 +19,29 @@ pub struct ModelPreset {
 ///
 /// Keep this UI-agnostic so it can be reused by both TUI and MCP server.
 pub fn builtin_model_presets() -> &'static [ModelPreset] {
-    // Order reflects effort from minimal to high.
+    // Order groups swiftfox variants before gpt-5 presets, each from minimal to high.
     const PRESETS: &[ModelPreset] = &[
+        ModelPreset {
+            id: "swiftfox-low",
+            label: "swiftfox low",
+            description: "",
+            model: "swiftfox-low",
+            effort: None,
+        },
+        ModelPreset {
+            id: "swiftfox-medium",
+            label: "swiftfox medium",
+            description: "",
+            model: "swiftfox-medium",
+            effort: None,
+        },
+        ModelPreset {
+            id: "swiftfox-high",
+            label: "swiftfox high",
+            description: "",
+            model: "swiftfox-high",
+            effort: None,
+        },
         ModelPreset {
             id: "gpt-5-minimal",
             label: "gpt-5 minimal",
@@ -48,27 +69,6 @@ pub fn builtin_model_presets() -> &'static [ModelPreset] {
             description: "— maximizes reasoning depth for complex or ambiguous problems",
             model: "gpt-5",
             effort: Some(ReasoningEffort::High),
-        },
-        ModelPreset {
-            id: "swiftfox-low",
-            label: "swiftfox low",
-            description: "— balances speed with some reasoning; useful for straightforward queries and short explanations",
-            model: "swiftfox-low",
-            effort: None,
-        },
-        ModelPreset {
-            id: "swiftfox-medium",
-            label: "swiftfox medium",
-            description: "— default setting; provides a solid balance of reasoning depth and latency for general-purpose tasks",
-            model: "swiftfox-medium",
-            effort: None,
-        },
-        ModelPreset {
-            id: "swiftfox-high",
-            label: "swiftfox high",
-            description: "",
-            model: "swiftfox-high",
-            effort: None,
         },
     ];
     PRESETS
