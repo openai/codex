@@ -106,6 +106,7 @@ use crate::tasks::GhostSnapshotTask;
 use crate::tasks::ReviewTask;
 use crate::tasks::SessionTask;
 use crate::tasks::SessionTaskContext;
+use crate::tasks::UserShellCommandTask;
 use crate::tools::ToolRouter;
 use crate::tools::context::SharedTurnDiffTracker;
 use crate::tools::parallel::ToolCallRuntime;
@@ -1222,6 +1223,19 @@ impl Session {
         &self.services.user_shell
     }
 
+    pub async fn spawn_user_shell_command(
+        self: &Arc<Self>,
+        turn_context: Arc<TurnContext>,
+        command: String,
+    ) {
+        self.spawn_task(
+            Arc::clone(&turn_context),
+            Vec::new(),
+            UserShellCommandTask::new(command),
+        )
+        .await;
+    }
+
     fn show_raw_agent_reasoning(&self) -> bool {
         self.services.show_raw_agent_reasoning
     }
@@ -1286,6 +1300,15 @@ async fn submission_loop(sess: Arc<Session>, config: Arc<Config>, rx_sub: Receiv
             }
             Op::Compact => {
                 handlers::compact(&sess, sub.id.clone()).await;
+            }
+            Op::RunUserShellCommand { command } => {
+                handlers::run_user_shell_command(
+                    &sess,
+                    sub.id.clone(),
+                    command,
+                    &mut previous_context,
+                )
+                .await;
             }
             Op::Shutdown => {
                 if handlers::shutdown(&sess, sub.id.clone()).await {
@@ -1386,6 +1409,20 @@ mod handlers {
                 .await;
             *previous_context = Some(current_context);
         }
+    }
+
+    pub async fn run_user_shell_command(
+        sess: &Arc<Session>,
+        sub_id: String,
+        command: String,
+        previous_context: &mut Option<Arc<TurnContext>>,
+    ) {
+        let turn_context = sess
+            .new_turn_with_sub_id(sub_id, SessionSettingsUpdate::default())
+            .await;
+        sess.spawn_user_shell_command(Arc::clone(&turn_context), command)
+            .await;
+        *previous_context = Some(turn_context);
     }
 
     pub async fn exec_approval(sess: &Arc<Session>, id: String, decision: ReviewDecision) {

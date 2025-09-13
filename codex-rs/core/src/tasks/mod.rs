@@ -3,6 +3,7 @@ mod ghost_snapshot;
 mod regular;
 mod review;
 mod undo;
+mod user_shell;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -31,6 +32,7 @@ pub(crate) use ghost_snapshot::GhostSnapshotTask;
 pub(crate) use regular::RegularTask;
 pub(crate) use review::ReviewTask;
 pub(crate) use undo::UndoTask;
+pub(crate) use user_shell::UserShellCommandTask;
 
 const GRACEFULL_INTERRUPTION_TIMEOUT_MS: u64 = 100;
 
