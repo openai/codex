@@ -1,5 +1,10 @@
-#![expect(clippy::unwrap_used)]
-
+use super::compact::FIRST_REPLY;
+use super::compact::SUMMARIZE_TRIGGER;
+use super::compact::SUMMARY_TEXT;
+use super::compact::ev_assistant_message;
+use super::compact::ev_completed;
+use super::compact::mount_sse_once;
+use super::compact::sse;
 use codex_core::CodexAuth;
 use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
@@ -14,76 +19,7 @@ use core_test_support::load_default_config_for_test;
 use core_test_support::wait_for_event;
 use serde_json::json;
 use tempfile::TempDir;
-use wiremock::Mock;
 use wiremock::MockServer;
-use wiremock::ResponseTemplate;
-use wiremock::matchers::method;
-use wiremock::matchers::path;
-
-// --- Test helpers -----------------------------------------------------------
-
-/// Build an SSE stream body from a list of JSON events.
-fn sse(events: Vec<serde_json::Value>) -> String {
-    use std::fmt::Write as _;
-    let mut out = String::new();
-    for ev in events {
-        let kind = ev.get("type").and_then(|v| v.as_str()).unwrap();
-        writeln!(&mut out, "event: {kind}").unwrap();
-        if !ev.as_object().map(|o| o.len() == 1).unwrap_or(false) {
-            write!(&mut out, "data: {ev}\n\n").unwrap();
-        } else {
-            out.push('\n');
-        }
-    }
-    out
-}
-
-/// Convenience: SSE event for a completed response with a specific id.
-fn ev_completed(id: &str) -> serde_json::Value {
-    serde_json::json!({
-        "type": "response.completed",
-        "response": {
-            "id": id,
-            "usage": {"input_tokens":0,"input_tokens_details":null,"output_tokens":0,"output_tokens_details":null,"total_tokens":0}
-        }
-    })
-}
-
-/// Convenience: SSE event for a single assistant message output item.
-fn ev_assistant_message(id: &str, text: &str) -> serde_json::Value {
-    serde_json::json!({
-        "type": "response.output_item.done",
-        "item": {
-            "type": "message",
-            "role": "assistant",
-            "id": id,
-            "content": [{"type": "output_text", "text": text}]
-        }
-    })
-}
-
-fn sse_response(body: String) -> ResponseTemplate {
-    ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_raw(body, "text/event-stream")
-}
-
-async fn mount_sse_once<M>(server: &MockServer, matcher: M, body: String)
-where
-    M: wiremock::Match + Send + Sync + 'static,
-{
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .and(matcher)
-        .respond_with(sse_response(body))
-        .expect(1)
-        .mount(server)
-        .await;
-}
-
-const FIRST_REPLY: &str = "FIRST_REPLY";
-const SUMMARY_TEXT: &str = "SUMMARY_ONLY_CONTEXT";
-const SUMMARIZE_TRIGGER: &str = "Start Summarization";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn compact_resume_and_fork_preserve_model_history_view() {
