@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::io::ErrorKind;
 use std::io::Read;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicBool;
@@ -33,6 +34,7 @@ pub(crate) struct UnifiedExecRequest<'a> {
     pub session_id: Option<i32>,
     pub input_chunks: &'a [String],
     pub timeout_ms: Option<u64>,
+    pub cwd: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -193,7 +195,7 @@ impl UnifiedExecSessionManager {
         } else {
             let command = request.input_chunks.to_vec();
             let new_id = self.next_session_id.fetch_add(1, Ordering::SeqCst);
-            let session = create_unified_exec_session(&command).await?;
+            let session = create_unified_exec_session(&command, request.cwd).await?;
             let managed_session = ManagedUnifiedExecSession::new(session);
             let (buffer, notify) = managed_session.output_handles();
             writer_tx = managed_session.writer_sender();
@@ -297,6 +299,7 @@ impl UnifiedExecSessionManager {
 
 async fn create_unified_exec_session(
     command: &[String],
+    cwd: Option<std::path::PathBuf>,
 ) -> Result<ExecCommandSession, UnifiedExecError> {
     if command.is_empty() {
         return Err(UnifiedExecError::MissingCommandLine);
@@ -317,6 +320,11 @@ async fn create_unified_exec_session(
     let mut command_builder = CommandBuilder::new(command[0].clone());
     for arg in &command[1..] {
         command_builder.arg(arg);
+    }
+
+    // Set the current working directory if provided
+    if let Some(cwd_path) = cwd {
+        command_builder.cwd(cwd_path);
     }
 
     let mut child = pair
@@ -422,6 +430,7 @@ mod tests {
                 session_id: None,
                 input_chunks: &["bash".to_string(), "-i".to_string()],
                 timeout_ms: Some(2_500),
+                cwd: None,
             })
             .await?;
         let session_id = open_shell.session_id.expect("expected session_id");
@@ -434,6 +443,7 @@ mod tests {
                     "CODEX_INTERACTIVE_SHELL_VAR=codex\n".to_string(),
                 ],
                 timeout_ms: Some(2_500),
+                cwd: None,
             })
             .await?;
 
@@ -442,6 +452,7 @@ mod tests {
                 session_id: Some(session_id),
                 input_chunks: &["echo $CODEX_INTERACTIVE_SHELL_VAR\n".to_string()],
                 timeout_ms: Some(2_500),
+                cwd: None,
             })
             .await?;
         assert!(out_2.output.contains("codex"));
@@ -459,6 +470,7 @@ mod tests {
                 session_id: None,
                 input_chunks: &["/bin/bash".to_string(), "-i".to_string()],
                 timeout_ms: Some(2_500),
+                cwd: None,
             })
             .await?;
         let session_a = shell_a.session_id.expect("expected session id");
@@ -468,6 +480,7 @@ mod tests {
                 session_id: Some(session_a),
                 input_chunks: &["export CODEX_INTERACTIVE_SHELL_VAR=codex\n".to_string()],
                 timeout_ms: Some(2_500),
+                cwd: None,
             })
             .await?;
 
@@ -479,6 +492,7 @@ mod tests {
                     "$CODEX_INTERACTIVE_SHELL_VAR\n".to_string(),
                 ],
                 timeout_ms: Some(2_500),
+                cwd: None,
             })
             .await?;
         assert!(!out_2.output.contains("codex"));
@@ -488,6 +502,7 @@ mod tests {
                 session_id: Some(session_a),
                 input_chunks: &["echo $CODEX_INTERACTIVE_SHELL_VAR\n".to_string()],
                 timeout_ms: Some(2_500),
+                cwd: None,
             })
             .await?;
         assert!(out_3.output.contains("codex"));
@@ -505,6 +520,7 @@ mod tests {
                 session_id: None,
                 input_chunks: &["bash".to_string(), "-i".to_string()],
                 timeout_ms: Some(2_500),
+                cwd: None,
             })
             .await?;
         let session_id = open_shell.session_id.expect("expected session id");
@@ -517,6 +533,7 @@ mod tests {
                     "CODEX_INTERACTIVE_SHELL_VAR=codex\n".to_string(),
                 ],
                 timeout_ms: Some(2_500),
+                cwd: None,
             })
             .await?;
 
@@ -525,6 +542,7 @@ mod tests {
                 session_id: Some(session_id),
                 input_chunks: &["sleep 5 && echo $CODEX_INTERACTIVE_SHELL_VAR\n".to_string()],
                 timeout_ms: Some(10),
+                cwd: None,
             })
             .await?;
         assert!(!out_2.output.contains("codex"));
@@ -537,6 +555,7 @@ mod tests {
                 session_id: Some(session_id),
                 input_chunks: &empty,
                 timeout_ms: Some(100),
+                cwd: None,
             })
             .await?;
 
@@ -555,6 +574,7 @@ mod tests {
                 session_id: None,
                 input_chunks: &["echo".to_string(), "codex".to_string()],
                 timeout_ms: Some(120_000),
+                cwd: None,
             })
             .await?;
 
@@ -575,6 +595,7 @@ mod tests {
                 session_id: None,
                 input_chunks: &["/bin/echo".to_string(), "codex".to_string()],
                 timeout_ms: Some(2_500),
+                cwd: None,
             })
             .await?;
 
@@ -596,6 +617,7 @@ mod tests {
                 session_id: None,
                 input_chunks: &["/bin/bash".to_string(), "-i".to_string()],
                 timeout_ms: Some(2_500),
+                cwd: None,
             })
             .await?;
         let session_id = open_shell.session_id.expect("expected session id");
@@ -605,6 +627,7 @@ mod tests {
                 session_id: Some(session_id),
                 input_chunks: &["exit\n".to_string()],
                 timeout_ms: Some(2_500),
+                cwd: None,
             })
             .await?;
 
@@ -615,6 +638,7 @@ mod tests {
                 session_id: Some(session_id),
                 input_chunks: &[],
                 timeout_ms: Some(100),
+                cwd: None,
             })
             .await
             .expect_err("expected unknown session error");
