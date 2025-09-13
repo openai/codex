@@ -450,14 +450,23 @@ const DEFAULT_ENV_VARS: &[&str] = &[
 fn create_env_for_mcp_server(
     extra_env: Option<HashMap<String, String>>,
 ) -> HashMap<String, String> {
-    DEFAULT_ENV_VARS
-        .iter()
-        .filter_map(|var| match std::env::var(var) {
-            Ok(value) => Some((var.to_string(), value)),
-            Err(_) => None,
-        })
-        .chain(extra_env.unwrap_or_default())
-        .collect::<HashMap<_, _>>()
+    // Start with all environment variables from the parent process.
+    let mut env_map: HashMap<String, String> = std::env::vars().collect();
+
+    // Then, merge in the default variables to ensure they are present.
+    for &var in DEFAULT_ENV_VARS.iter() {
+        if let Ok(value) = std::env::var(var) {
+            env_map.insert(var.to_string(), value);
+        }
+    }
+
+    // Finally, merge in the extra environment variables from the config,
+    // allowing them to override any existing values.
+    if let Some(extra) = extra_env {
+        env_map.extend(extra);
+    }
+
+    env_map
 }
 
 #[cfg(test)]
