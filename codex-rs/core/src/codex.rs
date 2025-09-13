@@ -2597,6 +2597,7 @@ async fn handle_custom_tool_call(
 }
 
 fn to_exec_params(params: ShellToolCallParams, turn_context: &TurnContext) -> ExecParams {
+    let params = shell::rewrite_cd_prefix_into_workdir(params);
     ExecParams {
         command: params.command,
         cwd: turn_context.resolve_path(params.workdir.clone()),
