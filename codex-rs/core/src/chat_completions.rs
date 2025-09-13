@@ -272,6 +272,9 @@ pub(crate) async fn stream_chat_completions(
         "model": model_family.slug,
         "messages": messages,
         "stream": true,
+        "stream_options": {
+            "include_usage": true
+        },
         "tools": tools_json,
     });
 
