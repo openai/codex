@@ -132,6 +132,14 @@ Run interactively:
 codex
 ```
 
+To upgrade Codex after installing it, run:
+
+```shell
+codex update
+```
+
+(`codex upgrade` works too.) The CLI reuses the installation method you originally used (npm or Homebrew).
+
 Or, run with a prompt as input (and optionally in `Full Auto` mode):
 
 ```shell

@@ -290,21 +290,17 @@ async fn run_ratatui_app(
             format!("{current_version} -> {latest_version}.").into(),
         ]));
 
-        if managed_by_npm {
-            let npm_cmd = "npm install -g @openai/codex@latest";
+        let knows_update_command = managed_by_npm
+            || (cfg!(target_os = "macos")
+                && (exe.starts_with("/opt/homebrew") || exe.starts_with("/usr/local")));
+
+        if knows_update_command {
             lines.push(Line::from(vec![
                 "Run ".into(),
-                npm_cmd.cyan(),
-                " to update.".into(),
-            ]));
-        } else if cfg!(target_os = "macos")
-            && (exe.starts_with("/opt/homebrew") || exe.starts_with("/usr/local"))
-        {
-            let brew_cmd = "brew upgrade codex";
-            lines.push(Line::from(vec![
-                "Run ".into(),
-                brew_cmd.cyan(),
-                " to update.".into(),
+                "codex update".cyan(),
+                " (or ".into(),
+                "codex upgrade".cyan(),
+                ") to update automatically.".into(),
             ]));
         } else {
             lines.push(Line::from(vec![
