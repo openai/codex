@@ -3311,6 +3311,7 @@ mod tests {
             sandbox_policy: config.sandbox_policy.clone(),
             shell_environment_policy: config.shell_environment_policy.clone(),
             tools_config,
+            is_review_mode: false,
         };
         let session = Session {
             conversation_id,
