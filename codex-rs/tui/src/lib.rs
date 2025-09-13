@@ -369,9 +369,9 @@ async fn run_ratatui_app(
         &cli,
         &config,
         active_profile.as_deref(),
-        internal_storage.gpt_5_high_model_prompt_seen,
+        internal_storage.swiftfox_model_prompt_seen,
     ) {
-        internal_storage.gpt_5_high_model_prompt_seen = true;
+        internal_storage.swiftfox_model_prompt_seen = true;
         if let Err(e) = internal_storage.persist().await {
             error!("Failed to persist internal storage: {e:?}");
         }
@@ -513,7 +513,7 @@ fn should_show_model_rollout_prompt(
     cli: &Cli,
     config: &Config,
     active_profile: Option<&str>,
-    gpt_5_high_model_prompt_seen: bool,
+    swiftfox_model_prompt_seen: bool,
 ) -> bool {
     // TODO(jif) drop.
     let debug_high_enabled = std::env::var("DEBUG_HIGH")
@@ -523,7 +523,7 @@ fn should_show_model_rollout_prompt(
     active_profile.is_none()
         && debug_high_enabled
         && cli.model.is_none()
-        && !gpt_5_high_model_prompt_seen
+        && !swiftfox_model_prompt_seen
         && config.model_provider.requires_openai_auth
         && !cli.oss
 }
