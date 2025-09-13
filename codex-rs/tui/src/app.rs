@@ -60,6 +60,7 @@ pub(crate) struct App {
 
     // Esc-backtracking state grouped
     pub(crate) backtrack: crate::app_backtrack::BacktrackState,
+    pub(crate) tui_notifications: codex_core::config_types::Notifications,
 }
 
 impl App {
@@ -71,6 +72,7 @@ impl App {
         initial_prompt: Option<String>,
         initial_images: Vec<PathBuf>,
         resume_selection: ResumeSelection,
+        tui_notifications: codex_core::config_types::Notifications,
     ) -> Result<TokenUsage> {
         use tokio_stream::StreamExt;
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
@@ -89,6 +91,7 @@ impl App {
                     initial_prompt: initial_prompt.clone(),
                     initial_images: initial_images.clone(),
                     enhanced_keys_supported,
+                    tui_notifications: tui_notifications.clone(),
                 };
                 ChatWidget::new(init, conversation_manager.clone())
             }
@@ -110,6 +113,7 @@ impl App {
                     initial_prompt: initial_prompt.clone(),
                     initial_images: initial_images.clone(),
                     enhanced_keys_supported,
+                    tui_notifications: tui_notifications.clone(),
                 };
                 ChatWidget::new_from_existing(
                     init,
@@ -137,6 +141,7 @@ impl App {
             has_emitted_history_lines: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
+            tui_notifications,
         };
 
         let tui_events = tui.event_stream();
@@ -177,6 +182,7 @@ impl App {
                     self.chat_widget.handle_paste(pasted);
                 }
                 TuiEvent::Draw => {
+                    self.chat_widget.maybe_post_pending_notification(tui);
                     if self
                         .chat_widget
                         .handle_paste_burst_tick(tui.frame_requester())
@@ -208,6 +214,7 @@ impl App {
                     initial_prompt: None,
                     initial_images: Vec::new(),
                     enhanced_keys_supported: self.enhanced_keys_supported,
+                    tui_notifications: self.tui_notifications.clone(),
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
                 tui.frame_requester().schedule_frame();
@@ -503,6 +510,7 @@ mod tests {
     use crate::file_search::FileSearchManager;
     use codex_core::CodexAuth;
     use codex_core::ConversationManager;
+    use codex_core::config_types::Notifications;
     use ratatui::text::Line;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
@@ -532,6 +540,7 @@ mod tests {
             enhanced_keys_supported: false,
             commit_anim_running: Arc::new(AtomicBool::new(false)),
             backtrack: BacktrackState::default(),
+            tui_notifications: Notifications::default(),
         }
     }
 

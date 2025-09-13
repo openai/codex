@@ -237,12 +237,20 @@ pub async fn run_main(
 
     let _ = tracing_subscriber::registry().with(file_layer).try_init();
 
+    // Extract TUI notifications preference from config.toml once and pass it down.
+    let tui_notifications = config_toml
+        .tui
+        .as_ref()
+        .map(|t| t.notifications.clone())
+        .unwrap_or_default();
+
     run_ratatui_app(
         cli,
         config,
         internal_storage,
         active_profile,
         should_show_trust_screen,
+        tui_notifications,
     )
     .await
     .map_err(|err| std::io::Error::other(err.to_string()))
@@ -254,6 +262,7 @@ async fn run_ratatui_app(
     mut internal_storage: InternalStorage,
     active_profile: Option<String>,
     should_show_trust_screen: bool,
+    tui_notifications: codex_core::config_types::Notifications,
 ) -> color_eyre::Result<codex_core::protocol::TokenUsage> {
     let mut config = config;
     color_eyre::install()?;
@@ -405,6 +414,7 @@ async fn run_ratatui_app(
         prompt,
         images,
         resume_selection,
+        tui_notifications,
     )
     .await;
 

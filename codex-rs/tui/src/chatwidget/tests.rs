@@ -200,6 +200,7 @@ async fn helpers_are_available_and_do_not_panic() {
         initial_prompt: None,
         initial_images: Vec::new(),
         enhanced_keys_supported: false,
+        tui_notifications: Notifications::default(),
     };
     let mut w = ChatWidget::new(init, conversation_manager);
     // Basic construction sanity.
@@ -243,6 +244,8 @@ fn make_chatwidget_manual() -> (
         show_welcome_banner: true,
         queued_user_messages: VecDeque::new(),
         suppress_session_configured_redraw: false,
+        pending_notification: None,
+        tui_notifications: Notifications::default(),
     };
     (widget, rx, op_rx)
 }

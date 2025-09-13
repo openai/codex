@@ -1,0 +1,12 @@
+{
+  "relevant": true,
+  "passes": false,
+  "failures": [
+    {
+      "issue": "Magic number used for truncation; prefer a named constant or configuration per 'Don\u2019t Use Magic Numbers'.",
+      "file": "codex-rs/tui/src/user_approval_widget.rs",
+      "line": -1,
+      "excerpt": "snippet = truncate_text(&snippet, 80);"
+    }
+  ]
+}

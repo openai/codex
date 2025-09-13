@@ -1,0 +1,24 @@
+{
+  "relevant": true,
+  "passes": false,
+  "failures": [
+    {
+      "issue": "Place helpers after callers; helper defined before primary types.",
+      "file": "codex-rs/tui/src/history_cell.rs",
+      "line": -1,
+      "excerpt": "fn prefix_lines("
+    },
+    {
+      "issue": "Comment does not end with a period.",
+      "file": "codex-rs/tui/src/chatwidget.rs",
+      "line": -1,
+      "excerpt": "// Emit the proposed command into history (like proposed patches)"
+    },
+    {
+      "issue": "Comment does not end with a period.",
+      "file": "codex-rs/tui/src/chatwidget/tests.rs",
+      "line": -1,
+      "excerpt": "// (removed experimental resize snapshot test)"
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+{
+  "relevant": true,
+  "passes": false,
+  "failures": [
+    {
+      "issue": "Approval UI omits the command; command/options not pinned as required.",
+      "file": "codex-rs/tui/src/user_approval_widget.rs",
+      "line": -1,
+      "excerpt": "ApprovalRequest::Exec { reason, .. } => { let mut contents: Vec<Line> = vec![]; if let Some(reason) = reason { contents.push(Line::from(reason.clone().italic())); }"
+    },
+    {
+      "issue": "Reason not scrollable or trimmed; no layout constraining reason area.",
+      "file": "codex-rs/tui/src/user_approval_widget.rs",
+      "line": -1,
+      "excerpt": "contents.push(Line::from(reason.clone().italic()));"
+    },
+    {
+      "issue": "Snapshots show command removed from approval modal, violating visibility requirement to pin command.",
+      "file": "codex-rs/tui/src/chatwidget/snapshots/codex_tui__chatwidget__tests__approval_modal_exec.snap",
+      "line": -1,
+      "excerpt": "\"this is a test reason such as one that would be produced by the model           \""
+    }
+  ]
+}

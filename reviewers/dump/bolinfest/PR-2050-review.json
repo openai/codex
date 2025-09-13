@@ -1,0 +1,24 @@
+{
+  "relevant": true,
+  "passes": false,
+  "failures": [
+    {
+      "issue": "No hardcoded widths: literal 80 used instead of shared default",
+      "file": "codex-rs/tui/src/user_approval_widget.rs",
+      "line": -1,
+      "excerpt": "snippet = truncate_text(&snippet, 80);"
+    },
+    {
+      "issue": "Centralize wrap width: use DEFAULT_WRAP_COLS constant",
+      "file": "codex-rs/tui/src/user_approval_widget.rs",
+      "line": -1,
+      "excerpt": "snippet = truncate_text(&snippet, 80);"
+    },
+    {
+      "issue": "Respect terminal size: not using crossterm::terminal::size() with fallback",
+      "file": "codex-rs/tui/src/user_approval_widget.rs",
+      "line": -1,
+      "excerpt": "snippet = truncate_text(&snippet, 80);"
+    }
+  ]
+}

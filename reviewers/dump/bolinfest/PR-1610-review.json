@@ -1,0 +1,18 @@
+{
+  "relevant": true,
+  "passes": false,
+  "failures": [
+    {
+      "issue": "Eager clone of String; move instead of clone",
+      "file": "codex-rs/tui/src/user_approval_widget.rs",
+      "line": -1,
+      "excerpt": "None => full_cmd.clone(),"
+    },
+    {
+      "issue": "Eager clone of String; move instead of clone",
+      "file": "codex-rs/tui/src/chatwidget/tests.rs",
+      "line": -1,
+      "excerpt": "command: vec![\"bash\".into(), \"-lc\".into(), long.clone()],"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "relevant": true,
+  "passes": false,
+  "failures": [
+    {
+      "issue": "Inline variables in format!: prefer named capture over positional placeholder",
+      "file": "tui/src/chatwidget/tests.rs",
+      "line": 294,
+      "excerpt": "let long = format!(\"echo {}\", \"a\".repeat(200));"
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "relevant": true,
+  "passes": false,
+  "failures": [
+    {
+      "issue": "Contains a change-narration/code-review style comment; remove explanatory 'removed' notes from source.",
+      "file": "codex-rs/tui/src/chatwidget/tests.rs",
+      "line": -1,
+      "excerpt": "// (removed experimental resize snapshot test)"
+    }
+  ]
+}

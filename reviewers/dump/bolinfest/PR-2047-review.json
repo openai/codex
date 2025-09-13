@@ -1,0 +1,12 @@
+{
+  "relevant": true,
+  "passes": false,
+  "failures": [
+    {
+      "issue": "Stray comment left in tests; violates 'Clean house' and 'Don\u2019t leave placeholder // lines'.",
+      "file": "codex-rs/tui/src/chatwidget/tests.rs",
+      "line": -1,
+      "excerpt": "// (removed experimental resize snapshot test)"
+    }
+  ]
+}

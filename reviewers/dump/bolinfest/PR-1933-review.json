@@ -1,0 +1,18 @@
+{
+  "relevant": true,
+  "passes": false,
+  "failures": [
+    {
+      "issue": "Missing concise in-modal prompt line showing the command (\"Codex wants to run <cmd>\")",
+      "file": "codex-rs/tui/src/user_approval_widget.rs",
+      "line": -1,
+      "excerpt": "ApprovalRequest::Exec { reason, .. } => { let mut contents: Vec<Line> = vec![];"
+    },
+    {
+      "issue": "Adds a pre-prompt history entry for the proposed command; guideline discourages background entries before prompt",
+      "file": "codex-rs/tui/src/chatwidget.rs",
+      "line": -1,
+      "excerpt": "self.add_to_history(history_cell::new_proposed_command(&ev.command));"
+    }
+  ]
+}

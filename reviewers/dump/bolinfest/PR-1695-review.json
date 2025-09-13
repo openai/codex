@@ -1,0 +1,12 @@
+{
+  "relevant": true,
+  "passes": false,
+  "failures": [
+    {
+      "issue": "Inline format args: prefer captured identifiers; avoid positional formatting in format!",
+      "file": "tui/src/chatwidget/tests.rs",
+      "line": 294,
+      "excerpt": "let long = format!(\"echo {}\", \"a\".repeat(200));"
+    }
+  ]
+}

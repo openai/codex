@@ -1,0 +1,18 @@
+{
+  "relevant": true,
+  "passes": false,
+  "failures": [
+    {
+      "issue": "Missing test docstring explaining intent and validation",
+      "file": "codex-rs/tui/src/chatwidget/tests.rs",
+      "line": -1,
+      "excerpt": "fn exec_approval_emits_proposed_command_and_decision_history() {"
+    },
+    {
+      "issue": "Missing test docstring explaining intent and validation",
+      "file": "codex-rs/tui/src/chatwidget/tests.rs",
+      "line": -1,
+      "excerpt": "fn exec_approval_decision_truncates_multiline_and_long_commands() {"
+    }
+  ]
+}

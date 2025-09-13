@@ -1,0 +1,18 @@
+{
+  "relevant": true,
+  "passes": false,
+  "failures": [
+    {
+      "issue": "Docstring missing return semantics",
+      "file": "codex-rs/tui/src/history_cell.rs",
+      "line": 47,
+      "excerpt": "/// Prefix each provided line with `initial_prefix` for the first, and"
+    },
+    {
+      "issue": "Docstring missing return semantics",
+      "file": "codex-rs/tui/src/history_cell.rs",
+      "line": 1245,
+      "excerpt": "/// Create a new history cell for a proposed command approval."
+    }
+  ]
+}

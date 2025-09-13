@@ -1,0 +1,12 @@
+{
+  "relevant": true,
+  "passes": false,
+  "failures": [
+    {
+      "issue": "Redundant comment narrates removed code; prefer concise, necessary comments",
+      "file": "codex-rs/tui/src/chatwidget/tests.rs",
+      "line": -1,
+      "excerpt": "// (removed experimental resize snapshot test)"
+    }
+  ]
+}

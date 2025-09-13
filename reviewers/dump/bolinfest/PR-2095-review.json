@@ -1,0 +1,24 @@
+{
+  "relevant": true,
+  "passes": false,
+  "failures": [
+    {
+      "issue": "Approval modal no longer shows command or a fallback summary when reason is missing; violates 'Render concise, intent-first summaries' with fallback to joined command.",
+      "file": "codex-rs/tui/src/user_approval_widget.rs",
+      "line": -1,
+      "excerpt": "ApprovalRequest::Exec { reason, .. } => { let mut contents: Vec<Line> = vec![]; if let Some(reason) = reason {"
+    },
+    {
+      "issue": "Proposed command history entry renders raw command without leveraging parsed metadata for an intent-first summary.",
+      "file": "codex-rs/tui/src/chatwidget.rs",
+      "line": -1,
+      "excerpt": "self.add_to_history(history_cell::new_proposed_command(&ev.command));"
+    },
+    {
+      "issue": "Proposed command cell builds display from raw string instead of using parsed metadata (icons/intent), risking surfacing helper steps.",
+      "file": "codex-rs/tui/src/history_cell.rs",
+      "line": -1,
+      "excerpt": "let cmd = strip_bash_lc_and_escape(command);"
+    }
+  ]
+}

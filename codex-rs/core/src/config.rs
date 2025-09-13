@@ -1789,3 +1789,46 @@ trust_level = "trusted"
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod notifications_tests {
+    use crate::config_types::Notifications;
+    use serde::Deserialize;
+
+    #[derive(Deserialize, Debug, PartialEq)]
+    struct TuiTomlTest {
+        notifications: Notifications,
+    }
+
+    #[derive(Deserialize, Debug, PartialEq)]
+    struct RootTomlTest {
+        tui: TuiTomlTest,
+    }
+
+    #[test]
+    fn test_tui_notifications_true() {
+        let toml = r#"
+            [tui]
+            notifications = true
+        "#;
+        let parsed: RootTomlTest = toml::from_str(toml).expect("deserialize notifications=true");
+        assert!(matches!(
+            parsed.tui.notifications,
+            Notifications::Enabled(true)
+        ));
+    }
+
+    #[test]
+    fn test_tui_notifications_custom_array() {
+        let toml = r#"
+            [tui]
+            notifications = ["foo"]
+        "#;
+        let parsed: RootTomlTest =
+            toml::from_str(toml).expect("deserialize notifications=[\"foo\"]");
+        assert!(matches!(
+            parsed.tui.notifications,
+            Notifications::Custom(ref v) if v == &vec!["foo".to_string()]
+        ));
+    }
+}

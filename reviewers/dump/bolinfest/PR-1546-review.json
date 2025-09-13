@@ -1,0 +1,24 @@
+{
+  "relevant": true,
+  "passes": false,
+  "failures": [
+    {
+      "issue": "Non-trivial test lacks a doc comment describing purpose and assertions",
+      "file": "codex-rs/tui/src/chatwidget/tests.rs",
+      "line": -1,
+      "excerpt": "fn exec_approval_emits_proposed_command_and_decision_history()"
+    },
+    {
+      "issue": "Non-trivial test lacks a doc comment describing purpose and assertions",
+      "file": "codex-rs/tui/src/chatwidget/tests.rs",
+      "line": -1,
+      "excerpt": "fn exec_approval_decision_truncates_multiline_and_long_commands()"
+    },
+    {
+      "issue": "Use inline interpolation in format! instead of \"{}\" placeholder",
+      "file": "codex-rs/tui/src/chatwidget/tests.rs",
+      "line": -1,
+      "excerpt": "let long = format!(\"echo {}\", \"a\".repeat(200));"
+    }
+  ]
+}

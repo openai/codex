@@ -1,0 +1,100 @@
+[
+  {
+    "guide": "PR-1529-study.md",
+    "issue": "Place helpers after callers; helper defined before primary types.",
+    "file": "codex-rs/tui/src/history_cell.rs",
+    "line": -1,
+    "excerpt": "fn prefix_lines("
+  },
+  {
+    "guide": "PR-1529-study.md",
+    "issue": "Comment does not end with a period.",
+    "file": "codex-rs/tui/src/chatwidget.rs",
+    "line": -1,
+    "excerpt": "// Emit the proposed command into history (like proposed patches)"
+  },
+  {
+    "guide": "PR-1546-study.md",
+    "issue": "Non-trivial test lacks a doc comment describing purpose and assertions",
+    "file": "codex-rs/tui/src/chatwidget/tests.rs",
+    "line": -1,
+    "excerpt": "fn exec_approval_emits_proposed_command_and_decision_history()"
+  },
+  {
+    "guide": "PR-1610-study.md",
+    "issue": "Eager clone of String; move instead of clone",
+    "file": "codex-rs/tui/src/user_approval_widget.rs",
+    "line": -1,
+    "excerpt": "None => full_cmd.clone(),"
+  },
+  {
+    "guide": "PR-1672-study.md",
+    "issue": "Contains a change-narration/code-review style comment; remove explanatory 'removed' notes from source.",
+    "file": "codex-rs/tui/src/chatwidget/tests.rs",
+    "line": -1,
+    "excerpt": "// (removed experimental resize snapshot test)"
+  },
+  {
+    "guide": "PR-1685-study.md",
+    "issue": "Public exports first: private helper placed before pub items",
+    "file": "codex-rs/tui/src/history_cell.rs",
+    "line": 44,
+    "excerpt": "fn prefix_lines("
+  },
+  {
+    "guide": "PR-1691-study.md",
+    "issue": "Reason not scrollable or trimmed; no layout constraining reason area.",
+    "file": "codex-rs/tui/src/user_approval_widget.rs",
+    "line": -1,
+    "excerpt": "contents.push(Line::from(reason.clone().italic()));"
+  },
+  {
+    "guide": "PR-1695-study.md",
+    "issue": "Inline format args: prefer captured identifiers; avoid positional formatting in format!",
+    "file": "tui/src/chatwidget/tests.rs",
+    "line": 294,
+    "excerpt": "let long = format!(\"echo {}\", \"a\".repeat(200));"
+  },
+  {
+    "guide": "PR-1933-study.md",
+    "issue": "Adds a pre-prompt history entry for the proposed command; guideline discourages background entries before prompt",
+    "file": "codex-rs/tui/src/chatwidget.rs",
+    "line": -1,
+    "excerpt": "self.add_to_history(history_cell::new_proposed_command(&ev.command));"
+  },
+  {
+    "guide": "PR-2050-study.md",
+    "issue": "Centralize wrap width: use DEFAULT_WRAP_COLS constant",
+    "file": "codex-rs/tui/src/user_approval_widget.rs",
+    "line": -1,
+    "excerpt": "snippet = truncate_text(&snippet, 80);"
+  },
+  {
+    "guide": "PR-2050-study.md",
+    "issue": "Respect terminal size: not using crossterm::terminal::size() with fallback",
+    "file": "codex-rs/tui/src/user_approval_widget.rs",
+    "line": -1,
+    "excerpt": "snippet = truncate_text(&snippet, 80);"
+  },
+  {
+    "guide": "PR-2095-study.md",
+    "issue": "Approval modal no longer shows command or a fallback summary when reason is missing; violates 'Render concise, intent-first summaries' with fallback to joined command.",
+    "file": "codex-rs/tui/src/user_approval_widget.rs",
+    "line": -1,
+    "excerpt": "ApprovalRequest::Exec { reason, .. } => { let mut contents: Vec<Line> = vec![]; if let Some(reason) = reason {"
+  },
+  {
+    "guide": "PR-2095-study.md",
+    "issue": "Proposed command cell builds display from raw string instead of using parsed metadata (icons/intent), risking surfacing helper steps.",
+    "file": "codex-rs/tui/src/history_cell.rs",
+    "line": -1,
+    "excerpt": "let cmd = strip_bash_lc_and_escape(command);"
+  },
+  {
+    "guide": "PR-2683-study.md",
+    "issue": "Docstring missing return semantics",
+    "file": "codex-rs/tui/src/history_cell.rs",
+    "line": 47,
+    "excerpt": "/// Prefix each provided line with `initial_prefix` for the first, and"
+  }
+]

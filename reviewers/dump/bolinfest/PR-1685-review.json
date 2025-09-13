@@ -1,0 +1,12 @@
+{
+  "relevant": true,
+  "passes": false,
+  "failures": [
+    {
+      "issue": "Public exports first: private helper placed before pub items",
+      "file": "codex-rs/tui/src/history_cell.rs",
+      "line": 44,
+      "excerpt": "fn prefix_lines("
+    }
+  ]
+}

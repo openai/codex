@@ -1,0 +1,12 @@
+{
+  "relevant": true,
+  "passes": false,
+  "failures": [
+    {
+      "issue": "Use inline format string captures; avoid trailing args",
+      "file": "codex-rs/tui/src/chatwidget/tests.rs",
+      "line": -1,
+      "excerpt": "let long = format!(\"echo {}\", \"a\".repeat(200));"
+    }
+  ]
+}
