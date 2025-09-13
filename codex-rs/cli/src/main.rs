@@ -17,6 +17,9 @@ use codex_exec::Cli as ExecCli;
 use codex_tui::Cli as TuiCli;
 use std::path::PathBuf;
 
+mod mcp_cmd;
+
+use crate::mcp_cmd::McpCli;
 use crate::proto::ProtoCli;
 
 /// Codex CLI
@@ -57,7 +60,7 @@ enum Subcommand {
     Logout(LogoutCommand),
 
     /// Experimental: run Codex as an MCP server.
-    Mcp,
+    Mcp(McpCli),
 
     /// Run the Protocol stream via stdin/stdout
     #[clap(visible_alias = "p")]
@@ -158,8 +161,9 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             prepend_config_flags(&mut exec_cli.config_overrides, cli.config_overrides);
             codex_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
         }
-        Some(Subcommand::Mcp) => {
-            codex_mcp_server::run_main(codex_linux_sandbox_exe, cli.config_overrides).await?;
+        Some(Subcommand::Mcp(mut mcp_cli)) => {
+            prepend_config_flags(&mut mcp_cli.config_overrides, cli.config_overrides);
+            mcp_cli.run(codex_linux_sandbox_exe).await?;
         }
         Some(Subcommand::Login(mut login_cli)) => {
             prepend_config_flags(&mut login_cli.config_overrides, cli.config_overrides);
