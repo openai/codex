@@ -58,6 +58,7 @@ mod session_log;
 mod shimmer;
 mod slash_command;
 mod status_indicator_widget;
+mod status_line;
 mod streaming;
 mod text_formatting;
 mod tui;
@@ -83,6 +84,10 @@ pub async fn run_main(
     cli: Cli,
     codex_linux_sandbox_exe: Option<PathBuf>,
 ) -> std::io::Result<codex_core::protocol::TokenUsage> {
+    if cli.no_status_line {
+        // Honor CLI flag via an internal toggle (no env mutation).
+        crate::status_line::force_disable_status_line();
+    }
     let (sandbox_mode, approval_policy) = if cli.full_auto {
         (
             Some(SandboxMode::WorkspaceWrite),

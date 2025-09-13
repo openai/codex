@@ -86,6 +86,7 @@ impl BottomPane {
                 enhanced_keys_supported,
                 params.placeholder_text,
                 params.disable_paste_burst,
+                params.frame_requester.clone(),
             ),
             active_view: None,
             app_event_tx: params.app_event_tx,
