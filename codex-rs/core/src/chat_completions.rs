@@ -1,6 +1,20 @@
 use std::time::Duration;
+use std::time::Instant;
 
+use crate::ModelProviderInfo;
+use crate::client_common::Prompt;
+use crate::client_common::ResponseEvent;
+use crate::client_common::ResponseStream;
+use crate::error::CodexErr;
+use crate::error::Result;
+use crate::model_family::ModelFamily;
+use crate::openai_tools::create_tools_json_for_chat_completions_api;
+use crate::util::backoff;
 use bytes::Bytes;
+use codex_otel::otel_event_manager::OtelEventManager;
+use codex_protocol::models::ContentItem;
+use codex_protocol::models::ReasoningItemContent;
+use codex_protocol::models::ResponseItem;
 use eventsource_stream::Eventsource;
 use futures::Stream;
 use futures::StreamExt;
@@ -15,25 +29,13 @@ use tokio::time::timeout;
 use tracing::debug;
 use tracing::trace;
 
-use crate::ModelProviderInfo;
-use crate::client_common::Prompt;
-use crate::client_common::ResponseEvent;
-use crate::client_common::ResponseStream;
-use crate::error::CodexErr;
-use crate::error::Result;
-use crate::model_family::ModelFamily;
-use crate::openai_tools::create_tools_json_for_chat_completions_api;
-use crate::util::backoff;
-use codex_protocol::models::ContentItem;
-use codex_protocol::models::ReasoningItemContent;
-use codex_protocol::models::ResponseItem;
-
 /// Implementation for the classic Chat Completions API.
 pub(crate) async fn stream_chat_completions(
     prompt: &Prompt,
     model_family: &ModelFamily,
     client: &reqwest::Client,
     provider: &ModelProviderInfo,
+    otel_event_manager: &OtelEventManager,
 ) -> Result<ResponseStream> {
     // Build messages array
     let mut messages = Vec::<serde_json::Value>::new();
@@ -288,11 +290,29 @@ pub(crate) async fn stream_chat_completions(
 
         let req_builder = provider.create_request_builder(client, &None).await?;
 
+        let start = Instant::now();
+
         let res = req_builder
             .header(reqwest::header::ACCEPT, "text/event-stream")
             .json(&payload)
             .send()
             .await;
+
+        let cf_ray = if let Ok(resp) = &res {
+            let cf_ray = resp
+                .headers()
+                .get("cf-ray")
+                .map(|v| v.to_str().unwrap_or_default())
+                .unwrap_or_default()
+                .to_string();
+
+            trace!("Response status: {}, cf-ray: {}", resp.status(), cf_ray);
+            Some(cf_ray)
+        } else {
+            None
+        };
+
+        otel_event_manager.request(cf_ray, attempt, start.elapsed(), &res);
 
         match res {
             Ok(resp) if resp.status().is_success() => {
@@ -302,6 +322,7 @@ pub(crate) async fn stream_chat_completions(
                     stream,
                     tx_event,
                     provider.stream_idle_timeout(),
+                    otel_event_manager.clone(),
                 ));
                 return Ok(ResponseStream { rx_event });
             }
@@ -345,6 +366,7 @@ async fn process_chat_sse<S>(
     stream: S,
     tx_event: mpsc::Sender<Result<ResponseEvent>>,
     idle_timeout: Duration,
+    otel_event_manager: OtelEventManager,
 ) where
     S: Stream<Item = Result<Bytes>> + Unpin,
 {
@@ -368,12 +390,13 @@ async fn process_chat_sse<S>(
     let mut reasoning_text = String::new();
 
     loop {
+        let start = Instant::now();
         let sse = match timeout(idle_timeout, stream.next()).await {
             Ok(Some(Ok(ev))) => ev,
             Ok(Some(Err(e))) => {
-                let _ = tx_event
-                    .send(Err(CodexErr::Stream(e.to_string(), None)))
-                    .await;
+                let error = e.to_string();
+                otel_event_manager.sse_event_failed(None, start.elapsed(), error.as_str());
+                let _ = tx_event.send(Err(CodexErr::Stream(error, None))).await;
                 return;
             }
             Ok(None) => {
@@ -387,11 +410,10 @@ async fn process_chat_sse<S>(
                 return;
             }
             Err(_) => {
+                let error = "idle timeout waiting for SSE";
+                otel_event_manager.sse_event_failed(None, start.elapsed(), error);
                 let _ = tx_event
-                    .send(Err(CodexErr::Stream(
-                        "idle timeout waiting for SSE".into(),
-                        None,
-                    )))
+                    .send(Err(CodexErr::Stream(error.into(), None)))
                     .await;
                 return;
             }
@@ -399,6 +421,7 @@ async fn process_chat_sse<S>(
 
         // OpenAI Chat streaming sends a literal string "[DONE]" when finished.
         if sse.data.trim() == "[DONE]" {
+            otel_event_manager.sse_event(sse.event, start.elapsed());
             // Emit any finalized items before closing so downstream consumers receive
             // terminal events for both assistant content and raw reasoning.
             if !assistant_text.is_empty() {
@@ -436,9 +459,14 @@ async fn process_chat_sse<S>(
         // Parse JSON chunk
         let chunk: serde_json::Value = match serde_json::from_str(&sse.data) {
             Ok(v) => v,
-            Err(_) => continue,
+            Err(e) => {
+                let error = format!("Failed to parse SSE event: {e}, data: {}", &sse.data);
+                otel_event_manager.sse_event_failed(None, start.elapsed(), error.as_str());
+                continue;
+            }
         };
         trace!("chat_completions received SSE chunk: {chunk:?}");
+        otel_event_manager.sse_event(sse.event, start.elapsed());
 
         let choice_opt = chunk.get("choices").and_then(|c| c.get(0));
 

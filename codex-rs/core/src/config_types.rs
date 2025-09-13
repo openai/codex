@@ -76,6 +76,54 @@ pub enum HistoryPersistence {
     None,
 }
 
+// ===== OTEL configuration =====
+
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum OtelHttpProtocol {
+    /// Binary payload
+    Binary,
+    /// JSON payload
+    Json,
+}
+
+/// Which OTEL exporter to use.
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum OtelExporterKind {
+    None,
+    OtlpHttp {
+        endpoint: String,
+        headers: HashMap<String, String>,
+        protocol: OtelHttpProtocol,
+    },
+    OtlpGrpc {
+        endpoint: String,
+        headers: HashMap<String, String>,
+    },
+}
+
+/// OTEL settings loaded from config.toml. Fields are optional so we can apply defaults.
+#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+pub struct OtelConfigToml {
+    /// Log user prompt in traces
+    pub log_user_prompt: Option<bool>,
+
+    /// Mark traces with environment (dev, staging, prod, test). Defaults to dev.
+    pub environment: Option<String>,
+
+    /// Exporter to use. Defaults to `otlp-file`.
+    pub exporter: Option<OtelExporterKind>,
+}
+
+/// Effective OTEL settings after defaults are applied.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OtelConfig {
+    pub log_user_prompt: bool,
+    pub environment: String,
+    pub exporter: OtelExporterKind,
+}
+
 /// Collection of settings that are specific to the TUI.
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
 pub struct Tui {}
