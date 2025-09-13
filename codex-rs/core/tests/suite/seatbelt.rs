@@ -194,6 +194,70 @@ async fn python_getpwuid_works_under_seatbelt() {
     assert!(status.success(), "python exited with {status:?}");
 }
 
+/// Exercises (allow process-info* (target same-sandbox)) and
+/// (sysctl-read
+///   (sysctl-name-prefix "kern.proc.pgrp.")
+///   (sysctl-name-prefix "kern.proc.pid."))
+#[tokio::test]
+async fn process_info_allowed_within_same_sandbox() {
+    if std::env::var(CODEX_SANDBOX_ENV_VAR) == Ok("seatbelt".to_string()) {
+        eprintln!("{CODEX_SANDBOX_ENV_VAR} is set to 'seatbelt', skipping test.");
+        return;
+    }
+
+    let policy = SandboxPolicy::ReadOnly;
+
+    let py_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/seatbelt_kqueue_sysctl.py");
+    let mut child = spawn_command_under_seatbelt(
+        vec!["python3".to_string(), py_path.to_string_lossy().to_string()],
+        &policy,
+        std::env::current_dir().expect("should be able to get current dir"),
+        StdioPolicy::RedirectForShellTool,
+        HashMap::new(),
+    )
+    .await
+    .expect("should be able to spawn python under seatbelt");
+
+    let status = child
+        .wait()
+        .await
+        .expect("should be able to wait for child process");
+    assert!(status.success(), "python exited with {status:?}");
+}
+
+/// Exercises (allow signal (target same-sandbox))
+#[tokio::test]
+async fn signals_parent_to_child_allowed_within_same_sandbox() {
+    if std::env::var(CODEX_SANDBOX_ENV_VAR) == Ok("seatbelt".to_string()) {
+        eprintln!("{CODEX_SANDBOX_ENV_VAR} is set to 'seatbelt', skipping test.");
+        return;
+    }
+
+    let policy = SandboxPolicy::ReadOnly;
+
+    let sh_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/seatbelt_signal_parent_child.sh");
+    let mut child = spawn_command_under_seatbelt(
+        vec![
+            "/bin/bash".to_string(),
+            sh_path.to_string_lossy().to_string(),
+        ],
+        &policy,
+        std::env::current_dir().expect("should be able to get current dir"),
+        StdioPolicy::RedirectForShellTool,
+        HashMap::new(),
+    )
+    .await
+    .expect("should be able to spawn bash under seatbelt");
+
+    let status = child
+        .wait()
+        .await
+        .expect("should be able to wait for child process");
+    assert!(status.success(), "bash exited with {status:?}");
+}
+
 #[expect(clippy::expect_used)]
 fn create_test_scenario(tmp: &TempDir) -> TestScenario {
     let repo_parent = tmp.path().to_path_buf();
