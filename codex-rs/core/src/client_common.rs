@@ -9,6 +9,8 @@ use codex_protocol::config_types::Verbosity as VerbosityConfig;
 use codex_protocol::models::ResponseItem;
 use futures::Stream;
 use serde::Serialize;
+use serde::ser::SerializeSeq;
+use serde::ser::Serializer;
 use std::borrow::Cow;
 use std::pin::Pin;
 use std::task::Context;
@@ -84,10 +86,8 @@ pub enum ResponseEvent {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct Reasoning {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) effort: Option<ReasoningEffortConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) summary: Option<ReasoningSummaryConfig>,
+    pub(crate) effort: ReasoningEffortConfig,
+    pub(crate) summary: ReasoningSummaryConfig,
 }
 
 /// Controls under the `text` field in the Responses API for GPT-5.
@@ -125,6 +125,7 @@ pub(crate) struct ResponsesApiRequest<'a> {
     // TODO(mbolin): ResponseItem::Other should not be serialized. Currently,
     // we code defensively to avoid this case, but perhaps we should use a
     // separate enum for serialization.
+    #[serde(serialize_with = "serialize_response_items_without_other")]
     pub(crate) input: &'a Vec<ResponseItem>,
     pub(crate) tools: &'a [serde_json::Value],
     pub(crate) tool_choice: &'static str,
@@ -148,10 +149,7 @@ pub(crate) fn create_reasoning_param_for_request(
         return None;
     }
 
-    Some(Reasoning {
-        effort,
-        summary: Some(summary),
-    })
+    effort.map(|effort| Reasoning { effort, summary })
 }
 
 pub(crate) fn create_text_param_for_request(
@@ -172,6 +170,23 @@ impl Stream for ResponseStream {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         self.rx_event.poll_recv(cx)
     }
+}
+
+fn serialize_response_items_without_other<S>(
+    items_ref: &&Vec<ResponseItem>,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    let items: &Vec<ResponseItem> = items_ref;
+    let mut seq = serializer.serialize_seq(None)?;
+    for ri in items.iter() {
+        if !matches!(ri, ResponseItem::Other) {
+            seq.serialize_element(ri)?;
+        }
+    }
+    seq.end()
 }
 
 #[cfg(test)]
@@ -242,5 +257,95 @@ mod tests {
 
         let v = serde_json::to_value(&req).expect("json");
         assert!(v.get("text").is_none());
+    }
+
+    #[test]
+    fn input_excludes_other_and_preserves_order() {
+        use crate::ContentItem;
+
+        let msg1 = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "hello".to_string(),
+            }],
+        };
+        let msg2 = ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "world".to_string(),
+            }],
+        };
+        let input: Vec<ResponseItem> = vec![
+            ResponseItem::Other,
+            msg1,
+            ResponseItem::Other,
+            msg2,
+            ResponseItem::Other,
+        ];
+        let tools: Vec<serde_json::Value> = vec![];
+
+        let req = ResponsesApiRequest {
+            model: "gpt-5",
+            instructions: "i",
+            input: &input,
+            tools: &tools,
+            tool_choice: "auto",
+            parallel_tool_calls: false,
+            reasoning: None,
+            store: false,
+            stream: true,
+            include: vec![],
+            prompt_cache_key: None,
+            text: None,
+        };
+
+        let v = serde_json::to_value(&req).expect("json");
+        let arr = v
+            .get("input")
+            .and_then(|i| i.as_array())
+            .cloned()
+            .expect("input should be an array");
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0].get("type").and_then(|t| t.as_str()), Some("message"));
+        assert_eq!(arr[0].get("role").and_then(|t| t.as_str()), Some("user"));
+        assert_eq!(arr[1].get("type").and_then(|t| t.as_str()), Some("message"));
+        assert_eq!(
+            arr[1].get("role").and_then(|t| t.as_str()),
+            Some("assistant")
+        );
+        assert!(
+            arr.iter()
+                .all(|v| v.get("type").and_then(|t| t.as_str()) != Some("other"))
+        );
+    }
+
+    #[test]
+    fn empty_input_serializes_to_empty_array() {
+        let input: Vec<ResponseItem> = vec![];
+        let tools: Vec<serde_json::Value> = vec![];
+        let req = ResponsesApiRequest {
+            model: "gpt-5",
+            instructions: "i",
+            input: &input,
+            tools: &tools,
+            tool_choice: "auto",
+            parallel_tool_calls: false,
+            reasoning: None,
+            store: false,
+            stream: true,
+            include: vec![],
+            prompt_cache_key: None,
+            text: None,
+        };
+
+        let v = serde_json::to_value(&req).expect("json");
+        let arr = v
+            .get("input")
+            .and_then(|i| i.as_array())
+            .cloned()
+            .expect("input should be an array");
+        assert!(arr.is_empty());
     }
 }
