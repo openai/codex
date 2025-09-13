@@ -82,6 +82,23 @@ fn assistant_text_message(text: &str) -> Value {
     message_value("assistant", "output_text", text.to_string())
 }
 
+fn history_bridge_message(user_messages: &[&str], summary_text: &str) -> Value {
+    let user_messages_text = if user_messages.is_empty() {
+        "(none)".to_string()
+    } else {
+        user_messages.join("\n\n")
+    };
+    let summary_text = if summary_text.is_empty() {
+        "(no summary available)".to_string()
+    } else {
+        summary_text.to_string()
+    };
+    let bridge = format!(
+        "You were originally given instructions from a user over one or more turns. Here were the user messages:\n\n{user_messages_text}\n\nAnother language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:\n\n{summary_text}"
+    );
+    user_text_message(&bridge)
+}
+
 fn format_environment_context(
     cwd: Option<std::path::PathBuf>,
     approval_policy: Option<AskForApproval>,
@@ -333,12 +350,13 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         .clone();
 
     let initial_context = initial_context_messages(&config).await;
+    let bridge_message = history_bridge_message(&["hello world"], SUMMARY_TEXT);
 
     let expected_prior_history_after_compact = initial_context
         .iter()
         .cloned()
         .chain(vec![
-            assistant_text_message(SUMMARY_TEXT),
+            bridge_message.clone(),
             user_text_message("AFTER_COMPACT"),
         ])
         .collect::<Vec<_>>();
@@ -347,7 +365,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         .iter()
         .cloned()
         .chain(vec![
-            assistant_text_message(SUMMARY_TEXT),
+            bridge_message.clone(),
             user_text_message("AFTER_COMPACT"),
             assistant_text_message("AFTER_COMPACT_REPLY"),
             user_text_message("AFTER_RESUME"),
@@ -358,7 +376,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         .iter()
         .cloned()
         .chain(vec![
-            assistant_text_message(SUMMARY_TEXT),
+            bridge_message,
             user_text_message("AFTER_COMPACT"),
             assistant_text_message("AFTER_COMPACT_REPLY"),
             user_text_message("AFTER_FORK"),
