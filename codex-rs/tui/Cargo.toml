@@ -16,6 +16,8 @@ path = "src/lib.rs"
 vt100-tests = []
 # Gate verbose debug logging inside the TUI implementation.
 debug-logs = []
+# Enable syntax highlighting for code blocks
+syntax-highlighting = ["dep:syntect"]
 
 [lints]
 workspace = true
@@ -66,6 +68,7 @@ shlex = "1.3.0"
 strum = "0.27.2"
 strum_macros = "0.27.2"
 supports-color = "3.0.2"
+syntect = { version = "5.0", features = ["default-fancy", "default-onig"], optional = true }
 tempfile = "3"
 textwrap = "0.16.2"
 tokio = { version = "1", features = [
@@ -84,6 +87,7 @@ unicode-segmentation = "1.12.0"
 unicode-width = "0.1"
 url = "2"
 pathdiff = "0.2"
+tui-markdown = "0.3.5"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
