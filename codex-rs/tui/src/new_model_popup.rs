@@ -1,7 +1,7 @@
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
-use codex_core::config::GPT5_HIGH_MODEL;
+use codex_core::config::SWIFTFOX_MEDIUM_MODEL;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -82,12 +82,15 @@ impl WidgetRef for &ModelUpgradePopup {
         Clear.render(area, buf);
 
         let mut lines: Vec<Line> = vec![
+            String::new().into(),
+            format!("   Codex is now powered by {SWIFTFOX_MEDIUM_MODEL}, a new model that is")
+                .into(),
             Line::from(vec![
-                "> ".into(),
-                format!("Try {GPT5_HIGH_MODEL} as your default model").bold(),
+                "   ".into(),
+                "faster, a better collaborator, ".bold(),
+                "and ".into(),
+                "more steerable.".bold(),
             ]),
-            format!("  {GPT5_HIGH_MODEL} is our latest model tuned for coding workflows.").into(),
-            "  Switch now or keep your current default – you can change models any time.".into(),
             "".into(),
         ];
 
@@ -106,7 +109,7 @@ impl WidgetRef for &ModelUpgradePopup {
         lines.push(create_option(
             0,
             ModelUpgradeOption::TryNewModel,
-            &format!("Yes, switch me to {GPT5_HIGH_MODEL}"),
+            &format!("Yes, switch me to {SWIFTFOX_MEDIUM_MODEL}"),
         ));
         lines.push(create_option(
             1,

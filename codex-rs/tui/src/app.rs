@@ -3,6 +3,7 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::chatwidget::ChatWidget;
 use crate::file_search::FileSearchManager;
+use crate::history_cell::HistoryCell;
 use crate::pager_overlay::Overlay;
 use crate::resume_picker::ResumeSelection;
 use crate::tui;
@@ -46,7 +47,7 @@ pub(crate) struct App {
 
     pub(crate) file_search: FileSearchManager,
 
-    pub(crate) transcript_lines: Vec<Line<'static>>,
+    pub(crate) transcript_cells: Vec<Arc<dyn HistoryCell>>,
 
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
@@ -131,7 +132,7 @@ impl App {
             model_saved_to_global: false,
             file_search,
             enhanced_keys_supported,
-            transcript_lines: Vec::new(),
+            transcript_cells: Vec::new(),
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
@@ -213,15 +214,12 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::InsertHistoryCell(cell) => {
-                let mut cell_transcript = cell.transcript_lines();
-                if !cell.is_stream_continuation() && !self.transcript_lines.is_empty() {
-                    cell_transcript.insert(0, Line::from(""));
-                }
+                let cell: Arc<dyn HistoryCell> = cell.into();
                 if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                    t.insert_lines(cell_transcript.clone());
+                    t.insert_cell(cell.clone());
                     tui.frame_requester().schedule_frame();
                 }
-                self.transcript_lines.extend(cell_transcript.clone());
+                self.transcript_cells.push(cell.clone());
                 let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
                 if !display.is_empty() {
                     // Only insert a separating blank line for new cells that are not
@@ -327,13 +325,15 @@ impl App {
     fn show_model_save_hint(&mut self) {
         let model = self.config.model.clone();
         if self.active_profile.is_some() {
-            self.chat_widget.add_info_message(format!(
-                "Model switched to {model}. Press Ctrl+S to save it for this profile, then press Ctrl+S again to set it as your global default."
-            ));
+            self.chat_widget.add_info_message(
+                format!("Model changed to {model} for the current session"),
+                Some("(ctrl+s to set as profile default)".to_string()),
+            );
         } else {
-            self.chat_widget.add_info_message(format!(
-                "Model switched to {model}. Press Ctrl+S to save it as your global default."
-            ));
+            self.chat_widget.add_info_message(
+                format!("Model changed to {model} for the current session"),
+                Some("(ctrl+s to set as default)".to_string()),
+            );
         }
     }
 
@@ -372,9 +372,6 @@ impl App {
 
         let model = self.config.model.clone();
         let effort = self.config.model_reasoning_effort;
-        let effort_label = effort
-            .map(|effort| effort.to_string())
-            .unwrap_or_else(|| "none".to_string());
         let codex_home = self.config.codex_home.clone();
 
         match scope {
@@ -382,9 +379,10 @@ impl App {
                 match persist_model_selection(&codex_home, Some(profile), &model, effort).await {
                     Ok(()) => {
                         self.model_saved_to_profile = true;
-                        self.chat_widget.add_info_message(format!(
-                            "Saved model {model} ({effort_label}) for profile `{profile}`. Press Ctrl+S again to make this your global default."
-                        ));
+                        self.chat_widget.add_info_message(
+                            format!("Profile model changed to {model} for all sessions"),
+                            Some("(view global config in config.toml)".to_string()),
+                        );
                     }
                     Err(err) => {
                         tracing::error!(
@@ -401,9 +399,10 @@ impl App {
                 match persist_model_selection(&codex_home, None, &model, effort).await {
                     Ok(()) => {
                         self.model_saved_to_global = true;
-                        self.chat_widget.add_info_message(format!(
-                            "Saved model {model} ({effort_label}) as your global default."
-                        ));
+                        self.chat_widget.add_info_message(
+                            format!("Default model changed to {model} for all sessions"),
+                            Some("(view global config in config.toml)".to_string()),
+                        )
                     }
                     Err(err) => {
                         tracing::error!(
@@ -420,6 +419,7 @@ impl App {
                 self.chat_widget.add_info_message(
                     "Model preference already saved globally; no further action needed."
                         .to_string(),
+                    None,
                 );
             }
         }
@@ -435,7 +435,7 @@ impl App {
             } => {
                 // Enter alternate screen and set viewport to full size.
                 let _ = tui.enter_alt_screen();
-                self.overlay = Some(Overlay::new_transcript(self.transcript_lines.clone()));
+                self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
                 tui.frame_requester().schedule_frame();
             }
             KeyEvent {
@@ -468,7 +468,7 @@ impl App {
                 kind: KeyEventKind::Press,
                 ..
             } if self.backtrack.primed
-                && self.backtrack.count > 0
+                && self.backtrack.nth_user_message != usize::MAX
                 && self.chat_widget.composer_is_empty() =>
             {
                 // Delegate to helper for clarity; preserves behavior.
@@ -501,7 +501,6 @@ mod tests {
     use crate::file_search::FileSearchManager;
     use codex_core::CodexAuth;
     use codex_core::ConversationManager;
-    use ratatui::text::Line;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
 
@@ -523,7 +522,7 @@ mod tests {
             model_saved_to_profile: false,
             model_saved_to_global: false,
             file_search,
-            transcript_lines: Vec::<Line<'static>>::new(),
+            transcript_cells: Vec::new(),
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
