@@ -10,14 +10,11 @@ use codex_protocol::models::ResponseItem;
 use futures::Stream;
 use serde::Serialize;
 use std::borrow::Cow;
+use std::ops::Deref;
 use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
 use tokio::sync::mpsc;
-
-/// The `instructions` field in the payload sent to a model should always start
-/// with this content.
-const BASE_INSTRUCTIONS: &str = include_str!("../prompt.md");
 
 /// Review thread system prompt. Edit `core/src/review_prompt.md` to customize.
 pub const REVIEW_PROMPT: &str = include_str!("../review_prompt.md");
@@ -41,7 +38,7 @@ impl Prompt {
         let base = self
             .base_instructions_override
             .as_deref()
-            .unwrap_or(BASE_INSTRUCTIONS);
+            .unwrap_or(model.base_instructions.deref());
         let mut sections: Vec<&str> = vec![base];
 
         // When there are no custom instructions, add apply_patch_tool_instructions if either:
@@ -185,8 +182,12 @@ mod tests {
         let prompt = Prompt {
             ..Default::default()
         };
-        let expected = format!("{BASE_INSTRUCTIONS}\n{APPLY_PATCH_TOOL_INSTRUCTIONS}");
         let model_family = find_family_for_model("gpt-4.1").expect("known model slug");
+
+        let expected = format!(
+            "{}\n{}",
+            model_family.base_instructions, APPLY_PATCH_TOOL_INSTRUCTIONS
+        );
         let full = prompt.get_full_instructions(&model_family);
         assert_eq!(full, expected);
     }

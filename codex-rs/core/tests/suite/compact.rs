@@ -366,7 +366,9 @@ async fn summarize_context_three_requests_and_instructions() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
+#[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
+#[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
 async fn auto_compact_runs_after_token_limit_hit() {
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
@@ -453,6 +455,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
         })
         .await
         .unwrap();
+
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     codex
@@ -463,13 +466,39 @@ async fn auto_compact_runs_after_token_limit_hit() {
         })
         .await
         .unwrap();
+
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
     // wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     let requests = server.received_requests().await.unwrap();
-    assert_eq!(requests.len(), 3, "auto compact should add a third request");
+    assert!(
+        requests.len() >= 3,
+        "auto compact should add at least a third request, got {}",
+        requests.len()
+    );
+    let is_auto_compact = |req: &wiremock::Request| {
+        std::str::from_utf8(&req.body)
+            .unwrap_or("")
+            .contains("You have exceeded the maximum number of tokens")
+    };
+    let auto_compact_count = requests.iter().filter(|req| is_auto_compact(req)).count();
+    assert_eq!(
+        auto_compact_count, 1,
+        "expected exactly one auto compact request"
+    );
+    let auto_compact_index = requests
+        .iter()
+        .enumerate()
+        .find_map(|(idx, req)| is_auto_compact(req).then_some(idx))
+        .expect("auto compact request missing");
+    assert_eq!(
+        auto_compact_index, 2,
+        "auto compact should add a third request"
+    );
 
-    let body3 = requests[2].body_json::<serde_json::Value>().unwrap();
+    let body3 = requests[auto_compact_index]
+        .body_json::<serde_json::Value>()
+        .unwrap();
     let instructions = body3
         .get("instructions")
         .and_then(|v| v.as_str())

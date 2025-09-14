@@ -1,7 +1,7 @@
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
-use codex_core::config::SWIFTFOX_MEDIUM_MODEL;
+use codex_core::config::SWIFTFOX_MODEL_DISPLAY_NAME;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -180,7 +180,6 @@ impl WidgetRef for &ModelUpgradePopup {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
 
-        // Start with the current animation frame.
         let mut lines: Vec<Line> = self.frames()[self.frame_idx]
             .lines()
             .map(|l| l.to_string().into())
@@ -190,8 +189,10 @@ impl WidgetRef for &ModelUpgradePopup {
         lines.push("".into());
 
         lines.push(
-            format!("   Codex is now powered by {SWIFTFOX_MEDIUM_MODEL}, a new model that is")
-                .into(),
+            format!(
+                "   Codex is now powered by {SWIFTFOX_MODEL_DISPLAY_NAME}, a new model that is"
+            )
+            .into(),
         );
         lines.push(Line::from(vec![
             "   ".into(),
@@ -216,7 +217,7 @@ impl WidgetRef for &ModelUpgradePopup {
         lines.push(create_option(
             0,
             ModelUpgradeOption::TryNewModel,
-            &format!("Yes, switch me to {SWIFTFOX_MEDIUM_MODEL}"),
+            &format!("Yes, switch me to {SWIFTFOX_MODEL_DISPLAY_NAME}"),
         ));
         lines.push(create_option(
             1,

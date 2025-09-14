@@ -7,6 +7,7 @@ use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
 use crate::slash_command::SlashCommand;
 use crate::text_formatting::format_and_truncate_tool_result;
+use crate::ui_consts::LIVE_PREFIX_COLS;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
 use crate::wrapping::word_wrap_lines;
@@ -106,7 +107,7 @@ impl HistoryCell for UserHistoryCell {
         let mut lines: Vec<Line<'static>> = Vec::new();
 
         // Wrap the content first, then prefix each wrapped line with the marker.
-        let wrap_width = width.saturating_sub(1); // account for the ▌ prefix
+        let wrap_width = width.saturating_sub(LIVE_PREFIX_COLS); // account for the ▌ prefix and trailing space
         let wrapped = textwrap::wrap(
             &self.message,
             textwrap::Options::new(wrap_width as usize)
@@ -114,7 +115,7 @@ impl HistoryCell for UserHistoryCell {
         );
 
         for line in wrapped {
-            lines.push(vec!["▌".cyan().dim(), line.to_string().dim()].into());
+            lines.push(vec!["▌ ".cyan().dim(), line.to_string().dim()].into());
         }
         lines
     }
@@ -436,9 +437,16 @@ impl ExecCell {
         if let Some(output) = call.output.as_ref()
             && output.exit_code != 0
         {
-            let out = output_lines(Some(output), false, false, false)
-                .into_iter()
-                .join("\n");
+            let out = output_lines(
+                Some(output),
+                OutputLinesParams {
+                    only_err: false,
+                    include_angle_pipe: false,
+                    include_prefix: false,
+                },
+            )
+            .into_iter()
+            .join("\n");
             if !out.trim().is_empty() {
                 // Wrap the output.
                 for line in out.lines() {
@@ -637,25 +645,25 @@ pub(crate) fn new_session_info(
         ]));
         lines.push(Line::from("".dim()));
         lines.push(Line::from(
-            " To get started, describe a task or try one of these commands:".dim(),
+            "  To get started, describe a task or try one of these commands:".dim(),
         ));
         lines.push(Line::from("".dim()));
         if !has_agents_md {
             lines.push(Line::from(vec![
-                " /init".bold(),
+                "  /init".bold(),
                 format!(" - {}", SlashCommand::Init.description()).dim(),
             ]));
         }
         lines.push(Line::from(vec![
-            " /status".bold(),
+            "  /status".bold(),
             format!(" - {}", SlashCommand::Status.description()).dim(),
         ]));
         lines.push(Line::from(vec![
-            " /approvals".bold(),
+            "  /approvals".bold(),
             format!(" - {}", SlashCommand::Approvals.description()).dim(),
         ]));
         lines.push(Line::from(vec![
-            " /model".bold(),
+            "  /model".bold(),
             format!(" - {}", SlashCommand::Model.description()).dim(),
         ]));
         PlainHistoryCell { lines }
@@ -1178,9 +1186,11 @@ pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
                 stderr,
                 formatted_output: String::new(),
             }),
-            true,
-            true,
-            true,
+            OutputLinesParams {
+                only_err: true,
+                include_angle_pipe: true,
+                include_prefix: true,
+            },
         ));
     }
 
@@ -1261,12 +1271,18 @@ pub(crate) fn new_reasoning_summary_block(
     vec![Box::new(new_reasoning_block(full_reasoning_buffer, config))]
 }
 
-fn output_lines(
-    output: Option<&CommandOutput>,
+struct OutputLinesParams {
     only_err: bool,
     include_angle_pipe: bool,
     include_prefix: bool,
-) -> Vec<Line<'static>> {
+}
+
+fn output_lines(output: Option<&CommandOutput>, params: OutputLinesParams) -> Vec<Line<'static>> {
+    let OutputLinesParams {
+        only_err,
+        include_angle_pipe,
+        include_prefix,
+    } = params;
     let CommandOutput {
         exit_code,
         stdout,
@@ -1770,7 +1786,7 @@ mod tests {
             message: msg.to_string(),
         };
 
-        // Small width to force wrapping more clearly. Effective wrap width is width-1 due to the ▌ prefix.
+        // Small width to force wrapping more clearly. Effective wrap width is width-2 due to the ▌ prefix and trailing space.
         let width: u16 = 12;
         let lines = cell.display_lines(width);
         let rendered = render_lines(&lines).join("\n");

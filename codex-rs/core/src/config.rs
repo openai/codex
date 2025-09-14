@@ -9,6 +9,7 @@ use crate::config_types::Tui;
 use crate::config_types::UriBasedFileOpener;
 use crate::git_info::resolve_root_git_project_for_trust;
 use crate::model_family::ModelFamily;
+use crate::model_family::derive_default_model_family;
 use crate::model_family::find_family_for_model;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::built_in_model_providers;
@@ -33,7 +34,8 @@ use toml_edit::DocumentMut;
 
 const OPENAI_DEFAULT_MODEL: &str = "gpt-5";
 const OPENAI_DEFAULT_REVIEW_MODEL: &str = "gpt-5";
-pub const SWIFTFOX_MEDIUM_MODEL: &str = "swiftfox-medium";
+pub const SWIFTFOX_MEDIUM_MODEL: &str = "swiftfox";
+pub const SWIFTFOX_MODEL_DISPLAY_NAME: &str = "swiftfox-medium";
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
@@ -865,15 +867,8 @@ impl Config {
             .or(cfg.model)
             .unwrap_or_else(default_model);
 
-        let mut model_family = find_family_for_model(&model).unwrap_or_else(|| ModelFamily {
-            slug: model.clone(),
-            family: model.clone(),
-            needs_special_apply_patch_instructions: false,
-            supports_reasoning_summaries: false,
-            reasoning_summary_format: ReasoningSummaryFormat::None,
-            uses_local_shell_tool: false,
-            apply_patch_tool_type: None,
-        });
+        let mut model_family =
+            find_family_for_model(&model).unwrap_or_else(|| derive_default_model_family(&model));
 
         if let Some(supports_reasoning_summaries) = cfg.model_supports_reasoning_summaries {
             model_family.supports_reasoning_summaries = supports_reasoning_summaries;
@@ -1184,7 +1179,7 @@ exclude_slash_tmp = true
         persist_model_selection(
             codex_home.path(),
             None,
-            "swiftfox-high",
+            "swiftfox",
             Some(ReasoningEffort::High),
         )
         .await?;
@@ -1193,7 +1188,7 @@ exclude_slash_tmp = true
             tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
         let parsed: ConfigToml = toml::from_str(&serialized)?;
 
-        assert_eq!(parsed.model.as_deref(), Some("swiftfox-high"));
+        assert_eq!(parsed.model.as_deref(), Some("swiftfox"));
         assert_eq!(parsed.model_reasoning_effort, Some(ReasoningEffort::High));
 
         Ok(())
@@ -1247,7 +1242,7 @@ model = "gpt-4.1"
         persist_model_selection(
             codex_home.path(),
             Some("dev"),
-            "swiftfox-medium",
+            "swiftfox",
             Some(ReasoningEffort::Medium),
         )
         .await?;
@@ -1260,7 +1255,7 @@ model = "gpt-4.1"
             .get("dev")
             .expect("profile should be created");
 
-        assert_eq!(profile.model.as_deref(), Some("swiftfox-medium"));
+        assert_eq!(profile.model.as_deref(), Some("swiftfox"));
         assert_eq!(
             profile.model_reasoning_effort,
             Some(ReasoningEffort::Medium)
