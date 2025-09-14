@@ -580,6 +580,7 @@ impl HistoryCell for CompletedMcpToolCallWithImageOutput {
 }
 
 const TOOL_CALL_MAX_LINES: usize = 5;
+const SESSION_HEADER_MAX_INNER_WIDTH: usize = 70;
 
 fn title_case(s: &str) -> String {
     if s.is_empty() {
@@ -732,7 +733,10 @@ impl HistoryCell for SessionHeaderHistoryCell {
             return out;
         }
 
-        let inner_width = width.saturating_sub(2) as usize;
+        let inner_width = std::cmp::min(
+            width.saturating_sub(2) as usize,
+            SESSION_HEADER_MAX_INNER_WIDTH,
+        );
         // Top border without a title on the border
         let mut top = String::with_capacity(inner_width + 2);
         top.push('╭');
