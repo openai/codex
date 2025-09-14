@@ -3,6 +3,10 @@ use std::io::{self};
 use std::path::Path;
 use std::path::PathBuf;
 
+use codex_file_search as file_search;
+use std::num::NonZero;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use time::OffsetDateTime;
 use time::PrimitiveDateTime;
 use time::format_description::FormatItem;
@@ -333,4 +337,49 @@ async fn read_head_and_flags(
     }
 
     Ok((head, saw_session_meta, saw_user_event))
+}
+
+/// Locate a recorded conversation rollout file by its UUID string using the existing
+/// paginated listing implementation. Returns `Ok(Some(path))` if found, `Ok(None)` if not present
+/// or the id is invalid.
+pub async fn find_conversation_path_by_id_str(
+    codex_home: &Path,
+    id_str: &str,
+) -> io::Result<Option<PathBuf>> {
+    // Validate UUID format early.
+    if Uuid::parse_str(id_str).is_err() {
+        return Ok(None);
+    }
+
+    let mut root = codex_home.to_path_buf();
+    root.push(SESSIONS_SUBDIR);
+    if !root.exists() {
+        return Ok(None);
+    }
+    // This is safe because we know the values are valid.
+    #[allow(clippy::unwrap_used)]
+    let limit = NonZero::new(1).unwrap();
+    // This is safe because we know the values are valid.
+    #[allow(clippy::unwrap_used)]
+    let threads = NonZero::new(2).unwrap();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let exclude: Vec<String> = Vec::new();
+    let compute_indices = false;
+
+    let results = file_search::run(
+        id_str,
+        limit,
+        &root,
+        exclude,
+        threads,
+        cancel,
+        compute_indices,
+    )
+    .map_err(|e| io::Error::other(format!("file search failed: {e}")))?;
+
+    Ok(results
+        .matches
+        .into_iter()
+        .next()
+        .map(|m| root.join(m.path)))
 }
