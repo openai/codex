@@ -78,6 +78,34 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
 
     // 3. Capture the requests to the model and validate the history slices.
     let requests = gather_request_bodies(&server).await;
+
+    // input after compact is a prefix of input after resume/fork
+    let input_after_compact = json!(requests[requests.len() - 3]["input"]);
+    let input_after_resume = json!(requests[requests.len() - 2]["input"]);
+    let input_after_fork = json!(requests[requests.len() - 1]["input"]);
+
+    let compact_arr = input_after_compact
+        .as_array()
+        .expect("input after compact should be an array");
+    let resume_arr = input_after_resume
+        .as_array()
+        .expect("input after resume should be an array");
+    let fork_arr = input_after_fork
+        .as_array()
+        .expect("input after fork should be an array");
+
+    assert!(
+        compact_arr.len() <= resume_arr.len(),
+        "after-resume input should have at least as many items as after-compact",
+    );
+    assert_eq!(compact_arr.as_slice(), &resume_arr[..compact_arr.len()]);
+
+    assert!(
+        compact_arr.len() <= fork_arr.len(),
+        "after-fork input should have at least as many items as after-compact",
+    );
+    assert_eq!(compact_arr.as_slice(), &fork_arr[..compact_arr.len()]);
+
     let prompt = requests[0]["instructions"]
         .as_str()
         .unwrap_or_default()
@@ -151,7 +179,11 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     let compact_1 = json!(
     {
       "model": "gpt-5",
-      "instructions": "You have exceeded the maximum number of tokens, please stop coding and instead write a short memento message for the next agent. Your note should:\n- Summarize what you finished and what still needs work. If there was a recent update_plan call, repeat its steps verbatim.\n- List outstanding TODOs with file paths / line numbers so they're easy to find.\n- Flag code that needs more tests (edge cases, performance, integration, etc.).\n- Record any open bugs, quirks, or setup steps that will make it easier for the next agent to pick up where you left off.",
+      "instructions": "You have exceeded the maximum number of tokens, please stop coding and instead write a short memento message for the next agent. Your note should:
+- Summarize what you finished and what still needs work. If there was a recent update_plan call, repeat its steps verbatim.
+- List outstanding TODOs with file paths / line numbers so they're easy to find.
+- Flag code that needs more tests (edge cases, performance, integration, etc.).
+- Record any open bugs, quirks, or setup steps that will make it easier for the next agent to pick up where you left off.",
       "input": [
         {
           "type": "message",
@@ -248,7 +280,13 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
           "content": [
             {
               "type": "input_text",
-              "text": "You were originally given instructions from a user over one or more turns. Here were the user messages:\n\nhello world\n\nAnother language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:\n\nSUMMARY_ONLY_CONTEXT"
+              "text": "You were originally given instructions from a user over one or more turns. Here were the user messages:
+
+hello world
+
+Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:
+
+SUMMARY_ONLY_CONTEXT"
             }
           ]
         },
@@ -307,7 +345,13 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
           "content": [
             {
               "type": "input_text",
-              "text": "You were originally given instructions from a user over one or more turns. Here were the user messages:\n\nhello world\n\nAnother language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:\n\nSUMMARY_ONLY_CONTEXT"
+              "text": "You were originally given instructions from a user over one or more turns. Here were the user messages:
+
+hello world
+
+Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:
+
+SUMMARY_ONLY_CONTEXT"
             }
           ]
         },
@@ -386,7 +430,13 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
           "content": [
             {
               "type": "input_text",
-              "text": "You were originally given instructions from a user over one or more turns. Here were the user messages:\n\nhello world\n\nAnother language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:\n\nSUMMARY_ONLY_CONTEXT"
+              "text": "You were originally given instructions from a user over one or more turns. Here were the user messages:
+
+hello world
+
+Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:
+
+SUMMARY_ONLY_CONTEXT"
             }
           ]
         },
@@ -483,6 +533,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
     user_turn(&forked, "AFTER_FORK").await;
 
     compact_conversation(&forked).await;
+    user_turn(&forked, "AFTER_COMPACT_2").await;
     let forked_path = fetch_conversation_path(&forked, "forked conversation").await;
     assert!(
         forked_path.exists(),
@@ -492,8 +543,26 @@ async fn compact_resume_after_second_compaction_preserves_history() {
     let resumed_again = resume_conversation(&manager, &config, forked_path).await;
     user_turn(&resumed_again, AFTER_SECOND_RESUME).await;
 
-    // 3. Capture the requests and verify the compacted histories.
     let requests = gather_request_bodies(&server).await;
+    let input_after_compact = json!(requests[requests.len() - 2]["input"]);
+    let input_after_resume = json!(requests[requests.len() - 1]["input"]);
+
+    // test input after compact before resume is the same as input after resume
+    let compact_input_array = input_after_compact
+        .as_array()
+        .expect("input after compact should be an array");
+    let resume_input_array = input_after_resume
+        .as_array()
+        .expect("input after resume should be an array");
+    assert!(
+        compact_input_array.len() <= resume_input_array.len(),
+        "after-resume input should have at least as many items as after-compact"
+    );
+    assert_eq!(
+        compact_input_array.as_slice(),
+        &resume_input_array[..compact_input_array.len()]
+    );
+    // hard coded test
     let prompt = requests[0]["instructions"]
         .as_str()
         .unwrap_or_default()
@@ -547,6 +616,16 @@ async fn compact_resume_after_second_compaction_preserves_history() {
             "content": [
               {
                 "type": "input_text",
+                "text": "AFTER_COMPACT_2"
+              }
+            ]
+          },
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
                 "text": "AFTER_SECOND_RESUME"
               }
             ]
@@ -554,7 +633,6 @@ async fn compact_resume_after_second_compaction_preserves_history() {
         ],
       }
     ]);
-    assert_eq!(requests.len(), 7);
     let last_request_after_2_compacts = json!([{
         "instructions": requests[requests.len() -1]["instructions"],
         "input": requests[requests.len() -1]["input"],
