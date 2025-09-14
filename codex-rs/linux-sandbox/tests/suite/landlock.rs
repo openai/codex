@@ -156,19 +156,17 @@ async fn assert_network_blocked(cmd: &[&str]) {
     )
     .await;
 
-    let (exit_code, stdout, stderr) = match result {
-        Ok(output) => (output.exit_code, output.stdout.text, output.stderr.text),
-        Err(CodexErr::Sandbox(SandboxErr::Denied { output })) => {
-            (output.exit_code, output.stdout.text, output.stderr.text)
-        }
+    let output = match result {
+        Ok(output) => output,
+        Err(CodexErr::Sandbox(SandboxErr::Denied { output })) => output,
         _ => {
             panic!("expected sandbox denied error, got: {result:?}");
         }
     };
 
-    dbg!(&stderr);
-    dbg!(&stdout);
-    dbg!(&exit_code);
+    dbg!(&output.stderr.text);
+    dbg!(&output.stdout.text);
+    dbg!(&output.exit_code);
 
     // A completely missing binary exits with 127.  Anything else should also
     // be non‑zero (EPERM from seccomp will usually bubble up as 1, 2, 13…)
