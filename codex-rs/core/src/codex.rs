@@ -889,7 +889,8 @@ impl Session {
 
         let output_stderr;
         let borrowed: &ExecToolCallOutput = match &result {
-            Ok(output) | Err(CodexErr::Sandbox(SandboxErr::Timeout { output })) => output,
+            Ok(output) => output,
+            Err(CodexErr::Sandbox(SandboxErr::Timeout { output })) => output,
             Err(e) => {
                 output_stderr = ExecToolCallOutput {
                     exit_code: -1,

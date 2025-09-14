@@ -14,8 +14,11 @@ pub type Result<T> = std::result::Result<T, CodexErr>;
 #[derive(Error, Debug)]
 pub enum SandboxErr {
     /// Error from sandbox execution
-    #[error("sandbox denied exec error, exit code: {0}, stdout: {1}, stderr: {2}")]
-    Denied(i32, String, String),
+    #[error(
+        "sandbox denied exec error, exit code: {}, stdout: {}, stderr: {}",
+        .output.exit_code, .output.stdout.text, .output.stderr.text
+    )]
+    Denied { output: Box<ExecToolCallOutput> },
 
     /// Error from linux seccomp filter setup
     #[cfg(target_os = "linux")]
@@ -29,7 +32,7 @@ pub enum SandboxErr {
 
     /// Command timed out
     #[error("command timed out")]
-    Timeout { output: ExecToolCallOutput },
+    Timeout { output: Box<ExecToolCallOutput> },
 
     /// Command was killed by a signal
     #[error("command was killed by a signal")]
@@ -246,7 +249,7 @@ impl CodexErr {
 
 pub fn get_error_message_ui(e: &CodexErr) -> String {
     match e {
-        CodexErr::Sandbox(SandboxErr::Denied(_, _, stderr)) => stderr.to_string(),
+        CodexErr::Sandbox(SandboxErr::Denied { output }) => output.stderr.text.clone(),
         // Timeouts are not sandbox errors from a UX perspective; present them plainly
         CodexErr::Sandbox(SandboxErr::Timeout { output }) => format!(
             "error: command timed out after {} ms",

@@ -151,34 +151,27 @@ pub async fn process_exec_tool_call(
             let stdout = raw_output.stdout.from_utf8_lossy();
             let stderr = raw_output.stderr.from_utf8_lossy();
             let aggregated_output = raw_output.aggregated_output.from_utf8_lossy();
-            if timed_out {
-                let exec_output = ExecToolCallOutput {
-                    exit_code,
-                    stdout,
-                    stderr,
-                    aggregated_output,
-                    duration,
-                };
-                return Err(CodexErr::Sandbox(SandboxErr::Timeout {
-                    output: exec_output,
-                }));
-            }
-
-            if exit_code != 0 && is_likely_sandbox_denied(sandbox_type, exit_code) {
-                return Err(CodexErr::Sandbox(SandboxErr::Denied(
-                    exit_code,
-                    stdout.text.clone(),
-                    stderr.text.clone(),
-                )));
-            }
-
-            Ok(ExecToolCallOutput {
+            let exec_output = ExecToolCallOutput {
                 exit_code,
                 stdout,
                 stderr,
                 aggregated_output,
                 duration,
-            })
+            };
+
+            if timed_out {
+                return Err(CodexErr::Sandbox(SandboxErr::Timeout {
+                    output: Box::new(exec_output),
+                }));
+            }
+
+            if exit_code != 0 && is_likely_sandbox_denied(sandbox_type, exit_code) {
+                return Err(CodexErr::Sandbox(SandboxErr::Denied {
+                    output: Box::new(exec_output),
+                }));
+            }
+
+            Ok(exec_output)
         }
         Err(err) => {
             tracing::error!("exec error: {err}");
