@@ -176,8 +176,8 @@ async fn run_compact_task_inner(
     };
     let summary_text = get_last_assistant_message_from_turn(&history_snapshot).unwrap_or_default();
     let user_messages = collect_user_messages(&history_snapshot);
-    let new_history =
-        build_compacted_history(&sess, turn_context.as_ref(), &user_messages, &summary_text);
+    let initial_context = sess.build_initial_context(turn_context.as_ref());
+    let new_history = build_compacted_history(initial_context, &user_messages, &summary_text);
     {
         let mut state = sess.state.lock_unchecked();
         state.history.replace(new_history);
@@ -223,7 +223,7 @@ fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
     }
 }
 
-fn collect_user_messages(items: &[ResponseItem]) -> Vec<String> {
+pub(crate) fn collect_user_messages(items: &[ResponseItem]) -> Vec<String> {
     items
         .iter()
         .filter_map(|item| match item {
@@ -243,13 +243,12 @@ fn is_session_prefix_message(text: &str) -> bool {
     )
 }
 
-fn build_compacted_history(
-    sess: &Session,
-    turn_context: &TurnContext,
+pub(crate) fn build_compacted_history(
+    initial_context: Vec<ResponseItem>,
     user_messages: &[String],
     summary_text: &str,
 ) -> Vec<ResponseItem> {
-    let mut history = sess.build_initial_context(turn_context);
+    let mut history = initial_context;
     let user_messages_text = if user_messages.is_empty() {
         "(none)".to_string()
     } else {
