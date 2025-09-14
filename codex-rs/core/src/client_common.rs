@@ -182,8 +182,12 @@ mod tests {
         let prompt = Prompt {
             ..Default::default()
         };
-        let expected = format!("{BASE_INSTRUCTIONS}\n{APPLY_PATCH_TOOL_INSTRUCTIONS}");
         let model_family = find_family_for_model("gpt-4.1").expect("known model slug");
+
+        let expected = format!(
+            "{}\n{}",
+            model_family.base_instructions, APPLY_PATCH_TOOL_INSTRUCTIONS
+        );
         let full = prompt.get_full_instructions(&model_family);
         assert_eq!(full, expected);
     }

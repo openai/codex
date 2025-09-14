@@ -39,7 +39,7 @@ pub struct ModelFamily {
     /// a tool call instead of just a bash command
     pub apply_patch_tool_type: Option<ApplyPatchToolType>,
 
-    // Instructions to use for the model
+    // Instructions to use for querying the model
     pub base_instructions: String,
 }
 
