@@ -1192,6 +1192,10 @@ impl ChatWidget {
                 }));
                 tx.send(AppEvent::UpdateModel(model_slug.clone()));
                 tx.send(AppEvent::UpdateReasoningEffort(effort));
+                tx.send(AppEvent::PersistModelSelection {
+                    model: model_slug.clone(),
+                    effort,
+                });
                 tracing::info!(
                     "New model: {}, New effort: {}, Current model: {}, Current effort: {}",
                     model_slug.clone(),
@@ -1215,7 +1219,7 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(
             "Select model and reasoning level".to_string(),
             Some("Switch between OpenAI models for this and future Codex CLI session".to_string()),
-            Some("Press Enter to confirm, Esc to go back, Ctrl+S to save".to_string()),
+            Some("Press Enter to confirm or Esc to go back".to_string()),
             items,
         );
     }
