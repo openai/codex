@@ -12,6 +12,7 @@ use crate::protocol::SandboxPolicy;
 use crate::tool_apply_patch::ApplyPatchToolType;
 use crate::tool_apply_patch::create_apply_patch_freeform_tool;
 use crate::tool_apply_patch::create_apply_patch_json_tool;
+use codex_protocol::config_types::ReasoningEffort;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct ResponsesApiTool {
@@ -83,6 +84,7 @@ pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) use_streamable_shell_tool: bool,
     pub(crate) include_view_image_tool: bool,
     pub(crate) experimental_unified_exec_tool: bool,
+    pub(crate) reasoning_effort: Option<ReasoningEffort>,
 }
 
 impl ToolsConfig {
@@ -97,6 +99,7 @@ impl ToolsConfig {
             use_streamable_shell_tool,
             include_view_image_tool,
             experimental_unified_exec_tool,
+            reasoning_effort,
         } = params;
         let mut shell_type = if *use_streamable_shell_tool {
             ConfigShellToolType::StreamableShell
@@ -123,11 +126,16 @@ impl ToolsConfig {
             }
         };
 
+        // Web search is not compatible with reasoning effort "minimal"
+        // See: https://platform.openai.com/docs/guides/reasoning
+        let web_search_request = *include_web_search_request
+            && !matches!(reasoning_effort, Some(ReasoningEffort::Minimal));
+
         Self {
             shell_type,
             plan_tool: *include_plan_tool,
             apply_patch_tool_type,
-            web_search_request: *include_web_search_request,
+            web_search_request,
             include_view_image_tool: *include_view_image_tool,
             experimental_unified_exec_tool: *experimental_unified_exec_tool,
         }
@@ -644,6 +652,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            reasoning_effort: None,
         });
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
@@ -666,6 +675,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            reasoning_effort: None,
         });
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
@@ -688,6 +698,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            reasoning_effort: None,
         });
         let tools = get_openai_tools(
             &config,
@@ -794,6 +805,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            reasoning_effort: None,
         });
 
         // Intentionally construct a map with keys that would sort alphabetically.
@@ -872,6 +884,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            reasoning_effort: None,
         });
 
         let tools = get_openai_tools(
@@ -935,6 +948,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            reasoning_effort: None,
         });
 
         let tools = get_openai_tools(
@@ -993,6 +1007,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            reasoning_effort: None,
         });
 
         let tools = get_openai_tools(
@@ -1054,6 +1069,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            reasoning_effort: None,
         });
 
         let tools = get_openai_tools(
@@ -1147,5 +1163,47 @@ mod tests {
         assert_eq!(name, "shell");
 
         assert_eq!(description, "Runs a shell command and returns its output.");
+    }
+
+    #[test]
+    fn test_web_search_excluded_with_minimal_reasoning_effort() {
+        let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
+        let config = ToolsConfig::new(&ToolsConfigParams {
+            model_family: &model_family,
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            include_plan_tool: false,
+            include_apply_patch_tool: false,
+            include_web_search_request: true,
+            use_streamable_shell_tool: false,
+            include_view_image_tool: true,
+            experimental_unified_exec_tool: true,
+            reasoning_effort: Some(ReasoningEffort::Minimal),
+        });
+        let tools = get_openai_tools(&config, Some(HashMap::new()));
+
+        // web_search should be excluded when reasoning effort is Minimal
+        assert_eq_tool_names(&tools, &["unified_exec", "view_image"]);
+    }
+
+    #[test]
+    fn test_web_search_included_with_non_minimal_reasoning_effort() {
+        let model_family = find_family_for_model("o3").expect("o3 should be a valid model family");
+        let config = ToolsConfig::new(&ToolsConfigParams {
+            model_family: &model_family,
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::ReadOnly,
+            include_plan_tool: false,
+            include_apply_patch_tool: false,
+            include_web_search_request: true,
+            use_streamable_shell_tool: false,
+            include_view_image_tool: true,
+            experimental_unified_exec_tool: true,
+            reasoning_effort: Some(ReasoningEffort::Medium),
+        });
+        let tools = get_openai_tools(&config, Some(HashMap::new()));
+
+        // web_search should be included when reasoning effort is not Minimal
+        assert_eq_tool_names(&tools, &["unified_exec", "web_search", "view_image"]);
     }
 }
