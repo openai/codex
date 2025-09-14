@@ -5,7 +5,6 @@ use crate::markdown::append_markdown;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
-use crate::slash_command::SlashCommand;
 use crate::text_formatting::format_and_truncate_tool_result;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use crate::wrapping::RtOptions;
@@ -624,11 +623,6 @@ pub(crate) fn new_session_info(
         rollout_path: _,
     } = event;
     if is_first_event {
-        // Discover AGENTS.md files to decide whether to suggest `/init`.
-        let has_agents_md = discover_project_doc_paths(config)
-            .map(|v| !v.is_empty())
-            .unwrap_or(false);
-
         // Header box rendered as history (so it appears at the very top)
         let header = SessionHeaderHistoryCell::new(
             model,
@@ -636,30 +630,28 @@ pub(crate) fn new_session_info(
             crate::version::CODEX_CLI_VERSION,
         );
 
-        // Help lines below the header
+        // Help lines below the header (new copy and list)
         let mut help_lines: Vec<Line<'static>> = Vec::new();
-        help_lines.push(Line::from(
-            "  To get started, describe a task or try one of these commands:".dim(),
-        ));
+        help_lines.push(
+            "Describe a task to get started or try one of the following commands:"
+                .dim()
+                .into(),
+        );
         help_lines.push(Line::from("".dim()));
-
-        if !has_agents_md {
-            help_lines.push(Line::from(vec![
-                "  /init".bold(),
-                format!(" - {}", SlashCommand::Init.description()).dim(),
-            ]));
-        }
         help_lines.push(Line::from(vec![
-            "  /status".bold(),
-            format!(" - {}", SlashCommand::Status.description()).dim(),
+            "1. ".into(),
+            "/status".bold(),
+            " - show current session configuration and token usage".dim(),
         ]));
         help_lines.push(Line::from(vec![
-            "  /approvals".bold(),
-            format!(" - {}", SlashCommand::Approvals.description()).dim(),
+            "2. ".into(),
+            "/compact".bold(),
+            " - compact the chat history to avoid context limits".dim(),
         ]));
         help_lines.push(Line::from(vec![
-            "  /model".bold(),
-            format!(" - {}", SlashCommand::Model.description()).dim(),
+            "3. ".into(),
+            "/prompts".bold(),
+            " - explore starter prompts to get to know Codex".dim(),
         ]));
 
         CompositeHistoryCell {
