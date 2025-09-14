@@ -12,4 +12,5 @@ expression: visual
  Investigating rendering code (0s • Esc to interrupt)
 
 ▌Summarize recent commits
- ⏎ send   ⌃J newline   ⌃O shortcuts   ⌃C quit
+
+ ⏎ send   ⌃J newline   ⌃V paste image   ⌃O shortcuts   ⌃C quit

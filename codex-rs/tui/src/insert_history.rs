@@ -3,6 +3,7 @@ use std::io;
 use std::io::Write;
 
 use crate::tui;
+use crate::wrapping::word_wrap_lines_borrowed;
 use crossterm::Command;
 use crossterm::cursor::MoveTo;
 use crossterm::queue;
@@ -18,8 +19,6 @@ use ratatui::style::Color;
 use ratatui::style::Modifier;
 use ratatui::text::Line;
 use ratatui::text::Span;
-use textwrap::Options as TwOptions;
-use textwrap::WordSplitter;
 
 /// Insert `lines` above the viewport using the terminal's backend writer
 /// (avoids direct stdout references).
@@ -44,7 +43,7 @@ pub fn insert_history_lines_to_writer<B, W>(
 
     // Pre-wrap lines using word-aware wrapping so terminal scrollback sees the same
     // formatting as the TUI. This avoids character-level hard wrapping by the terminal.
-    let wrapped = word_wrap_lines(&lines, area.width.max(1));
+    let wrapped = word_wrap_lines_borrowed(&lines, area.width.max(1) as usize);
     let wrapped_lines = wrapped.len() as u16;
     let cursor_top = if area.bottom() < screen_size.height {
         // If the viewport is not at the bottom of the screen, scroll it down to make room.
@@ -98,7 +97,17 @@ pub fn insert_history_lines_to_writer<B, W>(
 
     for line in wrapped {
         queue!(writer, Print("\r\n")).ok();
-        write_spans(writer, line.iter()).ok();
+        // Merge line-level style into each span so that ANSI colors reflect
+        // line styles (e.g., blockquotes with green fg).
+        let merged_spans: Vec<Span> = line
+            .spans
+            .iter()
+            .map(|s| Span {
+                style: s.style.patch(line.style),
+                content: s.content.clone(),
+            })
+            .collect();
+        write_spans(writer, merged_spans.iter()).ok();
     }
 
     queue!(writer, ResetScrollRegion).ok();
@@ -223,7 +232,7 @@ impl ModifierDiff {
 
 fn write_spans<'a, I>(mut writer: &mut impl Write, content: I) -> io::Result<()>
 where
-    I: Iterator<Item = &'a Span<'a>>,
+    I: IntoIterator<Item = &'a Span<'a>>,
 {
     let mut fg = Color::Reset;
     let mut bg = Color::Reset;
@@ -262,132 +271,13 @@ where
     )
 }
 
-/// Word-aware wrapping for a list of `Line`s preserving styles.
-pub(crate) fn word_wrap_lines<'a, I>(lines: I, width: u16) -> Vec<Line<'static>>
-where
-    I: IntoIterator<Item = &'a Line<'a>>,
-{
-    let mut out = Vec::new();
-    let w = width.max(1) as usize;
-    for line in lines {
-        out.extend(word_wrap_line(line, w));
-    }
-    out
-}
-
-fn word_wrap_line(line: &Line, width: usize) -> Vec<Line<'static>> {
-    if width == 0 {
-        return vec![to_owned_line(line)];
-    }
-    // Concatenate content and keep span boundaries for later re-slicing.
-    let mut flat = String::new();
-    let mut span_bounds = Vec::new(); // (start_byte, end_byte, style)
-    let mut cursor = 0usize;
-    for s in &line.spans {
-        let text = s.content.as_ref();
-        let start = cursor;
-        flat.push_str(text);
-        cursor += text.len();
-        span_bounds.push((start, cursor, s.style));
-    }
-
-    // Use textwrap for robust word-aware wrapping; no hyphenation, no breaking words.
-    let opts = TwOptions::new(width)
-        .break_words(false)
-        .word_splitter(WordSplitter::NoHyphenation);
-    let wrapped = textwrap::wrap(&flat, &opts);
-
-    if wrapped.len() <= 1 {
-        return vec![to_owned_line(line)];
-    }
-
-    // Map wrapped pieces back to byte ranges in `flat` sequentially.
-    let mut start_cursor = 0usize;
-    let mut out: Vec<Line<'static>> = Vec::with_capacity(wrapped.len());
-    for piece in wrapped {
-        let piece_str: &str = &piece;
-        if piece_str.is_empty() {
-            out.push(Line {
-                style: line.style,
-                alignment: line.alignment,
-                spans: Vec::new(),
-            });
-            continue;
-        }
-        // Find the next occurrence of piece_str at or after start_cursor.
-        // textwrap preserves order, so a linear scan is sufficient.
-        if let Some(rel) = flat[start_cursor..].find(piece_str) {
-            let s = start_cursor + rel;
-            let e = s + piece_str.len();
-            out.push(slice_line_spans(line, &span_bounds, s, e));
-            start_cursor = e;
-        } else {
-            // Fallback: slice by length from cursor.
-            let s = start_cursor;
-            let e = (start_cursor + piece_str.len()).min(flat.len());
-            out.push(slice_line_spans(line, &span_bounds, s, e));
-            start_cursor = e;
-        }
-    }
-
-    out
-}
-
-fn to_owned_line(l: &Line<'_>) -> Line<'static> {
-    Line {
-        style: l.style,
-        alignment: l.alignment,
-        spans: l
-            .spans
-            .iter()
-            .map(|s| Span {
-                style: s.style,
-                content: std::borrow::Cow::Owned(s.content.to_string()),
-            })
-            .collect(),
-    }
-}
-
-fn slice_line_spans(
-    original: &Line<'_>,
-    span_bounds: &[(usize, usize, ratatui::style::Style)],
-    start_byte: usize,
-    end_byte: usize,
-) -> Line<'static> {
-    let mut acc: Vec<Span<'static>> = Vec::new();
-    for (i, (s, e, style)) in span_bounds.iter().enumerate() {
-        if *e <= start_byte {
-            continue;
-        }
-        if *s >= end_byte {
-            break;
-        }
-        let seg_start = start_byte.max(*s);
-        let seg_end = end_byte.min(*e);
-        if seg_end > seg_start {
-            let local_start = seg_start - *s;
-            let local_end = seg_end - *s;
-            let content = original.spans[i].content.as_ref();
-            let slice = &content[local_start..local_end];
-            acc.push(Span {
-                style: *style,
-                content: std::borrow::Cow::Owned(slice.to_string()),
-            });
-        }
-        if *e >= end_byte {
-            break;
-        }
-    }
-    Line {
-        style: original.style,
-        alignment: original.alignment,
-        spans: acc,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::markdown_render::render_markdown_text;
+    use ratatui::layout::Rect;
+    use ratatui::style::Color;
+    use vt100::Parser;
 
     #[test]
     fn writes_bold_then_regular_spans() {
@@ -418,36 +308,238 @@ mod tests {
     }
 
     #[test]
-    fn line_height_counts_double_width_emoji() {
-        let line = "😀😀😀".into(); // each emoji ~ width 2
-        assert_eq!(word_wrap_line(&line, 4).len(), 2);
-        assert_eq!(word_wrap_line(&line, 2).len(), 3);
-        assert_eq!(word_wrap_line(&line, 6).len(), 1);
+    fn vt100_blockquote_line_emits_green_fg() {
+        // Set up a small off-screen terminal
+        let width: u16 = 40;
+        let height: u16 = 10;
+        let backend = ratatui::backend::TestBackend::new(width, height);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        // Place viewport on the last line so history inserts scroll upward
+        let viewport = Rect::new(0, height - 1, width, 1);
+        term.set_viewport_area(viewport);
+
+        // Build a blockquote-like line: apply line-level green style and prefix "> "
+        let mut line: Line<'static> = Line::from(vec!["> ".into(), "Hello world".into()]);
+        line = line.style(Color::Green);
+        let mut ansi: Vec<u8> = Vec::new();
+        insert_history_lines_to_writer(&mut term, &mut ansi, vec![line]);
+
+        // Parse ANSI using vt100 and assert at least one non-default fg color appears
+        let mut parser = Parser::new(height, width, 0);
+        parser.process(&ansi);
+
+        let mut saw_colored = false;
+        'outer: for row in 0..height {
+            for col in 0..width {
+                if let Some(cell) = parser.screen().cell(row, col)
+                    && cell.has_contents()
+                    && cell.fgcolor() != vt100::Color::Default
+                {
+                    saw_colored = true;
+                    break 'outer;
+                }
+            }
+        }
+        assert!(
+            saw_colored,
+            "expected at least one colored cell in vt100 output"
+        );
     }
 
     #[test]
-    fn word_wrap_does_not_split_words_simple_english() {
-        let sample = "Years passed, and Willowmere thrived in peace and friendship. Mira’s herb garden flourished with both ordinary and enchanted plants, and travelers spoke of the kindness of the woman who tended them.";
-        let line = sample.into();
-        // Force small width to exercise wrapping at spaces.
-        let wrapped = word_wrap_lines(&[line], 40);
-        let joined: String = wrapped
+    fn vt100_blockquote_wrap_preserves_color_on_all_wrapped_lines() {
+        // Force wrapping by using a narrow viewport width and a long blockquote line.
+        let width: u16 = 20;
+        let height: u16 = 8;
+        let backend = ratatui::backend::TestBackend::new(width, height);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        // Viewport is the last line so history goes directly above it.
+        let viewport = Rect::new(0, height - 1, width, 1);
+        term.set_viewport_area(viewport);
+
+        // Create a long blockquote with a distinct prefix and enough text to wrap.
+        let mut line: Line<'static> = Line::from(vec![
+            "> ".into(),
+            "This is a long quoted line that should wrap".into(),
+        ]);
+        line = line.style(Color::Green);
+
+        let mut ansi: Vec<u8> = Vec::new();
+        insert_history_lines_to_writer(&mut term, &mut ansi, vec![line]);
+
+        // Parse and inspect the final screen buffer.
+        let mut parser = Parser::new(height, width, 0);
+        parser.process(&ansi);
+        let screen = parser.screen();
+
+        // Collect rows that are non-empty; these should correspond to our wrapped lines.
+        let mut non_empty_rows: Vec<u16> = Vec::new();
+        for row in 0..height {
+            let mut any = false;
+            for col in 0..width {
+                if let Some(cell) = screen.cell(row, col)
+                    && cell.has_contents()
+                    && cell.contents() != "\0"
+                    && cell.contents() != " "
+                {
+                    any = true;
+                    break;
+                }
+            }
+            if any {
+                non_empty_rows.push(row);
+            }
+        }
+
+        // Expect at least two rows due to wrapping.
+        assert!(
+            non_empty_rows.len() >= 2,
+            "expected wrapped output to span >=2 rows, got {non_empty_rows:?}",
+        );
+
+        // For each non-empty row, ensure all non-space cells are using a non-default fg color.
+        for row in non_empty_rows {
+            for col in 0..width {
+                if let Some(cell) = screen.cell(row, col) {
+                    let contents = cell.contents();
+                    if !contents.is_empty() && contents != " " {
+                        assert!(
+                            cell.fgcolor() != vt100::Color::Default,
+                            "expected non-default fg on row {row} col {col}, got {:?}",
+                            cell.fgcolor()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn vt100_colored_prefix_then_plain_text_resets_color() {
+        let width: u16 = 40;
+        let height: u16 = 6;
+        let backend = ratatui::backend::TestBackend::new(width, height);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        let viewport = Rect::new(0, height - 1, width, 1);
+        term.set_viewport_area(viewport);
+
+        // First span colored, rest plain.
+        let line: Line<'static> = Line::from(vec![
+            Span::styled("1. ", ratatui::style::Style::default().fg(Color::LightBlue)),
+            Span::raw("Hello world"),
+        ]);
+
+        let mut ansi: Vec<u8> = Vec::new();
+        insert_history_lines_to_writer(&mut term, &mut ansi, vec![line]);
+
+        let mut parser = Parser::new(height, width, 0);
+        parser.process(&ansi);
+        let screen = parser.screen();
+
+        // Find the first non-empty row; verify first three cells are colored, following cells default.
+        'rows: for row in 0..height {
+            let mut has_text = false;
+            for col in 0..width {
+                if let Some(cell) = screen.cell(row, col)
+                    && cell.has_contents()
+                    && cell.contents() != " "
+                {
+                    has_text = true;
+                    break;
+                }
+            }
+            if !has_text {
+                continue;
+            }
+
+            // Expect "1. Hello world" starting at col 0.
+            for col in 0..3 {
+                let cell = screen.cell(row, col).unwrap();
+                assert!(
+                    cell.fgcolor() != vt100::Color::Default,
+                    "expected colored prefix at col {col}, got {:?}",
+                    cell.fgcolor()
+                );
+            }
+            for col in 3..(3 + "Hello world".len() as u16) {
+                let cell = screen.cell(row, col).unwrap();
+                assert_eq!(
+                    cell.fgcolor(),
+                    vt100::Color::Default,
+                    "expected default color for plain text at col {col}, got {:?}",
+                    cell.fgcolor()
+                );
+            }
+            break 'rows;
+        }
+    }
+
+    #[test]
+    fn vt100_deep_nested_mixed_list_third_level_marker_is_colored() {
+        // Markdown with five levels (ordered → unordered → ordered → unordered → unordered).
+        let md = "1. First\n   - Second level\n     1. Third level (ordered)\n        - Fourth level (bullet)\n          - Fifth level to test indent consistency\n";
+        let text = render_markdown_text(md);
+        let lines: Vec<Line<'static>> = text.lines.clone();
+
+        let width: u16 = 60;
+        let height: u16 = 12;
+        let backend = ratatui::backend::TestBackend::new(width, height);
+        let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+        let viewport = ratatui::layout::Rect::new(0, height - 1, width, 1);
+        term.set_viewport_area(viewport);
+
+        let mut ansi: Vec<u8> = Vec::new();
+        insert_history_lines_to_writer(&mut term, &mut ansi, lines);
+
+        let mut parser = Parser::new(height, width, 0);
+        parser.process(&ansi);
+        let screen = parser.screen();
+
+        // Reconstruct screen rows as strings to locate the 3rd level line.
+        let mut rows: Vec<String> = Vec::with_capacity(height as usize);
+        for row in 0..height {
+            let mut s = String::with_capacity(width as usize);
+            for col in 0..width {
+                if let Some(cell) = screen.cell(row, col) {
+                    if let Some(ch) = cell.contents().chars().next() {
+                        s.push(ch);
+                    } else {
+                        s.push(' ');
+                    }
+                } else {
+                    s.push(' ');
+                }
+            }
+            rows.push(s.trim_end().to_string());
+        }
+
+        let needle = "1. Third level (ordered)";
+        let row_idx = rows
             .iter()
-            .map(|l| {
-                l.spans
-                    .iter()
-                    .map(|s| s.content.clone())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(
-            !joined.contains("bo\nth"),
-            "word 'both' should not be split across lines:\n{joined}"
-        );
-        assert!(
-            !joined.contains("Willowm\nere"),
-            "should not split inside words:\n{joined}"
-        );
+            .position(|r| r.contains(needle))
+            .unwrap_or_else(|| {
+                panic!("expected to find row containing {needle:?}, have rows: {rows:?}")
+            });
+        let col_start = rows[row_idx].find(needle).unwrap() as u16; // column where '1' starts
+
+        // Verify that the numeric marker ("1.") at the third level is colored
+        // (non-default fg) and the content after the following space resets to default.
+        for c in [col_start, col_start + 1] {
+            let cell = screen.cell(row_idx as u16, c).unwrap();
+            assert!(
+                cell.fgcolor() != vt100::Color::Default,
+                "expected colored 3rd-level marker at row {row_idx} col {c}, got {:?}",
+                cell.fgcolor()
+            );
+        }
+        let content_col = col_start + 3; // skip '1', '.', and the space
+        if let Some(cell) = screen.cell(row_idx as u16, content_col) {
+            assert_eq!(
+                cell.fgcolor(),
+                vt100::Color::Default,
+                "expected default color for 3rd-level content at row {row_idx} col {content_col}, got {:?}",
+                cell.fgcolor()
+            );
+        }
     }
 }

@@ -487,6 +487,9 @@ pub struct Implementation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     pub version: String,
+    // This is an extra field that the Codex MCP server sends as part of InitializeResult.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub user_agent: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize, TS)]

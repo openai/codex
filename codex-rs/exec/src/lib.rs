@@ -137,6 +137,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     // Load configuration and determine approval policy
     let overrides = ConfigOverrides {
         model,
+        review_model: None,
         config_profile,
         // This CLI is intended to be headless and has no affordances for asking
         // the user for approval.
@@ -149,7 +150,6 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         include_plan_tool: None,
         include_apply_patch_tool: None,
         include_view_image_tool: None,
-        disable_response_storage: oss.then_some(true),
         show_raw_agent_reasoning: oss.then_some(true),
         tools_web_search_request: None,
     };
@@ -188,11 +188,8 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         std::process::exit(1);
     }
 
-    let conversation_manager = ConversationManager::new(AuthManager::shared(
-        config.codex_home.clone(),
-        config.preferred_auth_method,
-        config.responses_originator_header.clone(),
-    ));
+    let conversation_manager =
+        ConversationManager::new(AuthManager::shared(config.codex_home.clone()));
     let NewConversation {
         conversation_id: _,
         conversation,

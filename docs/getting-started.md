@@ -10,6 +10,7 @@
 
 Key flags: `--model/-m`, `--ask-for-approval/-a`.
 
+<!--
 Resume options:
 
 - `--resume`: open an interactive picker of recent sessions (shows a preview of the first real user message). Conflicts with `--continue`.
@@ -21,6 +22,7 @@ Examples:
 codex --resume
 codex --continue
 ```
+-->
 
 ### Running with a prompt as input
 
@@ -40,7 +42,7 @@ they'll be committed to your working directory.
 
 ### Example prompts
 
-Below are a few bite-size examples you can copy-paste. Replace the text in quotes with your own task. See the [prompting guide](https://github.com/openai/codex/blob/main/codex-cli/examples/prompting_guide.md) for more tips and usage patterns.
+Below are a few bite-size examples you can copy-paste. Replace the text in quotes with your own task.
 
 | ✨  | What you type                                                                   | What happens                                                               |
 | --- | ------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
