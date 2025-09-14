@@ -21,30 +21,19 @@ use codex_core::ModelProviderInfo;
 use codex_core::NewConversation;
 use codex_core::built_in_model_providers;
 use codex_core::config::Config;
-use codex_core::project_doc;
-use codex_core::protocol::AskForApproval;
 use codex_core::protocol::ConversationPathResponseEvent;
-use codex_core::protocol::ENVIRONMENT_CONTEXT_CLOSE_TAG;
-use codex_core::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
-use codex_core::protocol::SandboxPolicy;
-use codex_core::protocol::USER_INSTRUCTIONS_CLOSE_TAG;
-use codex_core::protocol::USER_INSTRUCTIONS_OPEN_TAG;
-use codex_core::shell;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
-use codex_protocol::config_types::SandboxMode;
 use core_test_support::load_default_config_for_test;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
-use serde_json::Value;
 use serde_json::json;
 use std::sync::Arc;
 use tempfile::TempDir;
 use wiremock::MockServer;
 
-const PROJECT_DOC_SEPARATOR: &str = "\n\n--- project-doc ---\n\n";
 const AFTER_SECOND_RESUME: &str = "AFTER_SECOND_RESUME";
 
 fn network_disabled() -> bool {
@@ -66,7 +55,6 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
 
     // 2. Start a new conversation and drive it through the compact/resume/fork steps.
     let (_home, config, manager, base) = start_test_conversation(&server).await;
-    let initial_context = initial_context_messages(&config).await;
 
     user_turn(&base, "hello world").await;
     compact_conversation(&base).await;
@@ -74,8 +62,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     let base_path = fetch_conversation_path(&base, "base conversation").await;
     assert!(
         base_path.exists(),
-        "compact+resume test expects base path {:?} to exist",
-        base_path
+        "compact+resume test expects base path {base_path:?} to exist",
     );
 
     let resumed = resume_conversation(&manager, &config, base_path).await;
@@ -83,8 +70,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
     let resumed_path = fetch_conversation_path(&resumed, "resumed conversation").await;
     assert!(
         resumed_path.exists(),
-        "compact+resume test expects resumed path {:?} to exist",
-        resumed_path
+        "compact+resume test expects resumed path {resumed_path:?} to exist",
     );
 
     let forked = fork_conversation(&manager, &config, resumed_path, 1).await;
@@ -92,61 +78,371 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
 
     // 3. Capture the requests to the model and validate the history slices.
     let requests = gather_request_bodies(&server).await;
-    let bridge_after_compact = history_bridge_text(&["hello world"], SUMMARY_TEXT);
-    let after_compact_history = request_history_for_user_suffix(
-        &requests,
-        &[bridge_after_compact.as_str(), "AFTER_COMPACT"],
-    );
-    let after_resume_history = request_history_for_user_suffix(
-        &requests,
-        &[
-            bridge_after_compact.as_str(),
-            "AFTER_COMPACT",
-            "AFTER_RESUME",
-        ],
-    );
-    let after_fork_history = request_history_for_user_suffix(
-        &requests,
-        &[bridge_after_compact.as_str(), "AFTER_COMPACT", "AFTER_FORK"],
-    );
-
-    let instruction_text = entry_text(&initial_context[0]);
-    let environment_text = entry_text(&initial_context[1]);
-
-    let after_compact_users = user_messages(&after_compact_history);
-    assert_eq!(
-        after_compact_users,
-        vec![
-            instruction_text.clone(),
-            environment_text.clone(),
-            bridge_after_compact.clone(),
-            "AFTER_COMPACT".to_string(),
-        ]
-    );
-
-    let after_resume_users = user_messages(&after_resume_history);
-    assert_eq!(
-        after_resume_users,
-        vec![
-            instruction_text.clone(),
-            environment_text.clone(),
-            bridge_after_compact.clone(),
-            "AFTER_COMPACT".to_string(),
-            "AFTER_RESUME".to_string(),
-        ]
-    );
-
-    let after_fork_users = user_messages(&after_fork_history);
-    assert_eq!(
-        after_fork_users,
-        vec![
-            instruction_text,
-            environment_text,
-            bridge_after_compact,
-            "AFTER_COMPACT".to_string(),
-            "AFTER_FORK".to_string(),
-        ]
-    );
+    let prompt = requests[0]["instructions"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let user_instructions = requests[0]["input"][0]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let environment_context = requests[0]["input"][1]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let tool_calls = json!(requests[0]["tools"].as_array());
+    let prompt_cache_key = requests[0]["prompt_cache_key"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let fork_prompt_cache_key = requests[requests.len() - 1]["prompt_cache_key"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let user_turn_1 = json!(
+    {
+      "model": "gpt-5",
+      "instructions": prompt,
+      "input": [
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": user_instructions
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": environment_context
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "hello world"
+            }
+          ]
+        }
+      ],
+      "tools": tool_calls,
+      "tool_choice": "auto",
+      "parallel_tool_calls": false,
+      "reasoning": {
+        "summary": "auto"
+      },
+      "store": false,
+      "stream": true,
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "prompt_cache_key": prompt_cache_key
+    });
+    let compact_1 = json!(
+    {
+      "model": "gpt-5",
+      "instructions": "You have exceeded the maximum number of tokens, please stop coding and instead write a short memento message for the next agent. Your note should:\n- Summarize what you finished and what still needs work. If there was a recent update_plan call, repeat its steps verbatim.\n- List outstanding TODOs with file paths / line numbers so they're easy to find.\n- Flag code that needs more tests (edge cases, performance, integration, etc.).\n- Record any open bugs, quirks, or setup steps that will make it easier for the next agent to pick up where you left off.",
+      "input": [
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": user_instructions
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": environment_context
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "hello world"
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "output_text",
+              "text": "FIRST_REPLY"
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "Start Summarization"
+            }
+          ]
+        }
+      ],
+      "tools": [],
+      "tool_choice": "auto",
+      "parallel_tool_calls": false,
+      "reasoning": {
+        "summary": "auto"
+      },
+      "store": false,
+      "stream": true,
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "prompt_cache_key": prompt_cache_key
+    });
+    let user_turn_2_after_compact = json!(
+    {
+      "model": "gpt-5",
+      "instructions": prompt,
+      "input": [
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": user_instructions
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": environment_context
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "You were originally given instructions from a user over one or more turns. Here were the user messages:\n\nhello world\n\nAnother language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:\n\nSUMMARY_ONLY_CONTEXT"
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "AFTER_COMPACT"
+            }
+          ]
+        }
+      ],
+      "tools": tool_calls,
+      "tool_choice": "auto",
+      "parallel_tool_calls": false,
+      "reasoning": {
+        "summary": "auto"
+      },
+      "store": false,
+      "stream": true,
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "prompt_cache_key": prompt_cache_key
+    });
+    let usert_turn_3_after_resume = json!(
+    {
+      "model": "gpt-5",
+      "instructions": prompt,
+      "input": [
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": user_instructions
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": environment_context
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "You were originally given instructions from a user over one or more turns. Here were the user messages:\n\nhello world\n\nAnother language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:\n\nSUMMARY_ONLY_CONTEXT"
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "AFTER_COMPACT"
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "output_text",
+              "text": "AFTER_COMPACT_REPLY"
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "AFTER_RESUME"
+            }
+          ]
+        }
+      ],
+      "tools": tool_calls,
+      "tool_choice": "auto",
+      "parallel_tool_calls": false,
+      "reasoning": {
+        "summary": "auto"
+      },
+      "store": false,
+      "stream": true,
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "prompt_cache_key": prompt_cache_key
+    });
+    let user_turn_3_after_fork = json!(
+    {
+      "model": "gpt-5",
+      "instructions": prompt,
+      "input": [
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": user_instructions
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": environment_context
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "You were originally given instructions from a user over one or more turns. Here were the user messages:\n\nhello world\n\nAnother language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:\n\nSUMMARY_ONLY_CONTEXT"
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "AFTER_COMPACT"
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "assistant",
+          "content": [
+            {
+              "type": "output_text",
+              "text": "AFTER_COMPACT_REPLY"
+            }
+          ]
+        },
+        {
+          "type": "message",
+          "role": "user",
+          "content": [
+            {
+              "type": "input_text",
+              "text": "AFTER_FORK"
+            }
+          ]
+        }
+      ],
+      "tools": tool_calls,
+      "tool_choice": "auto",
+      "parallel_tool_calls": false,
+      "reasoning": {
+        "summary": "auto"
+      },
+      "store": false,
+      "stream": true,
+      "include": [
+        "reasoning.encrypted_content"
+      ],
+      "prompt_cache_key": fork_prompt_cache_key
+    });
+    let expected = json!([
+        user_turn_1,
+        compact_1,
+        user_turn_2_after_compact,
+        usert_turn_3_after_resume,
+        user_turn_3_after_fork
+    ]);
+    assert_eq!(requests.len(), 5);
+    assert_eq!(json!(requests), expected);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -165,7 +461,6 @@ async fn compact_resume_after_second_compaction_preserves_history() {
 
     // 2. Drive the conversation through compact -> resume -> fork -> compact -> resume.
     let (_home, config, manager, base) = start_test_conversation(&server).await;
-    let initial_context = initial_context_messages(&config).await;
 
     user_turn(&base, "hello world").await;
     compact_conversation(&base).await;
@@ -173,8 +468,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
     let base_path = fetch_conversation_path(&base, "base conversation").await;
     assert!(
         base_path.exists(),
-        "second compact test expects base path {:?} to exist",
-        base_path
+        "second compact test expects base path {base_path:?} to exist",
     );
 
     let resumed = resume_conversation(&manager, &config, base_path).await;
@@ -182,8 +476,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
     let resumed_path = fetch_conversation_path(&resumed, "resumed conversation").await;
     assert!(
         resumed_path.exists(),
-        "second compact test expects resumed path {:?} to exist",
-        resumed_path
+        "second compact test expects resumed path {resumed_path:?} to exist",
     );
 
     let forked = fork_conversation(&manager, &config, resumed_path, 1).await;
@@ -193,8 +486,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
     let forked_path = fetch_conversation_path(&forked, "forked conversation").await;
     assert!(
         forked_path.exists(),
-        "second compact test expects forked path {:?} to exist",
-        forked_path
+        "second compact test expects forked path {forked_path:?} to exist",
     );
 
     let resumed_again = resume_conversation(&manager, &config, forked_path).await;
@@ -202,191 +494,72 @@ async fn compact_resume_after_second_compaction_preserves_history() {
 
     // 3. Capture the requests and verify the compacted histories.
     let requests = gather_request_bodies(&server).await;
-    let bridge_after_compact = history_bridge_text(&["hello world"], SUMMARY_TEXT);
-    let after_compact_history = request_history_for_user_suffix(
-        &requests,
-        &[bridge_after_compact.as_str(), "AFTER_COMPACT"],
-    );
-    let after_resume_history = request_history_for_user_suffix(
-        &requests,
-        &[
-            bridge_after_compact.as_str(),
-            "AFTER_COMPACT",
-            "AFTER_RESUME",
+    let prompt = requests[0]["instructions"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let user_instructions = requests[0]["input"][0]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    let environment_instructions = requests[0]["input"][1]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+
+    let expected = json!([
+      {
+        "instructions": prompt,
+        "input": [
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": user_instructions
+              }
+            ]
+          },
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": environment_instructions
+              }
+            ]
+          },
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "You were originally given instructions from a user over one or more turns. Here were the user messages:\n\nYou were originally given instructions from a user over one or more turns. Here were the user messages:\n\nhello world\n\nAnother language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:\n\nSUMMARY_ONLY_CONTEXT\n\nAFTER_COMPACT\n\nAFTER_FORK\n\nAnother language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:\n\nSUMMARY_ONLY_CONTEXT"
+              }
+            ]
+          },
+          {
+            "type": "message",
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "AFTER_SECOND_RESUME"
+              }
+            ]
+          }
         ],
-    );
-    let after_fork_history = request_history_for_user_suffix(
-        &requests,
-        &[bridge_after_compact.as_str(), "AFTER_COMPACT", "AFTER_FORK"],
-    );
-    let after_second_resume_history =
-        request_history_for_user_suffix(&requests, &[AFTER_SECOND_RESUME]);
-
-    let instruction_text = entry_text(&initial_context[0]);
-    let environment_text = entry_text(&initial_context[1]);
-
-    let after_compact_users = user_messages(&after_compact_history);
-    assert_eq!(
-        after_compact_users,
-        vec![
-            instruction_text.clone(),
-            environment_text.clone(),
-            bridge_after_compact.clone(),
-            "AFTER_COMPACT".to_string(),
-        ]
-    );
-
-    let after_resume_users = user_messages(&after_resume_history);
-    assert_eq!(
-        after_resume_users,
-        vec![
-            instruction_text.clone(),
-            environment_text.clone(),
-            bridge_after_compact.clone(),
-            "AFTER_COMPACT".to_string(),
-            "AFTER_RESUME".to_string(),
-        ]
-    );
-
-    let after_fork_users = user_messages(&after_fork_history);
-    assert_eq!(
-        after_fork_users,
-        vec![
-            instruction_text.clone(),
-            environment_text.clone(),
-            bridge_after_compact,
-            "AFTER_COMPACT".to_string(),
-            "AFTER_FORK".to_string(),
-        ]
-    );
-
-    let after_second_resume_users = user_messages(&after_second_resume_history);
-    assert_eq!(after_second_resume_users.len(), 4);
-    assert_eq!(after_second_resume_users[0], instruction_text);
-    assert_eq!(after_second_resume_users[1], environment_text);
-    assert!(after_second_resume_users[2].starts_with("You were originally given instructions"));
-    assert_eq!(after_second_resume_users[3], AFTER_SECOND_RESUME);
-}
-
-/// Returns the instruction and environment context messages that every
-/// conversation starts with in these tests.
-async fn initial_context_messages(config: &Config) -> Vec<Value> {
-    let instructions_text = match project_doc::read_project_docs(config).await {
-        Ok(Some(doc)) => match &config.user_instructions {
-            Some(existing) => Some(format!("{existing}{PROJECT_DOC_SEPARATOR}{doc}")),
-            None => Some(doc),
-        },
-        Ok(None) | Err(_) => config.user_instructions.clone(),
-    };
-
-    let mut messages = Vec::new();
-    if let Some(text) = instructions_text {
-        messages.push(message_value(
-            "user",
-            "input_text",
-            format!("{USER_INSTRUCTIONS_OPEN_TAG}\n\n{text}\n\n{USER_INSTRUCTIONS_CLOSE_TAG}"),
-        ));
-    }
-
-    let shell = shell::default_user_shell().await;
-    messages.push(message_value(
-        "user",
-        "input_text",
-        format_environment_context(
-            Some(config.cwd.clone()),
-            Some(config.approval_policy),
-            Some(config.sandbox_policy.clone()),
-            Some(shell),
-        ),
-    ));
-    messages
-}
-
-fn message_value(role: &str, content_type: &str, text: String) -> Value {
-    json!({
-        "type": "message",
-        "role": role,
-        "content": [{"type": content_type, "text": text}],
-    })
-}
-
-fn history_bridge_text(user_messages: &[&str], summary_text: &str) -> String {
-    let user_messages_text = if user_messages.is_empty() {
-        "(none)".to_string()
-    } else {
-        user_messages.join("\n\n")
-    };
-    let summary_text = if summary_text.is_empty() {
-        "(no summary available)".to_string()
-    } else {
-        summary_text.to_string()
-    };
-    format!(
-        "You were originally given instructions from a user over one or more turns. Here were the user messages:\n\n{user_messages_text}\n\nAnother language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:\n\n{summary_text}"
-    )
-}
-
-fn format_environment_context(
-    cwd: Option<std::path::PathBuf>,
-    approval_policy: Option<AskForApproval>,
-    sandbox_policy: Option<SandboxPolicy>,
-    shell: Option<shell::Shell>,
-) -> String {
-    let mut lines = vec![ENVIRONMENT_CONTEXT_OPEN_TAG.to_string()];
-    if let Some(cwd) = cwd {
-        lines.push(format!("  <cwd>{}</cwd>", cwd.to_string_lossy()));
-    }
-    if let Some(policy) = approval_policy {
-        lines.push(format!("  <approval_policy>{policy}</approval_policy>"));
-    }
-    if let Some(policy) = sandbox_policy {
-        match policy {
-            SandboxPolicy::DangerFullAccess => {
-                lines.push(format!(
-                    "  <sandbox_mode>{}</sandbox_mode>",
-                    SandboxMode::DangerFullAccess
-                ));
-                lines.push("  <network_access>enabled</network_access>".to_string());
-            }
-            SandboxPolicy::ReadOnly => {
-                lines.push(format!(
-                    "  <sandbox_mode>{}</sandbox_mode>",
-                    SandboxMode::ReadOnly
-                ));
-                lines.push("  <network_access>restricted</network_access>".to_string());
-            }
-            SandboxPolicy::WorkspaceWrite {
-                writable_roots,
-                network_access,
-                ..
-            } => {
-                lines.push(format!(
-                    "  <sandbox_mode>{}</sandbox_mode>",
-                    SandboxMode::WorkspaceWrite
-                ));
-                lines.push(format!(
-                    "  <network_access>{}</network_access>",
-                    if network_access {
-                        "enabled"
-                    } else {
-                        "restricted"
-                    }
-                ));
-                if !writable_roots.is_empty() {
-                    lines.push("  <writable_roots>".to_string());
-                    for root in writable_roots {
-                        lines.push(format!("    <root>{}</root>", root.to_string_lossy()));
-                    }
-                    lines.push("  </writable_roots>".to_string());
-                }
-            }
-        }
-    }
-    if let Some(shell_name) = shell.and_then(|s| s.name()) {
-        lines.push(format!("  <shell>{shell_name}</shell>"));
-    }
-    lines.push(ENVIRONMENT_CONTEXT_CLOSE_TAG.to_string());
-    lines.join("\n")
+      }
+    ]);
+    assert_eq!(requests.len(), 7);
+    let last_request_after_2_compacts = json!([{
+        "instructions": requests[requests.len() -1]["instructions"],
+        "input": requests[requests.len() -1]["input"],
+    }]);
+    assert_eq!(expected, last_request_after_2_compacts);
 }
 
 async fn gather_request_bodies(server: &MockServer) -> Vec<serde_json::Value> {
@@ -400,71 +573,6 @@ async fn gather_request_bodies(server: &MockServer) -> Vec<serde_json::Value> {
                 .expect("valid JSON body")
         })
         .collect()
-}
-
-fn user_messages(history: &[Value]) -> Vec<String> {
-    history
-        .iter()
-        .filter_map(|entry| {
-            if entry.get("role").and_then(|v| v.as_str()) == Some("user") {
-                entry
-                    .get("content")
-                    .and_then(|v| v.as_array())
-                    .map(|items| {
-                        items
-                            .iter()
-                            .filter_map(|item| item.get("text").and_then(|t| t.as_str()))
-                            .map(|s| s.to_string())
-                            .collect::<Vec<_>>()
-                    })
-            } else {
-                None
-            }
-        })
-        .flatten()
-        .collect()
-}
-
-fn entry_text(entry: &Value) -> String {
-    entry
-        .get("content")
-        .and_then(|v| v.as_array())
-        .and_then(|items| items.first())
-        .and_then(|item| item.get("text"))
-        .and_then(|text| text.as_str())
-        .unwrap_or_default()
-        .to_string()
-}
-
-fn request_history_for_user_suffix(
-    requests: &[serde_json::Value],
-    expected_suffix: &[&str],
-) -> Vec<Value> {
-    let expected_vec: Vec<String> = expected_suffix.iter().map(|s| s.to_string()).collect();
-    let (idx, value) = requests
-        .iter()
-        .enumerate()
-        .find(|(_, req)| {
-            let history = req.get("input").and_then(|v| v.as_array()).cloned();
-            history
-                .map(|hist| user_messages(&hist))
-                .map_or(false, |users| {
-                    users.len() >= expected_vec.len()
-                        && users[users.len() - expected_vec.len()..] == expected_vec[..]
-                })
-        })
-        .unwrap_or_else(|| {
-            panic!(
-                "no request found with user message suffix {:?}",
-                expected_suffix
-            )
-        });
-
-    value
-        .get("input")
-        .and_then(|v| v.as_array())
-        .cloned()
-        .unwrap_or_else(|| panic!("request {idx} missing input array"))
 }
 
 async fn mount_initial_flow(server: &MockServer) {
