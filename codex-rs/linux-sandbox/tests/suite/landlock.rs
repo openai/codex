@@ -173,7 +173,10 @@ async fn assert_network_blocked(cmd: &[&str]) {
     // If—*and only if*—the command exits 0 we consider the sandbox breached.
 
     if exit_code == 0 {
-        panic!("Network sandbox FAILED - {cmd:?} exited 0\nstdout:\n{stdout}\nstderr:\n{stderr}",);
+        panic!(
+            "Network sandbox FAILED - {cmd:?} exited 0\nstdout:\n{}\nstderr:\n{}",
+            output.stdout.text, output.stderr.text
+        );
     }
 }
 
