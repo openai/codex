@@ -7,6 +7,7 @@ use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
 use crate::slash_command::SlashCommand;
 use crate::text_formatting::format_and_truncate_tool_result;
+use crate::ui_consts::LIVE_PREFIX_COLS;
 use crate::wrapping::RtOptions;
 use crate::wrapping::word_wrap_line;
 use crate::wrapping::word_wrap_lines;
@@ -106,7 +107,7 @@ impl HistoryCell for UserHistoryCell {
         let mut lines: Vec<Line<'static>> = Vec::new();
 
         // Wrap the content first, then prefix each wrapped line with the marker.
-        let wrap_width = width.saturating_sub(2); // account for the ▌ prefix and trailing space
+        let wrap_width = width.saturating_sub(LIVE_PREFIX_COLS); // account for the ▌ prefix and trailing space
         let wrapped = textwrap::wrap(
             &self.message,
             textwrap::Options::new(wrap_width as usize)
