@@ -1251,7 +1251,8 @@ impl WidgetRef for ChatComposer {
                     ]
                 } else {
                     let newline_hint_key = if self.use_shift_enter_hint {
-                        key_hint::shift('⏎')
+                        key_hint::shift('
+                        ')
                     } else {
                         key_hint::ctrl('J')
                     };
