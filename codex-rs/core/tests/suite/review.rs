@@ -379,13 +379,8 @@ async fn review_input_isolated_from_parent_history() {
             .await
             .unwrap();
     }
-    config.experimental_resume = Some(session_file);
-
-    let codex = new_conversation_for_server(&server, &codex_home, |cfg| {
-        // apply resume file
-        cfg.experimental_resume = config.experimental_resume.clone();
-    })
-    .await;
+    let codex =
+        resume_conversation_for_server(&server, &codex_home, session_file.clone(), |_| {}).await;
 
     // Submit review request; it must start fresh (no parent history in `input`).
     let review_prompt = "Please review only this".to_string();
@@ -544,5 +539,34 @@ where
         .new_conversation(config)
         .await
         .expect("create conversation")
+        .conversation
+}
+
+/// Create a conversation resuming from a rollout file, configured to talk to the provided mock server.
+#[expect(clippy::expect_used)]
+async fn resume_conversation_for_server<F>(
+    server: &MockServer,
+    codex_home: &TempDir,
+    resume_path: std::path::PathBuf,
+    mutator: F,
+) -> Arc<CodexConversation>
+where
+    F: FnOnce(&mut Config),
+{
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+    let mut config = load_default_config_for_test(codex_home);
+    config.model_provider = model_provider;
+    mutator(&mut config);
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+    let auth_manager =
+        codex_core::AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    conversation_manager
+        .resume_conversation_from_rollout(config, resume_path, auth_manager)
+        .await
+        .expect("resume conversation")
         .conversation
 }
