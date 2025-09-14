@@ -219,7 +219,7 @@ impl From<Vec<InputItem>> for ResponseInputItem {
                             let mime = mime_guess::from_path(&path)
                                 .first()
                                 .map(|m| m.essence_str().to_owned())
-                                .unwrap_or_else(|| "application/octet-stream".to_string());
+                                .unwrap_or_else(|| "image".to_string());
                             let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
                             Some(ContentItem::InputImage {
                                 image_url: format!("data:{mime};base64,{encoded}"),

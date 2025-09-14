@@ -104,7 +104,7 @@ impl PolicyBuilder {
         info!("adding program spec: {program_spec:?}");
         let name = program_spec.program.clone();
         let mut programs = self.programs.borrow_mut();
-        programs.insert(name.clone(), program_spec);
+        programs.insert(name, program_spec);
     }
 
     fn add_forbidden_substrings(&self, substrings: &[String]) {

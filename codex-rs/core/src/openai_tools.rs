@@ -288,58 +288,9 @@ fn create_shell_tool_for_sandbox(sandbox_policy: &SandboxPolicy) -> OpenAiTool {
     );
     }
 
-    let description = match sandbox_policy {
-        SandboxPolicy::WorkspaceWrite {
-            network_access,
-            ..
-        } => {
-            let network_line = if !network_access {
-                "\n    - Commands that require network access"
-            } else {
-                ""
-            };
-
-            format!(
-                r#"
-The shell tool is used to execute shell commands.
-- When invoking the shell tool, your call will be running in a sandbox, and some shell commands will require escalated privileges:
-  - Types of actions that require escalated privileges:
-    - Writing files other than those in the writable roots (see the environment context for the allowed directories){network_line}
-  - Examples of commands that require escalated privileges:
-    - git commit
-    - npm install or pnpm install
-    - cargo build
-    - cargo test
-- When invoking a command that will require escalated privileges:
-  - Provide the with_escalated_permissions parameter with the boolean value true
-  - Include a short, 1 sentence explanation for why we need to run with_escalated_permissions in the justification parameter."#,
-            )
-        }
-        SandboxPolicy::DangerFullAccess => {
-            "Runs a shell command and returns its output.".to_string()
-        }
-        SandboxPolicy::ReadOnly => {
-            r#"
-The shell tool is used to execute shell commands.
-- When invoking the shell tool, your call will be running in a sandbox, and some shell commands (including apply_patch) will require escalated permissions:
-  - Types of actions that require escalated privileges:
-    - Writing files
-    - Applying patches
-  - Examples of commands that require escalated privileges:
-    - apply_patch
-    - git commit
-    - npm install or pnpm install
-    - cargo build
-    - cargo test
-- When invoking a command that will require escalated privileges:
-  - Provide the with_escalated_permissions parameter with the boolean value true
-  - Include a short, 1 sentence explanation for why we need to run with_escalated_permissions in the justification parameter"#.to_string()
-        }
-    };
-
     OpenAiTool::Function(ResponsesApiTool {
         name: "shell".to_string(),
-        description,
+        description: "Runs a shell command and returns its output.".to_string(),
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -1165,20 +1116,7 @@ mod tests {
         };
         assert_eq!(name, "shell");
 
-        let expected = r#"
-The shell tool is used to execute shell commands.
-- When invoking the shell tool, your call will be running in a sandbox, and some shell commands will require escalated privileges:
-  - Types of actions that require escalated privileges:
-    - Writing files other than those in the writable roots (see the environment context for the allowed directories)
-    - Commands that require network access
-  - Examples of commands that require escalated privileges:
-    - git commit
-    - npm install or pnpm install
-    - cargo build
-    - cargo test
-- When invoking a command that will require escalated privileges:
-  - Provide the with_escalated_permissions parameter with the boolean value true
-  - Include a short, 1 sentence explanation for why we need to run with_escalated_permissions in the justification parameter."#;
+        let expected = "Runs a shell command and returns its output.";
         assert_eq!(description, expected);
     }
 
@@ -1193,21 +1131,7 @@ The shell tool is used to execute shell commands.
         };
         assert_eq!(name, "shell");
 
-        let expected = r#"
-The shell tool is used to execute shell commands.
-- When invoking the shell tool, your call will be running in a sandbox, and some shell commands (including apply_patch) will require escalated permissions:
-  - Types of actions that require escalated privileges:
-    - Writing files
-    - Applying patches
-  - Examples of commands that require escalated privileges:
-    - apply_patch
-    - git commit
-    - npm install or pnpm install
-    - cargo build
-    - cargo test
-- When invoking a command that will require escalated privileges:
-  - Provide the with_escalated_permissions parameter with the boolean value true
-  - Include a short, 1 sentence explanation for why we need to run with_escalated_permissions in the justification parameter"#;
+        let expected = "Runs a shell command and returns its output.";
         assert_eq!(description, expected);
     }
 

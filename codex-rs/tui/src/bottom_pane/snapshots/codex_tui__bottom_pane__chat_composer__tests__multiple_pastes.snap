@@ -9,6 +9,5 @@ expression: terminal.backend()
 "▌                                                                                                   "
 "▌                                                                                                   "
 "▌                                                                                                   "
-"▌                                                                                                   "
-"▌                                                                                                   "
-"⏎ send   ⌃J newline   ⌃T transcript   ⌃C quit                                                       "
+"                                                                                                    "
+"⏎ send   ⌃J newline   ⌃T transcript   ⌃C quit                                                      "
