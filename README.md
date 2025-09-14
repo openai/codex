@@ -35,6 +35,14 @@ Then simply run `codex` to get started:
 codex
 ```
 
+To update Codex after installing it, run:
+
+```shell
+codex update
+```
+
+You can also run `codex upgrade`. The CLI will reuse the installation method you originally used (npm or Homebrew).
+
 <details>
 <summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
 
