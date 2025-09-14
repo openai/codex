@@ -381,16 +381,18 @@ async fn create_unified_exec_session(
         wait_exit_status.store(true, Ordering::SeqCst);
     });
 
-    Ok(ExecCommandSession::new(
+    let session = ExecCommandSession::new(
         writer_tx,
         output_tx,
-        initial_output_rx,
         killer,
         reader_handle,
         writer_handle,
         wait_handle,
         exit_status,
-    ))
+    );
+    session.set_initial_output_receiver(initial_output_rx);
+
+    Ok(session)
 }
 
 #[cfg(test)]

@@ -36,7 +36,6 @@ impl ExecCommandSession {
     pub(crate) fn new(
         writer_tx: mpsc::Sender<Vec<u8>>,
         output_tx: broadcast::Sender<Vec<u8>>,
-        initial_output_rx: broadcast::Receiver<Vec<u8>>,
         killer: Box<dyn portable_pty::ChildKiller + Send + Sync>,
         reader_handle: JoinHandle<()>,
         writer_handle: JoinHandle<()>,
@@ -46,12 +45,20 @@ impl ExecCommandSession {
         Self {
             writer_tx,
             output_tx,
-            initial_output_rx: StdMutex::new(Some(initial_output_rx)),
+            initial_output_rx: StdMutex::new(None),
             killer: StdMutex::new(Some(killer)),
             reader_handle: StdMutex::new(Some(reader_handle)),
             writer_handle: StdMutex::new(Some(writer_handle)),
             wait_handle: StdMutex::new(Some(wait_handle)),
             exit_status,
+        }
+    }
+
+    pub(crate) fn set_initial_output_receiver(&self, receiver: broadcast::Receiver<Vec<u8>>) {
+        if let Ok(mut guard) = self.initial_output_rx.lock() {
+            if guard.is_none() {
+                *guard = Some(receiver);
+            }
         }
     }
 

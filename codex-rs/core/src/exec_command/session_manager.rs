@@ -345,13 +345,13 @@ async fn create_exec_command_session(
     let session = ExecCommandSession::new(
         writer_tx,
         output_tx,
-        initial_output_rx,
         killer,
         reader_handle,
         writer_handle,
         wait_handle,
         exit_status,
     );
+    session.set_initial_output_receiver(initial_output_rx);
     Ok((session, exit_rx))
 }
 
