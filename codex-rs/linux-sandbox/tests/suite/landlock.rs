@@ -172,7 +172,7 @@ async fn assert_network_blocked(cmd: &[&str]) {
     // be non‑zero (EPERM from seccomp will usually bubble up as 1, 2, 13…)
     // If—*and only if*—the command exits 0 we consider the sandbox breached.
 
-    if exit_code == 0 {
+    if output.exit_code == 0 {
         panic!(
             "Network sandbox FAILED - {cmd:?} exited 0\nstdout:\n{}\nstderr:\n{}",
             output.stdout.text, output.stderr.text
