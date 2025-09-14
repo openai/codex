@@ -873,6 +873,7 @@ impl Config {
             reasoning_summary_format: ReasoningSummaryFormat::None,
             uses_local_shell_tool: false,
             apply_patch_tool_type: None,
+            base_instructions: "".to_string(),
         });
 
         if let Some(supports_reasoning_summaries) = cfg.model_supports_reasoning_summaries {
