@@ -92,12 +92,6 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             supports_reasoning_summaries: true,
             uses_local_shell_tool: true,
         )
-    } else if slug.starts_with("codex-") {
-        model_family!(
-            slug, slug,
-            supports_reasoning_summaries: true,
-            reasoning_summary_format: ReasoningSummaryFormat::Experimental,
-        )
     } else if slug.starts_with("gpt-4.1") {
         model_family!(
             slug, "gpt-4.1",
@@ -109,6 +103,12 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
         simple_model_family!(slug, "gpt-4o")
     } else if slug.starts_with("gpt-3.5") {
         simple_model_family!(slug, "gpt-3.5")
+    } else if slug.starts_with("codex-") || slug.starts_with("swiftfox") {
+        model_family!(
+            slug, slug,
+            supports_reasoning_summaries: true,
+            reasoning_summary_format: ReasoningSummaryFormat::Experimental,
+        )
     } else if slug.starts_with("gpt-5") {
         model_family!(
             slug, "gpt-5",

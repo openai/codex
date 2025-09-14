@@ -19,6 +19,9 @@ use tokio::sync::mpsc;
 /// with this content.
 const BASE_INSTRUCTIONS: &str = include_str!("../prompt.md");
 
+/// Review thread system prompt. Edit `core/src/review_prompt.md` to customize.
+pub const REVIEW_PROMPT: &str = include_str!("../review_prompt.md");
+
 /// API request payload for a single model turn
 #[derive(Default, Debug, Clone)]
 pub struct Prompt {
@@ -81,8 +84,10 @@ pub enum ResponseEvent {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct Reasoning {
-    pub(crate) effort: ReasoningEffortConfig,
-    pub(crate) summary: ReasoningSummaryConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) effort: Option<ReasoningEffortConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) summary: Option<ReasoningSummaryConfig>,
 }
 
 /// Controls under the `text` field in the Responses API for GPT-5.
@@ -136,14 +141,17 @@ pub(crate) struct ResponsesApiRequest<'a> {
 
 pub(crate) fn create_reasoning_param_for_request(
     model_family: &ModelFamily,
-    effort: ReasoningEffortConfig,
+    effort: Option<ReasoningEffortConfig>,
     summary: ReasoningSummaryConfig,
 ) -> Option<Reasoning> {
-    if model_family.supports_reasoning_summaries {
-        Some(Reasoning { effort, summary })
-    } else {
-        None
+    if !model_family.supports_reasoning_summaries {
+        return None;
     }
+
+    Some(Reasoning {
+        effort,
+        summary: Some(summary),
+    })
 }
 
 pub(crate) fn create_text_param_for_request(

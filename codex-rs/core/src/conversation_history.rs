@@ -1,4 +1,3 @@
-use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 
 /// Transcript of conversation history
@@ -33,52 +32,8 @@ impl ConversationHistory {
         }
     }
 
-    pub(crate) fn keep_last_messages(&mut self, n: usize) {
-        if n == 0 {
-            self.items.clear();
-            return;
-        }
-
-        // Collect the last N message items (assistant/user), newest to oldest.
-        let mut kept: Vec<ResponseItem> = Vec::with_capacity(n);
-        for item in self.items.iter().rev() {
-            if let ResponseItem::Message { role, content, .. } = item {
-                kept.push(ResponseItem::Message {
-                    // we need to remove the id or the model will complain that messages are sent without
-                    // their reasonings
-                    id: None,
-                    role: role.clone(),
-                    content: content.clone(),
-                });
-                if kept.len() == n {
-                    break;
-                }
-            }
-        }
-
-        // Preserve chronological order (oldest to newest) within the kept slice.
-        kept.reverse();
-        self.items = kept;
-    }
-
-    pub(crate) fn last_agent_message(&self) -> String {
-        for item in self.items.iter().rev() {
-            if let ResponseItem::Message { role, content, .. } = item
-                && role == "assistant"
-            {
-                return content
-                    .iter()
-                    .find_map(|ci| {
-                        if let ContentItem::OutputText { text } = ci {
-                            Some(text.clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or_default();
-            }
-        }
-        String::new()
+    pub(crate) fn replace(&mut self, items: Vec<ResponseItem>) {
+        self.items = items;
     }
 }
 

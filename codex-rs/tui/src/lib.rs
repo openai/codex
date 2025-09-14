@@ -11,7 +11,7 @@ use codex_core::RolloutRecorder;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
-use codex_core::config::GPT5_HIGH_MODEL;
+use codex_core::config::SWIFTFOX_MEDIUM_MODEL;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config::persist_model_selection;
@@ -31,7 +31,6 @@ mod app;
 mod app_backtrack;
 mod app_event;
 mod app_event_sender;
-mod backtrack_helpers;
 mod bottom_pane;
 mod chatwidget;
 mod citation_regex;
@@ -122,6 +121,7 @@ pub async fn run_main(
 
     let overrides = ConfigOverrides {
         model,
+        review_model: None,
         approval_policy,
         sandbox_mode,
         cwd,
@@ -368,9 +368,9 @@ async fn run_ratatui_app(
         &cli,
         &config,
         active_profile.as_deref(),
-        internal_storage.gpt_5_high_model_prompt_seen,
+        internal_storage.swiftfox_model_prompt_seen,
     ) {
-        internal_storage.gpt_5_high_model_prompt_seen = true;
+        internal_storage.swiftfox_model_prompt_seen = true;
         if let Err(e) = internal_storage.persist().await {
             error!("Failed to persist internal storage: {e:?}");
         }
@@ -379,12 +379,13 @@ async fn run_ratatui_app(
         let switch_to_new_model = upgrade_decision == ModelUpgradeDecision::Switch;
 
         if switch_to_new_model {
-            config.model = GPT5_HIGH_MODEL.to_owned();
+            config.model = SWIFTFOX_MEDIUM_MODEL.to_owned();
+            config.model_reasoning_effort = None;
             if let Err(e) = persist_model_selection(
                 &config.codex_home,
                 active_profile.as_deref(),
                 &config.model,
-                None,
+                config.model_reasoning_effort,
             )
             .await
             {
@@ -511,7 +512,7 @@ fn should_show_model_rollout_prompt(
     cli: &Cli,
     config: &Config,
     active_profile: Option<&str>,
-    gpt_5_high_model_prompt_seen: bool,
+    swiftfox_model_prompt_seen: bool,
 ) -> bool {
     // TODO(jif) drop.
     let debug_high_enabled = std::env::var("DEBUG_HIGH")
@@ -521,7 +522,7 @@ fn should_show_model_rollout_prompt(
     active_profile.is_none()
         && debug_high_enabled
         && cli.model.is_none()
-        && !gpt_5_high_model_prompt_seen
+        && !swiftfox_model_prompt_seen
         && config.model_provider.requires_openai_auth
         && !cli.oss
 }
