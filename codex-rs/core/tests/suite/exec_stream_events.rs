@@ -204,4 +204,5 @@ async fn test_exec_timeout_returns_partial_output() {
     assert!(output.stderr.text.is_empty());
     assert_eq!(output.aggregated_output.text, "before\n");
     assert!(output.duration >= Duration::from_millis(200));
+    assert!(output.timed_out);
 }

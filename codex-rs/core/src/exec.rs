@@ -158,6 +158,7 @@ pub async fn process_exec_tool_call(
                 stderr,
                 aggregated_output,
                 duration,
+                timed_out,
             };
 
             if timed_out {
@@ -245,6 +246,7 @@ pub struct ExecToolCallOutput {
     pub stderr: StreamOutput<String>,
     pub aggregated_output: StreamOutput<String>,
     pub duration: Duration,
+    pub timed_out: bool,
 }
 
 async fn exec(
