@@ -867,7 +867,7 @@ impl Config {
             .unwrap_or_else(default_model);
 
         let mut model_family =
-            find_family_for_model(&model).unwrap_or_else(|| default_model_family());
+            find_family_for_model(&model).unwrap_or_else(|| default_model_family(model));
 
         if let Some(supports_reasoning_summaries) = cfg.model_supports_reasoning_summaries {
             model_family.supports_reasoning_summaries = supports_reasoning_summaries;
