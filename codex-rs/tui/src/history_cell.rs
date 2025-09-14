@@ -631,28 +631,27 @@ pub(crate) fn new_session_info(
         );
 
         // Help lines below the header (new copy and list)
-        let mut help_lines: Vec<Line<'static>> = Vec::new();
-        help_lines.push(
+        let help_lines: Vec<Line<'static>> = vec![
             "Describe a task to get started or try one of the following commands:"
                 .dim()
                 .into(),
-        );
-        help_lines.push(Line::from("".dim()));
-        help_lines.push(Line::from(vec![
-            "1. ".into(),
-            "/status".bold(),
-            " - show current session configuration and token usage".dim(),
-        ]));
-        help_lines.push(Line::from(vec![
-            "2. ".into(),
-            "/compact".bold(),
-            " - compact the chat history to avoid context limits".dim(),
-        ]));
-        help_lines.push(Line::from(vec![
-            "3. ".into(),
-            "/prompts".bold(),
-            " - explore starter prompts to get to know Codex".dim(),
-        ]));
+            Line::from("".dim()),
+            Line::from(vec![
+                "1. ".into(),
+                "/status".bold(),
+                " - show current session configuration and token usage".dim(),
+            ]),
+            Line::from(vec![
+                "2. ".into(),
+                "/compact".bold(),
+                " - compact the chat history to avoid context limits".dim(),
+            ]),
+            Line::from(vec![
+                "3. ".into(),
+                "/prompts".bold(),
+                " - explore starter prompts to get to know Codex".dim(),
+            ]),
+        ];
 
         CompositeHistoryCell {
             parts: vec![
