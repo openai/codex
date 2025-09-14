@@ -22,6 +22,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::io::AsyncWriteExt as _;
+use tokio::time::Duration;
 use uuid::Uuid;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -397,26 +398,9 @@ async fn review_input_isolated_from_parent_history() {
         .await
         .unwrap();
 
-    let _entered = wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::EnteredReviewMode(_)),
-        tokio::time::Duration::from_secs(20),
-    )
-    .await;
-
-    let _closed = wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::ExitedReviewMode(_)), // or ExitedReviewMode(None) as appropriate
-        tokio::time::Duration::from_secs(20),
-    )
-    .await;
-
-    let _complete = wait_for_event_with_timeout(
-        &codex,
-        |ev| matches!(ev, EventMsg::TaskComplete(_)),
-        tokio::time::Duration::from_secs(20),
-    )
-    .await;
+    let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
+    let _closed = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExitedReviewMode(None))).await;
+    let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // Assert the request `input` contains only the single review user message.
     let request = &server.received_requests().await.unwrap()[0];
@@ -528,8 +512,6 @@ async fn start_responses_server_with_sse(sse_raw: &str, expected_requests: usize
         .respond_with(
             ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
-                .insert_header("connection", "close")
-                .insert_header("content-length", sse.len().to_string())
                 .set_body_raw(sse.clone(), "text/event-stream"),
         )
         .expect(expected_requests as u64)
@@ -550,8 +532,6 @@ where
 {
     let model_provider = ModelProviderInfo {
         base_url: Some(format!("{}/v1", server.uri())),
-        // Give Windows runners breathing room.
-        stream_idle_timeout_ms: Some(if cfg!(windows) { 10_000 } else { 1_000 }),
         ..built_in_model_providers()["openai"].clone()
     };
     let mut config = load_default_config_for_test(codex_home);
