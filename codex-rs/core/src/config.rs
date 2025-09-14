@@ -9,6 +9,7 @@ use crate::config_types::Tui;
 use crate::config_types::UriBasedFileOpener;
 use crate::git_info::resolve_root_git_project_for_trust;
 use crate::model_family::ModelFamily;
+use crate::model_family::derive_default_model_family;
 use crate::model_family::find_family_for_model;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::built_in_model_providers;
@@ -865,15 +866,8 @@ impl Config {
             .or(cfg.model)
             .unwrap_or_else(default_model);
 
-        let mut model_family = find_family_for_model(&model).unwrap_or_else(|| ModelFamily {
-            slug: model.clone(),
-            family: model.clone(),
-            needs_special_apply_patch_instructions: false,
-            supports_reasoning_summaries: false,
-            reasoning_summary_format: ReasoningSummaryFormat::None,
-            uses_local_shell_tool: false,
-            apply_patch_tool_type: None,
-        });
+        let mut model_family =
+            find_family_for_model(&model).unwrap_or_else(|| derive_default_model_family(&model));
 
         if let Some(supports_reasoning_summaries) = cfg.model_supports_reasoning_summaries {
             model_family.supports_reasoning_summaries = supports_reasoning_summaries;
