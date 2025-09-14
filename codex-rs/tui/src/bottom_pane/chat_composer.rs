@@ -416,15 +416,24 @@ impl ChatComposer {
                 ..
             } => {
                 if let Some(sel) = popup.selected_item() {
+                    // Capture the first line before clearing so we can parse arguments.
+                    let first_line = self
+                        .textarea
+                        .text()
+                        .lines()
+                        .next()
+                        .unwrap_or("")
+                        .to_string();
+                    // Capture any needed data from popup before clearing it.
+                    let (prompt_name, prompt_content) = match sel {
+                        CommandItem::UserPrompt(idx) => (
+                            popup.prompt_name(idx).map(|s| s.to_string()),
+                            popup.prompt_content(idx).map(|s| s.to_string()),
+                        ),
+                        _ => (None, None),
+                    };
                     // Clear textarea so no residual text remains.
                     self.textarea.set_text("");
-                    // Capture any needed data from popup before clearing it.
-                    let prompt_content = match sel {
-                        CommandItem::UserPrompt(idx) => {
-                            popup.prompt_content(idx).map(str::to_string)
-                        }
-                        _ => None,
-                    };
                     // Hide popup since an action has been dispatched.
                     self.active_popup = ActivePopup::None;
 
@@ -434,7 +443,13 @@ impl ChatComposer {
                         }
                         CommandItem::UserPrompt(_) => {
                             if let Some(contents) = prompt_content {
-                                return (InputResult::Submitted(contents), true);
+                                // Extract arguments from the first line after "/<prompt_name>".
+                                let args: Vec<String> = prompt_name
+                                    .as_deref()
+                                    .map(|name| extract_args_for_prompt(&first_line, name))
+                                    .unwrap_or_default();
+                                let expanded = expand_prompt_with_args(&contents, &args);
+                                return (InputResult::Submitted(expanded), true);
                             }
                             return (InputResult::None, true);
                         }
@@ -445,6 +460,13 @@ impl ChatComposer {
             }
             input => self.handle_input_basic(input),
         }
+    }
+
+    /// Extract positional arguments from the first line of the composer text for a
+    /// selected prompt name. Given a line like "/name foo bar", returns ["foo", "bar"].
+    /// If the command prefix does not match the prompt name, returns empty.
+    fn _extract_args_for_prompt_test_hook(line: &str, prompt_name: &str) -> Vec<String> {
+        extract_args_for_prompt(line, prompt_name)
     }
     #[inline]
     fn clamp_to_char_boundary(text: &str, pos: usize) -> usize {
@@ -710,16 +732,26 @@ impl ChatComposer {
             .unwrap_or(after_cursor.len());
         let end_idx = safe_cursor + end_rel_idx;
 
+        // If the path contains whitespace, wrap it in double quotes so the
+        // local prompt arg parser treats it as a single argument. Avoid adding
+        // quotes when the path already contains one to keep behavior simple.
+        let needs_quotes = path.chars().any(|c| c.is_whitespace());
+        let inserted = if needs_quotes && !path.contains('"') {
+            format!("\"{path}\"")
+        } else {
+            path.to_string()
+        };
+
         // Replace the slice `[start_idx, end_idx)` with the chosen path and a trailing space.
         let mut new_text =
-            String::with_capacity(text.len() - (end_idx - start_idx) + path.len() + 1);
+            String::with_capacity(text.len() - (end_idx - start_idx) + inserted.len() + 1);
         new_text.push_str(&text[..start_idx]);
-        new_text.push_str(path);
+        new_text.push_str(&inserted);
         new_text.push(' ');
         new_text.push_str(&text[end_idx..]);
 
         self.textarea.set_text(&new_text);
-        let new_cursor = start_idx.saturating_add(path.len()).saturating_add(1);
+        let new_cursor = start_idx.saturating_add(inserted.len()).saturating_add(1);
         self.textarea.set_cursor(new_cursor);
     }
 
@@ -1147,6 +1179,22 @@ impl ChatComposer {
     fn sync_command_popup(&mut self) {
         let first_line = self.textarea.text().lines().next().unwrap_or("");
         let input_starts_with_slash = first_line.starts_with('/');
+
+        // If the cursor is currently positioned within an `@token`, prefer the
+        // file-search popup over the slash popup so users can insert a file
+        // path as an argument to the command (e.g., "/review @docs/...").
+        //
+        // We accomplish this by hiding the slash popup here and returning
+        // early. The caller will then invoke `sync_file_search_popup()` which
+        // activates the file popup. This keeps the logic localized and avoids
+        // rendering two popups at once while still allowing quick toggling
+        // between contexts as the cursor moves.
+        if Self::current_at_token(&self.textarea).is_some() {
+            if matches!(self.active_popup, ActivePopup::Command(_)) {
+                self.active_popup = ActivePopup::None;
+            }
+            return;
+        }
         match &mut self.active_popup {
             ActivePopup::Command(popup) => {
                 if input_starts_with_slash {
@@ -1229,6 +1277,117 @@ impl ChatComposer {
     pub(crate) fn set_esc_backtrack_hint(&mut self, show: bool) {
         self.esc_backtrack_hint = show;
     }
+}
+
+// --- Helper functions for local prompt argument expansion ---
+
+/// Extract arguments from a command first line like "/name arg1 arg2".
+fn extract_args_for_prompt(line: &str, prompt_name: &str) -> Vec<String> {
+    let trimmed = line.trim_start();
+    let Some(rest) = trimmed.strip_prefix('/') else {
+        return Vec::new();
+    };
+    let mut parts = rest.splitn(2, char::is_whitespace);
+    let cmd = parts.next().unwrap_or("");
+    if cmd != prompt_name {
+        return Vec::new();
+    }
+    let args_str = parts.next().unwrap_or("").trim();
+    if args_str.is_empty() {
+        return Vec::new();
+    }
+    parse_args_simple_quotes(args_str)
+}
+
+/// Expand `$1..$9` and `$ARGUMENTS` in `content` with values from `args`.
+/// - `$1..$9` map to positional arguments (missing indices => empty string).
+/// - `$ARGUMENTS` is all args joined by a single space.
+/// - `$$` is preserved as literal `$$`.
+fn expand_prompt_with_args(content: &str, args: &[String]) -> String {
+    let mut out = String::with_capacity(content.len());
+    let bytes = content.as_bytes();
+    let mut cached_joined_args: Option<String> = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'$' {
+            if i + 1 < bytes.len() {
+                let b1 = bytes[i + 1];
+                // Preserve $$
+                if b1 == b'$' {
+                    out.push('$');
+                    out.push('$');
+                    i += 2;
+                    continue;
+                }
+                // $1..$9
+                if (b'1'..=b'9').contains(&b1) {
+                    let idx = (b1 - b'1') as usize;
+                    if let Some(val) = args.get(idx) {
+                        out.push_str(val);
+                    }
+                    i += 2;
+                    continue;
+                }
+            }
+            // $ARGUMENTS
+            if content[i + 1..].starts_with("ARGUMENTS") {
+                if !args.is_empty() {
+                    let joined = cached_joined_args.get_or_insert_with(|| args.join(" "));
+                    out.push_str(joined);
+                }
+                i += 1 + "ARGUMENTS".len();
+                continue;
+            }
+            // Fallback: emit '$'
+            out.push('$');
+            i += 1;
+        } else {
+            out.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+    out
+}
+
+/// Minimal, predictable argument parser used for local prompt args.
+///
+/// Rules:
+/// - Split on ASCII whitespace when outside quotes.
+/// - Double quotes ("...") group text and allow spaces inside.
+/// - Supports a basic escape for \" and \\\n/// - Unterminated quotes consume until end of line.
+fn parse_args_simple_quotes(s: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut it = s.chars().peekable();
+    let mut in_quotes = false;
+
+    while let Some(ch) = it.next() {
+        match ch {
+            '"' => in_quotes = !in_quotes,
+            '\\' if in_quotes => match it.peek().copied() {
+                Some('"') => {
+                    cur.push('"');
+                    it.next();
+                }
+                Some('\\') => {
+                    cur.push('\\');
+                    it.next();
+                }
+                _ => cur.push('\\'),
+            },
+            c if c.is_whitespace() && !in_quotes => {
+                if !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                }
+            }
+            c => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
 }
 
 impl WidgetRef for ChatComposer {
@@ -1869,6 +2028,22 @@ mod tests {
     }
 
     #[test]
+    fn extract_args_supports_quoted_paths_single_arg() {
+        let args = ChatComposer::_extract_args_for_prompt_test_hook(
+            "/review \"docs/My File.md\"",
+            "review",
+        );
+        assert_eq!(args, vec!["docs/My File.md".to_string()]);
+    }
+
+    #[test]
+    fn extract_args_supports_mixed_quoted_and_unquoted() {
+        let args =
+            ChatComposer::_extract_args_for_prompt_test_hook("/cmd \"with spaces\" simple", "cmd");
+        assert_eq!(args, vec!["with spaces".to_string(), "simple".to_string()]);
+    }
+
+    #[test]
     fn slash_tab_completion_moves_cursor_to_end() {
         use crossterm::event::KeyCode;
         use crossterm::event::KeyEvent;
@@ -2333,6 +2508,8 @@ mod tests {
             name: "my-prompt".to_string(),
             path: "/tmp/my-prompt.md".to_string().into(),
             content: prompt_text.to_string(),
+            description: None,
+            argument_hint: None,
         }]);
 
         type_chars_humanlike(
@@ -2344,6 +2521,141 @@ mod tests {
             composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
 
         assert_eq!(InputResult::Submitted(prompt_text.to_string()), result);
+    }
+
+    #[test]
+    fn selecting_custom_prompt_with_args_expands_placeholders() {
+        // Support $1..$9 and $ARGUMENTS in prompt content.
+        let prompt_text = "Header: $1\nArgs: $ARGUMENTS\nNinth: $9\n";
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "my-prompt".to_string(),
+            path: "/tmp/my-prompt.md".to_string().into(),
+            content: prompt_text.to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        // Type the slash command with two args and hit Enter to submit.
+        type_chars_humanlike(
+            &mut composer,
+            &[
+                '/', 'm', 'y', '-', 'p', 'r', 'o', 'm', 'p', 't', ' ', 'f', 'o', 'o', ' ', 'b',
+                'a', 'r',
+            ],
+        );
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        let expected = "Header: foo\nArgs: foo bar\nNinth: \n".to_string();
+        assert_eq!(InputResult::Submitted(expected), result);
+    }
+
+    #[test]
+    fn selecting_custom_prompt_with_no_args_expands_to_empty() {
+        let prompt_text = "X:$1 Y:$2 All:[$ARGUMENTS]";
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "p".to_string(),
+            path: "/tmp/p.md".to_string().into(),
+            content: prompt_text.to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        type_chars_humanlike(&mut composer, &['/', 'p']);
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(InputResult::Submitted("X: Y: All:[]".to_string()), result);
+    }
+
+    #[test]
+    fn selecting_custom_prompt_preserves_literal_dollar_dollar() {
+        // '$$' should remain untouched.
+        let prompt_text = "Cost: $$ and first: $1";
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "price".to_string(),
+            path: "/tmp/price.md".to_string().into(),
+            content: prompt_text.to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        type_chars_humanlike(&mut composer, &['/', 'p', 'r', 'i', 'c', 'e', ' ', 'x']);
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        assert_eq!(
+            InputResult::Submitted("Cost: $$ and first: x".to_string()),
+            result
+        );
+    }
+
+    #[test]
+    fn selecting_custom_prompt_reuses_cached_arguments_join() {
+        let prompt_text = "First: $ARGUMENTS\nSecond: $ARGUMENTS";
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "repeat".to_string(),
+            path: "/tmp/repeat.md".to_string().into(),
+            content: prompt_text.to_string(),
+            description: None,
+            argument_hint: None,
+        }]);
+
+        type_chars_humanlike(
+            &mut composer,
+            &[
+                '/', 'r', 'e', 'p', 'e', 'a', 't', ' ', 'o', 'n', 'e', ' ', 't', 'w', 'o',
+            ],
+        );
+        let (result, _needs_redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+
+        let expected = "First: one two\nSecond: one two".to_string();
+        assert_eq!(InputResult::Submitted(expected), result);
     }
 
     #[test]

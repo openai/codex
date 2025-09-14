@@ -10,6 +10,7 @@ use crate::slash_command::SlashCommand;
 use crate::slash_command::built_in_slash_commands;
 use codex_common::fuzzy_match::fuzzy_match;
 use codex_protocol::custom_prompts::CustomPrompt;
+// no additional imports
 use std::collections::HashSet;
 
 /// A selectable item in the popup: either a built-in command or a user prompt.
@@ -96,6 +97,7 @@ impl CommandPopup {
     /// Accounts for wrapped descriptions so that long tooltips don't overflow.
     pub(crate) fn calculate_required_height(&self, width: u16) -> u16 {
         use super::selection_popup_common::measure_rows_height;
+
         let rows = self.rows_from_matches(self.filtered());
 
         measure_rows_height(&rows, &self.state, MAX_POPUP_ROWS, width)
@@ -161,10 +163,13 @@ impl CommandPopup {
                     CommandItem::Builtin(cmd) => {
                         (format!("/{}", cmd.command()), cmd.description().to_string())
                     }
-                    CommandItem::UserPrompt(i) => (
-                        format!("/{}", self.prompts[i].name),
-                        "send saved prompt".to_string(),
-                    ),
+                    CommandItem::UserPrompt(i) => {
+                        let prompt = &self.prompts[i];
+                        (
+                            format!("/{}", prompt.name),
+                            build_prompt_row_description(prompt),
+                        )
+                    }
                 };
                 GenericDisplayRow {
                     name,
@@ -214,6 +219,77 @@ impl WidgetRef for CommandPopup {
         );
     }
 }
+
+/// Build the display description for a custom prompt row:
+///   "<five-word excerpt>  <1> <2> <3>"
+/// - Excerpt comes from the first non-empty line in content, cleaned and
+///   truncated to five words. Placeholders like $1..$9 and $ARGUMENTS are
+///   stripped from the excerpt to avoid noise.
+/// - Argument tokens show any referenced positional placeholders ($1..$9) in
+///   ascending order as minimal "<n>" hints. `$ARGUMENTS` is intentionally
+///   omitted here to keep the UI simple, per product guidance.
+fn build_prompt_row_description(prompt: &CustomPrompt) -> String {
+    let base = if let Some(d) = &prompt.description {
+        description_excerpt(d)
+    } else {
+        five_word_excerpt(&prompt.content)
+    };
+    let base = base.unwrap_or_else(|| "send saved prompt".to_string());
+    if let Some(hint) = &prompt.argument_hint {
+        if hint.is_empty() {
+            base
+        } else {
+            format!("{base}  {hint}")
+        }
+    } else {
+        base
+    }
+}
+
+fn description_excerpt(desc: &str) -> Option<String> {
+    let normalized = desc.replace("\\n", " ");
+    five_word_excerpt(&normalized)
+}
+
+/// Extract a five-word excerpt from the first non-empty line of `content`.
+/// Cleans basic markdown/backticks and removes placeholder tokens.
+fn five_word_excerpt(content: &str) -> Option<String> {
+    let line = content.lines().map(|l| l.trim()).find(|l| !l.is_empty())?;
+
+    // Strip simple markdown markers and placeholders from the excerpt source.
+    let mut cleaned = line.replace(['`', '*', '_'], "");
+
+    // Remove leading markdown header symbols (e.g., "# ").
+    if let Some(stripped) = cleaned.trim_start().strip_prefix('#') {
+        cleaned = stripped.trim_start_matches('#').trim_start().to_string();
+    }
+
+    // Remove placeholder occurrences from excerpt text.
+    for n in 1..=9 {
+        cleaned = cleaned.replace(&format!("${n}"), "");
+    }
+    cleaned = cleaned.replace("$ARGUMENTS", "");
+
+    // Remove a small set of common punctuation that can look odd mid-excerpt
+    // once placeholders are stripped (keep hyphens and slashes).
+    for ch in [',', ';', ':', '!', '?', '(', ')', '{', '}', '[', ']'] {
+        cleaned = cleaned.replace(ch, "");
+    }
+
+    // Collapse whitespace and split into words.
+    let words: Vec<&str> = cleaned.split_whitespace().collect();
+    if words.is_empty() {
+        return None;
+    }
+    let take = words.len().min(5);
+    let mut out = words[..take].join(" ");
+    if words.len() > 5 {
+        out.push('…');
+    }
+    Some(out)
+}
+
+// (no positional arg tokens in the popup)
 
 #[cfg(test)]
 mod tests {
@@ -276,11 +352,15 @@ mod tests {
                 name: "foo".to_string(),
                 path: "/tmp/foo.md".to_string().into(),
                 content: "hello from foo".to_string(),
+                description: None,
+                argument_hint: None,
             },
             CustomPrompt {
                 name: "bar".to_string(),
                 path: "/tmp/bar.md".to_string().into(),
                 content: "hello from bar".to_string(),
+                description: None,
+                argument_hint: None,
             },
         ];
         let popup = CommandPopup::new(prompts);
@@ -303,6 +383,8 @@ mod tests {
             name: "init".to_string(),
             path: "/tmp/init.md".to_string().into(),
             content: "should be ignored".to_string(),
+            description: None,
+            argument_hint: None,
         }]);
         let items = popup.filtered_items();
         let has_collision_prompt = items.into_iter().any(|it| match it {
@@ -313,5 +395,86 @@ mod tests {
             !has_collision_prompt,
             "prompt with builtin name should be ignored"
         );
+    }
+
+    #[test]
+    fn prompt_displays_excerpt_when_placeholders_present() {
+        let prompts = vec![CustomPrompt {
+            name: "with-args".to_string(),
+            path: "/tmp/with-args.md".into(),
+            content: "Header $1 and $3; rest: $ARGUMENTS".to_string(),
+            description: None,
+            argument_hint: None,
+        }];
+        let mut popup = CommandPopup::new(prompts);
+        // Filter so the prompt appears at the top and within visible rows.
+        popup.on_composer_text_change("/with-args".to_string());
+
+        // Render a buffer tall enough to show the selection row.
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 10));
+        popup.render_ref(Rect::new(0, 0, 80, 10), &mut buf);
+        let screen = buffer_to_string(&buf);
+        // Expect only the excerpt (first five words without placeholders).
+        assert!(
+            screen.contains("Header and rest"),
+            "expected five-word excerpt; got:\n{screen}"
+        );
+        assert!(
+            screen.contains("/with-args"),
+            "expected command label; got:\n{screen}"
+        );
+    }
+
+    #[test]
+    fn prompt_uses_excerpt_when_no_placeholders_present() {
+        let prompts = vec![CustomPrompt {
+            name: "no-args".to_string(),
+            path: "/tmp/no-args.md".into(),
+            content: "plain content".to_string(),
+            description: None,
+            argument_hint: None,
+        }];
+        let mut popup = CommandPopup::new(prompts);
+        popup.on_composer_text_change("/no-args".to_string());
+
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 10));
+        popup.render_ref(Rect::new(0, 0, 80, 10), &mut buf);
+        let screen = buffer_to_string(&buf);
+        assert!(
+            screen.contains("plain content"),
+            "expected excerpt fallback; got:\n{screen}"
+        );
+    }
+
+    #[test]
+    fn prompt_uses_frontmatter_description_and_argument_hint_when_present() {
+        let prompts = vec![CustomPrompt {
+            name: "review-pr".to_string(),
+            path: "/tmp/review-pr.md".into(),
+            content: "Summarize changes $1".to_string(),
+            description: Some("Review a PR with context".to_string()),
+            argument_hint: Some("[pr-number] [priority]".to_string()),
+        }];
+        let mut popup = CommandPopup::new(prompts);
+        popup.on_composer_text_change("/review-pr".to_string());
+
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 10));
+        popup.render_ref(Rect::new(0, 0, 80, 10), &mut buf);
+        let screen = buffer_to_string(&buf);
+        assert!(screen.contains("/review-pr"));
+        assert!(screen.contains("Review a PR with context  [pr-number] [priority]"));
+    }
+
+    fn buffer_to_string(buf: &Buffer) -> String {
+        let area = buf.area;
+        let mut s = String::new();
+        for y in 0..area.height {
+            for x in 0..area.width {
+                let cell = &buf[(x, y)];
+                s.push(cell.symbol().chars().next().unwrap_or(' '));
+            }
+            s.push('\n');
+        }
+        s
     }
 }
