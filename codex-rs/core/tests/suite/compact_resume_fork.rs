@@ -29,7 +29,7 @@ use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use core_test_support::load_default_config_for_test;
 use core_test_support::wait_for_event;
 use pretty_assertions::assert_eq;
-use serde_json::json;
+use serde_json::{Value, json};
 use std::sync::Arc;
 use tempfile::TempDir;
 use wiremock::MockServer;
@@ -645,15 +645,37 @@ async fn compact_resume_after_second_compaction_preserves_history() {
     assert_eq!(expected, last_request_after_2_compacts);
 }
 
-async fn gather_request_bodies(server: &MockServer) -> Vec<serde_json::Value> {
+fn normalize_line_endings(value: &mut Value) {
+    match value {
+        Value::String(text) => {
+            if text.contains('\r') {
+                *text = text.replace("\r\n", "\n").replace('\r', "\n");
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                normalize_line_endings(item);
+            }
+        }
+        Value::Object(map) => {
+            for item in map.values_mut() {
+                normalize_line_endings(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+async fn gather_request_bodies(server: &MockServer) -> Vec<Value> {
     server
         .received_requests()
         .await
         .expect("mock server should not fail")
         .into_iter()
         .map(|req| {
-            req.body_json::<serde_json::Value>()
-                .expect("valid JSON body")
+            let mut value = req.body_json::<Value>().expect("valid JSON body");
+            normalize_line_endings(&mut value);
+            value
         })
         .collect()
 }
