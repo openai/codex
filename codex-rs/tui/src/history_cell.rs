@@ -436,9 +436,16 @@ impl ExecCell {
         if let Some(output) = call.output.as_ref()
             && output.exit_code != 0
         {
-            let out = output_lines(Some(output), false, false, false)
-                .into_iter()
-                .join("\n");
+            let out = output_lines(
+                Some(output),
+                OutputLinesParams {
+                    only_err: false,
+                    include_angle_pipe: false,
+                    include_prefix: false,
+                },
+            )
+            .into_iter()
+            .join("\n");
             if !out.trim().is_empty() {
                 // Wrap the output.
                 for line in out.lines() {
@@ -1178,9 +1185,11 @@ pub(crate) fn new_patch_apply_failure(stderr: String) -> PlainHistoryCell {
                 stderr,
                 formatted_output: String::new(),
             }),
-            true,
-            true,
-            true,
+            OutputLinesParams {
+                only_err: true,
+                include_angle_pipe: true,
+                include_prefix: true,
+            },
         ));
     }
 
@@ -1261,12 +1270,18 @@ pub(crate) fn new_reasoning_summary_block(
     vec![Box::new(new_reasoning_block(full_reasoning_buffer, config))]
 }
 
-fn output_lines(
-    output: Option<&CommandOutput>,
+struct OutputLinesParams {
     only_err: bool,
     include_angle_pipe: bool,
     include_prefix: bool,
-) -> Vec<Line<'static>> {
+}
+
+fn output_lines(output: Option<&CommandOutput>, params: OutputLinesParams) -> Vec<Line<'static>> {
+    let OutputLinesParams {
+        only_err,
+        include_angle_pipe,
+        include_prefix,
+    } = params;
     let CommandOutput {
         exit_code,
         stdout,
