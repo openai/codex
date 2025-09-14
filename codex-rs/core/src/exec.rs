@@ -130,6 +130,7 @@ pub async fn process_exec_tool_call(
     let duration = start.elapsed();
     match raw_output_result {
         Ok(raw_output) => {
+            #[allow(unused_mut)]
             let mut timed_out = raw_output.timed_out;
 
             #[cfg(target_family = "unix")]
