@@ -108,6 +108,26 @@ pub async fn collect_git_info(cwd: &Path) -> Option<GitInfo> {
     Some(git_info)
 }
 
+/// Returns true if `cwd` is inside a Git repository that has at least one
+/// commit. Returns false for non-git directories and for repositories with no
+/// commits yet.
+pub async fn git_repo_has_commits(cwd: &Path) -> bool {
+    // Must be in a git repo first
+    let is_git_repo = match run_git_command_with_timeout(&["rev-parse", "--git-dir"], cwd).await {
+        Some(out) => out.status.success(),
+        None => false,
+    };
+    if !is_git_repo {
+        return false;
+    }
+
+    // Will fail when no commits are present (e.g., unborn HEAD)
+    match run_git_command_with_timeout(&["rev-parse", "--verify", "HEAD"], cwd).await {
+        Some(out) => out.status.success(),
+        None => false,
+    }
+}
+
 /// Returns the closest git sha to HEAD that is on a remote as well as the diff to that sha.
 pub async fn git_diff_to_remote(cwd: &Path) -> Option<GitDiffToRemote> {
     get_git_repo_root(cwd)?;
@@ -697,6 +717,29 @@ mod tests {
 
         // Should have the new branch name
         assert_eq!(git_info.branch, Some("feature-branch".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_git_repo_has_commits_false_for_empty_repo() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let repo_path = temp_dir.path().join("repo");
+        fs::create_dir(&repo_path).expect("Failed to create repo dir");
+        // Initialize git repository without any commit
+        Command::new("git")
+            .args(["init"])
+            .current_dir(&repo_path)
+            .output()
+            .await
+            .expect("Failed to init repo");
+
+        assert!(!git_repo_has_commits(&repo_path).await);
+    }
+
+    #[tokio::test]
+    async fn test_git_repo_has_commits_true_after_initial_commit() {
+        let temp_dir = TempDir::new().expect("Failed to create temp dir");
+        let repo_path = create_test_git_repo(&temp_dir).await;
+        assert!(git_repo_has_commits(&repo_path).await);
     }
 
     #[tokio::test]

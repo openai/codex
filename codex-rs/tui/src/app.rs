@@ -532,6 +532,10 @@ mod tests {
         }
     }
 
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "system configuration APIs are blocked under macOS seatbelt"
+    )]
     #[test]
     fn update_reasoning_effort_updates_config_and_resets_flags() {
         let mut app = make_test_app();
