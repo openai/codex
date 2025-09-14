@@ -60,6 +60,7 @@ mod status_indicator_widget;
 mod streaming;
 mod text_formatting;
 mod tui;
+mod ui_consts;
 mod user_approval_widget;
 mod version;
 mod wrapping;
