@@ -629,25 +629,25 @@ pub(crate) fn new_session_info(
         ]));
         lines.push(Line::from("".dim()));
         lines.push(Line::from(
-            " To get started, describe a task or try one of these commands:".dim(),
+            "  To get started, describe a task or try one of these commands:".dim(),
         ));
         lines.push(Line::from("".dim()));
         if !has_agents_md {
             lines.push(Line::from(vec![
-                " /init".bold(),
+                "  /init".bold(),
                 format!(" - {}", SlashCommand::Init.description()).dim(),
             ]));
         }
         lines.push(Line::from(vec![
-            " /status".bold(),
+            "  /status".bold(),
             format!(" - {}", SlashCommand::Status.description()).dim(),
         ]));
         lines.push(Line::from(vec![
-            " /approvals".bold(),
+            "  /approvals".bold(),
             format!(" - {}", SlashCommand::Approvals.description()).dim(),
         ]));
         lines.push(Line::from(vec![
-            " /model".bold(),
+            "  /model".bold(),
             format!(" - {}", SlashCommand::Model.description()).dim(),
         ]));
         PlainHistoryCell { lines }

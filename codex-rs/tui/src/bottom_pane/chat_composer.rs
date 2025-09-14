@@ -132,7 +132,8 @@ impl ChatComposer {
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
-        self.textarea.desired_height(width - 1)
+        // Leave 1 column for the left border and 1 column for left padding
+        self.textarea.desired_height(width.saturating_sub(2))
             + match &self.active_popup {
                 ActivePopup::None => 1u16,
                 ActivePopup::Command(c) => c.calculate_required_height(),
@@ -149,8 +150,9 @@ impl ChatComposer {
         let [textarea_rect, _] =
             Layout::vertical([Constraint::Min(1), Constraint::Max(popup_height)]).areas(area);
         let mut textarea_rect = textarea_rect;
-        textarea_rect.width = textarea_rect.width.saturating_sub(1);
-        textarea_rect.x += 1;
+        // Leave 1 for border and 1 for padding
+        textarea_rect.width = textarea_rect.width.saturating_sub(2);
+        textarea_rect.x = textarea_rect.x.saturating_add(2);
         let state = self.textarea_state.borrow();
         self.textarea.cursor_pos_with_state(textarea_rect, &state)
     }
@@ -1254,7 +1256,6 @@ impl WidgetRef for ChatComposer {
                         key_hint::ctrl('J')
                     };
                     vec![
-                        " ".into(),
                         key_hint::plain('⏎'),
                         " send   ".into(),
                         newline_hint_key,
@@ -1322,15 +1323,16 @@ impl WidgetRef for ChatComposer {
                 buf,
             );
         let mut textarea_rect = textarea_rect;
-        textarea_rect.width = textarea_rect.width.saturating_sub(1);
-        textarea_rect.x += 1;
+        // Leave 1 for border and 1 for padding
+        textarea_rect.width = textarea_rect.width.saturating_sub(2);
+        textarea_rect.x = textarea_rect.x.saturating_add(2);
 
         let mut state = self.textarea_state.borrow_mut();
         StatefulWidgetRef::render_ref(&(&self.textarea), textarea_rect, buf, &mut state);
         if self.textarea.text().is_empty() {
             Line::from(self.placeholder_text.as_str())
                 .style(Style::default().dim())
-                .render_ref(textarea_rect.inner(Margin::new(1, 0)), buf);
+                .render_ref(textarea_rect.inner(Margin::new(0, 0)), buf);
         }
     }
 }
