@@ -533,6 +533,11 @@ fn should_show_model_rollout_prompt(
 mod tests {
     use super::*;
     use clap::Parser;
+    use codex_core::auth::AuthDotJson;
+    use codex_core::auth::get_auth_file;
+    use codex_core::auth::login_with_api_key;
+    use codex_core::auth::write_auth_json;
+    use codex_core::token_data::TokenData;
     use std::sync::Once;
 
     fn enable_debug_high_env() {
@@ -548,12 +553,50 @@ mod tests {
 
     fn make_config() -> Config {
         enable_debug_high_env();
+        // Create a unique CODEX_HOME per test to isolate auth.json writes.
+        let mut codex_home = std::env::temp_dir();
+        let unique_suffix = format!(
+            "codex_tui_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        codex_home.push(unique_suffix);
+        std::fs::create_dir_all(&codex_home).expect("create unique CODEX_HOME");
+
         Config::load_from_base_config_with_overrides(
             ConfigToml::default(),
             ConfigOverrides::default(),
-            std::env::temp_dir(),
+            codex_home,
         )
         .expect("load default config")
+    }
+
+    /// Test helper to write an `auth.json` with the requested auth mode into the
+    /// provided CODEX_HOME directory. This ensures `get_login_status()` reads the
+    /// intended mode deterministically.
+    fn set_auth_method(codex_home: &std::path::Path, mode: AuthMode) {
+        match mode {
+            AuthMode::ApiKey => {
+                login_with_api_key(codex_home, "sk-test-key").expect("write api key auth.json");
+            }
+            AuthMode::ChatGPT => {
+                let auth = AuthDotJson {
+                    openai_api_key: None,
+                    tokens: Some(TokenData {
+                        id_token: Default::default(),
+                        access_token: "access-token".to_string(),
+                        refresh_token: "refresh-token".to_string(),
+                        account_id: None,
+                    }),
+                    last_refresh: None,
+                };
+                let file = get_auth_file(codex_home);
+                write_auth_json(&file, &auth).expect("write chatgpt auth.json");
+            }
+        }
     }
 
     #[test]
@@ -569,6 +612,7 @@ mod tests {
     fn shows_model_rollout_prompt_for_default_model() {
         let cli = Cli::parse_from(["codex"]);
         let cfg = make_config();
+        set_auth_method(&cfg.codex_home, AuthMode::ChatGPT);
         assert!(should_show_model_rollout_prompt(&cli, &cfg, None, false,));
     }
 
@@ -576,6 +620,7 @@ mod tests {
     fn hides_model_rollout_prompt_when_api_auth_mode() {
         let cli = Cli::parse_from(["codex"]);
         let cfg = make_config();
+        set_auth_method(&cfg.codex_home, AuthMode::ApiKey);
         assert!(!should_show_model_rollout_prompt(&cli, &cfg, None, false,));
     }
 
@@ -583,6 +628,7 @@ mod tests {
     fn hides_model_rollout_prompt_when_marked_seen() {
         let cli = Cli::parse_from(["codex"]);
         let cfg = make_config();
+        set_auth_method(&cfg.codex_home, AuthMode::ChatGPT);
         assert!(!should_show_model_rollout_prompt(&cli, &cfg, None, true,));
     }
 
@@ -590,6 +636,7 @@ mod tests {
     fn hides_model_rollout_prompt_when_cli_overrides_model() {
         let cli = Cli::parse_from(["codex", "--model", "gpt-4.1"]);
         let cfg = make_config();
+        set_auth_method(&cfg.codex_home, AuthMode::ChatGPT);
         assert!(!should_show_model_rollout_prompt(&cli, &cfg, None, false,));
     }
 
@@ -597,6 +644,7 @@ mod tests {
     fn hides_model_rollout_prompt_when_profile_active() {
         let cli = Cli::parse_from(["codex"]);
         let cfg = make_config();
+        set_auth_method(&cfg.codex_home, AuthMode::ChatGPT);
         assert!(!should_show_model_rollout_prompt(
             &cli,
             &cfg,
