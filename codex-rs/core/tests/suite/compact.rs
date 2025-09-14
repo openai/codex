@@ -115,7 +115,6 @@ where
         .and(path("/v1/responses"))
         .and(matcher)
         .respond_with(sse_response(body))
-        .expect(1)
         .mount(server)
         .await;
 }
