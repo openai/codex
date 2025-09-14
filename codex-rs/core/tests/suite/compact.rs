@@ -1,6 +1,7 @@
 #![expect(clippy::unwrap_used)]
 
 use codex_core::CodexAuth;
+use codex_core::CodexConversation;
 use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
 use codex_core::NewConversation;
@@ -16,6 +17,8 @@ use core_test_support::load_default_config_for_test;
 use core_test_support::wait_for_event;
 use serde_json::Value;
 use tempfile::TempDir;
+use tokio::time::Duration;
+use tokio::time::timeout;
 use wiremock::BodyPrintLimit;
 use wiremock::Mock;
 use wiremock::MockServer;
@@ -124,6 +127,22 @@ async fn start_mock_server() -> MockServer {
         .body_print_limit(BodyPrintLimit::Limited(80_000))
         .start()
         .await
+}
+
+async fn wait_for_non_auto_task_complete(codex: &CodexConversation, wait_time: Duration) {
+    loop {
+        let wait_budget = wait_time.max(Duration::from_secs(5));
+        let event = match timeout(wait_budget, codex.next_event()).await {
+            Ok(Ok(ev)) => ev,
+            Ok(Err(_)) => panic!("stream ended unexpectedly"),
+            Err(_) => panic!("timeout waiting for event"),
+        };
+        if let EventMsg::TaskComplete(_) = &event.msg
+            && !event.id.starts_with("auto-compact-")
+        {
+            break;
+        }
+    }
 }
 
 pub(super) const FIRST_REPLY: &str = "FIRST_REPLY";
@@ -366,7 +385,8 @@ async fn summarize_context_three_requests_and_instructions() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
+#[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
 async fn auto_compact_runs_after_token_limit_hit() {
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
@@ -453,7 +473,8 @@ async fn auto_compact_runs_after_token_limit_hit() {
         })
         .await
         .unwrap();
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    wait_for_non_auto_task_complete(&codex, Duration::from_secs(20)).await;
 
     codex
         .submit(Op::UserInput {
@@ -463,13 +484,39 @@ async fn auto_compact_runs_after_token_limit_hit() {
         })
         .await
         .unwrap();
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    wait_for_non_auto_task_complete(&codex, Duration::from_secs(20)).await;
     // wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     let requests = server.received_requests().await.unwrap();
-    assert_eq!(requests.len(), 3, "auto compact should add a third request");
+    assert!(
+        requests.len() >= 3,
+        "auto compact should add at least a third request, got {}",
+        requests.len()
+    );
+    let is_auto_compact = |req: &wiremock::Request| {
+        std::str::from_utf8(&req.body)
+            .unwrap_or("")
+            .contains("You have exceeded the maximum number of tokens")
+    };
+    let auto_compact_count = requests.iter().filter(|req| is_auto_compact(req)).count();
+    assert_eq!(
+        auto_compact_count, 1,
+        "expected exactly one auto compact request"
+    );
+    let auto_compact_index = requests
+        .iter()
+        .enumerate()
+        .find_map(|(idx, req)| is_auto_compact(req).then_some(idx))
+        .expect("auto compact request missing");
+    assert_eq!(
+        auto_compact_index, 2,
+        "auto compact should add a third request"
+    );
 
-    let body3 = requests[2].body_json::<serde_json::Value>().unwrap();
+    let body3 = requests[auto_compact_index]
+        .body_json::<serde_json::Value>()
+        .unwrap();
     let instructions = body3
         .get("instructions")
         .and_then(|v| v.as_str())
