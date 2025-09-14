@@ -99,7 +99,12 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         "after-resume input should have at least as many items as after-compact",
     );
     assert_eq!(compact_arr.as_slice(), &resume_arr[..compact_arr.len()]);
-
+    eprint!(
+        "len of compact: {}, len of fork: {}",
+        compact_arr.len(),
+        fork_arr.len()
+    );
+    eprintln!("input_after_fork:{}", json!(input_after_fork));
     assert!(
         compact_arr.len() <= fork_arr.len(),
         "after-fork input should have at least as many items as after-compact",
@@ -606,7 +611,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
             "content": [
               {
                 "type": "input_text",
-                "text": "You were originally given instructions from a user over one or more turns. Here were the user messages:\n\nYou were originally given instructions from a user over one or more turns. Here were the user messages:\n\nhello world\n\nAnother language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:\n\nSUMMARY_ONLY_CONTEXT\n\nAFTER_COMPACT\n\nAFTER_FORK\n\nAnother language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:\n\nSUMMARY_ONLY_CONTEXT"
+                "text": "You were originally given instructions from a user over one or more turns. Here were the user messages:\n\nAFTER_FORK\n\nAnother language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:\n\nSUMMARY_ONLY_CONTEXT"
               }
             ]
           },
