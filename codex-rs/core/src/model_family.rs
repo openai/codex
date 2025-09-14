@@ -136,7 +136,7 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
     }
 }
 
-pub fn default_model_family(model: String) -> ModelFamily {
+pub fn default_model_family(model: &String) -> ModelFamily {
     ModelFamily {
         slug: model.clone(),
         family: model.clone(),
