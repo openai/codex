@@ -121,7 +121,7 @@ async fn test_writable_root() {
 }
 
 #[tokio::test]
-#[should_panic(expected = "Sandbox(Timeout)")]
+#[should_panic(expected = "Sandbox(Timeout")]
 async fn test_timeout() {
     run_cmd(&["sleep", "2"], &[], 50).await;
 }
