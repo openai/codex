@@ -3,8 +3,6 @@ use anyhow::Context;
 use assert_cmd::prelude::*;
 use serde_json::Value;
 use std::process::Command;
-use std::time::Duration;
-use std::time::Instant;
 use tempfile::TempDir;
 use uuid::Uuid;
 use walkdir::WalkDir;
@@ -96,15 +94,8 @@ fn exec_resume_last_appends_to_existing_file() -> anyhow::Result<()> {
 
     // Find the created session file containing the marker.
     let sessions_dir = home.path().join("sessions");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let mut path = None;
-    while Instant::now() < deadline && path.is_none() {
-        path = find_session_file_containing_marker(&sessions_dir, &marker);
-        if path.is_none() {
-            std::thread::sleep(Duration::from_millis(50));
-        }
-    }
-    let path = path.expect("no session file found after first run");
+    let path = find_session_file_containing_marker(&sessions_dir, &marker)
+        .expect("no session file found after first run");
 
     // 2) Second run: resume the most recent file with a new marker.
     let marker2 = format!("resume-last-2-{}", Uuid::new_v4());
@@ -162,15 +153,8 @@ fn exec_resume_by_id_appends_to_existing_file() -> anyhow::Result<()> {
         .success();
 
     let sessions_dir = home.path().join("sessions");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let mut path = None;
-    while Instant::now() < deadline && path.is_none() {
-        path = find_session_file_containing_marker(&sessions_dir, &marker);
-        if path.is_none() {
-            std::thread::sleep(Duration::from_millis(50));
-        }
-    }
-    let path = path.expect("no session file found after first run");
+    let path = find_session_file_containing_marker(&sessions_dir, &marker)
+        .expect("no session file found after first run");
     let session_id = extract_conversation_id(&path);
     assert!(
         !session_id.is_empty(),
@@ -235,15 +219,8 @@ fn exec_resume_preserves_cli_configuration_overrides() -> anyhow::Result<()> {
         .success();
 
     let sessions_dir = home.path().join("sessions");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let mut path = None;
-    while Instant::now() < deadline && path.is_none() {
-        path = find_session_file_containing_marker(&sessions_dir, &marker);
-        if path.is_none() {
-            std::thread::sleep(Duration::from_millis(50));
-        }
-    }
-    let path = path.expect("no session file found after first run");
+    let path = find_session_file_containing_marker(&sessions_dir, &marker)
+        .expect("no session file found after first run");
 
     let marker2 = format!("resume-config-2-{}", Uuid::new_v4());
     let prompt2 = format!("echo {marker2}");

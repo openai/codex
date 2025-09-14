@@ -12,9 +12,9 @@ Key flags: `--model/-m`, `--ask-for-approval/-a`.
 
 ### Resuming interactive sessions
 
-- Picker: `codex resume`
+- Run `codex resume` to display the session picker UI
 - Resume most recent: `codex resume --last`
-- Resume by id: `codex resume <SESSION_ID>` (UUID shown in session files and logs)
+- Resume by id: `codex resume <SESSION_ID>` (You can get session ids from /status or `~/.codex/sessions/`)
 
 Examples:
 

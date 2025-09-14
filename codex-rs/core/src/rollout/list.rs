@@ -356,15 +356,12 @@ pub async fn find_conversation_path_by_id_str(
     if !root.exists() {
         return Ok(None);
     }
-
-    let limit = match NonZero::new(1) {
-        Some(v) => v,
-        None => return Ok(None),
-    };
-    let threads = match NonZero::new(2) {
-        Some(v) => v,
-        None => return Ok(None),
-    };
+    // This is safe because we know the values are valid.
+    #[allow(clippy::unwrap_used)]
+    let limit = NonZero::new(1).unwrap();
+    // This is safe because we know the values are valid.
+    #[allow(clippy::unwrap_used)]
+    let threads = NonZero::new(2).unwrap();
     let cancel = Arc::new(AtomicBool::new(false));
     let exclude: Vec<String> = Vec::new();
     let compute_indices = false;

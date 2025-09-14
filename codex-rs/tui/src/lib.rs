@@ -347,7 +347,10 @@ async fn run_ratatui_app(
     let resume_selection = if let Some(id_str) = cli.resume_session_id.as_deref() {
         match find_conversation_path_by_id_str(&config.codex_home, id_str).await? {
             Some(path) => resume_picker::ResumeSelection::Resume(path),
-            None => resume_picker::ResumeSelection::StartFresh,
+            None => {
+                error!("Error finding conversation path: {id_str}");
+                resume_picker::ResumeSelection::StartFresh
+            }
         }
     } else if cli.resume_last {
         match RolloutRecorder::list_conversations(&config.codex_home, 1, None).await {

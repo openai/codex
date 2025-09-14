@@ -172,7 +172,7 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         }
     };
 
-    let mut config = Config::load_with_cli_overrides(cli_kv_overrides, overrides)?;
+    let config = Config::load_with_cli_overrides(cli_kv_overrides, overrides)?;
     let mut event_processor: Box<dyn EventProcessor> = if json_mode {
         Box::new(EventProcessorWithJsonOutput::new(last_message_file.clone()))
     } else {
@@ -201,30 +201,28 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     let conversation_manager =
         ConversationManager::new(AuthManager::shared(config.codex_home.clone()));
 
-    // Handle resume subcommand by resolving a rollout path and setting experimental_resume.
-    if let Some(ExecCommand::Resume(args)) = command {
-        let resume_path = if args.last {
-            match codex_core::RolloutRecorder::list_conversations(&config.codex_home, 1, None).await
-            {
-                Ok(page) => page.items.first().map(|it| it.path.clone()),
-                Err(_) => None,
-            }
-        } else if let Some(id_str) = args.session_id.as_deref() {
-            find_conversation_path_by_id_str(&config.codex_home, id_str).await?
-        } else {
-            None
-        };
-
-        if let Some(path) = resume_path {
-            config.experimental_resume = Some(path);
-        }
-    }
-
+    // Handle resume subcommand by resolving a rollout path and using explicit resume API.
     let NewConversation {
         conversation_id: _,
         conversation,
         session_configured,
-    } = conversation_manager.new_conversation(config).await?;
+    } = if let Some(ExecCommand::Resume(args)) = command {
+        let resume_path = resolve_resume_path(&config, &args).await?;
+
+        if let Some(path) = resume_path {
+            conversation_manager
+                .resume_conversation_from_rollout(
+                    config.clone(),
+                    path,
+                    AuthManager::shared(config.codex_home.clone()),
+                )
+                .await?
+        } else {
+            conversation_manager.new_conversation(config).await?
+        }
+    } else {
+        conversation_manager.new_conversation(config).await?
+    };
     info!("Codex initialized with event: {session_configured:?}");
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Event>();
@@ -308,4 +306,24 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
     }
 
     Ok(())
+}
+
+async fn resolve_resume_path(
+    config: &Config,
+    args: &crate::cli::ResumeArgs,
+) -> anyhow::Result<Option<PathBuf>> {
+    if args.last {
+        match codex_core::RolloutRecorder::list_conversations(&config.codex_home, 1, None).await {
+            Ok(page) => Ok(page.items.first().map(|it| it.path.clone())),
+            Err(e) => {
+                error!("Error listing conversations: {e}");
+                Ok(None)
+            }
+        }
+    } else if let Some(id_str) = args.session_id.as_deref() {
+        let path = find_conversation_path_by_id_str(&config.codex_home, id_str).await?;
+        Ok(path)
+    } else {
+        Ok(None)
+    }
 }
