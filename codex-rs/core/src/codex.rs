@@ -889,7 +889,7 @@ impl Session {
 
         let output_stderr;
         let borrowed: &ExecToolCallOutput = match &result {
-            Ok(output) => output,
+            Ok(output) | Err(CodexErr::Sandbox(SandboxErr::Timeout { output })) => output,
             Err(e) => {
                 output_stderr = ExecToolCallOutput {
                     exit_code: -1,
@@ -2843,7 +2843,7 @@ async fn handle_container_exec_with_params(
             let ExecToolCallOutput { exit_code, .. } = &output;
 
             let is_success = *exit_code == 0;
-            let content = format_exec_output(&output);
+            let content = format_exec_output(&output, None);
             ResponseInputItem::FunctionCallOutput {
                 call_id: call_id.clone(),
                 output: FunctionCallOutputPayload {
@@ -2887,15 +2887,18 @@ async fn handle_sandbox_error(
     let sub_id = exec_command_context.sub_id.clone();
     let cwd = exec_command_context.cwd.clone();
 
-    // if the command timed out, we can simply return this failure to the model
-    if matches!(error, SandboxErr::Timeout) {
+    if let SandboxErr::Timeout { output } = &error {
+        let content = format_exec_output(
+            output,
+            Some(format!(
+                "command timed out after {} milliseconds\n",
+                params.timeout_duration().as_millis()
+            )),
+        );
         return ResponseInputItem::FunctionCallOutput {
             call_id,
             output: FunctionCallOutputPayload {
-                content: format!(
-                    "command timed out after {} milliseconds",
-                    params.timeout_duration().as_millis()
-                ),
+                content,
                 success: Some(false),
             },
         };
@@ -2980,7 +2983,7 @@ async fn handle_sandbox_error(
                     let ExecToolCallOutput { exit_code, .. } = &retry_output;
 
                     let is_success = *exit_code == 0;
-                    let content = format_exec_output(&retry_output);
+                    let content = format_exec_output(&retry_output, None);
 
                     ResponseInputItem::FunctionCallOutput {
                         call_id: call_id.clone(),
@@ -3114,7 +3117,7 @@ fn take_last_bytes_at_char_boundary(s: &str, maxb: usize) -> &str {
 }
 
 /// Exec output is a pre-serialized JSON payload
-fn format_exec_output(exec_output: &ExecToolCallOutput) -> String {
+fn format_exec_output(exec_output: &ExecToolCallOutput, prefix: Option<String>) -> String {
     let ExecToolCallOutput {
         exit_code,
         duration,
@@ -3136,7 +3139,10 @@ fn format_exec_output(exec_output: &ExecToolCallOutput) -> String {
     // round to 1 decimal place
     let duration_seconds = ((duration.as_secs_f32()) * 10.0).round() / 10.0;
 
-    let formatted_output = format_exec_output_str(exec_output);
+    let mut formatted_output = format_exec_output_str(exec_output);
+    if let Some(prefix) = prefix {
+        formatted_output = prefix + &formatted_output;
+    }
 
     let payload = ExecOutput {
         output: &formatted_output,

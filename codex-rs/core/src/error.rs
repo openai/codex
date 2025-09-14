@@ -1,3 +1,4 @@
+use crate::exec::ExecToolCallOutput;
 use crate::token_data::KnownPlan;
 use crate::token_data::PlanType;
 use codex_protocol::mcp_protocol::ConversationId;
@@ -28,7 +29,7 @@ pub enum SandboxErr {
 
     /// Command timed out
     #[error("command timed out")]
-    Timeout,
+    Timeout { output: ExecToolCallOutput },
 
     /// Command was killed by a signal
     #[error("command was killed by a signal")]
@@ -247,7 +248,10 @@ pub fn get_error_message_ui(e: &CodexErr) -> String {
     match e {
         CodexErr::Sandbox(SandboxErr::Denied(_, _, stderr)) => stderr.to_string(),
         // Timeouts are not sandbox errors from a UX perspective; present them plainly
-        CodexErr::Sandbox(SandboxErr::Timeout) => "error: command timed out".to_string(),
+        CodexErr::Sandbox(SandboxErr::Timeout { output }) => format!(
+            "error: command timed out after {} ms",
+            output.duration.as_millis()
+        ),
         _ => e.to_string(),
     }
 }
