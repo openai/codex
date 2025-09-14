@@ -118,18 +118,13 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
             slug, slug,
             supports_reasoning_summaries: true,
             reasoning_summary_format: ReasoningSummaryFormat::Experimental,
+            base_instructions: SWIFTFOX_INSTRUCTIONS.to_string(),
         )
     } else if slug.starts_with("gpt-5") {
         model_family!(
             slug, "gpt-5",
             supports_reasoning_summaries: true,
-        )
-    } else if slug.starts_with("swiftfox") {
-        model_family!(
-            slug, "swiftfox",
-            supports_reasoning_summaries: true,
-            reasoning_summary_format: ReasoningSummaryFormat::Experimental,
-            base_instructions: SWIFTFOX_INSTRUCTIONS.to_string(),
+            needs_special_apply_patch_instructions: true,
         )
     } else {
         None
@@ -147,4 +142,14 @@ pub fn derive_default_model_family(model: &str) -> ModelFamily {
         apply_patch_tool_type: None,
         base_instructions: BASE_INSTRUCTIONS.to_string(),
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    #[test]
+    fn get_full_instructions_gpt_5() {}
 }

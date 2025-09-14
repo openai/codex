@@ -41,16 +41,7 @@ impl Prompt {
             .unwrap_or(model.base_instructions.deref());
         let mut sections: Vec<&str> = vec![base];
 
-        // When there are no custom instructions, add apply_patch_tool_instructions if either:
-        // - the model needs special instructions (4.1), or
-        // - there is no apply_patch tool present
-        let is_apply_patch_tool_present = self.tools.iter().any(|tool| match tool {
-            OpenAiTool::Function(f) => f.name == "apply_patch",
-            OpenAiTool::Freeform(f) => f.name == "apply_patch",
-            _ => false,
-        });
-        if self.base_instructions_override.is_none()
-            && (model.needs_special_apply_patch_instructions || !is_apply_patch_tool_present)
+        if self.base_instructions_override.is_none() && model.needs_special_apply_patch_instructions
         {
             sections.push(APPLY_PATCH_TOOL_INSTRUCTIONS);
         }
@@ -174,6 +165,7 @@ impl Stream for ResponseStream {
 #[cfg(test)]
 mod tests {
     use crate::model_family::find_family_for_model;
+    use pretty_assertions::assert_eq;
 
     use super::*;
 
@@ -190,6 +182,32 @@ mod tests {
         );
         let full = prompt.get_full_instructions(&model_family);
         assert_eq!(full, expected);
+    }
+
+    #[test]
+    fn get_full_instructions_gpt_5() {
+        let prompt = Prompt {
+            ..Default::default()
+        };
+        let model_family = find_family_for_model("gpt-5").expect("known model slug");
+
+        let expected = format!(
+            "{}\n{}",
+            model_family.base_instructions, APPLY_PATCH_TOOL_INSTRUCTIONS
+        );
+        let full = prompt.get_full_instructions(&model_family);
+        assert_eq!(full, expected);
+    }
+
+    #[test]
+    fn get_full_instructions_swiftfox() {
+        let prompt = Prompt {
+            ..Default::default()
+        };
+        let model_family = find_family_for_model("swiftfox").expect("known model slug");
+
+        let full = prompt.get_full_instructions(&model_family);
+        assert_eq!(full, model_family.base_instructions);
     }
 
     #[test]
