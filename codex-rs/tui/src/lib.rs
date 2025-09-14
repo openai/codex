@@ -569,52 +569,28 @@ mod tests {
     fn shows_model_rollout_prompt_for_default_model() {
         let cli = Cli::parse_from(["codex"]);
         let cfg = make_config();
-        assert!(should_show_model_rollout_prompt(
-            &cli,
-            &cfg,
-            LoginStatus::AuthMode(AuthMode::ChatGPT),
-            None,
-            false,
-        ));
+        assert!(should_show_model_rollout_prompt(&cli, &cfg, None, false,));
     }
 
     #[test]
     fn hides_model_rollout_prompt_when_api_auth_mode() {
         let cli = Cli::parse_from(["codex"]);
         let cfg = make_config();
-        assert!(!should_show_model_rollout_prompt(
-            &cli,
-            &cfg,
-            LoginStatus::AuthMode(AuthMode::ApiKey),
-            None,
-            false,
-        ));
+        assert!(!should_show_model_rollout_prompt(&cli, &cfg, None, false,));
     }
 
     #[test]
     fn hides_model_rollout_prompt_when_marked_seen() {
         let cli = Cli::parse_from(["codex"]);
         let cfg = make_config();
-        assert!(!should_show_model_rollout_prompt(
-            &cli,
-            &cfg,
-            LoginStatus::AuthMode(AuthMode::ChatGPT),
-            None,
-            true,
-        ));
+        assert!(!should_show_model_rollout_prompt(&cli, &cfg, None, true,));
     }
 
     #[test]
     fn hides_model_rollout_prompt_when_cli_overrides_model() {
         let cli = Cli::parse_from(["codex", "--model", "gpt-4.1"]);
         let cfg = make_config();
-        assert!(!should_show_model_rollout_prompt(
-            &cli,
-            &cfg,
-            LoginStatus::AuthMode(AuthMode::ChatGPT),
-            None,
-            false,
-        ));
+        assert!(!should_show_model_rollout_prompt(&cli, &cfg, None, false,));
     }
 
     #[test]
@@ -624,7 +600,6 @@ mod tests {
         assert!(!should_show_model_rollout_prompt(
             &cli,
             &cfg,
-            LoginStatus::AuthMode(AuthMode::ChatGPT),
             Some("gpt5"),
             false,
         ));
