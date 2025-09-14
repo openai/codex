@@ -135,3 +135,16 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
         None
     }
 }
+
+pub fn default_model_family() -> ModelFamily {
+    ModelFamily {
+        slug: model.clone(),
+        family: model.clone(),
+        needs_special_apply_patch_instructions: false,
+        supports_reasoning_summaries: false,
+        reasoning_summary_format: ReasoningSummaryFormat::None,
+        uses_local_shell_tool: false,
+        apply_patch_tool_type: None,
+        base_instructions: BASE_INSTRUCTIONS.to_string(),
+    }
+}
