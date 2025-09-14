@@ -321,7 +321,7 @@ async fn run_ratatui_app(
     session_log::maybe_init(&config);
 
     let auth_manager = AuthManager::shared(config.codex_home.clone());
-    let mut login_status = get_login_status(&config);
+    let login_status = get_login_status(&config);
     let should_show_onboarding =
         should_show_onboarding(login_status, &config, should_show_trust_screen);
     if should_show_onboarding {
@@ -341,8 +341,6 @@ async fn run_ratatui_app(
             config.sandbox_policy = SandboxPolicy::new_workspace_write_policy();
         }
     }
-
-    login_status = get_login_status(&config);
 
     let resume_selection = if cli.r#continue {
         match RolloutRecorder::list_conversations(&config.codex_home, 1, None).await {
@@ -369,7 +367,6 @@ async fn run_ratatui_app(
     if should_show_model_rollout_prompt(
         &cli,
         &config,
-        login_status,
         active_profile.as_deref(),
         internal_storage.swiftfox_model_prompt_seen,
     ) {
@@ -514,10 +511,10 @@ fn should_show_login_screen(login_status: LoginStatus, config: &Config) -> bool 
 fn should_show_model_rollout_prompt(
     cli: &Cli,
     config: &Config,
-    login_status: LoginStatus,
     active_profile: Option<&str>,
     swiftfox_model_prompt_seen: bool,
 ) -> bool {
+    let login_status = get_login_status(config);
     // TODO(jif) drop.
     let debug_high_enabled = std::env::var("DEBUG_HIGH")
         .map(|v| v.eq_ignore_ascii_case("1"))
