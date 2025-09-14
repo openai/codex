@@ -430,9 +430,9 @@ async fn integration_creates_and_checks_session_file() {
         .arg("--skip-git-repo-check")
         .arg("-C")
         .arg(env!("CARGO_MANIFEST_DIR"))
+        .arg(&prompt2)
         .arg("resume")
-        .arg("--last")
-        .arg(&prompt2);
+        .arg("--last");
     cmd2.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("CODEX_RS_SSE_FIXTURE", &fixture)
