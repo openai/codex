@@ -366,6 +366,7 @@ async fn summarize_context_three_requests_and_instructions() {
     );
 }
 
+// Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
 #[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
 #[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
 async fn auto_compact_runs_after_token_limit_hit() {

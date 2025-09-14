@@ -85,7 +85,7 @@ jobs:
 
   # --- CI to validate on different os/targets --------------------------------
   lint_build_test:
-    name: ${{ matrix.runner }} - ${{ matrix.target }} [run ${{ matrix.repeat }}]${{ matrix.profile == 'release' && ' (release)' || '' }}
+    name: ${{ matrix.runner }} - ${{ matrix.target }}${{ matrix.profile == 'release' && ' (release)' || '' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     needs: changed
@@ -99,49 +99,47 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # - runner: macos-14
-          #   target: aarch64-apple-darwin
-          #   profile: dev
-          # - runner: macos-14
-          #   target: x86_64-apple-darwin
-          #   profile: dev
-          # - runner: ubuntu-24.04
-          #   target: x86_64-unknown-linux-musl
-          #   profile: dev
-          # - runner: ubuntu-24.04
-          #   target: x86_64-unknown-linux-gnu
-          #   profile: dev
-          # - runner: ubuntu-24.04-arm
-          #   target: aarch64-unknown-linux-musl
-          #   profile: dev
-          # - runner: ubuntu-24.04-arm
-          #   target: aarch64-unknown-linux-gnu
-          #   profile: dev
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            profile: dev
+          - runner: macos-14
+            target: x86_64-apple-darwin
+            profile: dev
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            profile: dev
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            profile: dev
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            profile: dev
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            profile: dev
           - runner: windows-latest
             target: x86_64-pc-windows-msvc
             profile: dev
-          # - runner: windows-11-arm
-          #   target: aarch64-pc-windows-msvc
-          #   profile: dev
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            profile: dev
 
           # Also run representative release builds on Mac and Linux because
           # there could be release-only build errors we want to catch.
           # Hopefully this also pre-populates the build cache to speed up
           # releases.
-          # - runner: macos-14
-          #   target: aarch64-apple-darwin
-          #   profile: release
-          # - runner: ubuntu-24.04
-          #   target: x86_64-unknown-linux-musl
-          #   profile: release
-          # - runner: windows-latest
-          #   target: x86_64-pc-windows-msvc
-          #   profile: release
-          # - runner: windows-11-arm
-          #   target: aarch64-pc-windows-msvc
-          #   profile: release
-
-        repeat: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
+          - runner: macos-14
+            target: aarch64-apple-darwin
+            profile: release
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+            profile: release
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+            profile: release
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            profile: release
 
     steps:
       - uses: actions/checkout@v5
@@ -167,7 +165,7 @@ jobs:
 
       - name: cargo clippy
         id: clippy
-        run: cargo clippy --target ${{ matrix.target }} -p codex-core --tests --profile ${{ matrix.profile }}
+        run: cargo clippy --target ${{ matrix.target }} --all-features --tests --profile ${{ matrix.profile }} -- -D warnings
 
       # Running `cargo build` from the workspace root builds the workspace using
       # the union of all features from third-party crates. This can mask errors
@@ -192,7 +190,7 @@ jobs:
         # Tests take too long for release builds to run them on every PR.
         if: ${{ matrix.profile != 'release' }}
         continue-on-error: true
-        run: cargo nextest run -p codex-core --no-fail-fast --target ${{ matrix.target }}
+        run: cargo nextest run --all-features --no-fail-fast --target ${{ matrix.target }}
         env:
           RUST_BACKTRACE: 1
 
