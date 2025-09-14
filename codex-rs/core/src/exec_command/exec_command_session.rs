@@ -55,10 +55,10 @@ impl ExecCommandSession {
     }
 
     pub(crate) fn set_initial_output_receiver(&self, receiver: broadcast::Receiver<Vec<u8>>) {
-        if let Ok(mut guard) = self.initial_output_rx.lock() {
-            if guard.is_none() {
-                *guard = Some(receiver);
-            }
+        if let Ok(mut guard) = self.initial_output_rx.lock()
+            && guard.is_none()
+        {
+            *guard = Some(receiver);
         }
     }
 
