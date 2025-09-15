@@ -39,7 +39,6 @@ use toml_edit::Table as TomlTable;
 const OPENAI_DEFAULT_MODEL: &str = "gpt-5";
 const OPENAI_DEFAULT_REVIEW_MODEL: &str = "gpt-5";
 pub const GPT_5_CODEX_MEDIUM_MODEL: &str = "gpt-5-codex";
-pub const GPT_5_CODEX_DISPLAY_NAME: &str = "gpt-5-codex";
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
