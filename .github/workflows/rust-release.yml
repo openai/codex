@@ -211,8 +211,7 @@ jobs:
           files: dist/**
           # Mark as prerelease only when the version has a suffix after x.y.z
           # (e.g. -alpha, -beta). Otherwise publish a normal release.
-          # prerelease: ${{ contains(steps.release_name.outputs.name, '-') }}
-          prerelease: true
+          prerelease: ${{ contains(steps.release_name.outputs.name, '-') }}
 
       - uses: facebook/dotslash-publish-release@v2
         env:
