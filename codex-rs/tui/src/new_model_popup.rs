@@ -123,13 +123,13 @@ impl WidgetRef for &ModelUpgradePopup {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
 
-        let frame = self.frames()[self.frame_idx];
         // Skip the animation entirely when the viewport is too small so we don't clip frames.
         let show_animation =
             area.height >= MIN_ANIMATION_HEIGHT && area.width >= MIN_ANIMATION_WIDTH;
 
         let mut lines: Vec<Line> = Vec::new();
         if show_animation {
+            let frame = self.frames()[self.frame_idx];
             lines.extend(frame.lines().map(|l| l.to_string().into()));
             // Spacer between animation and text content.
             lines.push("".into());
