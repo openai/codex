@@ -101,6 +101,9 @@ struct ResumeCommand {
     /// Continue the most recent session without showing the picker.
     #[arg(long = "last", default_value_t = false, conflicts_with = "session_id")]
     last: bool,
+
+    #[clap(flatten)]
+    config_overrides: TuiCli,
 }
 
 #[derive(Debug, Parser)]
@@ -190,18 +193,17 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             prepend_config_flags(&mut mcp_cli.config_overrides, root_config_overrides.clone());
             mcp_cli.run(codex_linux_sandbox_exe).await?;
         }
-        Some(Subcommand::Resume(ResumeCommand { session_id, last })) => {
-            // Start with the parsed interactive CLI so resume shares the same
-            // configuration surface area as `codex` without additional flags.
-            let resume_session_id = session_id;
-            interactive.resume_picker = resume_session_id.is_none() && !last;
-            interactive.resume_last = last;
-            interactive.resume_session_id = resume_session_id;
-
-            // Propagate any root-level config overrides (e.g. `-c key=value`).
-            prepend_config_flags(
-                &mut interactive.config_overrides,
+        Some(Subcommand::Resume(ResumeCommand {
+            session_id,
+            last,
+            config_overrides,
+        })) => {
+            interactive = finalize_resume_interactive(
+                interactive,
                 root_config_overrides.clone(),
+                session_id,
+                last,
+                config_overrides,
             );
             codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
         }
@@ -290,8 +292,208 @@ fn prepend_config_flags(
         .splice(0..0, cli_config_overrides.raw_overrides);
 }
 
+/// Build the final `TuiCli` for a `codex resume` invocation.
+fn finalize_resume_interactive(
+    mut interactive: TuiCli,
+    root_config_overrides: CliConfigOverrides,
+    session_id: Option<String>,
+    last: bool,
+    resume_cli: TuiCli,
+) -> TuiCli {
+    // Start with the parsed interactive CLI so resume shares the same
+    // configuration surface area as `codex` without additional flags.
+    let resume_session_id = session_id;
+    interactive.resume_picker = resume_session_id.is_none() && !last;
+    interactive.resume_last = last;
+    interactive.resume_session_id = resume_session_id;
+
+    // Merge resume-scoped flags and overrides with highest precedence.
+    merge_resume_cli_flags(&mut interactive, resume_cli);
+
+    // Propagate any root-level config overrides (e.g. `-c key=value`).
+    prepend_config_flags(&mut interactive.config_overrides, root_config_overrides);
+
+    interactive
+}
+
+/// Merge flags provided to `codex resume` so they take precedence over any
+/// root-level flags. Only overrides fields explicitly set on the resume-scoped
+/// CLI. Also appends `-c key=value` overrides with highest precedence.
+fn merge_resume_cli_flags(interactive: &mut TuiCli, resume_cli: TuiCli) {
+    if let Some(model) = resume_cli.model {
+        interactive.model = Some(model);
+    }
+    if resume_cli.oss {
+        interactive.oss = true;
+    }
+    if let Some(profile) = resume_cli.config_profile {
+        interactive.config_profile = Some(profile);
+    }
+    if let Some(sandbox) = resume_cli.sandbox_mode {
+        interactive.sandbox_mode = Some(sandbox);
+    }
+    if let Some(approval) = resume_cli.approval_policy {
+        interactive.approval_policy = Some(approval);
+    }
+    if resume_cli.full_auto {
+        interactive.full_auto = true;
+    }
+    if resume_cli.dangerously_bypass_approvals_and_sandbox {
+        interactive.dangerously_bypass_approvals_and_sandbox = true;
+    }
+    if let Some(cwd) = resume_cli.cwd {
+        interactive.cwd = Some(cwd);
+    }
+    if resume_cli.web_search {
+        interactive.web_search = true;
+    }
+    if !resume_cli.images.is_empty() {
+        interactive.images = resume_cli.images;
+    }
+    if let Some(prompt) = resume_cli.prompt {
+        interactive.prompt = Some(prompt);
+    }
+
+    interactive
+        .config_overrides
+        .raw_overrides
+        .extend(resume_cli.config_overrides.raw_overrides);
+}
+
 fn print_completion(cmd: CompletionCommand) {
     let mut app = MultitoolCli::command();
     let name = "codex";
     generate(cmd.shell, &mut app, name, &mut std::io::stdout());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn finalize_from_args(args: &[&str]) -> TuiCli {
+        let cli = MultitoolCli::try_parse_from(args).expect("parse");
+        let MultitoolCli {
+            interactive,
+            config_overrides: root_overrides,
+            subcommand,
+        } = cli;
+
+        let Subcommand::Resume(ResumeCommand {
+            session_id,
+            last,
+            config_overrides: resume_cli,
+        }) = subcommand.expect("resume present")
+        else {
+            unreachable!()
+        };
+
+        finalize_resume_interactive(interactive, root_overrides, session_id, last, resume_cli)
+    }
+
+    #[test]
+    fn resume_model_flag_applies_when_no_root_flags() {
+        let interactive = finalize_from_args(["codex", "resume", "-m", "gpt-5-test"].as_ref());
+
+        assert_eq!(interactive.model.as_deref(), Some("gpt-5-test"));
+        assert!(interactive.resume_picker);
+        assert!(!interactive.resume_last);
+        assert_eq!(interactive.resume_session_id, None);
+    }
+
+    #[test]
+    fn resume_picker_logic_none_and_not_last() {
+        let interactive = finalize_from_args(["codex", "resume"].as_ref());
+        assert!(interactive.resume_picker);
+        assert!(!interactive.resume_last);
+        assert_eq!(interactive.resume_session_id, None);
+    }
+
+    #[test]
+    fn resume_picker_logic_last() {
+        let interactive = finalize_from_args(["codex", "resume", "--last"].as_ref());
+        assert!(!interactive.resume_picker);
+        assert!(interactive.resume_last);
+        assert_eq!(interactive.resume_session_id, None);
+    }
+
+    #[test]
+    fn resume_picker_logic_with_session_id() {
+        let interactive = finalize_from_args(["codex", "resume", "1234"].as_ref());
+        assert!(!interactive.resume_picker);
+        assert!(!interactive.resume_last);
+        assert_eq!(interactive.resume_session_id.as_deref(), Some("1234"));
+    }
+
+    #[test]
+    fn resume_merges_option_flags_and_full_auto() {
+        let interactive = finalize_from_args(
+            [
+                "codex",
+                "resume",
+                "sid",
+                "--oss",
+                "--full-auto",
+                "--search",
+                "--sandbox",
+                "workspace-write",
+                "--ask-for-approval",
+                "on-request",
+                "-m",
+                "gpt-5-test",
+                "-p",
+                "my-profile",
+                "-C",
+                "/tmp",
+                "-i",
+                "/tmp/a.png,/tmp/b.png",
+            ]
+            .as_ref(),
+        );
+
+        assert_eq!(interactive.model.as_deref(), Some("gpt-5-test"));
+        assert!(interactive.oss);
+        assert_eq!(interactive.config_profile.as_deref(), Some("my-profile"));
+        assert!(matches!(
+            interactive.sandbox_mode,
+            Some(codex_common::SandboxModeCliArg::WorkspaceWrite)
+        ));
+        assert!(matches!(
+            interactive.approval_policy,
+            Some(codex_common::ApprovalModeCliArg::OnRequest)
+        ));
+        assert!(interactive.full_auto);
+        assert_eq!(
+            interactive.cwd.as_deref(),
+            Some(std::path::Path::new("/tmp"))
+        );
+        assert!(interactive.web_search);
+        let has_a = interactive
+            .images
+            .iter()
+            .any(|p| p == std::path::Path::new("/tmp/a.png"));
+        let has_b = interactive
+            .images
+            .iter()
+            .any(|p| p == std::path::Path::new("/tmp/b.png"));
+        assert!(has_a && has_b);
+        assert!(!interactive.resume_picker);
+        assert!(!interactive.resume_last);
+        assert_eq!(interactive.resume_session_id.as_deref(), Some("sid"));
+    }
+
+    #[test]
+    fn resume_merges_dangerously_bypass_flag() {
+        let interactive = finalize_from_args(
+            [
+                "codex",
+                "resume",
+                "--dangerously-bypass-approvals-and-sandbox",
+            ]
+            .as_ref(),
+        );
+        assert!(interactive.dangerously_bypass_approvals_and_sandbox);
+        assert!(interactive.resume_picker);
+        assert!(!interactive.resume_last);
+        assert_eq!(interactive.resume_session_id, None);
+    }
 }
