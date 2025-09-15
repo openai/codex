@@ -98,6 +98,9 @@ struct ResumeCommand {
     /// Continue the most recent session without showing the picker.
     #[arg(long = "last", default_value_t = false, conflicts_with = "session_id")]
     last: bool,
+
+    #[clap(flatten)]
+    config_overrides: TuiCli,
 }
 
 #[derive(Debug, Parser)]
@@ -186,13 +189,19 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             codex_mcp_server::run_main(codex_linux_sandbox_exe, root_config_overrides.clone())
                 .await?;
         }
-        Some(Subcommand::Resume(ResumeCommand { session_id, last })) => {
+        Some(Subcommand::Resume(ResumeCommand {
+            session_id,
+            last,
+            config_overrides,
+        })) => {
             // Start with the parsed interactive CLI so resume shares the same
             // configuration surface area as `codex` without additional flags.
             let resume_session_id = session_id;
             interactive.resume_picker = resume_session_id.is_none() && !last;
             interactive.resume_last = last;
             interactive.resume_session_id = resume_session_id;
+            // Merge resume-scoped flags and overrides with highest precedence.
+            merge_resume_cli_flags(&mut interactive, config_overrides);
 
             // Propagate any root-level config overrides (e.g. `-c key=value`).
             prepend_config_flags(
@@ -284,6 +293,50 @@ fn prepend_config_flags(
     subcommand_config_overrides
         .raw_overrides
         .splice(0..0, cli_config_overrides.raw_overrides);
+}
+
+/// Merge flags provided to `codex resume` so they take precedence over any
+/// root-level flags. Only overrides fields explicitly set on the resume-scoped
+/// CLI. Also appends `-c key=value` overrides with highest precedence.
+fn merge_resume_cli_flags(interactive: &mut TuiCli, resume_cli: TuiCli) {
+    if let Some(model) = resume_cli.model {
+        interactive.model = Some(model);
+    }
+    if resume_cli.oss {
+        interactive.oss = true;
+    }
+    if let Some(profile) = resume_cli.config_profile {
+        interactive.config_profile = Some(profile);
+    }
+    if let Some(sandbox) = resume_cli.sandbox_mode {
+        interactive.sandbox_mode = Some(sandbox);
+    }
+    if let Some(approval) = resume_cli.approval_policy {
+        interactive.approval_policy = Some(approval);
+    }
+    if resume_cli.full_auto {
+        interactive.full_auto = true;
+    }
+    if resume_cli.dangerously_bypass_approvals_and_sandbox {
+        interactive.dangerously_bypass_approvals_and_sandbox = true;
+    }
+    if let Some(cwd) = resume_cli.cwd {
+        interactive.cwd = Some(cwd);
+    }
+    if resume_cli.web_search {
+        interactive.web_search = true;
+    }
+    if !resume_cli.images.is_empty() {
+        interactive.images = resume_cli.images;
+    }
+    if let Some(prompt) = resume_cli.prompt {
+        interactive.prompt = Some(prompt);
+    }
+
+    interactive
+        .config_overrides
+        .raw_overrides
+        .extend(resume_cli.config_overrides.raw_overrides);
 }
 
 fn print_completion(cmd: CompletionCommand) {
