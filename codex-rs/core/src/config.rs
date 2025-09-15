@@ -9,6 +9,7 @@ use crate::config_types::Tui;
 use crate::config_types::UriBasedFileOpener;
 use crate::git_info::resolve_root_git_project_for_trust;
 use crate::model_family::ModelFamily;
+use crate::model_family::derive_default_model_family;
 use crate::model_family::find_family_for_model;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::built_in_model_providers;
@@ -33,7 +34,8 @@ use toml_edit::DocumentMut;
 
 const OPENAI_DEFAULT_MODEL: &str = "gpt-5";
 const OPENAI_DEFAULT_REVIEW_MODEL: &str = "gpt-5";
-pub const SWIFTFOX_MEDIUM_MODEL: &str = "swiftfox-medium";
+pub const SWIFTFOX_MEDIUM_MODEL: &str = "swiftfox";
+pub const SWIFTFOX_MODEL_DISPLAY_NAME: &str = "swiftfox-medium";
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
@@ -158,9 +160,6 @@ pub struct Config {
 
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
-
-    /// Experimental rollout resume path (absolute path to .jsonl; undocumented).
-    pub experimental_resume: Option<PathBuf>,
 
     /// Include an experimental plan tool that the model can use to update its current plan and status of each step.
     pub include_plan_tool: bool,
@@ -601,9 +600,6 @@ pub struct ConfigToml {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
 
-    /// Experimental rollout resume path (absolute path to .jsonl; undocumented).
-    pub experimental_resume: Option<PathBuf>,
-
     /// Experimental path to a file whose contents replace the built-in BASE_INSTRUCTIONS.
     pub experimental_instructions_file: Option<PathBuf>,
 
@@ -865,15 +861,8 @@ impl Config {
             .or(cfg.model)
             .unwrap_or_else(default_model);
 
-        let mut model_family = find_family_for_model(&model).unwrap_or_else(|| ModelFamily {
-            slug: model.clone(),
-            family: model.clone(),
-            needs_special_apply_patch_instructions: false,
-            supports_reasoning_summaries: false,
-            reasoning_summary_format: ReasoningSummaryFormat::None,
-            uses_local_shell_tool: false,
-            apply_patch_tool_type: None,
-        });
+        let mut model_family =
+            find_family_for_model(&model).unwrap_or_else(|| derive_default_model_family(&model));
 
         if let Some(supports_reasoning_summaries) = cfg.model_supports_reasoning_summaries {
             model_family.supports_reasoning_summaries = supports_reasoning_summaries;
@@ -896,8 +885,6 @@ impl Config {
                 .as_ref()
                 .and_then(|info| info.auto_compact_token_limit)
         });
-
-        let experimental_resume = cfg.experimental_resume;
 
         // Load base instructions override from a file if specified. If the
         // path is relative, resolve it against the effective cwd so the
@@ -959,8 +946,6 @@ impl Config {
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
-
-            experimental_resume,
             include_plan_tool: include_plan_tool.unwrap_or(false),
             include_apply_patch_tool: include_apply_patch_tool.unwrap_or(false),
             tools_web_search_request,
@@ -1184,7 +1169,7 @@ exclude_slash_tmp = true
         persist_model_selection(
             codex_home.path(),
             None,
-            "swiftfox-high",
+            "swiftfox",
             Some(ReasoningEffort::High),
         )
         .await?;
@@ -1193,7 +1178,7 @@ exclude_slash_tmp = true
             tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
         let parsed: ConfigToml = toml::from_str(&serialized)?;
 
-        assert_eq!(parsed.model.as_deref(), Some("swiftfox-high"));
+        assert_eq!(parsed.model.as_deref(), Some("swiftfox"));
         assert_eq!(parsed.model_reasoning_effort, Some(ReasoningEffort::High));
 
         Ok(())
@@ -1247,7 +1232,7 @@ model = "gpt-4.1"
         persist_model_selection(
             codex_home.path(),
             Some("dev"),
-            "swiftfox-medium",
+            "swiftfox",
             Some(ReasoningEffort::Medium),
         )
         .await?;
@@ -1260,7 +1245,7 @@ model = "gpt-4.1"
             .get("dev")
             .expect("profile should be created");
 
-        assert_eq!(profile.model.as_deref(), Some("swiftfox-medium"));
+        assert_eq!(profile.model.as_deref(), Some("swiftfox"));
         assert_eq!(
             profile.model_reasoning_effort,
             Some(ReasoningEffort::Medium)
@@ -1486,7 +1471,6 @@ model_verbosity = "high"
                 model_reasoning_summary: ReasoningSummary::Detailed,
                 model_verbosity: None,
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
-                experimental_resume: None,
                 base_instructions: None,
                 include_plan_tool: false,
                 include_apply_patch_tool: false,
@@ -1544,7 +1528,6 @@ model_verbosity = "high"
             model_reasoning_summary: ReasoningSummary::default(),
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
-            experimental_resume: None,
             base_instructions: None,
             include_plan_tool: false,
             include_apply_patch_tool: false,
@@ -1617,7 +1600,6 @@ model_verbosity = "high"
             model_reasoning_summary: ReasoningSummary::default(),
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
-            experimental_resume: None,
             base_instructions: None,
             include_plan_tool: false,
             include_apply_patch_tool: false,
@@ -1676,7 +1658,6 @@ model_verbosity = "high"
             model_reasoning_summary: ReasoningSummary::Detailed,
             model_verbosity: Some(Verbosity::High),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
-            experimental_resume: None,
             base_instructions: None,
             include_plan_tool: false,
             include_apply_patch_tool: false,

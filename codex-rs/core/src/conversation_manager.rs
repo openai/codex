@@ -59,21 +59,11 @@ impl ConversationManager {
         config: Config,
         auth_manager: Arc<AuthManager>,
     ) -> CodexResult<NewConversation> {
-        // TO BE REFACTORED: use the config experimental_resume field until we have a mainstream way.
-        if let Some(resume_path) = config.experimental_resume.as_ref() {
-            let initial_history = RolloutRecorder::get_rollout_history(resume_path).await?;
-            let CodexSpawnOk {
-                codex,
-                conversation_id,
-            } = Codex::spawn(config, auth_manager, initial_history).await?;
-            self.finalize_spawn(codex, conversation_id).await
-        } else {
-            let CodexSpawnOk {
-                codex,
-                conversation_id,
-            } = Codex::spawn(config, auth_manager, InitialHistory::New).await?;
-            self.finalize_spawn(codex, conversation_id).await
-        }
+        let CodexSpawnOk {
+            codex,
+            conversation_id,
+        } = Codex::spawn(config, auth_manager, InitialHistory::New).await?;
+        self.finalize_spawn(codex, conversation_id).await
     }
 
     async fn finalize_spawn(
