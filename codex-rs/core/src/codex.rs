@@ -2715,7 +2715,7 @@ async fn handle_agent_tool_call(
         Err(e) => ResponseInputItem::FunctionCallOutput {
             call_id,
             output: FunctionCallOutputPayload {
-                content: format!("Agent execution failed: {}", e),
+                content: format!("Agent execution failed: {e}"),
                 success: Some(false),
             },
         },
@@ -2825,14 +2825,13 @@ fn build_agent_response(context: &TurnContext, task: &str, agent_name: &str) -> 
         .unwrap_or_else(|| "General assistant".to_string());
 
     format!(
-        "Agent '{}' Analysis:\n\
-        Context: {}\n\
-        Task: {}\n\
+        "Agent '{agent_name}' Analysis:\n\
+        Context: {system_prompt}\n\
+        Task: {task}\n\
         \n\
         Analysis Complete: The task has been processed using the agent's specialized knowledge \
         and the configured tools. The agent operated within the defined permissions and \
-        generated this response based on its specialized prompt.",
-        agent_name, system_prompt, task
+        generated this response based on its specialized prompt."
     )
 }
 
@@ -2847,7 +2846,7 @@ fn generate_agent_summary(
     let mut summary = Vec::new();
 
     // Header
-    summary.push(format!("=== Agent '{}' Execution Summary ===", agent_name));
+    summary.push(format!("=== Agent '{agent_name}' Execution Summary ==="));
     summary.push(String::new());
 
     // Task description
@@ -2902,11 +2901,9 @@ fn generate_agent_summary(
         // Auto-compact long outputs
         if output_lines.len() > 10 {
             // Take first 5 and last 3 lines
-            let compacted = vec![
-                output_lines[..5].join("\n"),
+            let compacted = [output_lines[..5].join("\n"),
                 format!("... ({} lines omitted) ...", output_lines.len() - 8),
-                output_lines[output_lines.len() - 3..].join("\n"),
-            ];
+                output_lines[output_lines.len() - 3..].join("\n")];
             summary.push(compacted.join("\n"));
         } else {
             summary.push(combined_output);
@@ -2915,7 +2912,7 @@ fn generate_agent_summary(
     }
 
     // Footer
-    summary.push(format!("=== Agent '{}' Complete ===", agent_name));
+    summary.push(format!("=== Agent '{agent_name}' Complete ==="));
 
     summary.join("\n")
 }

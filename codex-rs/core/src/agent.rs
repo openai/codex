@@ -157,7 +157,7 @@ pub async fn execute_agent_task(
     let system_prompt = registry.get_system_prompt(agent_name);
 
     // Build the specialized prompt for this agent
-    let full_prompt = format!("{}\n\nTask: {}", system_prompt, task);
+    let full_prompt = format!("{system_prompt}\n\nTask: {task}");
 
     // Note: The actual execution will be handled by the parent context
     // using the existing conversation infrastructure
