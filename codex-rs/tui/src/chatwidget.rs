@@ -172,15 +172,15 @@ impl ChatWidget {
         self.conversation_id = Some(event.session_id);
         let initial_messages = event.initial_messages.clone();
         let model_for_header = event.model.clone();
-        if let Some(messages) = initial_messages {
-            self.replay_initial_messages(messages);
-        }
         self.session_header.set_model(&model_for_header);
         self.add_to_history(history_cell::new_session_info(
             &self.config,
             event,
             self.show_welcome_banner,
         ));
+        if let Some(messages) = initial_messages {
+            self.replay_initial_messages(messages);
+        }
         // Ask codex-core to enumerate custom prompts for this session.
         self.submit_op(Op::ListCustomPrompts);
         if let Some(user_message) = self.initial_user_message.take() {
@@ -739,7 +739,7 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             conversation_id: None,
             queued_user_messages: VecDeque::new(),
-            show_welcome_banner: false,
+            show_welcome_banner: true,
             suppress_session_configured_redraw: true,
         }
     }

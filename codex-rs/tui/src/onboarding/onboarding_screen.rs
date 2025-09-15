@@ -24,6 +24,7 @@ use crate::tui::TuiEvent;
 use color_eyre::eyre::Result;
 use std::sync::Arc;
 use std::sync::RwLock;
+use std::time::Instant;
 
 #[allow(clippy::large_enum_variant)]
 enum Step {
@@ -74,6 +75,8 @@ impl OnboardingScreen {
         let codex_home = config.codex_home;
         let mut steps: Vec<Step> = vec![Step::Welcome(WelcomeWidget {
             is_logged_in: !matches!(login_status, LoginStatus::NotAuthenticated),
+            request_frame: tui.frame_requester(),
+            start: Instant::now(),
         })];
         if show_login_screen {
             steps.push(Step::Auth(AuthModeWidget {

@@ -3,7 +3,6 @@ use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
 use crate::chatwidget::ChatWidget;
 use crate::file_search::FileSearchManager;
-use crate::history_cell::HistoryCell;
 use crate::pager_overlay::Overlay;
 use crate::resume_picker::ResumeSelection;
 use crate::tui;
@@ -46,7 +45,7 @@ pub(crate) struct App {
 
     pub(crate) file_search: FileSearchManager,
 
-    pub(crate) transcript_cells: Vec<Arc<dyn HistoryCell>>,
+    pub(crate) transcript_lines: Vec<Line<'static>>,
 
     // Pager overlay state (Transcript or Static like Diff)
     pub(crate) overlay: Option<Overlay>,
@@ -132,7 +131,7 @@ impl App {
             active_profile,
             file_search,
             enhanced_keys_supported,
-            transcript_cells: Vec::new(),
+            transcript_lines: Vec::new(),
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,
@@ -215,12 +214,15 @@ impl App {
                 tui.frame_requester().schedule_frame();
             }
             AppEvent::InsertHistoryCell(cell) => {
-                let cell: Arc<dyn HistoryCell> = cell.into();
+                let mut cell_transcript = cell.transcript_lines();
+                if !cell.is_stream_continuation() && !self.transcript_lines.is_empty() {
+                    cell_transcript.insert(0, Line::from(""));
+                }
                 if let Some(Overlay::Transcript(t)) = &mut self.overlay {
-                    t.insert_cell(cell.clone());
+                    t.insert_lines(cell_transcript.clone());
                     tui.frame_requester().schedule_frame();
                 }
-                self.transcript_cells.push(cell.clone());
+                self.transcript_lines.extend(cell_transcript.clone());
                 let mut display = cell.display_lines(tui.terminal.last_known_screen_size.width);
                 if !display.is_empty() {
                     // Only insert a separating blank line for new cells that are not
@@ -367,7 +369,7 @@ impl App {
             } => {
                 // Enter alternate screen and set viewport to full size.
                 let _ = tui.enter_alt_screen();
-                self.overlay = Some(Overlay::new_transcript(self.transcript_cells.clone()));
+                self.overlay = Some(Overlay::new_transcript(self.transcript_lines.clone()));
                 tui.frame_requester().schedule_frame();
             }
             // Esc primes/advances backtracking only in normal (not working) mode
@@ -392,7 +394,7 @@ impl App {
                 kind: KeyEventKind::Press,
                 ..
             } if self.backtrack.primed
-                && self.backtrack.nth_user_message != usize::MAX
+                && self.backtrack.count > 0
                 && self.chat_widget.composer_is_empty() =>
             {
                 // Delegate to helper for clarity; preserves behavior.
@@ -426,6 +428,7 @@ mod tests {
     use codex_core::AuthManager;
     use codex_core::CodexAuth;
     use codex_core::ConversationManager;
+    use ratatui::text::Line;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
 
@@ -448,7 +451,7 @@ mod tests {
             config,
             active_profile: None,
             file_search,
-            transcript_cells: Vec::new(),
+            transcript_lines: Vec::<Line<'static>>::new(),
             overlay: None,
             deferred_history_lines: Vec::new(),
             has_emitted_history_lines: false,

@@ -74,7 +74,7 @@ pub fn builtin_model_presets(auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
         Some(AuthMode::ApiKey) => PRESETS
             .iter()
             .copied()
-            .filter(|p| !p.model.contains(SWIFTFOX_MEDIUM_MODEL))
+            .filter(|p| p.model != SWIFTFOX_MEDIUM_MODEL)
             .collect(),
         _ => PRESETS.to_vec(),
     }
