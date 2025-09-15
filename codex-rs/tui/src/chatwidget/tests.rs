@@ -232,11 +232,7 @@ fn make_chatwidget_manual() -> (
         bottom_pane: bottom,
         active_exec_cell: None,
         config: cfg.clone(),
-        session_header: SessionHeader::new(
-            cfg.model.clone(),
-            cfg.cwd.clone(),
-            crate::version::CODEX_CLI_VERSION,
-        ),
+        session_header: SessionHeader::new(cfg.model.clone()),
         initial_user_message: None,
         token_info: None,
         stream: StreamController::new(cfg),
@@ -781,10 +777,10 @@ async fn binary_size_transcript_snapshot() {
     // 'thinking' header if present, and start from the first non-empty content line
     // that follows. This keeps the snapshot stable across sessions.
     const MARKER_PREFIX: &str =
-        " Describe a task to get started or try one of the following commands:";
+        "Describe a task to get started or try one of the following commands:";
     let last_marker_line_idx = lines
         .iter()
-        .rposition(|l| l.starts_with(MARKER_PREFIX))
+        .rposition(|l| l.trim_start().starts_with(MARKER_PREFIX))
         .expect("marker not found in visible output");
     // Prefer the first assistant content line (blockquote '>' prefix) after the marker;
     // fallback to the first non-empty, non-'thinking' line.

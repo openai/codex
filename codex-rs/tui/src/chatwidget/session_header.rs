@@ -1,21 +1,16 @@
-use std::path::PathBuf;
-
 pub(crate) struct SessionHeader {
     model: String,
 }
 
 impl SessionHeader {
-    // Keep signature to avoid changing call sites; underscore params silence warnings.
-    pub(crate) fn new(model: String, _directory: PathBuf, _version: &'static str) -> Self {
+    pub(crate) fn new(model: String) -> Self {
         Self { model }
     }
 
-    pub(crate) fn set_model(&mut self, model: String) -> bool {
-        if self.model == model {
-            false
-        } else {
-            self.model = model;
-            true
+    /// Updates the header's model text.
+    pub(crate) fn set_model(&mut self, model: &str) {
+        if self.model != model {
+            self.model = model.to_string();
         }
     }
 }

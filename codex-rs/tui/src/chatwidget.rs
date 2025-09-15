@@ -172,7 +172,7 @@ impl ChatWidget {
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);
         }
-        let _ = self.session_header.set_model(model_for_header);
+        let _ = self.session_header.set_model(&model_for_header);
         self.add_to_history(history_cell::new_session_info(
             &self.config,
             event,
@@ -665,11 +665,7 @@ impl ChatWidget {
             }),
             active_exec_cell: None,
             config: config.clone(),
-            session_header: SessionHeader::new(
-                config.model.clone(),
-                config.cwd.clone(),
-                crate::version::CODEX_CLI_VERSION,
-            ),
+            session_header: SessionHeader::new(config.model.clone()),
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
                 initial_images,
@@ -722,11 +718,7 @@ impl ChatWidget {
             }),
             active_exec_cell: None,
             config: config.clone(),
-            session_header: SessionHeader::new(
-                config.model.clone(),
-                config.cwd.clone(),
-                crate::version::CODEX_CLI_VERSION,
-            ),
+            session_header: SessionHeader::new(config.model.clone()),
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
                 initial_images,
@@ -1305,12 +1297,9 @@ impl ChatWidget {
     }
 
     /// Set the model in the widget's config copy.
-    pub(crate) fn set_model(&mut self, model: String) {
-        let header_changed = self.session_header.set_model(model.clone());
-        self.config.model = model;
-        if header_changed {
-            self.request_redraw();
-        }
+    pub(crate) fn set_model(&mut self, model: &str) {
+        self.session_header.set_model(model);
+        self.config.model = model.to_string();
     }
 
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
