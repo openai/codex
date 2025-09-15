@@ -15,9 +15,12 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
     /// The system prompt that defines the agent's behavior
-    pub prompt: String,
+    /// Required if prompt_file is not provided
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
 
     /// Optional: Load prompt from file instead of inline
+    /// Required if prompt is not provided
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_file: Option<String>,
 
@@ -28,6 +31,48 @@ pub struct AgentConfig {
     /// Optional: Override permissions (usually inherits from context)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub permissions: Option<String>,
+}
+
+impl AgentConfig {
+    /// Validate that the config has either prompt or prompt_file
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.prompt.is_none() && self.prompt_file.is_none() {
+            return Err(anyhow::anyhow!(
+                "Agent configuration must have either 'prompt' or 'prompt_file'"
+            ));
+        }
+        if self.prompt.is_some() && self.prompt_file.is_some() {
+            return Err(anyhow::anyhow!(
+                "Agent configuration should have either 'prompt' or 'prompt_file', not both"
+            ));
+        }
+        Ok(())
+    }
+
+    /// Get the effective prompt, loading from file if necessary
+    pub fn get_prompt(&mut self, agents_dir: Option<&Path>) -> anyhow::Result<String> {
+        if let Some(prompt) = &self.prompt {
+            return Ok(prompt.clone());
+        }
+
+        if let Some(prompt_file) = &self.prompt_file {
+            let full_path = if let Some(dir) = agents_dir {
+                dir.join(prompt_file)
+            } else {
+                PathBuf::from(prompt_file)
+            };
+
+            let prompt_content = std::fs::read_to_string(&full_path).map_err(|e| {
+                anyhow::anyhow!("Cannot read prompt file '{}': {}", full_path.display(), e)
+            })?;
+
+            // Cache the loaded prompt
+            self.prompt = Some(prompt_content.clone());
+            Ok(prompt_content)
+        } else {
+            Err(anyhow::anyhow!("No prompt or prompt_file specified"))
+        }
+    }
 }
 
 /// Registry of available agents and their configurations
@@ -74,7 +119,7 @@ impl AgentRegistry {
         agents.insert(
             "general".to_string(),
             AgentConfig {
-                prompt: "You are a helpful AI assistant. Complete the given task efficiently and accurately.".to_string(),
+                prompt: Some("You are a helpful AI assistant. Complete the given task efficiently and accurately.".to_string()),
                 prompt_file: None,
                 tools: None,
                 permissions: None,
@@ -92,6 +137,16 @@ impl AgentRegistry {
                             Ok(user_agents) => {
                                 // Process each agent config
                                 for (name, mut config) in user_agents {
+                                    // Validate the configuration
+                                    if let Err(e) = config.validate() {
+                                        tracing::error!(
+                                            "Agent '{}' configuration invalid: {}",
+                                            name,
+                                            e
+                                        );
+                                        continue;
+                                    }
+
                                     // If prompt_file is specified, load the prompt from file
                                     if let Some(ref prompt_file) = config.prompt_file {
                                         // Validate the path to prevent traversal attacks
@@ -99,7 +154,7 @@ impl AgentRegistry {
                                             Ok(safe_path) => {
                                                 match std::fs::read_to_string(&safe_path) {
                                                     Ok(prompt_content) => {
-                                                        config.prompt = prompt_content;
+                                                        config.prompt = Some(prompt_content);
                                                         tracing::debug!(
                                                             "Loaded prompt file for agent '{}'",
                                                             name
@@ -167,7 +222,7 @@ impl AgentRegistry {
         self.agents
             .get(agent_name)
             .or_else(|| self.agents.get("general"))
-            .map(|config| config.prompt.clone())
+            .and_then(|config| config.prompt.clone())
             .unwrap_or_else(|| "You are a helpful AI assistant.".to_string())
     }
 
@@ -182,7 +237,11 @@ impl AgentRegistry {
         let mut agents = Vec::new();
 
         for (name, config) in &self.agents {
-            let description = self.extract_description(&config.prompt);
+            let description = if let Some(ref prompt) = config.prompt {
+                self.extract_description(prompt)
+            } else {
+                "Agent with file-based prompt".to_string()
+            };
             agents.push(crate::protocol::AgentInfo {
                 name: name.clone(),
                 description,
@@ -296,5 +355,74 @@ mod tests {
         // Test that absolute paths outside allowed dirs are blocked
         let result = AgentRegistry::validate_prompt_path(base_dir, "/etc/passwd");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_agent_config_validation() {
+        // Test config with prompt is valid
+        let config = AgentConfig {
+            prompt: Some("Test prompt".to_string()),
+            prompt_file: None,
+            tools: None,
+            permissions: None,
+        };
+        assert!(config.validate().is_ok());
+
+        // Test config with prompt_file is valid
+        let config = AgentConfig {
+            prompt: None,
+            prompt_file: Some("test.txt".to_string()),
+            tools: None,
+            permissions: None,
+        };
+        assert!(config.validate().is_ok());
+
+        // Test config with neither prompt nor prompt_file is invalid
+        let config = AgentConfig {
+            prompt: None,
+            prompt_file: None,
+            tools: None,
+            permissions: None,
+        };
+        assert!(config.validate().is_err());
+
+        // Test config with both prompt and prompt_file is invalid
+        let config = AgentConfig {
+            prompt: Some("Test prompt".to_string()),
+            prompt_file: Some("test.txt".to_string()),
+            tools: None,
+            permissions: None,
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_agent_config_get_prompt() {
+        // Test getting prompt from inline prompt
+        let mut config = AgentConfig {
+            prompt: Some("Inline prompt".to_string()),
+            prompt_file: None,
+            tools: None,
+            permissions: None,
+        };
+        assert_eq!(config.get_prompt(None).unwrap(), "Inline prompt");
+
+        // Test getting prompt from file
+        let temp_dir = TempDir::new().unwrap();
+        let prompt_file = temp_dir.path().join("test_prompt.txt");
+        fs::write(&prompt_file, "File-based prompt").unwrap();
+
+        let mut config = AgentConfig {
+            prompt: None,
+            prompt_file: Some("test_prompt.txt".to_string()),
+            tools: None,
+            permissions: None,
+        };
+
+        let prompt = config.get_prompt(Some(temp_dir.path())).unwrap();
+        assert_eq!(prompt, "File-based prompt");
+
+        // Check that prompt is cached
+        assert_eq!(config.prompt, Some("File-based prompt".to_string()));
     }
 }

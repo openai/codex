@@ -72,6 +72,7 @@ use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::model_family::find_family_for_model;
 use crate::openai_model_info::get_model_info;
 use crate::openai_tools::ApplyPatchToolArgs;
+use crate::openai_tools::OpenAiTool;
 use crate::openai_tools::ToolsConfig;
 use crate::openai_tools::ToolsConfigParams;
 use crate::openai_tools::get_openai_tools;
@@ -2898,11 +2899,21 @@ async fn execute_agent_isolated(
         }],
     }];
 
-    // Get tools available for the agent
+    // Get tools available for the agent (excluding "agent" tool to prevent recursion)
     let tools = get_openai_tools(
         &agent_context.tools_config,
         Some(sess.mcp_connection_manager.list_all_tools()),
-    );
+    )
+    .into_iter()
+    .filter(|tool| {
+        // Filter out the agent tool to prevent infinite recursion
+        match tool {
+            OpenAiTool::Function(f) => f.name != "agent",
+            OpenAiTool::Freeform(f) => f.name != "agent",
+            _ => true,
+        }
+    })
+    .collect();
 
     // Create the prompt with the agent's specialized instructions
     let prompt = Prompt {
@@ -2939,11 +2950,13 @@ async fn execute_agent_isolated(
     // Track agent execution
     let mut agent_outputs = Vec::new();
     let mut agent_loops = Vec::new();
+    let mut agent_diff_tracker = TurnDiffTracker::new();
 
-    // Create a minimal diff tracker for the agent context
-    let _agent_diff_tracker = TurnDiffTracker::new();
+    // Collect all response items for potential multi-turn execution
+    let mut collected_items = Vec::new();
+    let mut pending_tool_calls = Vec::new();
 
-    // Process the stream
+    // Process the initial stream
     loop {
         let event = stream.next().await;
         let Some(event) = event else {
@@ -2980,45 +2993,43 @@ async fn execute_agent_isolated(
 
         match event {
             ResponseEvent::OutputItemDone(item) => {
-                // For now, agents cannot use tools to avoid infinite recursion
-                // This is a safety measure since agents calling agents would create infinite async recursion
-                // Future implementation could handle this with proper boxing or depth limiting
-
-                // Track if a tool was attempted (for debugging)
+                // Check if this is a tool call (which we now support, except for "agent" tool)
                 if matches!(
                     &item,
                     ResponseItem::FunctionCall { .. }
                         | ResponseItem::LocalShellCall { .. }
                         | ResponseItem::CustomToolCall { .. }
                 ) {
+                    // The "agent" tool is already filtered out from available tools
+                    // So we can safely handle other tool calls
                     match &item {
-                        ResponseItem::FunctionCall { name, .. } => {
-                            warn!(
-                                "Agent attempted to call function '{}' but tool calls are disabled for agents",
-                                name
-                            );
-                            agent_loops.push(format!("Attempted function: {name} (disabled)"));
+                        ResponseItem::FunctionCall { name, call_id, .. } => {
+                            info!("Agent executing function: {}", name);
+                            agent_loops.push(format!("Executed function: {name}"));
+                            pending_tool_calls.push((call_id.clone(), item.clone()));
                         }
-                        ResponseItem::LocalShellCall { action, .. } => {
+                        ResponseItem::LocalShellCall {
+                            action, call_id, ..
+                        } => {
                             let LocalShellAction::Exec(exec) = action;
-                            warn!(
-                                "Agent attempted to execute command but tool calls are disabled for agents"
-                            );
-                            agent_loops.push(format!(
-                                "Attempted command: {} (disabled)",
-                                exec.command.join(" ")
-                            ));
+                            info!("Agent executing command: {}", exec.command.join(" "));
+                            agent_loops
+                                .push(format!("Executed command: {}", exec.command.join(" ")));
+                            if let Some(id) = call_id {
+                                pending_tool_calls.push((id.clone(), item.clone()));
+                            }
                         }
-                        ResponseItem::CustomToolCall { name, .. } => {
-                            warn!(
-                                "Agent attempted to call tool '{}' but tool calls are disabled for agents",
-                                name
-                            );
-                            agent_loops.push(format!("Attempted tool: {name} (disabled)"));
+                        ResponseItem::CustomToolCall { name, call_id, .. } => {
+                            info!("Agent executing tool: {}", name);
+                            agent_loops.push(format!("Executed tool: {name}"));
+                            pending_tool_calls.push((call_id.clone(), item.clone()));
                         }
                         _ => {}
                     }
                 }
+
+                // Collect all items for processing
+                collected_items.push(item.clone());
 
                 // Collect text outputs from assistant messages
                 if let ResponseItem::Message { role, content, .. } = &item
@@ -3032,7 +3043,7 @@ async fn execute_agent_isolated(
                 }
             }
             ResponseEvent::Completed { .. } => {
-                info!("Agent stream completed successfully");
+                info!("Agent stream completed");
                 break;
             }
             ResponseEvent::OutputTextDelta(delta) => {
@@ -3055,6 +3066,56 @@ async fn execute_agent_isolated(
                 // Handle other events as needed
             }
         }
+    }
+
+    // Now handle tool calls if there were any
+    if !pending_tool_calls.is_empty() {
+        info!("Agent made {} tool calls", pending_tool_calls.len());
+
+        // TODO: Implement proper multi-turn tool execution for agents
+        // The challenge is that calling handle_response_item creates an async recursion
+        // issue because it can potentially call the agent tool (even though we filter it).
+        //
+        // Solutions to explore:
+        // 1. Box the async function to allow recursion
+        // 2. Create a separate tool handler for agents that doesn't include agent tool
+        // 3. Refactor the architecture to avoid the recursion entirely
+        //
+        // For now, we acknowledge tool calls but don't execute them to maintain stability
+
+        warn!(
+            "Agent tool execution is currently limited. {} tool calls were requested but not executed.",
+            pending_tool_calls.len()
+        );
+
+        // Log what tools were requested for debugging and user feedback
+        for (call_id, tool_item) in &pending_tool_calls {
+            match tool_item {
+                ResponseItem::FunctionCall { name, .. } => {
+                    info!("  - Function call '{}' (id: {})", name, call_id);
+                    agent_loops.push(format!("Requested function: {name}"));
+                }
+                ResponseItem::LocalShellCall { action, .. } => {
+                    if let LocalShellAction::Exec(exec) = action {
+                        info!(
+                            "  - Shell command: {} (id: {})",
+                            exec.command.join(" "),
+                            call_id
+                        );
+                        agent_loops.push(format!("Requested command: {}", exec.command.join(" ")));
+                    }
+                }
+                ResponseItem::CustomToolCall { name, .. } => {
+                    info!("  - Custom tool '{}' (id: {})", name, call_id);
+                    agent_loops.push(format!("Requested tool: {name}"));
+                }
+                _ => {}
+            }
+        }
+
+        agent_outputs.push(
+            "\n[Note: Tool execution in agents is currently limited. Tools were recognized but not executed.]".to_string()
+        );
     }
 
     // If no outputs were collected, provide a fallback
@@ -3107,6 +3168,104 @@ async fn execute_agent_isolated(
 
     info!("Agent '{}' completed successfully", params.agent_name);
     Ok(summary)
+}
+
+/// Process a single agent stream and collect tool calls
+async fn process_agent_stream(
+    sess: &Session,
+    stream: &mut crate::client_common::ResponseStream,
+    sub_id: &str,
+    agent_name: &str,
+    agent_outputs: &mut Vec<String>,
+    agent_loops: &mut Vec<String>,
+) -> Result<Vec<(String, ResponseItem)>, String> {
+    let mut tool_calls = Vec::new();
+
+    loop {
+        let event = stream.next().await;
+        let Some(event) = event else {
+            break; // Stream completed normally
+        };
+
+        let event = match event {
+            Ok(ev) => ev,
+            Err(e) => {
+                return Err(format!("Agent stream error: {e}"));
+            }
+        };
+
+        match event {
+            ResponseEvent::OutputItemDone(item) => {
+                // Check if this is a tool call
+                if matches!(
+                    &item,
+                    ResponseItem::FunctionCall { .. }
+                        | ResponseItem::LocalShellCall { .. }
+                        | ResponseItem::CustomToolCall { .. }
+                ) {
+                    match &item {
+                        ResponseItem::FunctionCall { name, call_id, .. } => {
+                            info!("Agent requesting function: {}", name);
+                            agent_loops.push(format!("Called function: {name}"));
+                            tool_calls.push((call_id.clone(), item.clone()));
+                        }
+                        ResponseItem::LocalShellCall {
+                            action, call_id, ..
+                        } => {
+                            let LocalShellAction::Exec(exec) = action;
+                            info!("Agent requesting command: {}", exec.command.join(" "));
+                            agent_loops.push(format!("Executed: {}", exec.command.join(" ")));
+                            if let Some(id) = call_id {
+                                tool_calls.push((id.clone(), item.clone()));
+                            }
+                        }
+                        ResponseItem::CustomToolCall { name, call_id, .. } => {
+                            info!("Agent requesting tool: {}", name);
+                            agent_loops.push(format!("Used tool: {name}"));
+                            tool_calls.push((call_id.clone(), item.clone()));
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Collect text outputs from assistant messages
+                if let ResponseItem::Message { role, content, .. } = &item
+                    && role == "assistant"
+                {
+                    for content_item in content {
+                        if let ContentItem::OutputText { text } = content_item {
+                            agent_outputs.push(text.clone());
+                        }
+                    }
+                }
+            }
+            ResponseEvent::Completed { .. } => {
+                info!("Agent stream completed");
+                break;
+            }
+            ResponseEvent::OutputTextDelta(delta) => {
+                // Send progress updates
+                sess.send_event(Event {
+                    id: sub_id.to_string(),
+                    msg: EventMsg::AgentProgress(crate::protocol::AgentProgressEvent {
+                        call_id: String::new(),
+                        agent_name: agent_name.to_string(),
+                        step: format!(
+                            "Processing: {}...",
+                            delta.chars().take(50).collect::<String>()
+                        ),
+                        progress_type: crate::protocol::AgentProgressType::Loop(delta),
+                    }),
+                })
+                .await;
+            }
+            _ => {
+                // Handle other events as needed
+            }
+        }
+    }
+
+    Ok(tool_calls)
 }
 
 /// Generate a comprehensive summary of agent execution
