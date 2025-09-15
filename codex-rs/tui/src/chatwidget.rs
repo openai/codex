@@ -175,7 +175,7 @@ impl ChatWidget {
         self.session_header.set_model(&model_for_header);
         self.add_to_history(history_cell::new_session_info(
             &self.config,
-            event.clone(),
+            event,
             self.show_welcome_banner,
         ));
         if let Some(messages) = initial_messages {
