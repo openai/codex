@@ -2855,7 +2855,7 @@ async fn execute_agent_isolated(
     }
 
     // Create an isolated context for the agent with specialized system prompt
-    let agent_context = TurnContext {
+    let _agent_context = TurnContext {
         client: parent_context.client.clone(),
         cwd: parent_context.cwd.clone(),
         base_instructions: Some(params.init_prompt.clone()),
@@ -2867,67 +2867,46 @@ async fn execute_agent_isolated(
         is_review_mode: false,
     };
 
-    // Track agent execution progress
-    let mut agent_loops = Vec::new();
+    // Track agent execution
     let mut agent_outputs = Vec::new();
+    let mut agent_loops = Vec::new();
 
-    // Step 1: Initialize agent
-    let step1 = "Initializing agent context".to_string();
-    agent_loops.push(step1.clone());
-    sess.send_event(Event {
-        id: params.sub_id.clone(),
-        msg: EventMsg::AgentProgress(crate::protocol::AgentProgressEvent {
-            call_id: params.call_id.clone(),
-            agent_name: params.agent_name.clone(),
-            step: step1.clone(),
-            progress_type: crate::protocol::AgentProgressType::Loop(step1),
-        }),
-    })
-    .await;
+    // NOTE: Real LLM execution would happen here
+    // The agent_context contains:
+    // - base_instructions: The agent's specialized system prompt
+    // - client: The ModelClient to make LLM calls
+    // - tools_config: Available tools for the agent
+    //
+    // A full implementation would:
+    // 1. Create a conversation with the agent's system prompt
+    // 2. Add the user's task as a message
+    // 3. Stream the response through the client
+    // 4. Handle tool calls if needed
+    // 5. Return the final response
+    //
+    // For now, we provide a more informative placeholder that shows
+    // the agent configuration is working correctly:
 
-    // Step 2: Analyze task
-    let step2 = "Analyzing task requirements".to_string();
-    agent_loops.push(step2.clone());
-    sess.send_event(Event {
-        id: params.sub_id.clone(),
-        msg: EventMsg::AgentProgress(crate::protocol::AgentProgressEvent {
-            call_id: params.call_id.clone(),
-            agent_name: params.agent_name.clone(),
-            step: step2.clone(),
-            progress_type: crate::protocol::AgentProgressType::Loop(step2),
-        }),
-    })
-    .await;
+    let agent_response = format!(
+        "Agent '{}' received task with specialized context.\n\
+         System prompt preview: {}\n\
+         Task: {}\n\
+         \n\
+         [Full LLM integration pending - agent would execute with above context]",
+        params.agent_name,
+        params.init_prompt.lines().next().unwrap_or(""),
+        params
+            .init_prompt
+            .lines()
+            .skip_while(|l| !l.contains("Task:"))
+            .next()
+            .unwrap_or("")
+            .trim_start_matches("Task:")
+            .trim()
+    );
 
-    // Step 3: Execute with agent's specialized context
-    let step3 = "Executing with specialized knowledge".to_string();
-    agent_loops.push(step3.clone());
-    sess.send_event(Event {
-        id: params.sub_id.clone(),
-        msg: EventMsg::AgentProgress(crate::protocol::AgentProgressEvent {
-            call_id: params.call_id.clone(),
-            agent_name: params.agent_name.clone(),
-            step: step3.clone(),
-            progress_type: crate::protocol::AgentProgressType::Loop(step3),
-        }),
-    })
-    .await;
-
-    // Create the agent's response based on its specialized prompt
-    // The agent context contains the specialized system instructions in base_instructions
-    let task_lines: Vec<&str> = params.init_prompt.lines().collect();
-    let task_brief = if task_lines.len() > 2 {
-        format!("{}...", task_lines[0])
-    } else {
-        params.init_prompt.clone()
-    };
-
-    // Build agent response using the specialized context
-    let agent_output = build_agent_response(&agent_context, &task_brief, &params.agent_name);
-    agent_outputs.push(agent_output);
-
-    // Step 4: Complete execution
-    agent_loops.push("Completing analysis and generating summary".to_string());
+    agent_outputs.push(agent_response.clone());
+    agent_loops.push("Agent execution completed".to_string());
 
     // Track any file changes (empty for now as agents work in isolated context)
     let agent_changes: Vec<(PathBuf, FileChange)> = Vec::new();
@@ -2967,32 +2946,6 @@ async fn execute_agent_isolated(
 
     info!("Agent '{}' completed successfully", params.agent_name);
     Ok(summary)
-}
-
-/// Build agent response based on its specialized context
-fn build_agent_response(context: &TurnContext, task: &str, agent_name: &str) -> String {
-    let system_prompt = context
-        .base_instructions
-        .as_ref()
-        .map(|s| {
-            let lines: Vec<&str> = s.lines().take(3).collect();
-            if lines.len() > 2 {
-                format!("{}...", lines[0])
-            } else {
-                lines.join(" ")
-            }
-        })
-        .unwrap_or_else(|| "General assistant".to_string());
-
-    format!(
-        "Agent '{agent_name}' Analysis:\n\
-        Context: {system_prompt}\n\
-        Task: {task}\n\
-        \n\
-        Analysis Complete: The task has been processed using the agent's specialized knowledge \
-        and the configured tools. The agent operated within the defined permissions and \
-        generated this response based on its specialized prompt."
-    )
 }
 
 /// Generate a comprehensive summary of agent execution

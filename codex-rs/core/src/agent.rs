@@ -8,6 +8,7 @@ use crate::error::Result;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
+use std::path::Path;
 use std::path::PathBuf;
 
 /// Configuration for a single agent
@@ -37,6 +38,34 @@ pub struct AgentRegistry {
 }
 
 impl AgentRegistry {
+    /// Validate that a prompt file path doesn't escape allowed directories
+    fn validate_prompt_path(base_dir: &Path, prompt_file: &str) -> anyhow::Result<PathBuf> {
+        let path = if prompt_file.starts_with('/') {
+            PathBuf::from(prompt_file)
+        } else {
+            base_dir.join(prompt_file)
+        };
+
+        // Canonicalize to resolve ../ and symlinks
+        let canonical = path
+            .canonicalize()
+            .map_err(|e| anyhow::anyhow!("Cannot access prompt file: {}", e))?;
+
+        // Get the home/.codex directory
+        let home_codex = dirs::home_dir()
+            .ok_or_else(|| anyhow::anyhow!("Cannot determine home directory"))?
+            .join(".codex");
+
+        // Security check: path must be within ~/.codex or the base directory
+        if !canonical.starts_with(&home_codex) && !canonical.starts_with(base_dir) {
+            return Err(anyhow::anyhow!(
+                "Security error: Prompt file must be within ~/.codex directory"
+            ));
+        }
+
+        Ok(canonical)
+    }
+
     /// Create a new agent registry, loading user configurations if available
     pub fn new() -> Result<Self> {
         let mut agents = HashMap::new();
@@ -65,23 +94,38 @@ impl AgentRegistry {
                                 for (name, mut config) in user_agents {
                                     // If prompt_file is specified, load the prompt from file
                                     if let Some(ref prompt_file) = config.prompt_file {
-                                        let prompt_path = if prompt_file.starts_with('/') {
-                                            PathBuf::from(prompt_file)
-                                        } else {
-                                            dir.join(prompt_file)
-                                        };
-
-                                        if let Ok(prompt_content) =
-                                            std::fs::read_to_string(prompt_path)
-                                        {
-                                            config.prompt = prompt_content;
-                                        } else {
-                                            tracing::warn!(
-                                                "Could not load prompt file for agent '{}': {}",
-                                                name,
-                                                prompt_file
-                                            );
-                                            continue;
+                                        // Validate the path to prevent traversal attacks
+                                        match Self::validate_prompt_path(dir, prompt_file) {
+                                            Ok(safe_path) => {
+                                                match std::fs::read_to_string(&safe_path) {
+                                                    Ok(prompt_content) => {
+                                                        config.prompt = prompt_content;
+                                                        tracing::debug!(
+                                                            "Loaded prompt file for agent '{}'",
+                                                            name
+                                                        );
+                                                    }
+                                                    Err(e) => {
+                                                        tracing::error!(
+                                                            "Cannot read prompt file '{}' for agent '{}': {}",
+                                                            prompt_file,
+                                                            name,
+                                                            e
+                                                        );
+                                                        // Skip this agent but continue loading others
+                                                        continue;
+                                                    }
+                                                }
+                                            }
+                                            Err(e) => {
+                                                tracing::error!(
+                                                    "Agent '{}' configuration error: {}",
+                                                    name,
+                                                    e
+                                                );
+                                                // Skip this agent but continue loading others
+                                                continue;
+                                            }
                                         }
                                     }
 
@@ -210,6 +254,8 @@ pub async fn execute_agent_task(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use tempfile::TempDir;
 
     #[test]
     fn test_default_agent_exists() {
@@ -224,5 +270,31 @@ mod tests {
 
         AgentRegistry::mark_as_agent_context(&mut metadata);
         assert!(!AgentRegistry::can_spawn_agents(&metadata));
+    }
+
+    #[test]
+    fn test_path_traversal_prevention() {
+        // Create a temporary directory structure
+        let temp_dir = TempDir::new().unwrap();
+        let base_dir = temp_dir.path();
+
+        // Create a safe file
+        let safe_dir = base_dir.join("prompts");
+        fs::create_dir(&safe_dir).unwrap();
+        let safe_file = safe_dir.join("test.txt");
+        fs::write(&safe_file, "safe content").unwrap();
+
+        // Test that normal paths work
+        let result = AgentRegistry::validate_prompt_path(base_dir, "prompts/test.txt");
+        assert!(result.is_ok());
+
+        // Test that path traversal is blocked
+        let result = AgentRegistry::validate_prompt_path(base_dir, "../../../etc/passwd");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Security error"));
+
+        // Test that absolute paths outside allowed dirs are blocked
+        let result = AgentRegistry::validate_prompt_path(base_dir, "/etc/passwd");
+        assert!(result.is_err());
     }
 }
