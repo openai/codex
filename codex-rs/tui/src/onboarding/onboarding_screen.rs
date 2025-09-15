@@ -342,8 +342,9 @@ pub(crate) async fn run_onboarding_app(
                     if !did_full_clear_after_success
                         && onboarding_screen.steps.iter().any(|step| {
                             if let Step::Auth(w) = step {
-                                let g = w.sign_in_state.read().unwrap();
-                                matches!(&*g, super::auth::SignInState::ChatGptSuccessMessage)
+                                w.sign_in_state.read().is_ok_and(|g| {
+                                    matches!(&*g, super::auth::SignInState::ChatGptSuccessMessage)
+                                })
                             } else {
                                 false
                             }
