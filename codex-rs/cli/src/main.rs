@@ -17,6 +17,9 @@ use codex_exec::Cli as ExecCli;
 use codex_tui::Cli as TuiCli;
 use std::path::PathBuf;
 
+mod mcp_cmd;
+
+use crate::mcp_cmd::McpCli;
 use crate::proto::ProtoCli;
 
 /// Codex CLI
@@ -56,8 +59,8 @@ enum Subcommand {
     /// Remove stored authentication credentials.
     Logout(LogoutCommand),
 
-    /// Experimental: run Codex as an MCP server.
-    Mcp,
+    /// [experimental] Run Codex as an MCP server and manage MCP servers.
+    Mcp(McpCli),
 
     /// Run the Protocol stream via stdin/stdout
     #[clap(visible_alias = "p")]
@@ -182,9 +185,10 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             );
             codex_exec::run_main(exec_cli, codex_linux_sandbox_exe).await?;
         }
-        Some(Subcommand::Mcp) => {
-            codex_mcp_server::run_main(codex_linux_sandbox_exe, root_config_overrides.clone())
-                .await?;
+        Some(Subcommand::Mcp(mut mcp_cli)) => {
+            // Propagate any root-level config overrides (e.g. `-c key=value`).
+            prepend_config_flags(&mut mcp_cli.config_overrides, root_config_overrides.clone());
+            mcp_cli.run(codex_linux_sandbox_exe).await?;
         }
         Some(Subcommand::Resume(ResumeCommand { session_id, last })) => {
             // Start with the parsed interactive CLI so resume shares the same
