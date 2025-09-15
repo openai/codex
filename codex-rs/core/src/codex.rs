@@ -2733,8 +2733,12 @@ async fn handle_agent_tool_call(
     };
 
     // Create a plan item for this agent execution
-    // Generate a unique ID using the call_id as base
-    let plan_item_id = format!("agent-{}-{}", agent_name, &call_id[..8]);
+    // Generate a unique ID using the call_id as base (safely truncated)
+    let plan_item_id = format!(
+        "agent-{}-{}",
+        agent_name,
+        call_id.get(..8).unwrap_or(&call_id)
+    );
 
     // Send a plan update event to track this agent execution
     let plan_args = UpdatePlanArgs {
