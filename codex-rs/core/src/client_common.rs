@@ -41,7 +41,18 @@ impl Prompt {
             .unwrap_or(model.base_instructions.deref());
         let mut sections: Vec<&str> = vec![base];
 
-        if self.base_instructions_override.is_none() && model.needs_special_apply_patch_instructions
+        // When there are no custom instructions, add apply_patch_tool_instructions if:
+        // - the model needs special instructions (4.1)
+        // AND
+        // - there is no apply_patch tool present
+        let is_apply_patch_tool_present = self.tools.iter().any(|tool| match tool {
+            OpenAiTool::Function(f) => f.name == "apply_patch",
+            OpenAiTool::Freeform(f) => f.name == "apply_patch",
+            _ => false,
+        });
+        if self.base_instructions_override.is_none()
+            && model.needs_special_apply_patch_instructions
+            && !is_apply_patch_tool_present
         {
             sections.push(APPLY_PATCH_TOOL_INSTRUCTIONS);
         }
