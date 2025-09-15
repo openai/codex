@@ -295,7 +295,7 @@ impl App {
                 self.on_update_reasoning_effort(effort);
             }
             AppEvent::UpdateModel(model) => {
-                self.chat_widget.set_model(model.clone());
+                self.chat_widget.set_model(&model);
                 self.config.model = model.clone();
                 if let Some(family) = find_family_for_model(&model) {
                     self.config.model_family = family;
