@@ -17,6 +17,8 @@ use std::time::Duration;
 use std::time::Instant;
 
 const FRAME_TICK: Duration = FRAME_TICK_DEFAULT;
+const MIN_ANIMATION_HEIGHT: u16 = 21;
+const MIN_ANIMATION_WIDTH: u16 = 60;
 
 pub(crate) struct WelcomeWidget {
     pub is_logged_in: bool,
@@ -44,11 +46,17 @@ impl WidgetRef for &WelcomeWidget {
 
         let frames = &FRAMES_DEFAULT;
         let idx = ((elapsed_ms / FRAME_TICK.as_millis()) % frames.len() as u128) as usize;
+        // Skip the animation entirely when the viewport is too small so we don't clip frames.
+        let show_animation =
+            area.height >= MIN_ANIMATION_HEIGHT && area.width >= MIN_ANIMATION_WIDTH;
 
-        let mut lines: Vec<Line> = Vec::with_capacity(frames.len() + 2);
-        lines.extend(frames[idx].lines().map(|l| l.into()));
-
-        lines.push("".into());
+        let mut lines: Vec<Line> = Vec::new();
+        if show_animation {
+            let frame_line_count = frames[idx].lines().count();
+            lines.reserve(frame_line_count + 2);
+            lines.extend(frames[idx].lines().map(|l| l.into()));
+            lines.push("".into());
+        }
         lines.push(Line::from(vec![
             "  ".into(),
             "Welcome to ".into(),
