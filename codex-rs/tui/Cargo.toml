@@ -96,6 +96,7 @@ arboard = "3"
 
 [dev-dependencies]
 chrono = { version = "0.4", features = ["serde"] }
+dirs = "6"
 insta = "1.43.2"
 pretty_assertions = "1"
 rand = "0.9"

@@ -921,6 +921,7 @@ dependencies = [
  "color-eyre",
  "crossterm",
  "diffy",
+ "dirs",
  "image",
  "insta",
  "itertools 0.14.0",

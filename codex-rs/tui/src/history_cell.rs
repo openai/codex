@@ -1557,6 +1557,7 @@ mod tests {
     use codex_core::config::Config;
     use codex_core::config::ConfigOverrides;
     use codex_core::config::ConfigToml;
+    use dirs::home_dir;
 
     fn test_config() -> Config {
         Config::load_from_base_config_with_overrides(
@@ -1604,8 +1605,7 @@ mod tests {
 
     #[test]
     fn session_header_directory_center_truncates() {
-        let home = PathBuf::from(std::env::var("HOME").expect("HOME"));
-        let mut dir = home;
+        let mut dir = home_dir().expect("home directory");
         for part in ["hello", "the", "fox", "is", "very", "fast"] {
             dir.push(part);
         }
@@ -1618,8 +1618,7 @@ mod tests {
 
     #[test]
     fn session_header_directory_front_truncates_long_segment() {
-        let home = PathBuf::from(std::env::var("HOME").expect("HOME"));
-        let mut dir = home;
+        let mut dir = home_dir().expect("home directory");
         dir.push("supercalifragilisticexpialidocious");
 
         let formatted = SessionHeaderHistoryCell::format_directory_inner(&dir, Some(18));
