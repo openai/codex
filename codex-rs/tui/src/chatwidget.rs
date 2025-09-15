@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_core::config::Config;
+use codex_core::config_types::Notifications;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -59,6 +60,7 @@ use crate::bottom_pane::InputResult;
 use crate::bottom_pane::SelectionAction;
 use crate::bottom_pane::SelectionItem;
 use crate::clipboard_paste::paste_image_to_temp_png;
+use crate::diff_render::display_path_for;
 use crate::get_git_diff::get_git_diff;
 use crate::history_cell;
 use crate::history_cell::CommandOutput;
@@ -66,6 +68,7 @@ use crate::history_cell::ExecCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PatchEventType;
 use crate::slash_command::SlashCommand;
+use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 // streaming internals are provided by crate::streaming and crate::markdown_stream
 use crate::user_approval_widget::ApprovalRequest;
@@ -136,6 +139,8 @@ pub(crate) struct ChatWidget {
     suppress_session_configured_redraw: bool,
     // User messages queued while a turn is in progress
     queued_user_messages: VecDeque<UserMessage>,
+    // Pending notification to show when unfocused on next Draw
+    pending_notification: Option<Notification>,
 }
 
 struct UserMessage {
@@ -265,6 +270,8 @@ impl ChatWidget {
 
         // If there is a queued user message, send exactly one now to begin the next turn.
         self.maybe_send_next_queued_input();
+        // Emit a notification when the turn completes (suppressed if focused).
+        self.notify(Notification::AgentTurnComplete);
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
@@ -531,6 +538,9 @@ impl ChatWidget {
         self.flush_answer_stream_with_separator();
         // Emit the proposed command into history (like proposed patches)
         self.add_to_history(history_cell::new_proposed_command(&ev.command));
+        let command = shlex::try_join(ev.command.iter().map(|s| s.as_str()))
+            .unwrap_or_else(|_| ev.command.join(" "));
+        self.notify(Notification::ExecApprovalRequested { command });
 
         let request = ApprovalRequest::Exec {
             id,
@@ -560,6 +570,10 @@ impl ChatWidget {
         };
         self.bottom_pane.push_approval_request(request);
         self.request_redraw();
+        self.notify(Notification::EditApprovalRequested {
+            cwd: self.config.cwd.clone(),
+            changes: ev.changes.keys().cloned().collect(),
+        });
     }
 
     pub(crate) fn handle_exec_begin_now(&mut self, ev: ExecCommandBeginEvent) {
@@ -686,6 +700,7 @@ impl ChatWidget {
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: true,
             suppress_session_configured_redraw: false,
+            pending_notification: None,
         }
     }
 
@@ -741,6 +756,7 @@ impl ChatWidget {
             queued_user_messages: VecDeque::new(),
             show_welcome_banner: true,
             suppress_session_configured_redraw: true,
+            pending_notification: None,
         }
     }
 
@@ -1137,6 +1153,20 @@ impl ChatWidget {
         self.frame_requester.schedule_frame();
     }
 
+    fn notify(&mut self, notification: Notification) {
+        if !notification.allowed_for(&self.config.tui_notifications) {
+            return;
+        }
+        self.pending_notification = Some(notification);
+        self.request_redraw();
+    }
+
+    pub(crate) fn maybe_post_pending_notification(&mut self, tui: &mut crate::tui::Tui) {
+        if let Some(notif) = self.pending_notification.take() {
+            tui.notify(notif.display());
+        }
+    }
+
     /// Mark the active exec cell as failed (✗) and flush it into history.
     fn finalize_active_exec_cell_as_failed(&mut self) {
         if let Some(cell) = self.active_exec_cell.take() {
@@ -1445,6 +1475,49 @@ impl WidgetRef for &ChatWidget {
             active_cell_area.y = active_cell_area.y.saturating_add(1);
             active_cell_area.height -= 1;
             cell.render_ref(active_cell_area, buf);
+        }
+    }
+}
+
+enum Notification {
+    AgentTurnComplete,
+    ExecApprovalRequested { command: String },
+    EditApprovalRequested { cwd: PathBuf, changes: Vec<PathBuf> },
+}
+
+impl Notification {
+    fn display(&self) -> String {
+        match self {
+            Notification::AgentTurnComplete => "Agent turn complete".to_string(),
+            Notification::ExecApprovalRequested { command } => {
+                format!("Approval requested: {}", truncate_text(command, 30))
+            }
+            Notification::EditApprovalRequested { cwd, changes } => {
+                format!(
+                    "Codex wants to edit {}",
+                    if changes.len() == 1 {
+                        #[allow(clippy::unwrap_used)]
+                        display_path_for(changes.first().unwrap(), cwd)
+                    } else {
+                        format!("{} files", changes.len())
+                    }
+                )
+            }
+        }
+    }
+
+    fn type_name(&self) -> &str {
+        match self {
+            Notification::AgentTurnComplete => "agent-turn-complete",
+            Notification::ExecApprovalRequested { .. }
+            | Notification::EditApprovalRequested { .. } => "approval-requested",
+        }
+    }
+
+    fn allowed_for(&self, settings: &Notifications) -> bool {
+        match settings {
+            Notifications::Enabled(enabled) => *enabled,
+            Notifications::Custom(allowed) => allowed.iter().any(|a| a == self.type_name()),
         }
     }
 }

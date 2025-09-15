@@ -504,6 +504,9 @@ To have Codex use this script for notifications, you would configure it via `not
 notify = ["python3", "/Users/mbolin/.codex/notify.py"]
 ```
 
+> [!NOTE]
+> Use `notify` for automation and integrations: Codex invokes your external program with a single JSON argument for each event, independent of the TUI. If you only want lightweight desktop notifications while using the TUI, prefer `tui.notifications`, which uses terminal escape codes and requires no external program. You can enable both; `tui.notifications` covers in‑TUI alerts (e.g., approval prompts), while `notify` is best for system‑level hooks or custom notifiers. Currently, `notify` emits only `agent-turn-complete`, whereas `tui.notifications` supports `agent-turn-complete` and `approval-requested` with optional filtering.
+
 ## history
 
 By default, Codex CLI records messages sent to the model in `$CODEX_HOME/history.jsonl`. Note that on UNIX, the file permissions are set to `o600`, so it should only be readable and writable by the owner.
@@ -576,8 +579,20 @@ Options that are specific to the TUI.
 
 ```toml
 [tui]
-# More to come here
+# Send desktop notifications when approvals are required or a turn completes.
+# Defaults to false.
+notifications = true
+
+# You can optionally filter to specific notification types.
+# Available types are "agent-turn-complete" and "approval-requested".
+notifications = [ "agent-turn-complete", "approval-requested" ]
 ```
+
+> [!NOTE]
+> Codex emits desktop notifications using terminal escape codes. Not all terminals support these (notably, macOS Terminal.app and VS Code's terminal do not support custom notifications. iTerm2, Ghostty and WezTerm do support these notifications).
+
+> [!NOTE]
+> `tui.notifications` is built‑in and limited to the TUI session. For programmatic or cross‑environment notifications—or to integrate with OS‑specific notifiers—use the top‑level `notify` option to run an external program that receives event JSON. The two settings are independent and can be used together.
 
 ## Config reference
 
@@ -616,7 +631,8 @@ Options that are specific to the TUI.
 | `history.persistence` | `save-all` \| `none` | History file persistence (default: `save-all`). |
 | `history.max_bytes` | number | Currently ignored (not enforced). |
 | `file_opener` | `vscode` \| `vscode-insiders` \| `windsurf` \| `cursor` \| `none` | URI scheme for clickable citations (default: `vscode`). |
-| `tui` | table | TUI‑specific options (reserved). |
+| `tui` | table | TUI‑specific options. |
+| `tui.notifications` | boolean \| array<string> | Enable desktop notifications in the tui (default: false). |
 | `hide_agent_reasoning` | boolean | Hide model reasoning events. |
 | `show_raw_agent_reasoning` | boolean | Show raw reasoning (when available). |
 | `model_reasoning_effort` | `minimal` \| `low` \| `medium` \| `high` | Responses API reasoning effort. |
