@@ -72,3 +72,19 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::ConversationPath(_) => false,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::TurnAbortedEvent;
+    use crate::protocol::TurnAbortReason;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn persists_turn_aborted_interrupted() {
+        let ev = EventMsg::TurnAborted(TurnAbortedEvent {
+            reason: TurnAbortReason::Interrupted,
+        });
+        assert_eq!(should_persist_event_msg(&ev), true);
+    }
+}
