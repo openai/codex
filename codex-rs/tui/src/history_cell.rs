@@ -787,7 +787,7 @@ impl HistoryCell for SessionHeaderHistoryCell {
             "│".into(),
         ]));
 
-        // Model line includes the current reasoning level when available (e.g., "gpt-5 high")
+        // Model line: " Model: <model> <reasoning_label> (change with /model)"
         const CHANGE_MODEL_HINT: &str = "(change with /model)";
         let reasoning_label = self.reasoning_label();
         let mut model_text = format!(" Model: {}", self.model);
