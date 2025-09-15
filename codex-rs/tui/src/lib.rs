@@ -42,6 +42,7 @@ pub mod custom_terminal;
 mod diff_render;
 mod exec_command;
 mod file_search;
+mod frames;
 mod get_git_diff;
 mod history_cell;
 pub mod insert_history;
