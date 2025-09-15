@@ -344,3 +344,39 @@ fn print_completion(cmd: CompletionCommand) {
     let name = "codex";
     generate(cmd.shell, &mut app, name, &mut std::io::stdout());
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resume_model_flag_applies_when_no_root_flags() {
+        let cli =
+            MultitoolCli::try_parse_from(["codex", "resume", "-m", "gpt-5-test"]).expect("parse");
+
+        let MultitoolCli {
+            mut interactive,
+            config_overrides: root_overrides,
+            subcommand,
+        } = cli;
+
+        let Subcommand::Resume(ResumeCommand {
+            session_id,
+            last,
+            config_overrides: resume_cli,
+        }) = subcommand.expect("resume present")
+        else {
+            unreachable!()
+        };
+
+        let resume_session_id = session_id;
+        interactive.resume_picker = resume_session_id.is_none() && !last;
+        interactive.resume_last = last;
+        interactive.resume_session_id = resume_session_id;
+
+        merge_resume_cli_flags(&mut interactive, resume_cli);
+        prepend_config_flags(&mut interactive.config_overrides, root_overrides);
+
+        assert_eq!(interactive.model.as_deref(), Some("gpt-5-test"));
+    }
+}
