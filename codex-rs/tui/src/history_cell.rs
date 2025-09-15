@@ -1099,6 +1099,20 @@ pub(crate) fn new_context_output(
         lines.push(vec!["  • ID: ".into(), session_id.to_string().into()].into());
     }
 
+    // Add warning message if usage exceeds 70%
+    if percentage > 70 {
+        lines.push("".into());
+        lines.push(vec![
+            padded_emoji("⚠️").into(),
+            "High Context Usage Warning".yellow().bold()
+        ].into());
+        lines.push(vec![
+            "  Consider using ".into(),
+            "/compact".cyan().bold(),
+            " to reduce context".into()
+        ].into());
+    }
+
     PlainHistoryCell { lines }
 }
 
