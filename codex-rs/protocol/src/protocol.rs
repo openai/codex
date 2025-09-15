@@ -414,6 +414,7 @@ pub struct Event {
 }
 
 /// Response event from the agent
+/// NOTE: Make sure none of these values have optional types, as it will mess up the extension code-gen.
 #[derive(Debug, Clone, Deserialize, Serialize, Display, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
@@ -514,7 +515,12 @@ pub enum EventMsg {
     EnteredReviewMode(ReviewRequest),
 
     /// Exited review mode with an optional final result to apply.
-    ExitedReviewMode(Option<ReviewOutputEvent>),
+    ExitedReviewMode(ExitedReviewModeEvent),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub struct ExitedReviewModeEvent {
+    pub review_output: Option<ReviewOutputEvent>,
 }
 
 // Individual event payload types matching each `EventMsg` variant.

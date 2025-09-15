@@ -18,6 +18,7 @@ use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
 use codex_protocol::mcp_protocol::ConversationId;
 use codex_protocol::protocol::ConversationPathResponseEvent;
+use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::TaskStartedEvent;
@@ -3249,11 +3250,11 @@ fn convert_call_tool_result_to_function_call_output_payload(
 async fn exit_review_mode(
     session: Arc<Session>,
     task_sub_id: String,
-    res: Option<ReviewOutputEvent>,
+    review_output: Option<ReviewOutputEvent>,
 ) {
     let event = Event {
         id: task_sub_id,
-        msg: EventMsg::ExitedReviewMode(res),
+        msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent { review_output }),
     };
     session.send_event(event).await;
 }
