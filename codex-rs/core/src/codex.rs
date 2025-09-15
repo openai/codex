@@ -2836,20 +2836,7 @@ async fn execute_agent_isolated(
         params.agent_name
     );
 
-    // Send AgentBegin event
-    sess.send_event(Event {
-        id: params.sub_id.clone(),
-        msg: EventMsg::AgentBegin(crate::protocol::AgentBeginEvent {
-            call_id: params.call_id.clone(),
-            agent_name: params.agent_name.clone(),
-            task: params.init_prompt.clone(),
-            parent_context: None,
-            plan_item_id: params.plan_item_id.clone(),
-        }),
-    })
-    .await;
-
-    // Check and set agent context to prevent recursion
+    // Check and set agent context to prevent recursion (before sending any events)
     {
         let mut state = sess.state.lock_unchecked();
         if state.is_agent_context {
@@ -2869,23 +2856,6 @@ async fn execute_agent_isolated(
     }
     let _guard = AgentContextGuard { sess };
 
-    // Create an isolated context for the agent with specialized system prompt
-    let agent_context = TurnContext {
-        client: parent_context.client.clone(),
-        cwd: parent_context.cwd.clone(),
-        base_instructions: Some(params.init_prompt.clone()),
-        user_instructions: None,
-        approval_policy: parent_context.approval_policy,
-        sandbox_policy: parent_context.sandbox_policy.clone(),
-        shell_environment_policy: parent_context.shell_environment_policy.clone(),
-        tools_config: parent_context.tools_config.clone(),
-        is_review_mode: false,
-    };
-
-    // Track agent execution
-    let mut agent_outputs = Vec::new();
-    let mut agent_loops = Vec::new();
-
     // Extract the user's task from the agent prompt
     // The prompt format is: [agent system prompt]\n\nTask: [user's request]
     let task_text = params
@@ -2899,6 +2869,19 @@ async fn execute_agent_isolated(
     if task_text.is_empty() {
         return Err("No task found in agent prompt".to_string());
     }
+
+    // Create an isolated context for the agent with specialized system prompt
+    let agent_context = TurnContext {
+        client: parent_context.client.clone(),
+        cwd: parent_context.cwd.clone(),
+        base_instructions: Some(params.init_prompt.clone()),
+        user_instructions: None,
+        approval_policy: parent_context.approval_policy,
+        sandbox_policy: parent_context.sandbox_policy.clone(),
+        shell_environment_policy: parent_context.shell_environment_policy.clone(),
+        tools_config: parent_context.tools_config.clone(),
+        is_review_mode: false,
+    };
 
     info!(
         "Agent '{}' executing task: {}",
@@ -2937,6 +2920,26 @@ async fn execute_agent_isolated(
         }
     };
 
+    // Send AgentBegin event only after stream is successfully created
+    sess.send_event(Event {
+        id: params.sub_id.clone(),
+        msg: EventMsg::AgentBegin(crate::protocol::AgentBeginEvent {
+            call_id: params.call_id.clone(),
+            agent_name: params.agent_name.clone(),
+            task: params.init_prompt.clone(),
+            parent_context: None,
+            plan_item_id: params.plan_item_id.clone(),
+        }),
+    })
+    .await;
+
+    // Track whether AgentBegin was sent, so we know if we need to send AgentEnd on error
+    let agent_begin_sent = true;
+
+    // Track agent execution
+    let mut agent_outputs = Vec::new();
+    let mut agent_loops = Vec::new();
+
     // Create a minimal diff tracker for the agent context
     let _agent_diff_tracker = TurnDiffTracker::new();
 
@@ -2952,7 +2955,26 @@ async fn execute_agent_isolated(
             Ok(ev) => ev,
             Err(e) => {
                 error!("Agent stream error: {}", e);
-                return Err(format!("Agent stream error: {e}"));
+                let error_msg = format!("Agent stream error: {e}");
+
+                // Send AgentEnd event with failure status if AgentBegin was sent
+                if agent_begin_sent {
+                    let duration_ms = start_time.elapsed().as_millis() as u64;
+                    sess.send_event(Event {
+                        id: params.sub_id.clone(),
+                        msg: EventMsg::AgentEnd(crate::protocol::AgentEndEvent {
+                            call_id: params.call_id.clone(),
+                            agent_name: params.agent_name.clone(),
+                            summary: format!("Agent failed: {error_msg}"),
+                            status: crate::protocol::AgentStatus::Failed,
+                            duration_ms,
+                            plan_item_id: params.plan_item_id.clone(),
+                        }),
+                    })
+                    .await;
+                }
+
+                return Err(error_msg);
             }
         };
 

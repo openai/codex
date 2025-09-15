@@ -1385,12 +1385,19 @@ pub(crate) fn new_agent_progress(
 
 /// Visual cell for agent completion
 pub(crate) fn new_agent_end(event: &codex_core::protocol::AgentEndEvent) -> PlainHistoryCell {
-    let status_icon = "✓".green();
+    use codex_core::protocol::AgentStatus;
+
     let duration = format_duration(Duration::from_millis(event.duration_ms));
+
+    let (status_icon, status_text) = match event.status {
+        AgentStatus::Done => ("✓".green(), " Done ".green()),
+        AgentStatus::Failed => ("✗".red(), " Failed ".red()),
+        AgentStatus::Running => ("⟲".yellow(), " Running ".yellow()), // Shouldn't happen here but handle it
+    };
 
     let mut lines = vec![Line::from(vec![
         status_icon,
-        " Done ".green(),
+        status_text,
         Span::styled(
             event.agent_name.clone(),
             Style::default()

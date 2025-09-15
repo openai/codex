@@ -1229,6 +1229,7 @@ pub struct AgentEndEvent {
 pub enum AgentStatus {
     Running,
     Done,
+    Failed,
 }
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize, TS)]
