@@ -251,6 +251,7 @@ fn make_chatwidget_manual() -> (
         show_welcome_banner: true,
         queued_user_messages: VecDeque::new(),
         suppress_session_configured_redraw: false,
+        pending_notification: None,
     };
     (widget, rx, op_rx)
 }
