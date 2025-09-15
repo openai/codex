@@ -1,4 +1,4 @@
-use codex_core::config::SWIFTFOX_MEDIUM_MODEL;
+use codex_core::config::GPT_5_CODEX_MEDIUM_MODEL;
 use codex_core::protocol_config_types::ReasoningEffort;
 use codex_protocol::mcp_protocol::AuthMode;
 
@@ -19,24 +19,24 @@ pub struct ModelPreset {
 
 const PRESETS: &[ModelPreset] = &[
     ModelPreset {
-        id: "swiftfox-low",
-        label: "swiftfox low",
+        id: "gpt-5-codex-low",
+        label: "gpt-5-codex low",
         description: "",
-        model: "swiftfox",
+        model: "gpt-5-codex",
         effort: Some(ReasoningEffort::Low),
     },
     ModelPreset {
-        id: "swiftfox-medium",
-        label: "swiftfox medium",
+        id: "gpt-5-codex-medium",
+        label: "gpt-5-codex medium",
         description: "",
-        model: "swiftfox",
+        model: "gpt-5-codex",
         effort: None,
     },
     ModelPreset {
-        id: "swiftfox-high",
-        label: "swiftfox high",
+        id: "gpt-5-codex-high",
+        label: "gpt-5-codex high",
         description: "",
-        model: "swiftfox",
+        model: "gpt-5-codex",
         effort: Some(ReasoningEffort::High),
     },
     ModelPreset {
@@ -74,7 +74,7 @@ pub fn builtin_model_presets(auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
         Some(AuthMode::ApiKey) => PRESETS
             .iter()
             .copied()
-            .filter(|p| p.model != SWIFTFOX_MEDIUM_MODEL)
+            .filter(|p| p.model != GPT_5_CODEX_MEDIUM_MODEL)
             .collect(),
         _ => PRESETS.to_vec(),
     }
