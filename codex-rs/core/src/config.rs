@@ -1,6 +1,7 @@
 use crate::config_profile::ConfigProfile;
 use crate::config_types::History;
 use crate::config_types::McpServerConfig;
+use crate::config_types::Notifications;
 use crate::config_types::ReasoningSummaryFormat;
 use crate::config_types::SandboxWorkspaceWrite;
 use crate::config_types::ShellEnvironmentPolicy;
@@ -9,6 +10,7 @@ use crate::config_types::Tui;
 use crate::config_types::UriBasedFileOpener;
 use crate::git_info::resolve_root_git_project_for_trust;
 use crate::model_family::ModelFamily;
+use crate::model_family::derive_default_model_family;
 use crate::model_family::find_family_for_model;
 use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::built_in_model_providers;
@@ -24,16 +26,20 @@ use codex_protocol::mcp_protocol::Tools;
 use codex_protocol::mcp_protocol::UserSavedConfig;
 use dirs::home_dir;
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
 use tempfile::NamedTempFile;
 use toml::Value as TomlValue;
+use toml_edit::Array as TomlArray;
 use toml_edit::DocumentMut;
+use toml_edit::Item as TomlItem;
+use toml_edit::Table as TomlTable;
 
 const OPENAI_DEFAULT_MODEL: &str = "gpt-5";
 const OPENAI_DEFAULT_REVIEW_MODEL: &str = "gpt-5";
-pub const SWIFTFOX_MEDIUM_MODEL: &str = "swiftfox-medium";
+pub const GPT_5_CODEX_MEDIUM_MODEL: &str = "gpt-5-codex";
 
 /// Maximum number of bytes of the documentation that will be embedded. Larger
 /// files are *silently truncated* to this size so we do not take up too much of
@@ -112,6 +118,10 @@ pub struct Config {
     /// If unset the feature is disabled.
     pub notify: Option<Vec<String>>,
 
+    /// TUI notifications preference. When set, the TUI will send OSC 9 notifications on approvals
+    /// and turn completions when not focused.
+    pub tui_notifications: Notifications,
+
     /// The directory that should be treated as the current working directory
     /// for the session. All relative paths inside the business-logic layer are
     /// resolved against this path.
@@ -158,9 +168,6 @@ pub struct Config {
 
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: String,
-
-    /// Experimental rollout resume path (absolute path to .jsonl; undocumented).
-    pub experimental_resume: Option<PathBuf>,
 
     /// Include an experimental plan tool that the model can use to update its current plan and status of each step.
     pub include_plan_tool: bool,
@@ -264,6 +271,88 @@ pub fn load_config_as_toml(codex_home: &Path) -> std::io::Result<TomlValue> {
             Err(e)
         }
     }
+}
+
+pub fn load_global_mcp_servers(
+    codex_home: &Path,
+) -> std::io::Result<BTreeMap<String, McpServerConfig>> {
+    let root_value = load_config_as_toml(codex_home)?;
+    let Some(servers_value) = root_value.get("mcp_servers") else {
+        return Ok(BTreeMap::new());
+    };
+
+    servers_value
+        .clone()
+        .try_into()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
+
+pub fn write_global_mcp_servers(
+    codex_home: &Path,
+    servers: &BTreeMap<String, McpServerConfig>,
+) -> std::io::Result<()> {
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let mut doc = match std::fs::read_to_string(&config_path) {
+        Ok(contents) => contents
+            .parse::<DocumentMut>()
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => DocumentMut::new(),
+        Err(e) => return Err(e),
+    };
+
+    doc.as_table_mut().remove("mcp_servers");
+
+    if !servers.is_empty() {
+        let mut table = TomlTable::new();
+        table.set_implicit(true);
+        doc["mcp_servers"] = TomlItem::Table(table);
+
+        for (name, config) in servers {
+            let mut entry = TomlTable::new();
+            entry.set_implicit(false);
+            entry["command"] = toml_edit::value(config.command.clone());
+
+            if !config.args.is_empty() {
+                let mut args = TomlArray::new();
+                for arg in &config.args {
+                    args.push(arg.clone());
+                }
+                entry["args"] = TomlItem::Value(args.into());
+            }
+
+            if let Some(env) = &config.env
+                && !env.is_empty()
+            {
+                let mut env_table = TomlTable::new();
+                env_table.set_implicit(false);
+                let mut pairs: Vec<_> = env.iter().collect();
+                pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                for (key, value) in pairs {
+                    env_table.insert(key, toml_edit::value(value.clone()));
+                }
+                entry["env"] = TomlItem::Table(env_table);
+            }
+
+            if let Some(timeout) = config.startup_timeout_ms {
+                let timeout = i64::try_from(timeout).map_err(|_| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "startup_timeout_ms exceeds supported range",
+                    )
+                })?;
+                entry["startup_timeout_ms"] = toml_edit::value(timeout);
+            }
+
+            doc["mcp_servers"][name.as_str()] = TomlItem::Table(entry);
+        }
+    }
+
+    std::fs::create_dir_all(codex_home)?;
+    let tmp_file = NamedTempFile::new_in(codex_home)?;
+    std::fs::write(tmp_file.path(), doc.to_string())?;
+    tmp_file.persist(config_path).map_err(|err| err.error)?;
+
+    Ok(())
 }
 
 fn set_project_trusted_inner(doc: &mut DocumentMut, project_path: &Path) -> anyhow::Result<()> {
@@ -601,9 +690,6 @@ pub struct ConfigToml {
     /// Base URL for requests to ChatGPT (as opposed to the OpenAI API).
     pub chatgpt_base_url: Option<String>,
 
-    /// Experimental rollout resume path (absolute path to .jsonl; undocumented).
-    pub experimental_resume: Option<PathBuf>,
-
     /// Experimental path to a file whose contents replace the built-in BASE_INSTRUCTIONS.
     pub experimental_instructions_file: Option<PathBuf>,
 
@@ -865,15 +951,8 @@ impl Config {
             .or(cfg.model)
             .unwrap_or_else(default_model);
 
-        let mut model_family = find_family_for_model(&model).unwrap_or_else(|| ModelFamily {
-            slug: model.clone(),
-            family: model.clone(),
-            needs_special_apply_patch_instructions: false,
-            supports_reasoning_summaries: false,
-            reasoning_summary_format: ReasoningSummaryFormat::None,
-            uses_local_shell_tool: false,
-            apply_patch_tool_type: None,
-        });
+        let mut model_family =
+            find_family_for_model(&model).unwrap_or_else(|| derive_default_model_family(&model));
 
         if let Some(supports_reasoning_summaries) = cfg.model_supports_reasoning_summaries {
             model_family.supports_reasoning_summaries = supports_reasoning_summaries;
@@ -896,8 +975,6 @@ impl Config {
                 .as_ref()
                 .and_then(|info| info.auto_compact_token_limit)
         });
-
-        let experimental_resume = cfg.experimental_resume;
 
         // Load base instructions override from a file if specified. If the
         // path is relative, resolve it against the effective cwd so the
@@ -959,8 +1036,6 @@ impl Config {
                 .chatgpt_base_url
                 .or(cfg.chatgpt_base_url)
                 .unwrap_or("https://chatgpt.com/backend-api/".to_string()),
-
-            experimental_resume,
             include_plan_tool: include_plan_tool.unwrap_or(false),
             include_apply_patch_tool: include_apply_patch_tool.unwrap_or(false),
             tools_web_search_request,
@@ -973,6 +1048,11 @@ impl Config {
             include_view_image_tool,
             active_profile: active_profile_name,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
+            tui_notifications: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.notifications.clone())
+                .unwrap_or_default(),
         };
         Ok(config)
     }
@@ -1177,6 +1257,47 @@ exclude_slash_tmp = true
         );
     }
 
+    #[test]
+    fn load_global_mcp_servers_returns_empty_if_missing() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        let servers = load_global_mcp_servers(codex_home.path())?;
+        assert!(servers.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn write_global_mcp_servers_round_trips_entries() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        let mut servers = BTreeMap::new();
+        servers.insert(
+            "docs".to_string(),
+            McpServerConfig {
+                command: "echo".to_string(),
+                args: vec!["hello".to_string()],
+                env: None,
+                startup_timeout_ms: None,
+            },
+        );
+
+        write_global_mcp_servers(codex_home.path(), &servers)?;
+
+        let loaded = load_global_mcp_servers(codex_home.path())?;
+        assert_eq!(loaded.len(), 1);
+        let docs = loaded.get("docs").expect("docs entry");
+        assert_eq!(docs.command, "echo");
+        assert_eq!(docs.args, vec!["hello".to_string()]);
+
+        let empty = BTreeMap::new();
+        write_global_mcp_servers(codex_home.path(), &empty)?;
+        let loaded = load_global_mcp_servers(codex_home.path())?;
+        assert!(loaded.is_empty());
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn persist_model_selection_updates_defaults() -> anyhow::Result<()> {
         let codex_home = TempDir::new()?;
@@ -1184,7 +1305,7 @@ exclude_slash_tmp = true
         persist_model_selection(
             codex_home.path(),
             None,
-            "swiftfox-high",
+            "gpt-5-codex",
             Some(ReasoningEffort::High),
         )
         .await?;
@@ -1193,7 +1314,7 @@ exclude_slash_tmp = true
             tokio::fs::read_to_string(codex_home.path().join(CONFIG_TOML_FILE)).await?;
         let parsed: ConfigToml = toml::from_str(&serialized)?;
 
-        assert_eq!(parsed.model.as_deref(), Some("swiftfox-high"));
+        assert_eq!(parsed.model.as_deref(), Some("gpt-5-codex"));
         assert_eq!(parsed.model_reasoning_effort, Some(ReasoningEffort::High));
 
         Ok(())
@@ -1247,7 +1368,7 @@ model = "gpt-4.1"
         persist_model_selection(
             codex_home.path(),
             Some("dev"),
-            "swiftfox-medium",
+            "gpt-5-codex",
             Some(ReasoningEffort::Medium),
         )
         .await?;
@@ -1260,7 +1381,7 @@ model = "gpt-4.1"
             .get("dev")
             .expect("profile should be created");
 
-        assert_eq!(profile.model.as_deref(), Some("swiftfox-medium"));
+        assert_eq!(profile.model.as_deref(), Some("gpt-5-codex"));
         assert_eq!(
             profile.model_reasoning_effort,
             Some(ReasoningEffort::Medium)
@@ -1486,7 +1607,6 @@ model_verbosity = "high"
                 model_reasoning_summary: ReasoningSummary::Detailed,
                 model_verbosity: None,
                 chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
-                experimental_resume: None,
                 base_instructions: None,
                 include_plan_tool: false,
                 include_apply_patch_tool: false,
@@ -1496,6 +1616,7 @@ model_verbosity = "high"
                 include_view_image_tool: true,
                 active_profile: Some("o3".to_string()),
                 disable_paste_burst: false,
+                tui_notifications: Default::default(),
             },
             o3_profile_config
         );
@@ -1544,7 +1665,6 @@ model_verbosity = "high"
             model_reasoning_summary: ReasoningSummary::default(),
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
-            experimental_resume: None,
             base_instructions: None,
             include_plan_tool: false,
             include_apply_patch_tool: false,
@@ -1554,6 +1674,7 @@ model_verbosity = "high"
             include_view_image_tool: true,
             active_profile: Some("gpt3".to_string()),
             disable_paste_burst: false,
+            tui_notifications: Default::default(),
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -1617,7 +1738,6 @@ model_verbosity = "high"
             model_reasoning_summary: ReasoningSummary::default(),
             model_verbosity: None,
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
-            experimental_resume: None,
             base_instructions: None,
             include_plan_tool: false,
             include_apply_patch_tool: false,
@@ -1627,6 +1747,7 @@ model_verbosity = "high"
             include_view_image_tool: true,
             active_profile: Some("zdr".to_string()),
             disable_paste_burst: false,
+            tui_notifications: Default::default(),
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
@@ -1676,7 +1797,6 @@ model_verbosity = "high"
             model_reasoning_summary: ReasoningSummary::Detailed,
             model_verbosity: Some(Verbosity::High),
             chatgpt_base_url: "https://chatgpt.com/backend-api/".to_string(),
-            experimental_resume: None,
             base_instructions: None,
             include_plan_tool: false,
             include_apply_patch_tool: false,
@@ -1686,6 +1806,7 @@ model_verbosity = "high"
             include_view_image_tool: true,
             active_profile: Some("gpt5".to_string()),
             disable_paste_burst: false,
+            tui_notifications: Default::default(),
         };
 
         assert_eq!(expected_gpt5_profile_config, gpt5_profile_config);
@@ -1787,5 +1908,48 @@ trust_level = "trusted"
         assert_eq!(contents, expected);
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod notifications_tests {
+    use crate::config_types::Notifications;
+    use serde::Deserialize;
+
+    #[derive(Deserialize, Debug, PartialEq)]
+    struct TuiTomlTest {
+        notifications: Notifications,
+    }
+
+    #[derive(Deserialize, Debug, PartialEq)]
+    struct RootTomlTest {
+        tui: TuiTomlTest,
+    }
+
+    #[test]
+    fn test_tui_notifications_true() {
+        let toml = r#"
+            [tui]
+            notifications = true
+        "#;
+        let parsed: RootTomlTest = toml::from_str(toml).expect("deserialize notifications=true");
+        assert!(matches!(
+            parsed.tui.notifications,
+            Notifications::Enabled(true)
+        ));
+    }
+
+    #[test]
+    fn test_tui_notifications_custom_array() {
+        let toml = r#"
+            [tui]
+            notifications = ["foo"]
+        "#;
+        let parsed: RootTomlTest =
+            toml::from_str(toml).expect("deserialize notifications=[\"foo\"]");
+        assert!(matches!(
+            parsed.tui.notifications,
+            Notifications::Custom(ref v) if v == &vec!["foo".to_string()]
+        ));
     }
 }
