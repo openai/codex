@@ -289,13 +289,6 @@ fn prepend_config_flags(
 }
 
 /// Build the final `TuiCli` for a `codex resume` invocation.
-///
-/// This function encapsulates the business logic for combining:
-/// - the base interactive CLI parsed at the root level,
-/// - the resume-specific flags and overrides,
-/// - and any root-level config overrides (lower precedence).
-///
-/// The resulting `TuiCli` is ready to be passed to `codex_tui::run_main`.
 fn finalize_resume_interactive(
     mut interactive: TuiCli,
     root_config_overrides: CliConfigOverrides,
