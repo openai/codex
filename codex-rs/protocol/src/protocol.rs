@@ -15,6 +15,7 @@ use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::custom_prompts::CustomPrompt;
 use crate::mcp_protocol::ConversationId;
 use crate::message_history::HistoryEntry;
+use crate::models::ContentItem;
 use crate::models::ResponseItem;
 use crate::num_format::format_with_separators;
 use crate::parse_command::ParsedCommand;
@@ -166,6 +167,10 @@ pub enum Op {
     /// The agent will use its existing context (either conversation history or previous response id)
     /// to generate a summary which will be returned as an AgentMessage event.
     Compact,
+
+    /// Request a code review from the agent.
+    Review { review_request: ReviewRequest },
+
     /// Request to shut down codex instance.
     Shutdown,
 }
@@ -409,6 +414,7 @@ pub struct Event {
 }
 
 /// Response event from the agent
+/// NOTE: Make sure none of these values have optional types, as it will mess up the extension code-gen.
 #[derive(Debug, Clone, Deserialize, Serialize, Display, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
@@ -504,6 +510,17 @@ pub enum EventMsg {
     ShutdownComplete,
 
     ConversationPath(ConversationPathResponseEvent),
+
+    /// Entered review mode.
+    EnteredReviewMode(ReviewRequest),
+
+    /// Exited review mode with an optional final result to apply.
+    ExitedReviewMode(ExitedReviewModeEvent),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub struct ExitedReviewModeEvent {
+    pub review_output: Option<ReviewOutputEvent>,
 }
 
 // Individual event payload types matching each `EventMsg` variant.
@@ -852,26 +869,7 @@ impl InitialHistory {
             InitialHistory::Forked(items) => items.clone(),
         }
     }
-    pub fn get_response_items(&self) -> Vec<ResponseItem> {
-        match self {
-            InitialHistory::New => Vec::new(),
-            InitialHistory::Resumed(resumed) => resumed
-                .history
-                .iter()
-                .filter_map(|ri| match ri {
-                    RolloutItem::ResponseItem(item) => Some(item.clone()),
-                    _ => None,
-                })
-                .collect(),
-            InitialHistory::Forked(items) => items
-                .iter()
-                .filter_map(|ri| match ri {
-                    RolloutItem::ResponseItem(item) => Some(item.clone()),
-                    _ => None,
-                })
-                .collect(),
-        }
-    }
+
     pub fn get_event_msgs(&self) -> Option<Vec<EventMsg>> {
         match self {
             InitialHistory::New => None,
@@ -931,6 +929,18 @@ pub struct CompactedItem {
     pub message: String,
 }
 
+impl From<CompactedItem> for ResponseItem {
+    fn from(value: CompactedItem) -> Self {
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: value.message,
+            }],
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 pub struct TurnContextItem {
     pub cwd: PathBuf,
@@ -960,6 +970,57 @@ pub struct GitInfo {
     /// Repository URL (if available from remote)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub repository_url: Option<String>,
+}
+
+/// Review request sent to the review session.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS)]
+pub struct ReviewRequest {
+    pub prompt: String,
+    pub user_facing_hint: String,
+}
+
+/// Structured review result produced by a child review session.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS)]
+pub struct ReviewOutputEvent {
+    pub findings: Vec<ReviewFinding>,
+    pub overall_correctness: String,
+    pub overall_explanation: String,
+    pub overall_confidence_score: f32,
+}
+
+impl Default for ReviewOutputEvent {
+    fn default() -> Self {
+        Self {
+            findings: Vec::new(),
+            overall_correctness: String::default(),
+            overall_explanation: String::default(),
+            overall_confidence_score: 0.0,
+        }
+    }
+}
+
+/// A single review finding describing an observed issue or recommendation.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS)]
+pub struct ReviewFinding {
+    pub title: String,
+    pub body: String,
+    pub confidence_score: f32,
+    pub priority: i32,
+    pub code_location: ReviewCodeLocation,
+}
+
+/// Location of the code related to a review finding.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS)]
+pub struct ReviewCodeLocation {
+    pub absolute_file_path: PathBuf,
+    pub line_range: ReviewLineRange,
+}
+
+/// Inclusive line range in a file associated with the finding.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, TS)]
+pub struct ReviewLineRange {
+    pub start: u32,
+    pub end: u32,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]

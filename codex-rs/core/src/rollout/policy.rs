@@ -38,7 +38,10 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::AgentMessage(_)
         | EventMsg::AgentReasoning(_)
         | EventMsg::AgentReasoningRawContent(_)
-        | EventMsg::TokenCount(_) => true,
+        | EventMsg::TokenCount(_)
+        | EventMsg::EnteredReviewMode(_)
+        | EventMsg::ExitedReviewMode(_)
+        | EventMsg::TurnAborted(_) => true,
         EventMsg::Error(_)
         | EventMsg::TaskStarted(_)
         | EventMsg::TaskComplete(_)
@@ -65,7 +68,6 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::McpListToolsResponse(_)
         | EventMsg::ListCustomPromptsResponse(_)
         | EventMsg::PlanUpdate(_)
-        | EventMsg::TurnAborted(_)
         | EventMsg::ShutdownComplete
         | EventMsg::ConversationPath(_) => false,
     }

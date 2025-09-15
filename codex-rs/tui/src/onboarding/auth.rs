@@ -137,12 +137,12 @@ impl AuthModeWidget {
     fn render_pick_mode(&self, area: Rect, buf: &mut Buffer) {
         let mut lines: Vec<Line> = vec![
             Line::from(vec![
-                "> ".into(),
-                "Sign in with ChatGPT to use Codex as part of your paid plan".bold(),
+                "  ".into(),
+                "Sign in with ChatGPT to use Codex as part of your paid plan".into(),
             ]),
             Line::from(vec![
                 "  ".into(),
-                "or connect an API key for usage-based billing".bold(),
+                "or connect an API key for usage-based billing".into(),
             ]),
             "".into(),
         ];
@@ -182,6 +182,7 @@ impl AuthModeWidget {
             "Sign in with ChatGPT",
             "Usage included with Plus, Pro, and Team plans",
         ));
+        lines.push("".into());
         lines.extend(create_mode_item(
             1,
             AuthMode::ApiKey,
@@ -205,7 +206,7 @@ impl AuthModeWidget {
     }
 
     fn render_continue_in_browser(&self, area: Rect, buf: &mut Buffer) {
-        let mut spans = vec!["> ".into()];
+        let mut spans = vec!["  ".into()];
         // Schedule a follow-up frame to keep the shimmer animation going.
         self.request_frame
             .schedule_frame_in(std::time::Duration::from_millis(100));
@@ -217,7 +218,8 @@ impl AuthModeWidget {
             && !state.auth_url.is_empty()
         {
             lines.push("  If the link doesn't open automatically, open the following link to authenticate:".into());
-            lines.push(vec!["  ".into(), state.auth_url.as_str().cyan().underlined()].into());
+            lines.push("".into());
+            lines.push(Line::from(state.auth_url.as_str().cyan().underlined()));
             lines.push("".into());
         }
 
@@ -231,7 +233,7 @@ impl AuthModeWidget {
         let lines = vec![
             "✓ Signed in with your ChatGPT account".fg(Color::Green).into(),
             "".into(),
-            "> Before you start:".into(),
+            "  Before you start:".into(),
             "".into(),
             "  Decide how much autonomy you want to grant Codex".into(),
             Line::from(vec![

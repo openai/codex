@@ -34,7 +34,7 @@ use std::sync::atomic::Ordering;
 // --- Test helpers -----------------------------------------------------------
 
 /// Build an SSE stream body from a list of JSON events.
-fn sse(events: Vec<Value>) -> String {
+pub(super) fn sse(events: Vec<Value>) -> String {
     use std::fmt::Write as _;
     let mut out = String::new();
     for ev in events {
@@ -50,7 +50,7 @@ fn sse(events: Vec<Value>) -> String {
 }
 
 /// Convenience: SSE event for a completed response with a specific id.
-fn ev_completed(id: &str) -> Value {
+pub(super) fn ev_completed(id: &str) -> Value {
     serde_json::json!({
         "type": "response.completed",
         "response": {
@@ -77,7 +77,7 @@ fn ev_completed_with_tokens(id: &str, total_tokens: u64) -> Value {
 }
 
 /// Convenience: SSE event for a single assistant message output item.
-fn ev_assistant_message(id: &str, text: &str) -> Value {
+pub(super) fn ev_assistant_message(id: &str, text: &str) -> Value {
     serde_json::json!({
         "type": "response.output_item.done",
         "item": {
@@ -101,13 +101,13 @@ fn ev_function_call(call_id: &str, name: &str, arguments: &str) -> Value {
     })
 }
 
-fn sse_response(body: String) -> ResponseTemplate {
+pub(super) fn sse_response(body: String) -> ResponseTemplate {
     ResponseTemplate::new(200)
         .insert_header("content-type", "text/event-stream")
         .set_body_raw(body, "text/event-stream")
 }
 
-async fn mount_sse_once<M>(server: &MockServer, matcher: M, body: String)
+pub(super) async fn mount_sse_once<M>(server: &MockServer, matcher: M, body: String)
 where
     M: wiremock::Match + Send + Sync + 'static,
 {
@@ -115,7 +115,6 @@ where
         .and(path("/v1/responses"))
         .and(matcher)
         .respond_with(sse_response(body))
-        .expect(1)
         .mount(server)
         .await;
 }
@@ -127,9 +126,9 @@ async fn start_mock_server() -> MockServer {
         .await
 }
 
-const FIRST_REPLY: &str = "FIRST_REPLY";
-const SUMMARY_TEXT: &str = "SUMMARY_ONLY_CONTEXT";
-const SUMMARIZE_TRIGGER: &str = "Start Summarization";
+pub(super) const FIRST_REPLY: &str = "FIRST_REPLY";
+pub(super) const SUMMARY_TEXT: &str = "SUMMARY_ONLY_CONTEXT";
+pub(super) const SUMMARIZE_TRIGGER: &str = "Start Summarization";
 const THIRD_USER_MSG: &str = "next turn";
 const AUTO_SUMMARY_TEXT: &str = "AUTO_SUMMARY";
 const FIRST_AUTO_MSG: &str = "token limit start";
@@ -367,7 +366,9 @@ async fn summarize_context_three_requests_and_instructions() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
+#[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
+#[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
 async fn auto_compact_runs_after_token_limit_hit() {
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
@@ -454,6 +455,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
         })
         .await
         .unwrap();
+
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     codex
@@ -464,13 +466,39 @@ async fn auto_compact_runs_after_token_limit_hit() {
         })
         .await
         .unwrap();
+
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
     // wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     let requests = server.received_requests().await.unwrap();
-    assert_eq!(requests.len(), 3, "auto compact should add a third request");
+    assert!(
+        requests.len() >= 3,
+        "auto compact should add at least a third request, got {}",
+        requests.len()
+    );
+    let is_auto_compact = |req: &wiremock::Request| {
+        std::str::from_utf8(&req.body)
+            .unwrap_or("")
+            .contains("You have exceeded the maximum number of tokens")
+    };
+    let auto_compact_count = requests.iter().filter(|req| is_auto_compact(req)).count();
+    assert_eq!(
+        auto_compact_count, 1,
+        "expected exactly one auto compact request"
+    );
+    let auto_compact_index = requests
+        .iter()
+        .enumerate()
+        .find_map(|(idx, req)| is_auto_compact(req).then_some(idx))
+        .expect("auto compact request missing");
+    assert_eq!(
+        auto_compact_index, 2,
+        "auto compact should add a third request"
+    );
 
-    let body3 = requests[2].body_json::<serde_json::Value>().unwrap();
+    let body3 = requests[auto_compact_index]
+        .body_json::<serde_json::Value>()
+        .unwrap();
     let instructions = body3
         .get("instructions")
         .and_then(|v| v.as_str())

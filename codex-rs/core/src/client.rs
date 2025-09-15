@@ -455,7 +455,13 @@ fn attach_item_ids(payload_json: &mut Value, original_items: &[ResponseItem]) {
     };
 
     for (value, item) in items.iter_mut().zip(original_items.iter()) {
-        if let ResponseItem::Reasoning { id, .. } = item {
+        if let ResponseItem::Reasoning { id, .. }
+        | ResponseItem::Message { id: Some(id), .. }
+        | ResponseItem::WebSearchCall { id: Some(id), .. }
+        | ResponseItem::FunctionCall { id: Some(id), .. }
+        | ResponseItem::LocalShellCall { id: Some(id), .. }
+        | ResponseItem::CustomToolCall { id: Some(id), .. } = item
+        {
             if id.is_empty() {
                 continue;
             }
