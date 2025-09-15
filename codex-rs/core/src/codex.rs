@@ -2855,7 +2855,7 @@ async fn execute_agent_isolated(
     }
 
     // Create an isolated context for the agent with specialized system prompt
-    let _agent_context = TurnContext {
+    let agent_context = TurnContext {
         client: parent_context.client.clone(),
         cwd: parent_context.cwd.clone(),
         base_instructions: Some(params.init_prompt.clone()),
@@ -2871,42 +2871,167 @@ async fn execute_agent_isolated(
     let mut agent_outputs = Vec::new();
     let mut agent_loops = Vec::new();
 
-    // NOTE: Real LLM execution would happen here
-    // The agent_context contains:
-    // - base_instructions: The agent's specialized system prompt
-    // - client: The ModelClient to make LLM calls
-    // - tools_config: Available tools for the agent
-    //
-    // A full implementation would:
-    // 1. Create a conversation with the agent's system prompt
-    // 2. Add the user's task as a message
-    // 3. Stream the response through the client
-    // 4. Handle tool calls if needed
-    // 5. Return the final response
-    //
-    // For now, we provide a more informative placeholder that shows
-    // the agent configuration is working correctly:
+    // Extract the user's task from the agent prompt
+    // The prompt format is: [agent system prompt]\n\nTask: [user's request]
+    let task_text = params
+        .init_prompt
+        .lines()
+        .find(|line| line.starts_with("Task:"))
+        .map(|line| line.trim_start_matches("Task:").trim())
+        .unwrap_or("")
+        .to_string();
 
-    let agent_response = format!(
-        "Agent '{}' received task with specialized context.\n\
-         System prompt preview: {}\n\
-         Task: {}\n\
-         \n\
-         [Full LLM integration pending - agent would execute with above context]",
-        params.agent_name,
-        params.init_prompt.lines().next().unwrap_or(""),
-        params
-            .init_prompt
-            .lines()
-            .skip_while(|l| !l.contains("Task:"))
-            .next()
-            .unwrap_or("")
-            .trim_start_matches("Task:")
-            .trim()
+    if task_text.is_empty() {
+        return Err("No task found in agent prompt".to_string());
+    }
+
+    info!(
+        "Agent '{}' executing task: {}",
+        params.agent_name, task_text
     );
 
-    agent_outputs.push(agent_response.clone());
-    agent_loops.push("Agent execution completed".to_string());
+    // Create the input for the LLM as a user message
+    use codex_protocol::models::ContentItem;
+    let input = vec![ResponseItem::Message {
+        id: None,
+        role: "user".to_string(),
+        content: vec![ContentItem::InputText {
+            text: task_text.clone(),
+        }],
+    }];
+
+    // Get tools available for the agent
+    let tools = get_openai_tools(
+        &agent_context.tools_config,
+        Some(sess.mcp_connection_manager.list_all_tools()),
+    );
+
+    // Create the prompt with the agent's specialized instructions
+    let prompt = Prompt {
+        input,
+        tools,
+        base_instructions_override: Some(params.init_prompt.clone()),
+    };
+
+    // Stream the response from the LLM
+    let mut stream = match agent_context.client.stream(&prompt).await {
+        Ok(s) => s,
+        Err(e) => {
+            error!("Failed to start agent stream: {}", e);
+            return Err(format!("Failed to start agent stream: {e}"));
+        }
+    };
+
+    // Create a minimal diff tracker for the agent context
+    let _agent_diff_tracker = TurnDiffTracker::new();
+
+    // Process the stream
+    loop {
+        let event = stream.next().await;
+        let Some(event) = event else {
+            warn!("Agent stream closed unexpectedly");
+            break;
+        };
+
+        let event = match event {
+            Ok(ev) => ev,
+            Err(e) => {
+                error!("Agent stream error: {}", e);
+                return Err(format!("Agent stream error: {e}"));
+            }
+        };
+
+        match event {
+            ResponseEvent::OutputItemDone(item) => {
+                // For now, agents cannot use tools to avoid infinite recursion
+                // This is a safety measure since agents calling agents would create infinite async recursion
+                // Future implementation could handle this with proper boxing or depth limiting
+
+                // Track if a tool was attempted (for debugging)
+                if matches!(
+                    &item,
+                    ResponseItem::FunctionCall { .. }
+                        | ResponseItem::LocalShellCall { .. }
+                        | ResponseItem::CustomToolCall { .. }
+                ) {
+                    match &item {
+                        ResponseItem::FunctionCall { name, .. } => {
+                            warn!(
+                                "Agent attempted to call function '{}' but tool calls are disabled for agents",
+                                name
+                            );
+                            agent_loops.push(format!("Attempted function: {name} (disabled)"));
+                        }
+                        ResponseItem::LocalShellCall { action, .. } => {
+                            let LocalShellAction::Exec(exec) = action;
+                            warn!(
+                                "Agent attempted to execute command but tool calls are disabled for agents"
+                            );
+                            agent_loops.push(format!(
+                                "Attempted command: {} (disabled)",
+                                exec.command.join(" ")
+                            ));
+                        }
+                        ResponseItem::CustomToolCall { name, .. } => {
+                            warn!(
+                                "Agent attempted to call tool '{}' but tool calls are disabled for agents",
+                                name
+                            );
+                            agent_loops.push(format!("Attempted tool: {name} (disabled)"));
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Collect text outputs from assistant messages
+                if let ResponseItem::Message { role, content, .. } = &item
+                    && role == "assistant"
+                {
+                    for content_item in content {
+                        if let ContentItem::OutputText { text } = content_item {
+                            agent_outputs.push(text.clone());
+                        }
+                    }
+                }
+            }
+            ResponseEvent::Completed { .. } => {
+                info!("Agent stream completed successfully");
+                break;
+            }
+            ResponseEvent::OutputTextDelta(delta) => {
+                // Send progress updates
+                sess.send_event(Event {
+                    id: params.sub_id.clone(),
+                    msg: EventMsg::AgentProgress(crate::protocol::AgentProgressEvent {
+                        call_id: params.call_id.clone(),
+                        agent_name: params.agent_name.clone(),
+                        step: format!(
+                            "Processing: {}...",
+                            delta.chars().take(50).collect::<String>()
+                        ),
+                        progress_type: crate::protocol::AgentProgressType::Loop(delta),
+                    }),
+                })
+                .await;
+            }
+            _ => {
+                // Handle other events as needed
+            }
+        }
+    }
+
+    // If no outputs were collected, provide a fallback
+    if agent_outputs.is_empty() {
+        agent_outputs.push(format!(
+            "Agent '{}' completed task but produced no text output",
+            params.agent_name
+        ));
+    }
+
+    // Add completion to loops
+    if agent_loops.is_empty() {
+        agent_loops.push("Agent execution completed".to_string());
+    }
 
     // Track any file changes (empty for now as agents work in isolated context)
     let agent_changes: Vec<(PathBuf, FileChange)> = Vec::new();
