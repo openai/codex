@@ -23,49 +23,56 @@ use tokio_stream::StreamExt;
 macro_rules! frames_for {
     ($dir:literal) => {
         [
-            include_str!(concat!("../frames/", $dir, "/frame_000.txt")),
-            include_str!(concat!("../frames/", $dir, "/frame_004.txt")),
-            include_str!(concat!("../frames/", $dir, "/frame_008.txt")),
-            include_str!(concat!("../frames/", $dir, "/frame_012.txt")),
-            include_str!(concat!("../frames/", $dir, "/frame_016.txt")),
-            include_str!(concat!("../frames/", $dir, "/frame_020.txt")),
-            include_str!(concat!("../frames/", $dir, "/frame_024.txt")),
-            include_str!(concat!("../frames/", $dir, "/frame_028.txt")),
-            include_str!(concat!("../frames/", $dir, "/frame_032.txt")),
-            include_str!(concat!("../frames/", $dir, "/frame_036.txt")),
-            include_str!(concat!("../frames/", $dir, "/frame_040.txt")),
-            include_str!(concat!("../frames/", $dir, "/frame_044.txt")),
-            include_str!(concat!("../frames/", $dir, "/frame_048.txt")),
-            include_str!(concat!("../frames/", $dir, "/frame_052.txt")),
-            include_str!(concat!("../frames/", $dir, "/frame_056.txt")),
-            include_str!(concat!("../frames/", $dir, "/frame_060.txt")),
-            include_str!(concat!("../frames/", $dir, "/frame_064.txt")),
-            include_str!(concat!("../frames/", $dir, "/frame_068.txt")),
-            include_str!(concat!("../frames/", $dir, "/frame_072.txt")),
-            include_str!(concat!("../frames/", $dir, "/frame_076.txt")),
-            include_str!(concat!("../frames/", $dir, "/frame_080.txt")),
-            include_str!(concat!("../frames/", $dir, "/frame_084.txt")),
-            include_str!(concat!("../frames/", $dir, "/frame_088.txt")),
-            include_str!(concat!("../frames/", $dir, "/frame_092.txt")),
-            include_str!(concat!("../frames/", $dir, "/frame_096.txt")),
-            include_str!(concat!("../frames/", $dir, "/frame_100.txt")),
-            include_str!(concat!("../frames/", $dir, "/frame_104.txt")),
-            include_str!(concat!("../frames/", $dir, "/frame_108.txt")),
-            include_str!(concat!("../frames/", $dir, "/frame_112.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_1.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_2.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_3.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_4.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_5.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_6.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_7.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_8.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_9.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_10.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_11.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_12.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_13.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_14.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_15.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_16.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_17.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_18.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_19.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_20.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_21.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_22.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_23.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_24.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_25.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_26.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_27.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_28.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_29.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_30.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_31.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_32.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_33.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_34.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_35.txt")),
+            include_str!(concat!("../frames/", $dir, "/frame_36.txt")),
         ]
     };
 }
 
-const FRAMES_DEFAULT: [&str; 29] = frames_for!("default");
-const FRAMES_CODEX: [&str; 29] = frames_for!("codex");
-const FRAMES_OPENAI: [&str; 29] = frames_for!("openai");
-const FRAMES_BLOCKS: [&str; 29] = frames_for!("blocks");
-const FRAMES_DOTS: [&str; 29] = frames_for!("dots");
-const FRAMES_HASH: [&str; 29] = frames_for!("hash");
-const FRAMES_HBARS: [&str; 29] = frames_for!("hbars");
-const FRAMES_VBARS: [&str; 29] = frames_for!("vbars");
-const FRAMES_SHAPES: [&str; 29] = frames_for!("shapes");
-const FRAMES_SLUG: [&str; 29] = frames_for!("slug");
+const FRAMES_DEFAULT: [&str; 36] = frames_for!("default");
+const FRAMES_CODEX: [&str; 36] = frames_for!("codex");
+const FRAMES_OPENAI: [&str; 36] = frames_for!("openai");
+const FRAMES_BLOCKS: [&str; 36] = frames_for!("blocks");
+const FRAMES_DOTS: [&str; 36] = frames_for!("dots");
+const FRAMES_HASH: [&str; 36] = frames_for!("hash");
+const FRAMES_HBARS: [&str; 36] = frames_for!("hbars");
+const FRAMES_VBARS: [&str; 36] = frames_for!("vbars");
+const FRAMES_SHAPES: [&str; 36] = frames_for!("shapes");
+const FRAMES_SLUG: [&str; 36] = frames_for!("slug");
 
 const VARIANTS: &[&[&str]] = &[
     &FRAMES_DEFAULT,
