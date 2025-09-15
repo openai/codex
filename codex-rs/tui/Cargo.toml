@@ -43,6 +43,7 @@ crossterm = { version = "0.28.1", features = [
     "bracketed-paste",
     "event-stream",
 ] }
+dirs = "6"
 diffy = "0.4.2"
 image = { version = "^0.25.8", default-features = false, features = [
     "jpeg",
