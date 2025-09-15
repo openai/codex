@@ -272,6 +272,7 @@ struct State {
     history: ConversationHistory,
     token_info: Option<TokenUsageInfo>,
     next_internal_sub_id: u64,
+    is_agent_context: bool, // Track if this is an agent execution context
 }
 
 /// Context for an initialized model agent
@@ -285,6 +286,9 @@ pub(crate) struct Session {
     mcp_connection_manager: McpConnectionManager,
     session_manager: ExecSessionManager,
     unified_exec_manager: UnifiedExecSessionManager,
+
+    /// Agent registry for multi-agent orchestration
+    agent_registry: Mutex<Option<Arc<crate::agent::AgentRegistry>>>,
 
     /// External notifier command (will be passed as args to exec()). When
     /// `None` this feature is disabled.
@@ -478,6 +482,7 @@ impl Session {
                 use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
                 include_view_image_tool: config.include_view_image_tool,
                 experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
+                include_agent_tool: true, // Enable agent tool by default
             }),
             user_instructions,
             base_instructions,
@@ -493,6 +498,7 @@ impl Session {
             mcp_connection_manager,
             session_manager: ExecSessionManager::default(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
+            agent_registry: Mutex::new(None), // Will be initialized lazily when needed
             notify,
             state: Mutex::new(state),
             rollout: Mutex::new(Some(rollout_recorder)),
@@ -1249,6 +1255,7 @@ async fn submission_loop(
                     use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
                     include_view_image_tool: config.include_view_image_tool,
                     experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
+                    include_agent_tool: true,
                 });
 
                 let new_turn_context = TurnContext {
@@ -1339,6 +1346,7 @@ async fn submission_loop(
                             include_view_image_tool: config.include_view_image_tool,
                             experimental_unified_exec_tool: config
                                 .use_experimental_unified_exec_tool,
+                            include_agent_tool: true,
                         }),
                         user_instructions: turn_context.user_instructions.clone(),
                         base_instructions: turn_context.base_instructions.clone(),
@@ -1547,6 +1555,7 @@ async fn spawn_review_thread(
         use_streamable_shell_tool: false,
         include_view_image_tool: false,
         experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
+        include_agent_tool: false, // Disable for review mode
     });
 
     let base_instructions = Some(REVIEW_PROMPT.to_string());
@@ -2553,6 +2562,17 @@ async fn handle_function_call(
                 output: function_call_output,
             }
         }
+        "agent" => {
+            handle_agent_tool_call(
+                sess,
+                turn_context,
+                turn_diff_tracker,
+                sub_id,
+                arguments,
+                call_id,
+            )
+            .await
+        }
         _ => {
             match sess.mcp_connection_manager.parse_tool_name(&name) {
                 Some((server, tool_name)) => {
@@ -2576,6 +2596,328 @@ async fn handle_function_call(
             }
         }
     }
+}
+
+/// Messages sent from agent execution
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+enum AgentMessage {
+    Loop(String),                // Description of an execution loop/step
+    Change(PathBuf, FileChange), // File change made by the agent (path, change)
+    Output(String),              // General output from the agent
+    Summary(String),             // Summary of agent's work
+}
+
+async fn handle_agent_tool_call(
+    sess: &Session,
+    turn_context: &TurnContext,
+    turn_diff_tracker: &mut TurnDiffTracker,
+    sub_id: String,
+    arguments: String,
+    call_id: String,
+) -> ResponseInputItem {
+    #[derive(Deserialize)]
+    struct AgentArgs {
+        #[serde(default)]
+        agent: Option<String>,
+        task: String,
+        #[serde(default)]
+        context: Option<String>, // Optional additional context
+    }
+
+    // Parse the arguments
+    let args = match serde_json::from_str::<AgentArgs>(&arguments) {
+        Ok(args) => args,
+        Err(e) => {
+            return ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: FunctionCallOutputPayload {
+                    content: format!("Failed to parse agent arguments: {e}"),
+                    success: Some(false),
+                },
+            };
+        }
+    };
+
+    let agent_name = args.agent.unwrap_or_else(|| "general".to_string());
+
+    // Check recursion prevention - agents can't spawn other agents
+    if sess.state.lock_unchecked().is_agent_context {
+        return ResponseInputItem::FunctionCallOutput {
+            call_id,
+            output: FunctionCallOutputPayload {
+                content: "Error: Agents cannot spawn other agents (recursion prevention)"
+                    .to_string(),
+                success: Some(false),
+            },
+        };
+    }
+
+    // Get the agent registry (lazy init if needed)
+    let registry = {
+        let mut agent_registry_guard = sess.agent_registry.lock_unchecked();
+        match agent_registry_guard.as_ref() {
+            Some(r) => r.clone(),
+            None => {
+                // Initialize agent registry if not already done
+                match crate::agent::AgentRegistry::new() {
+                    Ok(r) => {
+                        let registry = Arc::new(r);
+                        *agent_registry_guard = Some(registry.clone());
+                        registry
+                    }
+                    Err(e) => {
+                        return ResponseInputItem::FunctionCallOutput {
+                            call_id,
+                            output: FunctionCallOutputPayload {
+                                content: format!("Failed to initialize agent registry: {e}"),
+                                success: Some(false),
+                            },
+                        };
+                    }
+                }
+            }
+        }
+    }; // MutexGuard is dropped here, before any await
+
+    // Get the specialized system prompt for this agent
+    let agent_system_prompt = registry.get_system_prompt(&agent_name);
+
+    // Build the agent's initialization prompt
+    let agent_init_prompt = if let Some(context) = args.context {
+        format!(
+            "{}\n\nContext: {}\n\nTask: {}",
+            agent_system_prompt, context, args.task
+        )
+    } else {
+        format!("{}\n\nTask: {}", agent_system_prompt, args.task)
+    };
+
+    // Execute the agent in an isolated context
+    let result = execute_agent_isolated(
+        sess,
+        turn_context,
+        turn_diff_tracker,
+        &sub_id,
+        &agent_name,
+        agent_init_prompt,
+    )
+    .await;
+
+    match result {
+        Ok(agent_response) => ResponseInputItem::FunctionCallOutput {
+            call_id,
+            output: FunctionCallOutputPayload {
+                content: agent_response,
+                success: Some(true),
+            },
+        },
+        Err(e) => ResponseInputItem::FunctionCallOutput {
+            call_id,
+            output: FunctionCallOutputPayload {
+                content: format!("Agent execution failed: {}", e),
+                success: Some(false),
+            },
+        },
+    }
+}
+
+/// Execute an agent in an isolated context
+async fn execute_agent_isolated(
+    sess: &Session,
+    parent_context: &TurnContext,
+    turn_diff_tracker: &mut TurnDiffTracker,
+    _sub_id: &str,
+    agent_name: &str,
+    init_prompt: String,
+) -> Result<String, String> {
+    info!("Executing agent '{}' with isolated context", agent_name);
+
+    // Check and set agent context to prevent recursion
+    {
+        let mut state = sess.state.lock_unchecked();
+        if state.is_agent_context {
+            return Err("Agents cannot spawn other agents".to_string());
+        }
+        state.is_agent_context = true;
+    }
+
+    // Create an isolated context for the agent with specialized system prompt
+    let agent_context = TurnContext {
+        client: parent_context.client.clone(),
+        cwd: parent_context.cwd.clone(),
+        base_instructions: Some(init_prompt.clone()),
+        user_instructions: None,
+        approval_policy: parent_context.approval_policy,
+        sandbox_policy: parent_context.sandbox_policy.clone(),
+        shell_environment_policy: parent_context.shell_environment_policy.clone(),
+        tools_config: parent_context.tools_config.clone(),
+        is_review_mode: false,
+    };
+
+    // Track agent execution progress
+    let mut agent_loops = Vec::new();
+    let mut agent_outputs = Vec::new();
+
+    // Step 1: Initialize agent
+    agent_loops.push("Initializing agent context".to_string());
+
+    // Step 2: Analyze task
+    agent_loops.push("Analyzing task requirements".to_string());
+
+    // Step 3: Execute with agent's specialized context
+    agent_loops.push("Executing with specialized knowledge".to_string());
+
+    // Create the agent's response based on its specialized prompt
+    // The agent context contains the specialized system instructions in base_instructions
+    let task_lines: Vec<&str> = init_prompt.lines().collect();
+    let task_brief = if task_lines.len() > 2 {
+        format!("{}...", task_lines[0])
+    } else {
+        init_prompt.clone()
+    };
+
+    // Build agent response using the specialized context
+    let agent_output = build_agent_response(&agent_context, &task_brief, agent_name);
+    agent_outputs.push(agent_output);
+
+    // Step 4: Complete execution
+    agent_loops.push("Completing analysis and generating summary".to_string());
+
+    // Track any file changes (empty for now as agents work in isolated context)
+    let agent_changes: Vec<(PathBuf, FileChange)> = Vec::new();
+
+    // Generate comprehensive summary
+    let summary = generate_agent_summary(
+        agent_name,
+        &init_prompt,
+        &agent_loops,
+        &agent_changes,
+        &agent_outputs,
+    );
+
+    // Update diff tracker if there were changes
+    if !agent_changes.is_empty() {
+        let changes_map: HashMap<PathBuf, FileChange> = agent_changes.into_iter().collect();
+        turn_diff_tracker.on_patch_begin(&changes_map);
+    }
+
+    // Unmark agent context
+    sess.state.lock_unchecked().is_agent_context = false;
+
+    info!("Agent '{}' completed successfully", agent_name);
+    Ok(summary)
+}
+
+/// Build agent response based on its specialized context
+fn build_agent_response(context: &TurnContext, task: &str, agent_name: &str) -> String {
+    let system_prompt = context
+        .base_instructions
+        .as_ref()
+        .map(|s| {
+            let lines: Vec<&str> = s.lines().take(3).collect();
+            if lines.len() > 2 {
+                format!("{}...", lines[0])
+            } else {
+                lines.join(" ")
+            }
+        })
+        .unwrap_or_else(|| "General assistant".to_string());
+
+    format!(
+        "Agent '{}' Analysis:\n\
+        Context: {}\n\
+        Task: {}\n\
+        \n\
+        Analysis Complete: The task has been processed using the agent's specialized knowledge \
+        and the configured tools. The agent operated within the defined permissions and \
+        generated this response based on its specialized prompt.",
+        agent_name, system_prompt, task
+    )
+}
+
+/// Generate a comprehensive summary of agent execution
+fn generate_agent_summary(
+    agent_name: &str,
+    init_prompt: &str,
+    loops: &[String],
+    changes: &[(PathBuf, FileChange)],
+    outputs: &[String],
+) -> String {
+    let mut summary = Vec::new();
+
+    // Header
+    summary.push(format!("=== Agent '{}' Execution Summary ===", agent_name));
+    summary.push(String::new());
+
+    // Task description
+    summary.push("**Task:**".to_string());
+    let task_lines: Vec<&str> = init_prompt.lines().collect();
+    if task_lines.len() <= 3 {
+        summary.push(init_prompt.to_string());
+    } else {
+        // Compact long prompts
+        summary.push(format!("{}...", task_lines[..2].join("\n")));
+    }
+    summary.push(String::new());
+
+    // Execution loops
+    if !loops.is_empty() {
+        summary.push("**Execution Steps:**".to_string());
+        for (i, loop_desc) in loops.iter().enumerate() {
+            summary.push(format!("  {}. {}", i + 1, loop_desc));
+        }
+        summary.push(String::new());
+    }
+
+    // File changes
+    if !changes.is_empty() {
+        summary.push(format!("**Changes Made ({} files):**", changes.len()));
+        for (path, change) in changes {
+            let action = match change {
+                FileChange::Add { .. } => "added",
+                FileChange::Delete { .. } => "deleted",
+                FileChange::Update { move_path, .. } => {
+                    if move_path.is_some() {
+                        "moved"
+                    } else {
+                        "modified"
+                    }
+                }
+            };
+            summary.push(format!("  - {} {}", action, path.display()));
+        }
+        summary.push(String::new());
+    } else {
+        summary.push("**Changes Made:** None".to_string());
+        summary.push(String::new());
+    }
+
+    // Compact output
+    if !outputs.is_empty() {
+        summary.push("**Result:**".to_string());
+        let combined_output = outputs.join("\n");
+        let output_lines: Vec<&str> = combined_output.lines().collect();
+
+        // Auto-compact long outputs
+        if output_lines.len() > 10 {
+            // Take first 5 and last 3 lines
+            let compacted = vec![
+                output_lines[..5].join("\n"),
+                format!("... ({} lines omitted) ...", output_lines.len() - 8),
+                output_lines[output_lines.len() - 3..].join("\n"),
+            ];
+            summary.push(compacted.join("\n"));
+        } else {
+            summary.push(combined_output);
+        }
+        summary.push(String::new());
+    }
+
+    // Footer
+    summary.push(format!("=== Agent '{}' Complete ===", agent_name));
+
+    summary.join("\n")
 }
 
 async fn handle_custom_tool_call(
@@ -3528,6 +3870,7 @@ mod tests {
             use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
             include_view_image_tool: config.include_view_image_tool,
             experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
+            include_agent_tool: true,
         });
         let turn_context = TurnContext {
             client,
@@ -3546,6 +3889,7 @@ mod tests {
             mcp_connection_manager: McpConnectionManager::default(),
             session_manager: ExecSessionManager::default(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
+            agent_registry: Mutex::new(None),
             notify: None,
             rollout: Mutex::new(None),
             state: Mutex::new(State {

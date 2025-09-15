@@ -71,6 +71,7 @@ pub(crate) struct ToolsConfig {
     pub web_search_request: bool,
     pub include_view_image_tool: bool,
     pub experimental_unified_exec_tool: bool,
+    pub include_agent_tool: bool,
 }
 
 pub(crate) struct ToolsConfigParams<'a> {
@@ -83,6 +84,7 @@ pub(crate) struct ToolsConfigParams<'a> {
     pub(crate) use_streamable_shell_tool: bool,
     pub(crate) include_view_image_tool: bool,
     pub(crate) experimental_unified_exec_tool: bool,
+    pub(crate) include_agent_tool: bool,
 }
 
 impl ToolsConfig {
@@ -97,6 +99,7 @@ impl ToolsConfig {
             use_streamable_shell_tool,
             include_view_image_tool,
             experimental_unified_exec_tool,
+            include_agent_tool,
         } = params;
         let mut shell_type = if *use_streamable_shell_tool {
             ConfigShellToolType::StreamableShell
@@ -130,6 +133,7 @@ impl ToolsConfig {
             web_search_request: *include_web_search_request,
             include_view_image_tool: *include_view_image_tool,
             experimental_unified_exec_tool: *experimental_unified_exec_tool,
+            include_agent_tool: *include_agent_tool,
         }
     }
 }
@@ -319,6 +323,37 @@ fn create_view_image_tool() -> OpenAiTool {
         parameters: JsonSchema::Object {
             properties,
             required: Some(vec!["path".to_string()]),
+            additional_properties: Some(false),
+        },
+    })
+}
+
+fn create_agent_tool() -> OpenAiTool {
+    let mut properties = BTreeMap::new();
+
+    properties.insert(
+        "agent".to_string(),
+        JsonSchema::String {
+            description: Some("Name of the agent to use (e.g., 'code_reviewer', 'test_designer') or 'general' for default".to_string()),
+        },
+    );
+
+    properties.insert(
+        "task".to_string(),
+        JsonSchema::String {
+            description: Some("The task for the agent to perform autonomously".to_string()),
+        },
+    );
+
+    OpenAiTool::Function(ResponsesApiTool {
+        name: "agent".to_string(),
+        description:
+            "Run a specialized agent with custom system prompt for delegated task execution"
+                .to_string(),
+        strict: false,
+        parameters: JsonSchema::Object {
+            properties,
+            required: Some(vec!["task".to_string()]),
             additional_properties: Some(false),
         },
     })
@@ -580,6 +615,12 @@ pub(crate) fn get_openai_tools(
     if config.include_view_image_tool {
         tools.push(create_view_image_tool());
     }
+
+    // Include the agent tool for multi-agent orchestration
+    if config.include_agent_tool {
+        tools.push(create_agent_tool());
+    }
+
     if let Some(mcp_tools) = mcp_tools {
         // Ensure deterministic ordering to maximize prompt cache hits.
         let mut entries: Vec<(String, mcp_types::Tool)> = mcp_tools.into_iter().collect();
@@ -644,6 +685,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            include_agent_tool: false,
         });
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
@@ -666,6 +708,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            include_agent_tool: false,
         });
         let tools = get_openai_tools(&config, Some(HashMap::new()));
 
@@ -688,6 +731,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            include_agent_tool: false,
         });
         let tools = get_openai_tools(
             &config,
@@ -794,6 +838,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            include_agent_tool: false,
         });
 
         // Intentionally construct a map with keys that would sort alphabetically.
@@ -872,6 +917,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            include_agent_tool: false,
         });
 
         let tools = get_openai_tools(
@@ -935,6 +981,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            include_agent_tool: false,
         });
 
         let tools = get_openai_tools(
@@ -993,6 +1040,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            include_agent_tool: false,
         });
 
         let tools = get_openai_tools(
@@ -1054,6 +1102,7 @@ mod tests {
             use_streamable_shell_tool: false,
             include_view_image_tool: true,
             experimental_unified_exec_tool: true,
+            include_agent_tool: false,
         });
 
         let tools = get_openai_tools(

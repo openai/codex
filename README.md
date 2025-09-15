@@ -65,7 +65,6 @@ You can also use Codex with an API key, but this requires [additional setup](./d
 
 Codex CLI supports [MCP servers](./docs/advanced.md#model-context-protocol-mcp). Enable by adding an `mcp_servers` section to your `~/.codex/config.toml`.
 
-
 ### Configuration
 
 Codex CLI supports a rich set of configuration options, with preferences stored in `~/.codex/config.toml`. For full configuration options, see [Configuration](./docs/config.md).
@@ -88,6 +87,10 @@ Codex CLI supports a rich set of configuration options, with preferences stored 
   - [Non-interactive / CI mode](./docs/advanced.md#non-interactive--ci-mode)
   - [Tracing / verbose logging](./docs/advanced.md#tracing--verbose-logging)
   - [Model Context Protocol (MCP)](./docs/advanced.md#model-context-protocol-mcp)
+- [**Multi-Agent System**](./docs/subagents.md)
+  - [Custom agent configuration](./docs/subagents.md#custom-agent-configuration)
+  - [Agent behavior](./docs/subagents.md#agent-behavior)
+  - [Best practices](./docs/subagents.md#best-practices)
 - [**Zero data retention (ZDR)**](./docs/zdr.md)
 - [**Contributing**](./docs/contributing.md)
 - [**Install & build**](./docs/install.md)
@@ -102,4 +105,3 @@ Codex CLI supports a rich set of configuration options, with preferences stored 
 ## License
 
 This repository is licensed under the [Apache-2.0 License](LICENSE).
-
