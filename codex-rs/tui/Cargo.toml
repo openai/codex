@@ -78,7 +78,7 @@ tokio = { version = "1", features = [
 tokio-stream = "0.1.17"
 tracing = { version = "0.1.41", features = ["log"] }
 tracing-appender = "0.2.3"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 pulldown-cmark = "0.10"
 unicode-segmentation = "1.12.0"
 unicode-width = "0.1"
