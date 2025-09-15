@@ -736,10 +736,10 @@ impl SessionHeaderHistoryCell {
 
     fn reasoning_label(&self) -> Option<&'static str> {
         self.reasoning_effort.map(|effort| match effort {
-            ReasoningEffortConfig::Minimal => "Minimal",
-            ReasoningEffortConfig::Low => "Low",
-            ReasoningEffortConfig::Medium => "Medium",
-            ReasoningEffortConfig::High => "High",
+            ReasoningEffortConfig::Minimal => "minimal",
+            ReasoningEffortConfig::Low => "low",
+            ReasoningEffortConfig::Medium => "medium",
+            ReasoningEffortConfig::High => "high",
         })
     }
 }
@@ -787,15 +787,13 @@ impl HistoryCell for SessionHeaderHistoryCell {
             "│".into(),
         ]));
 
-        // Model line includes the current reasoning level when available
+        // Model line includes the current reasoning level when available (e.g., "gpt-5 high")
         const CHANGE_MODEL_HINT: &str = "(change with /model)";
         let reasoning_label = self.reasoning_label();
         let mut model_text = format!(" Model: {}", self.model);
         if let Some(reasoning) = reasoning_label {
             model_text.push(' ');
-            model_text.push('(');
             model_text.push_str(reasoning);
-            model_text.push(')');
         }
         model_text.push(' ');
         model_text.push_str(CHANGE_MODEL_HINT);
@@ -809,7 +807,7 @@ impl HistoryCell for SessionHeaderHistoryCell {
         ];
         if let Some(reasoning) = reasoning_label {
             spans.push(" ".into());
-            spans.push(format!("({reasoning})").into());
+            spans.push(reasoning.into());
         }
         spans.push(" ".into());
         spans.push(CHANGE_MODEL_HINT.dim());
@@ -1573,8 +1571,8 @@ mod tests {
             .find(|line| line.contains("Model:"))
             .expect("model line");
 
-        assert!(model_line.contains("Model: gpt-4o"));
-        assert!(model_line.contains("(High)"));
+        assert!(model_line.contains("Model: gpt-4o high"));
+        assert!(model_line.contains("(change with /model)"));
     }
 
     #[test]
