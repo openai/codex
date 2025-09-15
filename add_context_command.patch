@@ -1,0 +1,36 @@
+--- a/codex-rs/tui/src/chatwidget.rs
++++ b/codex-rs/tui/src/chatwidget.rs
+@@ -870,6 +870,9 @@
+             SlashCommand::Status => {
+                 self.add_status_output();
+             }
++            SlashCommand::Context => {
++                self.add_context_output();
++            }
+             SlashCommand::Mcp => {
+                 self.add_mcp_output();
+             }
+@@ -1166,6 +1169,21 @@
+         ));
+     }
+ 
++    pub(crate) fn add_context_output(&mut self) {
++        // For now, this is a placeholder implementation that shows basic context info
++        // This will be expanded to show detailed context window usage
++        let default_usage;
++        let usage_ref = if let Some(ti) = &self.token_info {
++            &ti.total_token_usage
++        } else {
++            default_usage = TokenUsage::default();
++            &default_usage
++        };
++        self.add_to_history(history_cell::new_context_output(
++            &self.config,
++            usage_ref,
++            &self.conversation_id,
++        ));
++    }
++
+     /// Open a popup to choose the model preset (model + reasoning effort).
+     pub(crate) fn open_model_popup(&mut self) {
+         let current_model = self.config.model.clone();
