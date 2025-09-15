@@ -59,7 +59,7 @@ enum Subcommand {
     /// Remove stored authentication credentials.
     Logout(LogoutCommand),
 
-    /// Experimental: run Codex as an MCP server.
+    /// [experimental] Run Codex as an MCP server and manage MCP servers.
     Mcp(McpCli),
 
     /// Run the Protocol stream via stdin/stdout
