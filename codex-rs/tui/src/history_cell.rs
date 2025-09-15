@@ -27,6 +27,7 @@ use codex_core::protocol::McpInvocation;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TokenUsage;
+use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::mcp_protocol::ConversationId;
 use codex_protocol::num_format::format_with_separators;
 use codex_protocol::parse_command::ParsedCommand;
@@ -609,7 +610,7 @@ pub(crate) fn new_session_info(
 ) -> CompositeHistoryCell {
     let SessionConfiguredEvent {
         model,
-        reasoning_effort: _,
+        reasoning_effort,
         session_id: _,
         history_log_id: _,
         history_entry_count: _,
@@ -620,6 +621,7 @@ pub(crate) fn new_session_info(
         // Header box rendered as history (so it appears at the very top)
         let header = SessionHeaderHistoryCell::new(
             model,
+            reasoning_effort,
             config.cwd.clone(),
             crate::version::CODEX_CLI_VERSION,
         );
@@ -694,14 +696,21 @@ pub(crate) fn new_active_exec_command(
 struct SessionHeaderHistoryCell {
     version: &'static str,
     model: String,
+    reasoning_effort: Option<ReasoningEffortConfig>,
     directory: PathBuf,
 }
 
 impl SessionHeaderHistoryCell {
-    fn new(model: String, directory: PathBuf, version: &'static str) -> Self {
+    fn new(
+        model: String,
+        reasoning_effort: Option<ReasoningEffortConfig>,
+        directory: PathBuf,
+        version: &'static str,
+    ) -> Self {
         Self {
             version,
             model,
+            reasoning_effort,
             directory,
         }
     }
@@ -716,6 +725,15 @@ impl SessionHeaderHistoryCell {
         } else {
             self.directory.display().to_string()
         }
+    }
+
+    fn reasoning_label(&self) -> Option<&'static str> {
+        self.reasoning_effort.map(|effort| match effort {
+            ReasoningEffortConfig::Minimal => "minimal",
+            ReasoningEffortConfig::Low => "low",
+            ReasoningEffortConfig::Medium => "medium",
+            ReasoningEffortConfig::High => "high",
+        })
     }
 }
 
@@ -762,9 +780,16 @@ impl HistoryCell for SessionHeaderHistoryCell {
             "│".into(),
         ]));
 
-        // Model line: " Model: <model> (change with /model)"
+        // Model line: " Model: <model> <reasoning_label> (change with /model)"
         const CHANGE_MODEL_HINT: &str = "(change with /model)";
-        let model_text = format!(" Model: {} {}", self.model, CHANGE_MODEL_HINT);
+        let reasoning_label = self.reasoning_label();
+        let mut model_text = format!(" Model: {}", self.model);
+        if let Some(reasoning) = reasoning_label {
+            model_text.push(' ');
+            model_text.push_str(reasoning);
+        }
+        model_text.push(' ');
+        model_text.push_str(CHANGE_MODEL_HINT);
         let model_w = UnicodeWidthStr::width(model_text.as_str());
         let pad_w = inner_width.saturating_sub(model_w);
         let mut spans: Vec<Span<'static>> = vec![
@@ -772,9 +797,13 @@ impl HistoryCell for SessionHeaderHistoryCell {
             " ".into(),
             "Model: ".bold(),
             self.model.clone().into(),
-            " ".into(),
-            CHANGE_MODEL_HINT.dim(),
         ];
+        if let Some(reasoning) = reasoning_label {
+            spans.push(" ".into());
+            spans.push(reasoning.into());
+        }
+        spans.push(" ".into());
+        spans.push(CHANGE_MODEL_HINT.dim());
         if pad_w > 0 {
             spans.push(" ".repeat(pad_w).into());
         }
@@ -1518,6 +1547,25 @@ mod tests {
 
     fn render_transcript(cell: &dyn HistoryCell) -> Vec<String> {
         render_lines(&cell.transcript_lines())
+    }
+
+    #[test]
+    fn session_header_includes_reasoning_level_when_present() {
+        let cell = SessionHeaderHistoryCell::new(
+            "gpt-4o".to_string(),
+            Some(ReasoningEffortConfig::High),
+            std::env::temp_dir(),
+            "test",
+        );
+
+        let lines = render_lines(&cell.display_lines(80));
+        let model_line = lines
+            .into_iter()
+            .find(|line| line.contains("Model:"))
+            .expect("model line");
+
+        assert!(model_line.contains("Model: gpt-4o high"));
+        assert!(model_line.contains("(change with /model)"));
     }
 
     #[test]
