@@ -7,10 +7,18 @@ use std::path::PathBuf;
 #[command(version)]
 pub struct Cli {
     /// Optional user prompt to start the session.
+    #[arg(value_name = "PROMPT", global = true)]
     pub prompt: Option<String>,
 
     /// Optional image(s) to attach to the initial prompt.
-    #[arg(long = "image", short = 'i', value_name = "FILE", value_delimiter = ',', num_args = 1..)]
+    #[arg(
+        long = "image",
+        short = 'i',
+        value_name = "FILE",
+        value_delimiter = ',',
+        num_args = 1..,
+        global = true
+    )]
     pub images: Vec<PathBuf>,
 
     // Internal controls set by the top-level `codex resume` subcommand.
@@ -27,30 +35,30 @@ pub struct Cli {
     pub resume_session_id: Option<String>,
 
     /// Model the agent should use.
-    #[arg(long, short = 'm')]
+    #[arg(long, short = 'm', global = true)]
     pub model: Option<String>,
 
     /// Convenience flag to select the local open source model provider.
     /// Equivalent to -c model_provider=oss; verifies a local Ollama server is
     /// running.
-    #[arg(long = "oss", default_value_t = false)]
+    #[arg(long = "oss", default_value_t = false, global = true)]
     pub oss: bool,
 
     /// Configuration profile from config.toml to specify default options.
-    #[arg(long = "profile", short = 'p')]
+    #[arg(long = "profile", short = 'p', global = true)]
     pub config_profile: Option<String>,
 
     /// Select the sandbox policy to use when executing model-generated shell
     /// commands.
-    #[arg(long = "sandbox", short = 's')]
+    #[arg(long = "sandbox", short = 's', global = true)]
     pub sandbox_mode: Option<codex_common::SandboxModeCliArg>,
 
     /// Configure when the model requires human approval before executing a command.
-    #[arg(long = "ask-for-approval", short = 'a')]
+    #[arg(long = "ask-for-approval", short = 'a', global = true)]
     pub approval_policy: Option<ApprovalModeCliArg>,
 
     /// Convenience alias for low-friction sandboxed automatic execution (-a on-failure, --sandbox workspace-write).
-    #[arg(long = "full-auto", default_value_t = false)]
+    #[arg(long = "full-auto", default_value_t = false, global = true)]
     pub full_auto: bool,
 
     /// Skip all confirmation prompts and execute commands without sandboxing.
@@ -59,16 +67,17 @@ pub struct Cli {
         long = "dangerously-bypass-approvals-and-sandbox",
         alias = "yolo",
         default_value_t = false,
-        conflicts_with_all = ["approval_policy", "full_auto"]
+        conflicts_with_all = ["approval_policy", "full_auto"],
+        global = true
     )]
     pub dangerously_bypass_approvals_and_sandbox: bool,
 
     /// Tell the agent to use the specified directory as its working root.
-    #[clap(long = "cd", short = 'C', value_name = "DIR")]
+    #[clap(long = "cd", short = 'C', value_name = "DIR", global = true)]
     pub cwd: Option<PathBuf>,
 
     /// Enable web search (off by default). When enabled, the native Responses `web_search` tool is available to the model (no per‑call approval).
-    #[arg(long = "search", default_value_t = false)]
+    #[arg(long = "search", default_value_t = false, global = true)]
     pub web_search: bool,
 
     #[clap(skip)]
