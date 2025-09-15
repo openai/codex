@@ -60,7 +60,7 @@ pub struct Cli {
         long = "dangerously-bypass-approvals-and-sandbox",
         alias = "yolo",
         default_value_t = false,
-        conflicts_with_all = ["approval_policy", "full_auto"],
+        conflicts_with_all = ["approval_policy", "full_auto"]
     )]
     pub dangerously_bypass_approvals_and_sandbox: bool,
 
