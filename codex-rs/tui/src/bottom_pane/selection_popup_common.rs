@@ -93,7 +93,9 @@ pub(crate) fn render_rows(
 
             if let Some(desc) = description.as_ref() {
                 spans.push("  ".into());
-                spans.push(desc.clone().dim());
+                // Keep descriptions subtle and legible per TUI style rules.
+                // Use dim + italic styling via Stylize helpers.
+                spans.push(desc.clone().dim().italic());
             }
 
             let mut cell = Cell::from(Line::from(spans));
