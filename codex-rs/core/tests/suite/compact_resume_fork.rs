@@ -74,7 +74,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         "compact+resume test expects resumed path {resumed_path:?} to exist",
     );
 
-    let forked = fork_conversation(&manager, &config, resumed_path, 4).await;
+    let forked = fork_conversation(&manager, &config, resumed_path, 1).await;
     user_turn(&forked, "AFTER_FORK").await;
 
     // 3. Capture the requests to the model and validate the history slices.
@@ -535,7 +535,7 @@ async fn compact_resume_after_second_compaction_preserves_history() {
         "second compact test expects resumed path {resumed_path:?} to exist",
     );
 
-    let forked = fork_conversation(&manager, &config, resumed_path, 1).await;
+    let forked = fork_conversation(&manager, &config, resumed_path, 3).await;
     user_turn(&forked, "AFTER_FORK").await;
 
     compact_conversation(&forked).await;
