@@ -1,6 +1,7 @@
 use anyhow::Context;
 use serde::Deserialize;
 use serde::Serialize;
+use std::io::ErrorKind;
 use std::path::Path;
 use std::path::PathBuf;
 
@@ -31,7 +32,14 @@ impl InternalStorage {
                 }
             },
             Err(error) => {
-                tracing::warn!("failed to read internal storage: {error:?}");
+                if error.kind() == ErrorKind::NotFound {
+                    tracing::debug!(
+                        "internal storage not found at {}; initializing defaults",
+                        storage_path.display()
+                    );
+                } else {
+                    tracing::warn!("failed to read internal storage: {error:?}");
+                }
                 Self::empty(storage_path)
             }
         }
