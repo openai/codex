@@ -870,6 +870,9 @@ impl ChatWidget {
             SlashCommand::Status => {
                 self.add_status_output();
             }
+            SlashCommand::Context => {
+                self.add_context_output();
+            }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
             }
@@ -1161,6 +1164,21 @@ impl ChatWidget {
             &default_usage
         };
         self.add_to_history(history_cell::new_status_output(
+            &self.config,
+            usage_ref,
+            &self.conversation_id,
+        ));
+    }
+
+    pub(crate) fn add_context_output(&mut self) {
+        let default_usage;
+        let usage_ref = if let Some(ti) = &self.token_info {
+            &ti.total_token_usage
+        } else {
+            default_usage = TokenUsage::default();
+            &default_usage
+        };
+        self.add_to_history(history_cell::new_context_output(
             &self.config,
             usage_ref,
             &self.conversation_id,
