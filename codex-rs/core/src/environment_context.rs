@@ -2,6 +2,7 @@ use serde::Deserialize;
 use serde::Serialize;
 use strum_macros::Display as DeriveDisplay;
 
+use crate::codex::TurnContext;
 use crate::protocol::AskForApproval;
 use crate::protocol::SandboxPolicy;
 use crate::shell::Shell;
@@ -70,6 +71,29 @@ impl EnvironmentContext {
             },
             shell,
         }
+    }
+
+    /// Compares two environment contexts, ignoring the shell. Useful when
+    /// comparing turn to turn, since the initial environment_context will
+    /// include the shell, and then it is not configurable from turn to turn.
+    pub fn equals_except_shell(&self, other: &EnvironmentContext) -> bool {
+        self.cwd == other.cwd
+            && self.approval_policy == other.approval_policy
+            && self.sandbox_mode == other.sandbox_mode
+            && self.network_access == other.network_access
+            && self.writable_roots == other.writable_roots
+    }
+}
+
+impl From<&TurnContext> for EnvironmentContext {
+    fn from(turn_context: &TurnContext) -> Self {
+        Self::new(
+            Some(turn_context.cwd.clone()),
+            Some(turn_context.approval_policy),
+            Some(turn_context.sandbox_policy.clone()),
+            // Shell is not configurable from turn to turn
+            None,
+        )
     }
 }
 
