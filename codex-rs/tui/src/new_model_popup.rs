@@ -3,7 +3,7 @@ use crate::frames::FRAME_TICK_DEFAULT;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
-use codex_core::config::SWIFTFOX_MODEL_DISPLAY_NAME;
+use codex_core::config::GPT_5_CODEX_DISPLAY_NAME;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -130,7 +130,7 @@ impl WidgetRef for &ModelUpgradePopup {
         lines.push("".into());
 
         lines.push(
-            format!("  Codex is now powered by {SWIFTFOX_MODEL_DISPLAY_NAME}, a new model that is")
+            format!("  Codex is now powered by {GPT_5_CODEX_DISPLAY_NAME}, a new model that is")
                 .into(),
         );
         lines.push(Line::from(vec![
@@ -156,7 +156,7 @@ impl WidgetRef for &ModelUpgradePopup {
         lines.push(create_option(
             0,
             ModelUpgradeOption::TryNewModel,
-            &format!("Yes, switch me to {SWIFTFOX_MODEL_DISPLAY_NAME}"),
+            &format!("Yes, switch me to {GPT_5_CODEX_DISPLAY_NAME}"),
         ));
         lines.push("".into());
         lines.push(create_option(

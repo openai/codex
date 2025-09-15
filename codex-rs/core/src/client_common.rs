@@ -215,7 +215,7 @@ mod tests {
                 expects_apply_patch_instructions: false,
             },
             InstructionsTestCase {
-                slug: "swiftfox",
+                slug: "gpt-5-codex",
                 expects_apply_patch_instructions: false,
             },
         ];
