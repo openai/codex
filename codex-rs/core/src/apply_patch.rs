@@ -1,6 +1,7 @@
 use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::protocol::FileChange;
+use crate::protocol::AskForApproval;
 use crate::protocol::ReviewDecision;
 use crate::safety::SafetyCheck;
 use crate::safety::assess_patch_safety;
@@ -59,6 +60,14 @@ pub(crate) async fn apply_patch(
             })
         }
         SafetyCheck::AskUser => {
+            // In fully non-interactive mode, bypass the approval surface entirely
+            // and treat this as explicitly approved.
+            if matches!(turn_context.approval_policy, AskForApproval::Never) {
+                return InternalApplyPatchInvocation::DelegateToExec(ApplyPatchExec {
+                    action,
+                    user_explicitly_approved_this_action: true,
+                });
+            }
             // Compute a readable summary of path changes to include in the
             // approval request so the user can make an informed decision.
             //
