@@ -1021,9 +1021,8 @@ pub(crate) fn new_context_output(
         format!(" ({}%)", percentage).dim(),
     ].into());
     
-    // Progress bar
-    lines.push("  • Progress: ".into());
-    lines.push(Line::from(render_progress_bar(percentage, 40)));
+    // Progress bar with token counts
+    lines.push(Line::from(render_progress_bar(usage.total_tokens, context_window, percentage)));
     lines.push("".into());
 
     // Component breakdown
@@ -1116,29 +1115,32 @@ pub(crate) fn new_context_output(
     PlainHistoryCell { lines }
 }
 
-/// Render an ASCII progress bar
-fn render_progress_bar(percentage: u64, width: usize) -> String {
-    let filled = ((percentage as f64 / 100.0) * width as f64) as usize;
-    let empty = width.saturating_sub(filled);
-    
+/// Render an ASCII progress bar with token counts
+fn render_progress_bar(used_tokens: u64, total_tokens: u64, percentage: u64) -> String {
+    // Fixed width of 10 for the progress bar itself
+    const BAR_WIDTH: usize = 10;
+
+    let filled = ((percentage as f64 / 100.0) * BAR_WIDTH as f64) as usize;
+    let empty = BAR_WIDTH.saturating_sub(filled);
+
     let mut bar = String::from("    [");
-    
-    // Use different characters for different fill levels
+
+    // Use UTF-8 block characters for visual representation
     if filled > 0 {
-        bar.push_str(&"█".repeat(filled.saturating_sub(1)));
-        if filled < width {
-            // Add a partial block for the current position
-            bar.push('▌');
-        } else {
-            bar.push('█');
-        }
+        bar.push_str(&"█".repeat(filled));
     }
-    
+
     if empty > 0 {
         bar.push_str(&"░".repeat(empty));
     }
-    
-    bar.push_str(&format!("] {}%", percentage));
+
+    // Format with token counts and percentage display
+    bar.push_str(&format!(
+        "] {}/{} ({}%)",
+        format_with_separators(used_tokens),
+        format_with_separators(total_tokens),
+        percentage
+    ));
     bar
 }
 
