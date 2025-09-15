@@ -366,11 +366,8 @@ fn print_completion(cmd: CompletionCommand) {
 mod tests {
     use super::*;
 
-    #[test]
-    fn resume_model_flag_applies_when_no_root_flags() {
-        let cli =
-            MultitoolCli::try_parse_from(["codex", "resume", "-m", "gpt-5-test"]).expect("parse");
-
+    fn finalize_from_args(args: &[&str]) -> TuiCli {
+        let cli = MultitoolCli::try_parse_from(args).expect("parse");
         let MultitoolCli {
             interactive,
             config_overrides: root_overrides,
@@ -386,9 +383,113 @@ mod tests {
             unreachable!()
         };
 
-        let interactive =
-            finalize_resume_interactive(interactive, root_overrides, session_id, last, resume_cli);
+        finalize_resume_interactive(interactive, root_overrides, session_id, last, resume_cli)
+    }
+
+    #[test]
+    fn resume_model_flag_applies_when_no_root_flags() {
+        let interactive = finalize_from_args(["codex", "resume", "-m", "gpt-5-test"].as_ref());
 
         assert_eq!(interactive.model.as_deref(), Some("gpt-5-test"));
+        assert!(interactive.resume_picker);
+        assert!(!interactive.resume_last);
+        assert_eq!(interactive.resume_session_id, None);
+    }
+
+    #[test]
+    fn resume_picker_logic_none_and_not_last() {
+        let interactive = finalize_from_args(["codex", "resume"].as_ref());
+        assert!(interactive.resume_picker);
+        assert!(!interactive.resume_last);
+        assert_eq!(interactive.resume_session_id, None);
+    }
+
+    #[test]
+    fn resume_picker_logic_last() {
+        let interactive = finalize_from_args(["codex", "resume", "--last"].as_ref());
+        assert!(!interactive.resume_picker);
+        assert!(interactive.resume_last);
+        assert_eq!(interactive.resume_session_id, None);
+    }
+
+    #[test]
+    fn resume_picker_logic_with_session_id() {
+        let interactive = finalize_from_args(["codex", "resume", "1234"].as_ref());
+        assert!(!interactive.resume_picker);
+        assert!(!interactive.resume_last);
+        assert_eq!(interactive.resume_session_id.as_deref(), Some("1234"));
+    }
+
+    #[test]
+    fn resume_merges_option_flags_and_full_auto() {
+        let interactive = finalize_from_args(
+            [
+                "codex",
+                "resume",
+                "sid",
+                "--oss",
+                "--full-auto",
+                "--search",
+                "--sandbox",
+                "workspace-write",
+                "--ask-for-approval",
+                "on-request",
+                "-m",
+                "gpt-5-test",
+                "-p",
+                "my-profile",
+                "-C",
+                "/tmp",
+                "-i",
+                "/tmp/a.png,/tmp/b.png",
+            ]
+            .as_ref(),
+        );
+
+        assert_eq!(interactive.model.as_deref(), Some("gpt-5-test"));
+        assert!(interactive.oss);
+        assert_eq!(interactive.config_profile.as_deref(), Some("my-profile"));
+        assert!(matches!(
+            interactive.sandbox_mode,
+            Some(codex_common::SandboxModeCliArg::WorkspaceWrite)
+        ));
+        assert!(matches!(
+            interactive.approval_policy,
+            Some(codex_common::ApprovalModeCliArg::OnRequest)
+        ));
+        assert!(interactive.full_auto);
+        assert_eq!(
+            interactive.cwd.as_deref(),
+            Some(std::path::Path::new("/tmp"))
+        );
+        assert!(interactive.web_search);
+        let has_a = interactive
+            .images
+            .iter()
+            .any(|p| p == std::path::Path::new("/tmp/a.png"));
+        let has_b = interactive
+            .images
+            .iter()
+            .any(|p| p == std::path::Path::new("/tmp/b.png"));
+        assert!(has_a && has_b);
+        assert!(!interactive.resume_picker);
+        assert!(!interactive.resume_last);
+        assert_eq!(interactive.resume_session_id.as_deref(), Some("sid"));
+    }
+
+    #[test]
+    fn resume_merges_dangerously_bypass_flag() {
+        let interactive = finalize_from_args(
+            [
+                "codex",
+                "resume",
+                "--dangerously-bypass-approvals-and-sandbox",
+            ]
+            .as_ref(),
+        );
+        assert!(interactive.dangerously_bypass_approvals_and_sandbox);
+        assert!(interactive.resume_picker);
+        assert!(!interactive.resume_last);
+        assert_eq!(interactive.resume_session_id, None);
     }
 }
