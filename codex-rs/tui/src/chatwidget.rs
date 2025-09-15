@@ -3,6 +3,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use codex_core::auth::CodexAuth;
 use codex_core::config::Config;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
@@ -49,6 +50,7 @@ use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::debug;
+use tracing::warn;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -85,6 +87,7 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_file_search::FileMatch;
+use codex_protocol::mcp_protocol::AuthMode;
 use codex_protocol::mcp_protocol::ConversationId;
 
 // Track information about an in-flight exec command.
@@ -1172,9 +1175,24 @@ impl ChatWidget {
         let current_model = self.config.model.clone();
         let current_effort = self.config.model_reasoning_effort;
         let presets: &[ModelPreset] = builtin_model_presets();
+        let auth_mode = CodexAuth::from_codex_home(&self.config.codex_home)
+            .ok()
+            .flatten()
+            .map(|auth| auth.mode);
 
         let mut items: Vec<SelectionItem> = Vec::new();
         for preset in presets.iter() {
+            warn!(
+                "auth_mode: {:?}, preset.model: {:?}",
+                auth_mode, preset.model
+            );
+            match (auth_mode, preset.model) {
+                (Some(AuthMode::ApiKey), model) if model.contains("swiftfox") => {
+                    // TODO: remove when model is in api.
+                    continue;
+                }
+                _ => {}
+            }
             let name = preset.label.to_string();
             let description = Some(preset.description.to_string());
             let is_current = preset.model == current_model && preset.effort == current_effort;
