@@ -18,6 +18,7 @@ use codex_core::auth::get_auth_file;
 use codex_core::auth::try_read_auth_json;
 use codex_core::config::Config;
 use codex_core::config_types::ReasoningSummaryFormat;
+use codex_core::context_analyzer::ContextBreakdown;
 use codex_core::plan_tool::PlanItemArg;
 use codex_core::plan_tool::StepStatus;
 use codex_core::plan_tool::UpdatePlanArgs;
@@ -988,6 +989,145 @@ pub(crate) fn new_status_output(
     PlainHistoryCell { lines }
 }
 
+/// Render detailed context window usage with progress bar and component breakdown
+pub(crate) fn new_context_output(
+    config: &Config,
+    usage: &TokenUsage,
+    session_id: &Option<ConversationId>,
+) -> PlainHistoryCell {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    lines.push("/context".magenta().into());
+    lines.push("".into());
+
+    // Get the context window size (default to 128k if not specified)
+    let context_window: u64 = 128000; // Default for Claude models
+    
+    // Calculate percentage usage
+    let percentage = if context_window > 0 {
+        ((usage.total_tokens as f64 / context_window as f64) * 100.0).min(100.0) as u64
+    } else {
+        0
+    };
+
+    // 📊 Context Window Usage
+    lines.push(vec![padded_emoji("📊").into(), "Context Window Usage".bold()].into());
+    
+    // Total usage with percentage
+    lines.push(vec![
+        "  • Total: ".into(),
+        format_with_separators(usage.total_tokens).into(),
+        " / ".dim(),
+        format_with_separators(context_window).into(),
+        format!(" ({}%)", percentage).dim(),
+    ].into());
+    
+    // Progress bar
+    lines.push("  • Progress: ".into());
+    lines.push(Line::from(render_progress_bar(percentage, 40)));
+    lines.push("".into());
+
+    // Component breakdown
+    lines.push(vec![padded_emoji("📋").into(), "Component Breakdown".bold()].into());
+    
+    // Input tokens
+    let input_percentage = if context_window > 0 {
+        ((usage.input_tokens as f64 / context_window as f64) * 100.0) as u64
+    } else {
+        0
+    };
+    lines.push(vec![
+        "  • Input: ".into(),
+        format_with_separators(usage.input_tokens).into(),
+        format!(" ({}%)", input_percentage).dim(),
+    ].into());
+    
+    // Cached input tokens (if any)
+    if usage.cached_input_tokens > 0 {
+        let cached_percentage = if context_window > 0 {
+            ((usage.cached_input_tokens as f64 / context_window as f64) * 100.0) as u64
+        } else {
+            0
+        };
+        lines.push(vec![
+            "    • Cached: ".dim(),
+            format_with_separators(usage.cached_input_tokens).dim(),
+            format!(" ({}%)", cached_percentage).dim(),
+        ].into());
+    }
+    
+    // Output tokens
+    let output_percentage = if context_window > 0 {
+        ((usage.output_tokens as f64 / context_window as f64) * 100.0) as u64
+    } else {
+        0
+    };
+    lines.push(vec![
+        "  • Output: ".into(),
+        format_with_separators(usage.output_tokens).into(),
+        format!(" ({}%)", output_percentage).dim(),
+    ].into());
+    
+    // Reasoning tokens (if any)
+    if usage.reasoning_output_tokens > 0 {
+        let reasoning_percentage = if context_window > 0 {
+            ((usage.reasoning_output_tokens as f64 / context_window as f64) * 100.0) as u64
+        } else {
+            0
+        };
+        lines.push(vec![
+            "  • Reasoning: ".into(),
+            format_with_separators(usage.reasoning_output_tokens).into(),
+            format!(" ({}%)", reasoning_percentage).dim(),
+        ].into());
+    }
+    
+    lines.push("".into());
+
+    // Model info
+    lines.push(vec![padded_emoji("🧠").into(), "Model".bold()].into());
+    lines.push(vec!["  • Name: ".into(), config.model.clone().into()].into());
+    lines.push(vec![
+        "  • Context Window: ".into(),
+        format_with_separators(context_window).into(),
+        " tokens".into(),
+    ].into());
+    
+    // Session info (if available)
+    if let Some(session_id) = session_id {
+        lines.push("".into());
+        lines.push(vec![padded_emoji("🔗").into(), "Session".bold()].into());
+        lines.push(vec!["  • ID: ".into(), session_id.to_string().into()].into());
+    }
+
+    PlainHistoryCell { lines }
+}
+
+/// Render an ASCII progress bar
+fn render_progress_bar(percentage: u64, width: usize) -> String {
+    let filled = ((percentage as f64 / 100.0) * width as f64) as usize;
+    let empty = width.saturating_sub(filled);
+    
+    let mut bar = String::from("    [");
+    
+    // Use different characters for different fill levels
+    if filled > 0 {
+        bar.push_str(&"█".repeat(filled.saturating_sub(1)));
+        if filled < width {
+            // Add a partial block for the current position
+            bar.push('▌');
+        } else {
+            bar.push('█');
+        }
+    }
+    
+    if empty > 0 {
+        bar.push_str(&"░".repeat(empty));
+    }
+    
+    bar.push_str(&format!("] {}%", percentage));
+    bar
+}
+
 /// Render a summary of configured MCP servers from the current `Config`.
 pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
     let lines: Vec<Line<'static>> = vec![
@@ -1776,7 +1916,7 @@ mod tests {
         // Long explanation forces wrapping; include long step text to verify step wrapping and alignment.
         let update = UpdatePlanArgs {
             explanation: Some(
-                "I’ll update Grafana call error handling by adding retries and clearer messages when the backend is unreachable."
+                "I'll update Grafana call error handling by adding retries and clearer messages when the backend is unreachable."
                     .to_string(),
             ),
             plan: vec![
