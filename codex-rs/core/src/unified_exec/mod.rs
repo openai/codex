@@ -327,6 +327,7 @@ async fn create_unified_exec_session(
 
     let (writer_tx, mut writer_rx) = mpsc::channel::<Vec<u8>>(128);
     let (output_tx, _) = tokio::sync::broadcast::channel::<Vec<u8>>(256);
+    let initial_output_rx = output_tx.subscribe();
 
     let mut reader = pair
         .master
@@ -380,7 +381,7 @@ async fn create_unified_exec_session(
         wait_exit_status.store(true, Ordering::SeqCst);
     });
 
-    Ok(ExecCommandSession::new(
+    let session = ExecCommandSession::new(
         writer_tx,
         output_tx,
         killer,
@@ -388,7 +389,10 @@ async fn create_unified_exec_session(
         writer_handle,
         wait_handle,
         exit_status,
-    ))
+    );
+    session.set_initial_output_receiver(initial_output_rx);
+
+    Ok(session)
 }
 
 #[cfg(test)]
