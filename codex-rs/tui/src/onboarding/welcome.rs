@@ -26,18 +26,27 @@ pub(crate) struct WelcomeWidget {
 
 impl WidgetRef for &WelcomeWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        self.request_frame.schedule_frame_in(FRAME_TICK);
+        let elapsed_ms = self.start.elapsed().as_millis();
+
+        // Align next draw to the next FRAME_TICK boundary to reduce jitter.
+        {
+            let tick_ms = FRAME_TICK.as_millis();
+            let rem_ms = elapsed_ms % tick_ms;
+            let delay_ms = if rem_ms == 0 {
+                tick_ms
+            } else {
+                tick_ms - rem_ms
+            };
+            // Safe cast: delay_ms < tick_ms and FRAME_TICK is small.
+            self.request_frame
+                .schedule_frame_in(Duration::from_millis(delay_ms as u64));
+        }
 
         let frames = &FRAMES_DEFAULT;
-        let idx = if FRAME_TICK.as_millis() > 0 {
-            let steps =
-                (self.start.elapsed().as_millis() / FRAME_TICK.as_millis()) % frames.len() as u128;
-            steps as usize
-        } else {
-            0
-        };
+        let idx = ((elapsed_ms / FRAME_TICK.as_millis()) % frames.len() as u128) as usize;
 
-        let mut lines: Vec<Line> = frames[idx].lines().map(|l| l.into()).collect();
+        let mut lines: Vec<Line> = Vec::with_capacity(frames.len() + 2);
+        lines.extend(frames[idx].lines().map(|l| l.into()));
 
         lines.push("".into());
         lines.push(Line::from(vec![
@@ -59,5 +68,16 @@ impl StepStateProvider for WelcomeWidget {
             true => StepState::Hidden,
             false => StepState::Complete,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A number of things break down if FRAME_TICK is zero.
+    #[test]
+    fn frame_tick_must_be_nonzero() {
+        assert!(FRAME_TICK.as_millis() > 0);
     }
 }
