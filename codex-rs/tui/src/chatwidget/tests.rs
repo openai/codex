@@ -79,7 +79,9 @@ fn final_answer_without_newline_is_flushed_immediately() {
 
     // Set up a VT100 test terminal to capture ANSI visual output
     let width: u16 = 80;
-    let height: u16 = 2000;
+    // Increased height to keep the initial banner/help lines in view even if
+    // the session renders an extra header line or minor layout changes occur.
+    let height: u16 = 2500;
     let viewport = Rect::new(0, height - 1, width, 1);
     let backend = ratatui::backend::TestBackend::new(width, height);
     let mut terminal = crate::custom_terminal::Terminal::with_options(backend)
@@ -230,6 +232,7 @@ fn make_chatwidget_manual() -> (
         bottom_pane: bottom,
         active_exec_cell: None,
         config: cfg.clone(),
+        session_header: SessionHeader::new(cfg.model.clone()),
         initial_user_message: None,
         token_info: None,
         stream: StreamController::new(cfg),
@@ -773,10 +776,11 @@ async fn binary_size_transcript_snapshot() {
     // Consider content only after the last session banner marker. Skip the transient
     // 'thinking' header if present, and start from the first non-empty content line
     // that follows. This keeps the snapshot stable across sessions.
-    const MARKER_PREFIX: &str = ">_ You are using OpenAI Codex in ";
+    const MARKER_PREFIX: &str =
+        "Describe a task to get started or try one of the following commands:";
     let last_marker_line_idx = lines
         .iter()
-        .rposition(|l| l.starts_with(MARKER_PREFIX))
+        .rposition(|l| l.trim_start().starts_with(MARKER_PREFIX))
         .expect("marker not found in visible output");
     // Prefer the first assistant content line (blockquote '>' prefix) after the marker;
     // fallback to the first non-empty, non-'thinking' line.
