@@ -97,10 +97,9 @@ base_url = "https://YOUR_PROJECT_NAME.openai.azure.com/openai"
 env_key = "AZURE_OPENAI_API_KEY"  # Or "OPENAI_API_KEY", whichever you use.
 query_params = { api-version = "2025-04-01-preview" }
 wire_api = "responses"
-env_http_headers = { api-key = "OPENAI_API_KEY" }
 ```
 
-Export your key before launching Codex: `export OPENAI_API_KEY=…`
+Export your key before launching Codex: `export AZURE_OPENAI_API_KEY=…`
 
 ### Per-provider network tuning
 
