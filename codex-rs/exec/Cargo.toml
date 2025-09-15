@@ -38,7 +38,7 @@ tokio = { version = "1", features = [
     "signal",
 ] }
 tracing = { version = "0.1.41", features = ["log"] }
-tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 
 [dev-dependencies]
 assert_cmd = "2"
@@ -46,4 +46,6 @@ core_test_support = { path = "../core/tests/common" }
 libc = "0.2"
 predicates = "3"
 tempfile = "3.13.0"
+uuid = "1"
+walkdir = "2"
 wiremock = "0.6"
