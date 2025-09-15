@@ -1,6 +1,7 @@
 use crate::config_profile::ConfigProfile;
 use crate::config_types::History;
 use crate::config_types::McpServerConfig;
+use crate::config_types::Notifications;
 use crate::config_types::ReasoningSummaryFormat;
 use crate::config_types::SandboxWorkspaceWrite;
 use crate::config_types::ShellEnvironmentPolicy;
@@ -116,6 +117,10 @@ pub struct Config {
     ///
     /// If unset the feature is disabled.
     pub notify: Option<Vec<String>>,
+
+    /// TUI notifications preference. When set, the TUI will send OSC 9 notifications on approvals
+    /// and turn completions when not focused.
+    pub tui_notifications: Notifications,
 
     /// The directory that should be treated as the current working directory
     /// for the session. All relative paths inside the business-logic layer are
@@ -1043,6 +1048,11 @@ impl Config {
             include_view_image_tool,
             active_profile: active_profile_name,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
+            tui_notifications: cfg
+                .tui
+                .as_ref()
+                .map(|t| t.notifications.clone())
+                .unwrap_or_default(),
         };
         Ok(config)
     }
@@ -1606,6 +1616,7 @@ model_verbosity = "high"
                 include_view_image_tool: true,
                 active_profile: Some("o3".to_string()),
                 disable_paste_burst: false,
+                tui_notifications: Default::default(),
             },
             o3_profile_config
         );
@@ -1663,6 +1674,7 @@ model_verbosity = "high"
             include_view_image_tool: true,
             active_profile: Some("gpt3".to_string()),
             disable_paste_burst: false,
+            tui_notifications: Default::default(),
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -1735,6 +1747,7 @@ model_verbosity = "high"
             include_view_image_tool: true,
             active_profile: Some("zdr".to_string()),
             disable_paste_burst: false,
+            tui_notifications: Default::default(),
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
@@ -1793,6 +1806,7 @@ model_verbosity = "high"
             include_view_image_tool: true,
             active_profile: Some("gpt5".to_string()),
             disable_paste_burst: false,
+            tui_notifications: Default::default(),
         };
 
         assert_eq!(expected_gpt5_profile_config, gpt5_profile_config);
@@ -1894,5 +1908,48 @@ trust_level = "trusted"
         assert_eq!(contents, expected);
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod notifications_tests {
+    use crate::config_types::Notifications;
+    use serde::Deserialize;
+
+    #[derive(Deserialize, Debug, PartialEq)]
+    struct TuiTomlTest {
+        notifications: Notifications,
+    }
+
+    #[derive(Deserialize, Debug, PartialEq)]
+    struct RootTomlTest {
+        tui: TuiTomlTest,
+    }
+
+    #[test]
+    fn test_tui_notifications_true() {
+        let toml = r#"
+            [tui]
+            notifications = true
+        "#;
+        let parsed: RootTomlTest = toml::from_str(toml).expect("deserialize notifications=true");
+        assert!(matches!(
+            parsed.tui.notifications,
+            Notifications::Enabled(true)
+        ));
+    }
+
+    #[test]
+    fn test_tui_notifications_custom_array() {
+        let toml = r#"
+            [tui]
+            notifications = ["foo"]
+        "#;
+        let parsed: RootTomlTest =
+            toml::from_str(toml).expect("deserialize notifications=[\"foo\"]");
+        assert!(matches!(
+            parsed.tui.notifications,
+            Notifications::Custom(ref v) if v == &vec!["foo".to_string()]
+        ));
     }
 }
