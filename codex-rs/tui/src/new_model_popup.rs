@@ -22,6 +22,8 @@ use std::time::Duration;
 use tokio_stream::StreamExt;
 
 const FRAME_TICK: Duration = FRAME_TICK_DEFAULT;
+const MIN_ANIMATION_HEIGHT: u16 = 24;
+const MIN_ANIMATION_WIDTH: u16 = 60;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ModelUpgradeDecision {
@@ -121,13 +123,17 @@ impl WidgetRef for &ModelUpgradePopup {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
 
-        let mut lines: Vec<Line> = self.frames()[self.frame_idx]
-            .lines()
-            .map(|l| l.to_string().into())
-            .collect();
+        // Skip the animation entirely when the viewport is too small so we don't clip frames.
+        let show_animation =
+            area.height >= MIN_ANIMATION_HEIGHT && area.width >= MIN_ANIMATION_WIDTH;
 
-        // Spacer between animation and text content.
-        lines.push("".into());
+        let mut lines: Vec<Line> = Vec::new();
+        if show_animation {
+            let frame = self.frames()[self.frame_idx];
+            lines.extend(frame.lines().map(|l| l.into()));
+            // Spacer between animation and text content.
+            lines.push("".into());
+        }
 
         lines.push(
             format!("  Codex is now powered by {GPT_5_CODEX_DISPLAY_NAME}, a new model that is")
