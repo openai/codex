@@ -194,19 +194,12 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
             last,
             config_overrides,
         })) => {
-            // Start with the parsed interactive CLI so resume shares the same
-            // configuration surface area as `codex` without additional flags.
-            let resume_session_id = session_id;
-            interactive.resume_picker = resume_session_id.is_none() && !last;
-            interactive.resume_last = last;
-            interactive.resume_session_id = resume_session_id;
-            // Merge resume-scoped flags and overrides with highest precedence.
-            merge_resume_cli_flags(&mut interactive, config_overrides);
-
-            // Propagate any root-level config overrides (e.g. `-c key=value`).
-            prepend_config_flags(
-                &mut interactive.config_overrides,
+            interactive = finalize_resume_interactive(
+                interactive,
                 root_config_overrides.clone(),
+                session_id,
+                last,
+                config_overrides,
             );
             codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
         }
@@ -295,6 +288,37 @@ fn prepend_config_flags(
         .splice(0..0, cli_config_overrides.raw_overrides);
 }
 
+/// Build the final `TuiCli` for a `codex resume` invocation.
+///
+/// This function encapsulates the business logic for combining:
+/// - the base interactive CLI parsed at the root level,
+/// - the resume-specific flags and overrides,
+/// - and any root-level config overrides (lower precedence).
+///
+/// The resulting `TuiCli` is ready to be passed to `codex_tui::run_main`.
+fn finalize_resume_interactive(
+    mut interactive: TuiCli,
+    root_config_overrides: CliConfigOverrides,
+    session_id: Option<String>,
+    last: bool,
+    resume_cli: TuiCli,
+) -> TuiCli {
+    // Start with the parsed interactive CLI so resume shares the same
+    // configuration surface area as `codex` without additional flags.
+    let resume_session_id = session_id;
+    interactive.resume_picker = resume_session_id.is_none() && !last;
+    interactive.resume_last = last;
+    interactive.resume_session_id = resume_session_id;
+
+    // Merge resume-scoped flags and overrides with highest precedence.
+    merge_resume_cli_flags(&mut interactive, resume_cli);
+
+    // Propagate any root-level config overrides (e.g. `-c key=value`).
+    prepend_config_flags(&mut interactive.config_overrides, root_config_overrides);
+
+    interactive
+}
+
 /// Merge flags provided to `codex resume` so they take precedence over any
 /// root-level flags. Only overrides fields explicitly set on the resume-scoped
 /// CLI. Also appends `-c key=value` overrides with highest precedence.
@@ -355,7 +379,7 @@ mod tests {
             MultitoolCli::try_parse_from(["codex", "resume", "-m", "gpt-5-test"]).expect("parse");
 
         let MultitoolCli {
-            mut interactive,
+            interactive,
             config_overrides: root_overrides,
             subcommand,
         } = cli;
@@ -369,13 +393,8 @@ mod tests {
             unreachable!()
         };
 
-        let resume_session_id = session_id;
-        interactive.resume_picker = resume_session_id.is_none() && !last;
-        interactive.resume_last = last;
-        interactive.resume_session_id = resume_session_id;
-
-        merge_resume_cli_flags(&mut interactive, resume_cli);
-        prepend_config_flags(&mut interactive.config_overrides, root_overrides);
+        let interactive =
+            finalize_resume_interactive(interactive, root_overrides, session_id, last, resume_cli);
 
         assert_eq!(interactive.model.as_deref(), Some("gpt-5-test"));
     }
