@@ -7,14 +7,36 @@ Codex CLI includes a powerful multi-agent orchestration system that allows you t
 The agent system enables you to:
 
 - Define specialized agents with custom system prompts
-- Invoke agents programmatically during conversations
+- Invoke agents using natural `@agent` mention syntax
+- Automatically track agent tasks in the plan system
+- View real-time agent execution progress
 - Maintain context isolation between agent executions
 - Prevent recursive agent spawning for safety
 - Get comprehensive summaries of agent work
 
 ## Quick Start
 
-To use an agent in Codex CLI, simply invoke it with the `agent` tool:
+### Using @Agent Mentions (Recommended)
+
+The most natural way to invoke agents is using the `@agent` mention syntax:
+
+```
+@researcher: find information about React hooks
+
+@code-reviewer: review the changes in src/
+
+@test-writer: create unit tests for the new functions
+```
+
+When you use `@agent` mentions:
+
+- The agent task is automatically added to the plan with "in_progress" status
+- You see real-time progress updates during execution
+- The plan updates to "completed" when the agent finishes
+
+### Using the Agent Tool
+
+You can also invoke agents programmatically with the `agent` tool:
 
 ```
 Please use the researcher agent to find information about React hooks
@@ -23,6 +45,20 @@ Use the code-reviewer agent to review the changes in src/
 
 Have the test-writer agent create unit tests for the new functions
 ```
+
+### Viewing Available Agents
+
+Use the `/agents` command to see all available agents:
+
+```
+/agents
+```
+
+This displays:
+
+- Built-in agents (marked with •)
+- Custom agents from your configuration (marked with ◦)
+- Brief descriptions of each agent's purpose
 
 ## Built-in Agents
 
@@ -109,6 +145,40 @@ Or use absolute paths:
 ```toml
 [complex-agent]
 prompt_file = "/home/user/my-prompts/complex-agent.md"
+```
+
+## Visual Feedback and Plan Integration
+
+### Real-Time Status Indicators
+
+When agents execute, you'll see visual feedback:
+
+- **⚡ Running** (yellow) - Agent is currently executing
+- **⟳** Progress loops - Iterative steps the agent is performing
+- **📝** File changes - Files being modified
+- **💬** Outputs - Agent responses and analysis
+- **🔧** Tool usage - Tools being invoked
+- **✓ Done** (green) - Agent completed successfully
+
+### Automatic Plan Tracking
+
+Every agent invocation automatically creates a plan item:
+
+1. **Plan Creation**: When you use `@agent: task`, a plan item is created
+2. **Status Tracking**: Plan shows "in_progress" during execution
+3. **Completion Update**: Plan updates to "completed" when done
+4. **Linked Execution**: Plan items are linked to agent events via `plan_item_id`
+
+Example workflow:
+
+```
+User: @researcher: find async Rust patterns
+System: [Creates plan item: "@researcher: find async Rust patterns" - in_progress]
+System: ⚡ Running researcher
+System: ⟳ [researcher] Analyzing task requirements
+System: ⟳ [researcher] Searching for documentation
+System: ✓ Done researcher (3.2s)
+System: [Updates plan item to completed]
 ```
 
 ## Agent Behavior
