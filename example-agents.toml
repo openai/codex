@@ -1,5 +1,14 @@
 # Example Agent Configuration for Codex Multi-Agent System
 # Place this file at ~/.codex/agents.toml to enable custom agents
+#
+# Usage:
+# - @agent_name: task description (e.g., @code_reviewer: review main.rs)
+# - /agents (lists all available agents)
+# - Agent tasks are automatically tracked in the plan system
+#
+# Visual indicators during execution:
+# - ⚡ Running (yellow) - agent is executing
+# - ✓ Done (green) - agent completed successfully
 
 [code_reviewer]
 prompt = """

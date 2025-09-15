@@ -1432,6 +1432,41 @@ async fn submission_loop(
                 };
                 sess.send_event(event).await;
             }
+            Op::ListAgents => {
+                let sub_id = sub.id.clone();
+
+                // Get the agent registry and list agents
+                let agents = {
+                    let mut agent_registry_guard = sess.agent_registry.lock_unchecked();
+                    let registry = match agent_registry_guard.as_ref() {
+                        Some(r) => Some(r.clone()),
+                        None => {
+                            // Initialize agent registry if not already done
+                            match crate::agent::AgentRegistry::new() {
+                                Ok(r) => {
+                                    let registry = Arc::new(r);
+                                    *agent_registry_guard = Some(registry.clone());
+                                    Some(registry)
+                                }
+                                Err(e) => {
+                                    tracing::error!("Failed to initialize agent registry: {e}");
+                                    None
+                                }
+                            }
+                        }
+                    };
+                    registry
+                        .map(|r| r.list_agent_details())
+                        .unwrap_or_else(Vec::new)
+                }; // MutexGuard is dropped here
+                let event = Event {
+                    id: sub_id,
+                    msg: EventMsg::ListAgentsResponse(crate::protocol::ListAgentsResponseEvent {
+                        agents,
+                    }),
+                };
+                sess.send_event(event).await;
+            }
             Op::ListCustomPrompts => {
                 let sub_id = sub.id.clone();
 
@@ -2616,6 +2651,10 @@ async fn handle_agent_tool_call(
     arguments: String,
     call_id: String,
 ) -> ResponseInputItem {
+    use crate::plan_tool::PlanItemArg;
+    use crate::plan_tool::StepStatus;
+    use crate::plan_tool::UpdatePlanArgs;
+
     #[derive(Deserialize)]
     struct AgentArgs {
         #[serde(default)]
@@ -2693,33 +2732,89 @@ async fn handle_agent_tool_call(
         format!("{}\n\nTask: {}", agent_system_prompt, args.task)
     };
 
+    // Create a plan item for this agent execution
+    // Generate a unique ID using the call_id as base
+    let plan_item_id = format!("agent-{}-{}", agent_name, &call_id[..8]);
+
+    // Send a plan update event to track this agent execution
+    let plan_args = UpdatePlanArgs {
+        explanation: Some(format!("Executing {agent_name} agent")),
+        plan: vec![PlanItemArg {
+            step: format!("@{}: {}", agent_name, args.task),
+            status: StepStatus::InProgress,
+        }],
+    };
+
+    sess.send_event(Event {
+        id: sub_id.to_string(),
+        msg: EventMsg::PlanUpdate(plan_args),
+    })
+    .await;
+
     // Execute the agent in an isolated context
     let result = execute_agent_isolated(
         sess,
         turn_context,
         turn_diff_tracker,
-        &sub_id,
-        &agent_name,
-        agent_init_prompt,
+        AgentExecutionParams {
+            sub_id: sub_id.clone(),
+            agent_name: agent_name.clone(),
+            init_prompt: agent_init_prompt,
+            call_id: call_id.clone(),
+            plan_item_id: Some(plan_item_id.clone()),
+        },
     )
     .await;
 
-    match result {
-        Ok(agent_response) => ResponseInputItem::FunctionCallOutput {
-            call_id,
-            output: FunctionCallOutputPayload {
-                content: agent_response,
-                success: Some(true),
+    // Update plan status based on result
+    let (response, plan_status) = match result {
+        Ok(agent_response) => (
+            ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: FunctionCallOutputPayload {
+                    content: agent_response,
+                    success: Some(true),
+                },
             },
-        },
-        Err(e) => ResponseInputItem::FunctionCallOutput {
-            call_id,
-            output: FunctionCallOutputPayload {
-                content: format!("Agent execution failed: {e}"),
-                success: Some(false),
+            StepStatus::Completed,
+        ),
+        Err(e) => (
+            ResponseInputItem::FunctionCallOutput {
+                call_id,
+                output: FunctionCallOutputPayload {
+                    content: format!("Agent execution failed: {e}"),
+                    success: Some(false),
+                },
             },
-        },
-    }
+            StepStatus::Completed, // Mark as completed even on error
+        ),
+    };
+
+    // Send final plan update with completion status
+    let final_plan_args = UpdatePlanArgs {
+        explanation: Some(format!("{agent_name} agent execution complete")),
+        plan: vec![PlanItemArg {
+            step: format!("@{}: {}", agent_name, args.task),
+            status: plan_status,
+        }],
+    };
+
+    sess.send_event(Event {
+        id: sub_id.to_string(),
+        msg: EventMsg::PlanUpdate(final_plan_args),
+    })
+    .await;
+
+    response
+}
+
+/// Parameters for agent execution
+struct AgentExecutionParams {
+    sub_id: String,
+    agent_name: String,
+    init_prompt: String,
+    call_id: String,
+    plan_item_id: Option<String>,
 }
 
 /// Execute an agent in an isolated context
@@ -2727,11 +2822,28 @@ async fn execute_agent_isolated(
     sess: &Session,
     parent_context: &TurnContext,
     turn_diff_tracker: &mut TurnDiffTracker,
-    _sub_id: &str,
-    agent_name: &str,
-    init_prompt: String,
+    params: AgentExecutionParams,
 ) -> Result<String, String> {
-    info!("Executing agent '{}' with isolated context", agent_name);
+    use std::time::Instant;
+    let start_time = Instant::now();
+
+    info!(
+        "Executing agent '{}' with isolated context",
+        params.agent_name
+    );
+
+    // Send AgentBegin event
+    sess.send_event(Event {
+        id: params.sub_id.clone(),
+        msg: EventMsg::AgentBegin(crate::protocol::AgentBeginEvent {
+            call_id: params.call_id.clone(),
+            agent_name: params.agent_name.clone(),
+            task: params.init_prompt.clone(),
+            parent_context: None,
+            plan_item_id: params.plan_item_id.clone(),
+        }),
+    })
+    .await;
 
     // Check and set agent context to prevent recursion
     {
@@ -2746,7 +2858,7 @@ async fn execute_agent_isolated(
     let agent_context = TurnContext {
         client: parent_context.client.clone(),
         cwd: parent_context.cwd.clone(),
-        base_instructions: Some(init_prompt.clone()),
+        base_instructions: Some(params.init_prompt.clone()),
         user_instructions: None,
         approval_policy: parent_context.approval_policy,
         sandbox_policy: parent_context.sandbox_policy.clone(),
@@ -2760,25 +2872,58 @@ async fn execute_agent_isolated(
     let mut agent_outputs = Vec::new();
 
     // Step 1: Initialize agent
-    agent_loops.push("Initializing agent context".to_string());
+    let step1 = "Initializing agent context".to_string();
+    agent_loops.push(step1.clone());
+    sess.send_event(Event {
+        id: params.sub_id.clone(),
+        msg: EventMsg::AgentProgress(crate::protocol::AgentProgressEvent {
+            call_id: params.call_id.clone(),
+            agent_name: params.agent_name.clone(),
+            step: step1.clone(),
+            progress_type: crate::protocol::AgentProgressType::Loop(step1),
+        }),
+    })
+    .await;
 
     // Step 2: Analyze task
-    agent_loops.push("Analyzing task requirements".to_string());
+    let step2 = "Analyzing task requirements".to_string();
+    agent_loops.push(step2.clone());
+    sess.send_event(Event {
+        id: params.sub_id.clone(),
+        msg: EventMsg::AgentProgress(crate::protocol::AgentProgressEvent {
+            call_id: params.call_id.clone(),
+            agent_name: params.agent_name.clone(),
+            step: step2.clone(),
+            progress_type: crate::protocol::AgentProgressType::Loop(step2),
+        }),
+    })
+    .await;
 
     // Step 3: Execute with agent's specialized context
-    agent_loops.push("Executing with specialized knowledge".to_string());
+    let step3 = "Executing with specialized knowledge".to_string();
+    agent_loops.push(step3.clone());
+    sess.send_event(Event {
+        id: params.sub_id.clone(),
+        msg: EventMsg::AgentProgress(crate::protocol::AgentProgressEvent {
+            call_id: params.call_id.clone(),
+            agent_name: params.agent_name.clone(),
+            step: step3.clone(),
+            progress_type: crate::protocol::AgentProgressType::Loop(step3),
+        }),
+    })
+    .await;
 
     // Create the agent's response based on its specialized prompt
     // The agent context contains the specialized system instructions in base_instructions
-    let task_lines: Vec<&str> = init_prompt.lines().collect();
+    let task_lines: Vec<&str> = params.init_prompt.lines().collect();
     let task_brief = if task_lines.len() > 2 {
         format!("{}...", task_lines[0])
     } else {
-        init_prompt.clone()
+        params.init_prompt.clone()
     };
 
     // Build agent response using the specialized context
-    let agent_output = build_agent_response(&agent_context, &task_brief, agent_name);
+    let agent_output = build_agent_response(&agent_context, &task_brief, &params.agent_name);
     agent_outputs.push(agent_output);
 
     // Step 4: Complete execution
@@ -2789,8 +2934,8 @@ async fn execute_agent_isolated(
 
     // Generate comprehensive summary
     let summary = generate_agent_summary(
-        agent_name,
-        &init_prompt,
+        &params.agent_name,
+        &params.init_prompt,
         &agent_loops,
         &agent_changes,
         &agent_outputs,
@@ -2802,10 +2947,25 @@ async fn execute_agent_isolated(
         turn_diff_tracker.on_patch_begin(&changes_map);
     }
 
+    // Send AgentEnd event
+    let duration_ms = start_time.elapsed().as_millis() as u64;
+    sess.send_event(Event {
+        id: params.sub_id.clone(),
+        msg: EventMsg::AgentEnd(crate::protocol::AgentEndEvent {
+            call_id: params.call_id,
+            agent_name: params.agent_name.clone(),
+            summary: summary.clone(),
+            status: crate::protocol::AgentStatus::Done,
+            duration_ms,
+            plan_item_id: params.plan_item_id,
+        }),
+    })
+    .await;
+
     // Unmark agent context
     sess.state.lock_unchecked().is_agent_context = false;
 
-    info!("Agent '{}' completed successfully", agent_name);
+    info!("Agent '{}' completed successfully", params.agent_name);
     Ok(summary)
 }
 
@@ -2901,9 +3061,11 @@ fn generate_agent_summary(
         // Auto-compact long outputs
         if output_lines.len() > 10 {
             // Take first 5 and last 3 lines
-            let compacted = [output_lines[..5].join("\n"),
+            let compacted = [
+                output_lines[..5].join("\n"),
                 format!("... ({} lines omitted) ...", output_lines.len() - 8),
-                output_lines[output_lines.len() - 3..].join("\n")];
+                output_lines[output_lines.len() - 3..].join("\n"),
+            ];
             summary.push(compacted.join("\n"));
         } else {
             summary.push(combined_output);

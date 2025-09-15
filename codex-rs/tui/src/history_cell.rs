@@ -1278,6 +1278,136 @@ pub(crate) fn new_stream_error_event(message: String) -> PlainHistoryCell {
 }
 
 /// Render a user‑friendly plan update styled like a checkbox todo list.
+/// Visual cell for agent invocation
+pub(crate) fn new_agent_invocation(agent_name: &str, task: &str) -> PlainHistoryCell {
+    let lines = vec![
+        Line::from(vec![
+            "🤖 ".into(),
+            "Agent: ".dim(),
+            Span::styled(
+                agent_name.to_string(),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(vec!["   Task: ".dim(), task.to_string().into()]),
+    ];
+    PlainHistoryCell { lines }
+}
+
+/// Visual cell for agents list
+pub(crate) fn new_agents_list(agents: Vec<codex_core::protocol::AgentInfo>) -> PlainHistoryCell {
+    let mut lines = vec![
+        Line::from(vec![Span::styled(
+            "Available Agents",
+            Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        )]),
+        Line::default(), // Empty line
+    ];
+
+    if agents.is_empty() {
+        lines.push(Line::from("No agents configured".dim()));
+    } else {
+        for agent in agents {
+            let bullet = if agent.is_builtin { "•" } else { "◦" };
+            lines.push(Line::from(vec![
+                format!("  {bullet} ").into(),
+                Span::styled(
+                    agent.name.clone(),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                " - ".dim(),
+                agent.description.clone().into(),
+            ]));
+        }
+    }
+
+    lines.push(Line::default()); // Empty line
+    lines.push(Line::from(vec![
+        "Usage: ".dim(),
+        Span::styled(
+            "@agent_name: task description",
+            Style::default().add_modifier(Modifier::ITALIC),
+        ),
+    ]));
+
+    PlainHistoryCell { lines }
+}
+
+/// Visual cell for agent execution begin
+pub(crate) fn new_agent_begin(event: &codex_core::protocol::AgentBeginEvent) -> PlainHistoryCell {
+    let lines = vec![
+        Line::from(vec![
+            Span::styled("⚡ ", Style::default().fg(Color::Cyan)),
+            Span::styled("Running ", Style::default().fg(Color::Cyan)),
+            Span::styled(
+                event.agent_name.clone(),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
+        Line::from(vec!["  ".into(), format!("Task: {}", event.task).dim()]),
+    ];
+    PlainHistoryCell { lines }
+}
+
+/// Visual cell for agent progress
+pub(crate) fn new_agent_progress(
+    event: &codex_core::protocol::AgentProgressEvent,
+) -> PlainHistoryCell {
+    use codex_core::protocol::AgentProgressType;
+
+    let prefix = match &event.progress_type {
+        AgentProgressType::Loop(_) => "⟳ ",
+        AgentProgressType::FileChange(_, _) => "📝 ",
+        AgentProgressType::Output(_) => "💬 ",
+        AgentProgressType::ToolCall(_) => "🔧 ",
+    };
+
+    let content = match &event.progress_type {
+        AgentProgressType::Loop(step) => step.clone(),
+        AgentProgressType::FileChange(path, _) => format!("Modified: {}", path.display()),
+        AgentProgressType::Output(text) => text.clone(),
+        AgentProgressType::ToolCall(tool) => format!("Using tool: {tool}"),
+    };
+
+    let lines = vec![Line::from(vec![
+        Span::styled(format!("  {prefix} "), Style::default().fg(Color::Yellow)),
+        Span::styled(format!("[{}] ", event.agent_name), Style::default().dim()),
+        Span::styled(content, Style::default().fg(Color::White)),
+    ])];
+    PlainHistoryCell { lines }
+}
+
+/// Visual cell for agent completion
+pub(crate) fn new_agent_end(event: &codex_core::protocol::AgentEndEvent) -> PlainHistoryCell {
+    let status_icon = "✓".green();
+    let duration = format_duration(Duration::from_millis(event.duration_ms));
+
+    let mut lines = vec![Line::from(vec![
+        status_icon,
+        " Done ".green(),
+        Span::styled(
+            event.agent_name.clone(),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        format!(" ({duration})").dim(),
+    ])];
+
+    // Add summary with proper indentation
+    for line in event.summary.lines() {
+        lines.push(Line::from(vec!["  ".into(), line.to_string().into()]));
+    }
+
+    PlainHistoryCell { lines }
+}
+
 pub(crate) fn new_plan_update(update: UpdatePlanArgs) -> PlanUpdateCell {
     let UpdatePlanArgs { explanation, plan } = update;
     PlanUpdateCell { explanation, plan }

@@ -912,6 +912,9 @@ impl ChatWidget {
             SlashCommand::Mcp => {
                 self.add_mcp_output();
             }
+            SlashCommand::Agents => {
+                self.add_agents_output();
+            }
             #[cfg(debug_assertions)]
             SlashCommand::TestApproval => {
                 use codex_core::protocol::EventMsg;
@@ -1114,6 +1117,18 @@ impl ChatWidget {
             EventMsg::GetHistoryEntryResponse(ev) => self.on_get_history_entry_response(ev),
             EventMsg::McpListToolsResponse(ev) => self.on_list_mcp_tools(ev),
             EventMsg::ListCustomPromptsResponse(ev) => self.on_list_custom_prompts(ev),
+            EventMsg::ListAgentsResponse(ev) => {
+                self.add_to_history(history_cell::new_agents_list(ev.agents));
+            }
+            EventMsg::AgentBegin(ev) => {
+                self.add_to_history(history_cell::new_agent_begin(&ev));
+            }
+            EventMsg::AgentProgress(ev) => {
+                self.add_to_history(history_cell::new_agent_progress(&ev));
+            }
+            EventMsg::AgentEnd(ev) => {
+                self.add_to_history(history_cell::new_agent_end(&ev));
+            }
             EventMsg::ShutdownComplete => self.on_shutdown_complete(),
             EventMsg::TurnDiff(TurnDiffEvent { unified_diff }) => self.on_turn_diff(unified_diff),
             EventMsg::BackgroundEvent(BackgroundEventEvent { message }) => {
@@ -1359,6 +1374,10 @@ impl ChatWidget {
         }
     }
 
+    pub(crate) fn add_agents_output(&mut self) {
+        self.submit_op(Op::ListAgents);
+    }
+
     /// Forward file-search results to the bottom pane.
     pub(crate) fn apply_file_search_result(&mut self, query: String, matches: Vec<FileMatch>) {
         self.bottom_pane.on_file_search_result(query, matches);
@@ -1429,10 +1448,29 @@ impl ChatWidget {
     /// Programmatically submit a user text message as if typed in the
     /// composer. The text will be added to conversation history and sent to
     /// the agent.
-    pub(crate) fn submit_text_message(&mut self, text: String) {
+    pub(crate) fn submit_text_message(&mut self, mut text: String) {
         if text.is_empty() {
             return;
         }
+
+        // Parse and convert @agent mentions
+        if text.contains('@') {
+            use crate::agent_mention::parse_agent_mentions;
+            use crate::agent_mention::replace_mentions_with_calls;
+            let mentions = parse_agent_mentions(&text);
+            if !mentions.is_empty() {
+                // Show visual indicator of agent invocation
+                for mention in &mentions {
+                    self.add_to_history(history_cell::new_agent_invocation(
+                        &mention.agent_name,
+                        &mention.task,
+                    ));
+                }
+                // Convert mentions to proper agent tool calls
+                text = replace_mentions_with_calls(&text);
+            }
+        }
+
         self.submit_user_message(text.into());
     }
 

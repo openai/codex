@@ -564,6 +564,10 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             EventMsg::UserMessage(_) => {}
             EventMsg::EnteredReviewMode(_) => {}
             EventMsg::ExitedReviewMode(_) => {}
+            EventMsg::ListAgentsResponse(_) => {}
+            EventMsg::AgentBegin(_) => {}
+            EventMsg::AgentProgress(_) => {}
+            EventMsg::AgentEnd(_) => {}
         }
         CodexStatus::Running
     }

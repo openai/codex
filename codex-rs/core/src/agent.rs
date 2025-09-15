@@ -133,6 +133,49 @@ impl AgentRegistry {
         self.agents.keys().cloned().collect()
     }
 
+    /// Get detailed information about all agents
+    pub fn list_agent_details(&self) -> Vec<crate::protocol::AgentInfo> {
+        let mut agents = Vec::new();
+
+        for (name, config) in &self.agents {
+            let description = self.extract_description(&config.prompt);
+            agents.push(crate::protocol::AgentInfo {
+                name: name.clone(),
+                description,
+                is_builtin: name == "general",
+            });
+        }
+
+        agents.sort_by(|a, b| {
+            // Built-in agents first, then alphabetical
+            match (a.is_builtin, b.is_builtin) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => a.name.cmp(&b.name),
+            }
+        });
+
+        agents
+    }
+
+    /// Extract brief description from prompt
+    fn extract_description(&self, prompt: &str) -> String {
+        // Take first line or first sentence as description
+        let first_line = prompt.lines().next().unwrap_or("");
+        let desc = if let Some(pos) = first_line.find('.') {
+            &first_line[..=pos]
+        } else {
+            first_line
+        };
+
+        // Clean up common prefixes
+        desc.trim_start_matches("You are a ")
+            .trim_start_matches("You are an ")
+            .trim_start_matches("You are ")
+            .trim()
+            .to_string()
+    }
+
     /// Check if agents can spawn other agents (always false to prevent recursion)
     #[allow(dead_code)]
     pub fn can_spawn_agents(metadata: &HashMap<String, String>) -> bool {
