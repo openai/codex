@@ -15,6 +15,7 @@ use codex_core::config::SWIFTFOX_MEDIUM_MODEL;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config::persist_model_selection;
+use codex_core::find_conversation_path_by_id_str;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_ollama::DEFAULT_OSS_MODEL;
@@ -343,7 +344,16 @@ async fn run_ratatui_app(
         }
     }
 
-    let resume_selection = if cli.r#continue {
+    // Determine resume behavior: explicit id, then resume last, then picker.
+    let resume_selection = if let Some(id_str) = cli.resume_session_id.as_deref() {
+        match find_conversation_path_by_id_str(&config.codex_home, id_str).await? {
+            Some(path) => resume_picker::ResumeSelection::Resume(path),
+            None => {
+                error!("Error finding conversation path: {id_str}");
+                resume_picker::ResumeSelection::StartFresh
+            }
+        }
+    } else if cli.resume_last {
         match RolloutRecorder::list_conversations(&config.codex_home, 1, None).await {
             Ok(page) => page
                 .items
@@ -352,7 +362,7 @@ async fn run_ratatui_app(
                 .unwrap_or(resume_picker::ResumeSelection::StartFresh),
             Err(_) => resume_picker::ResumeSelection::StartFresh,
         }
-    } else if cli.resume {
+    } else if cli.resume_picker {
         match resume_picker::run_resume_picker(&mut tui, &config.codex_home).await? {
             resume_picker::ResumeSelection::Exit => {
                 restore();

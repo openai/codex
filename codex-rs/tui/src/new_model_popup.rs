@@ -1,7 +1,7 @@
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
-use codex_core::config::SWIFTFOX_MEDIUM_MODEL;
+use codex_core::config::SWIFTFOX_MODEL_DISPLAY_NAME;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -83,8 +83,10 @@ impl WidgetRef for &ModelUpgradePopup {
 
         let mut lines: Vec<Line> = vec![
             String::new().into(),
-            format!("   Codex is now powered by {SWIFTFOX_MEDIUM_MODEL}, a new model that is")
-                .into(),
+            format!(
+                "   Codex is now powered by {SWIFTFOX_MODEL_DISPLAY_NAME}, a new model that is"
+            )
+            .into(),
             Line::from(vec![
                 "   ".into(),
                 "faster, a better collaborator, ".bold(),
@@ -109,7 +111,7 @@ impl WidgetRef for &ModelUpgradePopup {
         lines.push(create_option(
             0,
             ModelUpgradeOption::TryNewModel,
-            &format!("Yes, switch me to {SWIFTFOX_MEDIUM_MODEL}"),
+            &format!("Yes, switch me to {SWIFTFOX_MODEL_DISPLAY_NAME}"),
         ));
         lines.push(create_option(
             1,

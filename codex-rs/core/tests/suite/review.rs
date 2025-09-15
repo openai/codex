@@ -118,7 +118,9 @@ async fn review_op_emits_lifecycle_and_review_output() {
 /// When the model returns plain text that is not JSON, ensure the child
 /// lifecycle still occurs and the plain text is surfaced via
 /// ExitedReviewMode(Some(..)) as the overall_explanation.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
+#[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
+#[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
 async fn review_op_with_plain_text_emits_review_fallback() {
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
@@ -168,7 +170,9 @@ async fn review_op_with_plain_text_emits_review_fallback() {
 
 /// When the model returns structured JSON in a review, ensure no AgentMessage
 /// is emitted; the UI consumes the structured result via ExitedReviewMode.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
+#[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
+#[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
 async fn review_does_not_emit_agent_message_on_structured_output() {
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
@@ -293,7 +297,9 @@ async fn review_uses_custom_review_model_from_config() {
 /// When a review session begins, it must not prepend prior chat history from
 /// the parent session. The request `input` should contain only the review
 /// prompt from the user.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
+#[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
+#[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
 async fn review_input_isolated_from_parent_history() {
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
@@ -373,13 +379,8 @@ async fn review_input_isolated_from_parent_history() {
             .await
             .unwrap();
     }
-    config.experimental_resume = Some(session_file);
-
-    let codex = new_conversation_for_server(&server, &codex_home, |cfg| {
-        // apply resume file
-        cfg.experimental_resume = config.experimental_resume.clone();
-    })
-    .await;
+    let codex =
+        resume_conversation_for_server(&server, &codex_home, session_file.clone(), |_| {}).await;
 
     // Submit review request; it must start fresh (no parent history in `input`).
     let review_prompt = "Please review only this".to_string();
@@ -538,5 +539,34 @@ where
         .new_conversation(config)
         .await
         .expect("create conversation")
+        .conversation
+}
+
+/// Create a conversation resuming from a rollout file, configured to talk to the provided mock server.
+#[expect(clippy::expect_used)]
+async fn resume_conversation_for_server<F>(
+    server: &MockServer,
+    codex_home: &TempDir,
+    resume_path: std::path::PathBuf,
+    mutator: F,
+) -> Arc<CodexConversation>
+where
+    F: FnOnce(&mut Config),
+{
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+    let mut config = load_default_config_for_test(codex_home);
+    config.model_provider = model_provider;
+    mutator(&mut config);
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+    let auth_manager =
+        codex_core::AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    conversation_manager
+        .resume_conversation_from_rollout(config, resume_path, auth_manager)
+        .await
+        .expect("resume conversation")
         .conversation
 }
