@@ -5,6 +5,7 @@ use codex_core::ModelProviderInfo;
 use codex_core::built_in_model_providers;
 use codex_core::config::Config;
 use codex_core::protocol::EventMsg;
+use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewCodeLocation;
@@ -89,8 +90,10 @@ async fn review_op_emits_lifecycle_and_review_output() {
     let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
     let closed = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExitedReviewMode(_))).await;
     let review = match closed {
-        EventMsg::ExitedReviewMode(Some(r)) => r,
-        other => panic!("expected ExitedReviewMode(Some(..)), got {other:?}"),
+        EventMsg::ExitedReviewMode(ev) => ev
+            .review_output
+            .expect("expected ExitedReviewMode with Some(review_output)"),
+        other => panic!("expected ExitedReviewMode(..), got {other:?}"),
     };
 
     // Deep compare full structure using PartialEq (floats are f32 on both sides).
@@ -153,8 +156,10 @@ async fn review_op_with_plain_text_emits_review_fallback() {
     let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
     let closed = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExitedReviewMode(_))).await;
     let review = match closed {
-        EventMsg::ExitedReviewMode(Some(r)) => r,
-        other => panic!("expected ExitedReviewMode(Some(..)), got {other:?}"),
+        EventMsg::ExitedReviewMode(ev) => ev
+            .review_output
+            .expect("expected ExitedReviewMode with Some(review_output)"),
+        other => panic!("expected ExitedReviewMode(..), got {other:?}"),
     };
 
     // Expect a structured fallback carrying the plain text.
@@ -283,7 +288,15 @@ async fn review_uses_custom_review_model_from_config() {
 
     // Wait for completion
     let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
-    let _closed = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExitedReviewMode(None))).await;
+    let _closed = wait_for_event(&codex, |ev| {
+        matches!(
+            ev,
+            EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+                review_output: None
+            })
+        )
+    })
+    .await;
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // Assert the request body model equals the configured review model
@@ -395,7 +408,15 @@ async fn review_input_isolated_from_parent_history() {
         .unwrap();
 
     let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
-    let _closed = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExitedReviewMode(None))).await;
+    let _closed = wait_for_event(&codex, |ev| {
+        matches!(
+            ev,
+            EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+                review_output: None
+            })
+        )
+    })
+    .await;
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // Assert the request `input` contains only the single review user message.
@@ -449,7 +470,12 @@ async fn review_history_does_not_leak_into_parent_session() {
         .unwrap();
     let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
     let _closed = wait_for_event(&codex, |ev| {
-        matches!(ev, EventMsg::ExitedReviewMode(Some(_)))
+        matches!(
+            ev,
+            EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+                review_output: Some(_)
+            })
+        )
     })
     .await;
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
