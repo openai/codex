@@ -655,7 +655,7 @@ impl ChatWidget {
             }),
             active_exec_cell: None,
             config: config.clone(),
-            auth_manager: auth_manager.clone(),
+            auth_manager,
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
                 initial_images,
@@ -709,7 +709,7 @@ impl ChatWidget {
             }),
             active_exec_cell: None,
             config: config.clone(),
-            auth_manager: auth_manager.clone(),
+            auth_manager,
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
                 initial_images,

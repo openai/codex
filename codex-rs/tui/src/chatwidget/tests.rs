@@ -202,7 +202,7 @@ async fn helpers_are_available_and_do_not_panic() {
         initial_prompt: None,
         initial_images: Vec::new(),
         enhanced_keys_supported: false,
-        auth_manager: auth_manager.clone(),
+        auth_manager,
     };
     let mut w = ChatWidget::new(init, conversation_manager);
     // Basic construction sanity.
@@ -234,7 +234,7 @@ fn make_chatwidget_manual() -> (
         bottom_pane: bottom,
         active_exec_cell: None,
         config: cfg.clone(),
-        auth_manager: auth_manager.clone(),
+        auth_manager,
         initial_user_message: None,
         token_info: None,
         stream: StreamController::new(cfg),

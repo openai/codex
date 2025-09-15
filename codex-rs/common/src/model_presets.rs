@@ -1,3 +1,4 @@
+use codex_core::config::SWIFTFOX_MEDIUM_MODEL;
 use codex_core::protocol_config_types::ReasoningEffort;
 use codex_protocol::mcp_protocol::AuthMode;
 
@@ -73,7 +74,7 @@ pub fn builtin_model_presets(auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
         Some(AuthMode::ApiKey) => PRESETS
             .iter()
             .copied()
-            .filter(|p| !p.model.contains("swiftfox"))
+            .filter(|p| !p.model.contains(SWIFTFOX_MEDIUM_MODEL))
             .collect(),
         _ => PRESETS.to_vec(),
     }
