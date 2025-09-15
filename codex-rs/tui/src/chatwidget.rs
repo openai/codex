@@ -82,6 +82,7 @@ use codex_common::approval_presets::ApprovalPreset;
 use codex_common::approval_presets::builtin_approval_presets;
 use codex_common::model_presets::ModelPreset;
 use codex_common::model_presets::builtin_model_presets;
+use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
@@ -103,6 +104,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) initial_prompt: Option<String>,
     pub(crate) initial_images: Vec<PathBuf>,
     pub(crate) enhanced_keys_supported: bool,
+    pub(crate) auth_manager: Arc<AuthManager>,
 }
 
 pub(crate) struct ChatWidget {
@@ -111,6 +113,7 @@ pub(crate) struct ChatWidget {
     bottom_pane: BottomPane,
     active_exec_cell: Option<ExecCell>,
     config: Config,
+    auth_manager: Arc<AuthManager>,
     session_header: SessionHeader,
     initial_user_message: Option<UserMessage>,
     token_info: Option<TokenUsageInfo>,
@@ -646,6 +649,7 @@ impl ChatWidget {
             initial_prompt,
             initial_images,
             enhanced_keys_supported,
+            auth_manager,
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
@@ -665,6 +669,7 @@ impl ChatWidget {
             }),
             active_exec_cell: None,
             config: config.clone(),
+            auth_manager,
             session_header: SessionHeader::new(config.model.clone()),
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
@@ -697,6 +702,7 @@ impl ChatWidget {
             initial_prompt,
             initial_images,
             enhanced_keys_supported,
+            auth_manager,
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
@@ -718,6 +724,7 @@ impl ChatWidget {
             }),
             active_exec_cell: None,
             config: config.clone(),
+            auth_manager,
             session_header: SessionHeader::new(config.model.clone()),
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
@@ -1188,7 +1195,8 @@ impl ChatWidget {
     pub(crate) fn open_model_popup(&mut self) {
         let current_model = self.config.model.clone();
         let current_effort = self.config.model_reasoning_effort;
-        let presets: &[ModelPreset] = builtin_model_presets();
+        let auth_mode = self.auth_manager.auth().map(|auth| auth.mode);
+        let presets: Vec<ModelPreset> = builtin_model_presets(auth_mode);
 
         let mut items: Vec<SelectionItem> = Vec::new();
         for preset in presets.iter() {

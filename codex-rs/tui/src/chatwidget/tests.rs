@@ -1,6 +1,7 @@
 use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -195,6 +196,7 @@ async fn helpers_are_available_and_do_not_panic() {
     let conversation_manager = Arc::new(ConversationManager::with_auth(CodexAuth::from_api_key(
         "test",
     )));
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
     let init = ChatWidgetInit {
         config: cfg,
         frame_requester: FrameRequester::test_dummy(),
@@ -202,6 +204,7 @@ async fn helpers_are_available_and_do_not_panic() {
         initial_prompt: None,
         initial_images: Vec::new(),
         enhanced_keys_supported: false,
+        auth_manager,
     };
     let mut w = ChatWidget::new(init, conversation_manager);
     // Basic construction sanity.
@@ -226,12 +229,14 @@ fn make_chatwidget_manual() -> (
         placeholder_text: "Ask Codex to do anything".to_string(),
         disable_paste_burst: false,
     });
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
     let widget = ChatWidget {
         app_event_tx,
         codex_op_tx: op_tx,
         bottom_pane: bottom,
         active_exec_cell: None,
         config: cfg.clone(),
+        auth_manager,
         session_header: SessionHeader::new(cfg.model.clone()),
         initial_user_message: None,
         token_info: None,
