@@ -5,7 +5,6 @@ use crate::markdown::append_markdown;
 use crate::render::line_utils::line_to_static;
 use crate::render::line_utils::prefix_lines;
 use crate::render::line_utils::push_owned_lines;
-use crate::slash_command::SlashCommand;
 use crate::text_formatting::format_and_truncate_tool_result;
 use crate::ui_consts::LIVE_PREFIX_COLS;
 use crate::wrapping::RtOptions;
@@ -581,6 +580,7 @@ impl HistoryCell for CompletedMcpToolCallWithImageOutput {
 }
 
 const TOOL_CALL_MAX_LINES: usize = 5;
+const SESSION_HEADER_MAX_INNER_WIDTH: usize = 70;
 
 fn title_case(s: &str) -> String {
     if s.is_empty() {
@@ -613,7 +613,7 @@ pub(crate) fn new_session_info(
     config: &Config,
     event: SessionConfiguredEvent,
     is_first_event: bool,
-) -> PlainHistoryCell {
+) -> CompositeHistoryCell {
     let SessionConfiguredEvent {
         model,
         reasoning_effort: _,
@@ -624,58 +624,53 @@ pub(crate) fn new_session_info(
         rollout_path: _,
     } = event;
     if is_first_event {
-        let cwd_str = match relativize_to_home(&config.cwd) {
-            Some(rel) if !rel.as_os_str().is_empty() => {
-                let sep = std::path::MAIN_SEPARATOR;
-                format!("~{sep}{}", rel.display())
-            }
-            Some(_) => "~".to_string(),
-            None => config.cwd.display().to_string(),
-        };
-        // Discover AGENTS.md files to decide whether to suggest `/init`.
-        let has_agents_md = discover_project_doc_paths(config)
-            .map(|v| !v.is_empty())
-            .unwrap_or(false);
+        // Header box rendered as history (so it appears at the very top)
+        let header = SessionHeaderHistoryCell::new(
+            model,
+            config.cwd.clone(),
+            crate::version::CODEX_CLI_VERSION,
+        );
 
-        let mut lines: Vec<Line<'static>> = Vec::new();
-        lines.push(Line::from(vec![
-            ">_ ".dim(),
-            "You are using OpenAI Codex in".bold(),
-            format!(" {cwd_str}").dim(),
-        ]));
-        lines.push(Line::from("".dim()));
-        lines.push(Line::from(
-            "  To get started, describe a task or try one of these commands:".dim(),
-        ));
-        lines.push(Line::from("".dim()));
-        if !has_agents_md {
-            lines.push(Line::from(vec![
-                "  /init".bold(),
-                format!(" - {}", SlashCommand::Init.description()).dim(),
-            ]));
+        // Help lines below the header (new copy and list)
+        let help_lines: Vec<Line<'static>> = vec![
+            "Describe a task to get started or try one of the following commands:"
+                .dim()
+                .into(),
+            Line::from("".dim()),
+            Line::from(vec![
+                "1. ".into(),
+                "/status".bold(),
+                " - show current session configuration and token usage".dim(),
+            ]),
+            Line::from(vec![
+                "2. ".into(),
+                "/compact".bold(),
+                " - compact the chat history to avoid context limits".dim(),
+            ]),
+            Line::from(vec![
+                "3. ".into(),
+                "/prompts".bold(),
+                " - explore starter prompts to get to know Codex".dim(),
+            ]),
+        ];
+
+        CompositeHistoryCell {
+            parts: vec![
+                Box::new(header),
+                Box::new(PlainHistoryCell { lines: help_lines }),
+            ],
         }
-        lines.push(Line::from(vec![
-            "  /status".bold(),
-            format!(" - {}", SlashCommand::Status.description()).dim(),
-        ]));
-        lines.push(Line::from(vec![
-            "  /approvals".bold(),
-            format!(" - {}", SlashCommand::Approvals.description()).dim(),
-        ]));
-        lines.push(Line::from(vec![
-            "  /model".bold(),
-            format!(" - {}", SlashCommand::Model.description()).dim(),
-        ]));
-        PlainHistoryCell { lines }
     } else if config.model == model {
-        PlainHistoryCell { lines: Vec::new() }
+        CompositeHistoryCell { parts: vec![] }
     } else {
         let lines = vec![
             "model changed:".magenta().bold().into(),
             format!("requested: {}", config.model).into(),
             format!("used: {model}").into(),
         ];
-        PlainHistoryCell { lines }
+        CompositeHistoryCell {
+            parts: vec![Box::new(PlainHistoryCell { lines })],
+        }
     }
 }
 
@@ -700,6 +695,141 @@ pub(crate) fn new_active_exec_command(
         start_time: Some(Instant::now()),
         duration: None,
     })
+}
+
+#[derive(Debug)]
+struct SessionHeaderHistoryCell {
+    version: &'static str,
+    model: String,
+    directory: PathBuf,
+}
+
+impl SessionHeaderHistoryCell {
+    fn new(model: String, directory: PathBuf, version: &'static str) -> Self {
+        Self {
+            version,
+            model,
+            directory,
+        }
+    }
+
+    fn format_directory(&self) -> String {
+        if let Some(rel) = relativize_to_home(&self.directory) {
+            if rel.as_os_str().is_empty() {
+                "~".to_string()
+            } else {
+                format!("~{}{}", std::path::MAIN_SEPARATOR, rel.display())
+            }
+        } else {
+            self.directory.display().to_string()
+        }
+    }
+}
+
+impl HistoryCell for SessionHeaderHistoryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut out: Vec<Line<'static>> = Vec::new();
+        if width < 4 {
+            return out;
+        }
+
+        let inner_width = std::cmp::min(
+            width.saturating_sub(2) as usize,
+            SESSION_HEADER_MAX_INNER_WIDTH,
+        );
+        // Top border without a title on the border
+        let mut top = String::with_capacity(inner_width + 2);
+        top.push('╭');
+        top.push_str(&"─".repeat(inner_width));
+        top.push('╮');
+        out.push(Line::from(top));
+
+        // Title line rendered inside the box: " >_ OpenAI Codex (vX)"
+        let title_text = format!(" >_ OpenAI Codex (v{})", self.version);
+        let title_w = UnicodeWidthStr::width(title_text.as_str());
+        let pad_w = inner_width.saturating_sub(title_w);
+        let mut title_spans: Vec<Span<'static>> = vec![
+            "│".into(),
+            " ".into(),
+            ">_ ".into(),
+            "OpenAI Codex".bold(),
+            " ".into(),
+            format!("(v{})", self.version).dim(),
+        ];
+        if pad_w > 0 {
+            title_spans.push(" ".repeat(pad_w).into());
+        }
+        title_spans.push("│".into());
+        out.push(Line::from(title_spans));
+
+        // Spacer row between title and details
+        out.push(Line::from(vec![
+            "│".into(),
+            " ".repeat(inner_width).into(),
+            "│".into(),
+        ]));
+
+        // Model line: " Model: <model> (change with /model)"
+        const CHANGE_MODEL_HINT: &str = "(change with /model)";
+        let model_text = format!(" Model: {} {}", self.model, CHANGE_MODEL_HINT);
+        let model_w = UnicodeWidthStr::width(model_text.as_str());
+        let pad_w = inner_width.saturating_sub(model_w);
+        let mut spans: Vec<Span<'static>> = vec![
+            "│".into(),
+            " ".into(),
+            "Model: ".bold(),
+            self.model.clone().into(),
+            " ".into(),
+            CHANGE_MODEL_HINT.dim(),
+        ];
+        if pad_w > 0 {
+            spans.push(" ".repeat(pad_w).into());
+        }
+        spans.push("│".into());
+        out.push(Line::from(spans));
+
+        // Directory line: " Directory: <cwd>"
+        let dir = self.format_directory();
+        let dir_text = format!(" Directory: {dir}");
+        let dir_w = UnicodeWidthStr::width(dir_text.as_str());
+        let pad_w = inner_width.saturating_sub(dir_w);
+        let mut spans: Vec<Span<'static>> =
+            vec!["│".into(), " ".into(), "Directory: ".bold(), dir.into()];
+        if pad_w > 0 {
+            spans.push(" ".repeat(pad_w).into());
+        }
+        spans.push("│".into());
+        out.push(Line::from(spans));
+
+        // Bottom border
+        let bottom = format!("╰{}╯", "─".repeat(inner_width));
+        out.push(Line::from(bottom));
+
+        out
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct CompositeHistoryCell {
+    parts: Vec<Box<dyn HistoryCell>>,
+}
+
+impl HistoryCell for CompositeHistoryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let mut out: Vec<Line<'static>> = Vec::new();
+        let mut first = true;
+        for part in &self.parts {
+            let mut lines = part.display_lines(width);
+            if !lines.is_empty() {
+                if !first {
+                    out.push(Line::from(""));
+                }
+                out.append(&mut lines);
+                first = false;
+            }
+        }
+        out
+    }
 }
 
 fn spinner(start_time: Option<Instant>) -> Span<'static> {

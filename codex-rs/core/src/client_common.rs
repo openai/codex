@@ -41,8 +41,9 @@ impl Prompt {
             .unwrap_or(model.base_instructions.deref());
         let mut sections: Vec<&str> = vec![base];
 
-        // When there are no custom instructions, add apply_patch_tool_instructions if either:
-        // - the model needs special instructions (4.1), or
+        // When there are no custom instructions, add apply_patch_tool_instructions if:
+        // - the model needs special instructions (4.1)
+        // AND
         // - there is no apply_patch tool present
         let is_apply_patch_tool_present = self.tools.iter().any(|tool| match tool {
             OpenAiTool::Function(f) => f.name == "apply_patch",
@@ -50,7 +51,8 @@ impl Prompt {
             _ => false,
         });
         if self.base_instructions_override.is_none()
-            && (model.needs_special_apply_patch_instructions || !is_apply_patch_tool_present)
+            && model.needs_special_apply_patch_instructions
+            && !is_apply_patch_tool_present
         {
             sections.push(APPLY_PATCH_TOOL_INSTRUCTIONS);
         }
@@ -174,22 +176,64 @@ impl Stream for ResponseStream {
 #[cfg(test)]
 mod tests {
     use crate::model_family::find_family_for_model;
+    use pretty_assertions::assert_eq;
 
     use super::*;
 
+    struct InstructionsTestCase {
+        pub slug: &'static str,
+        pub expects_apply_patch_instructions: bool,
+    }
     #[test]
     fn get_full_instructions_no_user_content() {
         let prompt = Prompt {
             ..Default::default()
         };
-        let model_family = find_family_for_model("gpt-4.1").expect("known model slug");
+        let test_cases = vec![
+            InstructionsTestCase {
+                slug: "gpt-3.5",
+                expects_apply_patch_instructions: true,
+            },
+            InstructionsTestCase {
+                slug: "gpt-4.1",
+                expects_apply_patch_instructions: true,
+            },
+            InstructionsTestCase {
+                slug: "gpt-4o",
+                expects_apply_patch_instructions: true,
+            },
+            InstructionsTestCase {
+                slug: "gpt-5",
+                expects_apply_patch_instructions: true,
+            },
+            InstructionsTestCase {
+                slug: "codex-mini-latest",
+                expects_apply_patch_instructions: true,
+            },
+            InstructionsTestCase {
+                slug: "gpt-oss:120b",
+                expects_apply_patch_instructions: false,
+            },
+            InstructionsTestCase {
+                slug: "swiftfox",
+                expects_apply_patch_instructions: false,
+            },
+        ];
+        for test_case in test_cases {
+            let model_family = find_family_for_model(test_case.slug).expect("known model slug");
+            let expected = if test_case.expects_apply_patch_instructions {
+                format!(
+                    "{}\n{}",
+                    model_family.clone().base_instructions,
+                    APPLY_PATCH_TOOL_INSTRUCTIONS
+                )
+            } else {
+                model_family.clone().base_instructions
+            };
 
-        let expected = format!(
-            "{}\n{}",
-            model_family.base_instructions, APPLY_PATCH_TOOL_INSTRUCTIONS
-        );
-        let full = prompt.get_full_instructions(&model_family);
-        assert_eq!(full, expected);
+            let full = prompt.get_full_instructions(&model_family);
+            assert_eq!(full, expected);
+        }
     }
 
     #[test]
