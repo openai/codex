@@ -129,16 +129,15 @@ impl WidgetRef for &ModelUpgradePopup {
         // Spacer between animation and text content.
         lines.push("".into());
 
-        lines.push(
-            format!("  Codex is now powered by {GPT_5_CODEX_DISPLAY_NAME}, a new model that is")
-                .into(),
-        );
         lines.push(Line::from(vec![
             "  ".into(),
-            "faster, a better collaborator, ".bold(),
-            "and ".into(),
-            "more steerable.".bold(),
+            "Introducing GPT-5-Codex".bold(),
         ]));
+        lines.push("".into());
+        lines.push(
+            "  GPT-5-Codex adapts its reasoning effort more dynamically based on task".into(),
+        );
+        lines.push("  difficulty, making it a more collaborative and steerable partner.".into());
         lines.push("".into());
 
         let create_option =
@@ -156,13 +155,13 @@ impl WidgetRef for &ModelUpgradePopup {
         lines.push(create_option(
             0,
             ModelUpgradeOption::TryNewModel,
-            &format!("Yes, switch me to {GPT_5_CODEX_DISPLAY_NAME}"),
+            &format!("Try the new {GPT_5_CODEX_DISPLAY_NAME} model"),
         ));
         lines.push("".into());
         lines.push(create_option(
             1,
             ModelUpgradeOption::KeepCurrent,
-            "Not right now",
+            "Continue using current model",
         ));
         lines.push("".into());
         lines.push(
