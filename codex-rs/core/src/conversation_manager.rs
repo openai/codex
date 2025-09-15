@@ -134,19 +134,19 @@ impl ConversationManager {
         self.conversations.write().await.remove(conversation_id)
     }
 
-    /// Fork an existing conversation by taking messages up to the given position
-    /// (not including the message at the given position) and starting a new
+    /// Fork an existing conversation by dropping the last `drop_last_messages`
+    /// user/assistant messages from its transcript and starting a new
     /// conversation with identical configuration (unless overridden by the
     /// caller's `config`). The new conversation will have a fresh id.
     pub async fn fork_conversation(
         &self,
-        nth_user_message: usize,
+        num_messages_to_drop: usize,
         config: Config,
         path: PathBuf,
     ) -> CodexResult<NewConversation> {
         // Compute the prefix up to the cut point.
         let history = RolloutRecorder::get_rollout_history(&path).await?;
-        let history = truncate_after_nth_user_message(history, nth_user_message);
+        let history = truncate_after_dropping_last_messages(history, num_messages_to_drop);
 
         // Spawn a new conversation with the computed initial history.
         let auth_manager = self.auth_manager.clone();
@@ -159,10 +159,14 @@ impl ConversationManager {
     }
 }
 
-/// Return a prefix of `items` obtained by cutting strictly before the nth user message
-/// (0-based) and all items that follow it.
-fn truncate_after_nth_user_message(history: InitialHistory, n: usize) -> InitialHistory {
-    // Work directly on rollout items, and cut the vector at the nth user message input.
+/// Return a prefix of `items` obtained by dropping the last `n` user messages
+/// and all items that follow them.
+fn truncate_after_dropping_last_messages(history: InitialHistory, n: usize) -> InitialHistory {
+    if n == 0 {
+        return InitialHistory::Forked(history.get_rollout_items());
+    }
+
+    // Work directly on rollout items, and cut the vector at the nth-from-last user message input.
     let items: Vec<RolloutItem> = history.get_rollout_items();
 
     // Find indices of user message inputs in rollout order.
@@ -175,13 +179,13 @@ fn truncate_after_nth_user_message(history: InitialHistory, n: usize) -> Initial
         }
     }
 
-    // If fewer than or equal to n user messages exist, treat as empty (out of range).
-    if user_positions.len() <= n {
+    // If fewer than n user messages exist, treat as empty.
+    if user_positions.len() < n {
         return InitialHistory::New;
     }
 
-    // Cut strictly before the nth user message (do not keep the nth itself).
-    let cut_idx = user_positions[n];
+    // Cut strictly before the nth-from-last user message (do not keep the nth itself).
+    let cut_idx = user_positions[user_positions.len() - n];
     let rolled: Vec<RolloutItem> = items.into_iter().take(cut_idx).collect();
 
     if rolled.is_empty() {
@@ -248,7 +252,7 @@ mod tests {
             .cloned()
             .map(RolloutItem::ResponseItem)
             .collect();
-        let truncated = truncate_after_nth_user_message(InitialHistory::Forked(initial), 1);
+        let truncated = truncate_after_dropping_last_messages(InitialHistory::Forked(initial), 1);
         let got_items = truncated.get_rollout_items();
         let expected_items = vec![
             RolloutItem::ResponseItem(items[0].clone()),
@@ -265,7 +269,7 @@ mod tests {
             .cloned()
             .map(RolloutItem::ResponseItem)
             .collect();
-        let truncated2 = truncate_after_nth_user_message(InitialHistory::Forked(initial2), 2);
+        let truncated2 = truncate_after_dropping_last_messages(InitialHistory::Forked(initial2), 2);
         assert!(matches!(truncated2, InitialHistory::New));
     }
 }
