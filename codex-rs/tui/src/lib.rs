@@ -527,13 +527,8 @@ fn should_show_model_rollout_prompt(
     swiftfox_model_prompt_seen: bool,
 ) -> bool {
     let login_status = get_login_status(config);
-    // TODO(jif) drop.
-    let debug_high_enabled = std::env::var("DEBUG_HIGH")
-        .map(|v| v.eq_ignore_ascii_case("1"))
-        .unwrap_or(false);
 
     active_profile.is_none()
-        && debug_high_enabled
         && cli.model.is_none()
         && !swiftfox_model_prompt_seen
         && config.model_provider.requires_openai_auth
@@ -551,21 +546,7 @@ mod tests {
     use codex_core::auth::write_auth_json;
     use codex_core::token_data::IdTokenInfo;
     use codex_core::token_data::TokenData;
-    use std::sync::Once;
-
-    fn enable_debug_high_env() {
-        static DEBUG_HIGH_ONCE: Once = Once::new();
-        DEBUG_HIGH_ONCE.call_once(|| {
-            // SAFETY: Tests run in a controlled environment and require this env variable to
-            // opt into the GPT-5 High rollout prompt gating. We only set it once.
-            unsafe {
-                std::env::set_var("DEBUG_HIGH", "1");
-            }
-        });
-    }
-
     fn make_config() -> Config {
-        enable_debug_high_env();
         // Create a unique CODEX_HOME per test to isolate auth.json writes.
         let mut codex_home = std::env::temp_dir();
         let unique_suffix = format!(
