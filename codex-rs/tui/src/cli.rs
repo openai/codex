@@ -11,13 +11,7 @@ pub struct Cli {
     pub prompt: Option<String>,
 
     /// Optional image(s) to attach to the initial prompt.
-    #[arg(
-        long = "image",
-        short = 'i',
-        value_name = "FILE",
-        value_delimiter = ',',
-        num_args = 1..,
-    )]
+    #[arg(long = "image", short = 'i', value_name = "FILE", value_delimiter = ',', num_args = 1..)]
     pub images: Vec<PathBuf>,
 
     // Internal controls set by the top-level `codex resume` subcommand.
