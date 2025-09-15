@@ -1,4 +1,6 @@
+use codex_core::config::SWIFTFOX_MEDIUM_MODEL;
 use codex_core::protocol_config_types::ReasoningEffort;
+use codex_protocol::mcp_protocol::AuthMode;
 
 /// A simple preset pairing a model slug with a reasoning effort.
 #[derive(Debug, Clone, Copy)]
@@ -15,61 +17,65 @@ pub struct ModelPreset {
     pub effort: Option<ReasoningEffort>,
 }
 
-/// Built-in list of model presets that pair a model with a reasoning effort.
-///
-/// Keep this UI-agnostic so it can be reused by both TUI and MCP server.
-pub fn builtin_model_presets() -> &'static [ModelPreset] {
-    // Order groups swiftfox variants before gpt-5 presets, each from minimal to high.
-    const PRESETS: &[ModelPreset] = &[
-        ModelPreset {
-            id: "swiftfox-low",
-            label: "swiftfox low",
-            description: "",
-            model: "swiftfox",
-            effort: Some(ReasoningEffort::Low),
-        },
-        ModelPreset {
-            id: "swiftfox-medium",
-            label: "swiftfox medium",
-            description: "",
-            model: "swiftfox",
-            effort: None,
-        },
-        ModelPreset {
-            id: "swiftfox-high",
-            label: "swiftfox high",
-            description: "",
-            model: "swiftfox",
-            effort: Some(ReasoningEffort::High),
-        },
-        ModelPreset {
-            id: "gpt-5-minimal",
-            label: "gpt-5 minimal",
-            description: "— fastest responses with limited reasoning; ideal for coding, instructions, or lightweight tasks",
-            model: "gpt-5",
-            effort: Some(ReasoningEffort::Minimal),
-        },
-        ModelPreset {
-            id: "gpt-5-low",
-            label: "gpt-5 low",
-            description: "— balances speed with some reasoning; useful for straightforward queries and short explanations",
-            model: "gpt-5",
-            effort: Some(ReasoningEffort::Low),
-        },
-        ModelPreset {
-            id: "gpt-5-medium",
-            label: "gpt-5 medium",
-            description: "— default setting; provides a solid balance of reasoning depth and latency for general-purpose tasks",
-            model: "gpt-5",
-            effort: Some(ReasoningEffort::Medium),
-        },
-        ModelPreset {
-            id: "gpt-5-high",
-            label: "gpt-5 high",
-            description: "— maximizes reasoning depth for complex or ambiguous problems",
-            model: "gpt-5",
-            effort: Some(ReasoningEffort::High),
-        },
-    ];
-    PRESETS
+const PRESETS: &[ModelPreset] = &[
+    ModelPreset {
+        id: "swiftfox-low",
+        label: "swiftfox low",
+        description: "",
+        model: "swiftfox",
+        effort: Some(ReasoningEffort::Low),
+    },
+    ModelPreset {
+        id: "swiftfox-medium",
+        label: "swiftfox medium",
+        description: "",
+        model: "swiftfox",
+        effort: None,
+    },
+    ModelPreset {
+        id: "swiftfox-high",
+        label: "swiftfox high",
+        description: "",
+        model: "swiftfox",
+        effort: Some(ReasoningEffort::High),
+    },
+    ModelPreset {
+        id: "gpt-5-minimal",
+        label: "gpt-5 minimal",
+        description: "— fastest responses with limited reasoning; ideal for coding, instructions, or lightweight tasks",
+        model: "gpt-5",
+        effort: Some(ReasoningEffort::Minimal),
+    },
+    ModelPreset {
+        id: "gpt-5-low",
+        label: "gpt-5 low",
+        description: "— balances speed with some reasoning; useful for straightforward queries and short explanations",
+        model: "gpt-5",
+        effort: Some(ReasoningEffort::Low),
+    },
+    ModelPreset {
+        id: "gpt-5-medium",
+        label: "gpt-5 medium",
+        description: "— default setting; provides a solid balance of reasoning depth and latency for general-purpose tasks",
+        model: "gpt-5",
+        effort: Some(ReasoningEffort::Medium),
+    },
+    ModelPreset {
+        id: "gpt-5-high",
+        label: "gpt-5 high",
+        description: "— maximizes reasoning depth for complex or ambiguous problems",
+        model: "gpt-5",
+        effort: Some(ReasoningEffort::High),
+    },
+];
+
+pub fn builtin_model_presets(auth_mode: Option<AuthMode>) -> Vec<ModelPreset> {
+    match auth_mode {
+        Some(AuthMode::ApiKey) => PRESETS
+            .iter()
+            .copied()
+            .filter(|p| !p.model.contains(SWIFTFOX_MEDIUM_MODEL))
+            .collect(),
+        _ => PRESETS.to_vec(),
+    }
 }
