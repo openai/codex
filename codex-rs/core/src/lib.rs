@@ -13,6 +13,7 @@ mod client;
 mod client_common;
 pub mod codex;
 mod codex_conversation;
+pub mod context_analyzer;
 pub mod token_data;
 pub use codex_conversation::CodexConversation;
 pub mod config;
