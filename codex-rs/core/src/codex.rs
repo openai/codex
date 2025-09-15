@@ -18,6 +18,7 @@ use codex_apply_patch::MaybeApplyPatchVerified;
 use codex_apply_patch::maybe_parse_apply_patch_verified;
 use codex_protocol::mcp_protocol::ConversationId;
 use codex_protocol::protocol::ConversationPathResponseEvent;
+use codex_protocol::protocol::ExitedReviewModeEvent;
 use codex_protocol::protocol::ReviewRequest;
 use codex_protocol::protocol::RolloutItem;
 use codex_protocol::protocol::TaskStartedEvent;
@@ -130,6 +131,8 @@ use codex_protocol::models::ShellToolCallParams;
 use codex_protocol::protocol::InitialHistory;
 
 mod compact;
+use self::compact::build_compacted_history;
+use self::compact::collect_user_messages;
 
 // A convenience extension trait for acquiring mutex locks where poisoning is
 // unrecoverable and should abort the program. This avoids scattered `.unwrap()`
@@ -205,7 +208,7 @@ impl Codex {
             config.clone(),
             auth_manager.clone(),
             tx_event.clone(),
-            conversation_history.clone(),
+            conversation_history,
         )
         .await
         .map_err(|e| {
@@ -564,9 +567,10 @@ impl Session {
                 let persist = matches!(conversation_history, InitialHistory::Forked(_));
 
                 // Always add response items to conversation history
-                let response_items = conversation_history.get_response_items();
-                if !response_items.is_empty() {
-                    self.record_into_history(&response_items);
+                let reconstructed_history =
+                    self.reconstruct_history_from_rollout(turn_context, &rollout_items);
+                if !reconstructed_history.is_empty() {
+                    self.record_into_history(&reconstructed_history);
                 }
 
                 // If persisting, persist all rollout items as-is (recorder filters)
@@ -676,6 +680,33 @@ impl Session {
     async fn record_conversation_items(&self, items: &[ResponseItem]) {
         self.record_into_history(items);
         self.persist_rollout_response_items(items).await;
+    }
+
+    fn reconstruct_history_from_rollout(
+        &self,
+        turn_context: &TurnContext,
+        rollout_items: &[RolloutItem],
+    ) -> Vec<ResponseItem> {
+        let mut history = ConversationHistory::new();
+        for item in rollout_items {
+            match item {
+                RolloutItem::ResponseItem(response_item) => {
+                    history.record_items(std::iter::once(response_item));
+                }
+                RolloutItem::Compacted(compacted) => {
+                    let snapshot = history.contents();
+                    let user_messages = collect_user_messages(&snapshot);
+                    let rebuilt = build_compacted_history(
+                        self.build_initial_context(turn_context),
+                        &user_messages,
+                        &compacted.message,
+                    );
+                    history.replace(rebuilt);
+                }
+                _ => {}
+            }
+        }
+        history.contents()
     }
 
     /// Append ResponseItems to the in-memory conversation history only.
@@ -815,6 +846,7 @@ impl Session {
             aggregated_output,
             duration,
             exit_code,
+            timed_out: _,
         } = output;
         // Send full stdout/stderr to clients; do not truncate.
         let stdout = stdout.text.clone();
@@ -890,6 +922,7 @@ impl Session {
         let output_stderr;
         let borrowed: &ExecToolCallOutput = match &result {
             Ok(output) => output,
+            Err(CodexErr::Sandbox(SandboxErr::Timeout { output })) => output,
             Err(e) => {
                 output_stderr = ExecToolCallOutput {
                     exit_code: -1,
@@ -897,6 +930,7 @@ impl Session {
                     stderr: StreamOutput::new(get_error_message_ui(e)),
                     aggregated_output: StreamOutput::new(get_error_message_ui(e)),
                     duration: Duration::default(),
+                    timed_out: false,
                 };
                 &output_stderr
             }
@@ -2887,15 +2921,12 @@ async fn handle_sandbox_error(
     let sub_id = exec_command_context.sub_id.clone();
     let cwd = exec_command_context.cwd.clone();
 
-    // if the command timed out, we can simply return this failure to the model
-    if matches!(error, SandboxErr::Timeout) {
+    if let SandboxErr::Timeout { output } = &error {
+        let content = format_exec_output(output);
         return ResponseInputItem::FunctionCallOutput {
             call_id,
             output: FunctionCallOutputPayload {
-                content: format!(
-                    "command timed out after {} milliseconds",
-                    params.timeout_duration().as_millis()
-                ),
+                content,
                 success: Some(false),
             },
         };
@@ -3020,7 +3051,17 @@ fn format_exec_output_str(exec_output: &ExecToolCallOutput) -> String {
     // Head+tail truncation for the model: show the beginning and end with an elision.
     // Clients still receive full streams; only this formatted summary is capped.
 
-    let s = aggregated_output.text.as_str();
+    let mut s = &aggregated_output.text;
+    let prefixed_str: String;
+
+    if exec_output.timed_out {
+        prefixed_str = format!(
+            "command timed out after {} milliseconds\n",
+            exec_output.duration.as_millis()
+        ) + s;
+        s = &prefixed_str;
+    }
+
     let total_lines = s.lines().count();
     if s.len() <= MODEL_FORMAT_MAX_BYTES && total_lines <= MODEL_FORMAT_MAX_LINES {
         return s.to_string();
@@ -3063,6 +3104,7 @@ fn format_exec_output_str(exec_output: &ExecToolCallOutput) -> String {
     // Build final string respecting byte budgets
     let head_part = take_bytes_at_char_boundary(&head_lines_text, head_budget);
     let mut result = String::with_capacity(MODEL_FORMAT_MAX_BYTES.min(s.len()));
+
     result.push_str(head_part);
     result.push_str(&marker);
 
@@ -3208,11 +3250,11 @@ fn convert_call_tool_result_to_function_call_output_payload(
 async fn exit_review_mode(
     session: Arc<Session>,
     task_sub_id: String,
-    res: Option<ReviewOutputEvent>,
+    review_output: Option<ReviewOutputEvent>,
 ) {
     let event = Event {
         id: task_sub_id,
-        msg: EventMsg::ExitedReviewMode(res),
+        msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent { review_output }),
     };
     session.send_event(event).await;
 }
@@ -3220,18 +3262,59 @@ async fn exit_review_mode(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ConfigOverrides;
+    use crate::config::ConfigToml;
+    use crate::protocol::CompactedItem;
+    use crate::protocol::InitialHistory;
+    use crate::protocol::ResumedHistory;
+    use codex_protocol::models::ContentItem;
     use mcp_types::ContentBlock;
     use mcp_types::TextContent;
     use pretty_assertions::assert_eq;
     use serde_json::json;
+    use std::path::PathBuf;
+    use std::sync::Arc;
     use std::time::Duration as StdDuration;
 
-    fn text_block(s: &str) -> ContentBlock {
-        ContentBlock::TextContent(TextContent {
-            annotations: None,
-            text: s.to_string(),
-            r#type: "text".to_string(),
-        })
+    #[test]
+    fn reconstruct_history_matches_live_compactions() {
+        let (session, turn_context) = make_session_and_context();
+        let (rollout_items, expected) = sample_rollout(&session, &turn_context);
+
+        let reconstructed = session.reconstruct_history_from_rollout(&turn_context, &rollout_items);
+
+        assert_eq!(expected, reconstructed);
+    }
+
+    #[test]
+    fn record_initial_history_reconstructs_resumed_transcript() {
+        let (session, turn_context) = make_session_and_context();
+        let (rollout_items, expected) = sample_rollout(&session, &turn_context);
+
+        tokio_test::block_on(session.record_initial_history(
+            &turn_context,
+            InitialHistory::Resumed(ResumedHistory {
+                conversation_id: ConversationId::default(),
+                history: rollout_items,
+                rollout_path: PathBuf::from("/tmp/resume.jsonl"),
+            }),
+        ));
+
+        let actual = session.state.lock_unchecked().history.contents();
+        assert_eq!(expected, actual);
+    }
+
+    #[test]
+    fn record_initial_history_reconstructs_forked_transcript() {
+        let (session, turn_context) = make_session_and_context();
+        let (rollout_items, expected) = sample_rollout(&session, &turn_context);
+
+        tokio_test::block_on(
+            session.record_initial_history(&turn_context, InitialHistory::Forked(rollout_items)),
+        );
+
+        let actual = session.state.lock_unchecked().history.contents();
+        assert_eq!(expected, actual);
     }
 
     #[test]
@@ -3271,6 +3354,7 @@ mod tests {
             stderr: StreamOutput::new(String::new()),
             aggregated_output: StreamOutput::new(full),
             duration: StdDuration::from_secs(1),
+            timed_out: false,
         };
 
         let out = format_exec_output_str(&exec);
@@ -3313,6 +3397,7 @@ mod tests {
             stderr: StreamOutput::new(String::new()),
             aggregated_output: StreamOutput::new(full.clone()),
             duration: StdDuration::from_secs(1),
+            timed_out: false,
         };
 
         let out = format_exec_output_str(&exec);
@@ -3332,6 +3417,25 @@ mod tests {
                     .collect::<String>()
                     .as_str()
             )
+        );
+    }
+
+    #[test]
+    fn includes_timed_out_message() {
+        let exec = ExecToolCallOutput {
+            exit_code: 0,
+            stdout: StreamOutput::new(String::new()),
+            stderr: StreamOutput::new(String::new()),
+            aggregated_output: StreamOutput::new("Command output".to_string()),
+            duration: StdDuration::from_secs(1),
+            timed_out: true,
+        };
+
+        let out = format_exec_output_str(&exec);
+
+        assert_eq!(
+            out,
+            "command timed out after 1000 milliseconds\nCommand output"
         );
     }
 
@@ -3385,5 +3489,175 @@ mod tests {
         };
 
         assert_eq!(expected, got);
+    }
+
+    fn text_block(s: &str) -> ContentBlock {
+        ContentBlock::TextContent(TextContent {
+            annotations: None,
+            text: s.to_string(),
+            r#type: "text".to_string(),
+        })
+    }
+
+    fn make_session_and_context() -> (Session, TurnContext) {
+        let (tx_event, _rx_event) = async_channel::unbounded();
+        let codex_home = tempfile::tempdir().expect("create temp dir");
+        let config = Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )
+        .expect("load default test config");
+        let config = Arc::new(config);
+        let conversation_id = ConversationId::default();
+        let client = ModelClient::new(
+            config.clone(),
+            None,
+            config.model_provider.clone(),
+            config.model_reasoning_effort,
+            config.model_reasoning_summary,
+            conversation_id,
+        );
+        let tools_config = ToolsConfig::new(&ToolsConfigParams {
+            model_family: &config.model_family,
+            approval_policy: config.approval_policy,
+            sandbox_policy: config.sandbox_policy.clone(),
+            include_plan_tool: config.include_plan_tool,
+            include_apply_patch_tool: config.include_apply_patch_tool,
+            include_web_search_request: config.tools_web_search_request,
+            use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
+            include_view_image_tool: config.include_view_image_tool,
+            experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
+        });
+        let turn_context = TurnContext {
+            client,
+            cwd: config.cwd.clone(),
+            base_instructions: config.base_instructions.clone(),
+            user_instructions: config.user_instructions.clone(),
+            approval_policy: config.approval_policy,
+            sandbox_policy: config.sandbox_policy.clone(),
+            shell_environment_policy: config.shell_environment_policy.clone(),
+            tools_config,
+            is_review_mode: false,
+        };
+        let session = Session {
+            conversation_id,
+            tx_event,
+            mcp_connection_manager: McpConnectionManager::default(),
+            session_manager: ExecSessionManager::default(),
+            unified_exec_manager: UnifiedExecSessionManager::default(),
+            notify: None,
+            rollout: Mutex::new(None),
+            state: Mutex::new(State {
+                history: ConversationHistory::new(),
+                ..Default::default()
+            }),
+            codex_linux_sandbox_exe: None,
+            user_shell: shell::Shell::Unknown,
+            show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+        };
+        (session, turn_context)
+    }
+
+    fn sample_rollout(
+        session: &Session,
+        turn_context: &TurnContext,
+    ) -> (Vec<RolloutItem>, Vec<ResponseItem>) {
+        let mut rollout_items = Vec::new();
+        let mut live_history = ConversationHistory::new();
+
+        let initial_context = session.build_initial_context(turn_context);
+        for item in &initial_context {
+            rollout_items.push(RolloutItem::ResponseItem(item.clone()));
+        }
+        live_history.record_items(initial_context.iter());
+
+        let user1 = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "first user".to_string(),
+            }],
+        };
+        live_history.record_items(std::iter::once(&user1));
+        rollout_items.push(RolloutItem::ResponseItem(user1.clone()));
+
+        let assistant1 = ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "assistant reply one".to_string(),
+            }],
+        };
+        live_history.record_items(std::iter::once(&assistant1));
+        rollout_items.push(RolloutItem::ResponseItem(assistant1.clone()));
+
+        let summary1 = "summary one";
+        let snapshot1 = live_history.contents();
+        let user_messages1 = collect_user_messages(&snapshot1);
+        let rebuilt1 = build_compacted_history(
+            session.build_initial_context(turn_context),
+            &user_messages1,
+            summary1,
+        );
+        live_history.replace(rebuilt1);
+        rollout_items.push(RolloutItem::Compacted(CompactedItem {
+            message: summary1.to_string(),
+        }));
+
+        let user2 = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "second user".to_string(),
+            }],
+        };
+        live_history.record_items(std::iter::once(&user2));
+        rollout_items.push(RolloutItem::ResponseItem(user2.clone()));
+
+        let assistant2 = ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "assistant reply two".to_string(),
+            }],
+        };
+        live_history.record_items(std::iter::once(&assistant2));
+        rollout_items.push(RolloutItem::ResponseItem(assistant2.clone()));
+
+        let summary2 = "summary two";
+        let snapshot2 = live_history.contents();
+        let user_messages2 = collect_user_messages(&snapshot2);
+        let rebuilt2 = build_compacted_history(
+            session.build_initial_context(turn_context),
+            &user_messages2,
+            summary2,
+        );
+        live_history.replace(rebuilt2);
+        rollout_items.push(RolloutItem::Compacted(CompactedItem {
+            message: summary2.to_string(),
+        }));
+
+        let user3 = ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "third user".to_string(),
+            }],
+        };
+        live_history.record_items(std::iter::once(&user3));
+        rollout_items.push(RolloutItem::ResponseItem(user3.clone()));
+
+        let assistant3 = ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: "assistant reply three".to_string(),
+            }],
+        };
+        live_history.record_items(std::iter::once(&assistant3));
+        rollout_items.push(RolloutItem::ResponseItem(assistant3.clone()));
+
+        (rollout_items, live_history.contents())
     }
 }

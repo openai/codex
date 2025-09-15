@@ -3,9 +3,9 @@ source: tui/src/chatwidget/tests.rs
 expression: terminal.backend()
 ---
 "                                                                                "
-" Analyzing (0s • Esc to interrupt)                                              "
+"  Analyzing (0s • Esc to interrupt)                                             "
 "                                                                                "
 "▌ Ask Codex to do anything                                                      "
 "                                                                                "
-" ⏎ send   ⌃J newline   ⌃V paste image   ⌃O shortcuts   ⌃C quit                  "
+"⏎ send   ⌃J newline   ⌃O shortcuts   ⌃C quit                                    "
 "                                                                                "

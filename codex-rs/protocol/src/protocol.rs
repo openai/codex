@@ -15,6 +15,7 @@ use crate::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use crate::custom_prompts::CustomPrompt;
 use crate::mcp_protocol::ConversationId;
 use crate::message_history::HistoryEntry;
+use crate::models::ContentItem;
 use crate::models::ResponseItem;
 use crate::num_format::format_with_separators;
 use crate::parse_command::ParsedCommand;
@@ -413,6 +414,7 @@ pub struct Event {
 }
 
 /// Response event from the agent
+/// NOTE: Make sure none of these values have optional types, as it will mess up the extension code-gen.
 #[derive(Debug, Clone, Deserialize, Serialize, Display, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case")]
@@ -513,7 +515,12 @@ pub enum EventMsg {
     EnteredReviewMode(ReviewRequest),
 
     /// Exited review mode with an optional final result to apply.
-    ExitedReviewMode(Option<ReviewOutputEvent>),
+    ExitedReviewMode(ExitedReviewModeEvent),
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub struct ExitedReviewModeEvent {
+    pub review_output: Option<ReviewOutputEvent>,
 }
 
 // Individual event payload types matching each `EventMsg` variant.
@@ -862,26 +869,7 @@ impl InitialHistory {
             InitialHistory::Forked(items) => items.clone(),
         }
     }
-    pub fn get_response_items(&self) -> Vec<ResponseItem> {
-        match self {
-            InitialHistory::New => Vec::new(),
-            InitialHistory::Resumed(resumed) => resumed
-                .history
-                .iter()
-                .filter_map(|ri| match ri {
-                    RolloutItem::ResponseItem(item) => Some(item.clone()),
-                    _ => None,
-                })
-                .collect(),
-            InitialHistory::Forked(items) => items
-                .iter()
-                .filter_map(|ri| match ri {
-                    RolloutItem::ResponseItem(item) => Some(item.clone()),
-                    _ => None,
-                })
-                .collect(),
-        }
-    }
+
     pub fn get_event_msgs(&self) -> Option<Vec<EventMsg>> {
         match self {
             InitialHistory::New => None,
@@ -939,6 +927,18 @@ pub enum RolloutItem {
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
 pub struct CompactedItem {
     pub message: String,
+}
+
+impl From<CompactedItem> for ResponseItem {
+    fn from(value: CompactedItem) -> Self {
+        ResponseItem::Message {
+            id: None,
+            role: "assistant".to_string(),
+            content: vec![ContentItem::OutputText {
+                text: value.message,
+            }],
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, TS)]
