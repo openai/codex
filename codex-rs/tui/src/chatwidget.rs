@@ -74,6 +74,8 @@ use self::interrupts::InterruptManager;
 mod agent;
 use self::agent::spawn_agent;
 use self::agent::spawn_agent_from_existing;
+mod session_header;
+use self::session_header::SessionHeader;
 use crate::streaming::controller::AppEventHistorySink;
 use crate::streaming::controller::StreamController;
 use codex_common::approval_presets::ApprovalPreset;
@@ -109,6 +111,7 @@ pub(crate) struct ChatWidget {
     bottom_pane: BottomPane,
     active_exec_cell: Option<ExecCell>,
     config: Config,
+    session_header: SessionHeader,
     initial_user_message: Option<UserMessage>,
     token_info: Option<TokenUsageInfo>,
     // Stream lifecycle controller
@@ -165,9 +168,11 @@ impl ChatWidget {
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.conversation_id = Some(event.session_id);
         let initial_messages = event.initial_messages.clone();
+        let model_for_header = event.model.clone();
         if let Some(messages) = initial_messages {
             self.replay_initial_messages(messages);
         }
+        self.session_header.set_model(&model_for_header);
         self.add_to_history(history_cell::new_session_info(
             &self.config,
             event,
@@ -609,14 +614,23 @@ impl ChatWidget {
         ));
     }
 
-    fn layout_areas(&self, area: Rect) -> [Rect; 2] {
+    fn layout_areas(&self, area: Rect) -> [Rect; 3] {
+        let bottom_min = self.bottom_pane.desired_height(area.width).min(area.height);
+        let remaining = area.height.saturating_sub(bottom_min);
+
+        let active_desired = self
+            .active_exec_cell
+            .as_ref()
+            .map_or(0, |c| c.desired_height(area.width) + 1);
+        let active_height = active_desired.min(remaining);
+        // Note: no header area; remaining is not used beyond computing active height.
+
+        let header_height = 0u16;
+
         Layout::vertical([
-            Constraint::Max(
-                self.active_exec_cell
-                    .as_ref()
-                    .map_or(0, |c| c.desired_height(area.width) + 1),
-            ),
-            Constraint::Min(self.bottom_pane.desired_height(area.width)),
+            Constraint::Length(header_height),
+            Constraint::Length(active_height),
+            Constraint::Min(bottom_min),
         ])
         .areas(area)
     }
@@ -651,6 +665,7 @@ impl ChatWidget {
             }),
             active_exec_cell: None,
             config: config.clone(),
+            session_header: SessionHeader::new(config.model.clone()),
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
                 initial_images,
@@ -703,6 +718,7 @@ impl ChatWidget {
             }),
             active_exec_cell: None,
             config: config.clone(),
+            session_header: SessionHeader::new(config.model.clone()),
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
                 initial_images,
@@ -1282,8 +1298,9 @@ impl ChatWidget {
     }
 
     /// Set the model in the widget's config copy.
-    pub(crate) fn set_model(&mut self, model: String) {
-        self.config.model = model;
+    pub(crate) fn set_model(&mut self, model: &str) {
+        self.session_header.set_model(model);
+        self.config.model = model.to_string();
     }
 
     pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
@@ -1404,14 +1421,14 @@ impl ChatWidget {
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        let [_, bottom_pane_area] = self.layout_areas(area);
+        let [_, _, bottom_pane_area] = self.layout_areas(area);
         self.bottom_pane.cursor_pos(bottom_pane_area)
     }
 }
 
 impl WidgetRef for &ChatWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let [active_cell_area, bottom_pane_area] = self.layout_areas(area);
+        let [_, active_cell_area, bottom_pane_area] = self.layout_areas(area);
         (&self.bottom_pane).render(bottom_pane_area, buf);
         if !active_cell_area.is_empty()
             && let Some(cell) = &self.active_exec_cell
