@@ -43,6 +43,7 @@ crossterm = { version = "0.28.1", features = [
     "bracketed-paste",
     "event-stream",
 ] }
+dirs = "6"
 diffy = "0.4.2"
 image = { version = "^0.25.8", default-features = false, features = [
     "jpeg",
@@ -96,7 +97,6 @@ arboard = "3"
 
 [dev-dependencies]
 chrono = { version = "0.4", features = ["serde"] }
-dirs = "6"
 insta = "1.43.2"
 pretty_assertions = "1"
 rand = "0.9"
