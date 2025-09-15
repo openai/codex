@@ -345,6 +345,16 @@ fn create_agent_tool() -> OpenAiTool {
         },
     );
 
+    properties.insert(
+        "context".to_string(),
+        JsonSchema::String {
+            description: Some(
+                "Optional additional context to provide to the agent for better task understanding"
+                    .to_string(),
+            ),
+        },
+    );
+
     OpenAiTool::Function(ResponsesApiTool {
         name: "agent".to_string(),
         description:

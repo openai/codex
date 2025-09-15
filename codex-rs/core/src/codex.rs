@@ -2858,6 +2858,17 @@ async fn execute_agent_isolated(
         state.is_agent_context = true;
     }
 
+    // Create a scope guard to ensure the agent context flag is always reset
+    struct AgentContextGuard<'a> {
+        sess: &'a Session,
+    }
+    impl<'a> Drop for AgentContextGuard<'a> {
+        fn drop(&mut self) {
+            self.sess.state.lock_unchecked().is_agent_context = false;
+        }
+    }
+    let _guard = AgentContextGuard { sess };
+
     // Create an isolated context for the agent with specialized system prompt
     let agent_context = TurnContext {
         client: parent_context.client.clone(),
@@ -3070,8 +3081,7 @@ async fn execute_agent_isolated(
     })
     .await;
 
-    // Unmark agent context
-    sess.state.lock_unchecked().is_agent_context = false;
+    // Note: agent context flag is reset by the AgentContextGuard drop
 
     info!("Agent '{}' completed successfully", params.agent_name);
     Ok(summary)
