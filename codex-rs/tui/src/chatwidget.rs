@@ -1130,7 +1130,7 @@ impl ChatWidget {
     }
 
     fn notify(&mut self, notification: Notification) {
-        if !notification.allowed_for(&self.config.tui.notifications) {
+        if !notification.allowed_for(&self.config.tui_notifications) {
             return;
         }
         self.pending_notification = Some(notification);
