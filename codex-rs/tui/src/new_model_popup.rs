@@ -3,7 +3,6 @@ use crate::frames::FRAME_TICK_DEFAULT;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
-use codex_core::config::GPT_5_CODEX_DISPLAY_NAME;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -135,16 +134,15 @@ impl WidgetRef for &ModelUpgradePopup {
             lines.push("".into());
         }
 
-        lines.push(
-            format!("  Codex is now powered by {GPT_5_CODEX_DISPLAY_NAME}, a new model that is")
-                .into(),
-        );
         lines.push(Line::from(vec![
             "  ".into(),
-            "faster, a better collaborator, ".bold(),
-            "and ".into(),
-            "more steerable.".bold(),
+            "Introducing GPT-5-Codex".bold(),
         ]));
+        lines.push("".into());
+        lines.push(
+            "  GPT-5-Codex works faster through easy tasks and harder on complex tasks,".into(),
+        );
+        lines.push("  improves on code quality, and is more steerable with AGENTS.md.".into());
         lines.push("".into());
 
         let create_option =
@@ -162,13 +160,13 @@ impl WidgetRef for &ModelUpgradePopup {
         lines.push(create_option(
             0,
             ModelUpgradeOption::TryNewModel,
-            &format!("Yes, switch me to {GPT_5_CODEX_DISPLAY_NAME}"),
+            "Try the new GPT-5-Codex model",
         ));
         lines.push("".into());
         lines.push(create_option(
             1,
             ModelUpgradeOption::KeepCurrent,
-            "Not right now",
+            "Continue using current model",
         ));
         lines.push("".into());
         lines.push(
