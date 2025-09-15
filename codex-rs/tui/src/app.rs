@@ -38,6 +38,7 @@ pub(crate) struct App {
     pub(crate) server: Arc<ConversationManager>,
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) chat_widget: ChatWidget,
+    pub(crate) auth_manager: Arc<AuthManager>,
 
     /// Config is stored here so we can recreate ChatWidgets as needed.
     pub(crate) config: Config,
@@ -88,6 +89,7 @@ impl App {
                     initial_prompt: initial_prompt.clone(),
                     initial_images: initial_images.clone(),
                     enhanced_keys_supported,
+                    auth_manager: auth_manager.clone(),
                 };
                 ChatWidget::new(init, conversation_manager.clone())
             }
@@ -109,6 +111,7 @@ impl App {
                     initial_prompt: initial_prompt.clone(),
                     initial_images: initial_images.clone(),
                     enhanced_keys_supported,
+                    auth_manager: auth_manager.clone(),
                 };
                 ChatWidget::new_from_existing(
                     init,
@@ -124,6 +127,7 @@ impl App {
             server: conversation_manager,
             app_event_tx,
             chat_widget,
+            auth_manager: auth_manager.clone(),
             config,
             active_profile,
             file_search,
@@ -205,6 +209,7 @@ impl App {
                     initial_prompt: None,
                     initial_images: Vec::new(),
                     enhanced_keys_supported: self.enhanced_keys_supported,
+                    auth_manager: self.auth_manager.clone(),
                 };
                 self.chat_widget = ChatWidget::new(init, self.server.clone());
                 tui.frame_requester().schedule_frame();
@@ -418,6 +423,7 @@ mod tests {
     use crate::app_backtrack::BacktrackState;
     use crate::chatwidget::tests::make_chatwidget_manual_with_sender;
     use crate::file_search::FileSearchManager;
+    use codex_core::AuthManager;
     use codex_core::CodexAuth;
     use codex_core::ConversationManager;
     use std::sync::Arc;
@@ -430,12 +436,15 @@ mod tests {
         let server = Arc::new(ConversationManager::with_auth(CodexAuth::from_api_key(
             "Test API Key",
         )));
+        let auth_manager =
+            AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
         let file_search = FileSearchManager::new(config.cwd.clone(), app_event_tx.clone());
 
         App {
             server,
             app_event_tx,
             chat_widget,
+            auth_manager,
             config,
             active_profile: None,
             file_search,

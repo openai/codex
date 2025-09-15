@@ -3,7 +3,6 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use codex_core::auth::CodexAuth;
 use codex_core::config::Config;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
@@ -50,7 +49,6 @@ use ratatui::widgets::Widget;
 use ratatui::widgets::WidgetRef;
 use tokio::sync::mpsc::UnboundedSender;
 use tracing::debug;
-use tracing::warn;
 
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
@@ -82,12 +80,12 @@ use codex_common::approval_presets::ApprovalPreset;
 use codex_common::approval_presets::builtin_approval_presets;
 use codex_common::model_presets::ModelPreset;
 use codex_common::model_presets::builtin_model_presets;
+use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_file_search::FileMatch;
-use codex_protocol::mcp_protocol::AuthMode;
 use codex_protocol::mcp_protocol::ConversationId;
 
 // Track information about an in-flight exec command.
@@ -104,6 +102,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) initial_prompt: Option<String>,
     pub(crate) initial_images: Vec<PathBuf>,
     pub(crate) enhanced_keys_supported: bool,
+    pub(crate) auth_manager: Arc<AuthManager>,
 }
 
 pub(crate) struct ChatWidget {
@@ -112,6 +111,7 @@ pub(crate) struct ChatWidget {
     bottom_pane: BottomPane,
     active_exec_cell: Option<ExecCell>,
     config: Config,
+    auth_manager: Arc<AuthManager>,
     initial_user_message: Option<UserMessage>,
     token_info: Option<TokenUsageInfo>,
     // Stream lifecycle controller
@@ -635,6 +635,7 @@ impl ChatWidget {
             initial_prompt,
             initial_images,
             enhanced_keys_supported,
+            auth_manager,
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
@@ -654,6 +655,7 @@ impl ChatWidget {
             }),
             active_exec_cell: None,
             config: config.clone(),
+            auth_manager: auth_manager.clone(),
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
                 initial_images,
@@ -685,6 +687,7 @@ impl ChatWidget {
             initial_prompt,
             initial_images,
             enhanced_keys_supported,
+            auth_manager,
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
@@ -706,6 +709,7 @@ impl ChatWidget {
             }),
             active_exec_cell: None,
             config: config.clone(),
+            auth_manager: auth_manager.clone(),
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
                 initial_images,
@@ -1174,25 +1178,11 @@ impl ChatWidget {
     pub(crate) fn open_model_popup(&mut self) {
         let current_model = self.config.model.clone();
         let current_effort = self.config.model_reasoning_effort;
-        let presets: &[ModelPreset] = builtin_model_presets();
-        let auth_mode = CodexAuth::from_codex_home(&self.config.codex_home)
-            .ok()
-            .flatten()
-            .map(|auth| auth.mode);
+        let auth_mode = self.auth_manager.auth().map(|auth| auth.mode);
+        let presets: Vec<ModelPreset> = builtin_model_presets(auth_mode);
 
         let mut items: Vec<SelectionItem> = Vec::new();
         for preset in presets.iter() {
-            warn!(
-                "auth_mode: {:?}, preset.model: {:?}",
-                auth_mode, preset.model
-            );
-            match (auth_mode, preset.model) {
-                (Some(AuthMode::ApiKey), model) if model.contains("swiftfox") => {
-                    // TODO: remove when model is in api.
-                    continue;
-                }
-                _ => {}
-            }
             let name = preset.label.to_string();
             let description = Some(preset.description.to_string());
             let is_current = preset.model == current_model && preset.effort == current_effort;
