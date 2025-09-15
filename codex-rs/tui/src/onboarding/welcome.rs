@@ -37,7 +37,7 @@ impl WidgetRef for &WelcomeWidget {
             0
         };
 
-        let mut lines: Vec<Line> = frames[idx].lines().map(|l| l.to_string().into()).collect();
+        let mut lines: Vec<Line> = frames[idx].lines().map(|l| l.into()).collect();
 
         lines.push("".into());
         lines.push(Line::from(vec![
