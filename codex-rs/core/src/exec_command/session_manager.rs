@@ -279,7 +279,6 @@ async fn create_exec_command_session(
     let (writer_tx, mut writer_rx) = mpsc::channel::<Vec<u8>>(128);
     // Broadcast for streaming PTY output to readers: subscribers receive from subscription time.
     let (output_tx, _) = tokio::sync::broadcast::channel::<Vec<u8>>(256);
-    let initial_output_rx = output_tx.subscribe();
 
     // Reader task: drain PTY and forward chunks to output channel.
     let mut reader = pair.master.try_clone_reader()?;
@@ -351,7 +350,6 @@ async fn create_exec_command_session(
         wait_handle,
         exit_status,
     );
-    session.set_initial_output_receiver(initial_output_rx);
     Ok((session, exit_rx))
 }
 

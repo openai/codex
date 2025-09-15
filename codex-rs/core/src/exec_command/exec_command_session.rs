@@ -11,9 +11,6 @@ pub(crate) struct ExecCommandSession {
     /// Broadcast stream of output chunks read from the PTY. New subscribers
     /// receive only chunks emitted after they subscribe.
     output_tx: broadcast::Sender<Vec<u8>>,
-    /// Receiver subscribed before the child process starts emitting output so
-    /// the first caller can consume any early data without races.
-    initial_output_rx: StdMutex<Option<broadcast::Receiver<Vec<u8>>>>,
 
     /// Child killer handle for termination on drop (can signal independently
     /// of a thread blocked in `.wait()`).
@@ -45,7 +42,6 @@ impl ExecCommandSession {
         Self {
             writer_tx,
             output_tx,
-            initial_output_rx: StdMutex::new(None),
             killer: StdMutex::new(Some(killer)),
             reader_handle: StdMutex::new(Some(reader_handle)),
             writer_handle: StdMutex::new(Some(writer_handle)),
@@ -54,26 +50,12 @@ impl ExecCommandSession {
         }
     }
 
-    pub(crate) fn set_initial_output_receiver(&self, receiver: broadcast::Receiver<Vec<u8>>) {
-        if let Ok(mut guard) = self.initial_output_rx.lock()
-            && guard.is_none()
-        {
-            *guard = Some(receiver);
-        }
-    }
-
     pub(crate) fn writer_sender(&self) -> mpsc::Sender<Vec<u8>> {
         self.writer_tx.clone()
     }
 
     pub(crate) fn output_receiver(&self) -> broadcast::Receiver<Vec<u8>> {
-        if let Ok(mut guard) = self.initial_output_rx.lock()
-            && let Some(receiver) = guard.take()
-        {
-            receiver
-        } else {
-            self.output_tx.subscribe()
-        }
+        self.output_tx.subscribe()
     }
 
     pub(crate) fn has_exited(&self) -> bool {
