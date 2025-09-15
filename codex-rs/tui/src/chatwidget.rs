@@ -74,12 +74,15 @@ use self::interrupts::InterruptManager;
 mod agent;
 use self::agent::spawn_agent;
 use self::agent::spawn_agent_from_existing;
+mod session_header;
+use self::session_header::SessionHeader;
 use crate::streaming::controller::AppEventHistorySink;
 use crate::streaming::controller::StreamController;
 use codex_common::approval_presets::ApprovalPreset;
 use codex_common::approval_presets::builtin_approval_presets;
 use codex_common::model_presets::ModelPreset;
 use codex_common::model_presets::builtin_model_presets;
+use codex_core::AuthManager;
 use codex_core::ConversationManager;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
@@ -101,6 +104,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) initial_prompt: Option<String>,
     pub(crate) initial_images: Vec<PathBuf>,
     pub(crate) enhanced_keys_supported: bool,
+    pub(crate) auth_manager: Arc<AuthManager>,
 }
 
 pub(crate) struct ChatWidget {
@@ -109,6 +113,8 @@ pub(crate) struct ChatWidget {
     bottom_pane: BottomPane,
     active_exec_cell: Option<ExecCell>,
     config: Config,
+    auth_manager: Arc<AuthManager>,
+    session_header: SessionHeader,
     initial_user_message: Option<UserMessage>,
     token_info: Option<TokenUsageInfo>,
     // Stream lifecycle controller
@@ -165,14 +171,16 @@ impl ChatWidget {
             .set_history_metadata(event.history_log_id, event.history_entry_count);
         self.conversation_id = Some(event.session_id);
         let initial_messages = event.initial_messages.clone();
-        if let Some(messages) = initial_messages {
-            self.replay_initial_messages(messages);
-        }
+        let model_for_header = event.model.clone();
+        self.session_header.set_model(&model_for_header);
         self.add_to_history(history_cell::new_session_info(
             &self.config,
             event,
             self.show_welcome_banner,
         ));
+        if let Some(messages) = initial_messages {
+            self.replay_initial_messages(messages);
+        }
         // Ask codex-core to enumerate custom prompts for this session.
         self.submit_op(Op::ListCustomPrompts);
         if let Some(user_message) = self.initial_user_message.take() {
@@ -289,7 +297,9 @@ impl ChatWidget {
     /// separated by newlines rather than auto‑submitting the next one.
     fn on_interrupted_turn(&mut self) {
         // Finalize, log a gentle prompt, and clear running state.
-        self.finalize_turn_with_error_message("Tell the model what to do differently".to_owned());
+        self.finalize_turn_with_error_message(
+            "Conversation interrupted - tell the model what to do differently".to_owned(),
+        );
 
         // If any messages were queued during the task, restore them into the composer.
         if !self.queued_user_messages.is_empty() {
@@ -607,14 +617,23 @@ impl ChatWidget {
         ));
     }
 
-    fn layout_areas(&self, area: Rect) -> [Rect; 2] {
+    fn layout_areas(&self, area: Rect) -> [Rect; 3] {
+        let bottom_min = self.bottom_pane.desired_height(area.width).min(area.height);
+        let remaining = area.height.saturating_sub(bottom_min);
+
+        let active_desired = self
+            .active_exec_cell
+            .as_ref()
+            .map_or(0, |c| c.desired_height(area.width) + 1);
+        let active_height = active_desired.min(remaining);
+        // Note: no header area; remaining is not used beyond computing active height.
+
+        let header_height = 0u16;
+
         Layout::vertical([
-            Constraint::Max(
-                self.active_exec_cell
-                    .as_ref()
-                    .map_or(0, |c| c.desired_height(area.width) + 1),
-            ),
-            Constraint::Min(self.bottom_pane.desired_height(area.width)),
+            Constraint::Length(header_height),
+            Constraint::Length(active_height),
+            Constraint::Min(bottom_min),
         ])
         .areas(area)
     }
@@ -630,6 +649,7 @@ impl ChatWidget {
             initial_prompt,
             initial_images,
             enhanced_keys_supported,
+            auth_manager,
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
@@ -649,6 +669,8 @@ impl ChatWidget {
             }),
             active_exec_cell: None,
             config: config.clone(),
+            auth_manager,
+            session_header: SessionHeader::new(config.model.clone()),
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
                 initial_images,
@@ -680,6 +702,7 @@ impl ChatWidget {
             initial_prompt,
             initial_images,
             enhanced_keys_supported,
+            auth_manager,
         } = common;
         let mut rng = rand::rng();
         let placeholder = EXAMPLE_PROMPTS[rng.random_range(0..EXAMPLE_PROMPTS.len())].to_string();
@@ -701,6 +724,8 @@ impl ChatWidget {
             }),
             active_exec_cell: None,
             config: config.clone(),
+            auth_manager,
+            session_header: SessionHeader::new(config.model.clone()),
             initial_user_message: create_initial_user_message(
                 initial_prompt.unwrap_or_default(),
                 initial_images,
@@ -714,7 +739,7 @@ impl ChatWidget {
             full_reasoning_buffer: String::new(),
             conversation_id: None,
             queued_user_messages: VecDeque::new(),
-            show_welcome_banner: false,
+            show_welcome_banner: true,
             suppress_session_configured_redraw: true,
         }
     }
@@ -1035,8 +1060,9 @@ impl ChatWidget {
             | EventMsg::AgentReasoningRawContentDelta(AgentReasoningRawContentDeltaEvent {
                 delta,
             }) => self.on_agent_reasoning_delta(delta),
-            EventMsg::AgentReasoning(AgentReasoningEvent { .. })
-            | EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { .. }) => {
+            EventMsg::AgentReasoning(AgentReasoningEvent { .. }) => self.on_agent_reasoning_final(),
+            EventMsg::AgentReasoningRawContent(AgentReasoningRawContentEvent { text }) => {
+                self.on_agent_reasoning_delta(text);
                 self.on_agent_reasoning_final()
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
@@ -1087,6 +1113,8 @@ impl ChatWidget {
                 self.app_event_tx
                     .send(crate::app_event::AppEvent::ConversationHistory(ev));
             }
+            EventMsg::EnteredReviewMode(_) => {}
+            EventMsg::ExitedReviewMode(_) => {}
         }
     }
 
@@ -1167,7 +1195,8 @@ impl ChatWidget {
     pub(crate) fn open_model_popup(&mut self) {
         let current_model = self.config.model.clone();
         let current_effort = self.config.model_reasoning_effort;
-        let presets: &[ModelPreset] = builtin_model_presets();
+        let auth_mode = self.auth_manager.auth().map(|auth| auth.mode);
+        let presets: Vec<ModelPreset> = builtin_model_presets(auth_mode);
 
         let mut items: Vec<SelectionItem> = Vec::new();
         for preset in presets.iter() {
@@ -1188,6 +1217,10 @@ impl ChatWidget {
                 }));
                 tx.send(AppEvent::UpdateModel(model_slug.clone()));
                 tx.send(AppEvent::UpdateReasoningEffort(effort));
+                tx.send(AppEvent::PersistModelSelection {
+                    model: model_slug.clone(),
+                    effort,
+                });
                 tracing::info!(
                     "New model: {}, New effort: {}, Current model: {}, Current effort: {}",
                     model_slug.clone(),
@@ -1211,7 +1244,7 @@ impl ChatWidget {
         self.bottom_pane.show_selection_view(
             "Select model and reasoning level".to_string(),
             Some("Switch between OpenAI models for this and future Codex CLI session".to_string()),
-            Some("Press Enter to confirm, Esc to go back, Ctrl+S to save".to_string()),
+            Some("Press Enter to confirm or Esc to go back".to_string()),
             items,
         );
     }
@@ -1273,12 +1306,13 @@ impl ChatWidget {
     }
 
     /// Set the model in the widget's config copy.
-    pub(crate) fn set_model(&mut self, model: String) {
-        self.config.model = model;
+    pub(crate) fn set_model(&mut self, model: &str) {
+        self.session_header.set_model(model);
+        self.config.model = model.to_string();
     }
 
-    pub(crate) fn add_info_message(&mut self, message: String) {
-        self.add_to_history(history_cell::new_info_event(message));
+    pub(crate) fn add_info_message(&mut self, message: String, hint: Option<String>) {
+        self.add_to_history(history_cell::new_info_event(message, hint));
         self.request_redraw();
     }
 
@@ -1395,14 +1429,14 @@ impl ChatWidget {
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
-        let [_, bottom_pane_area] = self.layout_areas(area);
+        let [_, _, bottom_pane_area] = self.layout_areas(area);
         self.bottom_pane.cursor_pos(bottom_pane_area)
     }
 }
 
 impl WidgetRef for &ChatWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
-        let [active_cell_area, bottom_pane_area] = self.layout_areas(area);
+        let [_, active_cell_area, bottom_pane_area] = self.layout_areas(area);
         (&self.bottom_pane).render(bottom_pane_area, buf);
         if !active_cell_area.is_empty()
             && let Some(cell) = &self.active_exec_cell

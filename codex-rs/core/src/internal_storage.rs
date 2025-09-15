@@ -10,8 +10,8 @@ pub(crate) const INTERNAL_STORAGE_FILE: &str = "internal_storage.json";
 pub struct InternalStorage {
     #[serde(skip)]
     storage_path: PathBuf,
-    #[serde(default)]
-    pub gpt_5_high_model_prompt_seen: bool,
+    #[serde(default, alias = "gpt_5_high_model_prompt_seen")]
+    pub swiftfox_model_prompt_seen: bool,
 }
 
 // TODO(jif) generalise all the file writers and build proper async channel inserters.

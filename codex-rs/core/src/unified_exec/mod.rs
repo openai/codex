@@ -327,6 +327,7 @@ async fn create_unified_exec_session(
 
     let (writer_tx, mut writer_rx) = mpsc::channel::<Vec<u8>>(128);
     let (output_tx, _) = tokio::sync::broadcast::channel::<Vec<u8>>(256);
+    let initial_output_rx = output_tx.subscribe();
 
     let mut reader = pair
         .master
@@ -380,7 +381,7 @@ async fn create_unified_exec_session(
         wait_exit_status.store(true, Ordering::SeqCst);
     });
 
-    Ok(ExecCommandSession::new(
+    let session = ExecCommandSession::new(
         writer_tx,
         output_tx,
         killer,
@@ -388,7 +389,10 @@ async fn create_unified_exec_session(
         writer_handle,
         wait_handle,
         exit_status,
-    ))
+    );
+    session.set_initial_output_receiver(initial_output_rx);
+
+    Ok(session)
 }
 
 #[cfg(test)]
@@ -421,7 +425,7 @@ mod tests {
             .handle_request(UnifiedExecRequest {
                 session_id: None,
                 input_chunks: &["bash".to_string(), "-i".to_string()],
-                timeout_ms: Some(1_500),
+                timeout_ms: Some(2_500),
             })
             .await?;
         let session_id = open_shell.session_id.expect("expected session_id");
@@ -441,7 +445,7 @@ mod tests {
             .handle_request(UnifiedExecRequest {
                 session_id: Some(session_id),
                 input_chunks: &["echo $CODEX_INTERACTIVE_SHELL_VAR\n".to_string()],
-                timeout_ms: Some(1_500),
+                timeout_ms: Some(2_500),
             })
             .await?;
         assert!(out_2.output.contains("codex"));
@@ -458,7 +462,7 @@ mod tests {
             .handle_request(UnifiedExecRequest {
                 session_id: None,
                 input_chunks: &["/bin/bash".to_string(), "-i".to_string()],
-                timeout_ms: Some(1_500),
+                timeout_ms: Some(2_500),
             })
             .await?;
         let session_a = shell_a.session_id.expect("expected session id");
@@ -467,7 +471,7 @@ mod tests {
             .handle_request(UnifiedExecRequest {
                 session_id: Some(session_a),
                 input_chunks: &["export CODEX_INTERACTIVE_SHELL_VAR=codex\n".to_string()],
-                timeout_ms: Some(1_500),
+                timeout_ms: Some(2_500),
             })
             .await?;
 
@@ -478,7 +482,7 @@ mod tests {
                     "echo".to_string(),
                     "$CODEX_INTERACTIVE_SHELL_VAR\n".to_string(),
                 ],
-                timeout_ms: Some(1_500),
+                timeout_ms: Some(2_500),
             })
             .await?;
         assert!(!out_2.output.contains("codex"));
@@ -487,7 +491,7 @@ mod tests {
             .handle_request(UnifiedExecRequest {
                 session_id: Some(session_a),
                 input_chunks: &["echo $CODEX_INTERACTIVE_SHELL_VAR\n".to_string()],
-                timeout_ms: Some(1_500),
+                timeout_ms: Some(2_500),
             })
             .await?;
         assert!(out_3.output.contains("codex"));
@@ -504,7 +508,7 @@ mod tests {
             .handle_request(UnifiedExecRequest {
                 session_id: None,
                 input_chunks: &["bash".to_string(), "-i".to_string()],
-                timeout_ms: Some(1_500),
+                timeout_ms: Some(2_500),
             })
             .await?;
         let session_id = open_shell.session_id.expect("expected session id");
@@ -516,7 +520,7 @@ mod tests {
                     "export".to_string(),
                     "CODEX_INTERACTIVE_SHELL_VAR=codex\n".to_string(),
                 ],
-                timeout_ms: Some(1_500),
+                timeout_ms: Some(2_500),
             })
             .await?;
 
@@ -574,7 +578,7 @@ mod tests {
             .handle_request(UnifiedExecRequest {
                 session_id: None,
                 input_chunks: &["/bin/echo".to_string(), "codex".to_string()],
-                timeout_ms: Some(1_500),
+                timeout_ms: Some(2_500),
             })
             .await?;
 
@@ -595,7 +599,7 @@ mod tests {
             .handle_request(UnifiedExecRequest {
                 session_id: None,
                 input_chunks: &["/bin/bash".to_string(), "-i".to_string()],
-                timeout_ms: Some(1_500),
+                timeout_ms: Some(2_500),
             })
             .await?;
         let session_id = open_shell.session_id.expect("expected session id");
@@ -604,7 +608,7 @@ mod tests {
             .handle_request(UnifiedExecRequest {
                 session_id: Some(session_id),
                 input_chunks: &["exit\n".to_string()],
-                timeout_ms: Some(1_500),
+                timeout_ms: Some(2_500),
             })
             .await?;
 

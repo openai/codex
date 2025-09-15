@@ -279,7 +279,9 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::TurnAborted(_)
                     | EventMsg::ConversationPath(_)
                     | EventMsg::UserMessage(_)
-                    | EventMsg::ShutdownComplete => {
+                    | EventMsg::ShutdownComplete
+                    | EventMsg::EnteredReviewMode(_)
+                    | EventMsg::ExitedReviewMode(_) => {
                         // For now, we do not do anything extra for these
                         // events. Note that
                         // send(codex_event_to_notification(&event)) above has

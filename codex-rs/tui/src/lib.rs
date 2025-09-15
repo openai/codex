@@ -11,10 +11,11 @@ use codex_core::RolloutRecorder;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::ConfigToml;
-use codex_core::config::GPT5_HIGH_MODEL;
+use codex_core::config::SWIFTFOX_MEDIUM_MODEL;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_config_as_toml_with_cli_overrides;
 use codex_core::config::persist_model_selection;
+use codex_core::find_conversation_path_by_id_str;
 use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_ollama::DEFAULT_OSS_MODEL;
@@ -61,6 +62,7 @@ mod status_indicator_widget;
 mod streaming;
 mod text_formatting;
 mod tui;
+mod ui_consts;
 mod user_approval_widget;
 mod version;
 mod wrapping;
@@ -86,7 +88,7 @@ pub async fn run_main(
     let (sandbox_mode, approval_policy) = if cli.full_auto {
         (
             Some(SandboxMode::WorkspaceWrite),
-            Some(AskForApproval::OnFailure),
+            Some(AskForApproval::OnRequest),
         )
     } else if cli.dangerously_bypass_approvals_and_sandbox {
         (
@@ -122,6 +124,7 @@ pub async fn run_main(
 
     let overrides = ConfigOverrides {
         model,
+        review_model: None,
         approval_policy,
         sandbox_mode,
         cwd,
@@ -342,7 +345,16 @@ async fn run_ratatui_app(
         }
     }
 
-    let resume_selection = if cli.r#continue {
+    // Determine resume behavior: explicit id, then resume last, then picker.
+    let resume_selection = if let Some(id_str) = cli.resume_session_id.as_deref() {
+        match find_conversation_path_by_id_str(&config.codex_home, id_str).await? {
+            Some(path) => resume_picker::ResumeSelection::Resume(path),
+            None => {
+                error!("Error finding conversation path: {id_str}");
+                resume_picker::ResumeSelection::StartFresh
+            }
+        }
+    } else if cli.resume_last {
         match RolloutRecorder::list_conversations(&config.codex_home, 1, None).await {
             Ok(page) => page
                 .items
@@ -351,7 +363,7 @@ async fn run_ratatui_app(
                 .unwrap_or(resume_picker::ResumeSelection::StartFresh),
             Err(_) => resume_picker::ResumeSelection::StartFresh,
         }
-    } else if cli.resume {
+    } else if cli.resume_picker {
         match resume_picker::run_resume_picker(&mut tui, &config.codex_home).await? {
             resume_picker::ResumeSelection::Exit => {
                 restore();
@@ -368,9 +380,9 @@ async fn run_ratatui_app(
         &cli,
         &config,
         active_profile.as_deref(),
-        internal_storage.gpt_5_high_model_prompt_seen,
+        internal_storage.swiftfox_model_prompt_seen,
     ) {
-        internal_storage.gpt_5_high_model_prompt_seen = true;
+        internal_storage.swiftfox_model_prompt_seen = true;
         if let Err(e) = internal_storage.persist().await {
             error!("Failed to persist internal storage: {e:?}");
         }
@@ -379,12 +391,13 @@ async fn run_ratatui_app(
         let switch_to_new_model = upgrade_decision == ModelUpgradeDecision::Switch;
 
         if switch_to_new_model {
-            config.model = GPT5_HIGH_MODEL.to_owned();
+            config.model = SWIFTFOX_MEDIUM_MODEL.to_owned();
+            config.model_reasoning_effort = None;
             if let Err(e) = persist_model_selection(
                 &config.codex_home,
                 active_profile.as_deref(),
                 &config.model,
-                None,
+                config.model_reasoning_effort,
             )
             .await
             {
@@ -511,8 +524,9 @@ fn should_show_model_rollout_prompt(
     cli: &Cli,
     config: &Config,
     active_profile: Option<&str>,
-    gpt_5_high_model_prompt_seen: bool,
+    swiftfox_model_prompt_seen: bool,
 ) -> bool {
+    let login_status = get_login_status(config);
     // TODO(jif) drop.
     let debug_high_enabled = std::env::var("DEBUG_HIGH")
         .map(|v| v.eq_ignore_ascii_case("1"))
@@ -521,8 +535,9 @@ fn should_show_model_rollout_prompt(
     active_profile.is_none()
         && debug_high_enabled
         && cli.model.is_none()
-        && !gpt_5_high_model_prompt_seen
+        && !swiftfox_model_prompt_seen
         && config.model_provider.requires_openai_auth
+        && matches!(login_status, LoginStatus::AuthMode(AuthMode::ChatGPT))
         && !cli.oss
 }
 
@@ -530,6 +545,12 @@ fn should_show_model_rollout_prompt(
 mod tests {
     use super::*;
     use clap::Parser;
+    use codex_core::auth::AuthDotJson;
+    use codex_core::auth::get_auth_file;
+    use codex_core::auth::login_with_api_key;
+    use codex_core::auth::write_auth_json;
+    use codex_core::token_data::IdTokenInfo;
+    use codex_core::token_data::TokenData;
     use std::sync::Once;
 
     fn enable_debug_high_env() {
@@ -545,12 +566,54 @@ mod tests {
 
     fn make_config() -> Config {
         enable_debug_high_env();
+        // Create a unique CODEX_HOME per test to isolate auth.json writes.
+        let mut codex_home = std::env::temp_dir();
+        let unique_suffix = format!(
+            "codex_tui_test_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        codex_home.push(unique_suffix);
+        std::fs::create_dir_all(&codex_home).expect("create unique CODEX_HOME");
+
         Config::load_from_base_config_with_overrides(
             ConfigToml::default(),
             ConfigOverrides::default(),
-            std::env::temp_dir(),
+            codex_home,
         )
         .expect("load default config")
+    }
+
+    /// Test helper to write an `auth.json` with the requested auth mode into the
+    /// provided CODEX_HOME directory. This ensures `get_login_status()` reads the
+    /// intended mode deterministically.
+    fn set_auth_method(codex_home: &std::path::Path, mode: AuthMode) {
+        match mode {
+            AuthMode::ApiKey => {
+                login_with_api_key(codex_home, "sk-test-key").expect("write api key auth.json");
+            }
+            AuthMode::ChatGPT => {
+                // Minimal valid JWT payload: header.payload.signature (all base64url, no padding)
+                const FAKE_JWT: &str = "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.e30.c2ln"; // {"alg":"none","typ":"JWT"}.{}."sig"
+                let mut id_info = IdTokenInfo::default();
+                id_info.raw_jwt = FAKE_JWT.to_string();
+                let auth = AuthDotJson {
+                    openai_api_key: None,
+                    tokens: Some(TokenData {
+                        id_token: id_info,
+                        access_token: "access-token".to_string(),
+                        refresh_token: "refresh-token".to_string(),
+                        account_id: None,
+                    }),
+                    last_refresh: None,
+                };
+                let file = get_auth_file(codex_home);
+                write_auth_json(&file, &auth).expect("write chatgpt auth.json");
+            }
+        }
     }
 
     #[test]
@@ -566,27 +629,39 @@ mod tests {
     fn shows_model_rollout_prompt_for_default_model() {
         let cli = Cli::parse_from(["codex"]);
         let cfg = make_config();
-        assert!(should_show_model_rollout_prompt(&cli, &cfg, None, false));
+        set_auth_method(&cfg.codex_home, AuthMode::ChatGPT);
+        assert!(should_show_model_rollout_prompt(&cli, &cfg, None, false,));
+    }
+
+    #[test]
+    fn hides_model_rollout_prompt_when_api_auth_mode() {
+        let cli = Cli::parse_from(["codex"]);
+        let cfg = make_config();
+        set_auth_method(&cfg.codex_home, AuthMode::ApiKey);
+        assert!(!should_show_model_rollout_prompt(&cli, &cfg, None, false,));
     }
 
     #[test]
     fn hides_model_rollout_prompt_when_marked_seen() {
         let cli = Cli::parse_from(["codex"]);
         let cfg = make_config();
-        assert!(!should_show_model_rollout_prompt(&cli, &cfg, None, true));
+        set_auth_method(&cfg.codex_home, AuthMode::ChatGPT);
+        assert!(!should_show_model_rollout_prompt(&cli, &cfg, None, true,));
     }
 
     #[test]
     fn hides_model_rollout_prompt_when_cli_overrides_model() {
         let cli = Cli::parse_from(["codex", "--model", "gpt-4.1"]);
         let cfg = make_config();
-        assert!(!should_show_model_rollout_prompt(&cli, &cfg, None, false));
+        set_auth_method(&cfg.codex_home, AuthMode::ChatGPT);
+        assert!(!should_show_model_rollout_prompt(&cli, &cfg, None, false,));
     }
 
     #[test]
     fn hides_model_rollout_prompt_when_profile_active() {
         let cli = Cli::parse_from(["codex"]);
         let cfg = make_config();
+        set_auth_method(&cfg.codex_home, AuthMode::ChatGPT);
         assert!(!should_show_model_rollout_prompt(
             &cli,
             &cfg,
