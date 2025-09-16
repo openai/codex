@@ -2,8 +2,11 @@
 
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use async_channel::Receiver;
+use codex_core::error::CodexErr;
+use codex_core::error::SandboxErr;
 use codex_core::exec::ExecParams;
 use codex_core::exec::SandboxType;
 use codex_core::exec::StdoutStream;
@@ -169,4 +172,37 @@ async fn test_aggregated_output_interleaves_in_order() {
     assert_eq!(result.stderr.text, "E1\nE2\n");
     assert_eq!(result.aggregated_output.text, "O1\nE1\nO2\nE2\n");
     assert_eq!(result.aggregated_output.truncated_after_lines, None);
+}
+
+#[tokio::test]
+async fn test_exec_timeout_returns_partial_output() {
+    let cmd = vec![
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        "printf 'before\\n'; sleep 2; printf 'after\\n'".to_string(),
+    ];
+
+    let params = ExecParams {
+        command: cmd,
+        cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        timeout_ms: Some(200),
+        env: HashMap::new(),
+        with_escalated_permissions: None,
+        justification: None,
+    };
+
+    let policy = SandboxPolicy::new_read_only_policy();
+
+    let result = process_exec_tool_call(params, SandboxType::None, &policy, &None, None).await;
+
+    let Err(CodexErr::Sandbox(SandboxErr::Timeout { output })) = result else {
+        panic!("expected timeout error");
+    };
+
+    assert_eq!(output.exit_code, 124);
+    assert_eq!(output.stdout.text, "before\n");
+    assert!(output.stderr.text.is_empty());
+    assert_eq!(output.aggregated_output.text, "before\n");
+    assert!(output.duration >= Duration::from_millis(200));
+    assert!(output.timed_out);
 }

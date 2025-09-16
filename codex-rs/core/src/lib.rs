@@ -28,6 +28,7 @@ mod exec_command;
 pub mod exec_env;
 mod flags;
 pub mod git_info;
+pub mod internal_storage;
 mod is_safe_command;
 pub mod landlock;
 mod mcp_connection_manager;
@@ -35,6 +36,8 @@ mod mcp_tool_call;
 mod message_history;
 mod model_provider_info;
 pub mod parse_command;
+mod truncate;
+mod unified_exec;
 mod user_instructions;
 pub use model_provider_info::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 pub use model_provider_info::ModelProviderInfo;
@@ -67,11 +70,13 @@ pub use rollout::ARCHIVED_SESSIONS_SUBDIR;
 pub use rollout::RolloutRecorder;
 pub use rollout::SESSIONS_SUBDIR;
 pub use rollout::SessionMeta;
+pub use rollout::find_conversation_path_by_id_str;
 pub use rollout::list::ConversationItem;
 pub use rollout::list::ConversationsPage;
 pub use rollout::list::Cursor;
 mod user_notification;
 pub mod util;
+
 pub use apply_patch::CODEX_APPLY_PATCH_ARG1;
 pub use safety::get_platform_sandbox;
 // Re-export the protocol types from the standalone `codex-protocol` crate so existing
@@ -83,6 +88,7 @@ pub use codex_protocol::config_types as protocol_config_types;
 
 pub use client::ModelClient;
 pub use client_common::Prompt;
+pub use client_common::REVIEW_PROMPT;
 pub use client_common::ResponseEvent;
 pub use client_common::ResponseStream;
 pub use codex_protocol::models::ContentItem;

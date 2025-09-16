@@ -69,17 +69,6 @@ base_url = "https://api.mistral.ai/v1"
 env_key = "MISTRAL_API_KEY"
 ```
 
-Note that Azure requires `api-version` to be passed as a query parameter, so be sure to specify it as part of `query_params` when defining the Azure provider:
-
-```toml
-[model_providers.azure]
-name = "Azure"
-# Make sure you set the appropriate subdomain for this URL.
-base_url = "https://YOUR_PROJECT_NAME.openai.azure.com/openai"
-env_key = "AZURE_OPENAI_API_KEY"  # Or "OPENAI_API_KEY", whichever you use.
-query_params = { api-version = "2025-04-01-preview" }
-```
-
 It is also possible to configure a provider to include extra HTTP headers with a request. These can be hardcoded values (`http_headers`) or values read from environment variables (`env_http_headers`):
 
 ```toml
@@ -95,6 +84,22 @@ http_headers = { "X-Example-Header" = "example-value" }
 # _if_ the environment variable is set and its value is non-empty.
 env_http_headers = { "X-Example-Features" = "EXAMPLE_FEATURES" }
 ```
+
+### Azure model provider example
+
+Note that Azure requires `api-version` to be passed as a query parameter, so be sure to specify it as part of `query_params` when defining the Azure provider:
+
+```toml
+[model_providers.azure]
+name = "Azure"
+# Make sure you set the appropriate subdomain for this URL.
+base_url = "https://YOUR_PROJECT_NAME.openai.azure.com/openai"
+env_key = "AZURE_OPENAI_API_KEY"  # Or "OPENAI_API_KEY", whichever you use.
+query_params = { api-version = "2025-04-01-preview" }
+wire_api = "responses"
+```
+
+Export your key before launching Codex: `export AZURE_OPENAI_API_KEY=…`
 
 ### Per-provider network tuning
 
@@ -367,6 +372,24 @@ env = { "API_KEY" = "value" }
 startup_timeout_ms = 20_000
 ```
 
+You can also manage these entries from the CLI [experimental]:
+
+```shell
+# Add a server (env can be repeated; `--` separates the launcher command)
+codex mcp add docs -- docs-server --port 4000
+
+# List configured servers (pretty table or JSON)
+codex mcp list
+codex mcp list --json
+
+# Show one server (table or JSON)
+codex mcp get docs
+codex mcp get docs --json
+
+# Remove a server
+codex mcp remove docs
+```
+
 ## shell_environment_policy
 
 Codex spawns subprocesses (e.g. when executing a `local_shell` tool-call suggested by the assistant). By default it now passes **your full environment** to those subprocesses. You can tune this behavior via the **`shell_environment_policy`** block in `config.toml`:
@@ -486,6 +509,9 @@ To have Codex use this script for notifications, you would configure it via `not
 notify = ["python3", "/Users/mbolin/.codex/notify.py"]
 ```
 
+> [!NOTE]
+> Use `notify` for automation and integrations: Codex invokes your external program with a single JSON argument for each event, independent of the TUI. If you only want lightweight desktop notifications while using the TUI, prefer `tui.notifications`, which uses terminal escape codes and requires no external program. You can enable both; `tui.notifications` covers in‑TUI alerts (e.g., approval prompts), while `notify` is best for system‑level hooks or custom notifiers. Currently, `notify` emits only `agent-turn-complete`, whereas `tui.notifications` supports `agent-turn-complete` and `approval-requested` with optional filtering.
+
 ## history
 
 By default, Codex CLI records messages sent to the model in `$CODEX_HOME/history.jsonl`. Note that on UNIX, the file permissions are set to `o600`, so it should only be readable and writable by the owner.
@@ -558,8 +584,20 @@ Options that are specific to the TUI.
 
 ```toml
 [tui]
-# More to come here
+# Send desktop notifications when approvals are required or a turn completes.
+# Defaults to false.
+notifications = true
+
+# You can optionally filter to specific notification types.
+# Available types are "agent-turn-complete" and "approval-requested".
+notifications = [ "agent-turn-complete", "approval-requested" ]
 ```
+
+> [!NOTE]
+> Codex emits desktop notifications using terminal escape codes. Not all terminals support these (notably, macOS Terminal.app and VS Code's terminal do not support custom notifications. iTerm2, Ghostty and WezTerm do support these notifications).
+
+> [!NOTE]
+> `tui.notifications` is built‑in and limited to the TUI session. For programmatic or cross‑environment notifications—or to integrate with OS‑specific notifiers—use the top‑level `notify` option to run an external program that receives event JSON. The two settings are independent and can be used together.
 
 ## Config reference
 
@@ -598,7 +636,8 @@ Options that are specific to the TUI.
 | `history.persistence` | `save-all` \| `none` | History file persistence (default: `save-all`). |
 | `history.max_bytes` | number | Currently ignored (not enforced). |
 | `file_opener` | `vscode` \| `vscode-insiders` \| `windsurf` \| `cursor` \| `none` | URI scheme for clickable citations (default: `vscode`). |
-| `tui` | table | TUI‑specific options (reserved). |
+| `tui` | table | TUI‑specific options. |
+| `tui.notifications` | boolean \| array<string> | Enable desktop notifications in the tui (default: false). |
 | `hide_agent_reasoning` | boolean | Hide model reasoning events. |
 | `show_raw_agent_reasoning` | boolean | Show raw reasoning (when available). |
 | `model_reasoning_effort` | `minimal` \| `low` \| `medium` \| `high` | Responses API reasoning effort. |
@@ -612,5 +651,4 @@ Options that are specific to the TUI.
 | `experimental_use_exec_command_tool` | boolean | Use experimental exec command tool. |
 | `responses_originator_header_internal_override` | string | Override `originator` header value. |
 | `projects.<path>.trust_level` | string | Mark project/worktree as trusted (only `"trusted"` is recognized). |
-| `preferred_auth_method` | `chatgpt` \| `apikey` | Select default auth method (default: `chatgpt`). |
 | `tools.web_search` | boolean | Enable web search tool (alias: `web_search_request`) (default: false). |

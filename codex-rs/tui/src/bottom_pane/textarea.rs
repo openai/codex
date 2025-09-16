@@ -649,9 +649,7 @@ impl TextArea {
     }
 
     fn add_element(&mut self, range: Range<usize>) {
-        let elem = TextElement {
-            range: range.clone(),
-        };
+        let elem = TextElement { range };
         self.elements.push(elem);
         self.elements.sort_by_key(|e| e.range.start);
     }

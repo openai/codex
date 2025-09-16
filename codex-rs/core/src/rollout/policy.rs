@@ -8,8 +8,10 @@ pub(crate) fn is_persisted_response_item(item: &RolloutItem) -> bool {
     match item {
         RolloutItem::ResponseItem(item) => should_persist_response_item(item),
         RolloutItem::EventMsg(ev) => should_persist_event_msg(ev),
-        // Always persist session meta
-        RolloutItem::SessionMeta(_) => true,
+        // Persist Codex executive markers so we can analyze flows (e.g., compaction, API turns).
+        RolloutItem::Compacted(_) | RolloutItem::TurnContext(_) | RolloutItem::SessionMeta(_) => {
+            true
+        }
     }
 }
 
@@ -23,8 +25,9 @@ pub(crate) fn should_persist_response_item(item: &ResponseItem) -> bool {
         | ResponseItem::FunctionCall { .. }
         | ResponseItem::FunctionCallOutput { .. }
         | ResponseItem::CustomToolCall { .. }
-        | ResponseItem::CustomToolCallOutput { .. } => true,
-        ResponseItem::WebSearchCall { .. } | ResponseItem::Other => false,
+        | ResponseItem::CustomToolCallOutput { .. }
+        | ResponseItem::WebSearchCall { .. } => true,
+        ResponseItem::Other => false,
     }
 }
 
@@ -36,7 +39,10 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::AgentMessage(_)
         | EventMsg::AgentReasoning(_)
         | EventMsg::AgentReasoningRawContent(_)
-        | EventMsg::TokenCount(_) => true,
+        | EventMsg::TokenCount(_)
+        | EventMsg::EnteredReviewMode(_)
+        | EventMsg::ExitedReviewMode(_)
+        | EventMsg::TurnAborted(_) => true,
         EventMsg::Error(_)
         | EventMsg::TaskStarted(_)
         | EventMsg::TaskComplete(_)
@@ -63,8 +69,7 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::McpListToolsResponse(_)
         | EventMsg::ListCustomPromptsResponse(_)
         | EventMsg::PlanUpdate(_)
-        | EventMsg::TurnAborted(_)
         | EventMsg::ShutdownComplete
-        | EventMsg::ConversationHistory(_) => false,
+        | EventMsg::ConversationPath(_) => false,
     }
 }

@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use codex_core::auth::login_with_api_key;
+use codex_login::login_with_api_key;
 use codex_protocol::mcp_protocol::CancelLoginChatGptParams;
 use codex_protocol::mcp_protocol::CancelLoginChatGptResponse;
 use codex_protocol::mcp_protocol::GetAuthStatusParams;
@@ -95,7 +95,7 @@ async fn logout_chatgpt_removes_auth() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn login_and_cancel_chatgpt() {
     let codex_home = TempDir::new().unwrap_or_else(|e| panic!("create tempdir: {e}"));
-    create_config_toml(codex_home.path()).expect("write config.toml");
+    create_config_toml(codex_home.path()).unwrap_or_else(|err| panic!("write config.toml: {err}"));
 
     let mut mcp = McpProcess::new(codex_home.path())
         .await

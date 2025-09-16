@@ -7,6 +7,12 @@ use toml_edit::DocumentMut;
 pub const CONFIG_KEY_MODEL: &str = "model";
 pub const CONFIG_KEY_EFFORT: &str = "model_reasoning_effort";
 
+#[derive(Copy, Clone)]
+enum NoneBehavior {
+    Skip,
+    Remove,
+}
+
 /// Persist overrides into `config.toml` using explicit key segments per
 /// override. This avoids ambiguity with keys that contain dots or spaces.
 pub async fn persist_overrides(
@@ -14,47 +20,12 @@ pub async fn persist_overrides(
     profile: Option<&str>,
     overrides: &[(&[&str], &str)],
 ) -> Result<()> {
-    let config_path = codex_home.join(CONFIG_TOML_FILE);
+    let with_options: Vec<(&[&str], Option<&str>)> = overrides
+        .iter()
+        .map(|(segments, value)| (*segments, Some(*value)))
+        .collect();
 
-    let mut doc = match tokio::fs::read_to_string(&config_path).await {
-        Ok(s) => s.parse::<DocumentMut>()?,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            tokio::fs::create_dir_all(codex_home).await?;
-            DocumentMut::new()
-        }
-        Err(e) => return Err(e.into()),
-    };
-
-    let effective_profile = if let Some(p) = profile {
-        Some(p.to_owned())
-    } else {
-        doc.get("profile")
-            .and_then(|i| i.as_str())
-            .map(|s| s.to_string())
-    };
-
-    for (segments, val) in overrides.iter().copied() {
-        let value = toml_edit::value(val);
-        if let Some(ref name) = effective_profile {
-            if segments.first().copied() == Some("profiles") {
-                apply_toml_edit_override_segments(&mut doc, segments, value);
-            } else {
-                let mut seg_buf: Vec<&str> = Vec::with_capacity(2 + segments.len());
-                seg_buf.push("profiles");
-                seg_buf.push(name.as_str());
-                seg_buf.extend_from_slice(segments);
-                apply_toml_edit_override_segments(&mut doc, &seg_buf, value);
-            }
-        } else {
-            apply_toml_edit_override_segments(&mut doc, segments, value);
-        }
-    }
-
-    let tmp_file = NamedTempFile::new_in(codex_home)?;
-    tokio::fs::write(tmp_file.path(), doc.to_string()).await?;
-    tmp_file.persist(config_path)?;
-
-    Ok(())
+    persist_overrides_with_behavior(codex_home, profile, &with_options, NoneBehavior::Skip).await
 }
 
 /// Persist overrides where values may be optional. Any entries with `None`
@@ -65,16 +36,17 @@ pub async fn persist_non_null_overrides(
     profile: Option<&str>,
     overrides: &[(&[&str], Option<&str>)],
 ) -> Result<()> {
-    let filtered: Vec<(&[&str], &str)> = overrides
-        .iter()
-        .filter_map(|(k, v)| v.map(|vv| (*k, vv)))
-        .collect();
+    persist_overrides_with_behavior(codex_home, profile, overrides, NoneBehavior::Skip).await
+}
 
-    if filtered.is_empty() {
-        return Ok(());
-    }
-
-    persist_overrides(codex_home, profile, &filtered).await
+/// Persist overrides where `None` values clear any existing values from the
+/// configuration file.
+pub async fn persist_overrides_and_clear_if_none(
+    codex_home: &Path,
+    profile: Option<&str>,
+    overrides: &[(&[&str], Option<&str>)],
+) -> Result<()> {
+    persist_overrides_with_behavior(codex_home, profile, overrides, NoneBehavior::Remove).await
 }
 
 /// Apply a single override onto a `toml_edit` document while preserving
@@ -119,6 +91,125 @@ fn apply_toml_edit_override_segments(
 
     let last = segments[segments.len() - 1];
     current[last] = value;
+}
+
+async fn persist_overrides_with_behavior(
+    codex_home: &Path,
+    profile: Option<&str>,
+    overrides: &[(&[&str], Option<&str>)],
+    none_behavior: NoneBehavior,
+) -> Result<()> {
+    if overrides.is_empty() {
+        return Ok(());
+    }
+
+    let should_skip = match none_behavior {
+        NoneBehavior::Skip => overrides.iter().all(|(_, value)| value.is_none()),
+        NoneBehavior::Remove => false,
+    };
+
+    if should_skip {
+        return Ok(());
+    }
+
+    let config_path = codex_home.join(CONFIG_TOML_FILE);
+
+    let read_result = tokio::fs::read_to_string(&config_path).await;
+    let mut doc = match read_result {
+        Ok(contents) => contents.parse::<DocumentMut>()?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            if overrides
+                .iter()
+                .all(|(_, value)| value.is_none() && matches!(none_behavior, NoneBehavior::Remove))
+            {
+                return Ok(());
+            }
+
+            tokio::fs::create_dir_all(codex_home).await?;
+            DocumentMut::new()
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    let effective_profile = if let Some(p) = profile {
+        Some(p.to_owned())
+    } else {
+        doc.get("profile")
+            .and_then(|i| i.as_str())
+            .map(|s| s.to_string())
+    };
+
+    let mut mutated = false;
+
+    for (segments, value) in overrides.iter().copied() {
+        let mut seg_buf: Vec<&str> = Vec::new();
+        let segments_to_apply: &[&str];
+
+        if let Some(ref name) = effective_profile {
+            if segments.first().copied() == Some("profiles") {
+                segments_to_apply = segments;
+            } else {
+                seg_buf.reserve(2 + segments.len());
+                seg_buf.push("profiles");
+                seg_buf.push(name.as_str());
+                seg_buf.extend_from_slice(segments);
+                segments_to_apply = seg_buf.as_slice();
+            }
+        } else {
+            segments_to_apply = segments;
+        }
+
+        match value {
+            Some(v) => {
+                let item_value = toml_edit::value(v);
+                apply_toml_edit_override_segments(&mut doc, segments_to_apply, item_value);
+                mutated = true;
+            }
+            None => {
+                if matches!(none_behavior, NoneBehavior::Remove)
+                    && remove_toml_edit_segments(&mut doc, segments_to_apply)
+                {
+                    mutated = true;
+                }
+            }
+        }
+    }
+
+    if !mutated {
+        return Ok(());
+    }
+
+    let tmp_file = NamedTempFile::new_in(codex_home)?;
+    tokio::fs::write(tmp_file.path(), doc.to_string()).await?;
+    tmp_file.persist(config_path)?;
+
+    Ok(())
+}
+
+fn remove_toml_edit_segments(doc: &mut DocumentMut, segments: &[&str]) -> bool {
+    use toml_edit::Item;
+
+    if segments.is_empty() {
+        return false;
+    }
+
+    let mut current = doc.as_table_mut();
+    for seg in &segments[..segments.len() - 1] {
+        let Some(item) = current.get_mut(seg) else {
+            return false;
+        };
+
+        match item {
+            Item::Table(table) => {
+                current = table;
+            }
+            _ => {
+                return false;
+            }
+        }
+    }
+
+    current.remove(segments[segments.len() - 1]).is_some()
 }
 
 #[cfg(test)]
@@ -572,6 +663,81 @@ model_reasoning_effort = "minimal"
 model = "o3"
 "#;
         assert_eq!(contents, expected);
+    }
+
+    #[tokio::test]
+    async fn persist_clear_none_removes_top_level_value() {
+        let tmpdir = tempdir().expect("tmp");
+        let codex_home = tmpdir.path();
+
+        let seed = r#"model = "gpt-5"
+model_reasoning_effort = "medium"
+"#;
+        tokio::fs::write(codex_home.join(CONFIG_TOML_FILE), seed)
+            .await
+            .expect("seed write");
+
+        persist_overrides_and_clear_if_none(
+            codex_home,
+            None,
+            &[
+                (&[CONFIG_KEY_MODEL], None),
+                (&[CONFIG_KEY_EFFORT], Some("high")),
+            ],
+        )
+        .await
+        .expect("persist");
+
+        let contents = read_config(codex_home).await;
+        let expected = "model_reasoning_effort = \"high\"\n";
+        assert_eq!(contents, expected);
+    }
+
+    #[tokio::test]
+    async fn persist_clear_none_respects_active_profile() {
+        let tmpdir = tempdir().expect("tmp");
+        let codex_home = tmpdir.path();
+
+        let seed = r#"profile = "team"
+
+[profiles.team]
+model = "gpt-4"
+model_reasoning_effort = "minimal"
+"#;
+        tokio::fs::write(codex_home.join(CONFIG_TOML_FILE), seed)
+            .await
+            .expect("seed write");
+
+        persist_overrides_and_clear_if_none(
+            codex_home,
+            None,
+            &[
+                (&[CONFIG_KEY_MODEL], None),
+                (&[CONFIG_KEY_EFFORT], Some("high")),
+            ],
+        )
+        .await
+        .expect("persist");
+
+        let contents = read_config(codex_home).await;
+        let expected = r#"profile = "team"
+
+[profiles.team]
+model_reasoning_effort = "high"
+"#;
+        assert_eq!(contents, expected);
+    }
+
+    #[tokio::test]
+    async fn persist_clear_none_noop_when_file_missing() {
+        let tmpdir = tempdir().expect("tmp");
+        let codex_home = tmpdir.path();
+
+        persist_overrides_and_clear_if_none(codex_home, None, &[(&[CONFIG_KEY_MODEL], None)])
+            .await
+            .expect("persist");
+
+        assert!(!codex_home.join(CONFIG_TOML_FILE).exists());
     }
 
     // Test helper moved to bottom per review guidance.

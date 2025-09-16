@@ -40,6 +40,11 @@ pub enum ApplyPatchError {
     /// Error that occurs while computing replacements when applying patch chunks
     #[error("{0}")]
     ComputeReplacements(String),
+    /// A raw patch body was provided without an explicit `apply_patch` invocation.
+    #[error(
+        "patch detected without explicit call to apply_patch. Rerun as [\"apply_patch\", \"<patch>\"]"
+    )]
+    ImplicitInvocation,
 }
 
 impl From<std::io::Error> for ApplyPatchError {
@@ -93,10 +98,12 @@ pub struct ApplyPatchArgs {
 
 pub fn maybe_parse_apply_patch(argv: &[String]) -> MaybeApplyPatch {
     match argv {
+        // Direct invocation: apply_patch <patch>
         [cmd, body] if APPLY_PATCH_COMMANDS.contains(&cmd.as_str()) => match parse_patch(body) {
             Ok(source) => MaybeApplyPatch::Body(source),
             Err(e) => MaybeApplyPatch::PatchParseError(e),
         },
+        // Bash heredoc form: (optional `cd <path> &&`) apply_patch <<'EOF' ...
         [bash, flag, script] if bash == "bash" && flag == "-lc" => {
             match extract_apply_patch_from_bash(script) {
                 Ok((body, workdir)) => match parse_patch(&body) {
@@ -207,6 +214,26 @@ impl ApplyPatchAction {
 /// cwd must be an absolute path so that we can resolve relative paths in the
 /// patch.
 pub fn maybe_parse_apply_patch_verified(argv: &[String], cwd: &Path) -> MaybeApplyPatchVerified {
+    // Detect a raw patch body passed directly as the command or as the body of a bash -lc
+    // script. In these cases, report an explicit error rather than applying the patch.
+    match argv {
+        [body] => {
+            if parse_patch(body).is_ok() {
+                return MaybeApplyPatchVerified::CorrectnessError(
+                    ApplyPatchError::ImplicitInvocation,
+                );
+            }
+        }
+        [bash, flag, script] if bash == "bash" && flag == "-lc" => {
+            if parse_patch(script).is_ok() {
+                return MaybeApplyPatchVerified::CorrectnessError(
+                    ApplyPatchError::ImplicitInvocation,
+                );
+            }
+        }
+        _ => {}
+    }
+
     match maybe_parse_apply_patch(argv) {
         MaybeApplyPatch::Body(ApplyPatchArgs {
             patch,
@@ -733,6 +760,8 @@ fn compute_replacements(
         }
     }
 
+    replacements.sort_by(|(lhs_idx, _, _), (rhs_idx, _, _)| lhs_idx.cmp(rhs_idx));
+
     Ok(replacements)
 }
 
@@ -870,6 +899,28 @@ mod tests {
         assert!(matches!(
             maybe_parse_apply_patch(&args),
             MaybeApplyPatch::NotApplyPatch
+        ));
+    }
+
+    #[test]
+    fn test_implicit_patch_single_arg_is_error() {
+        let patch = "*** Begin Patch\n*** Add File: foo\n+hi\n*** End Patch".to_string();
+        let args = vec![patch];
+        let dir = tempdir().unwrap();
+        assert!(matches!(
+            maybe_parse_apply_patch_verified(&args, dir.path()),
+            MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::ImplicitInvocation)
+        ));
+    }
+
+    #[test]
+    fn test_implicit_patch_bash_script_is_error() {
+        let script = "*** Begin Patch\n*** Add File: foo\n+hi\n*** End Patch";
+        let args = args_bash(script);
+        let dir = tempdir().unwrap();
+        assert!(matches!(
+            maybe_parse_apply_patch_verified(&args, dir.path()),
+            MaybeApplyPatchVerified::CorrectnessError(ApplyPatchError::ImplicitInvocation)
         ));
     }
 
@@ -1214,6 +1265,33 @@ PATCH"#,
 
         let contents = fs::read_to_string(&path).unwrap();
         assert_eq!(contents, "a\nB\nc\nd\nE\nf\ng\n");
+    }
+
+    #[test]
+    fn test_pure_addition_chunk_followed_by_removal() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("panic.txt");
+        fs::write(&path, "line1\nline2\nline3\n").unwrap();
+        let patch = wrap_patch(&format!(
+            r#"*** Update File: {}
+@@
++after-context
++second-line
+@@
+ line1
+-line2
+-line3
++line2-replacement"#,
+            path.display()
+        ));
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        apply_patch(&patch, &mut stdout, &mut stderr).unwrap();
+        let contents = fs::read_to_string(path).unwrap();
+        assert_eq!(
+            contents,
+            "line1\nline2-replacement\nafter-context\nsecond-line\n"
+        );
     }
 
     /// Ensure that patches authored with ASCII characters can update lines that

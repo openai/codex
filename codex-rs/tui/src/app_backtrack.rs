@@ -1,9 +1,11 @@
+use std::path::PathBuf;
+
 use crate::app::App;
 use crate::backtrack_helpers;
 use crate::pager_overlay::Overlay;
 use crate::tui;
 use crate::tui::TuiEvent;
-use codex_core::protocol::ConversationHistoryResponseEvent;
+use codex_core::protocol::ConversationPathResponseEvent;
 use codex_protocol::mcp_protocol::ConversationId;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
@@ -98,7 +100,7 @@ impl App {
     ) {
         self.backtrack.pending = Some((base_id, drop_last_messages, prefill));
         self.app_event_tx.send(crate::app_event::AppEvent::CodexOp(
-            codex_core::protocol::Op::GetHistory,
+            codex_core::protocol::Op::GetPath,
         ));
     }
 
@@ -265,7 +267,7 @@ impl App {
     pub(crate) async fn on_conversation_history_for_backtrack(
         &mut self,
         tui: &mut tui::Tui,
-        ev: ConversationHistoryResponseEvent,
+        ev: ConversationPathResponseEvent,
     ) -> Result<()> {
         if let Some((base_id, _, _)) = self.backtrack.pending.as_ref()
             && ev.conversation_id == *base_id
@@ -281,14 +283,14 @@ impl App {
     async fn fork_and_switch_to_new_conversation(
         &mut self,
         tui: &mut tui::Tui,
-        ev: ConversationHistoryResponseEvent,
+        ev: ConversationPathResponseEvent,
         drop_count: usize,
         prefill: String,
     ) {
         let cfg = self.chat_widget.config_ref().clone();
         // Perform the fork via a thin wrapper for clarity/testability.
         let result = self
-            .perform_fork(ev.entries.clone(), drop_count, cfg.clone())
+            .perform_fork(ev.path.clone(), drop_count, cfg.clone())
             .await;
         match result {
             Ok(new_conv) => {
@@ -301,13 +303,11 @@ impl App {
     /// Thin wrapper around ConversationManager::fork_conversation.
     async fn perform_fork(
         &self,
-        entries: Vec<codex_protocol::models::ResponseItem>,
+        path: PathBuf,
         drop_count: usize,
         cfg: codex_core::config::Config,
     ) -> codex_core::error::Result<codex_core::NewConversation> {
-        self.server
-            .fork_conversation(entries, drop_count, cfg)
-            .await
+        self.server.fork_conversation(drop_count, cfg, path).await
     }
 
     /// Install a forked conversation into the ChatWidget and update UI to reflect selection.
@@ -328,6 +328,7 @@ impl App {
             initial_prompt: None,
             initial_images: Vec::new(),
             enhanced_keys_supported: self.enhanced_keys_supported,
+            auth_manager: self.auth_manager.clone(),
         };
         self.chat_widget =
             crate::chatwidget::ChatWidget::new_from_existing(init, conv, session_configured);
@@ -335,7 +336,7 @@ impl App {
         self.trim_transcript_for_backtrack(drop_count);
         self.render_transcript_once(tui);
         if !prefill.is_empty() {
-            self.chat_widget.insert_str(prefill);
+            self.chat_widget.set_composer_text(prefill.to_string());
         }
         tui.frame_requester().schedule_frame();
     }

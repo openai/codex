@@ -10,14 +10,14 @@ use codex_protocol::models::ResponseItem;
 use futures::Stream;
 use serde::Serialize;
 use std::borrow::Cow;
+use std::ops::Deref;
 use std::pin::Pin;
 use std::task::Context;
 use std::task::Poll;
 use tokio::sync::mpsc;
 
-/// The `instructions` field in the payload sent to a model should always start
-/// with this content.
-const BASE_INSTRUCTIONS: &str = include_str!("../prompt.md");
+/// Review thread system prompt. Edit `core/src/review_prompt.md` to customize.
+pub const REVIEW_PROMPT: &str = include_str!("../review_prompt.md");
 
 /// API request payload for a single model turn
 #[derive(Default, Debug, Clone)]
@@ -38,11 +38,12 @@ impl Prompt {
         let base = self
             .base_instructions_override
             .as_deref()
-            .unwrap_or(BASE_INSTRUCTIONS);
+            .unwrap_or(model.base_instructions.deref());
         let mut sections: Vec<&str> = vec![base];
 
-        // When there are no custom instructions, add apply_patch_tool_instructions if either:
-        // - the model needs special instructions (4.1), or
+        // When there are no custom instructions, add apply_patch_tool_instructions if:
+        // - the model needs special instructions (4.1)
+        // AND
         // - there is no apply_patch tool present
         let is_apply_patch_tool_present = self.tools.iter().any(|tool| match tool {
             OpenAiTool::Function(f) => f.name == "apply_patch",
@@ -50,7 +51,8 @@ impl Prompt {
             _ => false,
         });
         if self.base_instructions_override.is_none()
-            && (model.needs_special_apply_patch_instructions || !is_apply_patch_tool_present)
+            && model.needs_special_apply_patch_instructions
+            && !is_apply_patch_tool_present
         {
             sections.push(APPLY_PATCH_TOOL_INSTRUCTIONS);
         }
@@ -81,8 +83,10 @@ pub enum ResponseEvent {
 
 #[derive(Debug, Serialize)]
 pub(crate) struct Reasoning {
-    pub(crate) effort: ReasoningEffortConfig,
-    pub(crate) summary: ReasoningSummaryConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) effort: Option<ReasoningEffortConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) summary: Option<ReasoningSummaryConfig>,
 }
 
 /// Controls under the `text` field in the Responses API for GPT-5.
@@ -136,14 +140,17 @@ pub(crate) struct ResponsesApiRequest<'a> {
 
 pub(crate) fn create_reasoning_param_for_request(
     model_family: &ModelFamily,
-    effort: ReasoningEffortConfig,
+    effort: Option<ReasoningEffortConfig>,
     summary: ReasoningSummaryConfig,
 ) -> Option<Reasoning> {
-    if model_family.supports_reasoning_summaries {
-        Some(Reasoning { effort, summary })
-    } else {
-        None
+    if !model_family.supports_reasoning_summaries {
+        return None;
     }
+
+    Some(Reasoning {
+        effort,
+        summary: Some(summary),
+    })
 }
 
 pub(crate) fn create_text_param_for_request(
@@ -169,18 +176,64 @@ impl Stream for ResponseStream {
 #[cfg(test)]
 mod tests {
     use crate::model_family::find_family_for_model;
+    use pretty_assertions::assert_eq;
 
     use super::*;
 
+    struct InstructionsTestCase {
+        pub slug: &'static str,
+        pub expects_apply_patch_instructions: bool,
+    }
     #[test]
     fn get_full_instructions_no_user_content() {
         let prompt = Prompt {
             ..Default::default()
         };
-        let expected = format!("{BASE_INSTRUCTIONS}\n{APPLY_PATCH_TOOL_INSTRUCTIONS}");
-        let model_family = find_family_for_model("gpt-4.1").expect("known model slug");
-        let full = prompt.get_full_instructions(&model_family);
-        assert_eq!(full, expected);
+        let test_cases = vec![
+            InstructionsTestCase {
+                slug: "gpt-3.5",
+                expects_apply_patch_instructions: true,
+            },
+            InstructionsTestCase {
+                slug: "gpt-4.1",
+                expects_apply_patch_instructions: true,
+            },
+            InstructionsTestCase {
+                slug: "gpt-4o",
+                expects_apply_patch_instructions: true,
+            },
+            InstructionsTestCase {
+                slug: "gpt-5",
+                expects_apply_patch_instructions: true,
+            },
+            InstructionsTestCase {
+                slug: "codex-mini-latest",
+                expects_apply_patch_instructions: true,
+            },
+            InstructionsTestCase {
+                slug: "gpt-oss:120b",
+                expects_apply_patch_instructions: false,
+            },
+            InstructionsTestCase {
+                slug: "gpt-5-codex",
+                expects_apply_patch_instructions: false,
+            },
+        ];
+        for test_case in test_cases {
+            let model_family = find_family_for_model(test_case.slug).expect("known model slug");
+            let expected = if test_case.expects_apply_patch_instructions {
+                format!(
+                    "{}\n{}",
+                    model_family.clone().base_instructions,
+                    APPLY_PATCH_TOOL_INSTRUCTIONS
+                )
+            } else {
+                model_family.clone().base_instructions
+            };
+
+            let full = prompt.get_full_instructions(&model_family);
+            assert_eq!(full, expected);
+        }
     }
 
     #[test]
