@@ -25,8 +25,9 @@ pub(crate) fn should_persist_response_item(item: &ResponseItem) -> bool {
         | ResponseItem::FunctionCall { .. }
         | ResponseItem::FunctionCallOutput { .. }
         | ResponseItem::CustomToolCall { .. }
-        | ResponseItem::CustomToolCallOutput { .. } => true,
-        ResponseItem::WebSearchCall { .. } | ResponseItem::Other => false,
+        | ResponseItem::CustomToolCallOutput { .. }
+        | ResponseItem::WebSearchCall { .. } => true,
+        ResponseItem::Other => false,
     }
 }
 
