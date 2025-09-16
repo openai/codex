@@ -273,7 +273,7 @@ fn create_shell_tool_for_sandbox(sandbox_policy: &SandboxPolicy) -> OpenAiTool {
         },
     );
 
-    if matches!(sandbox_policy, SandboxPolicy::WorkspaceWrite { .. }) {
+    if !matches!(sandbox_policy, SandboxPolicy::DangerFullAccess) {
         properties.insert(
         "with_escalated_permissions".to_string(),
         JsonSchema::Boolean {
