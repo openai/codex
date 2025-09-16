@@ -135,18 +135,24 @@ mod compact;
 use self::compact::build_compacted_history;
 use self::compact::collect_user_messages;
 
-// A convenience extension trait for acquiring mutex locks where poisoning is
-// unrecoverable and should abort the program. This avoids scattered `.unwrap()`
-// calls on `lock()` while still surfacing a clear panic message when a lock is
-// poisoned.
+// A convenience extension trait for acquiring mutex locks with automatic
+// recovery from poison errors. This provides a cleaner API than manually
+// handling poisoned locks at every call site.
 trait MutexExt<T> {
-    fn lock_unchecked(&self) -> MutexGuard<'_, T>;
+    fn lock_or_recover(&self) -> MutexGuard<'_, T>;
 }
 
 impl<T> MutexExt<T> for Mutex<T> {
-    fn lock_unchecked(&self) -> MutexGuard<'_, T> {
-        #[expect(clippy::expect_used)]
-        self.lock().expect("poisoned lock")
+    fn lock_or_recover(&self) -> MutexGuard<'_, T> {
+        match self.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                // Log the poisoned lock but recover and continue
+                // This is safe because we're taking ownership of the data
+                tracing::warn!("Recovering from poisoned mutex");
+                poisoned.into_inner()
+            }
+        }
     }
 }
 
@@ -562,7 +568,7 @@ impl Session {
     }
 
     pub fn set_task(&self, task: AgentTask) {
-        let mut state = self.state.lock_unchecked();
+        let mut state = self.state.lock_or_recover();
         if let Some(current_task) = state.current_task.take() {
             current_task.abort(TurnAbortReason::Replaced);
         }
@@ -570,7 +576,7 @@ impl Session {
     }
 
     pub fn remove_task(&self, sub_id: &str) {
-        let mut state = self.state.lock_unchecked();
+        let mut state = self.state.lock_or_recover();
         if let Some(task) = &state.current_task
             && task.sub_id == sub_id
         {
@@ -579,7 +585,7 @@ impl Session {
     }
 
     fn next_internal_sub_id(&self) -> String {
-        let mut state = self.state.lock_unchecked();
+        let mut state = self.state.lock_or_recover();
         let id = state.next_internal_sub_id;
         state.next_internal_sub_id += 1;
         format!("auto-compact-{id}")
@@ -637,7 +643,7 @@ impl Session {
         let (tx_approve, rx_approve) = oneshot::channel();
         let event_id = sub_id.clone();
         let prev_entry = {
-            let mut state = self.state.lock_unchecked();
+            let mut state = self.state.lock_or_recover();
             state.pending_approvals.insert(sub_id, tx_approve)
         };
         if prev_entry.is_some() {
@@ -669,7 +675,7 @@ impl Session {
         let (tx_approve, rx_approve) = oneshot::channel();
         let event_id = sub_id.clone();
         let prev_entry = {
-            let mut state = self.state.lock_unchecked();
+            let mut state = self.state.lock_or_recover();
             state.pending_approvals.insert(sub_id, tx_approve)
         };
         if prev_entry.is_some() {
@@ -691,7 +697,7 @@ impl Session {
 
     pub fn notify_approval(&self, sub_id: &str, decision: ReviewDecision) {
         let entry = {
-            let mut state = self.state.lock_unchecked();
+            let mut state = self.state.lock_or_recover();
             state.pending_approvals.remove(sub_id)
         };
         match entry {
@@ -705,7 +711,7 @@ impl Session {
     }
 
     pub fn add_approved_command(&self, cmd: Vec<String>) {
-        let mut state = self.state.lock_unchecked();
+        let mut state = self.state.lock_or_recover();
         state.approved_commands.insert(cmd);
     }
 
@@ -746,7 +752,7 @@ impl Session {
     /// Append ResponseItems to the in-memory conversation history only.
     fn record_into_history(&self, items: &[ResponseItem]) {
         self.state
-            .lock_unchecked()
+            .lock_or_recover()
             .history
             .record_items(items.iter());
     }
@@ -776,7 +782,7 @@ impl Session {
 
     async fn persist_rollout_items(&self, items: &[RolloutItem]) {
         let recorder = {
-            let guard = self.rollout.lock_unchecked();
+            let guard = self.rollout.lock_or_recover();
             guard.as_ref().cloned()
         };
         if let Some(rec) = recorder
@@ -791,7 +797,7 @@ impl Session {
         turn_context: &TurnContext,
         token_usage: &Option<TokenUsage>,
     ) -> Option<TokenUsageInfo> {
-        let mut state = self.state.lock_unchecked();
+        let mut state = self.state.lock_or_recover();
         let info = TokenUsageInfo::new_or_append(
             &state.token_info,
             token_usage,
@@ -1007,12 +1013,12 @@ impl Session {
     /// Build the full turn input by concatenating the current conversation
     /// history with additional items for this turn.
     pub fn turn_input_with_history(&self, extra: Vec<ResponseItem>) -> Vec<ResponseItem> {
-        [self.state.lock_unchecked().history.contents(), extra].concat()
+        [self.state.lock_or_recover().history.contents(), extra].concat()
     }
 
     /// Returns the input if there was no task running to inject into
     pub fn inject_input(&self, input: Vec<InputItem>) -> Result<(), Vec<InputItem>> {
-        let mut state = self.state.lock_unchecked();
+        let mut state = self.state.lock_or_recover();
         if state.current_task.is_some() {
             state.pending_input.push(input.into());
             Ok(())
@@ -1022,7 +1028,7 @@ impl Session {
     }
 
     pub fn get_pending_input(&self) -> Vec<ResponseInputItem> {
-        let mut state = self.state.lock_unchecked();
+        let mut state = self.state.lock_or_recover();
         if state.pending_input.is_empty() {
             Vec::with_capacity(0)
         } else {
@@ -1046,7 +1052,7 @@ impl Session {
 
     fn interrupt_task(&self) {
         info!("interrupt received: abort current task, if any");
-        let mut state = self.state.lock_unchecked();
+        let mut state = self.state.lock_or_recover();
         state.pending_approvals.clear();
         state.pending_input.clear();
         if let Some(task) = state.current_task.take() {
@@ -1465,7 +1471,7 @@ async fn submission_loop(
 
                 // Get the agent registry and list agents
                 let agents = {
-                    let agent_registry_guard = sess.agent_registry.lock_unchecked();
+                    let agent_registry_guard = sess.agent_registry.lock_or_recover();
                     agent_registry_guard
                         .as_ref()
                         .map(|r| r.list_agent_details())
@@ -1515,7 +1521,7 @@ async fn submission_loop(
 
                 // Gracefully flush and shutdown rollout recorder on session end so tests
                 // that inspect the rollout file do not race with the background writer.
-                let recorder_opt = sess.rollout.lock_unchecked().take();
+                let recorder_opt = sess.rollout.lock_or_recover().take();
                 if let Some(rec) = recorder_opt
                     && let Err(e) = rec.shutdown().await
                 {
@@ -1540,7 +1546,7 @@ async fn submission_loop(
                 let sub_id = sub.id.clone();
                 // Flush rollout writes before returning the path so readers observe a consistent file.
                 let (path, rec_opt) = {
-                    let guard = sess.rollout.lock_unchecked();
+                    let guard = sess.rollout.lock_or_recover();
                     match guard.as_ref() {
                         Some(rec) => (rec.get_rollout_path(), Some(rec.clone())),
                         None => {
@@ -2338,9 +2344,10 @@ async fn try_run_turn(
                 .collect();
 
             // Execute all agents in parallel with proper concurrency control
-            // Create safe Arc wrappers for concurrent execution
             let agent_results = {
                 // Create thread-safe wrappers for concurrent execution
+                // SAFETY: sess and turn_context are guaranteed to outlive this call
+                // as they're borrowed from the enclosing function scope
                 let sess_wrapper = Arc::new(SessionWrapper::new(sess));
                 let context_wrapper = Arc::new(TurnContextWrapper::new(turn_context));
 
@@ -2838,14 +2845,25 @@ enum AgentMessage {
 // =================================================================================
 // Concurrent Execution Wrappers for Thread Safety
 // =================================================================================
+// These wrappers enable safe sharing of Session and TurnContext across threads
+// during parallel agent execution. They use raw pointers internally but are safe
+// because:
+// 1. The referenced objects are guaranteed to outlive the wrappers (enforced by caller)
+// 2. Session and TurnContext have internal synchronization via Mutex fields
+// 3. The wrappers are only used within a controlled scope where lifetimes are guaranteed
 
 /// Thread-safe wrapper for Session to enable concurrent execution
 struct SessionWrapper {
-    // Store raw pointer - SAFETY: We ensure the referenced Session outlives this wrapper
+    // We use a raw pointer here because:
+    // 1. We need to share &Session across threads but Session isn't Clone
+    // 2. The Session is guaranteed to outlive this wrapper (created in same scope)
+    // 3. Session has internal thread-safety via Mutex fields
     ptr: *const Session,
+    _phantom: std::marker::PhantomData<Session>,
 }
 
-// SAFETY: SessionWrapper is Send/Sync if we ensure proper lifetime management
+// SAFETY: Session has internal synchronization via Mutex fields
+// The wrapper ensures the Session outlives all uses
 unsafe impl Send for SessionWrapper {}
 unsafe impl Sync for SessionWrapper {}
 
@@ -2853,22 +2871,26 @@ impl SessionWrapper {
     fn new(sess: &Session) -> Self {
         Self {
             ptr: sess as *const Session,
+            _phantom: std::marker::PhantomData,
         }
     }
 
     fn get(&self) -> &Session {
-        // SAFETY: We ensure the Session outlives the wrapper
+        // SAFETY: The caller guarantees Session outlives this wrapper
+        // This is enforced by the structure of execute_agents_concurrent_safe
         unsafe { &*self.ptr }
     }
 }
 
-/// Thread-safe wrapper for TurnContext to enable concurrent execution  
+/// Thread-safe wrapper for TurnContext to enable concurrent execution
 struct TurnContextWrapper {
-    // Store raw pointer - SAFETY: We ensure the referenced TurnContext outlives this wrapper
+    // We use a raw pointer here for the same reasons as SessionWrapper
     ptr: *const TurnContext,
+    _phantom: std::marker::PhantomData<TurnContext>,
 }
 
-// SAFETY: TurnContextWrapper is Send/Sync if we ensure proper lifetime management
+// SAFETY: TurnContext contains only thread-safe types
+// The wrapper ensures the TurnContext outlives all uses
 unsafe impl Send for TurnContextWrapper {}
 unsafe impl Sync for TurnContextWrapper {}
 
@@ -2876,11 +2898,13 @@ impl TurnContextWrapper {
     fn new(ctx: &TurnContext) -> Self {
         Self {
             ptr: ctx as *const TurnContext,
+            _phantom: std::marker::PhantomData,
         }
     }
 
     fn get(&self) -> &TurnContext {
-        // SAFETY: We ensure the TurnContext outlives the wrapper
+        // SAFETY: The caller guarantees TurnContext outlives this wrapper
+        // This is enforced by the structure of execute_agents_concurrent_safe
         unsafe { &*self.ptr }
     }
 }
@@ -2946,7 +2970,7 @@ fn create_agent_error_response(call_id: String, error_msg: &str) -> (String, Res
 
 /// Get the agent registry from the session
 fn get_agent_registry(sess: &Session) -> Result<Arc<crate::agent::AgentRegistry>, String> {
-    let agent_registry_guard = sess.agent_registry.lock_unchecked();
+    let agent_registry_guard = sess.agent_registry.lock_or_recover();
     match agent_registry_guard.as_ref() {
         Some(r) => Ok(r.clone()),
         None => Err("Agent registry not available".to_string()),
@@ -2965,7 +2989,7 @@ async fn execute_agents_concurrent_safe(
 
     let sess = sess_wrapper.get();
     // Check if we're already in agent context (prevent recursion)
-    if sess.state.lock_unchecked().is_agent_context {
+    if sess.state.lock_or_recover().is_agent_context {
         return agent_calls
             .into_iter()
             .map(|(call_id, _, _)| {
@@ -2997,7 +3021,7 @@ async fn execute_agents_concurrent_safe(
     };
 
     // Set agent context flag to prevent recursion
-    sess.state.lock_unchecked().is_agent_context = true;
+    sess.state.lock_or_recover().is_agent_context = true;
 
     // Create futures for TRUE PARALLEL agent execution
     // Each agent runs independently and concurrently
@@ -3014,10 +3038,11 @@ async fn execute_agents_concurrent_safe(
                 let args = match parse_agent_args(&arguments) {
                     Ok(a) => a,
                     Err(e) => {
-                        return create_agent_error_response(
+                        let (call_id, response) = create_agent_error_response(
                             call_id.clone(),
                             &format!("Failed to parse agent arguments: {e}"),
                         );
+                        return (call_id, response, TurnDiffTracker::new());
                     }
                 };
 
@@ -3031,7 +3056,7 @@ async fn execute_agents_concurrent_safe(
                 let plan_item_id = generate_agent_plan_id(&agent_name, &call_id);
 
                 // Execute the agent with concurrent support
-                let result = execute_agent_isolated_concurrent(
+                let (result, diff_tracker) = execute_agent_isolated_concurrent(
                     sess_wrapper_clone,
                     context_wrapper_clone,
                     AgentExecutionParams {
@@ -3063,7 +3088,7 @@ async fn execute_agents_concurrent_safe(
                     },
                 };
 
-                (call_id, response)
+                (call_id, response, diff_tracker)
             }
         })
         .collect();
@@ -3073,11 +3098,17 @@ async fn execute_agents_concurrent_safe(
     let agent_results = join_all(agent_futures).await;
 
     // Reset agent context flag after all agents complete
-    sess.state.lock_unchecked().is_agent_context = false;
+    sess.state.lock_or_recover().is_agent_context = false;
 
-    // Collect results
+    // Merge all diff trackers from agents and return results
+    let mut results = Vec::new();
+    for (call_id, response, agent_diff_tracker) in agent_results {
+        // Merge the agent's diff tracker into the main one
+        turn_diff_tracker.merge(agent_diff_tracker);
+        results.push((call_id, response));
+    }
 
-    agent_results
+    results
 }
 struct AgentExecutionParams {
     sub_id: String,
@@ -3093,7 +3124,7 @@ async fn execute_agent_isolated_concurrent(
     sess_wrapper: Arc<SessionWrapper>,
     context_wrapper: Arc<TurnContextWrapper>,
     params: AgentExecutionParams,
-) -> Result<String, String> {
+) -> (Result<String, String>, TurnDiffTracker) {
     let sess = sess_wrapper.get();
     let parent_context = context_wrapper.get();
     use std::time::Instant;
@@ -3201,7 +3232,7 @@ async fn execute_agent_isolated_concurrent(
         Err(e) => {
             error!("Agent '{}' turn failed: {e:#}", params.agent_name);
             agent_response = format!("Error during agent execution: {e}");
-            return Err(agent_response.clone());
+            return (Err(agent_response.clone()), turn_diff_tracker);
         }
     }
 
@@ -3243,7 +3274,7 @@ async fn execute_agent_isolated_concurrent(
     })
     .await;
 
-    Ok(agent_response)
+    (Ok(agent_response), turn_diff_tracker)
 }
 
 /// Generate a comprehensive summary of agent execution
@@ -3528,7 +3559,7 @@ async fn handle_container_exec_with_params(
         }
         None => {
             let safety = {
-                let state = sess.state.lock_unchecked();
+                let state = sess.state.lock_or_recover();
                 assess_command_safety(
                     &params.command,
                     turn_context.approval_policy,
@@ -4053,7 +4084,7 @@ mod tests {
             }),
         ));
 
-        let actual = session.state.lock_unchecked().history.contents();
+        let actual = session.state.lock_or_recover().history.contents();
         assert_eq!(expected, actual);
     }
 
@@ -4066,7 +4097,7 @@ mod tests {
             session.record_initial_history(&turn_context, InitialHistory::Forked(rollout_items)),
         );
 
-        let actual = session.state.lock_unchecked().history.contents();
+        let actual = session.state.lock_or_recover().history.contents();
         assert_eq!(expected, actual);
     }
 

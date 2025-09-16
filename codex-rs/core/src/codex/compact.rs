@@ -171,7 +171,7 @@ async fn run_compact_task_inner(
         sess.remove_task(&sub_id);
     }
     let history_snapshot = {
-        let state = sess.state.lock_unchecked();
+        let state = sess.state.lock_or_recover();
         state.history.contents()
     };
     let summary_text = get_last_assistant_message_from_turn(&history_snapshot).unwrap_or_default();
@@ -179,7 +179,7 @@ async fn run_compact_task_inner(
     let initial_context = sess.build_initial_context(turn_context.as_ref());
     let new_history = build_compacted_history(initial_context, &user_messages, &summary_text);
     {
-        let mut state = sess.state.lock_unchecked();
+        let mut state = sess.state.lock_or_recover();
         state.history.replace(new_history);
     }
 
@@ -290,7 +290,7 @@ async fn drain_to_completed(
         };
         match event {
             Ok(ResponseEvent::OutputItemDone(item)) => {
-                let mut state = sess.state.lock_unchecked();
+                let mut state = sess.state.lock_or_recover();
                 state.history.record_items(std::slice::from_ref(&item));
             }
             Ok(ResponseEvent::Completed { .. }) => {
