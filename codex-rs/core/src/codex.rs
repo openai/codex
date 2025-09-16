@@ -1154,20 +1154,16 @@ impl AgentTask {
     fn abort(self, reason: TurnAbortReason) {
         // TOCTOU?
         if !self.handle.is_finished() {
-            if self.kind == AgentTaskKind::Review {
-                let sess = self.sess.clone();
-                let sub_id = self.sub_id.clone();
-                tokio::spawn(async move {
-                    exit_review_mode(sess, sub_id, None).await;
-                });
-            }
             self.handle.abort();
             let event = Event {
-                id: self.sub_id,
+                id: self.sub_id.clone(),
                 msg: EventMsg::TurnAborted(TurnAbortedEvent { reason }),
             };
             let sess = self.sess;
             tokio::spawn(async move {
+                if self.kind == AgentTaskKind::Review {
+                    exit_review_mode(sess.clone(), self.sub_id, None).await;
+                }
                 sess.send_event(event).await;
             });
         }
@@ -1560,7 +1556,8 @@ async fn spawn_review_thread(
         experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
     });
 
-    let base_instructions = Some(REVIEW_PROMPT.to_string());
+    let base_instructions = REVIEW_PROMPT.to_string();
+    let review_prompt = review_request.prompt.clone();
     let provider = parent_turn_context.client.get_provider();
     let auth_manager = parent_turn_context.client.get_auth_manager();
     let model_family = review_model_family.clone();
@@ -1569,16 +1566,19 @@ async fn spawn_review_thread(
     let mut per_turn_config = (*config).clone();
     per_turn_config.model = model.clone();
     per_turn_config.model_family = model_family.clone();
+    per_turn_config.model_reasoning_effort = Some(ReasoningEffortConfig::Low);
+    per_turn_config.model_reasoning_summary = ReasoningSummaryConfig::Detailed;
     if let Some(model_info) = get_model_info(&model_family) {
         per_turn_config.model_context_window = Some(model_info.context_window);
     }
 
+    let per_turn_config = Arc::new(per_turn_config);
     let client = ModelClient::new(
-        Arc::new(per_turn_config),
+        per_turn_config.clone(),
         auth_manager,
         provider,
-        parent_turn_context.client.get_reasoning_effort(),
-        parent_turn_context.client.get_reasoning_summary(),
+        per_turn_config.model_reasoning_effort,
+        per_turn_config.model_reasoning_summary,
         sess.conversation_id,
     );
 
@@ -1586,7 +1586,7 @@ async fn spawn_review_thread(
         client,
         tools_config,
         user_instructions: None,
-        base_instructions,
+        base_instructions: Some(base_instructions.clone()),
         approval_policy: parent_turn_context.approval_policy,
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
@@ -1596,7 +1596,7 @@ async fn spawn_review_thread(
 
     // Seed the child task with the review prompt as the initial user message.
     let input: Vec<InputItem> = vec![InputItem::Text {
-        text: review_request.prompt.clone(),
+        text: format!("{base_instructions}\n\n---\n\nNow, here's your task: {review_prompt}"),
     }];
     let tc = Arc::new(review_turn_context);
 
@@ -1654,6 +1654,8 @@ async fn run_task(
     let is_review_mode = turn_context.is_review_mode;
     let mut review_thread_history: Vec<ResponseItem> = Vec::new();
     if is_review_mode {
+        // Seed review threads with environment context so the model knows the working directory.
+        review_thread_history.extend(sess.build_initial_context(turn_context.as_ref()));
         review_thread_history.push(initial_input_for_turn.into());
     } else {
         sess.record_input_and_rollout_usermsg(&initial_input_for_turn)
