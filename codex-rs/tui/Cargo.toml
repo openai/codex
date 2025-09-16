@@ -27,6 +27,7 @@ base64 = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["derive"] }
 codex-ansi-escape = { workspace = true }
+codex-app-server-protocol = { workspace = true }
 codex-arg0 = { workspace = true }
 codex-common = { workspace = true, features = [
     "cli",
@@ -35,6 +36,7 @@ codex-common = { workspace = true, features = [
 ] }
 codex-core = { workspace = true }
 codex-file-search = { workspace = true }
+codex-lmstudio = { workspace = true }
 codex-login = { workspace = true }
 codex-ollama = { workspace = true }
 codex-protocol = { workspace = true }
@@ -52,6 +54,7 @@ image = { workspace = true, features = ["jpeg", "png"] }
 itertools = { workspace = true }
 lazy_static = { workspace = true }
 mcp-types = { workspace = true }
+opentelemetry-appender-tracing = { workspace = true }
 pathdiff = { workspace = true }
 pulldown-cmark = { workspace = true }
 rand = { workspace = true }
@@ -63,6 +66,7 @@ ratatui = { workspace = true, features = [
 ] }
 ratatui-macros = { workspace = true }
 regex-lite = { workspace = true }
+reqwest = { version = "0.12", features = ["json"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
 shlex = { workspace = true }
@@ -85,7 +89,6 @@ toml = { workspace = true }
 tracing = { workspace = true, features = ["log"] }
 tracing-appender = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
-opentelemetry-appender-tracing = { workspace = true }
 unicode-segmentation = { workspace = true }
 unicode-width = { workspace = true }
 url = { workspace = true }
