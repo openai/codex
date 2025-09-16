@@ -1,0 +1,13 @@
+{
+  "name": "codex-docs",
+  "version": "0.0.0-dev",
+  "private": true,
+  "license": "Apache-2.0",
+  "scripts": {
+    "build": "echo 'Building documentation...'",
+    "test": "echo 'Testing documentation...'",
+    "lint": "echo 'Linting documentation...'",
+    "codex:local": "echo 'Docs local setup complete'",
+    "codex:cloud": "echo 'Docs cloud setup complete'"
+  }
+}

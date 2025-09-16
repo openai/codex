@@ -1,0 +1,31 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**", "bin/**", "target/**"]
+    },
+    "test": {
+      "dependsOn": ["build"],
+      "outputs": []
+    },
+    "lint": {
+      "outputs": []
+    },
+    "format": {
+      "outputs": []
+    },
+    "codex:local": {
+      "cache": false,
+      "outputs": []
+    },
+    "codex:cloud": {
+      "cache": false,
+      "outputs": []
+    },
+    "codex:build": {
+      "dependsOn": ["build", "codex:local"],
+      "outputs": []
+    }
+  }
+}

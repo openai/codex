@@ -1,5 +1,7 @@
 packages:
   - docs
+  - codex-cli
+  - codex-rs
 
 ignoredBuiltDependencies:
   - esbuild
