@@ -226,12 +226,11 @@ impl ChatWidget {
         // At the end of a reasoning block, record transcript-only content.
         self.full_reasoning_buffer.push_str(&self.reasoning_buffer);
         if !self.full_reasoning_buffer.is_empty() {
-            for cell in history_cell::new_reasoning_summary_block(
+            let cell = history_cell::new_reasoning_summary_block(
                 self.full_reasoning_buffer.clone(),
                 &self.config,
-            ) {
-                self.add_boxed_history(cell);
-            }
+            );
+            self.add_boxed_history(cell);
         }
         self.reasoning_buffer.clear();
         self.full_reasoning_buffer.clear();
