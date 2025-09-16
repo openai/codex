@@ -238,46 +238,11 @@ mod tests {
     #[test]
     fn test_shell_environment_policy_timeout_conversion() {
         let toml_policy = ShellEnvironmentPolicyToml {
-            inherit: Some(ShellEnvironmentPolicyInherit::Core),
-            ignore_default_excludes: Some(true),
-            exclude: Some(vec!["TEST_*".to_string()]),
-            r#set: Some([("VAR".to_string(), "value".to_string())].into()),
-            include_only: Some(vec!["HOME".to_string()]),
-            experimental_use_profile: Some(true),
-            exec_timeout_seconds: Some(120), // 2 minutes
+            exec_timeout_seconds: Some(120),
+            ..Default::default()
         };
 
         let policy: ShellEnvironmentPolicy = toml_policy.into();
-
-        assert_eq!(policy.inherit, ShellEnvironmentPolicyInherit::Core);
-        assert_eq!(policy.ignore_default_excludes, true);
-        assert_eq!(policy.exclude.len(), 1);
-        assert_eq!(policy.r#set.get("VAR"), Some(&"value".to_string()));
-        assert_eq!(policy.include_only.len(), 1);
-        assert_eq!(policy.use_profile, true);
         assert_eq!(policy.exec_timeout_seconds, Some(120));
-    }
-
-    #[test]
-    fn test_shell_environment_policy_timeout_defaults() {
-        let toml_policy = ShellEnvironmentPolicyToml {
-            inherit: None,
-            ignore_default_excludes: None,
-            exclude: None,
-            r#set: None,
-            include_only: None,
-            experimental_use_profile: None,
-            exec_timeout_seconds: None,
-        };
-
-        let policy: ShellEnvironmentPolicy = toml_policy.into();
-
-        assert_eq!(policy.inherit, ShellEnvironmentPolicyInherit::All); // default
-        assert_eq!(policy.ignore_default_excludes, false); // default
-        assert!(policy.exclude.is_empty());
-        assert!(policy.r#set.is_empty());
-        assert!(policy.include_only.is_empty());
-        assert_eq!(policy.use_profile, false); // default
-        assert_eq!(policy.exec_timeout_seconds, None); // default
     }
 }

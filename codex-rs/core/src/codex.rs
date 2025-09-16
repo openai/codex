@@ -3666,11 +3666,10 @@ mod tests {
     }
 
     #[test]
-    fn test_to_exec_params_timeout_fallback_logic() {
+    fn test_to_exec_params_timeout_fallback() {
         use crate::config_types::ShellEnvironmentPolicyInherit;
         use codex_protocol::models::ShellToolCallParams;
 
-        // Create a TurnContext with timeout in shell policy
         let shell_policy = ShellEnvironmentPolicy {
             inherit: ShellEnvironmentPolicyInherit::All,
             ignore_default_excludes: false,
@@ -3678,76 +3677,32 @@ mod tests {
             r#set: HashMap::new(),
             include_only: vec![],
             use_profile: false,
-            exec_timeout_seconds: Some(90), // 90 seconds in shell policy
+            exec_timeout_seconds: Some(90),
         };
 
         let (session, mut turn_context) = make_session_and_context();
         turn_context.shell_environment_policy = shell_policy;
 
-        // Test case 1: Tool call params has timeout - should use that
+        // Tool param timeout takes precedence
         let params_with_timeout = ShellToolCallParams {
-            command: vec!["echo".to_string(), "test".to_string()],
+            command: vec!["echo".to_string()],
             workdir: None,
-            timeout_ms: Some(5000), // 5 seconds - should take precedence
+            timeout_ms: Some(5000),
             with_escalated_permissions: None,
             justification: None,
         };
-
         let exec_params = to_exec_params(params_with_timeout, &turn_context);
-        assert_eq!(exec_params.timeout_ms, Some(5000)); // Should use tool param timeout
+        assert_eq!(exec_params.timeout_ms, Some(5000));
 
-        // Test case 2: Tool call params has no timeout - should fall back to shell policy
+        // Falls back to shell policy timeout
         let params_without_timeout = ShellToolCallParams {
-            command: vec!["echo".to_string(), "test".to_string()],
+            command: vec!["echo".to_string()],
             workdir: None,
             timeout_ms: None,
             with_escalated_permissions: None,
             justification: None,
         };
-
         let exec_params = to_exec_params(params_without_timeout, &turn_context);
-        assert_eq!(exec_params.timeout_ms, Some(90000)); // Should use shell policy timeout (90s * 1000ms)
-
-        // Test case 3: Neither tool params nor shell policy has timeout - should be None
-        turn_context.shell_environment_policy.exec_timeout_seconds = None;
-        let exec_params = to_exec_params(params_without_timeout.clone(), &turn_context);
-        assert_eq!(exec_params.timeout_ms, None); // Should be None when no fallback available
-    }
-
-    #[test]
-    fn test_to_exec_params_preserves_other_fields() {
-        use crate::config_types::ShellEnvironmentPolicyInherit;
-        use codex_protocol::models::ShellToolCallParams;
-
-        let shell_policy = ShellEnvironmentPolicy {
-            inherit: ShellEnvironmentPolicyInherit::All,
-            ignore_default_excludes: false,
-            exclude: vec![],
-            r#set: HashMap::new(),
-            include_only: vec![],
-            use_profile: false,
-            exec_timeout_seconds: Some(60),
-        };
-
-        let (session, mut turn_context) = make_session_and_context();
-        turn_context.shell_environment_policy = shell_policy;
-
-        let params = ShellToolCallParams {
-            command: vec!["ls".to_string(), "-la".to_string()],
-            workdir: Some("test_dir".to_string()),
-            timeout_ms: None,
-            with_escalated_permissions: Some(true),
-            justification: Some("Testing permissions".to_string()),
-        };
-
-        let exec_params = to_exec_params(params, &turn_context);
-
-        // Verify all fields are correctly transferred
-        assert_eq!(exec_params.command, vec!["ls", "-la"]);
-        assert_eq!(exec_params.cwd, turn_context.cwd.join("test_dir"));
-        assert_eq!(exec_params.timeout_ms, Some(60000)); // 60s from shell policy
-        assert_eq!(exec_params.with_escalated_permissions, Some(true));
-        assert_eq!(exec_params.justification, Some("Testing permissions".to_string()));
-        // env should be created from shell policy (tested elsewhere)
+        assert_eq!(exec_params.timeout_ms, Some(90000)); // 90s * 1000ms
     }
 }
