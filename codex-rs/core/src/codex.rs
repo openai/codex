@@ -296,7 +296,6 @@ struct State {
     history: ConversationHistory,
     token_info: Option<TokenUsageInfo>,
     next_internal_sub_id: u64,
-    is_agent_context: bool, // Track if this is an agent execution context
 }
 
 /// Context for an initialized model agent
@@ -2978,26 +2977,6 @@ async fn execute_agents_concurrent_safe(
     use futures::future::join_all;
 
     let sess = sess_wrapper.get();
-    // Check if we're already in agent context (prevent recursion)
-    if sess.state.lock_or_recover().is_agent_context {
-        return agent_calls
-            .into_iter()
-            .map(|(call_id, _, _)| {
-                (
-                    call_id.clone(),
-                    ResponseInputItem::FunctionCallOutput {
-                        call_id,
-                        output: FunctionCallOutputPayload {
-                            content:
-                                "Error: Agents cannot spawn other agents (recursion prevention)"
-                                    .to_string(),
-                            success: Some(false),
-                        },
-                    },
-                )
-            })
-            .collect();
-    }
 
     // Get the agent registry once using helper
     let registry = match get_agent_registry(sess) {
@@ -3011,8 +2990,6 @@ async fn execute_agents_concurrent_safe(
     };
 
     // Set agent context flag to prevent recursion
-    sess.state.lock_or_recover().is_agent_context = true;
-
     // Create futures for TRUE PARALLEL agent execution
     // Each agent runs independently and concurrently
     let agent_futures: Vec<_> = agent_calls
@@ -3086,9 +3063,6 @@ async fn execute_agents_concurrent_safe(
     // Execute all agents concurrently - TRUE PARALLELISM
     // All agents run at the same time, not sequentially
     let agent_results = join_all(agent_futures).await;
-
-    // Reset agent context flag after all agents complete
-    sess.state.lock_or_recover().is_agent_context = false;
 
     // Merge all diff trackers from agents and return results
     let mut results = Vec::new();
@@ -3172,9 +3146,13 @@ async fn execute_agent_isolated_concurrent(
     // Create a modified turn context for the agent
     // base_instructions: Keep parent's base instructions (default Codex instructions)
     // user_instructions: Agent system prompt + AGENTS.md
+    // IMPORTANT: Disable agent tool for agents to prevent recursion
+    let mut agent_tools_config = parent_context.tools_config.clone();
+    agent_tools_config.include_agent_tool = false; // Prevent agents from spawning other agents
+
     let agent_turn_context = TurnContext {
         client: parent_context.client.clone(),
-        tools_config: parent_context.tools_config.clone(),
+        tools_config: agent_tools_config,
         base_instructions: parent_context.base_instructions.clone(), // Keep default base instructions
         user_instructions: if agent_custom_instructions.is_empty() {
             None
