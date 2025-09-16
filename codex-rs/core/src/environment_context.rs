@@ -164,6 +164,9 @@ impl From<EnvironmentContext> for ResponseItem {
 
 #[cfg(test)]
 mod tests {
+    use crate::shell::BashShell;
+    use crate::shell::ZshShell;
+
     use super::*;
     use pretty_assertions::assert_eq;
 
@@ -233,5 +236,48 @@ mod tests {
 </environment_context>"#;
 
         assert_eq!(context.serialize_to_xml(), expected);
+    }
+
+    #[test]
+    fn equals_except_shell_compares() {
+        // Network access is different
+        let context1 = EnvironmentContext::new(
+            Some(PathBuf::from("/repo")),
+            Some(AskForApproval::OnRequest),
+            Some(workspace_write_policy(vec!["/repo"], false)),
+            None,
+        );
+        let context2 = EnvironmentContext::new(
+            Some(PathBuf::from("/repo")),
+            Some(AskForApproval::OnRequest),
+            Some(workspace_write_policy(vec!["/repo"], true)),
+            None,
+        );
+
+        assert!(!context1.equals_except_shell(&context2));
+    }
+
+    #[test]
+    fn equals_except_shell_ignores_shell() {
+        let context1 = EnvironmentContext::new(
+            Some(PathBuf::from("/repo")),
+            Some(AskForApproval::OnRequest),
+            Some(workspace_write_policy(vec!["/repo"], false)),
+            Some(Shell::Bash(BashShell {
+                shell_path: "/bin/bash".into(),
+                bashrc_path: "/home/user/.bashrc".into(),
+            })),
+        );
+        let context2 = EnvironmentContext::new(
+            Some(PathBuf::from("/repo")),
+            Some(AskForApproval::OnRequest),
+            Some(workspace_write_policy(vec!["/repo"], false)),
+            Some(Shell::Zsh(ZshShell {
+                shell_path: "/bin/zsh".into(),
+                zshrc_path: "/home/user/.zshrc".into(),
+            })),
+        );
+
+        assert!(context1.equals_except_shell(&context2));
     }
 }
