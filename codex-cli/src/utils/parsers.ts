@@ -86,6 +86,7 @@ export function parseToolCall(
  */
 export function parseToolCallArguments(
   toolCallArguments: string,
+  defaultTimeoutSeconds?: number,
 ): ExecInput | undefined {
   let json: unknown;
   try {
@@ -107,10 +108,16 @@ export function parseToolCallArguments(
 
   // @ts-expect-error timeout and workdir may not exist on json.
   const { timeout, workdir } = json;
+  const timeoutInMillis =
+    typeof timeout === "number"
+      ? timeout
+      : defaultTimeoutSeconds
+        ? defaultTimeoutSeconds * 1000
+        : undefined;
   return {
     cmd: commandArray,
     workdir: typeof workdir === "string" ? workdir : undefined,
-    timeoutInMillis: typeof timeout === "number" ? timeout : undefined,
+    timeoutInMillis,
   };
 }
 

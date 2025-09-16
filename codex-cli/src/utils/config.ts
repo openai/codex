@@ -175,6 +175,7 @@ export type AppConfig = {
   instructions: string;
   fullAutoErrorMode?: FullAutoErrorMode;
   memory?: MemoryConfig;
+  timeoutSeconds?: number;
 };
 
 // ---------------------------------------------------------------------------

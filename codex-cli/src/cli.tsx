@@ -67,6 +67,7 @@ const cli = meow(
     --no-project-doc           Do not automatically include the repository's 'codex.md'
     --project-doc <file>       Include an additional markdown file at <file> as context
     --full-stdout              Do not truncate stdout/stderr from command outputs
+    --timeout <seconds>        Set the timeout for individual subtasks in seconds (default: 10)
 
   Dangerous options
     --dangerously-auto-approve-everything
@@ -136,6 +137,10 @@ const cli = meow(
         description:
           "Disable truncation of command stdout/stderr messages (show everything)",
         aliases: ["no-truncate"],
+      },
+      timeout: {
+        type: "number",
+        description: "Set the timeout for individual subtasks in seconds (default: 10)",
       },
 
       // Experimental mode where whole directory is loaded in context and model is requested
@@ -218,11 +223,13 @@ let config = loadConfig(undefined, undefined, {
 const prompt = cli.input[0];
 const model = cli.flags.model;
 const imagePaths = cli.flags.image as Array<string> | undefined;
+const timeoutSeconds = cli.flags.timeout;
 
 config = {
   ...config,
   model: model ?? config.model,
   provider: provider ?? config.provider,
+  timeoutSeconds: timeoutSeconds,
 };
 
 let rollout: AppRollout | undefined;

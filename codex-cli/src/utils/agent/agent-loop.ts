@@ -305,7 +305,7 @@ export class AgentLoop {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const callId: string = (item as any).call_id ?? (item as any).id;
 
-    const args = parseToolCallArguments(rawArguments ?? "{}");
+    const args = parseToolCallArguments(rawArguments ?? "{}", this.config?.timeoutSeconds);
     if (isLoggingEnabled()) {
       log(
         `handleFunctionCall(): name=${
