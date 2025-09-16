@@ -2303,15 +2303,29 @@ async fn try_run_turn(
         processed_items.push(ProcessedResponseItem { item, response });
     }
 
-    // Process tool calls in parallel
+    // Process ALL tool calls in TRUE PARALLEL
     if !pending_tool_calls.is_empty() {
-        // Separate agent calls from other tool calls
+        // Separate agent calls from other tool calls for specialized handling
+        // Both groups still execute in parallel
         let (agent_calls, other_tool_calls): (Vec<_>, Vec<_>) = pending_tool_calls
             .into_iter()
             .partition(|call| call.name == "agent");
 
-        // Handle agent calls in parallel (they need special handling)
+        // Handle agent calls with TRUE PARALLEL EXECUTION
+        // All agents run concurrently at the same time, not sequentially
+        // This provides maximum performance for multi-agent orchestration
         if !agent_calls.is_empty() {
+            // Notify UI about parallel agent execution starting
+            if agent_calls.len() > 1 {
+                let event = Event {
+                    id: sub_id.to_string(),
+                    msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
+                        message: format!("🚀 Starting {} agents in PARALLEL...", agent_calls.len()),
+                    }),
+                };
+                sess.send_event(event).await;
+            }
+
             let agent_call_params: Vec<_> = agent_calls
                 .iter()
                 .map(|call| {
@@ -2324,17 +2338,20 @@ async fn try_run_turn(
                 .collect();
 
             // Execute all agents in parallel with proper concurrency control
-            // Create Arc wrappers for concurrent execution
-            let sess_arc = unsafe { Arc::from_raw(sess as *const Session) };
-            let context_arc = unsafe { Arc::from_raw(turn_context as *const TurnContext) };
+            // Create safe Arc wrappers for concurrent execution
+            let agent_results = {
+                // Create thread-safe wrappers for concurrent execution
+                let sess_wrapper = Arc::new(SessionWrapper::new(sess));
+                let context_wrapper = Arc::new(TurnContextWrapper::new(turn_context));
 
-            let agent_results =
-                execute_agents_concurrent(sess_arc.clone(), context_arc.clone(), agent_call_params)
-                    .await;
-
-            // Prevent dropping the references we don't own
-            let _ = Arc::into_raw(sess_arc);
-            let _ = Arc::into_raw(context_arc);
+                execute_agents_concurrent_safe(
+                    sess_wrapper,
+                    context_wrapper,
+                    turn_diff_tracker,
+                    agent_call_params,
+                )
+                .await
+            };
 
             // Process agent results
             for (i, (_call_id, result)) in agent_results.into_iter().enumerate() {
@@ -2365,7 +2382,7 @@ async fn try_run_turn(
                             item.clone(),
                         )
                         .await;
-                        (item, response)
+                        (item, response, local_diff_tracker)
                     }
                 })
                 .collect();
@@ -2373,8 +2390,10 @@ async fn try_run_turn(
             // Execute all non-agent tool calls in parallel
             let tool_results = futures::future::join_all(tool_futures).await;
 
-            // Collect results
-            for (item, response) in tool_results {
+            // Collect results and merge diff trackers
+            for (item, response, local_diff_tracker) in tool_results {
+                // Merge the local diff tracker back into the main one
+                turn_diff_tracker.merge(local_diff_tracker);
                 match response {
                     Ok(Some(resp)) => {
                         output.push(resp.clone());
@@ -2817,6 +2836,56 @@ enum AgentMessage {
 }
 
 // =================================================================================
+// Concurrent Execution Wrappers for Thread Safety
+// =================================================================================
+
+/// Thread-safe wrapper for Session to enable concurrent execution
+struct SessionWrapper {
+    // Store raw pointer - SAFETY: We ensure the referenced Session outlives this wrapper
+    ptr: *const Session,
+}
+
+// SAFETY: SessionWrapper is Send/Sync if we ensure proper lifetime management
+unsafe impl Send for SessionWrapper {}
+unsafe impl Sync for SessionWrapper {}
+
+impl SessionWrapper {
+    fn new(sess: &Session) -> Self {
+        Self {
+            ptr: sess as *const Session,
+        }
+    }
+
+    fn get(&self) -> &Session {
+        // SAFETY: We ensure the Session outlives the wrapper
+        unsafe { &*self.ptr }
+    }
+}
+
+/// Thread-safe wrapper for TurnContext to enable concurrent execution  
+struct TurnContextWrapper {
+    // Store raw pointer - SAFETY: We ensure the referenced TurnContext outlives this wrapper
+    ptr: *const TurnContext,
+}
+
+// SAFETY: TurnContextWrapper is Send/Sync if we ensure proper lifetime management
+unsafe impl Send for TurnContextWrapper {}
+unsafe impl Sync for TurnContextWrapper {}
+
+impl TurnContextWrapper {
+    fn new(ctx: &TurnContext) -> Self {
+        Self {
+            ptr: ctx as *const TurnContext,
+        }
+    }
+
+    fn get(&self) -> &TurnContext {
+        // SAFETY: We ensure the TurnContext outlives the wrapper
+        unsafe { &*self.ptr }
+    }
+}
+
+// =================================================================================
 // Agent Execution Helper Functions
 // =================================================================================
 
@@ -2825,12 +2894,11 @@ fn parse_agent_args(arguments: &str) -> Result<AgentToolArgs, serde_json::Error>
     serde_json::from_str::<AgentToolArgs>(arguments)
 }
 
-/// Build agent prompt with context and task
-fn build_agent_prompt(system_prompt: &str, context: Option<&str>, task: &str) -> String {
-    if let Some(ctx) = context {
-        format!("{system_prompt}\n\nContext: {ctx}\n\nTask: {task}")
-    } else {
-        format!("{system_prompt}\n\nTask: {task}")
+/// Build the task message for the agent (sent as user input)
+fn build_agent_task_message(context: Option<&str>, task: &str) -> String {
+    match context {
+        Some(ctx) => format!("Context: {ctx}\n\nTask: {task}"),
+        None => format!("Task: {task}"),
     }
 }
 
@@ -2884,14 +2952,18 @@ fn get_agent_registry(sess: &Session) -> Result<Arc<crate::agent::AgentRegistry>
         None => Err("Agent registry not available".to_string()),
     }
 }
-/// Execute multiple agents with true concurrent execution
-async fn execute_agents_concurrent(
-    sess: Arc<Session>,
-    parent_context: Arc<TurnContext>,
+/// Execute multiple agents with true parallel execution
+/// Uses safe wrappers to enable concurrent access to Session and TurnContext
+/// All agents run in parallel using futures::future::join_all
+async fn execute_agents_concurrent_safe(
+    sess_wrapper: Arc<SessionWrapper>,
+    context_wrapper: Arc<TurnContextWrapper>,
+    turn_diff_tracker: &mut TurnDiffTracker,
     agent_calls: Vec<(String, String, String)>, // (call_id, arguments, sub_id)
 ) -> Vec<(String, ResponseInputItem)> {
     use futures::future::join_all;
 
+    let sess = sess_wrapper.get();
     // Check if we're already in agent context (prevent recursion)
     if sess.state.lock_unchecked().is_agent_context {
         return agent_calls
@@ -2914,7 +2986,7 @@ async fn execute_agents_concurrent(
     }
 
     // Get the agent registry once using helper
-    let registry = match get_agent_registry(&sess) {
+    let registry = match get_agent_registry(sess) {
         Ok(r) => r,
         Err(msg) => {
             return agent_calls
@@ -2924,16 +2996,21 @@ async fn execute_agents_concurrent(
         }
     };
 
-    // Prepare agent execution futures for concurrent execution
+    // Set agent context flag to prevent recursion
+    sess.state.lock_unchecked().is_agent_context = true;
+
+    // Create futures for TRUE PARALLEL agent execution
+    // Each agent runs independently and concurrently
     let agent_futures: Vec<_> = agent_calls
         .into_iter()
         .map(|(call_id, arguments, sub_id)| {
             let registry_clone = Arc::clone(&registry);
-            let sess_clone = Arc::clone(&sess);
-            let context_clone = Arc::clone(&parent_context);
+            let sess_wrapper_clone = Arc::clone(&sess_wrapper);
+            let context_wrapper_clone = Arc::clone(&context_wrapper);
 
+            // Each agent executes in parallel
             async move {
-                // Parse agent arguments using helper
+                // Parse agent arguments
                 let args = match parse_agent_args(&arguments) {
                     Ok(a) => a,
                     Err(e) => {
@@ -2947,20 +3024,21 @@ async fn execute_agents_concurrent(
                 let agent_name = args.agent.unwrap_or_else(|| "general".to_string());
                 let agent_system_prompt = registry_clone.get_system_prompt(&agent_name);
 
-                // Build the agent's initialization prompt using helper
-                let agent_init_prompt =
-                    build_agent_prompt(&agent_system_prompt, args.context.as_deref(), &args.task);
+                // Build the agent's task message (what the user is asking)
+                let agent_task_message =
+                    build_agent_task_message(args.context.as_deref(), &args.task);
 
                 let plan_item_id = generate_agent_plan_id(&agent_name, &call_id);
 
-                // Execute the agent in an isolated context
-                let result = execute_agent_isolated(
-                    sess_clone,
-                    context_clone,
+                // Execute the agent with concurrent support
+                let result = execute_agent_isolated_concurrent(
+                    sess_wrapper_clone,
+                    context_wrapper_clone,
                     AgentExecutionParams {
                         sub_id: sub_id.clone(),
                         agent_name: agent_name.clone(),
-                        init_prompt: agent_init_prompt,
+                        task_message: agent_task_message,
+                        agent_system_prompt: agent_system_prompt.clone(),
                         call_id: call_id.clone(),
                         _plan_item_id: Some(plan_item_id),
                     },
@@ -2990,23 +3068,34 @@ async fn execute_agents_concurrent(
         })
         .collect();
 
-    // Execute all agents concurrently
-    join_all(agent_futures).await
+    // Execute all agents concurrently - TRUE PARALLELISM
+    // All agents run at the same time, not sequentially
+    let agent_results = join_all(agent_futures).await;
+
+    // Reset agent context flag after all agents complete
+    sess.state.lock_unchecked().is_agent_context = false;
+
+    // Collect results
+
+    agent_results
 }
 struct AgentExecutionParams {
     sub_id: String,
     agent_name: String,
-    init_prompt: String,
+    task_message: String,
+    agent_system_prompt: String,
     call_id: String,
     _plan_item_id: Option<String>,
 }
 
-/// Execute an agent in an isolated context
-async fn execute_agent_isolated(
-    sess: Arc<Session>,
-    parent_context: Arc<TurnContext>,
+/// Execute an agent in an isolated context with concurrent support
+async fn execute_agent_isolated_concurrent(
+    sess_wrapper: Arc<SessionWrapper>,
+    context_wrapper: Arc<TurnContextWrapper>,
     params: AgentExecutionParams,
 ) -> Result<String, String> {
+    let sess = sess_wrapper.get();
+    let parent_context = context_wrapper.get();
     use std::time::Instant;
     let start_time = Instant::now();
 
@@ -3014,51 +3103,63 @@ async fn execute_agent_isolated(
         "Executing agent '{}' with isolated context (parallel)",
         params.agent_name
     );
-
-    // Check and set agent context to prevent recursion (before sending any events)
-    {
-        let state = sess.state.lock_unchecked();
-        if state.is_agent_context {
-            return Err("Agents cannot spawn other agents".to_string());
-        }
-        // Note: We don't set is_agent_context here for parallel execution
-        // Each agent runs independently
-    }
-
-    // Extract the user's task from the agent prompt
-    let task_text = params
-        .init_prompt
-        .lines()
-        .find(|line| line.starts_with("Task:"))
-        .map(|line| line.trim_start_matches("Task:").trim())
-        .unwrap_or("")
-        .to_string();
-
-    if task_text.is_empty() {
-        return Err("No task found in agent prompt".to_string());
-    }
-
-    // Log agent start
+    // Log agent start and notify UI
     info!(
-        "Agent '{}' starting task (call_id: {}): {}",
-        params.agent_name, params.call_id, task_text
+        "Agent '{}' starting task (call_id: {}) - PARALLEL EXECUTION",
+        params.agent_name, params.call_id
     );
 
-    // Create a minimal prompt for the agent with just the system prompt and task
+    // Send agent start event to UI for status display
+    sess.send_event(Event {
+        id: params.sub_id.clone(),
+        msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
+            message: format!(
+                "🤖 Agent '{}' started: {}",
+                params.agent_name, params.task_message
+            ),
+        }),
+    })
+    .await;
+
+    // Create agent messages - just the task as a user message
     let agent_messages = vec![ResponseItem::Message {
         id: None,
         role: "user".to_string(),
         content: vec![ContentItem::OutputText {
-            text: params.init_prompt.clone(),
+            text: params.task_message.clone(),
         }],
     }];
 
+    // Build agent's custom instructions: agent system prompt + AGENTS.md
+    let mut agent_custom_instructions = String::new();
+
+    // First append the agent's system prompt
+    if !params.agent_system_prompt.is_empty() {
+        agent_custom_instructions.push_str(&params.agent_system_prompt);
+    }
+
+    // Then append AGENTS.md if present
+    if let Some(user_inst) = parent_context.user_instructions.as_deref()
+        && !user_inst.is_empty()
+    {
+        if !agent_custom_instructions.is_empty() {
+            agent_custom_instructions.push_str("\n\n");
+        }
+        agent_custom_instructions.push_str(user_inst);
+    }
+
     // Create a modified turn context for the agent
+    // base_instructions: Keep parent's base instructions (default Codex instructions)
+    // user_instructions: Agent system prompt + AGENTS.md
     let agent_turn_context = TurnContext {
         client: parent_context.client.clone(),
         tools_config: parent_context.tools_config.clone(),
-        user_instructions: None, // Don't include user instructions for agents
-        base_instructions: Some(params.init_prompt.clone()),
+        base_instructions: parent_context.base_instructions.clone(), // Keep default base instructions
+        user_instructions: if agent_custom_instructions.is_empty() {
+            None
+        } else {
+            Some(agent_custom_instructions)
+        }, // Agent prompt + AGENTS.md
         approval_policy: parent_context.approval_policy,
         sandbox_policy: parent_context.sandbox_policy.clone(),
         shell_environment_policy: parent_context.shell_environment_policy.clone(),
@@ -3071,7 +3172,7 @@ async fn execute_agent_isolated(
     let mut turn_diff_tracker = TurnDiffTracker::new();
 
     match run_turn(
-        &sess,
+        sess,
         &agent_turn_context,
         &mut turn_diff_tracker,
         params.sub_id.clone(),
@@ -3100,19 +3201,47 @@ async fn execute_agent_isolated(
         Err(e) => {
             error!("Agent '{}' turn failed: {e:#}", params.agent_name);
             agent_response = format!("Error during agent execution: {e}");
+            return Err(agent_response.clone());
         }
     }
 
     let duration = start_time.elapsed();
-    info!("Agent '{}' completed in {:?}", params.agent_name, duration);
 
-    // Log agent completion
+    // Log agent completion for PARALLEL EXECUTION
     info!(
-        "Agent '{}' completed in {}ms (call_id: {})",
+        "Agent '{}' completed in {}ms (call_id: {}) - PARALLEL EXECUTION",
         params.agent_name,
         duration.as_millis(),
         params.call_id
     );
+
+    // Send agent completion status to UI
+    let status_msg = if agent_response.is_empty() {
+        format!(
+            "❌ Agent '{}' failed: No response generated",
+            params.agent_name
+        )
+    } else {
+        let preview = if agent_response.len() > 100 {
+            format!("{}...", &agent_response[..100])
+        } else {
+            agent_response.clone()
+        };
+        format!(
+            "✅ Agent '{}' completed in {:.2}s: {}",
+            params.agent_name,
+            duration.as_secs_f64(),
+            preview.trim().replace('\n', " ")
+        )
+    };
+
+    sess.send_event(Event {
+        id: params.sub_id.clone(),
+        msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
+            message: status_msg,
+        }),
+    })
+    .await;
 
     Ok(agent_response)
 }
