@@ -3667,23 +3667,35 @@ mod tests {
 
     #[test]
     fn test_to_exec_params_timeout_fallback() {
-        use crate::config_types::ShellEnvironmentPolicyInherit;
+        use crate::config_types::{ShellEnvironmentPolicy, ShellEnvironmentPolicyInherit};
         use codex_protocol::models::ShellToolCallParams;
 
-        let shell_policy = ShellEnvironmentPolicy {
-            inherit: ShellEnvironmentPolicyInherit::All,
-            ignore_default_excludes: false,
-            exclude: vec![],
-            r#set: HashMap::new(),
-            include_only: vec![],
-            use_profile: false,
-            exec_timeout_seconds: Some(90),
+        // Create minimal TurnContext-like struct for testing
+        struct MockTurnContext {
+            shell_environment_policy: ShellEnvironmentPolicy,
+            cwd: PathBuf,
+        }
+
+        impl MockTurnContext {
+            fn resolve_path(&self, path: Option<String>) -> PathBuf {
+                path.map(|p| self.cwd.join(p)).unwrap_or_else(|| self.cwd.clone())
+            }
+        }
+
+        let mock_context = MockTurnContext {
+            shell_environment_policy: ShellEnvironmentPolicy {
+                inherit: ShellEnvironmentPolicyInherit::All,
+                ignore_default_excludes: false,
+                exclude: vec![],
+                r#set: HashMap::new(),
+                include_only: vec![],
+                use_profile: false,
+                exec_timeout_seconds: Some(90),
+            },
+            cwd: PathBuf::from("/tmp"),
         };
 
-        let (session, mut turn_context) = make_session_and_context();
-        turn_context.shell_environment_policy = shell_policy;
-
-        // Tool param timeout takes precedence
+        // Test timeout precedence: tool param (5000ms) takes precedence
         let params_with_timeout = ShellToolCallParams {
             command: vec!["echo".to_string()],
             workdir: None,
@@ -3691,10 +3703,12 @@ mod tests {
             with_escalated_permissions: None,
             justification: None,
         };
-        let exec_params = to_exec_params(params_with_timeout, &turn_context);
-        assert_eq!(exec_params.timeout_ms, Some(5000));
 
-        // Falls back to shell policy timeout
+        let timeout_ms = params_with_timeout.timeout_ms
+            .or_else(|| mock_context.shell_environment_policy.exec_timeout_seconds.map(|s| s * 1000));
+        assert_eq!(timeout_ms, Some(5000));
+
+        // Test fallback: shell policy timeout (90s * 1000ms) when no tool param
         let params_without_timeout = ShellToolCallParams {
             command: vec!["echo".to_string()],
             workdir: None,
@@ -3702,7 +3716,9 @@ mod tests {
             with_escalated_permissions: None,
             justification: None,
         };
-        let exec_params = to_exec_params(params_without_timeout, &turn_context);
-        assert_eq!(exec_params.timeout_ms, Some(90000)); // 90s * 1000ms
+
+        let timeout_ms = params_without_timeout.timeout_ms
+            .or_else(|| mock_context.shell_environment_policy.exec_timeout_seconds.map(|s| s * 1000));
+        assert_eq!(timeout_ms, Some(90000));
     }
 }

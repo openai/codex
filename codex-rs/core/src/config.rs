@@ -1965,39 +1965,33 @@ mod notifications_tests {
     }
 
     #[test]
-    fn test_timeout_cli_override_applied_to_shell_policy() -> std::io::Result<()> {
+    fn test_timeout_cli_override_applied_to_shell_policy() {
         let cfg = ConfigToml::default();
-        let codex_home = std::env::temp_dir();
-
         let overrides = ConfigOverrides {
             timeout_seconds: Some(120),
-            cwd: Some(codex_home.clone()),
             ..Default::default()
         };
 
-        let config = Config::load_from_base_config_with_overrides(cfg, overrides, codex_home)?;
+        let config = Config::load_from_base_config_with_overrides(cfg, overrides, PathBuf::from("/tmp")).unwrap();
         assert_eq!(config.shell_environment_policy.exec_timeout_seconds, Some(120));
-        Ok(())
     }
 
     #[test]
-    fn test_timeout_cli_override_precedence() -> std::io::Result<()> {
-        let toml_with_timeout = r#"
-[shell_environment_policy]
-exec_timeout_seconds = 60
-"#;
-        let cfg: ConfigToml = toml::from_str(toml_with_timeout).unwrap();
-        let codex_home = std::env::temp_dir();
-
-        // CLI override should take precedence over TOML config
-        let overrides = ConfigOverrides {
-            timeout_seconds: Some(180),
-            cwd: Some(codex_home.clone()),
+    fn test_timeout_cli_override_precedence() {
+        let cfg = ConfigToml {
+            shell_environment_policy: ShellEnvironmentPolicyToml {
+                exec_timeout_seconds: Some(60),
+                ..Default::default()
+            },
             ..Default::default()
         };
 
-        let config = Config::load_from_base_config_with_overrides(cfg, overrides, codex_home)?;
+        let overrides = ConfigOverrides {
+            timeout_seconds: Some(180),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(cfg, overrides, PathBuf::from("/tmp")).unwrap();
         assert_eq!(config.shell_environment_policy.exec_timeout_seconds, Some(180));
-        Ok(())
     }
 }
