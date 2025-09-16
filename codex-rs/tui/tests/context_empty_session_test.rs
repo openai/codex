@@ -17,19 +17,19 @@ fn test_context_command_empty_session_no_crash() {
 
     // Create empty token usage (simulating a new session with no history)
     let usage = TokenUsage::default();
-    
+
     // No session ID for a brand new session
     let session_id: Option<ConversationId> = None;
-    
+
     // This should not panic
     let cell = codex_tui::history_cell::new_context_output(&config, &usage, &session_id);
-    
+
     // Verify the cell contains expected output
     let lines = cell.display_lines(80);
-    
+
     // Check that we have some output
     assert!(!lines.is_empty(), "Context output should not be empty");
-    
+
     // Check for key elements
     let output_text = lines
         .iter()
@@ -41,17 +41,29 @@ fn test_context_command_empty_session_no_crash() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    
+
     // Verify key sections are present
-    assert!(output_text.contains("/context"), "Should show /context header");
-    assert!(output_text.contains("Context Window Usage"), "Should show context window usage section");
-    assert!(output_text.contains("Component Breakdown"), "Should show component breakdown");
+    assert!(
+        output_text.contains("/context"),
+        "Should show /context header"
+    );
+    assert!(
+        output_text.contains("Context Window Usage"),
+        "Should show context window usage section"
+    );
+    assert!(
+        output_text.contains("Component Breakdown"),
+        "Should show component breakdown"
+    );
     assert!(output_text.contains("Model"), "Should show model info");
-    
+
     // Verify zero values are handled properly
-    assert!(output_text.contains("0"), "Should show 0 tokens for empty session");
+    assert!(
+        output_text.contains("0"),
+        "Should show 0 tokens for empty session"
+    );
     assert!(output_text.contains("0%"), "Should show 0% usage");
-    
+
     // Verify no crash occurs with empty conversation
     assert!(output_text.contains("Total:"), "Should show total usage");
     assert!(output_text.contains("Input:"), "Should show input tokens");
@@ -71,12 +83,12 @@ fn test_context_command_high_usage_warning() {
     // Create high token usage (> 70% of 128k context window)
     let mut usage = TokenUsage::default();
     usage.input_tokens = 100000; // About 78% of 128k
-    
+
     let session_id: Option<ConversationId> = None;
-    
+
     let cell = codex_tui::history_cell::new_context_output(&config, &usage, &session_id);
     let lines = cell.display_lines(80);
-    
+
     let output_text = lines
         .iter()
         .map(|line| {
@@ -87,11 +99,16 @@ fn test_context_command_high_usage_warning() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    
+
     // Should show warning for high usage
-    assert!(output_text.contains("High Context Usage Warning") || output_text.contains("⚠"), 
-            "Should show warning for high context usage");
-    assert!(output_text.contains("/compact"), "Should suggest /compact command");
+    assert!(
+        output_text.contains("High Context Usage Warning") || output_text.contains("⚠"),
+        "Should show warning for high context usage"
+    );
+    assert!(
+        output_text.contains("/compact"),
+        "Should suggest /compact command"
+    );
 }
 
 /// Test that new_context_output handles session with conversation history
@@ -110,12 +127,12 @@ fn test_context_command_with_conversation_history() {
     usage.output_tokens = 1500;
     usage.cached_input_tokens = 500;
     usage.reasoning_output_tokens = 200;
-    
+
     let session_id = Some(ConversationId::new());
-    
+
     let cell = codex_tui::history_cell::new_context_output(&config, &usage, &session_id);
     let lines = cell.display_lines(80);
-    
+
     let output_text = lines
         .iter()
         .map(|line| {
@@ -126,16 +143,28 @@ fn test_context_command_with_conversation_history() {
         })
         .collect::<Vec<_>>()
         .join("\n");
-    
+
     // Verify all token types are shown
-    assert!(output_text.contains("5,000") || output_text.contains("5000"), 
-            "Should show input tokens");
-    assert!(output_text.contains("1,500") || output_text.contains("1500"), 
-            "Should show output tokens");
-    assert!(output_text.contains("Cached"), "Should show cached tokens when present");
-    assert!(output_text.contains("Reasoning"), "Should show reasoning tokens when present");
-    
+    assert!(
+        output_text.contains("5,000") || output_text.contains("5000"),
+        "Should show input tokens"
+    );
+    assert!(
+        output_text.contains("1,500") || output_text.contains("1500"),
+        "Should show output tokens"
+    );
+    assert!(
+        output_text.contains("Cached"),
+        "Should show cached tokens when present"
+    );
+    assert!(
+        output_text.contains("Reasoning"),
+        "Should show reasoning tokens when present"
+    );
+
     // Verify session ID is shown
-    assert!(output_text.contains("Session") || output_text.contains("ID:"), 
-            "Should show session info when available");
+    assert!(
+        output_text.contains("Session") || output_text.contains("ID:"),
+        "Should show session info when available"
+    );
 }

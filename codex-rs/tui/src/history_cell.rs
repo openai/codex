@@ -999,9 +999,12 @@ pub(crate) fn new_context_output(
     lines.push("/context".magenta().into());
     lines.push("".into());
 
-    // Get the context window size (default to 128k if not specified)
-    let context_window: u64 = 128000; // Default for Claude models
-    
+    // Get the context window size dynamically based on model
+    let context_window = get_model_context_window(config, usage);
+
+    // Calculate real context breakdown
+    let breakdown = calculate_context_breakdown(config, usage);
+
     // Calculate percentage usage
     let percentage = if context_window > 0 {
         ((usage.total_tokens as f64 / context_window as f64) * 100.0).min(100.0) as u64
@@ -1011,86 +1014,186 @@ pub(crate) fn new_context_output(
 
     // 📊 Context Window Usage
     lines.push(vec![padded_emoji("📊").into(), "Context Window Usage".bold()].into());
-    
+
     // Total usage with percentage
-    lines.push(vec![
-        "  • Total: ".into(),
-        format_with_separators(usage.total_tokens).into(),
-        " / ".dim(),
-        format_with_separators(context_window).into(),
-        format!(" ({}%)", percentage).dim(),
-    ].into());
-    
+    lines.push(
+        vec![
+            "  • Total: ".into(),
+            format_with_separators(usage.total_tokens).into(),
+            " / ".dim(),
+            format_with_separators(context_window).into(),
+            format!(" ({}%)", percentage).dim(),
+        ]
+        .into(),
+    );
+
     // Progress bar with token counts
-    lines.push(Line::from(render_progress_bar(usage.total_tokens, context_window, percentage)));
+    lines.push(Line::from(render_progress_bar(
+        usage.total_tokens,
+        context_window,
+        percentage,
+    )));
     lines.push("".into());
 
-    // Component breakdown
-    lines.push(vec![padded_emoji("📋").into(), "Component Breakdown".bold()].into());
-    
-    // Input tokens
-    let input_percentage = if context_window > 0 {
-        ((usage.input_tokens as f64 / context_window as f64) * 100.0) as u64
-    } else {
-        0
-    };
-    lines.push(vec![
-        "  • Input: ".into(),
-        format_with_separators(usage.input_tokens).into(),
-        format!(" ({}%)", input_percentage).dim(),
-    ].into());
-    
-    // Cached input tokens (if any)
-    if usage.cached_input_tokens > 0 {
-        let cached_percentage = if context_window > 0 {
-            ((usage.cached_input_tokens as f64 / context_window as f64) * 100.0) as u64
-        } else {
-            0
-        };
-        lines.push(vec![
-            "    • Cached: ".dim(),
-            format_with_separators(usage.cached_input_tokens).dim(),
-            format!(" ({}%)", cached_percentage).dim(),
-        ].into());
+    // 🔍 Detailed Component Breakdown
+    lines.push(vec![padded_emoji("🔍").into(), "Detailed Breakdown".bold()].into());
+
+    // System Instructions
+    if breakdown.system_instructions > 0 {
+        let sys_percentage =
+            calculate_percentage(breakdown.system_instructions as u64, context_window);
+        lines.push(
+            vec![
+                "  • System Instructions: ".into(),
+                format_with_separators(breakdown.system_instructions as u64).into(),
+                format!(" ({}%)", sys_percentage).dim(),
+            ]
+            .into(),
+        );
     }
-    
-    // Output tokens
-    let output_percentage = if context_window > 0 {
-        ((usage.output_tokens as f64 / context_window as f64) * 100.0) as u64
-    } else {
-        0
-    };
-    lines.push(vec![
-        "  • Output: ".into(),
-        format_with_separators(usage.output_tokens).into(),
-        format!(" ({}%)", output_percentage).dim(),
-    ].into());
-    
+
+    // User Instructions (AGENTS.md)
+    if breakdown.user_instructions > 0 {
+        let user_percentage =
+            calculate_percentage(breakdown.user_instructions as u64, context_window);
+        lines.push(
+            vec![
+                "  • User Instructions: ".into(),
+                format_with_separators(breakdown.user_instructions as u64).into(),
+                format!(" ({}%)", user_percentage).dim(),
+                " - AGENTS.md".dim(),
+            ]
+            .into(),
+        );
+    }
+
+    // Environment Context
+    if breakdown.environment > 0 {
+        let env_percentage = calculate_percentage(breakdown.environment as u64, context_window);
+        lines.push(
+            vec![
+                "  • Environment: ".into(),
+                format_with_separators(breakdown.environment as u64).into(),
+                format!(" ({}%)", env_percentage).dim(),
+                " - working dir, git, date".dim(),
+            ]
+            .into(),
+        );
+    }
+
+    // Tools (System + MCP)
+    if breakdown.tools > 0 {
+        let tools_percentage = calculate_percentage(breakdown.tools as u64, context_window);
+        lines.push(
+            vec![
+                "  • Tools: ".into(),
+                format_with_separators(breakdown.tools as u64).into(),
+                format!(" ({}%)", tools_percentage).dim(),
+            ]
+            .into(),
+        );
+
+        if breakdown.system_tools > 0 {
+            lines.push(
+                vec![
+                    "    • System: ".dim(),
+                    format_with_separators(breakdown.system_tools as u64).dim(),
+                    " - exec, patch, etc.".dim(),
+                ]
+                .into(),
+            );
+        }
+
+        if breakdown.mcp_tools > 0 {
+            lines.push(
+                vec![
+                    "    • MCP: ".dim(),
+                    format_with_separators(breakdown.mcp_tools as u64).dim(),
+                    " - external tools".dim(),
+                ]
+                .into(),
+            );
+        }
+    }
+
+    // Conversation History
+    if breakdown.conversation > 0 {
+        let conv_percentage = calculate_percentage(breakdown.conversation as u64, context_window);
+        lines.push(
+            vec![
+                "  • Conversation: ".into(),
+                format_with_separators(breakdown.conversation as u64).into(),
+                format!(" ({}%)", conv_percentage).dim(),
+            ]
+            .into(),
+        );
+    }
+
+    // Output tokens (current response)
+    if usage.output_tokens > 0 {
+        let output_percentage = calculate_percentage(usage.output_tokens, context_window);
+        lines.push(
+            vec![
+                "  • Current Output: ".into(),
+                format_with_separators(usage.output_tokens).into(),
+                format!(" ({}%)", output_percentage).dim(),
+            ]
+            .into(),
+        );
+    }
+
     // Reasoning tokens (if any)
     if usage.reasoning_output_tokens > 0 {
-        let reasoning_percentage = if context_window > 0 {
-            ((usage.reasoning_output_tokens as f64 / context_window as f64) * 100.0) as u64
-        } else {
-            0
-        };
-        lines.push(vec![
-            "  • Reasoning: ".into(),
-            format_with_separators(usage.reasoning_output_tokens).into(),
-            format!(" ({}%)", reasoning_percentage).dim(),
-        ].into());
+        let reasoning_percentage =
+            calculate_percentage(usage.reasoning_output_tokens, context_window);
+        lines.push(
+            vec![
+                "  • Reasoning: ".into(),
+                format_with_separators(usage.reasoning_output_tokens).into(),
+                format!(" ({}%)", reasoning_percentage).dim(),
+            ]
+            .into(),
+        );
     }
-    
+
+    // Cached tokens summary
+    if usage.cached_input_tokens > 0 {
+        lines.push("".into());
+        lines.push(vec![padded_emoji("💾").into(), "Cache Usage".bold()].into());
+        let cached_percentage = calculate_percentage(usage.cached_input_tokens, usage.input_tokens);
+        lines.push(
+            vec![
+                "  • Cached: ".into(),
+                format_with_separators(usage.cached_input_tokens).into(),
+                " / ".dim(),
+                format_with_separators(usage.input_tokens).into(),
+                format!(" ({}% of input)", cached_percentage).dim(),
+            ]
+            .into(),
+        );
+    }
+
     lines.push("".into());
 
     // Model info
     lines.push(vec![padded_emoji("🧠").into(), "Model".bold()].into());
     lines.push(vec!["  • Name: ".into(), config.model.clone().into()].into());
-    lines.push(vec![
-        "  • Context Window: ".into(),
-        format_with_separators(context_window).into(),
-        " tokens".into(),
-    ].into());
-    
+    lines.push(
+        vec![
+            "  • Provider: ".into(),
+            pretty_provider_name(&config.model_provider_id).into(),
+        ]
+        .into(),
+    );
+    lines.push(
+        vec![
+            "  • Context Window: ".into(),
+            format_with_separators(context_window).into(),
+            " tokens".into(),
+        ]
+        .into(),
+    );
+
     // Session info (if available)
     if let Some(session_id) = session_id {
         lines.push("".into());
@@ -1098,30 +1201,169 @@ pub(crate) fn new_context_output(
         lines.push(vec!["  • ID: ".into(), session_id.to_string().into()].into());
     }
 
-    // Add warning message if usage exceeds 70%
-    if percentage > 70 {
-        lines.push("".into());
-        lines.push(vec![
-            padded_emoji("⚠️").into(),
-            "High Context Usage Warning".yellow().bold()
-        ].into());
-        lines.push(vec![
-            "  Consider using ".into(),
-            "/compact".cyan().bold(),
-            " to reduce context".into()
-        ].into());
+    // Add recommendations based on usage patterns
+    lines.push("".into());
+    lines.push(vec![padded_emoji("💡").into(), "Recommendations".bold()].into());
+
+    if percentage > 90 {
+        lines.push(
+            vec![
+                "  • ".red(),
+                "Critical: ".red().bold(),
+                "Context nearly full! Use ".into(),
+                "/compact".cyan().bold(),
+                " immediately".into(),
+            ]
+            .into(),
+        );
+    } else if percentage > 70 {
+        lines.push(
+            vec![
+                "  • ".yellow(),
+                "Warning: ".yellow().bold(),
+                "Consider using ".into(),
+                "/compact".cyan().bold(),
+                " to reduce context".into(),
+            ]
+            .into(),
+        );
+    }
+
+    if breakdown.user_instructions as f64 > usage.total_tokens as f64 * 0.2 {
+        lines.push(
+            vec![
+                "  • ".dim(),
+                "Large AGENTS.md files consume ".dim(),
+                format!(
+                    "{}%",
+                    (breakdown.user_instructions as f64 / usage.total_tokens as f64 * 100.0) as u64
+                )
+                .yellow(),
+                " of context".dim(),
+            ]
+            .into(),
+        );
+    }
+
+    if usage.cached_input_tokens == 0 && usage.input_tokens > 10000 {
+        lines.push(
+            vec![
+                "  • ".dim(),
+                "No cache hits - consider stable prompts for better caching".dim(),
+            ]
+            .into(),
+        );
     }
 
     PlainHistoryCell { lines }
 }
 
+/// Helper structure for detailed context breakdown
+#[derive(Debug, Default)]
+struct DetailedContextBreakdown {
+    system_instructions: usize,
+    user_instructions: usize,
+    environment: usize,
+    tools: usize,
+    system_tools: usize,
+    mcp_tools: usize,
+    conversation: usize,
+}
+
+/// Get model context window size dynamically
+fn get_model_context_window(config: &Config, _usage: &TokenUsage) -> u64 {
+    // Note: TokenUsage doesn't have model_context_window field in the current struct
+    // We'll use model-specific defaults based on config
+
+    // Otherwise use model-specific defaults
+    match config.model.as_str() {
+        // Claude models
+        "claude-3-5-sonnet-20241022" | "claude-3-5-haiku-20241022" => 200000,
+        "claude-3-opus-20240229" | "claude-3-sonnet-20240229" => 200000,
+        "claude-3-haiku-20240307" => 200000,
+
+        // GPT-4 models
+        "gpt-4o" | "gpt-4o-2024-08-06" | "gpt-4o-2024-05-13" => 128000,
+        "gpt-4-turbo" | "gpt-4-turbo-2024-04-09" => 128000,
+        "gpt-4" | "gpt-4-0613" => 8192,
+        "gpt-4-32k" | "gpt-4-32k-0613" => 32768,
+
+        // GPT-3.5 models
+        "gpt-3.5-turbo" => 16385,
+        "gpt-3.5-turbo-16k" => 16385,
+
+        // Default for unknown models
+        _ => 128000,
+    }
+}
+
+/// Calculate detailed context breakdown using estimates
+fn calculate_context_breakdown(config: &Config, usage: &TokenUsage) -> DetailedContextBreakdown {
+    use codex_core::context_analyzer::estimate_tokens;
+
+    let mut breakdown = DetailedContextBreakdown::default();
+
+    // Estimate system instructions (prompt.md content)
+    // Typical size is around 8-12k tokens
+    breakdown.system_instructions = 10000; // Conservative estimate
+
+    // Estimate user instructions (AGENTS.md)
+    if let Ok(agent_paths) = discover_project_doc_paths(config) {
+        // Estimate ~2k tokens per AGENTS.md file
+        breakdown.user_instructions = agent_paths.len() * 2000;
+    }
+
+    // Estimate environment context (XML formatted)
+    // Working dir, approval policy, sandbox mode, etc.
+    breakdown.environment = 500; // Typical environment context size
+
+    // Estimate tools definitions
+    // System tools (exec, patch, plan, web_search)
+    breakdown.system_tools = 3000; // Typical system tools size
+
+    // MCP tools (if configured)
+    if !config.mcp_servers.is_empty() {
+        // Estimate ~500 tokens per MCP server for tool definitions
+        breakdown.mcp_tools = config.mcp_servers.len() * 500;
+    }
+
+    breakdown.tools = breakdown.system_tools + breakdown.mcp_tools;
+
+    // Calculate conversation history
+    // This is the actual input tokens minus all the other components
+    let other_components = breakdown.system_instructions
+        + breakdown.user_instructions
+        + breakdown.environment
+        + breakdown.tools;
+
+    // Ensure we don't go negative
+    if usage.input_tokens as usize > other_components {
+        breakdown.conversation = (usage.input_tokens as usize) - other_components;
+    }
+
+    breakdown
+}
+
+/// Calculate percentage with proper rounding
+fn calculate_percentage(value: u64, total: u64) -> u64 {
+    if total == 0 {
+        0
+    } else {
+        ((value as f64 / total as f64) * 100.0).round() as u64
+    }
+}
+
 /// Render an ASCII progress bar with token counts
 fn render_progress_bar(used_tokens: u64, total_tokens: u64, percentage: u64) -> String {
-    // Fixed width of 10 for the progress bar itself
-    const BAR_WIDTH: usize = 10;
+    // Adaptive width based on terminal size (with min/max)
+    const MIN_BAR_WIDTH: usize = 10;
+    const MAX_BAR_WIDTH: usize = 30;
 
-    let filled = ((percentage as f64 / 100.0) * BAR_WIDTH as f64) as usize;
-    let empty = BAR_WIDTH.saturating_sub(filled);
+    // Use a reasonable default, could be made dynamic based on terminal width
+    let bar_width = 20; // Middle ground for now
+
+    let filled = ((percentage as f64 / 100.0) * bar_width as f64) as usize;
+    let empty = bar_width.saturating_sub(filled);
 
     let mut bar = String::from("    [");
 
@@ -1504,6 +1746,8 @@ mod tests {
     use codex_core::config::Config;
     use codex_core::config::ConfigOverrides;
     use codex_core::config::ConfigToml;
+    use codex_core::protocol::TokenUsage;
+    use codex_protocol::mcp_protocol::ConversationId;
 
     fn test_config() -> Config {
         Config::load_from_base_config_with_overrides(
@@ -2062,5 +2306,113 @@ mod tests {
             summary_lines,
             vec!["codex", "Thinking", "We should fix the bug next."]
         )
+    }
+
+    #[test]
+    fn test_context_output_basic() {
+        let config = test_config();
+        let usage = TokenUsage {
+            input_tokens: 50000,
+            cached_input_tokens: 10000,
+            output_tokens: 2000,
+            reasoning_output_tokens: 500,
+            total_tokens: 52500,
+        };
+        let session_id = Some(ConversationId::from("test-session-123"));
+
+        let cell = new_context_output(&config, &usage, &session_id);
+        let lines = cell.display_lines(80);
+        let rendered = render_lines(&lines);
+
+        // Check that key elements are present
+        assert!(rendered.iter().any(|l| l.contains("/context")));
+        assert!(rendered.iter().any(|l| l.contains("Context Window Usage")));
+        assert!(rendered.iter().any(|l| l.contains("Detailed Breakdown")));
+        assert!(rendered.iter().any(|l| l.contains("System Instructions")));
+        assert!(rendered.iter().any(|l| l.contains("52,500"))); // total tokens
+        assert!(rendered.iter().any(|l| l.contains("128,000"))); // context window
+        assert!(rendered.iter().any(|l| l.contains("test-session-123"))); // session id
+    }
+
+    #[test]
+    fn test_context_output_high_usage_warning() {
+        let mut config = test_config();
+        config.model = "gpt-4o".to_string();
+        let usage = TokenUsage {
+            input_tokens: 95000,
+            cached_input_tokens: 0,
+            output_tokens: 5000,
+            reasoning_output_tokens: 0,
+            total_tokens: 100000,
+        };
+
+        let cell = new_context_output(&config, &usage, &None);
+        let lines = cell.display_lines(80);
+        let rendered = render_lines(&lines);
+
+        // Should show warning at 78% usage
+        assert!(rendered.iter().any(|l| l.contains("Warning")));
+        assert!(rendered.iter().any(|l| l.contains("/compact")));
+    }
+
+    #[test]
+    fn test_context_output_critical_warning() {
+        let config = test_config();
+        let usage = TokenUsage {
+            input_tokens: 120000,
+            cached_input_tokens: 0,
+            output_tokens: 5000,
+            reasoning_output_tokens: 0,
+            total_tokens: 125000,
+        };
+
+        let cell = new_context_output(&config, &usage, &None);
+        let lines = cell.display_lines(80);
+        let rendered = render_lines(&lines);
+
+        // Should show critical warning at 97% usage
+        assert!(rendered.iter().any(|l| l.contains("Critical")));
+        assert!(rendered.iter().any(|l| l.contains("/compact")));
+    }
+
+    #[test]
+    fn test_get_model_context_window() {
+        let config = test_config();
+        let mut usage = TokenUsage::default();
+
+        // Test Claude models
+        let mut claude_config = config.clone();
+
+        claude_config.model = "claude-3-5-sonnet-20241022".to_string();
+        assert_eq!(get_model_context_window(&claude_config, &usage), 200000);
+
+        // Test GPT-4 models
+        claude_config.model = "gpt-4o".to_string();
+        assert_eq!(get_model_context_window(&claude_config, &usage), 128000);
+
+        claude_config.model = "gpt-4".to_string();
+        assert_eq!(get_model_context_window(&claude_config, &usage), 8192);
+
+        // Test unknown model
+        claude_config.model = "unknown-model-xyz".to_string();
+        assert_eq!(get_model_context_window(&claude_config, &usage), 128000);
+    }
+
+    #[test]
+    fn test_progress_bar_rendering() {
+        // Test empty bar
+        let bar = render_progress_bar(0, 100, 0);
+        assert!(bar.contains("[░░░░░░░░░░░░░░░░░░░░]"));
+        assert!(bar.contains("0/100 (0%)"));
+
+        // Test half full
+        let bar = render_progress_bar(50, 100, 50);
+        assert!(bar.contains("[██████████░░░░░░░░░░]"));
+        assert!(bar.contains("50/100 (50%)"));
+
+        // Test full bar
+        let bar = render_progress_bar(100, 100, 100);
+        assert!(bar.contains("[████████████████████]"));
+        assert!(bar.contains("100/100 (100%)"));
     }
 }

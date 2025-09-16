@@ -3,7 +3,7 @@
 
 #[cfg(test)]
 mod performance_tests {
-    use codex_core::context_analyzer::{analyze_context, estimate_tokens, ContextBreakdown};
+    use codex_core::context_analyzer::{ContextBreakdown, analyze_context, estimate_tokens};
     use codex_protocol::models::{
         ContentItem, FunctionCallOutputPayload, LocalShellAction, LocalShellExecAction,
         ReasoningItemContent, ReasoningItemReasoningSummary, ResponseItem, WebSearchAction,
@@ -25,7 +25,7 @@ mod performance_tests {
     fn test_performance_estimate_tokens_short_text() {
         let text = "Hello, world!";
         let (tokens, duration) = measure_time(|| estimate_tokens(text));
-        
+
         assert!(tokens > 0);
         assert!(
             duration.as_micros() < 100,
@@ -38,7 +38,7 @@ mod performance_tests {
     fn test_performance_estimate_tokens_medium_text() {
         let text = "The quick brown fox jumps over the lazy dog. ".repeat(10);
         let (tokens, duration) = measure_time(|| estimate_tokens(&text));
-        
+
         assert!(tokens > 0);
         assert!(
             duration.as_micros() < 500,
@@ -51,7 +51,7 @@ mod performance_tests {
     fn test_performance_estimate_tokens_large_text() {
         let text = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ".repeat(100);
         let (tokens, duration) = measure_time(|| estimate_tokens(&text));
-        
+
         assert!(tokens > 0);
         assert!(
             duration.as_millis() < 5,
@@ -63,7 +63,7 @@ mod performance_tests {
     #[test]
     fn test_performance_analyze_empty_context() {
         let (breakdown, duration) = measure_time(|| analyze_context(None, &[], None));
-        
+
         assert_eq!(breakdown.total(), 0);
         assert!(
             duration.as_micros() < 50,
@@ -92,7 +92,7 @@ mod performance_tests {
         ];
 
         let (breakdown, duration) = measure_time(|| analyze_context(None, &history, None));
-        
+
         assert!(breakdown.conversation > 0);
         assert!(
             duration.as_micros() < 200,
@@ -115,7 +115,7 @@ mod performance_tests {
         }
 
         let (breakdown, duration) = measure_time(|| analyze_context(None, &history, None));
-        
+
         assert!(breakdown.conversation > 0);
         assert!(
             duration.as_millis() < 10,
@@ -138,7 +138,7 @@ mod performance_tests {
         }
 
         let (breakdown, duration) = measure_time(|| analyze_context(None, &history, None));
-        
+
         assert!(breakdown.conversation > 0);
         assert!(
             duration.as_millis() < 50,
@@ -150,7 +150,7 @@ mod performance_tests {
     #[test]
     fn test_performance_analyze_with_images() {
         let mut history = Vec::new();
-        
+
         // Add messages with images
         for i in 0..50 {
             history.push(ResponseItem::Message {
@@ -172,7 +172,7 @@ mod performance_tests {
         }
 
         let (breakdown, duration) = measure_time(|| analyze_context(None, &history, None));
-        
+
         assert!(breakdown.conversation > 0);
         assert!(
             duration.as_millis() < 10,
@@ -184,7 +184,7 @@ mod performance_tests {
     #[test]
     fn test_performance_analyze_with_function_calls() {
         let mut history = Vec::new();
-        
+
         // Add function calls
         for i in 0..100 {
             history.push(ResponseItem::FunctionCall {
@@ -193,7 +193,7 @@ mod performance_tests {
                 arguments: format!(r#"{{"param": "value_{}", "index": {}}}"#, i, i),
                 call_id: format!("call_id_{}", i),
             });
-            
+
             history.push(ResponseItem::FunctionCallOutput {
                 call_id: format!("call_id_{}", i),
                 output: FunctionCallOutputPayload {
@@ -204,7 +204,7 @@ mod performance_tests {
         }
 
         let (breakdown, duration) = measure_time(|| analyze_context(None, &history, None));
-        
+
         assert!(breakdown.conversation > 0);
         assert!(
             duration.as_millis() < 20,
@@ -216,7 +216,7 @@ mod performance_tests {
     #[test]
     fn test_performance_analyze_complex_reasoning() {
         let mut history = Vec::new();
-        
+
         for i in 0..50 {
             history.push(ResponseItem::Reasoning {
                 id: Some(format!("reasoning_{}", i)),
@@ -241,7 +241,7 @@ mod performance_tests {
         }
 
         let (breakdown, duration) = measure_time(|| analyze_context(None, &history, None));
-        
+
         assert!(breakdown.conversation > 0);
         assert!(
             duration.as_millis() < 15,
@@ -253,7 +253,7 @@ mod performance_tests {
     #[test]
     fn test_performance_analyze_shell_calls() {
         let mut history = Vec::new();
-        
+
         for i in 0..100 {
             history.push(ResponseItem::LocalShellCall {
                 id: Some(format!("shell_{}", i)),
@@ -278,7 +278,7 @@ mod performance_tests {
         }
 
         let (breakdown, duration) = measure_time(|| analyze_context(None, &history, None));
-        
+
         assert!(breakdown.conversation > 0);
         assert!(
             duration.as_millis() < 20,
@@ -290,7 +290,7 @@ mod performance_tests {
     #[test]
     fn test_performance_analyze_web_searches() {
         let mut history = Vec::new();
-        
+
         for i in 0..100 {
             history.push(ResponseItem::WebSearchCall {
                 id: Some(format!("search_{}", i)),
@@ -305,7 +305,7 @@ mod performance_tests {
         }
 
         let (breakdown, duration) = measure_time(|| analyze_context(None, &history, None));
-        
+
         assert!(breakdown.conversation > 0);
         assert!(
             duration.as_millis() < 10,
@@ -317,7 +317,7 @@ mod performance_tests {
     #[test]
     fn test_performance_analyze_full_context() {
         let system_prompt = "You are a helpful AI assistant specialized in multiple domains including programming, mathematics, science, and general knowledge. You should provide accurate, helpful, and concise responses.";
-        
+
         let tools = r#"{
             "tools": [
                 {"name": "search", "description": "Search the web for information", "parameters": {"query": "string"}},
@@ -327,9 +327,9 @@ mod performance_tests {
                 {"name": "write_file", "description": "Write content to a file", "parameters": {"path": "string", "content": "string"}}
             ]
         }"#;
-        
+
         let mut history = Vec::new();
-        
+
         // Add diverse content
         for i in 0..200 {
             match i % 5 {
@@ -362,19 +362,16 @@ mod performance_tests {
                 _ => history.push(ResponseItem::Message {
                     id: Some(format!("img_{}", i)),
                     role: "user".to_string(),
-                    content: vec![
-                        ContentItem::InputImage {
-                            image_url: "https://example.com/image.jpg".to_string(),
-                        },
-                    ],
+                    content: vec![ContentItem::InputImage {
+                        image_url: "https://example.com/image.jpg".to_string(),
+                    }],
                 }),
             }
         }
 
-        let (breakdown, duration) = measure_time(|| {
-            analyze_context(Some(system_prompt), &history, Some(tools))
-        });
-        
+        let (breakdown, duration) =
+            measure_time(|| analyze_context(Some(system_prompt), &history, Some(tools)));
+
         assert!(breakdown.system_prompt > 0);
         assert!(breakdown.conversation > 0);
         assert!(breakdown.tools > 0);
@@ -400,7 +397,7 @@ mod performance_tests {
             }
             sum
         });
-        
+
         assert!(total > 0);
         assert!(
             duration.as_micros() < 1000,
@@ -414,7 +411,7 @@ mod performance_tests {
                 let _ = breakdown.clone();
             }
         });
-        
+
         assert!(
             duration.as_micros() < 500,
             "1000 clones took {:?}, expected < 500µs",
@@ -431,7 +428,7 @@ mod performance_tests {
 
         // Test serialization performance
         let (json, duration) = measure_time(|| serde_json::to_string(&breakdown).unwrap());
-        
+
         assert!(!json.is_empty());
         assert!(
             duration.as_micros() < 100,
@@ -440,10 +437,9 @@ mod performance_tests {
         );
 
         // Test deserialization performance
-        let (deserialized, duration) = measure_time(|| {
-            serde_json::from_str::<ContextBreakdown>(&json).unwrap()
-        });
-        
+        let (deserialized, duration) =
+            measure_time(|| serde_json::from_str::<ContextBreakdown>(&json).unwrap());
+
         assert_eq!(deserialized.total(), breakdown.total());
         assert!(
             duration.as_micros() < 100,
@@ -459,38 +455,36 @@ mod performance_tests {
 
         let system_prompt = Arc::new("Test prompt".to_string());
         let tools = Arc::new(r#"{"tools": []}"#.to_string());
-        let history = Arc::new(vec![
-            ResponseItem::Message {
-                id: None,
-                role: "user".to_string(),
-                content: vec![ContentItem::InputText {
-                    text: "Test message".to_string(),
-                }],
-            },
-        ]);
+        let history = Arc::new(vec![ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText {
+                text: "Test message".to_string(),
+            }],
+        }]);
 
         let (_, duration) = measure_time(|| {
             let mut handles = vec![];
-            
+
             // Spawn 10 threads doing concurrent analysis
             for _ in 0..10 {
                 let prompt = Arc::clone(&system_prompt);
                 let tools_clone = Arc::clone(&tools);
                 let history_clone = Arc::clone(&history);
-                
+
                 let handle = thread::spawn(move || {
                     analyze_context(Some(&prompt), &history_clone, Some(&tools_clone))
                 });
-                
+
                 handles.push(handle);
             }
-            
+
             // Wait for all threads
             for handle in handles {
                 handle.join().unwrap();
             }
         });
-        
+
         assert!(
             duration.as_millis() < 10,
             "10 concurrent analyses took {:?}, expected < 10ms",
@@ -502,9 +496,9 @@ mod performance_tests {
     fn test_performance_worst_case_long_strings() {
         // Test with very long strings
         let long_string = "a".repeat(1_000_000); // 1 million characters
-        
+
         let (tokens, duration) = measure_time(|| estimate_tokens(&long_string));
-        
+
         assert!(tokens > 0);
         assert!(
             duration.as_millis() < 100,
@@ -516,7 +510,7 @@ mod performance_tests {
     #[test]
     fn test_performance_worst_case_many_items() {
         let mut history = Vec::new();
-        
+
         // Create 10,000 small messages
         for i in 0..10000 {
             history.push(ResponseItem::Message {
@@ -529,7 +523,7 @@ mod performance_tests {
         }
 
         let (breakdown, duration) = measure_time(|| analyze_context(None, &history, None));
-        
+
         assert!(breakdown.conversation > 0);
         assert!(
             duration.as_millis() < 500,
