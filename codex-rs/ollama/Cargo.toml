@@ -24,9 +24,7 @@ tokio = { version = "1", features = [
     "rt-multi-thread",
     "signal",
 ] }
-toml = "0.9.5"
 tracing = { version = "0.1.41", features = ["log"] }
 wiremock = "0.6"
 
 [dev-dependencies]
-tempfile = "3"

@@ -1,20 +1,34 @@
 use codex_core::CodexAuth;
+use codex_core::ContentItem;
 use codex_core::ConversationManager;
+use codex_core::LocalShellAction;
+use codex_core::LocalShellExecAction;
+use codex_core::LocalShellStatus;
+use codex_core::ModelClient;
 use codex_core::ModelProviderInfo;
 use codex_core::NewConversation;
+use codex_core::Prompt;
+use codex_core::ReasoningItemContent;
+use codex_core::ResponseEvent;
+use codex_core::ResponseItem;
 use codex_core::WireApi;
 use codex_core::built_in_model_providers;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
-use codex_protocol::mcp_protocol::AuthMode;
+use codex_protocol::mcp_protocol::ConversationId;
+use codex_protocol::models::ReasoningItemReasoningSummary;
+use codex_protocol::models::WebSearchAction;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
 use core_test_support::wait_for_event;
+use futures::StreamExt;
 use serde_json::json;
 use std::io::Write;
+use std::sync::Arc;
 use tempfile::TempDir;
+use uuid::Uuid;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
@@ -122,11 +136,22 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     let tmpdir = TempDir::new().unwrap();
     let session_path = tmpdir.path().join("resume-session.jsonl");
     let mut f = std::fs::File::create(&session_path).unwrap();
-    // First line: meta (content not used by reader other than non-empty)
+    let convo_id = Uuid::new_v4();
     writeln!(
         f,
         "{}",
-        serde_json::json!({"meta":"test","instructions":"be nice"})
+        json!({
+            "timestamp": "2024-01-01T00:00:00.000Z",
+            "type": "session_meta",
+            "payload": {
+                "id": convo_id,
+                "timestamp": "2024-01-01T00:00:00Z",
+                "instructions": "be nice",
+                "cwd": ".",
+                "originator": "test_originator",
+                "cli_version": "test_version"
+            }
+        })
     )
     .unwrap();
 
@@ -138,7 +163,17 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
             text: "resumed user message".to_string(),
         }],
     };
-    writeln!(f, "{}", serde_json::to_string(&prior_user).unwrap()).unwrap();
+    let prior_user_json = serde_json::to_value(&prior_user).unwrap();
+    writeln!(
+        f,
+        "{}",
+        json!({
+            "timestamp": "2024-01-01T00:00:01.000Z",
+            "type": "response_item",
+            "payload": prior_user_json
+        })
+    )
+    .unwrap();
 
     // Prior item: system message (excluded from API history)
     let prior_system = codex_protocol::models::ResponseItem::Message {
@@ -148,7 +183,17 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
             text: "resumed system instruction".to_string(),
         }],
     };
-    writeln!(f, "{}", serde_json::to_string(&prior_system).unwrap()).unwrap();
+    let prior_system_json = serde_json::to_value(&prior_system).unwrap();
+    writeln!(
+        f,
+        "{}",
+        json!({
+            "timestamp": "2024-01-01T00:00:02.000Z",
+            "type": "response_item",
+            "payload": prior_system_json
+        })
+    )
+    .unwrap();
 
     // Prior item: assistant message
     let prior_item = codex_protocol::models::ResponseItem::Message {
@@ -158,7 +203,17 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
             text: "resumed assistant message".to_string(),
         }],
     };
-    writeln!(f, "{}", serde_json::to_string(&prior_item).unwrap()).unwrap();
+    let prior_item_json = serde_json::to_value(&prior_item).unwrap();
+    writeln!(
+        f,
+        "{}",
+        json!({
+            "timestamp": "2024-01-01T00:00:03.000Z",
+            "type": "response_item",
+            "payload": prior_item_json
+        })
+    )
+    .unwrap();
     drop(f);
 
     // Mock server that will receive the resumed request
@@ -181,31 +236,29 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = model_provider;
-    config.experimental_resume = Some(session_path.clone());
     // Also configure user instructions to ensure they are NOT delivered on resume.
     config.user_instructions = Some("be nice".to_string());
 
     let conversation_manager =
         ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+    let auth_manager =
+        codex_core::AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
     let NewConversation {
         conversation: codex,
         session_configured,
         ..
     } = conversation_manager
-        .new_conversation(config)
+        .resume_conversation_from_rollout(config, session_path.clone(), auth_manager)
         .await
-        .expect("create new conversation");
+        .expect("resume conversation");
 
-    // 1) Assert initial_messages contains the prior user + assistant messages as EventMsg entries
+    // 1) Assert initial_messages only includes existing EventMsg entries; response items are not converted
     let initial_msgs = session_configured
         .initial_messages
         .clone()
-        .expect("expected initial messages for resumed session");
+        .expect("expected initial messages option for resumed session");
     let initial_json = serde_json::to_value(&initial_msgs).unwrap();
-    let expected_initial_json = serde_json::json!([
-        { "type": "user_message", "message": "resumed user message", "kind": "plain" },
-        { "type": "agent_message", "message": "resumed assistant message" }
-    ]);
+    let expected_initial_json = json!([]);
     assert_eq!(initial_json, expected_initial_json);
 
     // 2) Submit new input; the request body must include the prior item followed by the new user input.
@@ -221,7 +274,7 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
 
     let request = &server.received_requests().await.unwrap()[0];
     let request_body = request.body_json::<serde_json::Value>().unwrap();
-    let expected_input = serde_json::json!([
+    let expected_input = json!([
         {
             "type": "message",
             "role": "user",
@@ -372,56 +425,6 @@ async fn includes_base_instructions_override_in_request() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn originator_config_override_is_used() {
-    // Mock server
-    let server = MockServer::start().await;
-
-    let first = ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_raw(sse_completed("resp1"), "text/event-stream");
-
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .respond_with(first)
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
-
-    let codex_home = TempDir::new().unwrap();
-    let mut config = load_default_config_for_test(&codex_home);
-    config.model_provider = model_provider;
-    config.responses_originator_header = "my_override".to_owned();
-
-    let conversation_manager =
-        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
-    let codex = conversation_manager
-        .new_conversation(config)
-        .await
-        .expect("create new conversation")
-        .conversation;
-
-    codex
-        .submit(Op::UserInput {
-            items: vec![InputItem::Text {
-                text: "hello".into(),
-            }],
-        })
-        .await
-        .unwrap();
-
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
-
-    let request = &server.received_requests().await.unwrap()[0];
-    let request_originator = request.headers.get("originator").unwrap();
-    assert_eq!(request_originator.to_str().unwrap(), "my_override");
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn chatgpt_auth_sends_correct_request() {
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
@@ -501,82 +504,6 @@ async fn chatgpt_auth_sends_correct_request() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn prefers_chatgpt_token_when_config_prefers_chatgpt() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
-
-    // Mock server
-    let server = MockServer::start().await;
-
-    let first = ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_raw(sse_completed("resp1"), "text/event-stream");
-
-    // Expect ChatGPT base path and correct headers
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .and(header_regex("Authorization", r"Bearer Access-123"))
-        .and(header_regex("chatgpt-account-id", r"acc-123"))
-        .respond_with(first)
-        .expect(1)
-        .mount(&server)
-        .await;
-
-    let model_provider = ModelProviderInfo {
-        base_url: Some(format!("{}/v1", server.uri())),
-        ..built_in_model_providers()["openai"].clone()
-    };
-
-    // Init session
-    let codex_home = TempDir::new().unwrap();
-    // Write auth.json that contains both API key and ChatGPT tokens for a plan that should prefer ChatGPT.
-    let _jwt = write_auth_json(
-        &codex_home,
-        Some("sk-test-key"),
-        "pro",
-        "Access-123",
-        Some("acc-123"),
-    );
-
-    let mut config = load_default_config_for_test(&codex_home);
-    config.model_provider = model_provider;
-    config.preferred_auth_method = AuthMode::ChatGPT;
-
-    let auth_manager = match CodexAuth::from_codex_home(
-        codex_home.path(),
-        config.preferred_auth_method,
-        &config.responses_originator_header,
-    ) {
-        Ok(Some(auth)) => codex_core::AuthManager::from_auth_for_testing(auth),
-        Ok(None) => panic!("No CodexAuth found in codex_home"),
-        Err(e) => panic!("Failed to load CodexAuth: {e}"),
-    };
-    let conversation_manager = ConversationManager::new(auth_manager);
-    let NewConversation {
-        conversation: codex,
-        ..
-    } = conversation_manager
-        .new_conversation(config)
-        .await
-        .expect("create new conversation");
-
-    codex
-        .submit(Op::UserInput {
-            items: vec![InputItem::Text {
-                text: "hello".into(),
-            }],
-        })
-        .await
-        .unwrap();
-
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
@@ -620,13 +547,8 @@ async fn prefers_apikey_when_config_prefers_apikey_even_with_chatgpt_tokens() {
 
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = model_provider;
-    config.preferred_auth_method = AuthMode::ApiKey;
 
-    let auth_manager = match CodexAuth::from_codex_home(
-        codex_home.path(),
-        config.preferred_auth_method,
-        &config.responses_originator_header,
-    ) {
+    let auth_manager = match CodexAuth::from_codex_home(codex_home.path()) {
         Ok(Some(auth)) => codex_core::AuthManager::from_auth_for_testing(auth),
         Ok(None) => panic!("No CodexAuth found in codex_home"),
         Err(e) => panic!("Failed to load CodexAuth: {e}"),
@@ -711,6 +633,147 @@ async fn includes_user_instructions_message_in_request() {
     assert_message_role(&request_body["input"][1], "user");
     assert_message_starts_with(&request_body["input"][1], "<environment_context>");
     assert_message_ends_with(&request_body["input"][1], "</environment_context>");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn azure_responses_request_includes_store_and_reasoning_ids() {
+    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
+        println!(
+            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
+        );
+        return;
+    }
+
+    let server = MockServer::start().await;
+
+    let sse_body = concat!(
+        "data: {\"type\":\"response.created\",\"response\":{}}\n\n",
+        "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\"}}\n\n",
+    );
+
+    let template = ResponseTemplate::new(200)
+        .insert_header("content-type", "text/event-stream")
+        .set_body_raw(sse_body, "text/event-stream");
+
+    Mock::given(method("POST"))
+        .and(path("/openai/responses"))
+        .respond_with(template)
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let provider = ModelProviderInfo {
+        name: "azure".into(),
+        base_url: Some(format!("{}/openai", server.uri())),
+        env_key: None,
+        env_key_instructions: None,
+        wire_api: WireApi::Responses,
+        query_params: None,
+        http_headers: None,
+        env_http_headers: None,
+        request_max_retries: Some(0),
+        stream_max_retries: Some(0),
+        stream_idle_timeout_ms: Some(5_000),
+        requires_openai_auth: false,
+    };
+
+    let codex_home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&codex_home);
+    config.model_provider_id = provider.name.clone();
+    config.model_provider = provider.clone();
+    let effort = config.model_reasoning_effort;
+    let summary = config.model_reasoning_summary;
+    let config = Arc::new(config);
+
+    let client = ModelClient::new(
+        Arc::clone(&config),
+        None,
+        provider,
+        effort,
+        summary,
+        ConversationId::new(),
+    );
+
+    let mut prompt = Prompt::default();
+    prompt.input.push(ResponseItem::Reasoning {
+        id: "reasoning-id".into(),
+        summary: vec![ReasoningItemReasoningSummary::SummaryText {
+            text: "summary".into(),
+        }],
+        content: Some(vec![ReasoningItemContent::ReasoningText {
+            text: "content".into(),
+        }]),
+        encrypted_content: None,
+    });
+    prompt.input.push(ResponseItem::Message {
+        id: Some("message-id".into()),
+        role: "assistant".into(),
+        content: vec![ContentItem::OutputText {
+            text: "message".into(),
+        }],
+    });
+    prompt.input.push(ResponseItem::WebSearchCall {
+        id: Some("web-search-id".into()),
+        status: Some("completed".into()),
+        action: WebSearchAction::Search {
+            query: "weather".into(),
+        },
+    });
+    prompt.input.push(ResponseItem::FunctionCall {
+        id: Some("function-id".into()),
+        name: "do_thing".into(),
+        arguments: "{}".into(),
+        call_id: "function-call-id".into(),
+    });
+    prompt.input.push(ResponseItem::LocalShellCall {
+        id: Some("local-shell-id".into()),
+        call_id: Some("local-shell-call-id".into()),
+        status: LocalShellStatus::Completed,
+        action: LocalShellAction::Exec(LocalShellExecAction {
+            command: vec!["echo".into(), "hello".into()],
+            timeout_ms: None,
+            working_directory: None,
+            env: None,
+            user: None,
+        }),
+    });
+    prompt.input.push(ResponseItem::CustomToolCall {
+        id: Some("custom-tool-id".into()),
+        status: Some("completed".into()),
+        call_id: "custom-tool-call-id".into(),
+        name: "custom_tool".into(),
+        input: "{}".into(),
+    });
+
+    let mut stream = client
+        .stream(&prompt)
+        .await
+        .expect("responses stream to start");
+
+    while let Some(event) = stream.next().await {
+        if let Ok(ResponseEvent::Completed { .. }) = event {
+            break;
+        }
+    }
+
+    let requests = server
+        .received_requests()
+        .await
+        .expect("mock server collected requests");
+    assert_eq!(requests.len(), 1, "expected a single request");
+    let body: serde_json::Value = requests[0]
+        .body_json()
+        .expect("request body to be valid JSON");
+
+    assert_eq!(body["store"], serde_json::Value::Bool(true));
+    assert_eq!(body["stream"], serde_json::Value::Bool(true));
+    assert_eq!(body["input"].as_array().map(Vec::len), Some(6));
+    assert_eq!(body["input"][0]["id"].as_str(), Some("reasoning-id"));
+    assert_eq!(body["input"][1]["id"].as_str(), Some("message-id"));
+    assert_eq!(body["input"][2]["id"].as_str(), Some("web-search-id"));
+    assert_eq!(body["input"][3]["id"].as_str(), Some("function-id"));
+    assert_eq!(body["input"][4]["id"].as_str(), Some("local-shell-id"));
+    assert_eq!(body["input"][5]["id"].as_str(), Some("custom-tool-id"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -967,7 +1030,7 @@ async fn history_dedupes_streamed_and_final_messages_across_turns() {
     assert_eq!(requests.len(), 3, "expected 3 requests (one per turn)");
 
     // Replace full-array compare with tail-only raw JSON compare using a single hard-coded value.
-    let r3_tail_expected = serde_json::json!([
+    let r3_tail_expected = json!([
         {
             "type": "message",
             "role": "user",

@@ -90,6 +90,22 @@ async fn end_to_end_login_flow_persists_auth_json() {
     let tmp = tempdir().unwrap();
     let codex_home = tmp.path().to_path_buf();
 
+    // Seed auth.json with stale API key + tokens that should be overwritten.
+    let stale_auth = serde_json::json!({
+        "OPENAI_API_KEY": "sk-stale",
+        "tokens": {
+            "id_token": "stale.header.payload",
+            "access_token": "stale-access",
+            "refresh_token": "stale-refresh",
+            "account_id": "stale-acc"
+        }
+    });
+    std::fs::write(
+        codex_home.join("auth.json"),
+        serde_json::to_string_pretty(&stale_auth).unwrap(),
+    )
+    .unwrap();
+
     let state = "test_state_123".to_string();
 
     // Run server in background
@@ -102,7 +118,6 @@ async fn end_to_end_login_flow_persists_auth_json() {
         port: 0,
         open_browser: false,
         force_state: Some(state),
-        originator: "test_originator".to_string(),
     };
     let server = run_login_server(opts).unwrap();
     let login_port = server.actual_port;
@@ -123,10 +138,10 @@ async fn end_to_end_login_flow_persists_auth_json() {
     let auth_path = codex_home.join("auth.json");
     let data = std::fs::read_to_string(&auth_path).unwrap();
     let json: serde_json::Value = serde_json::from_str(&data).unwrap();
-    assert!(
-        !json["OPENAI_API_KEY"].is_null(),
-        "OPENAI_API_KEY should be set"
-    );
+    // The following assert is here because of the old oauth flow that exchanges tokens for an
+    // API key. See obtain_api_key in server.rs for details. Once we remove this old mechanism
+    // from the code, this test should be updated to expect that the API key is no longer present.
+    assert_eq!(json["OPENAI_API_KEY"], "access-123");
     assert_eq!(json["tokens"]["access_token"], "access-123");
     assert_eq!(json["tokens"]["refresh_token"], "refresh-123");
     assert_eq!(json["tokens"]["account_id"], "acc-123");
@@ -161,7 +176,6 @@ async fn creates_missing_codex_home_dir() {
         port: 0,
         open_browser: false,
         force_state: Some(state),
-        originator: "test_originator".to_string(),
     };
     let server = run_login_server(opts).unwrap();
     let login_port = server.actual_port;
@@ -202,7 +216,6 @@ async fn cancels_previous_login_server_when_port_is_in_use() {
         port: 0,
         open_browser: false,
         force_state: Some("cancel_state".to_string()),
-        originator: "test_originator".to_string(),
     };
 
     let first_server = run_login_server(first_opts).unwrap();
@@ -221,7 +234,6 @@ async fn cancels_previous_login_server_when_port_is_in_use() {
         port: login_port,
         open_browser: false,
         force_state: Some("cancel_state_2".to_string()),
-        originator: "test_originator".to_string(),
     };
 
     let second_server = run_login_server(second_opts).unwrap();

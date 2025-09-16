@@ -187,10 +187,17 @@ where
 
     // Build first wrapped line with initial indent.
     let mut first_line = rt_opts.initial_indent.clone();
+    first_line.style = first_line.style.patch(line.style);
     {
-        let mut sliced = slice_line_spans(line, &span_bounds, first_line_range);
+        let sliced = slice_line_spans(line, &span_bounds, first_line_range);
         let mut spans = first_line.spans;
-        spans.append(&mut sliced.spans);
+        spans.append(
+            &mut sliced
+                .spans
+                .into_iter()
+                .map(|s| s.patch_style(line.style))
+                .collect(),
+        );
         first_line.spans = spans;
         out.push(first_line);
     }
@@ -209,10 +216,17 @@ where
             continue;
         }
         let mut subsequent_line = rt_opts.subsequent_indent.clone();
+        subsequent_line.style = subsequent_line.style.patch(line.style);
         let offset_range = (r.start + base)..(r.end + base);
-        let mut sliced = slice_line_spans(line, &span_bounds, &offset_range);
+        let sliced = slice_line_spans(line, &span_bounds, &offset_range);
         let mut spans = subsequent_line.spans;
-        spans.append(&mut sliced.spans);
+        spans.append(
+            &mut sliced
+                .spans
+                .into_iter()
+                .map(|s| s.patch_style(line.style))
+                .collect(),
+        );
         subsequent_line.spans = spans;
         out.push(subsequent_line);
     }

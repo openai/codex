@@ -15,9 +15,7 @@ path = "src/lib.rs"
 workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-anyhow = "1"
 clap = { version = "4", features = ["derive"] }
-codex-common = { path = "../common", features = ["cli"] }
 codex-core = { path = "../core" }
 landlock = "0.4.1"
 libc = "0.2.175"

@@ -17,6 +17,7 @@ use crate::app_event_sender::AppEventSender;
 use crate::key_hint;
 use crate::shimmer::shimmer_spans;
 use crate::tui::FrameRequester;
+use crate::ui_consts::LIVE_PREFIX_COLS;
 
 pub(crate) struct StatusIndicatorWidget {
     /// Animated header text (defaults to "Working").
@@ -32,7 +33,7 @@ pub(crate) struct StatusIndicatorWidget {
 }
 
 // Format elapsed seconds into a compact human-friendly form used by the status line.
-// Examples: 0s, 59s, 1m00s, 59m59s, 1h00m00s, 2h03m09s
+// Examples: 0s, 59s, 1m 00s, 59m 59s, 1h 00m 00s, 2h 03m 09s
 fn fmt_elapsed_compact(elapsed_secs: u64) -> String {
     if elapsed_secs < 60 {
         return format!("{elapsed_secs}s");
@@ -40,12 +41,12 @@ fn fmt_elapsed_compact(elapsed_secs: u64) -> String {
     if elapsed_secs < 3600 {
         let minutes = elapsed_secs / 60;
         let seconds = elapsed_secs % 60;
-        return format!("{minutes}m{seconds:02}s");
+        return format!("{minutes}m {seconds:02}s");
     }
     let hours = elapsed_secs / 3600;
     let minutes = (elapsed_secs % 3600) / 60;
     let seconds = elapsed_secs % 60;
-    format!("{hours}h{minutes:02}m{seconds:02}s")
+    format!("{hours}h {minutes:02}m {seconds:02}s")
 }
 
 impl StatusIndicatorWidget {
@@ -63,10 +64,13 @@ impl StatusIndicatorWidget {
     }
 
     pub fn desired_height(&self, width: u16) -> u16 {
-        // Status line + wrapped queued messages (up to 3 lines per message)
+        // Status line + optional blank line + wrapped queued messages (up to 3 lines per message)
         // + optional ellipsis line per truncated message + 1 spacer line
         let inner_width = width.max(1) as usize;
         let mut total: u16 = 1; // status line
+        if !self.queued_messages.is_empty() {
+            total = total.saturating_add(1); // blank line between status and queued messages
+        }
         let text_width = inner_width.saturating_sub(3); // account for " ↳ " prefix
         if text_width > 0 {
             for q in &self.queued_messages {
@@ -156,7 +160,7 @@ impl WidgetRef for StatusIndicatorWidget {
         let pretty_elapsed = fmt_elapsed_compact(elapsed);
 
         // Plain rendering: no borders or padding so the live cell is visually indistinguishable from terminal scrollback.
-        let mut spans = vec![" ".into()];
+        let mut spans = vec![" ".repeat(LIVE_PREFIX_COLS as usize).into()];
         spans.extend(shimmer_spans(&self.header));
         spans.extend(vec![
             " ".into(),
@@ -168,6 +172,9 @@ impl WidgetRef for StatusIndicatorWidget {
         // Build lines: status, then queued messages, then spacer.
         let mut lines: Vec<Line<'static>> = Vec::new();
         lines.push(Line::from(spans));
+        if !self.queued_messages.is_empty() {
+            lines.push(Line::from(""));
+        }
         // Wrap queued messages using textwrap and show up to the first 3 lines per message.
         let text_width = area.width.saturating_sub(3); // " ↳ " prefix
         for q in &self.queued_messages {
@@ -209,13 +216,13 @@ mod tests {
         assert_eq!(fmt_elapsed_compact(0), "0s");
         assert_eq!(fmt_elapsed_compact(1), "1s");
         assert_eq!(fmt_elapsed_compact(59), "59s");
-        assert_eq!(fmt_elapsed_compact(60), "1m00s");
-        assert_eq!(fmt_elapsed_compact(61), "1m01s");
-        assert_eq!(fmt_elapsed_compact(3 * 60 + 5), "3m05s");
-        assert_eq!(fmt_elapsed_compact(59 * 60 + 59), "59m59s");
-        assert_eq!(fmt_elapsed_compact(3600), "1h00m00s");
-        assert_eq!(fmt_elapsed_compact(3600 + 60 + 1), "1h01m01s");
-        assert_eq!(fmt_elapsed_compact(25 * 3600 + 2 * 60 + 3), "25h02m03s");
+        assert_eq!(fmt_elapsed_compact(60), "1m 00s");
+        assert_eq!(fmt_elapsed_compact(61), "1m 01s");
+        assert_eq!(fmt_elapsed_compact(3 * 60 + 5), "3m 05s");
+        assert_eq!(fmt_elapsed_compact(59 * 60 + 59), "59m 59s");
+        assert_eq!(fmt_elapsed_compact(3600), "1h 00m 00s");
+        assert_eq!(fmt_elapsed_compact(3600 + 60 + 1), "1h 01m 01s");
+        assert_eq!(fmt_elapsed_compact(25 * 3600 + 2 * 60 + 3), "25h 02m 03s");
     }
 
     #[test]

@@ -88,7 +88,7 @@ impl ExecvChecker {
         let mut program = valid_exec.program.to_string();
         for system_path in valid_exec.system_path {
             if is_executable_file(&system_path) {
-                program = system_path.to_string();
+                program = system_path;
                 break;
             }
         }
@@ -196,7 +196,7 @@ system_path=[{fake_cp:?}]
         let checker = setup(&fake_cp);
         let exec_call = ExecCall {
             program: "cp".into(),
-            args: vec![source.clone(), dest.clone()],
+            args: vec![source, dest.clone()],
         };
         let valid_exec = match checker.r#match(&exec_call)? {
             MatchedExec::Match { exec } => exec,
@@ -207,7 +207,7 @@ system_path=[{fake_cp:?}]
         assert_eq!(
             checker.check(valid_exec.clone(), &cwd, &[], &[]),
             Err(ReadablePathNotInReadableFolders {
-                file: source_path.clone(),
+                file: source_path,
                 folders: vec![]
             }),
         );
@@ -229,7 +229,7 @@ system_path=[{fake_cp:?}]
         // Both readable and writeable folders specified.
         assert_eq!(
             checker.check(
-                valid_exec.clone(),
+                valid_exec,
                 &cwd,
                 std::slice::from_ref(&root_path),
                 std::slice::from_ref(&root_path)
@@ -241,7 +241,7 @@ system_path=[{fake_cp:?}]
         // folders.
         let exec_call_folders_as_args = ExecCall {
             program: "cp".into(),
-            args: vec![root.clone(), root.clone()],
+            args: vec![root.clone(), root],
         };
         let valid_exec_call_folders_as_args = match checker.r#match(&exec_call_folders_as_args)? {
             MatchedExec::Match { exec } => exec,
@@ -254,7 +254,7 @@ system_path=[{fake_cp:?}]
                 std::slice::from_ref(&root_path),
                 std::slice::from_ref(&root_path)
             ),
-            Ok(cp.clone()),
+            Ok(cp),
         );
 
         // Specify a parent of a readable folder as input.

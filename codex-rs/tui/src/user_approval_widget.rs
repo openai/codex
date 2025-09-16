@@ -244,7 +244,7 @@ impl UserApprovalWidget {
                             "You ".into(),
                             "approved".bold(),
                             " codex to run ".into(),
-                            snippet.clone().dim(),
+                            snippet.dim(),
                             " this time".bold(),
                         ]);
                     }
@@ -254,7 +254,7 @@ impl UserApprovalWidget {
                             "You ".into(),
                             "approved".bold(),
                             " codex to run ".into(),
-                            snippet.clone().dim(),
+                            snippet.dim(),
                             " every time this session".bold(),
                         ]);
                     }
@@ -264,7 +264,7 @@ impl UserApprovalWidget {
                             "You ".into(),
                             "did not approve".bold(),
                             " codex to run ".into(),
-                            snippet.clone().dim(),
+                            snippet.dim(),
                         ]);
                     }
                     ReviewDecision::Abort => {
@@ -273,7 +273,7 @@ impl UserApprovalWidget {
                             "You ".into(),
                             "canceled".bold(),
                             " the request to run ".into(),
-                            snippet.clone().dim(),
+                            snippet.dim(),
                         ]);
                     }
                 }
