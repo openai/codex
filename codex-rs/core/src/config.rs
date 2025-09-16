@@ -1963,4 +1963,82 @@ mod notifications_tests {
             Notifications::Custom(ref v) if v == &vec!["foo".to_string()]
         ));
     }
+
+    #[test]
+    fn test_timeout_cli_override_applied_to_shell_policy() -> std::io::Result<()> {
+        let cfg = ConfigToml::default();
+        let codex_home = std::env::temp_dir();
+
+        // Test that CLI timeout override is applied to shell environment policy
+        let overrides = ConfigOverrides {
+            timeout_seconds: Some(120), // 2 minutes
+            cwd: Some(codex_home.clone()),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(cfg, overrides, codex_home)?;
+
+        assert_eq!(config.shell_environment_policy.exec_timeout_seconds, Some(120));
+        Ok(())
+    }
+
+    #[test]
+    fn test_timeout_defaults_when_not_overridden() -> std::io::Result<()> {
+        let cfg = ConfigToml::default();
+        let codex_home = std::env::temp_dir();
+
+        let overrides = ConfigOverrides {
+            cwd: Some(codex_home.clone()),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(cfg, overrides, codex_home)?;
+
+        // Should be None when not overridden
+        assert_eq!(config.shell_environment_policy.exec_timeout_seconds, None);
+        Ok(())
+    }
+
+    #[test]
+    fn test_timeout_toml_config_with_cli_override() -> std::io::Result<()> {
+        let toml_with_timeout = r#"
+[shell_environment_policy]
+exec_timeout_seconds = 60
+"#;
+        let cfg: ConfigToml = toml::from_str(toml_with_timeout).expect("parse TOML");
+        let codex_home = std::env::temp_dir();
+
+        // CLI override should take precedence over TOML config
+        let overrides = ConfigOverrides {
+            timeout_seconds: Some(180), // 3 minutes - should override the 60s from TOML
+            cwd: Some(codex_home.clone()),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(cfg, overrides, codex_home)?;
+
+        assert_eq!(config.shell_environment_policy.exec_timeout_seconds, Some(180));
+        Ok(())
+    }
+
+    #[test]
+    fn test_timeout_toml_config_without_cli_override() -> std::io::Result<()> {
+        let toml_with_timeout = r#"
+[shell_environment_policy]
+exec_timeout_seconds = 45
+"#;
+        let cfg: ConfigToml = toml::from_str(toml_with_timeout).expect("parse TOML");
+        let codex_home = std::env::temp_dir();
+
+        // No CLI override - should use TOML value
+        let overrides = ConfigOverrides {
+            cwd: Some(codex_home.clone()),
+            ..Default::default()
+        };
+
+        let config = Config::load_from_base_config_with_overrides(cfg, overrides, codex_home)?;
+
+        assert_eq!(config.shell_environment_policy.exec_timeout_seconds, Some(45));
+        Ok(())
+    }
 }
