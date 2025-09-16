@@ -13,6 +13,7 @@ use crate::protocol::SandboxPolicy;
 
 #[derive(Debug, PartialEq)]
 pub enum SafetyCheck {
+    UserAutoApprove { sandbox_type: SandboxType },
     AutoApprove { sandbox_type: SandboxType },
     AskUser,
     Reject { reason: String },

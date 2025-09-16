@@ -2,6 +2,7 @@ use std::io::BufRead;
 use std::path::Path;
 use std::sync::OnceLock;
 use std::time::Duration;
+use std::time::Instant;
 
 use crate::AuthManager;
 use bytes::Bytes;
@@ -43,6 +44,7 @@ use crate::openai_tools::create_tools_json_for_responses_api;
 use crate::protocol::TokenUsage;
 use crate::token_data::PlanType;
 use crate::util::backoff;
+use codex_otel::otel_event_manager::OtelEventManager;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_protocol::config_types::ReasoningSummary as ReasoningSummaryConfig;
 use codex_protocol::models::ResponseItem;
@@ -69,6 +71,7 @@ struct Error {
 pub struct ModelClient {
     config: Arc<Config>,
     auth_manager: Option<Arc<AuthManager>>,
+    otel_event_manager: OtelEventManager,
     client: reqwest::Client,
     provider: ModelProviderInfo,
     conversation_id: ConversationId,
@@ -80,6 +83,7 @@ impl ModelClient {
     pub fn new(
         config: Arc<Config>,
         auth_manager: Option<Arc<AuthManager>>,
+        otel_event_manager: OtelEventManager,
         provider: ModelProviderInfo,
         effort: Option<ReasoningEffortConfig>,
         summary: ReasoningSummaryConfig,
@@ -90,6 +94,7 @@ impl ModelClient {
         Self {
             config,
             auth_manager,
+            otel_event_manager,
             client,
             provider,
             conversation_id,
@@ -123,6 +128,7 @@ impl ModelClient {
                     &self.config.model_family,
                     &self.client,
                     &self.provider,
+                    &self.otel_event_manager,
                 )
                 .await?;
 
@@ -159,7 +165,12 @@ impl ModelClient {
         if let Some(path) = &*CODEX_RS_SSE_FIXTURE {
             // short circuit for tests
             warn!(path, "Streaming from fixture");
-            return stream_from_fixture(path, self.provider.clone()).await;
+            return stream_from_fixture(
+                path,
+                self.provider.clone(),
+                self.otel_event_manager.clone(),
+            )
+            .await;
         }
 
         let auth_manager = self.auth_manager.clone();
@@ -258,17 +269,25 @@ impl ModelClient {
                 req_builder = req_builder.header("chatgpt-account-id", account_id);
             }
 
+            let start = Instant::now();
             let res = req_builder.send().await;
-            if let Ok(resp) = &res {
-                trace!(
-                    "Response status: {}, cf-ray: {}",
-                    resp.status(),
-                    resp.headers()
-                        .get("cf-ray")
-                        .map(|v| v.to_str().unwrap_or_default())
-                        .unwrap_or_default()
-                );
-            }
+
+            let cf_ray = if let Ok(resp) = &res {
+                let cf_ray = resp
+                    .headers()
+                    .get("cf-ray")
+                    .map(|v| v.to_str().unwrap_or_default())
+                    .unwrap_or_default()
+                    .to_string();
+
+                trace!("Response status: {}, cf-ray: {}", resp.status(), cf_ray);
+                Some(cf_ray)
+            } else {
+                None
+            };
+
+            self.otel_event_manager
+                .request(cf_ray, attempt, start.elapsed(), &res);
 
             match res {
                 Ok(resp) if resp.status().is_success() => {
@@ -280,6 +299,7 @@ impl ModelClient {
                         stream,
                         tx_event,
                         self.provider.stream_idle_timeout(),
+                        self.otel_event_manager.clone(),
                     ));
 
                     return Ok(ResponseStream { rx_event });
@@ -366,6 +386,10 @@ impl ModelClient {
         self.provider.clone()
     }
 
+    pub fn get_otel_event_manager(&self) -> OtelEventManager {
+        self.otel_event_manager.clone()
+    }
+
     /// Returns the currently configured model slug.
     pub fn get_model(&self) -> String {
         self.config.model.clone()
@@ -388,6 +412,10 @@ impl ModelClient {
 
     pub fn get_auth_manager(&self) -> Option<Arc<AuthManager>> {
         self.auth_manager.clone()
+    }
+
+    pub fn get_conversation_id(&self) -> ConversationId {
+        self.conversation_id
     }
 }
 
@@ -477,6 +505,7 @@ async fn process_sse<S>(
     stream: S,
     tx_event: mpsc::Sender<Result<ResponseEvent>>,
     idle_timeout: Duration,
+    otel_event_manager: OtelEventManager,
 ) where
     S: Stream<Item = Result<Bytes>> + Unpin,
 {
@@ -488,11 +517,14 @@ async fn process_sse<S>(
     let mut response_error: Option<CodexErr> = None;
 
     loop {
+        let start = Instant::now();
         let sse = match timeout(idle_timeout, stream.next()).await {
             Ok(Some(Ok(sse))) => sse,
             Ok(Some(Err(e))) => {
                 debug!("SSE Error: {e:#}");
-                let event = CodexErr::Stream(e.to_string(), None);
+                let error = e.to_string();
+                otel_event_manager.sse_event_failed(None, start.elapsed(), error.as_str());
+                let event = CodexErr::Stream(error, None);
                 let _ = tx_event.send(Err(event)).await;
                 return;
             }
@@ -502,6 +534,22 @@ async fn process_sse<S>(
                         id: response_id,
                         usage,
                     }) => {
+                        if let Some(token_usage) = &usage {
+                            otel_event_manager.sse_event_completed(
+                                start.elapsed(),
+                                token_usage.input_tokens,
+                                token_usage.output_tokens,
+                                token_usage
+                                    .input_tokens_details
+                                    .as_ref()
+                                    .map(|d| d.cached_tokens),
+                                token_usage
+                                    .output_tokens_details
+                                    .as_ref()
+                                    .map(|d| d.reasoning_tokens),
+                                token_usage.total_tokens,
+                            );
+                        }
                         let event = ResponseEvent::Completed {
                             response_id,
                             token_usage: usage.map(Into::into),
@@ -509,22 +557,31 @@ async fn process_sse<S>(
                         let _ = tx_event.send(Ok(event)).await;
                     }
                     None => {
-                        let _ = tx_event
-                            .send(Err(response_error.unwrap_or(CodexErr::Stream(
-                                "stream closed before response.completed".into(),
+                        let error = response_error.unwrap_or(CodexErr::Stream(
+                            "stream closed before response.completed".into(),
+                            None,
+                        ));
+
+                        if let CodexErr::Stream(message, _) = &error {
+                            otel_event_manager.sse_event_failed(
                                 None,
-                            ))))
-                            .await;
+                                start.elapsed(),
+                                message.as_str(),
+                            );
+                        }
+
+                        let _ = tx_event.send(Err(error)).await;
                     }
                 }
                 return;
             }
             Err(_) => {
+                let error = "idle timeout waiting for SSE";
+
+                otel_event_manager.sse_event_failed(None, start.elapsed(), error);
+
                 let _ = tx_event
-                    .send(Err(CodexErr::Stream(
-                        "idle timeout waiting for SSE".into(),
-                        None,
-                    )))
+                    .send(Err(CodexErr::Stream(error.into(), None)))
                     .await;
                 return;
             }
@@ -536,7 +593,9 @@ async fn process_sse<S>(
         let event: SseEvent = match serde_json::from_str(&sse.data) {
             Ok(event) => event,
             Err(e) => {
-                debug!("Failed to parse SSE event: {e}, data: {}", &sse.data);
+                let error = format!("Failed to parse SSE event: {e}, data: {}", &sse.data);
+                otel_event_manager.sse_event_failed(None, start.elapsed(), error.as_str());
+                debug!(error);
                 continue;
             }
         };
@@ -561,11 +620,18 @@ async fn process_sse<S>(
             // The fix is to forward the incremental events *as they come* and
             // drop the duplicated list inside `response.completed`.
             "response.output_item.done" => {
-                let Some(item_val) = event.item else { continue };
+                let Some(item_val) = event.item else {
+                    otel_event_manager.sse_event(event.kind, start.elapsed());
+                    continue
+                };
                 let Ok(item) = serde_json::from_value::<ResponseItem>(item_val) else {
-                    debug!("failed to parse ResponseItem from output_item.done");
+                    let error = "failed to parse ResponseItem from output_item.done";
+                    debug!(error);
+                    otel_event_manager.sse_event_failed(Some(event.kind), start.elapsed(), error);
                     continue;
                 };
+
+                otel_event_manager.sse_event(event.kind, start.elapsed());
 
                 let event = ResponseEvent::OutputItemDone(item);
                 if tx_event.send(Ok(event)).await.is_err() {
@@ -573,6 +639,7 @@ async fn process_sse<S>(
                 }
             }
             "response.output_text.delta" => {
+                otel_event_manager.sse_event(event.kind, start.elapsed());
                 if let Some(delta) = event.delta {
                     let event = ResponseEvent::OutputTextDelta(delta);
                     if tx_event.send(Ok(event)).await.is_err() {
@@ -581,6 +648,7 @@ async fn process_sse<S>(
                 }
             }
             "response.reasoning_summary_text.delta" => {
+                otel_event_manager.sse_event(event.kind, start.elapsed());
                 if let Some(delta) = event.delta {
                     let event = ResponseEvent::ReasoningSummaryDelta(delta);
                     if tx_event.send(Ok(event)).await.is_err() {
@@ -589,6 +657,7 @@ async fn process_sse<S>(
                 }
             }
             "response.reasoning_text.delta" => {
+                otel_event_manager.sse_event(event.kind, start.elapsed());
                 if let Some(delta) = event.delta {
                     let event = ResponseEvent::ReasoningContentDelta(delta);
                     if tx_event.send(Ok(event)).await.is_err() {
@@ -597,14 +666,16 @@ async fn process_sse<S>(
                 }
             }
             "response.created" => {
+                otel_event_manager.sse_event(event.kind, start.elapsed());
                 if event.response.is_some() {
                     let _ = tx_event.send(Ok(ResponseEvent::Created {})).await;
                 }
             }
             "response.failed" => {
                 if let Some(resp_val) = event.response {
+                    let error_message = "response.failed event received";
                     response_error = Some(CodexErr::Stream(
-                        "response.failed event received".to_string(),
+                        error_message.to_string(),
                         None,
                     ));
 
@@ -615,12 +686,17 @@ async fn process_sse<S>(
                             Ok(error) => {
                                 let delay = try_parse_retry_after(&error);
                                 let message = error.message.unwrap_or_default();
+                                otel_event_manager.sse_event_failed(Some(event.kind), start.elapsed(), message.as_str());
                                 response_error = Some(CodexErr::Stream(message, delay));
                             }
                             Err(e) => {
-                                debug!("failed to parse ErrorResponse: {e}");
+                                let error_message = format!("failed to parse ErrorResponse: {e}");
+                                debug!(error_message);
+                                otel_event_manager.sse_event_failed(Some(event.kind), start.elapsed(), error_message.as_str());
                             }
                         }
+                    } else {
+                        otel_event_manager.sse_event_failed(Some(event.kind), start.elapsed(), error_message);
                     }
                 }
             }
@@ -632,7 +708,9 @@ async fn process_sse<S>(
                             response_completed = Some(r);
                         }
                         Err(e) => {
-                            debug!("failed to parse ResponseCompleted: {e}");
+                            let error_message = format!("failed to parse ResponseCompleted: {e}");
+                            debug!(error_message);
+                            otel_event_manager.sse_event_failed(Some(event.kind), start.elapsed(), error_message.as_str());
                             continue;
                         }
                     };
@@ -645,6 +723,7 @@ async fn process_sse<S>(
             | "response.in_progress"
             | "response.output_text.done" => {}
             "response.output_item.added" => {
+                otel_event_manager.sse_event(event.kind, start.elapsed());
                 if let Some(item) = event.item.as_ref() {
                     // Detect web_search_call begin and forward a synthetic event upstream.
                     if let Some(ty) = item.get("type").and_then(|v| v.as_str())
@@ -664,13 +743,18 @@ async fn process_sse<S>(
             }
             "response.reasoning_summary_part.added" => {
                 // Boundary between reasoning summary sections (e.g., titles).
+                otel_event_manager.sse_event(event.kind, start.elapsed());
                 let event = ResponseEvent::ReasoningSummaryPartAdded;
                 if tx_event.send(Ok(event)).await.is_err() {
                     return;
                 }
             }
-            "response.reasoning_summary_text.done" => {}
-            _ => {}
+            "response.reasoning_summary_text.done" => {
+                otel_event_manager.sse_event(event.kind, start.elapsed());
+            }
+            _ => {
+                otel_event_manager.sse_event(event.kind, start.elapsed());
+            }
         }
     }
 }
@@ -679,6 +763,7 @@ async fn process_sse<S>(
 async fn stream_from_fixture(
     path: impl AsRef<Path>,
     provider: ModelProviderInfo,
+    otel_event_manager: OtelEventManager,
 ) -> Result<ResponseStream> {
     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
     let f = std::fs::File::open(path.as_ref())?;
@@ -697,6 +782,7 @@ async fn stream_from_fixture(
         stream,
         tx_event,
         provider.stream_idle_timeout(),
+        otel_event_manager,
     ));
     Ok(ResponseStream { rx_event })
 }
@@ -752,6 +838,7 @@ mod tests {
     async fn collect_events(
         chunks: &[&[u8]],
         provider: ModelProviderInfo,
+        otel_event_manager: OtelEventManager,
     ) -> Vec<Result<ResponseEvent>> {
         let mut builder = IoBuilder::new();
         for chunk in chunks {
@@ -761,7 +848,12 @@ mod tests {
         let reader = builder.build();
         let stream = ReaderStream::new(reader).map_err(CodexErr::Io);
         let (tx, mut rx) = mpsc::channel::<Result<ResponseEvent>>(16);
-        tokio::spawn(process_sse(stream, tx, provider.stream_idle_timeout()));
+        tokio::spawn(process_sse(
+            stream,
+            tx,
+            provider.stream_idle_timeout(),
+            otel_event_manager,
+        ));
 
         let mut events = Vec::new();
         while let Some(ev) = rx.recv().await {
@@ -775,6 +867,7 @@ mod tests {
     async fn run_sse(
         events: Vec<serde_json::Value>,
         provider: ModelProviderInfo,
+        otel_event_manager: OtelEventManager,
     ) -> Vec<ResponseEvent> {
         let mut body = String::new();
         for e in events {
@@ -791,7 +884,12 @@ mod tests {
 
         let (tx, mut rx) = mpsc::channel::<Result<ResponseEvent>>(8);
         let stream = ReaderStream::new(std::io::Cursor::new(body)).map_err(CodexErr::Io);
-        tokio::spawn(process_sse(stream, tx, provider.stream_idle_timeout()));
+        tokio::spawn(process_sse(
+            stream,
+            tx,
+            provider.stream_idle_timeout(),
+            otel_event_manager,
+        ));
 
         let mut out = Vec::new();
         while let Some(ev) = rx.recv().await {
@@ -851,9 +949,20 @@ mod tests {
             requires_openai_auth: false,
         };
 
+        let otel_event_manager = OtelEventManager::new(
+            ConversationId::new(),
+            "test",
+            "test",
+            None,
+            Some(AuthMode::ChatGPT),
+            false,
+            "test".to_string(),
+        );
+
         let events = collect_events(
             &[sse1.as_bytes(), sse2.as_bytes(), sse3.as_bytes()],
             provider,
+            otel_event_manager,
         )
         .await;
 
@@ -911,7 +1020,17 @@ mod tests {
             requires_openai_auth: false,
         };
 
-        let events = collect_events(&[sse1.as_bytes()], provider).await;
+        let otel_event_manager = OtelEventManager::new(
+            ConversationId::new(),
+            "test",
+            "test",
+            None,
+            Some(AuthMode::ChatGPT),
+            false,
+            "test".to_string(),
+        );
+
+        let events = collect_events(&[sse1.as_bytes()], provider, otel_event_manager).await;
 
         assert_eq!(events.len(), 2);
 
@@ -945,7 +1064,17 @@ mod tests {
             requires_openai_auth: false,
         };
 
-        let events = collect_events(&[sse1.as_bytes()], provider).await;
+        let otel_event_manager = OtelEventManager::new(
+            ConversationId::new(),
+            "test",
+            "test",
+            None,
+            Some(AuthMode::ChatGPT),
+            false,
+            "test".to_string(),
+        );
+
+        let events = collect_events(&[sse1.as_bytes()], provider, otel_event_manager).await;
 
         assert_eq!(events.len(), 1);
 
@@ -1050,7 +1179,17 @@ mod tests {
                 requires_openai_auth: false,
             };
 
-            let out = run_sse(evs, provider).await;
+            let otel_event_manager = OtelEventManager::new(
+                ConversationId::new(),
+                "test",
+                "test",
+                None,
+                Some(AuthMode::ChatGPT),
+                false,
+                "test".to_string(),
+            );
+
+            let out = run_sse(evs, provider, otel_event_manager).await;
             assert_eq!(out.len(), case.expected_len, "case {}", case.name);
             assert!(
                 (case.expect_first)(&out[0]),

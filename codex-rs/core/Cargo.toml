@@ -22,6 +22,7 @@ codex-apply-patch = { path = "../apply-patch" }
 codex-file-search = { path = "../file-search" }
 codex-mcp-client = { path = "../mcp-client" }
 codex-protocol = { path = "../protocol" }
+codex-otel = { path = "../otel", features = ["otel"] }
 dirs = "6"
 env-flags = "0.1.1"
 eventsource-stream = "0.2.3"

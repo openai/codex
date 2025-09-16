@@ -48,6 +48,8 @@ pub(crate) const PROJECT_DOC_MAX_BYTES: usize = 32 * 1024; // 32 KiB
 
 pub(crate) const CONFIG_TOML_FILE: &str = "config.toml";
 
+const DEFAULT_OTEL_ENVIRONMENT: &str = "dev";
+
 /// Application configuration loaded from disk and merged with overrides.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Config {
@@ -194,6 +196,9 @@ pub struct Config {
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: bool,
+
+    /// OTEL configuration (exporter type, endpoint, headers, etc.).
+    pub otel: crate::config_types::OtelConfig,
 }
 
 impl Config {
@@ -705,6 +710,9 @@ pub struct ConfigToml {
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: Option<bool>,
+
+    /// OTEL configuration.
+    pub otel: Option<crate::config_types::OtelConfigToml>,
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -1053,6 +1061,22 @@ impl Config {
                 .as_ref()
                 .map(|t| t.notifications.clone())
                 .unwrap_or_default(),
+            otel: {
+                use crate::config_types::OtelConfig;
+                use crate::config_types::OtelConfigToml;
+                use crate::config_types::OtelExporterKind;
+                let t: OtelConfigToml = cfg.otel.unwrap_or_default();
+                let log_user_prompt = t.log_user_prompt.unwrap_or(false);
+                let environment = t
+                    .environment
+                    .unwrap_or(DEFAULT_OTEL_ENVIRONMENT.to_string());
+                let exporter = t.exporter.unwrap_or(OtelExporterKind::None);
+                OtelConfig {
+                    log_user_prompt,
+                    environment,
+                    exporter,
+                }
+            },
         };
         Ok(config)
     }
@@ -1617,6 +1641,11 @@ model_verbosity = "high"
                 active_profile: Some("o3".to_string()),
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
+                otel: crate::config_types::OtelConfig {
+                    log_user_prompt: false,
+                    environment: DEFAULT_OTEL_ENVIRONMENT.to_string(),
+                    exporter: crate::config_types::OtelExporterKind::None,
+                },
             },
             o3_profile_config
         );
@@ -1675,6 +1704,11 @@ model_verbosity = "high"
             active_profile: Some("gpt3".to_string()),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            otel: crate::config_types::OtelConfig {
+                log_user_prompt: false,
+                environment: DEFAULT_OTEL_ENVIRONMENT.to_string(),
+                exporter: crate::config_types::OtelExporterKind::None,
+            },
         };
 
         assert_eq!(expected_gpt3_profile_config, gpt3_profile_config);
@@ -1748,6 +1782,11 @@ model_verbosity = "high"
             active_profile: Some("zdr".to_string()),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            otel: crate::config_types::OtelConfig {
+                log_user_prompt: false,
+                environment: DEFAULT_OTEL_ENVIRONMENT.to_string(),
+                exporter: crate::config_types::OtelExporterKind::None,
+            },
         };
 
         assert_eq!(expected_zdr_profile_config, zdr_profile_config);
@@ -1807,6 +1846,11 @@ model_verbosity = "high"
             active_profile: Some("gpt5".to_string()),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
+            otel: crate::config_types::OtelConfig {
+                log_user_prompt: false,
+                environment: DEFAULT_OTEL_ENVIRONMENT.to_string(),
+                exporter: crate::config_types::OtelExporterKind::None,
+            },
         };
 
         assert_eq!(expected_gpt5_profile_config, gpt5_profile_config);

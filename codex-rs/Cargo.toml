@@ -17,6 +17,7 @@ members = [
     "ollama",
     "protocol",
     "protocol-ts",
+    "otel",
     "tui",
 ]
 resolver = "2"
