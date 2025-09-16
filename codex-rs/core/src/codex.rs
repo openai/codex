@@ -3259,7 +3259,8 @@ fn convert_call_tool_result_to_function_call_output_payload(
     }
 }
 
-/// Emits an ExitedReviewMode Event with optional ReviewOutput.
+/// Emits an ExitedReviewMode Event with optional ReviewOutput,
+/// and records a developer message with the review output.
 async fn exit_review_mode(
     session: Arc<Session>,
     task_sub_id: String,
@@ -3267,9 +3268,43 @@ async fn exit_review_mode(
 ) {
     let event = Event {
         id: task_sub_id,
-        msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent { review_output }),
+        msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+            review_output: review_output.clone(),
+        }),
     };
     session.send_event(event).await;
+
+    let mut user_message = String::new();
+    if let Some(out) = review_output {
+        user_message.push_str(
+            "[User initiated a review task. Here's the full review output from reviewer model. User may select one or more comments to resolve.]",
+        );
+        if out.findings.is_empty() {
+            let text = out.overall_explanation.trim();
+            if !text.is_empty() {
+                user_message.push_str(&format!("\n{text}\n"));
+            }
+        } else {
+            let lines =
+                crate::review_format::format_review_findings_block(&out.findings, false, None);
+            for line in lines {
+                user_message.push_str(&format!("\n{line}"));
+            }
+            user_message.push('\n');
+        }
+    } else {
+        user_message.push_str(
+            "[User initiated a review task, but was interrupted. If user asks about this, tell them to re-initiate a review with `/review` and wait for it to complete.]",
+        );
+    }
+
+    session
+        .record_conversation_items(&[ResponseItem::Message {
+            id: None,
+            role: "developer".to_string(),
+            content: vec![ContentItem::InputText { text: user_message }],
+        }])
+        .await;
 }
 
 #[cfg(test)]
