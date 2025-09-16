@@ -2309,10 +2309,11 @@ async fn try_run_turn(
         processed_items.push(ProcessedResponseItem { item, response });
     }
 
-    // Process ALL tool calls in TRUE PARALLEL
+    // Process tool calls with appropriate concurrency strategy
     if !pending_tool_calls.is_empty() {
-        // Separate agent calls from other tool calls for specialized handling
-        // Both groups still execute in parallel
+        // Separate agent calls from other tool calls for different handling:
+        // - Agents: Execute in PARALLEL (independent tasks)
+        // - Other tools: Execute SEQUENTIALLY (may have dependencies)
         let (agent_calls, other_tool_calls): (Vec<_>, Vec<_>) = pending_tool_calls
             .into_iter()
             .partition(|call| call.name == "agent");
@@ -2371,36 +2372,24 @@ async fn try_run_turn(
             }
         }
 
-        // Handle other tool calls in parallel
+        // Handle other tool calls SEQUENTIALLY (they may have dependencies)
+        // Unlike agents which are independent, tool calls like shell commands
+        // and apply-patch often depend on previous operations completing first
         if !other_tool_calls.is_empty() {
-            let tool_futures: Vec<_> = other_tool_calls
-                .into_iter()
-                .map(|call| {
-                    let item = call.item;
+            for call in other_tool_calls {
+                let item = call.item;
 
-                    async move {
-                        // Each tool gets its own diff tracker for isolation
-                        let mut local_diff_tracker = TurnDiffTracker::new();
-                        let response = handle_response_item(
-                            sess,
-                            turn_context,
-                            &mut local_diff_tracker,
-                            sub_id,
-                            item.clone(),
-                        )
-                        .await;
-                        (item, response, local_diff_tracker)
-                    }
-                })
-                .collect();
+                // Execute the tool call with the shared diff tracker
+                // This ensures changes are tracked in order
+                let response = handle_response_item(
+                    sess,
+                    turn_context,
+                    turn_diff_tracker,
+                    sub_id,
+                    item.clone(),
+                )
+                .await;
 
-            // Execute all non-agent tool calls in parallel
-            let tool_results = futures::future::join_all(tool_futures).await;
-
-            // Collect results and merge diff trackers
-            for (item, response, local_diff_tracker) in tool_results {
-                // Merge the local diff tracker back into the main one
-                turn_diff_tracker.merge(local_diff_tracker);
                 match response {
                     Ok(Some(resp)) => {
                         output.push(resp.clone());
@@ -2425,6 +2414,9 @@ async fn try_run_turn(
                                 response: Some(err_resp),
                             });
                         }
+                        // On error, stop processing remaining tool calls
+                        // as they likely depend on the failed operation
+                        break;
                     }
                 }
             }
