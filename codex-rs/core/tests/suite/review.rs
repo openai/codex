@@ -2,8 +2,10 @@ use codex_core::CodexAuth;
 use codex_core::CodexConversation;
 use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
+use codex_core::REVIEW_PROMPT;
 use codex_core::built_in_model_providers;
 use codex_core::config::Config;
+use codex_core::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::InputItem;
@@ -419,17 +421,36 @@ async fn review_input_isolated_from_parent_history() {
     .await;
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    // Assert the request `input` contains only the single review user message.
+    // Assert the request `input` contains the environment context followed by the review prompt.
     let request = &server.received_requests().await.unwrap()[0];
     let body = request.body_json::<serde_json::Value>().unwrap();
-    let expected_input = serde_json::json!([
-        {
-            "type": "message",
-            "role": "user",
-            "content": [{"type": "input_text", "text": review_prompt}]
-        }
-    ]);
-    assert_eq!(body["input"], expected_input);
+    let input = body["input"].as_array().expect("input array");
+    assert_eq!(
+        input.len(),
+        2,
+        "expected environment context and review prompt"
+    );
+
+    let env_msg = &input[0];
+    assert_eq!(env_msg["type"].as_str().unwrap(), "message");
+    assert_eq!(env_msg["role"].as_str().unwrap(), "user");
+    let env_text = env_msg["content"][0]["text"].as_str().expect("env text");
+    assert!(
+        env_text.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG),
+        "environment context must be the first item"
+    );
+    assert!(
+        env_text.contains("<cwd>"),
+        "environment context should include cwd"
+    );
+
+    let review_msg = &input[1];
+    assert_eq!(review_msg["type"].as_str().unwrap(), "message");
+    assert_eq!(review_msg["role"].as_str().unwrap(), "user");
+    assert_eq!(
+        review_msg["content"][0]["text"].as_str().unwrap(),
+        format!("{REVIEW_PROMPT}\n\n---\n\nNow, here's your task: Please review only this",)
+    );
 
     server.verify().await;
 }
