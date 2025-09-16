@@ -142,7 +142,6 @@ impl WidgetRef for &ModelUpgradePopup {
         lines.push(
             "  GPT-5-Codex works faster through easy tasks and harder on complex tasks,".into(),
         );
-        lines.push("  GPT-5-Codex f,".into());
         lines.push("  improves on code quality, and is more steerable with AGENTS.md.".into());
         lines.push("".into());
 
