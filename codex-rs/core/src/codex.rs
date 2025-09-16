@@ -1348,10 +1348,21 @@ async fn submission_loop(
                         cwd,
                         is_review_mode: false,
                     };
-                    // TODO: record the new environment context in the conversation history
+
+                    // if the environment context has changed, record it in the conversation history
+                    let previous_env_context = EnvironmentContext::from(turn_context.as_ref());
+                    let new_env_context = EnvironmentContext::from(&fresh_turn_context);
+                    if !new_env_context.equals_except_shell(&previous_env_context) {
+                        sess.record_conversation_items(&[ResponseItem::from(new_env_context)])
+                            .await;
+                    }
+
+                    // Install the new persistent context for subsequent tasks/turns.
+                    turn_context = Arc::new(fresh_turn_context);
+
                     // no current task, spawn a new one with the per‑turn context
                     let task =
-                        AgentTask::spawn(sess.clone(), Arc::new(fresh_turn_context), sub.id, items);
+                        AgentTask::spawn(sess.clone(), Arc::clone(&turn_context), sub.id, items);
                     sess.set_task(task);
                 }
             }
