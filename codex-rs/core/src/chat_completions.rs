@@ -459,7 +459,10 @@ async fn process_chat_sse<S>(
             // Forward any reasoning/thinking deltas if present.
             // Some providers stream `reasoning` as a plain string while others
             // nest the text under an object (e.g. `{ "reasoning": { "text": "…" } }`).
-            if let Some(reasoning_val) = choice.get("delta").and_then(|d| d.get("reasoning")) {
+            if let Some(reasoning_val) = choice
+                .get("delta")
+                .and_then(|d| d.get("reasoning").or_else(|| d.get("reasoning_content")))
+            {
                 let mut maybe_text = reasoning_val
                     .as_str()
                     .map(|s| s.to_string())
@@ -491,7 +494,10 @@ async fn process_chat_sse<S>(
             }
 
             // Some providers only include reasoning on the final message object.
-            if let Some(message_reasoning) = choice.get("message").and_then(|m| m.get("reasoning"))
+            if let Some(message_reasoning) = choice
+                .get("message")
+                .and_then(|m| m.get("reasoning").or_else(|| m.get("reasoning_content")))
+
             {
                 // Accept either a plain string or an object with { text | content }
                 if let Some(s) = message_reasoning.as_str() {
