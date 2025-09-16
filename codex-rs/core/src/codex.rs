@@ -72,7 +72,7 @@ use crate::mcp_tool_call::handle_mcp_tool_call;
 use crate::model_family::find_family_for_model;
 use crate::openai_model_info::get_model_info;
 use crate::openai_tools::ApplyPatchToolArgs;
-use crate::openai_tools::OpenAiTool;
+
 use crate::openai_tools::ToolsConfig;
 use crate::openai_tools::ToolsConfigParams;
 use crate::openai_tools::get_openai_tools;
@@ -148,6 +148,23 @@ impl<T> MutexExt<T> for Mutex<T> {
         #[expect(clippy::expect_used)]
         self.lock().expect("poisoned lock")
     }
+}
+
+/// Structure to hold pending tool calls for parallel execution
+#[derive(Clone)]
+struct PendingToolCall {
+    item: ResponseItem,
+    call_id: String,
+    name: String,
+    arguments: Option<String>,
+}
+
+/// Arguments for the agent tool
+#[derive(Debug, Serialize, Deserialize)]
+struct AgentToolArgs {
+    task: String,
+    agent: Option<String>,
+    context: Option<String>,
 }
 
 /// The high-level interface to the Codex system.
@@ -493,13 +510,23 @@ impl Session {
             cwd,
             is_review_mode: false,
         };
+
+        // Initialize agent registry once during session creation
+        let agent_registry = match crate::agent::AgentRegistry::new() {
+            Ok(r) => Some(Arc::new(r)),
+            Err(e) => {
+                tracing::warn!("Failed to initialize agent registry: {e}");
+                None
+            }
+        };
+
         let sess = Arc::new(Session {
             conversation_id,
             tx_event: tx_event.clone(),
             mcp_connection_manager,
             session_manager: ExecSessionManager::default(),
             unified_exec_manager: UnifiedExecSessionManager::default(),
-            agent_registry: Mutex::new(None), // Will be initialized lazily when needed
+            agent_registry: Mutex::new(agent_registry),
             notify,
             state: Mutex::new(state),
             rollout: Mutex::new(Some(rollout_recorder)),
@@ -1438,25 +1465,9 @@ async fn submission_loop(
 
                 // Get the agent registry and list agents
                 let agents = {
-                    let mut agent_registry_guard = sess.agent_registry.lock_unchecked();
-                    let registry = match agent_registry_guard.as_ref() {
-                        Some(r) => Some(r.clone()),
-                        None => {
-                            // Initialize agent registry if not already done
-                            match crate::agent::AgentRegistry::new() {
-                                Ok(r) => {
-                                    let registry = Arc::new(r);
-                                    *agent_registry_guard = Some(registry.clone());
-                                    Some(registry)
-                                }
-                                Err(e) => {
-                                    tracing::error!("Failed to initialize agent registry: {e}");
-                                    None
-                                }
-                            }
-                        }
-                    };
-                    registry
+                    let agent_registry_guard = sess.agent_registry.lock_unchecked();
+                    agent_registry_guard
+                        .as_ref()
                         .map(|r| r.list_agent_details())
                         .unwrap_or_else(Vec::new)
                 }; // MutexGuard is dropped here
@@ -2123,6 +2134,11 @@ async fn try_run_turn(
 
     let mut output = Vec::new();
 
+    // First pass: collect all items from the stream
+    let mut collected_items = Vec::new();
+    #[allow(unused_assignments)]
+    let mut token_usage_result: Option<TokenUsage> = None;
+
     loop {
         // Poll the next item from the model stream. We must inspect *both* Ok and Err
         // cases so that transient stream failures (e.g., dropped SSE connection before
@@ -2149,15 +2165,7 @@ async fn try_run_turn(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
-                let response = handle_response_item(
-                    sess,
-                    turn_context,
-                    turn_diff_tracker,
-                    sub_id,
-                    item.clone(),
-                )
-                .await?;
-                output.push(ProcessedResponseItem { item, response });
+                collected_items.push(item);
             }
             ResponseEvent::WebSearchCallBegin { call_id } => {
                 let _ = sess
@@ -2190,12 +2198,9 @@ async fn try_run_turn(
                     sess.send_event(event).await;
                 }
 
-                let result = TurnRunResult {
-                    processed_items: output,
-                    total_token_usage: token_usage.clone(),
-                };
-
-                return Ok(result);
+                // Store the token usage for the result
+                token_usage_result = token_usage.clone();
+                break; // Exit the collection loop
             }
             ResponseEvent::OutputTextDelta(delta) => {
                 // In review child threads, suppress assistant text deltas; the
@@ -2237,6 +2242,173 @@ async fn try_run_turn(
             }
         }
     }
+
+    // Process collected items after the stream completes
+    // Separate tool calls from other items for potential parallel execution
+    let mut processed_items = Vec::new();
+    let mut pending_tool_calls = Vec::new();
+    let mut non_tool_items = Vec::new();
+
+    // Categorize items
+    for item in collected_items {
+        match &item {
+            ResponseItem::FunctionCall {
+                name,
+                call_id,
+                arguments,
+                ..
+            } => {
+                pending_tool_calls.push(PendingToolCall {
+                    item: item.clone(),
+                    call_id: call_id.clone(),
+                    name: name.clone(),
+                    arguments: Some(arguments.clone()),
+                });
+            }
+            ResponseItem::LocalShellCall {
+                call_id: Some(id), ..
+            } => {
+                pending_tool_calls.push(PendingToolCall {
+                    item: item.clone(),
+                    call_id: id.clone(),
+                    name: "shell".to_string(),
+                    arguments: None,
+                });
+            }
+            ResponseItem::LocalShellCall { call_id: None, .. } => {
+                non_tool_items.push(item);
+            }
+            ResponseItem::CustomToolCall { name, call_id, .. } => {
+                pending_tool_calls.push(PendingToolCall {
+                    item: item.clone(),
+                    call_id: call_id.clone(),
+                    name: name.clone(),
+                    arguments: None,
+                });
+            }
+            _ => {
+                non_tool_items.push(item);
+            }
+        }
+    }
+
+    // Process non-tool items first (messages, reasoning, etc.)
+    for item in non_tool_items {
+        let response =
+            handle_response_item(sess, turn_context, turn_diff_tracker, sub_id, item.clone())
+                .await?;
+        if let Some(resp) = response.clone() {
+            output.push(resp);
+        }
+        processed_items.push(ProcessedResponseItem { item, response });
+    }
+
+    // Process tool calls in parallel
+    if !pending_tool_calls.is_empty() {
+        // Separate agent calls from other tool calls
+        let (agent_calls, other_tool_calls): (Vec<_>, Vec<_>) = pending_tool_calls
+            .into_iter()
+            .partition(|call| call.name == "agent");
+
+        // Handle agent calls in parallel (they need special handling)
+        if !agent_calls.is_empty() {
+            let agent_call_params: Vec<_> = agent_calls
+                .iter()
+                .map(|call| {
+                    (
+                        call.call_id.clone(),
+                        call.arguments.clone().unwrap_or_default(),
+                        sub_id.to_string(),
+                    )
+                })
+                .collect();
+
+            // Execute all agents in parallel with proper concurrency control
+            // Create Arc wrappers for concurrent execution
+            let sess_arc = unsafe { Arc::from_raw(sess as *const Session) };
+            let context_arc = unsafe { Arc::from_raw(turn_context as *const TurnContext) };
+
+            let agent_results =
+                execute_agents_concurrent(sess_arc.clone(), context_arc.clone(), agent_call_params)
+                    .await;
+
+            // Prevent dropping the references we don't own
+            let _ = Arc::into_raw(sess_arc);
+            let _ = Arc::into_raw(context_arc);
+
+            // Process agent results
+            for (i, (_call_id, result)) in agent_results.into_iter().enumerate() {
+                let item = agent_calls[i].item.clone();
+                output.push(result.clone());
+                processed_items.push(ProcessedResponseItem {
+                    item,
+                    response: Some(result),
+                });
+            }
+        }
+
+        // Handle other tool calls in parallel
+        if !other_tool_calls.is_empty() {
+            let tool_futures: Vec<_> = other_tool_calls
+                .into_iter()
+                .map(|call| {
+                    let item = call.item;
+
+                    async move {
+                        // Each tool gets its own diff tracker for isolation
+                        let mut local_diff_tracker = TurnDiffTracker::new();
+                        let response = handle_response_item(
+                            sess,
+                            turn_context,
+                            &mut local_diff_tracker,
+                            sub_id,
+                            item.clone(),
+                        )
+                        .await;
+                        (item, response)
+                    }
+                })
+                .collect();
+
+            // Execute all non-agent tool calls in parallel
+            let tool_results = futures::future::join_all(tool_futures).await;
+
+            // Collect results
+            for (item, response) in tool_results {
+                match response {
+                    Ok(Some(resp)) => {
+                        output.push(resp.clone());
+                        processed_items.push(ProcessedResponseItem {
+                            item,
+                            response: Some(resp),
+                        });
+                    }
+                    Ok(None) => {
+                        processed_items.push(ProcessedResponseItem {
+                            item,
+                            response: None,
+                        });
+                    }
+                    Err(e) => {
+                        // Create error response for failed tool call
+                        let error_response = create_tool_error_response(&item, &e.to_string());
+                        if let Some(err_resp) = error_response {
+                            output.push(err_resp.clone());
+                            processed_items.push(ProcessedResponseItem {
+                                item,
+                                response: Some(err_resp),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(TurnRunResult {
+        processed_items,
+        total_token_usage: token_usage_result,
+    })
 }
 
 async fn handle_response_item(
@@ -2599,15 +2771,15 @@ async fn handle_function_call(
             }
         }
         "agent" => {
-            handle_agent_tool_call(
-                sess,
-                turn_context,
-                turn_diff_tracker,
-                sub_id,
-                arguments,
+            // Agent calls are now handled in parallel at the turn level
+            // Return a placeholder response that will be replaced by parallel execution
+            ResponseInputItem::FunctionCallOutput {
                 call_id,
-            )
-            .await
+                output: FunctionCallOutputPayload {
+                    content: "Agent execution deferred for parallel processing".to_string(),
+                    success: Some(false),
+                },
+            }
         }
         _ => {
             match sess.mcp_connection_manager.parse_tool_name(&name) {
@@ -2644,221 +2816,216 @@ enum AgentMessage {
     Summary(String),             // Summary of agent's work
 }
 
-async fn handle_agent_tool_call(
-    sess: &Session,
-    turn_context: &TurnContext,
-    turn_diff_tracker: &mut TurnDiffTracker,
-    sub_id: String,
-    arguments: String,
-    call_id: String,
-) -> ResponseInputItem {
-    use crate::plan_tool::PlanItemArg;
-    use crate::plan_tool::StepStatus;
-    use crate::plan_tool::UpdatePlanArgs;
+// =================================================================================
+// Agent Execution Helper Functions
+// =================================================================================
 
-    #[derive(Deserialize)]
-    struct AgentArgs {
-        #[serde(default)]
-        agent: Option<String>,
-        task: String,
-        #[serde(default)]
-        context: Option<String>, // Optional additional context
-    }
-
-    // Parse the arguments
-    let args = match serde_json::from_str::<AgentArgs>(&arguments) {
-        Ok(args) => args,
-        Err(e) => {
-            return ResponseInputItem::FunctionCallOutput {
-                call_id,
-                output: FunctionCallOutputPayload {
-                    content: format!("Failed to parse agent arguments: {e}"),
-                    success: Some(false),
-                },
-            };
-        }
-    };
-
-    let agent_name = args.agent.unwrap_or_else(|| "general".to_string());
-
-    // Check recursion prevention - agents can't spawn other agents
-    if sess.state.lock_unchecked().is_agent_context {
-        return ResponseInputItem::FunctionCallOutput {
-            call_id,
-            output: FunctionCallOutputPayload {
-                content: "Error: Agents cannot spawn other agents (recursion prevention)"
-                    .to_string(),
-                success: Some(false),
-            },
-        };
-    }
-
-    // Get the agent registry (lazy init if needed)
-    let registry = {
-        let mut agent_registry_guard = sess.agent_registry.lock_unchecked();
-        match agent_registry_guard.as_ref() {
-            Some(r) => r.clone(),
-            None => {
-                // Initialize agent registry if not already done
-                match crate::agent::AgentRegistry::new() {
-                    Ok(r) => {
-                        let registry = Arc::new(r);
-                        *agent_registry_guard = Some(registry.clone());
-                        registry
-                    }
-                    Err(e) => {
-                        return ResponseInputItem::FunctionCallOutput {
-                            call_id,
-                            output: FunctionCallOutputPayload {
-                                content: format!("Failed to initialize agent registry: {e}"),
-                                success: Some(false),
-                            },
-                        };
-                    }
-                }
-            }
-        }
-    }; // MutexGuard is dropped here, before any await
-
-    // Get the specialized system prompt for this agent
-    let agent_system_prompt = registry.get_system_prompt(&agent_name);
-
-    // Build the agent's initialization prompt
-    let agent_init_prompt = if let Some(context) = args.context {
-        format!(
-            "{}\n\nContext: {}\n\nTask: {}",
-            agent_system_prompt, context, args.task
-        )
-    } else {
-        format!("{}\n\nTask: {}", agent_system_prompt, args.task)
-    };
-
-    // Create a plan item for this agent execution
-    // Generate a unique ID using the call_id as base (safely truncated)
-    let plan_item_id = format!(
-        "agent-{}-{}",
-        agent_name,
-        call_id.get(..8).unwrap_or(&call_id)
-    );
-
-    // Send a plan update event to track this agent execution
-    let plan_args = UpdatePlanArgs {
-        explanation: Some(format!("Executing {agent_name} agent")),
-        plan: vec![PlanItemArg {
-            step: format!("@{}: {}", agent_name, args.task),
-            status: StepStatus::InProgress,
-        }],
-    };
-
-    sess.send_event(Event {
-        id: sub_id.to_string(),
-        msg: EventMsg::PlanUpdate(plan_args),
-    })
-    .await;
-
-    // Execute the agent in an isolated context
-    let result = execute_agent_isolated(
-        sess,
-        turn_context,
-        turn_diff_tracker,
-        AgentExecutionParams {
-            sub_id: sub_id.clone(),
-            agent_name: agent_name.clone(),
-            init_prompt: agent_init_prompt,
-            call_id: call_id.clone(),
-            plan_item_id: Some(plan_item_id.clone()),
-        },
-    )
-    .await;
-
-    // Update plan status based on result
-    let (response, plan_status) = match result {
-        Ok(agent_response) => (
-            ResponseInputItem::FunctionCallOutput {
-                call_id,
-                output: FunctionCallOutputPayload {
-                    content: agent_response,
-                    success: Some(true),
-                },
-            },
-            StepStatus::Completed,
-        ),
-        Err(e) => (
-            ResponseInputItem::FunctionCallOutput {
-                call_id,
-                output: FunctionCallOutputPayload {
-                    content: format!("Agent execution failed: {e}"),
-                    success: Some(false),
-                },
-            },
-            StepStatus::Completed, // Mark as completed even on error
-        ),
-    };
-
-    // Send final plan update with completion status
-    let final_plan_args = UpdatePlanArgs {
-        explanation: Some(format!("{agent_name} agent execution complete")),
-        plan: vec![PlanItemArg {
-            step: format!("@{}: {}", agent_name, args.task),
-            status: plan_status,
-        }],
-    };
-
-    sess.send_event(Event {
-        id: sub_id.to_string(),
-        msg: EventMsg::PlanUpdate(final_plan_args),
-    })
-    .await;
-
-    response
+/// Parse agent arguments from JSON string
+fn parse_agent_args(arguments: &str) -> Result<AgentToolArgs, serde_json::Error> {
+    serde_json::from_str::<AgentToolArgs>(arguments)
 }
 
-/// Parameters for agent execution
+/// Build agent prompt with context and task
+fn build_agent_prompt(system_prompt: &str, context: Option<&str>, task: &str) -> String {
+    if let Some(ctx) = context {
+        format!("{system_prompt}\n\nContext: {ctx}\n\nTask: {task}")
+    } else {
+        format!("{system_prompt}\n\nTask: {task}")
+    }
+}
+
+/// Generate a unique plan ID for agent execution
+fn generate_agent_plan_id(agent_name: &str, call_id: &str) -> String {
+    format!(
+        "agent-{}-{}",
+        agent_name,
+        call_id.get(..8).unwrap_or(call_id)
+    )
+}
+
+/// Create an error response for agent calls
+fn create_tool_error_response(item: &ResponseItem, error_msg: &str) -> Option<ResponseInputItem> {
+    match item {
+        ResponseItem::FunctionCall { call_id, .. } => Some(ResponseInputItem::FunctionCallOutput {
+            call_id: call_id.clone(),
+            output: FunctionCallOutputPayload {
+                content: error_msg.to_string(),
+                success: Some(false),
+            },
+        }),
+        ResponseItem::CustomToolCall { call_id, .. } => {
+            Some(ResponseInputItem::CustomToolCallOutput {
+                call_id: call_id.clone(),
+                output: error_msg.to_string(),
+            })
+        }
+        _ => None,
+    }
+}
+
+fn create_agent_error_response(call_id: String, error_msg: &str) -> (String, ResponseInputItem) {
+    (
+        call_id.clone(),
+        ResponseInputItem::FunctionCallOutput {
+            call_id,
+            output: FunctionCallOutputPayload {
+                content: error_msg.to_string(),
+                success: Some(false),
+            },
+        },
+    )
+}
+
+/// Get the agent registry from the session
+fn get_agent_registry(sess: &Session) -> Result<Arc<crate::agent::AgentRegistry>, String> {
+    let agent_registry_guard = sess.agent_registry.lock_unchecked();
+    match agent_registry_guard.as_ref() {
+        Some(r) => Ok(r.clone()),
+        None => Err("Agent registry not available".to_string()),
+    }
+}
+/// Execute multiple agents with true concurrent execution
+async fn execute_agents_concurrent(
+    sess: Arc<Session>,
+    parent_context: Arc<TurnContext>,
+    agent_calls: Vec<(String, String, String)>, // (call_id, arguments, sub_id)
+) -> Vec<(String, ResponseInputItem)> {
+    use futures::future::join_all;
+
+    // Check if we're already in agent context (prevent recursion)
+    if sess.state.lock_unchecked().is_agent_context {
+        return agent_calls
+            .into_iter()
+            .map(|(call_id, _, _)| {
+                (
+                    call_id.clone(),
+                    ResponseInputItem::FunctionCallOutput {
+                        call_id,
+                        output: FunctionCallOutputPayload {
+                            content:
+                                "Error: Agents cannot spawn other agents (recursion prevention)"
+                                    .to_string(),
+                            success: Some(false),
+                        },
+                    },
+                )
+            })
+            .collect();
+    }
+
+    // Get the agent registry once using helper
+    let registry = match get_agent_registry(&sess) {
+        Ok(r) => r,
+        Err(msg) => {
+            return agent_calls
+                .into_iter()
+                .map(|(call_id, _, _)| create_agent_error_response(call_id, &msg))
+                .collect();
+        }
+    };
+
+    // Prepare agent execution futures for concurrent execution
+    let agent_futures: Vec<_> = agent_calls
+        .into_iter()
+        .map(|(call_id, arguments, sub_id)| {
+            let registry_clone = Arc::clone(&registry);
+            let sess_clone = Arc::clone(&sess);
+            let context_clone = Arc::clone(&parent_context);
+
+            async move {
+                // Parse agent arguments using helper
+                let args = match parse_agent_args(&arguments) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        return create_agent_error_response(
+                            call_id.clone(),
+                            &format!("Failed to parse agent arguments: {e}"),
+                        );
+                    }
+                };
+
+                let agent_name = args.agent.unwrap_or_else(|| "general".to_string());
+                let agent_system_prompt = registry_clone.get_system_prompt(&agent_name);
+
+                // Build the agent's initialization prompt using helper
+                let agent_init_prompt =
+                    build_agent_prompt(&agent_system_prompt, args.context.as_deref(), &args.task);
+
+                let plan_item_id = generate_agent_plan_id(&agent_name, &call_id);
+
+                // Execute the agent in an isolated context
+                let result = execute_agent_isolated(
+                    sess_clone,
+                    context_clone,
+                    AgentExecutionParams {
+                        sub_id: sub_id.clone(),
+                        agent_name: agent_name.clone(),
+                        init_prompt: agent_init_prompt,
+                        call_id: call_id.clone(),
+                        _plan_item_id: Some(plan_item_id),
+                    },
+                )
+                .await;
+
+                // Convert result to ResponseInputItem
+                let response = match result {
+                    Ok(agent_response) => ResponseInputItem::FunctionCallOutput {
+                        call_id: call_id.clone(),
+                        output: FunctionCallOutputPayload {
+                            content: agent_response,
+                            success: Some(true),
+                        },
+                    },
+                    Err(e) => ResponseInputItem::FunctionCallOutput {
+                        call_id: call_id.clone(),
+                        output: FunctionCallOutputPayload {
+                            content: format!("Agent execution failed: {e}"),
+                            success: Some(false),
+                        },
+                    },
+                };
+
+                (call_id, response)
+            }
+        })
+        .collect();
+
+    // Execute all agents concurrently
+    join_all(agent_futures).await
+}
 struct AgentExecutionParams {
     sub_id: String,
     agent_name: String,
     init_prompt: String,
     call_id: String,
-    plan_item_id: Option<String>,
+    _plan_item_id: Option<String>,
 }
 
 /// Execute an agent in an isolated context
 async fn execute_agent_isolated(
-    sess: &Session,
-    parent_context: &TurnContext,
-    turn_diff_tracker: &mut TurnDiffTracker,
+    sess: Arc<Session>,
+    parent_context: Arc<TurnContext>,
     params: AgentExecutionParams,
 ) -> Result<String, String> {
     use std::time::Instant;
     let start_time = Instant::now();
 
     info!(
-        "Executing agent '{}' with isolated context",
+        "Executing agent '{}' with isolated context (parallel)",
         params.agent_name
     );
 
     // Check and set agent context to prevent recursion (before sending any events)
     {
-        let mut state = sess.state.lock_unchecked();
+        let state = sess.state.lock_unchecked();
         if state.is_agent_context {
             return Err("Agents cannot spawn other agents".to_string());
         }
-        state.is_agent_context = true;
+        // Note: We don't set is_agent_context here for parallel execution
+        // Each agent runs independently
     }
-
-    // Create a scope guard to ensure the agent context flag is always reset
-    struct AgentContextGuard<'a> {
-        sess: &'a Session,
-    }
-    impl<'a> Drop for AgentContextGuard<'a> {
-        fn drop(&mut self) {
-            self.sess.state.lock_unchecked().is_agent_context = false;
-        }
-    }
-    let _guard = AgentContextGuard { sess };
 
     // Extract the user's task from the agent prompt
-    // The prompt format is: [agent system prompt]\n\nTask: [user's request]
     let task_text = params
         .init_prompt
         .lines()
@@ -2871,404 +3038,87 @@ async fn execute_agent_isolated(
         return Err("No task found in agent prompt".to_string());
     }
 
-    // Create an isolated context for the agent with specialized system prompt
-    let agent_context = TurnContext {
-        client: parent_context.client.clone(),
-        cwd: parent_context.cwd.clone(),
-        base_instructions: Some(params.init_prompt.clone()),
-        user_instructions: None,
-        approval_policy: parent_context.approval_policy,
-        sandbox_policy: parent_context.sandbox_policy.clone(),
-        shell_environment_policy: parent_context.shell_environment_policy.clone(),
-        tools_config: parent_context.tools_config.clone(),
-        is_review_mode: false,
-    };
-
+    // Log agent start
     info!(
-        "Agent '{}' executing task: {}",
-        params.agent_name, task_text
+        "Agent '{}' starting task (call_id: {}): {}",
+        params.agent_name, params.call_id, task_text
     );
 
-    // Create the input for the LLM as a user message
-    use codex_protocol::models::ContentItem;
-    let input = vec![ResponseItem::Message {
+    // Create a minimal prompt for the agent with just the system prompt and task
+    let agent_messages = vec![ResponseItem::Message {
         id: None,
         role: "user".to_string(),
-        content: vec![ContentItem::InputText {
-            text: task_text.clone(),
+        content: vec![ContentItem::OutputText {
+            text: params.init_prompt.clone(),
         }],
     }];
 
-    // Get tools available for the agent (excluding "agent" tool to prevent recursion)
-    let tools = get_openai_tools(
-        &agent_context.tools_config,
-        Some(sess.mcp_connection_manager.list_all_tools()),
+    // Create a modified turn context for the agent
+    let agent_turn_context = TurnContext {
+        client: parent_context.client.clone(),
+        tools_config: parent_context.tools_config.clone(),
+        user_instructions: None, // Don't include user instructions for agents
+        base_instructions: Some(params.init_prompt.clone()),
+        approval_policy: parent_context.approval_policy,
+        sandbox_policy: parent_context.sandbox_policy.clone(),
+        shell_environment_policy: parent_context.shell_environment_policy.clone(),
+        cwd: parent_context.cwd.clone(),
+        is_review_mode: false,
+    };
+
+    // Execute a single turn for the agent
+    let mut agent_response = String::new();
+    let mut turn_diff_tracker = TurnDiffTracker::new();
+
+    match run_turn(
+        &sess,
+        &agent_turn_context,
+        &mut turn_diff_tracker,
+        params.sub_id.clone(),
+        agent_messages,
     )
-    .into_iter()
-    .filter(|tool| {
-        // Filter out the agent tool to prevent infinite recursion
-        match tool {
-            OpenAiTool::Function(f) => f.name != "agent",
-            OpenAiTool::Freeform(f) => f.name != "agent",
-            _ => true,
-        }
-    })
-    .collect();
-
-    // Create the prompt with the agent's specialized instructions
-    let prompt = Prompt {
-        input,
-        tools,
-        base_instructions_override: Some(params.init_prompt.clone()),
-    };
-
-    // Stream the response from the LLM
-    let mut stream = match agent_context.client.stream(&prompt).await {
-        Ok(s) => s,
-        Err(e) => {
-            error!("Failed to start agent stream: {}", e);
-            return Err(format!("Failed to start agent stream: {e}"));
-        }
-    };
-
-    // Send AgentBegin event only after stream is successfully created
-    sess.send_event(Event {
-        id: params.sub_id.clone(),
-        msg: EventMsg::AgentBegin(crate::protocol::AgentBeginEvent {
-            call_id: params.call_id.clone(),
-            agent_name: params.agent_name.clone(),
-            task: params.init_prompt.clone(),
-            parent_context: None,
-            plan_item_id: params.plan_item_id.clone(),
-        }),
-    })
-    .await;
-
-    // Track whether AgentBegin was sent, so we know if we need to send AgentEnd on error
-    let agent_begin_sent = true;
-
-    // Track agent execution
-    let mut agent_outputs = Vec::new();
-    let mut agent_loops = Vec::new();
-    let mut agent_diff_tracker = TurnDiffTracker::new();
-
-    // Collect all response items for potential multi-turn execution
-    let mut collected_items = Vec::new();
-    let mut pending_tool_calls = Vec::new();
-
-    // Process the initial stream
-    loop {
-        let event = stream.next().await;
-        let Some(event) = event else {
-            warn!("Agent stream closed unexpectedly");
-            break;
-        };
-
-        let event = match event {
-            Ok(ev) => ev,
-            Err(e) => {
-                error!("Agent stream error: {}", e);
-                let error_msg = format!("Agent stream error: {e}");
-
-                // Send AgentEnd event with failure status if AgentBegin was sent
-                if agent_begin_sent {
-                    let duration_ms = start_time.elapsed().as_millis() as u64;
-                    sess.send_event(Event {
-                        id: params.sub_id.clone(),
-                        msg: EventMsg::AgentEnd(crate::protocol::AgentEndEvent {
-                            call_id: params.call_id.clone(),
-                            agent_name: params.agent_name.clone(),
-                            summary: format!("Agent failed: {error_msg}"),
-                            status: crate::protocol::AgentStatus::Failed,
-                            duration_ms,
-                            plan_item_id: params.plan_item_id.clone(),
-                        }),
-                    })
-                    .await;
-                }
-
-                return Err(error_msg);
-            }
-        };
-
-        match event {
-            ResponseEvent::OutputItemDone(item) => {
-                // Check if this is a tool call (which we now support, except for "agent" tool)
-                if matches!(
-                    &item,
-                    ResponseItem::FunctionCall { .. }
-                        | ResponseItem::LocalShellCall { .. }
-                        | ResponseItem::CustomToolCall { .. }
-                ) {
-                    // The "agent" tool is already filtered out from available tools
-                    // So we can safely handle other tool calls
-                    match &item {
-                        ResponseItem::FunctionCall { name, call_id, .. } => {
-                            info!("Agent executing function: {}", name);
-                            agent_loops.push(format!("Executed function: {name}"));
-                            pending_tool_calls.push((call_id.clone(), item.clone()));
-                        }
-                        ResponseItem::LocalShellCall {
-                            action, call_id, ..
-                        } => {
-                            let LocalShellAction::Exec(exec) = action;
-                            info!("Agent executing command: {}", exec.command.join(" "));
-                            agent_loops
-                                .push(format!("Executed command: {}", exec.command.join(" ")));
-                            if let Some(id) = call_id {
-                                pending_tool_calls.push((id.clone(), item.clone()));
-                            }
-                        }
-                        ResponseItem::CustomToolCall { name, call_id, .. } => {
-                            info!("Agent executing tool: {}", name);
-                            agent_loops.push(format!("Executed tool: {name}"));
-                            pending_tool_calls.push((call_id.clone(), item.clone()));
-                        }
-                        _ => {}
-                    }
-                }
-
-                // Collect all items for processing
-                collected_items.push(item.clone());
-
-                // Collect text outputs from assistant messages
-                if let ResponseItem::Message { role, content, .. } = &item
+    .await
+    {
+        Ok(turn_output) => {
+            // Extract the assistant's response
+            for processed_item in turn_output.processed_items {
+                if let ProcessedResponseItem {
+                    item: ResponseItem::Message { role, content, .. },
+                    response: None,
+                } = processed_item
                     && role == "assistant"
                 {
                     for content_item in content {
                         if let ContentItem::OutputText { text } = content_item {
-                            agent_outputs.push(text.clone());
+                            agent_response.push_str(&text);
+                            agent_response.push('\n');
                         }
                     }
                 }
             }
-            ResponseEvent::Completed { .. } => {
-                info!("Agent stream completed");
-                break;
-            }
-            ResponseEvent::OutputTextDelta(delta) => {
-                // Send progress updates
-                sess.send_event(Event {
-                    id: params.sub_id.clone(),
-                    msg: EventMsg::AgentProgress(crate::protocol::AgentProgressEvent {
-                        call_id: params.call_id.clone(),
-                        agent_name: params.agent_name.clone(),
-                        step: format!(
-                            "Processing: {}...",
-                            delta.chars().take(50).collect::<String>()
-                        ),
-                        progress_type: crate::protocol::AgentProgressType::Loop(delta),
-                    }),
-                })
-                .await;
-            }
-            _ => {
-                // Handle other events as needed
-            }
+        }
+        Err(e) => {
+            error!("Agent '{}' turn failed: {e:#}", params.agent_name);
+            agent_response = format!("Error during agent execution: {e}");
         }
     }
 
-    // Now handle tool calls if there were any
-    if !pending_tool_calls.is_empty() {
-        info!("Agent made {} tool calls", pending_tool_calls.len());
+    let duration = start_time.elapsed();
+    info!("Agent '{}' completed in {:?}", params.agent_name, duration);
 
-        // TODO: Implement proper multi-turn tool execution for agents
-        // The challenge is that calling handle_response_item creates an async recursion
-        // issue because it can potentially call the agent tool (even though we filter it).
-        //
-        // Solutions to explore:
-        // 1. Box the async function to allow recursion
-        // 2. Create a separate tool handler for agents that doesn't include agent tool
-        // 3. Refactor the architecture to avoid the recursion entirely
-        //
-        // For now, we acknowledge tool calls but don't execute them to maintain stability
-
-        warn!(
-            "Agent tool execution is currently limited. {} tool calls were requested but not executed.",
-            pending_tool_calls.len()
-        );
-
-        // Log what tools were requested for debugging and user feedback
-        for (call_id, tool_item) in &pending_tool_calls {
-            match tool_item {
-                ResponseItem::FunctionCall { name, .. } => {
-                    info!("  - Function call '{}' (id: {})", name, call_id);
-                    agent_loops.push(format!("Requested function: {name}"));
-                }
-                ResponseItem::LocalShellCall { action, .. } => {
-                    if let LocalShellAction::Exec(exec) = action {
-                        info!(
-                            "  - Shell command: {} (id: {})",
-                            exec.command.join(" "),
-                            call_id
-                        );
-                        agent_loops.push(format!("Requested command: {}", exec.command.join(" ")));
-                    }
-                }
-                ResponseItem::CustomToolCall { name, .. } => {
-                    info!("  - Custom tool '{}' (id: {})", name, call_id);
-                    agent_loops.push(format!("Requested tool: {name}"));
-                }
-                _ => {}
-            }
-        }
-
-        agent_outputs.push(
-            "\n[Note: Tool execution in agents is currently limited. Tools were recognized but not executed.]".to_string()
-        );
-    }
-
-    // If no outputs were collected, provide a fallback
-    if agent_outputs.is_empty() {
-        agent_outputs.push(format!(
-            "Agent '{}' completed task but produced no text output",
-            params.agent_name
-        ));
-    }
-
-    // Add completion to loops
-    if agent_loops.is_empty() {
-        agent_loops.push("Agent execution completed".to_string());
-    }
-
-    // Track any file changes (empty for now as agents work in isolated context)
-    let agent_changes: Vec<(PathBuf, FileChange)> = Vec::new();
-
-    // Generate comprehensive summary
-    let summary = generate_agent_summary(
-        &params.agent_name,
-        &params.init_prompt,
-        &agent_loops,
-        &agent_changes,
-        &agent_outputs,
+    // Log agent completion
+    info!(
+        "Agent '{}' completed in {}ms (call_id: {})",
+        params.agent_name,
+        duration.as_millis(),
+        params.call_id
     );
 
-    // Update diff tracker if there were changes
-    if !agent_changes.is_empty() {
-        let changes_map: HashMap<PathBuf, FileChange> = agent_changes.into_iter().collect();
-        turn_diff_tracker.on_patch_begin(&changes_map);
-    }
-
-    // Send AgentEnd event
-    let duration_ms = start_time.elapsed().as_millis() as u64;
-    sess.send_event(Event {
-        id: params.sub_id.clone(),
-        msg: EventMsg::AgentEnd(crate::protocol::AgentEndEvent {
-            call_id: params.call_id,
-            agent_name: params.agent_name.clone(),
-            summary: summary.clone(),
-            status: crate::protocol::AgentStatus::Done,
-            duration_ms,
-            plan_item_id: params.plan_item_id,
-        }),
-    })
-    .await;
-
-    // Note: agent context flag is reset by the AgentContextGuard drop
-
-    info!("Agent '{}' completed successfully", params.agent_name);
-    Ok(summary)
-}
-
-/// Process a single agent stream and collect tool calls
-async fn process_agent_stream(
-    sess: &Session,
-    stream: &mut crate::client_common::ResponseStream,
-    sub_id: &str,
-    agent_name: &str,
-    agent_outputs: &mut Vec<String>,
-    agent_loops: &mut Vec<String>,
-) -> Result<Vec<(String, ResponseItem)>, String> {
-    let mut tool_calls = Vec::new();
-
-    loop {
-        let event = stream.next().await;
-        let Some(event) = event else {
-            break; // Stream completed normally
-        };
-
-        let event = match event {
-            Ok(ev) => ev,
-            Err(e) => {
-                return Err(format!("Agent stream error: {e}"));
-            }
-        };
-
-        match event {
-            ResponseEvent::OutputItemDone(item) => {
-                // Check if this is a tool call
-                if matches!(
-                    &item,
-                    ResponseItem::FunctionCall { .. }
-                        | ResponseItem::LocalShellCall { .. }
-                        | ResponseItem::CustomToolCall { .. }
-                ) {
-                    match &item {
-                        ResponseItem::FunctionCall { name, call_id, .. } => {
-                            info!("Agent requesting function: {}", name);
-                            agent_loops.push(format!("Called function: {name}"));
-                            tool_calls.push((call_id.clone(), item.clone()));
-                        }
-                        ResponseItem::LocalShellCall {
-                            action, call_id, ..
-                        } => {
-                            let LocalShellAction::Exec(exec) = action;
-                            info!("Agent requesting command: {}", exec.command.join(" "));
-                            agent_loops.push(format!("Executed: {}", exec.command.join(" ")));
-                            if let Some(id) = call_id {
-                                tool_calls.push((id.clone(), item.clone()));
-                            }
-                        }
-                        ResponseItem::CustomToolCall { name, call_id, .. } => {
-                            info!("Agent requesting tool: {}", name);
-                            agent_loops.push(format!("Used tool: {name}"));
-                            tool_calls.push((call_id.clone(), item.clone()));
-                        }
-                        _ => {}
-                    }
-                }
-
-                // Collect text outputs from assistant messages
-                if let ResponseItem::Message { role, content, .. } = &item
-                    && role == "assistant"
-                {
-                    for content_item in content {
-                        if let ContentItem::OutputText { text } = content_item {
-                            agent_outputs.push(text.clone());
-                        }
-                    }
-                }
-            }
-            ResponseEvent::Completed { .. } => {
-                info!("Agent stream completed");
-                break;
-            }
-            ResponseEvent::OutputTextDelta(delta) => {
-                // Send progress updates
-                sess.send_event(Event {
-                    id: sub_id.to_string(),
-                    msg: EventMsg::AgentProgress(crate::protocol::AgentProgressEvent {
-                        call_id: String::new(),
-                        agent_name: agent_name.to_string(),
-                        step: format!(
-                            "Processing: {}...",
-                            delta.chars().take(50).collect::<String>()
-                        ),
-                        progress_type: crate::protocol::AgentProgressType::Loop(delta),
-                    }),
-                })
-                .await;
-            }
-            _ => {
-                // Handle other events as needed
-            }
-        }
-    }
-
-    Ok(tool_calls)
+    Ok(agent_response)
 }
 
 /// Generate a comprehensive summary of agent execution
+#[allow(dead_code)]
 fn generate_agent_summary(
     agent_name: &str,
     init_prompt: &str,

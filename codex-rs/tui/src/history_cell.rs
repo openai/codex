@@ -1392,7 +1392,7 @@ pub(crate) fn new_agent_end(event: &codex_core::protocol::AgentEndEvent) -> Plai
     let (status_icon, status_text) = match event.status {
         AgentStatus::Done => ("✓".green(), " Done ".green()),
         AgentStatus::Failed => ("✗".red(), " Failed ".red()),
-        AgentStatus::Running => ("⟲".yellow(), " Running ".yellow()), // Shouldn't happen here but handle it
+        AgentStatus::Running => ("⟲".cyan(), " Running ".cyan()), // Shouldn't happen here but handle it
     };
 
     let mut lines = vec![Line::from(vec![
