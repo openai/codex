@@ -517,11 +517,11 @@ async fn review_input_isolated_from_parent_history() {
             && role == "developer"
         {
             for c in content {
-                if let ContentItem::InputText { text } = c {
-                    if text.contains("[User initiated a review task, but was interrupted.") {
-                        saw_interruption_message = true;
-                        break;
-                    }
+                if let ContentItem::InputText { text } = c
+                    && text.contains("[User initiated a review task, but was interrupted.")
+                {
+                    saw_interruption_message = true;
+                    break;
                 }
             }
         }
