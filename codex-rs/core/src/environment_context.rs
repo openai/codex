@@ -77,11 +77,21 @@ impl EnvironmentContext {
     /// comparing turn to turn, since the initial environment_context will
     /// include the shell, and then it is not configurable from turn to turn.
     pub fn equals_except_shell(&self, other: &EnvironmentContext) -> bool {
-        self.cwd == other.cwd
-            && self.approval_policy == other.approval_policy
-            && self.sandbox_mode == other.sandbox_mode
-            && self.network_access == other.network_access
-            && self.writable_roots == other.writable_roots
+        let EnvironmentContext {
+            cwd,
+            approval_policy,
+            sandbox_mode,
+            network_access,
+            writable_roots,
+            // should compare all fields except shell
+            shell: _,
+        } = other;
+
+        self.cwd == *cwd
+            && self.approval_policy == *approval_policy
+            && self.sandbox_mode == *sandbox_mode
+            && self.network_access == *network_access
+            && self.writable_roots == *writable_roots
     }
 }
 
