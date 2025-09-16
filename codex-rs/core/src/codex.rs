@@ -314,7 +314,6 @@ pub(crate) struct TurnContext {
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) tools_config: ToolsConfig,
     pub(crate) is_review_mode: bool,
-    pub(crate) exec_timeout_seconds: Option<u64>,
 }
 
 impl TurnContext {
@@ -487,7 +486,6 @@ impl Session {
             shell_environment_policy: config.shell_environment_policy.clone(),
             cwd,
             is_review_mode: false,
-            exec_timeout_seconds: config.exec_timeout_seconds,
         };
         let sess = Arc::new(Session {
             conversation_id,
@@ -1263,7 +1261,6 @@ async fn submission_loop(
                     shell_environment_policy: prev.shell_environment_policy.clone(),
                     cwd: new_cwd.clone(),
                     is_review_mode: false,
-                    exec_timeout_seconds: prev.exec_timeout_seconds,
                 };
 
                 // Install the new persistent context for subsequent tasks/turns.
@@ -1350,7 +1347,6 @@ async fn submission_loop(
                         shell_environment_policy: turn_context.shell_environment_policy.clone(),
                         cwd,
                         is_review_mode: false,
-                        exec_timeout_seconds: config.exec_timeout_seconds,
                     };
                     // TODO: record the new environment context in the conversation history
                     // no current task, spawn a new one with the per‑turn context
@@ -1585,7 +1581,6 @@ async fn spawn_review_thread(
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
         cwd: parent_turn_context.cwd.clone(),
         is_review_mode: true,
-        exec_timeout_seconds: parent_turn_context.exec_timeout_seconds,
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -2636,9 +2631,9 @@ async fn handle_custom_tool_call(
 }
 
 fn to_exec_params(params: ShellToolCallParams, turn_context: &TurnContext) -> ExecParams {
-    // Use timeout from tool call params, fallback to config timeout (converted to ms), then to default
+    // Use timeout from tool call params, fallback to shell policy timeout (converted to ms), then to default
     let timeout_ms = params.timeout_ms
-        .or_else(|| turn_context.exec_timeout_seconds.map(|s| s * 1000));
+        .or_else(|| turn_context.shell_environment_policy.exec_timeout_seconds.map(|s| s * 1000));
 
     ExecParams {
         command: params.command,
@@ -3548,7 +3543,6 @@ mod tests {
             shell_environment_policy: config.shell_environment_policy.clone(),
             tools_config,
             is_review_mode: false,
-            exec_timeout_seconds: config.exec_timeout_seconds,
         };
         let session = Session {
             conversation_id,

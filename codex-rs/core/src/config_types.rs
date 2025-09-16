@@ -152,6 +152,9 @@ pub struct ShellEnvironmentPolicyToml {
     pub include_only: Option<Vec<String>>,
 
     pub experimental_use_profile: Option<bool>,
+
+    /// Timeout for individual command execution in seconds.
+    pub exec_timeout_seconds: Option<u64>,
 }
 
 pub type EnvironmentVariablePattern = WildMatchPattern<'*', '?'>;
@@ -183,6 +186,9 @@ pub struct ShellEnvironmentPolicy {
 
     /// If true, the shell profile will be used to run the command.
     pub use_profile: bool,
+
+    /// Timeout for individual command execution in seconds. Defaults to 10 seconds.
+    pub exec_timeout_seconds: Option<u64>,
 }
 
 impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
@@ -212,6 +218,7 @@ impl From<ShellEnvironmentPolicyToml> for ShellEnvironmentPolicy {
             r#set,
             include_only,
             use_profile,
+            exec_timeout_seconds: toml.exec_timeout_seconds,
         }
     }
 }

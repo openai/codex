@@ -194,9 +194,6 @@ pub struct Config {
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: bool,
-
-    /// Timeout for individual command execution in seconds. Defaults to 10 seconds.
-    pub exec_timeout_seconds: Option<u64>,
 }
 
 impl Config {
@@ -848,6 +845,7 @@ pub struct ConfigOverrides {
     pub include_view_image_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
+    pub timeout_seconds: Option<u64>,
 }
 
 impl Config {
@@ -876,6 +874,7 @@ impl Config {
             include_view_image_tool,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
+            timeout_seconds,
         } = overrides;
 
         let active_profile_name = config_profile_key
@@ -918,7 +917,16 @@ impl Config {
             })?
             .clone();
 
-        let shell_environment_policy = cfg.shell_environment_policy.into();
+        let shell_environment_policy = {
+            let mut policy_toml = cfg.shell_environment_policy;
+
+            // Override timeout from CLI if provided
+            if let Some(timeout) = timeout_seconds {
+                policy_toml.exec_timeout_seconds = Some(timeout);
+            }
+
+            policy_toml.into()
+        };
 
         let resolved_cwd = {
             use std::env;
@@ -1051,7 +1059,6 @@ impl Config {
             include_view_image_tool,
             active_profile: active_profile_name,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
-            exec_timeout_seconds: None, // Will be set from CLI args later
             tui_notifications: cfg
                 .tui
                 .as_ref()
@@ -1620,7 +1627,6 @@ model_verbosity = "high"
                 include_view_image_tool: true,
                 active_profile: Some("o3".to_string()),
                 disable_paste_burst: false,
-                exec_timeout_seconds: None,
                 tui_notifications: Default::default(),
             },
             o3_profile_config
@@ -1679,7 +1685,6 @@ model_verbosity = "high"
             include_view_image_tool: true,
             active_profile: Some("gpt3".to_string()),
             disable_paste_burst: false,
-            exec_timeout_seconds: None,
             tui_notifications: Default::default(),
         };
 
@@ -1753,7 +1758,6 @@ model_verbosity = "high"
             include_view_image_tool: true,
             active_profile: Some("zdr".to_string()),
             disable_paste_burst: false,
-            exec_timeout_seconds: None,
             tui_notifications: Default::default(),
         };
 
@@ -1813,7 +1817,6 @@ model_verbosity = "high"
             include_view_image_tool: true,
             active_profile: Some("gpt5".to_string()),
             disable_paste_burst: false,
-            exec_timeout_seconds: None,
             tui_notifications: Default::default(),
         };
 
