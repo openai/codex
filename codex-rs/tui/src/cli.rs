@@ -72,6 +72,10 @@ pub struct Cli {
     #[arg(long = "search", default_value_t = false)]
     pub web_search: bool,
 
+    /// Set the timeout for individual command execution in seconds (default: 10).
+    #[arg(long = "timeout", value_name = "SECONDS")]
+    pub timeout_seconds: Option<u64>,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 }

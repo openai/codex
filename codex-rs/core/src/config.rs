@@ -194,6 +194,9 @@ pub struct Config {
     /// All characters are inserted as they are received, and no buffering
     /// or placeholder replacement will occur for fast keypress bursts.
     pub disable_paste_burst: bool,
+
+    /// Timeout for individual command execution in seconds. Defaults to 10 seconds.
+    pub exec_timeout_seconds: Option<u64>,
 }
 
 impl Config {
@@ -1048,6 +1051,7 @@ impl Config {
             include_view_image_tool,
             active_profile: active_profile_name,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
+            exec_timeout_seconds: None, // Will be set from CLI args later
             tui_notifications: cfg
                 .tui
                 .as_ref()
@@ -1616,6 +1620,7 @@ model_verbosity = "high"
                 include_view_image_tool: true,
                 active_profile: Some("o3".to_string()),
                 disable_paste_burst: false,
+                exec_timeout_seconds: None,
                 tui_notifications: Default::default(),
             },
             o3_profile_config
@@ -1674,6 +1679,7 @@ model_verbosity = "high"
             include_view_image_tool: true,
             active_profile: Some("gpt3".to_string()),
             disable_paste_burst: false,
+            exec_timeout_seconds: None,
             tui_notifications: Default::default(),
         };
 
@@ -1747,6 +1753,7 @@ model_verbosity = "high"
             include_view_image_tool: true,
             active_profile: Some("zdr".to_string()),
             disable_paste_burst: false,
+            exec_timeout_seconds: None,
             tui_notifications: Default::default(),
         };
 
@@ -1806,6 +1813,7 @@ model_verbosity = "high"
             include_view_image_tool: true,
             active_profile: Some("gpt5".to_string()),
             disable_paste_burst: false,
+            exec_timeout_seconds: None,
             tui_notifications: Default::default(),
         };
 

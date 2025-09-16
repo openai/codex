@@ -163,6 +163,11 @@ pub async fn run_main(
         }
     };
 
+    // Override timeout from CLI argument if provided
+    if let Some(timeout_seconds) = cli.timeout_seconds {
+        config.exec_timeout_seconds = Some(timeout_seconds);
+    }
+
     // we load config.toml here to determine project state.
     #[allow(clippy::print_stderr)]
     let config_toml = {
