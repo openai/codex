@@ -1437,12 +1437,15 @@ pub(crate) fn new_reasoning_summary_block(
                     let summary_buffer = full_reasoning_buffer[after_close_idx..].to_string();
 
                     let mut header_lines: Vec<Line<'static>> = Vec::new();
-                    header_lines.push(Line::from("Thinking".magenta().italic()));
                     append_markdown(&header_buffer, &mut header_lines, config);
+                    header_lines = header_lines.into_iter().map(|l| l.bold()).collect();
 
                     let mut summary_lines: Vec<Line<'static>> = Vec::new();
-                    summary_lines.push(Line::from("Thinking".magenta().bold()));
                     append_markdown(&summary_buffer, &mut summary_lines, config);
+                    summary_lines = summary_lines
+                        .into_iter()
+                        .map(|l| l.dim().italic())
+                        .collect();
 
                     return vec![
                         Box::new(TranscriptOnlyHistoryCell {
@@ -1558,6 +1561,7 @@ mod tests {
     use codex_core::config::ConfigOverrides;
     use codex_core::config::ConfigToml;
     use dirs::home_dir;
+    use pretty_assertions::assert_eq;
 
     fn test_config() -> Config {
         Config::load_from_base_config_with_overrides(
@@ -2075,6 +2079,27 @@ mod tests {
         let lines = cell.display_lines(40);
         let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
+    }
+    #[test]
+    fn reasoning_summary_block() {
+        let mut config = test_config();
+        config.model_family.reasoning_summary_format = ReasoningSummaryFormat::Experimental;
+
+        let cells = new_reasoning_summary_block(
+            "**High level reasoning**\n\nDetailed reasoning goes here.".to_string(),
+            &config,
+        );
+
+        assert_eq!(cells.len(), 2);
+
+        let header_lines = render_transcript(cells[0].as_ref());
+        assert_eq!(header_lines, vec!["High level reasoning"]);
+
+        let lines = cells[1].display_lines(80);
+        assert_eq!(
+            lines,
+            vec![vec!["> ".into(), "Detailed reasoning goes here.".dim().italic()].into()]
+        );
     }
 
     #[test]
