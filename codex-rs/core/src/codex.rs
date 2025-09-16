@@ -3148,7 +3148,7 @@ async fn execute_agent_isolated_concurrent(
     let agent_messages = vec![ResponseItem::Message {
         id: None,
         role: "user".to_string(),
-        content: vec![ContentItem::OutputText {
+        content: vec![ContentItem::InputText {
             text: params.task_message.clone(),
         }],
     }];
