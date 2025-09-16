@@ -17,6 +17,7 @@ use super::bottom_pane_view::BottomPaneView;
 use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
+use super::selection_popup_common::measure_rows_height;
 use super::selection_popup_common::render_rows;
 
 /// One selectable item in the generic selection list.
@@ -135,11 +136,36 @@ impl BottomPaneView for ListSelectionView {
         CancellationEvent::Handled
     }
 
-    fn desired_height(&self, _width: u16) -> u16 {
-        let rows = (self.items.len()).clamp(1, MAX_POPUP_ROWS);
+    fn desired_height(&self, width: u16) -> u16 {
+        // Measure wrapped height for up to MAX_POPUP_ROWS items at the given width.
+        // Build the same display rows used by the renderer so wrapping math matches.
+        let rows: Vec<GenericDisplayRow> = self
+            .items
+            .iter()
+            .enumerate()
+            .map(|(i, it)| {
+                let is_selected = self.state.selected_idx == Some(i);
+                let prefix = if is_selected { '>' } else { ' ' };
+                let name_with_marker = if it.is_current {
+                    format!("{} (current)", it.name)
+                } else {
+                    it.name.clone()
+                };
+                let display_name = format!("{} {}. {}", prefix, i + 1, name_with_marker);
+                GenericDisplayRow {
+                    name: display_name,
+                    match_indices: None,
+                    is_current: it.is_current,
+                    description: it.description.clone(),
+                }
+            })
+            .collect();
+
+        let rows_height = measure_rows_height(&rows, &self.state, MAX_POPUP_ROWS, width);
+
         // +1 for the title row, +1 for a spacer line beneath the header,
-        // +1 for optional subtitle, +1 for optional footer
-        let mut height = rows as u16 + 2;
+        // +1 for optional subtitle, +1 for optional footer (2 lines incl. spacing)
+        let mut height = rows_height + 2;
         if self.subtitle.is_some() {
             // +1 for subtitle (the spacer is accounted for above)
             height = height.saturating_add(1);
