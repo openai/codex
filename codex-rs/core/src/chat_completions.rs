@@ -303,7 +303,7 @@ pub(crate) async fn stream_chat_completions(
                     tx_event,
                     provider.stream_idle_timeout(),
                 ));
-                return Ok(ResponseStream { rx_event });
+                return Ok(ResponseStream::new(rx_event));
             }
             Ok(res) => {
                 let status = res.status();

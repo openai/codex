@@ -63,6 +63,10 @@ pub struct Cli {
     #[arg(long = "json", default_value_t = false)]
     pub json: bool,
 
+    /// Prevent the system from sleeping while commands run (macOS only).
+    #[arg(long = "no-sleep", default_value_t = false)]
+    pub no_sleep: bool,
+
     /// Specifies file where the last message from the agent should be written.
     #[arg(long = "output-last-message")]
     pub last_message_file: Option<PathBuf>,

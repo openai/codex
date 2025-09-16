@@ -40,6 +40,7 @@ use crate::model_provider_info::ModelProviderInfo;
 use crate::model_provider_info::WireApi;
 use crate::openai_model_info::get_model_info;
 use crate::openai_tools::create_tools_json_for_responses_api;
+use crate::prevent_sleep::PreventSleepGuard;
 use crate::protocol::TokenUsage;
 use crate::token_data::PlanType;
 use crate::util::backoff;
@@ -114,8 +115,10 @@ impl ModelClient {
     /// the provider config.  Public callers always invoke `stream()` – the
     /// specialised helpers are private to avoid accidental misuse.
     pub async fn stream(&self, prompt: &Prompt) -> Result<ResponseStream> {
-        match self.provider.wire_api {
-            WireApi::Responses => self.stream_responses(prompt).await,
+        let guard = PreventSleepGuard::activate_if_supported(self.config.prevent_sleep);
+
+        let response_stream = match self.provider.wire_api {
+            WireApi::Responses => self.stream_responses(prompt).await?,
             WireApi::Chat => {
                 // Create the raw streaming connection first.
                 let response_stream = stream_chat_completions(
@@ -149,9 +152,11 @@ impl ModelClient {
                     }
                 });
 
-                Ok(ResponseStream { rx_event: rx })
+                ResponseStream::new(rx)
             }
-        }
+        };
+
+        Ok(response_stream.with_prevent_sleep_guard(guard))
     }
 
     /// Implementation for the OpenAI *Responses* experimental API.
@@ -282,7 +287,7 @@ impl ModelClient {
                         self.provider.stream_idle_timeout(),
                     ));
 
-                    return Ok(ResponseStream { rx_event });
+                    return Ok(ResponseStream::new(rx_event));
                 }
                 Ok(res) => {
                     let status = res.status();
@@ -698,7 +703,7 @@ async fn stream_from_fixture(
         tx_event,
         provider.stream_idle_timeout(),
     ));
-    Ok(ResponseStream { rx_event })
+    Ok(ResponseStream::new(rx_event))
 }
 
 fn rate_limit_regex() -> &'static Regex {

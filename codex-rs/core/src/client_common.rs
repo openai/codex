@@ -1,6 +1,7 @@
 use crate::error::Result;
 use crate::model_family::ModelFamily;
 use crate::openai_tools::OpenAiTool;
+use crate::prevent_sleep::PreventSleepGuard;
 use crate::protocol::TokenUsage;
 use codex_apply_patch::APPLY_PATCH_TOOL_INSTRUCTIONS;
 use codex_protocol::config_types::ReasoningEffort as ReasoningEffortConfig;
@@ -163,6 +164,21 @@ pub(crate) fn create_text_param_for_request(
 
 pub struct ResponseStream {
     pub(crate) rx_event: mpsc::Receiver<Result<ResponseEvent>>,
+    prevent_sleep_guard: Option<PreventSleepGuard>,
+}
+
+impl ResponseStream {
+    pub(crate) fn new(rx_event: mpsc::Receiver<Result<ResponseEvent>>) -> Self {
+        Self {
+            rx_event,
+            prevent_sleep_guard: None,
+        }
+    }
+
+    pub(crate) fn with_prevent_sleep_guard(mut self, guard: Option<PreventSleepGuard>) -> Self {
+        self.prevent_sleep_guard = guard;
+        self
+    }
 }
 
 impl Stream for ResponseStream {

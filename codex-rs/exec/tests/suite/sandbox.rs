@@ -17,7 +17,7 @@ async fn spawn_command_under_sandbox(
     env: HashMap<String, String>,
 ) -> std::io::Result<Child> {
     use codex_core::seatbelt::spawn_command_under_seatbelt;
-    spawn_command_under_seatbelt(command, sandbox_policy, cwd, stdio_policy, env).await
+    spawn_command_under_seatbelt(command, sandbox_policy, cwd, stdio_policy, env, false).await
 }
 
 #[cfg(target_os = "linux")]
@@ -37,6 +37,7 @@ async fn spawn_command_under_sandbox(
         cwd,
         stdio_policy,
         env,
+        false,
     )
     .await
 }

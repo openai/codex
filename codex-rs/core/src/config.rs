@@ -187,6 +187,9 @@ pub struct Config {
     /// Include the `view_image` tool that lets the agent attach a local image path to context.
     pub include_view_image_tool: bool,
 
+    /// When true, wrap executed tasks to prevent the system from sleeping.
+    pub prevent_sleep: bool,
+
     /// The active profile name used to derive this `Config` (if any).
     pub active_profile: Option<String>,
 
@@ -845,6 +848,7 @@ pub struct ConfigOverrides {
     pub include_view_image_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
+    pub prevent_sleep: Option<bool>,
 }
 
 impl Config {
@@ -873,6 +877,7 @@ impl Config {
             include_view_image_tool,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
+            prevent_sleep,
         } = overrides;
 
         let active_profile_name = config_profile_key
@@ -945,6 +950,8 @@ impl Config {
         let include_view_image_tool = include_view_image_tool
             .or(cfg.tools.as_ref().and_then(|t| t.view_image))
             .unwrap_or(true);
+
+        let prevent_sleep = prevent_sleep.unwrap_or(false);
 
         let model = model
             .or(config_profile.model)
@@ -1046,6 +1053,7 @@ impl Config {
                 .experimental_use_unified_exec_tool
                 .unwrap_or(false),
             include_view_image_tool,
+            prevent_sleep,
             active_profile: active_profile_name,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
             tui_notifications: cfg
@@ -1614,6 +1622,7 @@ model_verbosity = "high"
                 use_experimental_streamable_shell_tool: false,
                 use_experimental_unified_exec_tool: false,
                 include_view_image_tool: true,
+                prevent_sleep: false,
                 active_profile: Some("o3".to_string()),
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
@@ -1672,6 +1681,7 @@ model_verbosity = "high"
             use_experimental_streamable_shell_tool: false,
             use_experimental_unified_exec_tool: false,
             include_view_image_tool: true,
+            prevent_sleep: false,
             active_profile: Some("gpt3".to_string()),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
@@ -1745,6 +1755,7 @@ model_verbosity = "high"
             use_experimental_streamable_shell_tool: false,
             use_experimental_unified_exec_tool: false,
             include_view_image_tool: true,
+            prevent_sleep: false,
             active_profile: Some("zdr".to_string()),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
@@ -1804,6 +1815,7 @@ model_verbosity = "high"
             use_experimental_streamable_shell_tool: false,
             use_experimental_unified_exec_tool: false,
             include_view_image_tool: true,
+            prevent_sleep: false,
             active_profile: Some("gpt5".to_string()),
             disable_paste_burst: false,
             tui_notifications: Default::default(),

@@ -35,6 +35,7 @@ async fn run_test_cmd(tmp: TempDir, cmd: Vec<&str>) -> Result<ExecToolCallOutput
         env: HashMap::new(),
         with_escalated_permissions: None,
         justification: None,
+        prevent_sleep: false,
     };
 
     let policy = SandboxPolicy::new_read_only_policy();
