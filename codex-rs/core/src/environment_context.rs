@@ -239,8 +239,8 @@ mod tests {
     }
 
     #[test]
-    fn equals_except_shell_compares() {
-        // Network access is different
+    fn equals_except_shell_compares_approval_policy() {
+        // Approval policy
         let context1 = EnvironmentContext::new(
             Some(PathBuf::from("/repo")),
             Some(AskForApproval::OnRequest),
@@ -249,8 +249,43 @@ mod tests {
         );
         let context2 = EnvironmentContext::new(
             Some(PathBuf::from("/repo")),
-            Some(AskForApproval::OnRequest),
+            Some(AskForApproval::Never),
             Some(workspace_write_policy(vec!["/repo"], true)),
+            None,
+        );
+        assert!(!context1.equals_except_shell(&context2));
+    }
+
+    #[test]
+    fn equals_except_shell_compares_sandbox_policy() {
+        let context1 = EnvironmentContext::new(
+            Some(PathBuf::from("/repo")),
+            Some(AskForApproval::OnRequest),
+            Some(SandboxPolicy::new_read_only_policy()),
+            None,
+        );
+        let context2 = EnvironmentContext::new(
+            Some(PathBuf::from("/repo")),
+            Some(AskForApproval::OnRequest),
+            Some(SandboxPolicy::new_workspace_write_policy()),
+            None,
+        );
+
+        assert!(!context1.equals_except_shell(&context2));
+    }
+
+    #[test]
+    fn equals_except_shell_compares_workspace_write_policy() {
+        let context1 = EnvironmentContext::new(
+            Some(PathBuf::from("/repo")),
+            Some(AskForApproval::OnRequest),
+            Some(workspace_write_policy(vec!["/repo", "/tmp", "/var"], false)),
+            None,
+        );
+        let context2 = EnvironmentContext::new(
+            Some(PathBuf::from("/repo")),
+            Some(AskForApproval::OnRequest),
+            Some(workspace_write_policy(vec!["/repo", "/tmp"], true)),
             None,
         );
 
