@@ -328,20 +328,46 @@ fn create_view_image_tool() -> OpenAiTool {
     })
 }
 
-fn create_agent_tool() -> OpenAiTool {
+fn create_agent_tool(agent_infos: Option<&[crate::protocol::AgentInfo]>) -> OpenAiTool {
     let mut properties = BTreeMap::new();
+
+    // Build agent description with list of available agents
+    let agent_description = if let Some(agents) = agent_infos {
+        if agents.is_empty() {
+            "Name of the agent to use. No custom agents configured. Use 'general' for default."
+                .to_string()
+        } else {
+            let agent_list: Vec<String> = agents
+                .iter()
+                .map(|a| {
+                    if a.description.is_empty() {
+                        format!("  - {}", a.name)
+                    } else {
+                        format!("  - {}: {}", a.name, a.description)
+                    }
+                })
+                .collect();
+            format!(
+                "Name of the agent to use. Available agents:\n{}\n  - general: Default general-purpose agent",
+                agent_list.join("\n")
+            )
+        }
+    } else {
+        "Name of the agent to use (e.g., 'code_reviewer', 'test_designer') or 'general' for default"
+            .to_string()
+    };
 
     properties.insert(
         "agent".to_string(),
         JsonSchema::String {
-            description: Some("Name of the agent to use (e.g., 'code_reviewer', 'test_designer') or 'general' for default".to_string()),
+            description: Some(agent_description),
         },
     );
 
     properties.insert(
         "task".to_string(),
         JsonSchema::String {
-            description: Some("The task for the agent to perform autonomously".to_string()),
+            description: Some("The task for the agent to perform autonomously. Be specific and provide clear instructions. When using multiple agent calls in parallel, each agent can work on a different task or aspect of the problem concurrently.".to_string()),
         },
     );
 
@@ -355,11 +381,23 @@ fn create_agent_tool() -> OpenAiTool {
         },
     );
 
+    // Build tool description with parallel execution emphasis
+    let tool_description = if let Some(agents) = agent_infos {
+        if !agents.is_empty() {
+            format!(
+                "Run a specialized agent for delegated task execution. {} specialized agents available. Use the 'agent' parameter to select one. IMPORTANT: This tool supports TRUE PARALLEL EXECUTION - multiple agent tool calls in the same response will run concurrently for maximum performance. Ideal for dividing complex tasks among multiple specialized agents.",
+                agents.len()
+            )
+        } else {
+            "Run a specialized agent for delegated task execution. No custom agents configured, will use general agent. IMPORTANT: This tool supports TRUE PARALLEL EXECUTION - multiple agent tool calls in the same response will run concurrently for maximum performance.".to_string()
+        }
+    } else {
+        "Run a specialized agent with custom system prompt for delegated task execution. IMPORTANT: This tool supports TRUE PARALLEL EXECUTION - multiple agent tool calls in the same response will run concurrently for maximum performance. Ideal for dividing complex tasks among multiple specialized agents.".to_string()
+    };
+
     OpenAiTool::Function(ResponsesApiTool {
         name: "agent".to_string(),
-        description:
-            "Run a specialized agent with custom system prompt for delegated task execution"
-                .to_string(),
+        description: tool_description,
         strict: false,
         parameters: JsonSchema::Object {
             properties,
@@ -575,6 +613,7 @@ fn sanitize_json_schema(value: &mut JsonValue) {
 pub(crate) fn get_openai_tools(
     config: &ToolsConfig,
     mcp_tools: Option<HashMap<String, mcp_types::Tool>>,
+    agent_infos: Option<Vec<crate::protocol::AgentInfo>>,
 ) -> Vec<OpenAiTool> {
     let mut tools: Vec<OpenAiTool> = Vec::new();
 
@@ -628,7 +667,7 @@ pub(crate) fn get_openai_tools(
 
     // Include the agent tool for multi-agent orchestration
     if config.include_agent_tool {
-        tools.push(create_agent_tool());
+        tools.push(create_agent_tool(agent_infos.as_deref()));
     }
 
     if let Some(mcp_tools) = mcp_tools {
@@ -697,7 +736,7 @@ mod tests {
             experimental_unified_exec_tool: true,
             include_agent_tool: false,
         });
-        let tools = get_openai_tools(&config, Some(HashMap::new()));
+        let tools = get_openai_tools(&config, Some(HashMap::new()), None);
 
         assert_eq_tool_names(
             &tools,
@@ -720,7 +759,7 @@ mod tests {
             experimental_unified_exec_tool: true,
             include_agent_tool: false,
         });
-        let tools = get_openai_tools(&config, Some(HashMap::new()));
+        let tools = get_openai_tools(&config, Some(HashMap::new()), None);
 
         assert_eq_tool_names(
             &tools,
@@ -779,6 +818,7 @@ mod tests {
                     description: Some("Do something cool".to_string()),
                 },
             )])),
+            None,
         );
 
         assert_eq_tool_names(
@@ -900,7 +940,7 @@ mod tests {
             ),
         ]);
 
-        let tools = get_openai_tools(&config, Some(tools_map));
+        let tools = get_openai_tools(&config, Some(tools_map), None);
         // Expect unified_exec first, followed by MCP tools sorted by fully-qualified name.
         assert_eq_tool_names(
             &tools,
@@ -951,6 +991,7 @@ mod tests {
                     description: Some("Search docs".to_string()),
                 },
             )])),
+            None,
         );
 
         assert_eq_tool_names(
@@ -1013,6 +1054,7 @@ mod tests {
                     description: Some("Pagination".to_string()),
                 },
             )])),
+            None,
         );
 
         assert_eq_tool_names(
@@ -1072,6 +1114,7 @@ mod tests {
                     description: Some("Tags".to_string()),
                 },
             )])),
+            None,
         );
 
         assert_eq_tool_names(
@@ -1134,6 +1177,7 @@ mod tests {
                     description: Some("AnyOf Value".to_string()),
                 },
             )])),
+            None,
         );
 
         assert_eq_tool_names(

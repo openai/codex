@@ -1996,9 +1996,18 @@ async fn run_turn(
     sub_id: String,
     input: Vec<ResponseItem>,
 ) -> CodexResult<TurnRunResult> {
+    // Get agent list if available
+    let agent_infos =
+        if let Ok(Some(registry)) = sess.agent_registry.lock().map(|g| g.as_ref().cloned()) {
+            Some(registry.list_agent_details())
+        } else {
+            None
+        };
+
     let tools = get_openai_tools(
         &turn_context.tools_config,
         Some(sess.mcp_connection_manager.list_all_tools()),
+        agent_infos,
     );
 
     let prompt = Prompt {
@@ -2250,12 +2259,10 @@ async fn try_run_turn(
     }
 
     // Process collected items after the stream completes
-    // Separate tool calls from other items for potential parallel execution
+    // Process items in order while collecting agent calls for parallel execution
     let mut processed_items = Vec::new();
-    let mut pending_tool_calls = Vec::new();
-    let mut non_tool_items = Vec::new();
+    let mut pending_agent_calls = Vec::new();
 
-    // Categorize items
     for item in collected_items {
         match &item {
             ResponseItem::FunctionCall {
@@ -2263,124 +2270,17 @@ async fn try_run_turn(
                 call_id,
                 arguments,
                 ..
-            } => {
-                pending_tool_calls.push(PendingToolCall {
+            } if name == "agent" => {
+                // Collect agent calls for parallel execution
+                pending_agent_calls.push(PendingToolCall {
                     item: item.clone(),
                     call_id: call_id.clone(),
                     name: name.clone(),
                     arguments: Some(arguments.clone()),
                 });
             }
-            ResponseItem::LocalShellCall {
-                call_id: Some(id), ..
-            } => {
-                pending_tool_calls.push(PendingToolCall {
-                    item: item.clone(),
-                    call_id: id.clone(),
-                    name: "shell".to_string(),
-                    arguments: None,
-                });
-            }
-            ResponseItem::LocalShellCall { call_id: None, .. } => {
-                non_tool_items.push(item);
-            }
-            ResponseItem::CustomToolCall { name, call_id, .. } => {
-                pending_tool_calls.push(PendingToolCall {
-                    item: item.clone(),
-                    call_id: call_id.clone(),
-                    name: name.clone(),
-                    arguments: None,
-                });
-            }
-            _ => {
-                non_tool_items.push(item);
-            }
-        }
-    }
-
-    // Process non-tool items first (messages, reasoning, etc.)
-    for item in non_tool_items {
-        let response =
-            handle_response_item(sess, turn_context, turn_diff_tracker, sub_id, item.clone())
-                .await?;
-        if let Some(resp) = response.clone() {
-            output.push(resp);
-        }
-        processed_items.push(ProcessedResponseItem { item, response });
-    }
-
-    // Process tool calls with appropriate concurrency strategy
-    if !pending_tool_calls.is_empty() {
-        // Separate agent calls from other tool calls for different handling:
-        // - Agents: Execute in PARALLEL (independent tasks)
-        // - Other tools: Execute SEQUENTIALLY (may have dependencies)
-        let (agent_calls, other_tool_calls): (Vec<_>, Vec<_>) = pending_tool_calls
-            .into_iter()
-            .partition(|call| call.name == "agent");
-
-        // Handle agent calls with TRUE PARALLEL EXECUTION
-        // All agents run concurrently at the same time, not sequentially
-        // This provides maximum performance for multi-agent orchestration
-        if !agent_calls.is_empty() {
-            // Notify UI about parallel agent execution starting
-            if agent_calls.len() > 1 {
-                let event = Event {
-                    id: sub_id.to_string(),
-                    msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
-                        message: format!("🚀 Starting {} agents in PARALLEL...", agent_calls.len()),
-                    }),
-                };
-                sess.send_event(event).await;
-            }
-
-            let agent_call_params: Vec<_> = agent_calls
-                .iter()
-                .map(|call| {
-                    (
-                        call.call_id.clone(),
-                        call.arguments.clone().unwrap_or_default(),
-                        sub_id.to_string(),
-                    )
-                })
-                .collect();
-
-            // Execute all agents in parallel with proper concurrency control
-            let agent_results = {
-                // Create thread-safe wrappers for concurrent execution
-                // SAFETY: sess and turn_context are guaranteed to outlive this call
-                // as they're borrowed from the enclosing function scope
-                let sess_wrapper = Arc::new(SessionWrapper::new(sess));
-                let context_wrapper = Arc::new(TurnContextWrapper::new(turn_context));
-
-                execute_agents_concurrent_safe(
-                    sess_wrapper,
-                    context_wrapper,
-                    turn_diff_tracker,
-                    agent_call_params,
-                )
-                .await
-            };
-
-            // Process agent results
-            for (i, (_call_id, result)) in agent_results.into_iter().enumerate() {
-                let item = agent_calls[i].item.clone();
-                output.push(result.clone());
-                processed_items.push(ProcessedResponseItem {
-                    item,
-                    response: Some(result),
-                });
-            }
-        }
-
-        // Handle other tool calls SEQUENTIALLY (they may have dependencies)
-        // Unlike agents which are independent, tool calls like shell commands
-        // and apply-patch often depend on previous operations completing first
-        if !other_tool_calls.is_empty() {
-            for call in other_tool_calls {
-                let item = call.item;
-
-                // Execute the tool call with the shared diff tracker
-                // This ensures changes are tracked in order
+            ResponseItem::FunctionCall { .. } => {
+                // Process non-agent function calls immediately in order
                 let response = handle_response_item(
                     sess,
                     turn_context,
@@ -2388,38 +2288,136 @@ async fn try_run_turn(
                     sub_id,
                     item.clone(),
                 )
-                .await;
-
-                match response {
-                    Ok(Some(resp)) => {
-                        output.push(resp.clone());
-                        processed_items.push(ProcessedResponseItem {
-                            item,
-                            response: Some(resp),
-                        });
-                    }
-                    Ok(None) => {
-                        processed_items.push(ProcessedResponseItem {
-                            item,
-                            response: None,
-                        });
-                    }
-                    Err(e) => {
-                        // Create error response for failed tool call
-                        let error_response = create_tool_error_response(&item, &e.to_string());
-                        if let Some(err_resp) = error_response {
-                            output.push(err_resp.clone());
-                            processed_items.push(ProcessedResponseItem {
-                                item,
-                                response: Some(err_resp),
-                            });
-                        }
-                        // On error, stop processing remaining tool calls
-                        // as they likely depend on the failed operation
-                        break;
-                    }
+                .await?;
+                if let Some(resp) = response.clone() {
+                    output.push(resp);
                 }
+                processed_items.push(ProcessedResponseItem {
+                    item: item.clone(),
+                    response,
+                });
             }
+            ResponseItem::LocalShellCall {
+                call_id: Some(id), ..
+            } => {
+                // Process shell calls immediately in order
+                let response = handle_response_item(
+                    sess,
+                    turn_context,
+                    turn_diff_tracker,
+                    sub_id,
+                    item.clone(),
+                )
+                .await?;
+                if let Some(resp) = response.clone() {
+                    output.push(resp);
+                }
+                processed_items.push(ProcessedResponseItem {
+                    item: item.clone(),
+                    response,
+                });
+            }
+            ResponseItem::CustomToolCall { name, call_id, .. } if name == "agent" => {
+                // Collect agent calls for parallel execution
+                pending_agent_calls.push(PendingToolCall {
+                    item: item.clone(),
+                    call_id: call_id.clone(),
+                    name: name.clone(),
+                    arguments: None,
+                });
+            }
+            ResponseItem::CustomToolCall { .. } => {
+                // Process non-agent custom tool calls immediately in order
+                let response = handle_response_item(
+                    sess,
+                    turn_context,
+                    turn_diff_tracker,
+                    sub_id,
+                    item.clone(),
+                )
+                .await?;
+                if let Some(resp) = response.clone() {
+                    output.push(resp);
+                }
+                processed_items.push(ProcessedResponseItem {
+                    item: item.clone(),
+                    response,
+                });
+            }
+            _ => {
+                // Process non-tool items immediately in order
+                let response = handle_response_item(
+                    sess,
+                    turn_context,
+                    turn_diff_tracker,
+                    sub_id,
+                    item.clone(),
+                )
+                .await?;
+                if let Some(resp) = response.clone() {
+                    output.push(resp);
+                }
+                processed_items.push(ProcessedResponseItem { item, response });
+            }
+        }
+    }
+
+    // Process pending agent calls in parallel if any were collected
+    if !pending_agent_calls.is_empty() {
+        // Handle agent calls with TRUE PARALLEL EXECUTION
+        // All agents run concurrently at the same time, not sequentially
+        // This provides maximum performance for multi-agent orchestration
+
+        // Notify UI about parallel agent execution starting
+        if pending_agent_calls.len() > 1 {
+            let event = Event {
+                id: sub_id.to_string(),
+                msg: EventMsg::BackgroundEvent(BackgroundEventEvent {
+                    message: format!(
+                        "🚀 Starting {} agents in PARALLEL...",
+                        pending_agent_calls.len()
+                    ),
+                }),
+            };
+            sess.send_event(event).await;
+        }
+
+        let agent_call_params: Vec<_> = pending_agent_calls
+            .iter()
+            .map(|call| {
+                (
+                    call.call_id.clone(),
+                    call.arguments.clone().unwrap_or_default(),
+                    sub_id.to_string(),
+                )
+            })
+            .collect();
+
+        // Execute all agents in parallel with proper concurrency control
+        let agent_results = {
+            // Create thread-safe wrappers for concurrent execution
+            // SAFETY: sess and turn_context are guaranteed to outlive this call
+            // as they're borrowed from the enclosing function scope
+            let sess_wrapper = Arc::new(SessionWrapper::new(sess));
+            let context_wrapper = Arc::new(TurnContextWrapper::new(turn_context));
+
+            execute_agents_concurrent_safe(
+                sess_wrapper,
+                context_wrapper,
+                turn_diff_tracker,
+                agent_call_params,
+            )
+            .await
+        };
+
+        // Process agent results
+        for (i, (_call_id, result)) in agent_results.into_iter().enumerate() {
+            let item = pending_agent_calls[i].item.clone();
+            output.push(result.clone());
+            processed_items.push(ProcessedResponseItem {
+                item,
+                response: Some(result),
+            });
         }
     }
 
