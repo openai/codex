@@ -1357,9 +1357,12 @@ async fn submission_loop(
                             .await;
                     }
 
+                    // Install the new persistent context for subsequent tasks/turns.
+                    turn_context = Arc::new(fresh_turn_context);
+
                     // no current task, spawn a new one with the per‑turn context
                     let task =
-                        AgentTask::spawn(sess.clone(), Arc::new(fresh_turn_context), sub.id, items);
+                        AgentTask::spawn(sess.clone(), Arc::clone(&turn_context), sub.id, items);
                     sess.set_task(task);
                 }
             }
