@@ -6,7 +6,8 @@ use core_test_support::load_default_config_for_test;
 use core_test_support::wait_for_event;
 use tempfile::TempDir;
 
-/// Test that timeout configuration flows correctly from CLI to execution
+/// Test that timeout configuration flows correctly from overrides into the
+/// session initialization path.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn timeout_config_integration() {
     let codex_home = TempDir::new().unwrap();

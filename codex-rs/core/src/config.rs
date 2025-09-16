@@ -1924,8 +1924,10 @@ trust_level = "trusted"
 
 #[cfg(test)]
 mod notifications_tests {
-    use crate::config_types::Notifications;
+    use super::{Config, ConfigOverrides, ConfigToml};
+    use crate::config_types::{Notifications, ShellEnvironmentPolicyToml};
     use serde::Deserialize;
+    use std::path::PathBuf;
 
     #[derive(Deserialize, Debug, PartialEq)]
     struct TuiTomlTest {
@@ -1972,8 +1974,13 @@ mod notifications_tests {
             ..Default::default()
         };
 
-        let config = Config::load_from_base_config_with_overrides(cfg, overrides, PathBuf::from("/tmp")).unwrap();
-        assert_eq!(config.shell_environment_policy.exec_timeout_seconds, Some(120));
+        let config =
+            Config::load_from_base_config_with_overrides(cfg, overrides, PathBuf::from("/tmp"))
+                .unwrap();
+        assert_eq!(
+            config.shell_environment_policy.exec_timeout_seconds,
+            Some(120)
+        );
     }
 
     #[test]
@@ -1991,7 +1998,12 @@ mod notifications_tests {
             ..Default::default()
         };
 
-        let config = Config::load_from_base_config_with_overrides(cfg, overrides, PathBuf::from("/tmp")).unwrap();
-        assert_eq!(config.shell_environment_policy.exec_timeout_seconds, Some(180));
+        let config =
+            Config::load_from_base_config_with_overrides(cfg, overrides, PathBuf::from("/tmp"))
+                .unwrap();
+        assert_eq!(
+            config.shell_environment_policy.exec_timeout_seconds,
+            Some(180)
+        );
     }
 }

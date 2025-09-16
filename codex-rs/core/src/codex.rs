@@ -2632,8 +2632,12 @@ async fn handle_custom_tool_call(
 
 fn to_exec_params(params: ShellToolCallParams, turn_context: &TurnContext) -> ExecParams {
     // Use timeout from tool call params, fallback to shell policy timeout (converted to ms), then to default
-    let timeout_ms = params.timeout_ms
-        .or_else(|| turn_context.shell_environment_policy.exec_timeout_seconds.map(|s| s * 1000));
+    let timeout_ms = params.timeout_ms.or_else(|| {
+        turn_context
+            .shell_environment_policy
+            .exec_timeout_seconds
+            .map(|s| s * 1000)
+    });
 
     ExecParams {
         command: params.command,
@@ -3667,7 +3671,8 @@ mod tests {
 
     #[test]
     fn test_to_exec_params_timeout_fallback() {
-        use crate::config_types::{ShellEnvironmentPolicy, ShellEnvironmentPolicyInherit};
+        use crate::config_types::ShellEnvironmentPolicy;
+        use crate::config_types::ShellEnvironmentPolicyInherit;
         use codex_protocol::models::ShellToolCallParams;
 
         // Create minimal TurnContext-like struct for testing
@@ -3678,7 +3683,8 @@ mod tests {
 
         impl MockTurnContext {
             fn resolve_path(&self, path: Option<String>) -> PathBuf {
-                path.map(|p| self.cwd.join(p)).unwrap_or_else(|| self.cwd.clone())
+                path.map(|p| self.cwd.join(p))
+                    .unwrap_or_else(|| self.cwd.clone())
             }
         }
 
@@ -3704,8 +3710,12 @@ mod tests {
             justification: None,
         };
 
-        let timeout_ms = params_with_timeout.timeout_ms
-            .or_else(|| mock_context.shell_environment_policy.exec_timeout_seconds.map(|s| s * 1000));
+        let timeout_ms = params_with_timeout.timeout_ms.or_else(|| {
+            mock_context
+                .shell_environment_policy
+                .exec_timeout_seconds
+                .map(|s| s * 1000)
+        });
         assert_eq!(timeout_ms, Some(5000));
 
         // Test fallback: shell policy timeout (90s * 1000ms) when no tool param
@@ -3717,8 +3727,12 @@ mod tests {
             justification: None,
         };
 
-        let timeout_ms = params_without_timeout.timeout_ms
-            .or_else(|| mock_context.shell_environment_policy.exec_timeout_seconds.map(|s| s * 1000));
+        let timeout_ms = params_without_timeout.timeout_ms.or_else(|| {
+            mock_context
+                .shell_environment_policy
+                .exec_timeout_seconds
+                .map(|s| s * 1000)
+        });
         assert_eq!(timeout_ms, Some(90000));
     }
 }
