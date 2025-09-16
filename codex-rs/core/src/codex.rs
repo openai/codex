@@ -1352,7 +1352,7 @@ async fn submission_loop(
                     // if the environment context has changed, record it in the conversation history
                     let previous_env_context = EnvironmentContext::from(turn_context.as_ref());
                     let new_env_context = EnvironmentContext::from(&fresh_turn_context);
-                    if new_env_context.equals_except_shell(&previous_env_context) {
+                    if !new_env_context.equals_except_shell(&previous_env_context) {
                         sess.record_conversation_items(&[ResponseItem::from(new_env_context)])
                             .await;
                     }
