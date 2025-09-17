@@ -193,6 +193,14 @@ jobs:
       # Publish to npm using OIDC authentication.
       # July 31, 2025: https://github.blog/changelog/2025-07-31-npm-trusted-publishing-with-oidc-is-generally-available/
       # npm docs: https://docs.npmjs.com/trusted-publishers
+
+      # package.json has `packageManager: "pnpm@`, so we must get pnpm on the
+      # PATH before setting up Node.js.
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
