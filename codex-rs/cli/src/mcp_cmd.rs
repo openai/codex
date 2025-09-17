@@ -15,6 +15,8 @@ use codex_core::config::migrations::mcp::MigrationOptions;
 use codex_core::config::migrations::mcp::{self};
 use codex_core::config::write_global_mcp_servers;
 use codex_core::config_types::McpServerConfig;
+use codex_core::mcp::registry::McpRegistry;
+use codex_core::mcp::templates::TemplateCatalog;
 
 /// [experimental] Launch Codex as an MCP server or manage configured MCP servers.
 ///
@@ -258,7 +260,13 @@ fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) -> Resul
     let config = Config::load_with_cli_overrides(overrides, ConfigOverrides::default())
         .context("failed to load configuration")?;
 
-    let mut entries: Vec<_> = config.mcp_servers.iter().collect();
+    let templates = TemplateCatalog::load_default().unwrap_or_else(|err| {
+        tracing::warn!("Failed to load MCP templates: {err}");
+        TemplateCatalog::empty()
+    });
+    let registry = McpRegistry::new(&config, templates);
+
+    let mut entries: Vec<_> = registry.servers().collect();
     entries.sort_by(|(a, _), (b, _)| a.cmp(b));
 
     if list_args.json {
@@ -286,6 +294,7 @@ fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) -> Resul
                     "created_at": cfg.created_at,
                     "last_verified_at": cfg.last_verified_at,
                     "metadata": cfg.metadata,
+                    "experimental_overhaul": registry.experimental_enabled(),
                 })
             })
             .collect();
@@ -365,7 +374,13 @@ fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Result<(
     let config = Config::load_with_cli_overrides(overrides, ConfigOverrides::default())
         .context("failed to load configuration")?;
 
-    let Some(server) = config.mcp_servers.get(&get_args.name) else {
+    let templates = TemplateCatalog::load_default().unwrap_or_else(|err| {
+        tracing::warn!("Failed to load MCP templates: {err}");
+        TemplateCatalog::empty()
+    });
+    let registry = McpRegistry::new(&config, templates);
+
+    let Some(server) = registry.server(&get_args.name) else {
         bail!("No MCP server named '{name}' found.", name = get_args.name);
     };
 
@@ -381,10 +396,21 @@ fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Result<(
             "args": server.args,
             "env": env,
             "startup_timeout_ms": server.startup_timeout_ms,
+            "display_name": server.display_name,
+            "category": server.category,
+            "template_id": server.template_id,
+            "description": server.description,
+            "auth": server.auth,
+            "healthcheck": server.healthcheck,
+            "tags": server.tags,
+            "created_at": server.created_at,
+            "last_verified_at": server.last_verified_at,
+            "metadata": server.metadata,
+            "experimental_overhaul": registry.experimental_enabled(),
         }))?;
         println!("{output}");
         return Ok(());
-    }
+    };
 
     println!("{}", get_args.name);
     println!("  command: {}", server.command);
@@ -393,25 +419,35 @@ fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Result<(
     } else {
         server.args.join(" ")
     };
-    println!("  args: {args}");
-    let env_display = match server.env.as_ref() {
-        None => "-".to_string(),
-        Some(map) if map.is_empty() => "-".to_string(),
+    println!("  args: {}", args);
+
+    match server.env.as_ref() {
+        None => println!("  env: -"),
+        Some(map) if map.is_empty() => println!("  env: -"),
         Some(map) => {
             let mut pairs: Vec<_> = map.iter().collect();
             pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
-            pairs
-                .into_iter()
-                .map(|(k, v)| format!("{k}={v}"))
-                .collect::<Vec<_>>()
-                .join(", ")
+            for (k, v) in pairs {
+                println!("  env: {k}={v}");
+            }
         }
-    };
-    println!("  env: {env_display}");
-    if let Some(timeout) = server.startup_timeout_ms {
-        println!("  startup_timeout_ms: {timeout}");
     }
-    println!("  remove: codex mcp remove {}", get_args.name);
+
+    if let Some(timeout) = server.startup_timeout_ms {
+        println!("  startup_timeout_ms: {}", timeout);
+    }
+    if let Some(display_name) = &server.display_name {
+        println!("  display_name: {}", display_name);
+    }
+    if let Some(category) = &server.category {
+        println!("  category: {}", category);
+    }
+    if let Some(template_id) = &server.template_id {
+        println!("  template_id: {}", template_id);
+    }
+    if let Some(description) = &server.description {
+        println!("  description: {}", description);
+    }
 
     Ok(())
 }
