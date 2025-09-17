@@ -158,12 +158,15 @@ pub fn run(
         // Don't require git to be present to apply to apply git-related ignore rules.
         .require_git(false);
 
-    if !exclude.is_empty() {
+    {
         let mut override_builder = OverrideBuilder::new(search_directory);
-        for exclude in exclude {
-            // The `!` prefix is used to indicate an exclude pattern.
-            let exclude_pattern = format!("!{exclude}");
-            override_builder.add(&exclude_pattern)?;
+        override_builder.add("**/*")?;
+        if !exclude.is_empty() {
+            for exclude in exclude {
+                // The `!` prefix is used to indicate an exclude pattern.
+                let exclude_pattern = format!("!{exclude}");
+                override_builder.add(&exclude_pattern)?;
+            }
         }
         let override_matcher = override_builder.build()?;
         walk_builder.overrides(override_matcher);
