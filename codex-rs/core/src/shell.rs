@@ -5,20 +5,20 @@ use std::path::PathBuf;
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct ZshShell {
-    shell_path: String,
-    zshrc_path: String,
+    pub(crate) shell_path: String,
+    pub(crate) zshrc_path: String,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct BashShell {
-    shell_path: String,
-    bashrc_path: String,
+    pub(crate) shell_path: String,
+    pub(crate) bashrc_path: String,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 pub struct PowerShellConfig {
-    exe: String, // Executable name or path, e.g. "pwsh" or "powershell.exe".
-    bash_exe_fallback: Option<PathBuf>, // In case the model generates a bash command.
+    pub(crate) exe: String, // Executable name or path, e.g. "pwsh" or "powershell.exe".
+    pub(crate) bash_exe_fallback: Option<PathBuf>, // In case the model generates a bash command.
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]

@@ -11,6 +11,7 @@ use std::time::Duration;
 use crate::AuthManager;
 use crate::client_common::REVIEW_PROMPT;
 use crate::event_mapping::map_response_item_to_event_messages;
+use crate::review_format::format_review_findings_block;
 use async_channel::Receiver;
 use async_channel::Sender;
 use codex_apply_patch::ApplyPatchAction;
@@ -1154,20 +1155,16 @@ impl AgentTask {
     fn abort(self, reason: TurnAbortReason) {
         // TOCTOU?
         if !self.handle.is_finished() {
-            if self.kind == AgentTaskKind::Review {
-                let sess = self.sess.clone();
-                let sub_id = self.sub_id.clone();
-                tokio::spawn(async move {
-                    exit_review_mode(sess, sub_id, None).await;
-                });
-            }
             self.handle.abort();
             let event = Event {
-                id: self.sub_id,
+                id: self.sub_id.clone(),
                 msg: EventMsg::TurnAborted(TurnAbortedEvent { reason }),
             };
             let sess = self.sess;
             tokio::spawn(async move {
+                if self.kind == AgentTaskKind::Review {
+                    exit_review_mode(sess.clone(), self.sub_id, None).await;
+                }
                 sess.send_event(event).await;
             });
         }
@@ -1348,10 +1345,21 @@ async fn submission_loop(
                         cwd,
                         is_review_mode: false,
                     };
-                    // TODO: record the new environment context in the conversation history
+
+                    // if the environment context has changed, record it in the conversation history
+                    let previous_env_context = EnvironmentContext::from(turn_context.as_ref());
+                    let new_env_context = EnvironmentContext::from(&fresh_turn_context);
+                    if !new_env_context.equals_except_shell(&previous_env_context) {
+                        sess.record_conversation_items(&[ResponseItem::from(new_env_context)])
+                            .await;
+                    }
+
+                    // Install the new persistent context for subsequent tasks/turns.
+                    turn_context = Arc::new(fresh_turn_context);
+
                     // no current task, spawn a new one with the per‑turn context
                     let task =
-                        AgentTask::spawn(sess.clone(), Arc::new(fresh_turn_context), sub.id, items);
+                        AgentTask::spawn(sess.clone(), Arc::clone(&turn_context), sub.id, items);
                     sess.set_task(task);
                 }
             }
@@ -1549,7 +1557,8 @@ async fn spawn_review_thread(
         experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
     });
 
-    let base_instructions = Some(REVIEW_PROMPT.to_string());
+    let base_instructions = REVIEW_PROMPT.to_string();
+    let review_prompt = review_request.prompt.clone();
     let provider = parent_turn_context.client.get_provider();
     let auth_manager = parent_turn_context.client.get_auth_manager();
     let model_family = review_model_family.clone();
@@ -1558,16 +1567,19 @@ async fn spawn_review_thread(
     let mut per_turn_config = (*config).clone();
     per_turn_config.model = model.clone();
     per_turn_config.model_family = model_family.clone();
+    per_turn_config.model_reasoning_effort = Some(ReasoningEffortConfig::Low);
+    per_turn_config.model_reasoning_summary = ReasoningSummaryConfig::Detailed;
     if let Some(model_info) = get_model_info(&model_family) {
         per_turn_config.model_context_window = Some(model_info.context_window);
     }
 
+    let per_turn_config = Arc::new(per_turn_config);
     let client = ModelClient::new(
-        Arc::new(per_turn_config),
+        per_turn_config.clone(),
         auth_manager,
         provider,
-        parent_turn_context.client.get_reasoning_effort(),
-        parent_turn_context.client.get_reasoning_summary(),
+        per_turn_config.model_reasoning_effort,
+        per_turn_config.model_reasoning_summary,
         sess.conversation_id,
     );
 
@@ -1575,7 +1587,7 @@ async fn spawn_review_thread(
         client,
         tools_config,
         user_instructions: None,
-        base_instructions,
+        base_instructions: Some(base_instructions.clone()),
         approval_policy: parent_turn_context.approval_policy,
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
@@ -1585,7 +1597,7 @@ async fn spawn_review_thread(
 
     // Seed the child task with the review prompt as the initial user message.
     let input: Vec<InputItem> = vec![InputItem::Text {
-        text: review_request.prompt.clone(),
+        text: format!("{base_instructions}\n\n---\n\nNow, here's your task: {review_prompt}"),
     }];
     let tc = Arc::new(review_turn_context);
 
@@ -1643,6 +1655,8 @@ async fn run_task(
     let is_review_mode = turn_context.is_review_mode;
     let mut review_thread_history: Vec<ResponseItem> = Vec::new();
     if is_review_mode {
+        // Seed review threads with environment context so the model knows the working directory.
+        review_thread_history.extend(sess.build_initial_context(turn_context.as_ref()));
         review_thread_history.push(initial_input_for_turn.into());
     } else {
         sess.record_input_and_rollout_usermsg(&initial_input_for_turn)
@@ -3246,7 +3260,8 @@ fn convert_call_tool_result_to_function_call_output_payload(
     }
 }
 
-/// Emits an ExitedReviewMode Event with optional ReviewOutput.
+/// Emits an ExitedReviewMode Event with optional ReviewOutput,
+/// and records a developer message with the review output.
 async fn exit_review_mode(
     session: Arc<Session>,
     task_sub_id: String,
@@ -3254,9 +3269,50 @@ async fn exit_review_mode(
 ) {
     let event = Event {
         id: task_sub_id,
-        msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent { review_output }),
+        msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+            review_output: review_output.clone(),
+        }),
     };
     session.send_event(event).await;
+
+    let mut user_message = String::new();
+    if let Some(out) = review_output {
+        let mut findings_str = String::new();
+        let text = out.overall_explanation.trim();
+        if !text.is_empty() {
+            findings_str.push_str(text);
+        }
+        if !out.findings.is_empty() {
+            let block = format_review_findings_block(&out.findings, None);
+            findings_str.push_str(&format!("\n{block}"));
+        }
+        user_message.push_str(&format!(
+            r#"<user_action>
+  <context>User initiated a review task. Here's the full review output from reviewer model. User may select one or more comments to resolve.</context>
+  <action>review</action>
+  <results>
+  {findings_str}
+  </results>
+</user_tool>
+"#));
+    } else {
+        user_message.push_str(r#"<user_action>
+  <context>User initiated a review task, but was interrupted. If user asks about this, tell them to re-initiate a review with `/review` and wait for it to complete.</context>
+  <action>review</action>
+  <results>
+  None.
+  </results>
+</user_tool>
+"#);
+    }
+
+    session
+        .record_conversation_items(&[ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText { text: user_message }],
+        }])
+        .await;
 }
 
 #[cfg(test)]

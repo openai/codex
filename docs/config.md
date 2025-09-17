@@ -69,17 +69,6 @@ base_url = "https://api.mistral.ai/v1"
 env_key = "MISTRAL_API_KEY"
 ```
 
-Note that Azure requires `api-version` to be passed as a query parameter, so be sure to specify it as part of `query_params` when defining the Azure provider:
-
-```toml
-[model_providers.azure]
-name = "Azure"
-# Make sure you set the appropriate subdomain for this URL.
-base_url = "https://YOUR_PROJECT_NAME.openai.azure.com/openai"
-env_key = "AZURE_OPENAI_API_KEY"  # Or "OPENAI_API_KEY", whichever you use.
-query_params = { api-version = "2025-04-01-preview" }
-```
-
 It is also possible to configure a provider to include extra HTTP headers with a request. These can be hardcoded values (`http_headers`) or values read from environment variables (`env_http_headers`):
 
 ```toml
@@ -95,6 +84,22 @@ http_headers = { "X-Example-Header" = "example-value" }
 # _if_ the environment variable is set and its value is non-empty.
 env_http_headers = { "X-Example-Features" = "EXAMPLE_FEATURES" }
 ```
+
+### Azure model provider example
+
+Note that Azure requires `api-version` to be passed as a query parameter, so be sure to specify it as part of `query_params` when defining the Azure provider:
+
+```toml
+[model_providers.azure]
+name = "Azure"
+# Make sure you set the appropriate subdomain for this URL.
+base_url = "https://YOUR_PROJECT_NAME.openai.azure.com/openai"
+env_key = "AZURE_OPENAI_API_KEY"  # Or "OPENAI_API_KEY", whichever you use.
+query_params = { api-version = "2025-04-01-preview" }
+wire_api = "responses"
+```
+
+Export your key before launching Codex: `export AZURE_OPENAI_API_KEY=…`
 
 ### Per-provider network tuning
 
