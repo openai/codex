@@ -1,45 +1,45 @@
 # MCP Management Overhaul – Phase 3 (Wizard & UX)
 
 ## Objective
-Implement feature-flagged MCP wizard and template-driven workflows across CLI/TUI while maintaining automation parity and health/status visibility.
+Ship a feature-flagged MCP wizard and dashboard that meet these success criteria:
+- ≥95% of guided CLI/TUI sessions reach a valid config within 5 minutes (measured via telemetry or manual timing).
+- Health check command returns a structured result for every configured server.
+- CLI/TUI/JSON outputs stay in sync (no divergence bugs in manual QA).
+- No plaintext secrets written to disk during wizard flows.
 
 ## Preconditions
-- Schema extensions, migrations, and CLI migrate command (completed).
-- `experimental.mcp_overhaul` gate wired into config loading (completed).
+- Schema extensions, migrations, and CLI migrate command ✅
+- `experimental.mcp_overhaul` flag wired into config ✅
 
-## Phased Tasks
-1. **Templates & Registry Integration**
-   - Define built-in templates under `resources/mcp_templates/*.json` with schema validation helpers (`McpTemplate` parsing).
-   - Extend `codex_core::mcp::registry` (new module) to expose typed CRUD operations, template resolution (apply defaults, prompts for missing fields), and policy checks (command allowlist stub, env key validation warnings).
-   - Implement in-memory health status cache placeholder to surface last probe result.
+## Deliverables
+1. **Templates & Registry (Success when…)**
+   - `resources/mcp_templates/*.json` exist with schema validation.
+   - `codex_core::mcp::registry` supports create/update/delete/list using templates.
+   - Policy hooks (command allowlist stub + env warning) execute during registry ops.
 
-2. **CLI Wizard**
-   - Add `codex mcp wizard` command (feature-gated) with stepper: select template / custom → fill command/env/auth → optional health settings → preview diff → dry-run test call (stub).
-   - Support non-interactive mode: `codex mcp add --template foo --set key=value --set env.KEY=VALUE`.
-   - Reuse registry APIs for create/update; ensure rollback-on-error semantics.
-   - Update list/get outputs to include health summary when flag enabled.
+2. **CLI Wizard (Success when…)**
+   - `codex mcp wizard` (flagged) walks through template selection, validation, preview, final apply.
+   - `codex mcp add --template … --set …` works headless and writes identical config.
+   - `codex mcp list/get` show health summary when flag on.
 
-3. **TUI Panel**
-   - Create MCP management panel (behind flag) listing servers, status, last check, actions (test, edit, remove).
-   - Integrate wizard flow via modal/prompt system; add snapshot tests (`insta`).
+3. **TUI Panel (Success when…)**
+   - New panel lists servers + status.
+   - Wizard modal mirrors CLI flow; snapshot tests updated.
 
-4. **Health Probe Stub**
-   - Wire placeholder `codex mcp test <name>` to call registry health (currently stubbed) so UX flows end-to-end.
-   - Provide JSON output for automation.
+4. **Health Probe Stub (Success when…)**
+   - `codex mcp test <name> [--json]` returns cached/placeholder status without panic.
 
-5. **Automation Hooks**
-   - Add `codex mcp plan --json` to emit registry state + validation warnings (feature-gated).
+5. **Automation Hooks (Success when…)**
+   - `codex mcp plan --json` emits validation summary suitable for CI.
 
-6. **Documentation & Guardrails**
-   - Update `docs/config.md` with experimental flag instructions and wizard preview.
-   - Clearly note feature flag in CLI help (`--help`).
+6. **Documentation & Guardrails (Success when…)**
+   - `docs/config.md` updated with flag instructions + wizard quickstart.
+   - CLI help (`--help`) references experimental gate.
+   - Running wizard/test without flag yields explicit guidance.
 
-## Guardrails
-- All new surfaces check `config.experimental_mcp_overhaul`; non-enabled state prints actionable guidance.
-- Wizard commands must respect `--json` (no interactive prompts) with helpful error when run without flag.
-- No default telemetry until Phase 4.
-
-## Validation
-- Unit tests for template parsing, registry safeguards, CLI wizard step logic.
-- TUI snapshots for panel and wizard modals.
-- Manual QA script covering CLI wizard (Happy path/validation failure) and TUI panel navigation.
+## Validation Checklist
+- Unit tests: template parsing, registry validation, wizard step transitions.
+- TUI snapshot: panel, wizard flows.
+- Manual QA: CLI happy path + failure, TUI flow, automation commands.
+- Telemetry/mock timing: confirm ≤5 min setup goal (manual timing if telemetry absent).
+- Secrets audit: ensure wizard never leaves secrets in plain config.
