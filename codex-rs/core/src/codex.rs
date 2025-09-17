@@ -11,6 +11,7 @@ use std::time::Duration;
 use crate::AuthManager;
 use crate::client_common::REVIEW_PROMPT;
 use crate::event_mapping::map_response_item_to_event_messages;
+use crate::review_format::format_review_findings_block;
 use async_channel::Receiver;
 use async_channel::Sender;
 use codex_apply_patch::ApplyPatchAction;
@@ -3259,7 +3260,8 @@ fn convert_call_tool_result_to_function_call_output_payload(
     }
 }
 
-/// Emits an ExitedReviewMode Event with optional ReviewOutput.
+/// Emits an ExitedReviewMode Event with optional ReviewOutput,
+/// and records a developer message with the review output.
 async fn exit_review_mode(
     session: Arc<Session>,
     task_sub_id: String,
@@ -3267,9 +3269,50 @@ async fn exit_review_mode(
 ) {
     let event = Event {
         id: task_sub_id,
-        msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent { review_output }),
+        msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+            review_output: review_output.clone(),
+        }),
     };
     session.send_event(event).await;
+
+    let mut user_message = String::new();
+    if let Some(out) = review_output {
+        let mut findings_str = String::new();
+        let text = out.overall_explanation.trim();
+        if !text.is_empty() {
+            findings_str.push_str(text);
+        }
+        if !out.findings.is_empty() {
+            let block = format_review_findings_block(&out.findings, None);
+            findings_str.push_str(&format!("\n{block}"));
+        }
+        user_message.push_str(&format!(
+            r#"<user_action>
+  <context>User initiated a review task. Here's the full review output from reviewer model. User may select one or more comments to resolve.</context>
+  <action>review</action>
+  <results>
+  {findings_str}
+  </results>
+</user_tool>
+"#));
+    } else {
+        user_message.push_str(r#"<user_action>
+  <context>User initiated a review task, but was interrupted. If user asks about this, tell them to re-initiate a review with `/review` and wait for it to complete.</context>
+  <action>review</action>
+  <results>
+  None.
+  </results>
+</user_tool>
+"#);
+    }
+
+    session
+        .record_conversation_items(&[ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText { text: user_message }],
+        }])
+        .await;
 }
 
 #[cfg(test)]
