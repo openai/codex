@@ -1113,7 +1113,7 @@ pub(crate) fn new_status_output(
             Some(_) => "~".to_string(),
             None => global_path.display().to_string(),
         };
-        agents_list.push(format!("Global ({display})"));
+        agents_list.push(display);
     }
 
     if let Ok(paths) = discover_project_doc_paths(config) {
@@ -1661,7 +1661,16 @@ mod tests {
         let lines = render_lines(&cell.display_lines(80));
         let agents_line = status_agents_line(&lines).expect("agents line");
 
-        assert!(agents_line.contains("Global ("));
+        let expected = match relativize_to_home(codex_home.path().join("AGENTS.md")) {
+            Some(rel) if !rel.as_os_str().is_empty() => {
+                let sep = std::path::MAIN_SEPARATOR;
+                format!("~{sep}{}", rel.display())
+            }
+            Some(_) => "~".to_string(),
+            None => codex_home.path().join("AGENTS.md").display().to_string(),
+        };
+
+        assert!(agents_line.contains(&expected));
         assert!(!agents_line.contains("(none)"));
     }
 
@@ -1682,7 +1691,16 @@ mod tests {
         let lines = render_lines(&cell.display_lines(80));
         let agents_line = status_agents_line(&lines).expect("agents line");
 
-        assert!(agents_line.contains("Global ("));
+        let expected = match relativize_to_home(codex_home.path().join("AGENTS.md")) {
+            Some(rel) if !rel.as_os_str().is_empty() => {
+                let sep = std::path::MAIN_SEPARATOR;
+                format!("~{sep}{}", rel.display())
+            }
+            Some(_) => "~".to_string(),
+            None => codex_home.path().join("AGENTS.md").display().to_string(),
+        };
+
+        assert!(agents_line.contains(&expected));
         assert!(agents_line.contains("AGENTS.md"));
         assert!(agents_line.contains(","));
     }
