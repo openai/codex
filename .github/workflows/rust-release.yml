@@ -11,6 +11,9 @@ on:
     tags:
       - "rust-v*.*.*"
 
+permissions:
+  id-token: write  # Required for OIDC
+
 concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: true
@@ -187,6 +190,20 @@ jobs:
           version="${GITHUB_REF_NAME#rust-v}"
           echo "name=${version}" >> $GITHUB_OUTPUT
 
+      # Publish to npm using OIDC authentication.
+      # July 31, 2025: https://github.blog/changelog/2025-07-31-npm-trusted-publishing-with-oidc-is-generally-available/
+      # npm docs: https://docs.npmjs.com/trusted-publishers
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          registry-url: "https://registry.npmjs.org"
+          scope: "@openai"
+
+      # Trusted publishing requires npm CLI version 11.5.1 or later.
+      - name: Update npm
+        run: npm install -g npm@latest
+
       - name: Stage npm package
         env:
           GH_TOKEN: ${{ github.token }}
@@ -219,6 +236,12 @@ jobs:
         with:
           tag: ${{ github.ref_name }}
           config: .github/dotslash-config.json
+
+      # No NODE_AUTH_TOKEN needed because we use OIDC.
+      - name: Publish to npm
+        # Do not publish alphas to npm.
+        if: ${{ !contains(steps.release_name.outputs.name, '-') }}
+        run: npm publish "${GITHUB_WORKSPACE}/dist/npm/codex-npm-${{ steps.release_name.outputs.name }}.tgz"
 
   update-branch:
     name: Update latest-alpha-cli branch
