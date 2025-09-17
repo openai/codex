@@ -11,6 +11,8 @@ use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
 use codex_core::config::find_codex_home;
 use codex_core::config::load_global_mcp_servers;
+use codex_core::config::migrations::mcp::MigrationOptions;
+use codex_core::config::migrations::mcp::{self};
 use codex_core::config::write_global_mcp_servers;
 use codex_core::config_types::McpServerConfig;
 
@@ -47,6 +49,9 @@ pub enum McpSubcommand {
 
     /// [experimental] Remove a global MCP server entry.
     Remove(RemoveArgs),
+
+    /// [experimental] Migrate MCP configuration to the latest schema.
+    Migrate(MigrateArgs),
 }
 
 #[derive(Debug, clap::Parser)]
@@ -86,6 +91,17 @@ pub struct RemoveArgs {
     pub name: String,
 }
 
+#[derive(Debug, clap::Parser)]
+pub struct MigrateArgs {
+    /// Apply migration changes instead of performing a dry-run preview.
+    #[arg(long, default_value_t = false)]
+    pub apply: bool,
+
+    /// Migrate even when the schema version is already up-to-date.
+    #[arg(long, default_value_t = false)]
+    pub force: bool,
+}
+
 impl McpCli {
     pub async fn run(self, codex_linux_sandbox_exe: Option<PathBuf>) -> Result<()> {
         let McpCli {
@@ -109,6 +125,9 @@ impl McpCli {
             }
             McpSubcommand::Remove(args) => {
                 run_remove(&config_overrides, args)?;
+            }
+            McpSubcommand::Migrate(args) => {
+                run_migrate(&config_overrides, args)?;
             }
         }
 
@@ -149,6 +168,7 @@ fn run_add(config_overrides: &CliConfigOverrides, add_args: AddArgs) -> Result<(
         args: command_args,
         env: env_map,
         startup_timeout_ms: None,
+        ..McpServerConfig::default()
     };
 
     servers.insert(name.clone(), new_entry);
@@ -188,6 +208,51 @@ fn run_remove(config_overrides: &CliConfigOverrides, remove_args: RemoveArgs) ->
     Ok(())
 }
 
+fn run_migrate(config_overrides: &CliConfigOverrides, args: MigrateArgs) -> Result<()> {
+    let overrides = config_overrides.parse_overrides().map_err(|e| anyhow!(e))?;
+
+    let config = Config::load_with_cli_overrides(overrides.clone(), ConfigOverrides::default())
+        .context("failed to load configuration")?;
+
+    if !config.experimental_mcp_overhaul && !args.force {
+        bail!(
+            "MCP overhaul features are disabled. Enable `experimental.mcp_overhaul=true` or rerun with --force."
+        );
+    }
+
+    let options = MigrationOptions {
+        dry_run: !args.apply,
+        force: args.force,
+    };
+
+    let report = mcp::migrate_to_v2(&config.codex_home, &options).with_context(|| {
+        format!(
+            "failed to migrate configuration at {}",
+            config.codex_home.display()
+        )
+    })?;
+
+    if options.dry_run {
+        println!(
+            "Dry run complete (from schema v{} → v{}). Changes detected: {}",
+            report.from_version, report.to_version, report.changes_detected
+        );
+    } else {
+        println!(
+            "Migration applied (schema v{} → v{}). Backup created: {}",
+            report.from_version, report.to_version, report.backed_up
+        );
+    }
+
+    if !report.notes.is_empty() {
+        for note in report.notes {
+            println!("• {note}");
+        }
+    }
+
+    Ok(())
+}
+
 fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) -> Result<()> {
     let overrides = config_overrides.parse_overrides().map_err(|e| anyhow!(e))?;
     let config = Config::load_with_cli_overrides(overrides, ConfigOverrides::default())
@@ -207,10 +272,20 @@ fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) -> Resul
                 });
                 serde_json::json!({
                     "name": name,
+                    "display_name": cfg.display_name,
+                    "category": cfg.category,
+                    "template_id": cfg.template_id,
+                    "description": cfg.description,
                     "command": cfg.command,
                     "args": cfg.args,
                     "env": env,
                     "startup_timeout_ms": cfg.startup_timeout_ms,
+                    "auth": cfg.auth,
+                    "healthcheck": cfg.healthcheck,
+                    "tags": cfg.tags,
+                    "created_at": cfg.created_at,
+                    "last_verified_at": cfg.last_verified_at,
+                    "metadata": cfg.metadata,
                 })
             })
             .collect();
