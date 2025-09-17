@@ -229,6 +229,28 @@ impl HistoryCell for TranscriptOnlyHistoryCell {
     }
 }
 
+/// Insert a transcript line describing the current review status.
+#[derive(Debug)]
+pub(crate) struct ReviewStatusHistoryCell {
+    message: String,
+}
+
+impl HistoryCell for ReviewStatusHistoryCell {
+    fn display_lines(&self, _width: u16) -> Vec<Line<'static>> {
+        vec![Line::from(self.message.clone().cyan())]
+    }
+
+    fn is_stream_continuation(&self) -> bool {
+        // Treat status lines as part of the same history block to avoid an extra
+        // blank separator when following other content in the same turn.
+        true
+    }
+}
+
+pub(crate) fn new_review_status_line(message: String) -> ReviewStatusHistoryCell {
+    ReviewStatusHistoryCell { message }
+}
+
 #[derive(Debug)]
 pub(crate) struct PatchHistoryCell {
     event_type: PatchEventType,
@@ -690,6 +712,11 @@ pub(crate) fn new_session_info(
                 "  ".into(),
                 "/model".into(),
                 " - choose what model and reasoning effort to use".dim(),
+            ]),
+            Line::from(vec![
+                "  ".into(),
+                "/review".into(),
+                " - review current changes and find issues".dim(),
             ]),
         ];
 

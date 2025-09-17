@@ -185,12 +185,14 @@ impl WidgetRef for CommandPopup {
                         match_indices: indices.map(|v| v.into_iter().map(|i| i + 1).collect()),
                         is_current: false,
                         description: Some(cmd.description().to_string()),
+                        styled_name: None,
                     },
                     CommandItem::UserPrompt(i) => GenericDisplayRow {
                         name: format!("/{}", self.prompts[i].name),
                         match_indices: indices.map(|v| v.into_iter().map(|i| i + 1).collect()),
                         is_current: false,
                         description: Some("send saved prompt".to_string()),
+                        styled_name: None,
                     },
                 })
                 .collect()

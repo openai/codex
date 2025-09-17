@@ -2,12 +2,13 @@ use crate::user_approval_widget::ApprovalRequest;
 use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
+use std::any::Any;
 
 use super::BottomPane;
 use super::CancellationEvent;
 
 /// Trait implemented by every view that can be shown in the bottom pane.
-pub(crate) trait BottomPaneView {
+pub(crate) trait BottomPaneView: Any {
     /// Handle a key event while the view is active. A redraw is always
     /// scheduled after this call.
     fn handle_key_event(&mut self, _pane: &mut BottomPane, _key_event: KeyEvent) {}
@@ -28,6 +29,17 @@ pub(crate) trait BottomPaneView {
     /// Render the view: this will be displayed in place of the composer.
     fn render(&self, area: Rect, buf: &mut Buffer);
 
+    /// Optional paste handler. Return true if the view modified its state and
+    /// needs a redraw.
+    fn handle_paste(&mut self, _pane: &mut BottomPane, _pasted: String) -> bool {
+        false
+    }
+
+    /// Cursor position when this view is active.
+    fn cursor_pos(&self, _area: Rect) -> Option<(u16, u16)> {
+        None
+    }
+
     /// Try to handle approval request; return the original value if not
     /// consumed.
     fn try_consume_approval_request(
@@ -36,4 +48,6 @@ pub(crate) trait BottomPaneView {
     ) -> Option<ApprovalRequest> {
         Some(request)
     }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 }

@@ -268,6 +268,9 @@ impl App {
             AppEvent::CodexEvent(event) => {
                 self.chat_widget.handle_codex_event(event);
             }
+            AppEvent::SubmitUserText(text) => {
+                self.chat_widget.submit_text_message(text);
+            }
             AppEvent::ConversationHistory(ev) => {
                 self.on_conversation_history_for_backtrack(tui, ev).await?;
             }
@@ -290,6 +293,13 @@ impl App {
                     "D I F F".to_string(),
                 ));
                 tui.frame_requester().schedule_frame();
+            }
+            AppEvent::DiffShortstat {
+                shortstat,
+                request_id,
+            } => {
+                self.chat_widget
+                    .on_diff_shortstat_ready(shortstat, request_id);
             }
             AppEvent::StartFileSearch(query) => {
                 if !query.is_empty() {

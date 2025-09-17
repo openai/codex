@@ -339,7 +339,7 @@ fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
         let q = if state.query.is_empty() {
             "Type to search".dim().to_string()
         } else {
-            format!("Search: {}", state.query)
+            state.query.clone()
         };
         frame.render_widget_ref(Line::from(q), search);
 

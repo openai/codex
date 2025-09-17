@@ -2,6 +2,7 @@ use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::Event;
 use codex_file_search::FileMatch;
 
+use crate::git_shortstat::DiffShortStat;
 use crate::history_cell::HistoryCell;
 
 use codex_core::protocol::AskForApproval;
@@ -23,6 +24,10 @@ pub(crate) enum AppEvent {
     /// bubbling channels through layers of widgets.
     CodexOp(codex_core::protocol::Op),
 
+    /// Ask the ChatWidget to submit a user text message using its
+    /// standard helpers.
+    SubmitUserText(String),
+
     /// Kick off an asynchronous file search for the given query (text after
     /// the `@`). Previous searches may be cancelled by the app layer so there
     /// is at most one in-flight search.
@@ -38,6 +43,12 @@ pub(crate) enum AppEvent {
 
     /// Result of computing a `/diff` command.
     DiffResult(String),
+
+    /// Result of computing `git diff --shortstat`.
+    DiffShortstat {
+        shortstat: Option<DiffShortStat>,
+        request_id: u64,
+    },
 
     InsertHistoryCell(Box<dyn HistoryCell>),
 

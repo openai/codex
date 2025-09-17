@@ -3293,7 +3293,7 @@ async fn exit_review_mode(
   <results>
   {findings_str}
   </results>
-</user_tool>
+</user_action>
 "#));
     } else {
         user_message.push_str(r#"<user_action>
@@ -3302,7 +3302,7 @@ async fn exit_review_mode(
   <results>
   None.
   </results>
-</user_tool>
+</user_action>
 "#);
     }
 

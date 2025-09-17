@@ -2,6 +2,7 @@ use crossterm::event::KeyEvent;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::WidgetRef;
+use std::any::Any;
 
 use crate::app_event_sender::AppEventSender;
 use crate::user_approval_widget::ApprovalRequest;
@@ -42,6 +43,10 @@ impl ApprovalModalView {
 }
 
 impl BottomPaneView for ApprovalModalView {
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
     fn handle_key_event(&mut self, _pane: &mut BottomPane, key_event: KeyEvent) {
         self.current.handle_key_event(key_event);
         self.maybe_advance();

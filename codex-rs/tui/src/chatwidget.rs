@@ -19,6 +19,7 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
+use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::InputMessageKind;
 use codex_core::protocol::ListCustomPromptsResponseEvent;
@@ -27,6 +28,7 @@ use codex_core::protocol::McpToolCallBeginEvent;
 use codex_core::protocol::McpToolCallEndEvent;
 use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
+use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TokenUsage;
@@ -36,6 +38,7 @@ use codex_core::protocol::TurnDiffEvent;
 use codex_core::protocol::UserMessageEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
+use codex_protocol::mcp_protocol::ConversationId;
 use codex_protocol::parse_command::ParsedCommand;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -62,6 +65,7 @@ use crate::bottom_pane::SelectionItem;
 use crate::clipboard_paste::paste_image_to_temp_png;
 use crate::diff_render::display_path_for;
 use crate::get_git_diff::get_git_diff;
+use crate::git_shortstat::DiffShortStat;
 use crate::history_cell;
 use crate::history_cell::CommandOutput;
 use crate::history_cell::ExecCell;
@@ -79,6 +83,10 @@ use self::agent::spawn_agent;
 use self::agent::spawn_agent_from_existing;
 mod session_header;
 use self::session_header::SessionHeader;
+mod review;
+use self::review::ReviewController;
+use self::review::ReviewExitResult;
+use self::review::ReviewState;
 use crate::streaming::controller::AppEventHistorySink;
 use crate::streaming::controller::StreamController;
 use codex_common::approval_presets::ApprovalPreset;
@@ -91,7 +99,6 @@ use codex_core::protocol::AskForApproval;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort as ReasoningEffortConfig;
 use codex_file_search::FileMatch;
-use codex_protocol::mcp_protocol::ConversationId;
 
 // Track information about an in-flight exec command.
 struct RunningCommand {
@@ -141,6 +148,7 @@ pub(crate) struct ChatWidget {
     queued_user_messages: VecDeque<UserMessage>,
     // Pending notification to show when unfocused on next Draw
     pending_notification: Option<Notification>,
+    review_state: ReviewState,
 }
 
 struct UserMessage {
@@ -279,11 +287,13 @@ impl ChatWidget {
     }
     /// Finalize any active exec as failed, push an error message into history,
     /// and stop/clear running UI state.
-    fn finalize_turn_with_error_message(&mut self, message: String) {
+    fn finalize_turn_with_error_message(&mut self, message: Option<String>) {
         // Ensure any spinner is replaced by a red ✗ and flushed into history.
         self.finalize_active_exec_cell_as_failed();
         // Emit the provided error message/history cell.
-        self.add_to_history(history_cell::new_error_event(message));
+        if let Some(message) = message {
+            self.add_to_history(history_cell::new_error_event(message));
+        }
         // Reset running state and clear streaming buffers.
         self.bottom_pane.set_task_running(false);
         self.running_commands.clear();
@@ -291,7 +301,7 @@ impl ChatWidget {
     }
 
     fn on_error(&mut self, message: String) {
-        self.finalize_turn_with_error_message(message);
+        self.finalize_turn_with_error_message(Some(message));
         self.request_redraw();
 
         // After an error ends the turn, try sending the next queued input.
@@ -301,11 +311,13 @@ impl ChatWidget {
     /// Handle a turn aborted due to user interrupt (Esc).
     /// When there are queued user messages, restore them into the composer
     /// separated by newlines rather than auto‑submitting the next one.
-    fn on_interrupted_turn(&mut self) {
+    fn on_interrupted_turn(&mut self, reason: TurnAbortReason) {
         // Finalize, log a gentle prompt, and clear running state.
-        self.finalize_turn_with_error_message(
-            "Conversation interrupted - tell the model what to do differently".to_owned(),
-        );
+        self.finalize_turn_with_error_message(if reason == TurnAbortReason::ReviewEnded {
+            None
+        } else {
+            Some("Conversation interrupted - tell the model what to do differently".to_owned())
+        });
 
         // If any messages were queued during the task, restore them into the composer.
         if !self.queued_user_messages.is_empty() {
@@ -398,9 +410,9 @@ impl ChatWidget {
 
     fn on_web_search_end(&mut self, ev: WebSearchEndEvent) {
         self.flush_answer_stream_with_separator();
+        let query = ev.query;
         self.add_to_history(history_cell::new_web_search_call(format!(
-            "Searched: {}",
-            ev.query
+            "Searched: {query}"
         )));
     }
 
@@ -631,7 +643,11 @@ impl ChatWidget {
     }
 
     fn layout_areas(&self, area: Rect) -> [Rect; 3] {
-        let bottom_min = self.bottom_pane.desired_height(area.width).min(area.height);
+        let bottom_min = if self.review_state.is_review_mode() {
+            3.min(area.height)
+        } else {
+            self.bottom_pane.desired_height(area.width).min(area.height)
+        };
         let remaining = area.height.saturating_sub(bottom_min);
 
         let active_desired = self
@@ -700,6 +716,7 @@ impl ChatWidget {
             show_welcome_banner: true,
             suppress_session_configured_redraw: false,
             pending_notification: None,
+            review_state: ReviewState::new(),
         }
     }
 
@@ -756,6 +773,7 @@ impl ChatWidget {
             show_welcome_banner: true,
             suppress_session_configured_redraw: true,
             pending_notification: None,
+            review_state: ReviewState::new(),
         }
     }
 
@@ -870,6 +888,9 @@ impl ChatWidget {
                 self.clear_token_usage();
                 self.app_event_tx.send(AppEvent::CodexOp(Op::Compact));
             }
+            SlashCommand::Review => {
+                self.open_review_popup();
+            }
             SlashCommand::Model => {
                 self.open_model_popup();
             }
@@ -976,8 +997,8 @@ impl ChatWidget {
 
     fn flush_active_exec_cell(&mut self) {
         if let Some(active) = self.active_exec_cell.take() {
-            self.app_event_tx
-                .send(AppEvent::InsertHistoryCell(Box::new(active)));
+            let cell: Box<dyn history_cell::HistoryCell> = Box::new(active);
+            self.app_event_tx.send(AppEvent::InsertHistoryCell(cell));
         }
     }
 
@@ -1087,10 +1108,13 @@ impl ChatWidget {
             EventMsg::Error(ErrorEvent { message }) => self.on_error(message),
             EventMsg::TurnAborted(ev) => match ev.reason {
                 TurnAbortReason::Interrupted => {
-                    self.on_interrupted_turn();
+                    self.on_interrupted_turn(ev.reason);
                 }
                 TurnAbortReason::Replaced => {
                     self.on_error("Turn aborted: replaced by a new task".to_owned())
+                }
+                TurnAbortReason::ReviewEnded => {
+                    self.on_interrupted_turn(ev.reason);
                 }
             },
             EventMsg::PlanUpdate(update) => self.on_plan_update(update),
@@ -1128,9 +1152,81 @@ impl ChatWidget {
                 self.app_event_tx
                     .send(crate::app_event::AppEvent::ConversationHistory(ev));
             }
-            EventMsg::EnteredReviewMode(_) => {}
-            EventMsg::ExitedReviewMode(_) => {}
+            EventMsg::EnteredReviewMode(review_request) => {
+                self.on_entered_review_mode(review_request)
+            }
+            EventMsg::ExitedReviewMode(review) => self.on_exited_review_mode(review),
         }
+    }
+
+    fn on_entered_review_mode(&mut self, review: ReviewRequest) {
+        if let Some(banner) = ReviewController::new(
+            &mut self.review_state,
+            &self.config,
+            &mut self.bottom_pane,
+            &self.app_event_tx,
+        )
+        .enter_review_mode(&review.user_facing_hint)
+        {
+            self.add_to_history(history_cell::new_review_status_line(banner));
+        }
+        self.request_redraw();
+    }
+
+    fn on_exited_review_mode(&mut self, review: ExitedReviewModeEvent) {
+        let update: review::ReviewExitUpdate = ReviewController::new(
+            &mut self.review_state,
+            &self.config,
+            &mut self.bottom_pane,
+            &self.app_event_tx,
+        )
+        .exit_review_mode(review.review_output);
+
+        if update.should_flush_stream {
+            self.flush_answer_stream_with_separator();
+            self.flush_interrupt_queue();
+            self.flush_active_exec_cell();
+        }
+
+        match update.result {
+            ReviewExitResult::None => {}
+            ReviewExitResult::ShowMessage(body_lines) => {
+                let body_cell = crate::history_cell::AgentMessageCell::new(body_lines, false);
+                self.app_event_tx
+                    .send(AppEvent::InsertHistoryCell(Box::new(body_cell)));
+            }
+            ReviewExitResult::ShowFindings(findings) => {
+                // Always emit a full review findings block in history so results are visible
+                // even if the selection overlay is skipped due to queued input.
+                let message_text =
+                    codex_core::review_format::format_review_findings_block(&findings, None);
+                let message_lines: Vec<ratatui::text::Line<'static>> = message_text
+                    .lines()
+                    .map(|s| ratatui::text::Line::from(s.to_string()))
+                    .collect();
+                let body_cell = crate::history_cell::AgentMessageCell::new(message_lines, true);
+                self.app_event_tx
+                    .send(AppEvent::InsertHistoryCell(Box::new(body_cell)));
+
+                // Only show the review selection panel if there isn't another
+                // user message queued. Otherwise the queued message would start
+                // a new turn and run behind the overlay.
+                if self.queued_user_messages.is_empty() {
+                    let view = crate::bottom_pane::ReviewSelectionView::new(
+                        "Select review comments to add to chat".to_string(),
+                        findings,
+                        self.app_event_tx.clone(),
+                    );
+                    self.bottom_pane.show_view(Box::new(view));
+                } else {
+                    // Skip opening the panel; queued message will run next.
+                }
+            }
+        }
+        // Append the finishing banner after emitting any findings/results so the
+        // banner appears last in history for this turn.
+        self.add_to_history(history_cell::new_review_status_line(update.banner));
+        self.request_redraw();
     }
 
     fn on_user_message_event(&mut self, event: UserMessageEvent) {
@@ -1220,6 +1316,32 @@ impl ChatWidget {
         ));
     }
 
+    pub(crate) fn on_diff_shortstat_ready(
+        &mut self,
+        shortstat: Option<DiffShortStat>,
+        request_id: u64,
+    ) {
+        let mut controller = ReviewController::new(
+            &mut self.review_state,
+            &self.config,
+            &mut self.bottom_pane,
+            &self.app_event_tx,
+        );
+        if controller.on_diff_shortstat_ready(shortstat, request_id) {
+            self.request_redraw();
+        }
+    }
+
+    pub(crate) fn open_review_popup(&mut self) {
+        let mut controller = ReviewController::new(
+            &mut self.review_state,
+            &self.config,
+            &mut self.bottom_pane,
+            &self.app_event_tx,
+        );
+        controller.open_review_popup();
+    }
+
     /// Open a popup to choose the model preset (model + reasoning effort).
     pub(crate) fn open_model_popup(&mut self) {
         let current_model = self.config.model.clone();
@@ -1235,7 +1357,7 @@ impl ChatWidget {
             let model_slug = preset.model.to_string();
             let effort = preset.effort;
             let current_model = current_model.clone();
-            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+            let actions: Vec<SelectionAction> = vec![Box::new(move |_, tx| {
                 tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
                     cwd: None,
                     approval_policy: None,
@@ -1267,13 +1389,14 @@ impl ChatWidget {
                 description,
                 is_current,
                 actions,
+                styled_label: None,
+                dismiss_on_select: true,
             });
         }
 
         self.bottom_pane.show_selection_view(
             "Select model and reasoning level".to_string(),
             Some("Switch between OpenAI models for this and future Codex CLI session".to_string()),
-            Some("Press Enter to confirm or Esc to go back".to_string()),
             items,
         );
     }
@@ -1291,7 +1414,7 @@ impl ChatWidget {
             let sandbox = preset.sandbox.clone();
             let name = preset.label.to_string();
             let description = Some(preset.description.to_string());
-            let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
+            let actions: Vec<SelectionAction> = vec![Box::new(move |_, tx| {
                 tx.send(AppEvent::CodexOp(Op::OverrideTurnContext {
                     cwd: None,
                     approval_policy: Some(approval),
@@ -1308,15 +1431,13 @@ impl ChatWidget {
                 description,
                 is_current,
                 actions,
+                styled_label: None,
+                dismiss_on_select: true,
             });
         }
 
-        self.bottom_pane.show_selection_view(
-            "Select Approval Mode".to_string(),
-            None,
-            Some("Press Enter to confirm or Esc to go back".to_string()),
-            items,
-        );
+        self.bottom_pane
+            .show_selection_view("Select Approval Mode".to_string(), None, items);
     }
 
     /// Set the approval policy in the widget's config copy.
@@ -1406,7 +1527,10 @@ impl ChatWidget {
         self.bottom_pane.clear_esc_backtrack_hint();
     }
     /// Forward an `Op` directly to codex.
-    pub(crate) fn submit_op(&self, op: Op) {
+    pub(crate) fn submit_op(&mut self, op: Op) {
+        if matches!(op, Op::Review { .. }) {
+            self.bottom_pane.clear_views();
+        }
         // Record outbound operation for session replay fidelity.
         crate::session_log::log_outbound_op(&op);
         if let Err(e) = self.codex_op_tx.send(op) {
@@ -1432,7 +1556,14 @@ impl ChatWidget {
         if text.is_empty() {
             return;
         }
-        self.submit_user_message(text.into());
+
+        let user_message: UserMessage = text.into();
+        if self.bottom_pane.is_task_running() {
+            self.queued_user_messages.push_back(user_message);
+            self.refresh_queued_user_messages();
+        } else {
+            self.submit_user_message(user_message);
+        }
     }
 
     pub(crate) fn token_usage(&self) -> TokenUsage {
@@ -1467,13 +1598,15 @@ impl WidgetRef for &ChatWidget {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         let [_, active_cell_area, bottom_pane_area] = self.layout_areas(area);
         (&self.bottom_pane).render(bottom_pane_area, buf);
-        if !active_cell_area.is_empty()
+        self.review_state.render_hint(area, bottom_pane_area, buf);
+        if !self.bottom_pane.has_active_view()
+            && !active_cell_area.is_empty()
             && let Some(cell) = &self.active_exec_cell
         {
-            let mut active_cell_area = active_cell_area;
-            active_cell_area.y = active_cell_area.y.saturating_add(1);
-            active_cell_area.height -= 1;
-            cell.render_ref(active_cell_area, buf);
+            let mut area_to_render = active_cell_area;
+            area_to_render.y = area_to_render.y.saturating_add(1);
+            area_to_render.height = area_to_render.height.saturating_sub(1);
+            cell.render_ref(area_to_render, buf);
         }
     }
 }

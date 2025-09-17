@@ -6,8 +6,10 @@ use ratatui::layout::Rect;
 use ratatui::style::Stylize;
 use ratatui::text::Line;
 use ratatui::text::Span;
+use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
+use std::any::Any;
 
 use crate::app_event_sender::AppEventSender;
 
@@ -18,21 +20,23 @@ use super::popup_consts::MAX_POPUP_ROWS;
 use super::scroll_state::ScrollState;
 use super::selection_popup_common::GenericDisplayRow;
 use super::selection_popup_common::render_rows;
+use super::standard_popup_hint_line;
 
 /// One selectable item in the generic selection list.
-pub(crate) type SelectionAction = Box<dyn Fn(&AppEventSender) + Send + Sync>;
+pub(crate) type SelectionAction = Box<dyn Fn(&mut BottomPane, &AppEventSender) + Send + Sync>;
 
 pub(crate) struct SelectionItem {
     pub name: String,
     pub description: Option<String>,
     pub is_current: bool,
     pub actions: Vec<SelectionAction>,
+    pub styled_label: Option<Vec<Span<'static>>>,
+    pub dismiss_on_select: bool,
 }
 
 pub(crate) struct ListSelectionView {
     title: String,
     subtitle: Option<String>,
-    footer_hint: Option<String>,
     items: Vec<SelectionItem>,
     state: ScrollState,
     complete: bool,
@@ -45,20 +49,22 @@ impl ListSelectionView {
     }
 
     fn render_dim_prefix_line(area: Rect, buf: &mut Buffer) {
+        if area.width == 0 || area.height == 0 {
+            return;
+        }
+        Clear.render(area, buf);
         let para = Paragraph::new(Line::from(Self::dim_prefix_span()));
         para.render(area, buf);
     }
     pub fn new(
         title: String,
         subtitle: Option<String>,
-        footer_hint: Option<String>,
         items: Vec<SelectionItem>,
         app_event_tx: AppEventSender,
     ) -> Self {
         let mut s = Self {
             title,
             subtitle,
-            footer_hint,
             items,
             state: ScrollState::new(),
             complete: false,
@@ -73,6 +79,19 @@ impl ListSelectionView {
         s
     }
 
+    pub(crate) fn title(&self) -> &str {
+        &self.title
+    }
+
+    pub(crate) fn update_item<F>(&mut self, index: usize, mut update: F)
+    where
+        F: FnMut(&mut SelectionItem),
+    {
+        if let Some(item) = self.items.get_mut(index) {
+            update(item);
+        }
+    }
+
     fn move_up(&mut self) {
         let len = self.items.len();
         self.state.move_up_wrap(len);
@@ -85,13 +104,15 @@ impl ListSelectionView {
         self.state.ensure_visible(len, MAX_POPUP_ROWS.min(len));
     }
 
-    fn accept(&mut self) {
+    fn accept(&mut self, pane: &mut BottomPane) {
         if let Some(idx) = self.state.selected_idx {
             if let Some(item) = self.items.get(idx) {
                 for act in &item.actions {
-                    act(&self.app_event_tx);
+                    act(pane, &self.app_event_tx);
                 }
-                self.complete = true;
+                if item.dismiss_on_select {
+                    self.complete = true;
+                }
             }
         } else {
             self.complete = true;
@@ -105,7 +126,11 @@ impl ListSelectionView {
 }
 
 impl BottomPaneView for ListSelectionView {
-    fn handle_key_event(&mut self, _pane: &mut BottomPane, key_event: KeyEvent) {
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+
+    fn handle_key_event(&mut self, pane: &mut BottomPane, key_event: KeyEvent) {
         match key_event {
             KeyEvent {
                 code: KeyCode::Up, ..
@@ -121,7 +146,7 @@ impl BottomPaneView for ListSelectionView {
                 code: KeyCode::Enter,
                 modifiers: KeyModifiers::NONE,
                 ..
-            } => self.accept(),
+            } => self.accept(pane),
             _ => {}
         }
     }
@@ -144,10 +169,7 @@ impl BottomPaneView for ListSelectionView {
             // +1 for subtitle (the spacer is accounted for above)
             height = height.saturating_add(1);
         }
-        if self.footer_hint.is_some() {
-            height = height.saturating_add(2);
-        }
-        height
+        height.saturating_add(2)
     }
 
     fn render(&self, area: Rect, buf: &mut Buffer) {
@@ -191,7 +213,7 @@ impl BottomPaneView for ListSelectionView {
         Self::render_dim_prefix_line(spacer_area, buf);
         next_y = next_y.saturating_add(1);
 
-        let footer_reserved = if self.footer_hint.is_some() { 2 } else { 0 };
+        let footer_reserved = 2;
         let rows_area = Rect {
             x: area.x,
             y: next_y,
@@ -209,17 +231,28 @@ impl BottomPaneView for ListSelectionView {
             .map(|(i, it)| {
                 let is_selected = self.state.selected_idx == Some(i);
                 let prefix = if is_selected { '>' } else { ' ' };
+                let number = i + 1;
+                let label_prefix = format!("{prefix} {number}. ");
+                let styled_name = if let Some(styled_label) = it.styled_label.as_ref() {
+                    let mut spans = Vec::new();
+                    spans.push(label_prefix.into());
+                    spans.extend(styled_label.clone());
+                    Some(spans)
+                } else {
+                    None
+                };
                 let name_with_marker = if it.is_current {
                     format!("{} (current)", it.name)
                 } else {
                     it.name.clone()
                 };
-                let display_name = format!("{} {}. {}", prefix, i + 1, name_with_marker);
+                let display_name = format!("{prefix} {number}. {name_with_marker}");
                 GenericDisplayRow {
                     name: display_name,
                     match_indices: None,
                     is_current: it.is_current,
                     description: it.description.clone(),
+                    styled_name,
                 }
             })
             .collect();
@@ -235,16 +268,22 @@ impl BottomPaneView for ListSelectionView {
             );
         }
 
-        if let Some(hint) = &self.footer_hint {
-            let footer_area = Rect {
+        if area.height >= 2 {
+            let spacer_area = Rect {
                 x: area.x,
-                y: area.y + area.height - 1,
+                y: area.y + area.height - 2,
                 width: area.width,
                 height: 1,
             };
-            let footer_para = Paragraph::new(hint.clone().dim());
-            footer_para.render(footer_area, buf);
+            Clear.render(spacer_area, buf);
         }
+        let footer_area = Rect {
+            x: area.x,
+            y: area.y + area.height - 1,
+            width: area.width,
+            height: 1,
+        };
+        Paragraph::new(standard_popup_hint_line()).render(footer_area, buf);
     }
 }
 
@@ -266,18 +305,21 @@ mod tests {
                 description: Some("Codex can read files".to_string()),
                 is_current: true,
                 actions: vec![],
+                styled_label: None,
+                dismiss_on_select: true,
             },
             SelectionItem {
                 name: "Full Access".to_string(),
                 description: Some("Codex can edit files".to_string()),
                 is_current: false,
                 actions: vec![],
+                styled_label: None,
+                dismiss_on_select: true,
             },
         ];
         ListSelectionView::new(
             "Select Approval Mode".to_string(),
             subtitle.map(str::to_string),
-            Some("Press Enter to confirm or Esc to go back".to_string()),
             items,
             tx,
         )
