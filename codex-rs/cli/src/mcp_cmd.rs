@@ -54,6 +54,9 @@ pub enum McpSubcommand {
 
     /// [experimental] Migrate MCP configuration to the latest schema.
     Migrate(MigrateArgs),
+
+    /// [experimental] Launch the MCP configuration wizard (preview).
+    Wizard(WizardArgs),
 }
 
 #[derive(Debug, clap::Parser)]
@@ -104,6 +107,17 @@ pub struct MigrateArgs {
     pub force: bool,
 }
 
+#[derive(Debug, clap::Parser)]
+pub struct WizardArgs {
+    /// Optional template to preselect when starting the wizard.
+    #[arg(long)]
+    pub template: Option<String>,
+
+    /// Output summary as JSON instead of launching interactive flow.
+    #[arg(long)]
+    pub json: bool,
+}
+
 impl McpCli {
     pub async fn run(self, codex_linux_sandbox_exe: Option<PathBuf>) -> Result<()> {
         let McpCli {
@@ -130,6 +144,9 @@ impl McpCli {
             }
             McpSubcommand::Migrate(args) => {
                 run_migrate(&config_overrides, args)?;
+            }
+            McpSubcommand::Wizard(args) => {
+                run_wizard(&config_overrides, args)?;
             }
         }
 
@@ -251,6 +268,56 @@ fn run_migrate(config_overrides: &CliConfigOverrides, args: MigrateArgs) -> Resu
             println!("• {note}");
         }
     }
+
+    Ok(())
+}
+
+fn run_wizard(config_overrides: &CliConfigOverrides, args: WizardArgs) -> Result<()> {
+    let overrides = config_overrides.parse_overrides().map_err(|e| anyhow!(e))?;
+    let config = Config::load_with_cli_overrides(overrides, ConfigOverrides::default())
+        .context("failed to load configuration")?;
+
+    if !config.experimental_mcp_overhaul {
+        bail!(
+            "MCP overhaul features are disabled. Enable `experimental.mcp_overhaul=true` to use the wizard."
+        );
+    }
+
+    let templates = TemplateCatalog::load_default().unwrap_or_else(|err| {
+        tracing::warn!("Failed to load MCP templates: {err}");
+        TemplateCatalog::empty()
+    });
+    let registry = McpRegistry::new(&config, templates.clone());
+
+    if args.json {
+        let summary = serde_json::json!({
+            "experimental_overhaul": registry.experimental_enabled(),
+            "server_count": registry.servers().count(),
+            "template_ids": templates.templates().keys().cloned().collect::<Vec<_>>(),
+            "preselected_template": args.template,
+        });
+        println!("{}", serde_json::to_string_pretty(&summary)?);
+        return Ok(());
+    }
+
+    println!("MCP wizard (preview) is not yet implemented.");
+    println!("- Feature flag: experimental.mcp_overhaul=true");
+    println!("- Configured servers: {}", registry.servers().count());
+    if let Some(template) = args.template.as_ref() {
+        if registry.templates().contains_key(template) {
+            println!("- Preselected template: {template}");
+        } else {
+            println!("- Requested template '{template}' not found in catalog");
+        }
+    }
+    if registry.templates().is_empty() {
+        println!(
+            "- No templates detected. Add JSON files under resources/mcp_templates/ to populate the catalog."
+        );
+    } else {
+        println!("- {} template(s) available.", registry.templates().len());
+    }
+    println!("This preview command currently reports summary information only.");
 
     Ok(())
 }
