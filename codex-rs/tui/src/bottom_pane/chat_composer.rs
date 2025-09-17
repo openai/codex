@@ -156,38 +156,9 @@ impl ChatComposer {
 
     // Footer composition returns the full list of spans for the bottom line, respecting width.
     fn build_footer_spans(&self, total_width: u16) -> Vec<Span<'static>> {
-        let mut spans: Vec<Span<'static>> = Vec::new();
+        let span_width = |span: &Span<'_>| span.content.width();
+        let spans_width = |spans: &[Span<'static>]| spans.iter().map(span_width).sum();
 
-        // Base key-hint spans
-        spans.push(" ".into());
-        if self.ctrl_c_quit_hint {
-            spans.push(" ".into());
-            spans.push(key_hint::ctrl('C'));
-            spans.push(" again".into());
-            spans.push(" to quit".into());
-        } else {
-            let newline_hint_key = if self.use_shift_enter_hint {
-                key_hint::shift('⏎')
-            } else {
-                key_hint::ctrl('J')
-            };
-            spans.push(key_hint::plain('⏎'));
-            spans.push(" send   ".into());
-            spans.push(newline_hint_key);
-            spans.push(" newline   ".into());
-            spans.push(key_hint::ctrl('T'));
-            spans.push(" transcript   ".into());
-            spans.push(key_hint::ctrl('C'));
-            spans.push(" quit".into());
-        }
-
-        if !self.ctrl_c_quit_hint && self.esc_backtrack_hint {
-            spans.push("   ".into());
-            spans.push(key_hint::plain("Esc"));
-            spans.push(" edit prev".into());
-        }
-
-        // Token/context usage spans (computed now so we reserve width before repo/branch)
         let mut token_spans: Vec<Span<'static>> = Vec::new();
         if let Some(token_usage_info) = &self.token_usage_info {
             let token_usage = &token_usage_info.total_token_usage;
@@ -206,65 +177,130 @@ impl ChatComposer {
             }
         }
 
-        // Compute reserved width for base + tokens
-        let base_width: usize = spans.iter().map(|s| s.content.width()).sum();
-        let token_width: usize = token_spans.iter().map(|s| s.content.width()).sum();
-        let mut remaining = (total_width as usize).saturating_sub(base_width + token_width);
+        let total_width = total_width as usize;
+        let token_width = spans_width(&token_spans);
+        let mut available = total_width.saturating_sub(token_width);
 
-        // Repo/branch spans, only if there is space and repo info is present
-        if let Some(repo_name) = &self.repo_name
-            && remaining > 4
+        let mut repo_spans = Vec::new();
+        if available > 0 {
+            let (spans, used) = self.build_repo_spans(available);
+            repo_spans = spans;
+            available = available.saturating_sub(used);
+        }
+
+        let mut hint_segments = self.build_hint_segments();
+        let mut hints_width: usize = hint_segments
+            .iter()
+            .map(|segment| segment.iter().map(span_width).sum::<usize>())
+            .sum();
+
+        while hints_width > available
+            && !hint_segments.is_empty()
+            && (!repo_spans.is_empty() || !token_spans.is_empty())
         {
-            // Reserve leading spacing before repo
-            let sep = "   ";
-            let sep_w = sep.width();
-            if remaining > sep_w {
-                remaining -= sep_w;
-                let mut repo_branch_spans: Vec<Span<'static>> = Vec::new();
-                repo_branch_spans.push(sep.into());
+            let removed = hint_segments.remove(0);
+            let removed_width: usize = removed.iter().map(span_width).sum();
+            hints_width = hints_width.saturating_sub(removed_width);
+        }
 
-                // If not enough for minimal repo, skip entirely.
-                let min_repo = 8usize;
-                let min_branch = 6usize;
-                let colon_w = 1usize; // ":"
+        let mut spans: Vec<Span<'static>> = hint_segments.into_iter().flatten().collect();
+        spans.extend(repo_spans);
+        spans.extend(token_spans);
+        spans
+    }
 
-                if remaining >= min_repo {
-                    // First assume we can show both
-                    let mut repo_budget = ((remaining as f32) * 0.6) as usize;
-                    repo_budget = repo_budget.clamp(min_repo, remaining);
-                    let mut branch_budget = remaining.saturating_sub(repo_budget + colon_w);
+    fn build_hint_segments(&self) -> Vec<Vec<Span<'static>>> {
+        let mut segments: Vec<Vec<Span<'static>>> = Vec::new();
 
-                    if branch_budget < min_branch {
-                        // Not enough space for branch alongside repo; use all for repo
-                        repo_budget = remaining;
-                        branch_budget = 0;
-                    }
+        if self.ctrl_c_quit_hint {
+            segments.push(vec![
+                " ".into(),
+                key_hint::ctrl('C'),
+                " again".into(),
+                " to quit".into(),
+            ]);
+        } else {
+            let mut send_segment: Vec<Span<'static>> = Vec::new();
+            if self.repo_name.is_some() {
+                send_segment.push(" ".into());
+            }
+            send_segment.push(key_hint::plain('⏎'));
+            send_segment.push(" send   ".into());
+            segments.push(send_segment);
 
-                    // Truncate and push repo
-                    let repo_disp = ellipsize_middle_by_width(repo_name, repo_budget);
-                    let used_repo_w = repo_disp.width();
-                    repo_branch_spans.push(repo_disp.bold());
-                    let mut leftover = remaining.saturating_sub(used_repo_w);
+            let newline_hint_key = if self.use_shift_enter_hint {
+                key_hint::shift('⏎')
+            } else {
+                key_hint::ctrl('J')
+            };
+            segments.push(vec![newline_hint_key, " newline   ".into()]);
+            segments.push(vec![key_hint::ctrl('T'), " transcript   ".into()]);
+            segments.push(vec![key_hint::ctrl('C'), " quit".into()]);
 
-                    // If space permits, push branch with preceding ':'
-                    if branch_budget > 0 && leftover > colon_w {
-                        repo_branch_spans.push(Span::from(":"));
-                        leftover = leftover.saturating_sub(colon_w);
-                        if let Some(branch) = &self.git_branch {
-                            let branch_disp = ellipsize_middle_by_width(branch, leftover);
-                            repo_branch_spans.push(branch_disp.dim());
-                        }
-                    }
-
-                    // Append repo/branch spans
-                    spans.extend(repo_branch_spans);
-                }
+            if self.esc_backtrack_hint {
+                segments.push(vec![
+                    "   ".into(),
+                    key_hint::plain("Esc"),
+                    " edit prev".into(),
+                ]);
             }
         }
 
-        // Finally append tokens (always fits because we reserved width earlier)
-        spans.extend(token_spans);
-        spans
+        segments
+    }
+
+    fn build_repo_spans(&self, available_width: usize) -> (Vec<Span<'static>>, usize) {
+        let Some(repo_name) = &self.repo_name else {
+            return (Vec::new(), 0);
+        };
+
+        if available_width <= 4 {
+            return (Vec::new(), 0);
+        }
+
+        let sep = "   ";
+        let sep_width = sep.width();
+        if available_width <= sep_width {
+            return (Vec::new(), 0);
+        }
+
+        let remaining = available_width - sep_width;
+        let min_repo = 8usize;
+        let min_branch = 6usize;
+        let colon_width = 1usize;
+
+        if remaining < min_repo {
+            return (Vec::new(), 0);
+        }
+
+        let mut repo_budget = ((remaining as f32) * 0.6) as usize;
+        repo_budget = repo_budget.clamp(min_repo, remaining);
+        let mut branch_budget = remaining.saturating_sub(repo_budget + colon_width);
+
+        if branch_budget < min_branch {
+            repo_budget = remaining;
+            branch_budget = 0;
+        }
+
+        let repo_disp = ellipsize_middle_by_width(repo_name, repo_budget);
+        let repo_width = repo_disp.width();
+        let mut spans = vec![sep.into(), repo_disp.bold()];
+        let mut used_width = sep_width + repo_width;
+        let mut leftover = remaining.saturating_sub(repo_width);
+
+        if branch_budget > 0 && leftover > colon_width {
+            spans.push(Span::from(":"));
+            used_width += colon_width;
+            leftover = leftover.saturating_sub(colon_width);
+            if let Some(branch) = &self.git_branch {
+                let branch_disp = ellipsize_middle_by_width(branch, leftover);
+                let branch_width = branch_disp.width();
+                spans.push(branch_disp.dim());
+                used_width += branch_width;
+            }
+        }
+
+        (spans, used_width)
     }
 
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
@@ -1386,6 +1422,14 @@ impl WidgetRef for ChatComposer {
                         Constraint::Length(FOOTER_HINT_HEIGHT),
                     ])
                     .areas(popup_rect);
+                    if self.repo_name.is_some() {
+                        let spacing_y = hint_rect.y.saturating_sub(1);
+                        if spacing_y >= popup_rect.y {
+                            buf[(hint_rect.x, spacing_y)]
+                                .set_symbol("▌")
+                                .set_style(Style::default().add_modifier(Modifier::DIM));
+                        }
+                    }
                     hint_rect
                 } else {
                     popup_rect
@@ -1458,10 +1502,11 @@ impl WidgetRef for ChatComposer {
                 }
 
                 // Render footer using the computed spans helper.
+                let bottom_line_rect = hint_rect;
                 let hint_spans = self.build_footer_spans(bottom_line_rect.width);
                 Line::from(hint_spans)
                     .style(Style::default().dim())
-                    .render_ref(hint_rect, buf);
+                    .render_ref(bottom_line_rect, buf);
             }
         }
         let border_style = if self.has_focus {
@@ -1537,7 +1582,7 @@ mod tests {
         let mut hint_row: Option<(u16, String)> = None;
         for y in 0..area.height {
             let row = row_to_string(y);
-            if row.contains(" send") {
+            if row.contains('⏎') || row.contains(" send") {
                 hint_row = Some((y, row));
                 break;
             }
@@ -1561,6 +1606,10 @@ mod tests {
             spacing_row.trim(),
             "",
             "expected blank spacing row above hints but saw: {spacing_row:?}",
+        );
+    }
+
+    #[test]
     fn footer_truncates_repo_and_branch_for_narrow_width() {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
         let tx = AppEventSender::new(tx_raw);
@@ -1571,9 +1620,9 @@ mod tests {
         let branch = "feature/super/long/branch/name".to_string();
         composer.set_repo_info(Some(repo.clone()), Some(branch.clone()));
 
-        // Width large enough to include repo and branch after key hints
-        // width 100 -> repo_budget 25, branch_budget 16
-        let area = Rect::new(0, 0, 100, 3);
+        // Width chosen so repo + branch still exceed available space even after hints are trimmed
+        // width 60 -> repo_budget 27, branch_budget 16
+        let area = Rect::new(0, 0, 60, 3);
         let mut buf = Buffer::empty(area);
         composer.render_ref(area, &mut buf);
 
