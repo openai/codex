@@ -12,6 +12,7 @@ use codex_core::protocol::Op;
 use codex_core::protocol::SandboxPolicy;
 use codex_core::protocol_config_types::ReasoningEffort;
 use codex_core::protocol_config_types::ReasoningSummary;
+use codex_core::shell::Shell;
 use codex_core::shell::default_user_shell;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id;
@@ -22,6 +23,30 @@ use wiremock::MockServer;
 use wiremock::ResponseTemplate;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
+
+fn text_user_input(text: String) -> serde_json::Value {
+    serde_json::json!({
+        "type": "message",
+        "role": "user",
+        "content": [ { "type": "input_text", "text": text } ]
+    })
+}
+
+fn default_env_context_str(cwd: &str, shell: &Shell) -> String {
+    format!(
+        r#"<environment_context>
+  <cwd>{}</cwd>
+  <approval_policy>on-request</approval_policy>
+  <sandbox_mode>read-only</sandbox_mode>
+  <network_access>restricted</network_access>
+{}</environment_context>"#,
+        cwd,
+        match shell.name() {
+            Some(name) => format!("  <shell>{name}</shell>\n"),
+            None => String::new(),
+        }
+    )
+}
 
 /// Build minimal SSE stream with completed marker using the JSON fixture.
 fn sse_completed(id: &str) -> String {
@@ -546,12 +571,262 @@ async fn per_turn_overrides_keep_cached_prefix_and_key_constant() {
         "role": "user",
         "content": [ { "type": "input_text", "text": "hello 2" } ]
     });
+    let expected_env_text_2 = format!(
+        r#"<environment_context>
+  <cwd>{}</cwd>
+  <approval_policy>never</approval_policy>
+  <sandbox_mode>workspace-write</sandbox_mode>
+  <network_access>enabled</network_access>
+  <writable_roots>
+    <root>{}</root>
+  </writable_roots>
+</environment_context>"#,
+        new_cwd.path().to_string_lossy(),
+        writable.path().to_string_lossy(),
+    );
+    let expected_env_msg_2 = serde_json::json!({
+        "type": "message",
+        "role": "user",
+        "content": [ { "type": "input_text", "text": expected_env_text_2 } ]
+    });
     let expected_body2 = serde_json::json!(
         [
             body1["input"].as_array().unwrap().as_slice(),
-            [expected_user_message_2].as_slice(),
+            [expected_env_msg_2, expected_user_message_2].as_slice(),
         ]
         .concat()
     );
     assert_eq!(body2["input"], expected_body2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn send_user_turn_with_no_changes_does_not_send_environment_context() {
+    use pretty_assertions::assert_eq;
+
+    let server = MockServer::start().await;
+
+    let sse = sse_completed("resp");
+    let template = ResponseTemplate::new(200)
+        .insert_header("content-type", "text/event-stream")
+        .set_body_raw(sse, "text/event-stream");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(template)
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    let cwd = TempDir::new().unwrap();
+    let codex_home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&codex_home);
+    config.cwd = cwd.path().to_path_buf();
+    config.model_provider = model_provider;
+    config.user_instructions = Some("be consistent and helpful".to_string());
+
+    let default_cwd = config.cwd.clone();
+    let default_approval_policy = config.approval_policy;
+    let default_sandbox_policy = config.sandbox_policy.clone();
+    let default_model = config.model.clone();
+    let default_effort = config.model_reasoning_effort;
+    let default_summary = config.model_reasoning_summary;
+
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+    let codex = conversation_manager
+        .new_conversation(config)
+        .await
+        .expect("create new conversation")
+        .conversation;
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![InputItem::Text {
+                text: "hello 1".into(),
+            }],
+            cwd: default_cwd.clone(),
+            approval_policy: default_approval_policy,
+            sandbox_policy: default_sandbox_policy.clone(),
+            model: default_model.clone(),
+            effort: default_effort,
+            summary: default_summary,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![InputItem::Text {
+                text: "hello 2".into(),
+            }],
+            cwd: default_cwd.clone(),
+            approval_policy: default_approval_policy,
+            sandbox_policy: default_sandbox_policy.clone(),
+            model: default_model.clone(),
+            effort: default_effort,
+            summary: default_summary,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2, "expected two POST requests");
+
+    let body1 = requests[0].body_json::<serde_json::Value>().unwrap();
+    let body2 = requests[1].body_json::<serde_json::Value>().unwrap();
+
+    let shell = default_user_shell().await;
+    let expected_ui_text =
+        "<user_instructions>\n\nbe consistent and helpful\n\n</user_instructions>";
+    let expected_ui_msg = text_user_input(expected_ui_text.to_string());
+
+    let expected_env_msg_1 = text_user_input(default_env_context_str(
+        &cwd.path().to_string_lossy(),
+        &shell,
+    ));
+    let expected_user_message_1 = text_user_input("hello 1".to_string());
+
+    let expected_input_1 = serde_json::Value::Array(vec![
+        expected_ui_msg.clone(),
+        expected_env_msg_1.clone(),
+        expected_user_message_1.clone(),
+    ]);
+    assert_eq!(body1["input"], expected_input_1);
+
+    let expected_user_message_2 = text_user_input("hello 2".to_string());
+    let expected_input_2 = serde_json::Value::Array(vec![
+        expected_ui_msg,
+        expected_env_msg_1,
+        expected_user_message_1,
+        expected_user_message_2,
+    ]);
+    assert_eq!(body2["input"], expected_input_2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn send_user_turn_with_changes_sends_environment_context() {
+    use pretty_assertions::assert_eq;
+
+    let server = MockServer::start().await;
+
+    let sse = sse_completed("resp");
+    let template = ResponseTemplate::new(200)
+        .insert_header("content-type", "text/event-stream")
+        .set_body_raw(sse, "text/event-stream");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/responses"))
+        .respond_with(template)
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+
+    let cwd = TempDir::new().unwrap();
+    let codex_home = TempDir::new().unwrap();
+    let mut config = load_default_config_for_test(&codex_home);
+    config.cwd = cwd.path().to_path_buf();
+    config.model_provider = model_provider;
+    config.user_instructions = Some("be consistent and helpful".to_string());
+
+    let default_cwd = config.cwd.clone();
+    let default_approval_policy = config.approval_policy;
+    let default_sandbox_policy = config.sandbox_policy.clone();
+    let default_model = config.model.clone();
+    let default_effort = config.model_reasoning_effort;
+    let default_summary = config.model_reasoning_summary;
+
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+    let codex = conversation_manager
+        .new_conversation(config.clone())
+        .await
+        .expect("create new conversation")
+        .conversation;
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![InputItem::Text {
+                text: "hello 1".into(),
+            }],
+            cwd: default_cwd.clone(),
+            approval_policy: default_approval_policy,
+            sandbox_policy: default_sandbox_policy.clone(),
+            model: default_model,
+            effort: default_effort,
+            summary: default_summary,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    codex
+        .submit(Op::UserTurn {
+            items: vec![InputItem::Text {
+                text: "hello 2".into(),
+            }],
+            cwd: default_cwd.clone(),
+            approval_policy: AskForApproval::Never,
+            sandbox_policy: SandboxPolicy::DangerFullAccess,
+            model: "o3".to_string(),
+            effort: Some(ReasoningEffort::High),
+            summary: ReasoningSummary::Detailed,
+        })
+        .await
+        .unwrap();
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 2, "expected two POST requests");
+
+    let body1 = requests[0].body_json::<serde_json::Value>().unwrap();
+    let body2 = requests[1].body_json::<serde_json::Value>().unwrap();
+
+    let shell = default_user_shell().await;
+    let expected_ui_text =
+        "<user_instructions>\n\nbe consistent and helpful\n\n</user_instructions>";
+    let expected_ui_msg = serde_json::json!({
+        "type": "message",
+        "role": "user",
+        "content": [ { "type": "input_text", "text": expected_ui_text } ]
+    });
+    let expected_env_text_1 = default_env_context_str(&default_cwd.to_string_lossy(), &shell);
+    let expected_env_msg_1 = text_user_input(expected_env_text_1);
+    let expected_user_message_1 = text_user_input("hello 1".to_string());
+    let expected_input_1 = serde_json::Value::Array(vec![
+        expected_ui_msg.clone(),
+        expected_env_msg_1.clone(),
+        expected_user_message_1.clone(),
+    ]);
+    assert_eq!(body1["input"], expected_input_1);
+
+    let expected_env_msg_2 = text_user_input(format!(
+        r#"<environment_context>
+  <cwd>{}</cwd>
+  <approval_policy>never</approval_policy>
+  <sandbox_mode>danger-full-access</sandbox_mode>
+  <network_access>enabled</network_access>
+</environment_context>"#,
+        default_cwd.to_string_lossy()
+    ));
+    let expected_user_message_2 = text_user_input("hello 2".to_string());
+    let expected_input_2 = serde_json::Value::Array(vec![
+        expected_ui_msg,
+        expected_env_msg_1,
+        expected_user_message_1,
+        expected_env_msg_2,
+        expected_user_message_2,
+    ]);
+    assert_eq!(body2["input"], expected_input_2);
 }

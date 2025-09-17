@@ -6,6 +6,6 @@ expression: render_lines(&view)
 ▌ Switch between Codex approval presets         
 ▌                                               
 ▌> 1. Read Only (current)  Codex can read files 
-▌  2. Full Access  Codex can edit files         
+▌  2. Full Access          Codex can edit files 
                                                 
 Press Enter to confirm or Esc to go back

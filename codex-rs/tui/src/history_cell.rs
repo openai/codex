@@ -122,6 +122,45 @@ impl HistoryCell for UserHistoryCell {
 }
 
 #[derive(Debug)]
+pub(crate) struct ReasoningSummaryCell {
+    _header: Vec<Line<'static>>,
+    content: Vec<Line<'static>>,
+}
+
+impl ReasoningSummaryCell {
+    pub(crate) fn new(header: Vec<Line<'static>>, content: Vec<Line<'static>>) -> Self {
+        Self {
+            _header: header,
+            content,
+        }
+    }
+}
+
+impl HistoryCell for ReasoningSummaryCell {
+    fn display_lines(&self, width: u16) -> Vec<Line<'static>> {
+        let summary_lines = self
+            .content
+            .iter()
+            .map(|l| l.clone().dim().italic())
+            .collect::<Vec<_>>();
+
+        word_wrap_lines(
+            &summary_lines,
+            RtOptions::new(width as usize)
+                .initial_indent("• ".into())
+                .subsequent_indent("  ".into()),
+        )
+    }
+
+    fn transcript_lines(&self) -> Vec<Line<'static>> {
+        let mut out: Vec<Line<'static>> = Vec::new();
+        out.push("thinking".magenta().bold().into());
+        out.extend(self.content.clone());
+        out
+    }
+}
+
+#[derive(Debug)]
 pub(crate) struct AgentMessageCell {
     lines: Vec<Line<'static>>,
     is_first_line: bool,
@@ -574,7 +613,7 @@ impl HistoryCell for CompletedMcpToolCallWithImageOutput {
 }
 
 const TOOL_CALL_MAX_LINES: usize = 5;
-const SESSION_HEADER_MAX_INNER_WIDTH: usize = 70;
+const SESSION_HEADER_MAX_INNER_WIDTH: usize = 56; // Just an eyeballed value
 
 fn title_case(s: &str) -> String {
     if s.is_empty() {
@@ -628,24 +667,29 @@ pub(crate) fn new_session_info(
 
         // Help lines below the header (new copy and list)
         let help_lines: Vec<Line<'static>> = vec![
-            "Describe a task to get started or try one of the following commands:"
+            "  To get started, describe a task or try one of these commands:"
                 .dim()
                 .into(),
-            Line::from("".dim()),
+            Line::from(""),
             Line::from(vec![
-                "1. ".into(),
-                "/status".bold(),
-                " - show current session configuration and token usage".dim(),
+                "  ".into(),
+                "/init".into(),
+                " - create an AGENTS.md file with instructions for Codex".dim(),
             ]),
             Line::from(vec![
-                "2. ".into(),
-                "/compact".bold(),
-                " - compact the chat history to avoid context limits".dim(),
+                "  ".into(),
+                "/status".into(),
+                " - show current session configuration".dim(),
             ]),
             Line::from(vec![
-                "3. ".into(),
-                "/prompts".bold(),
-                " - explore starter prompts to get to know Codex".dim(),
+                "  ".into(),
+                "/approvals".into(),
+                " - choose what Codex can do without approval".dim(),
+            ]),
+            Line::from(vec![
+                "  ".into(),
+                "/model".into(),
+                " - choose what model and reasoning effort to use".dim(),
             ]),
         ];
 
@@ -715,16 +759,31 @@ impl SessionHeaderHistoryCell {
         }
     }
 
-    fn format_directory(&self) -> String {
-        if let Some(rel) = relativize_to_home(&self.directory) {
+    fn format_directory(&self, max_width: Option<usize>) -> String {
+        Self::format_directory_inner(&self.directory, max_width)
+    }
+
+    fn format_directory_inner(directory: &Path, max_width: Option<usize>) -> String {
+        let formatted = if let Some(rel) = relativize_to_home(directory) {
             if rel.as_os_str().is_empty() {
                 "~".to_string()
             } else {
                 format!("~{}{}", std::path::MAIN_SEPARATOR, rel.display())
             }
         } else {
-            self.directory.display().to_string()
+            directory.display().to_string()
+        };
+
+        if let Some(max_width) = max_width {
+            if max_width == 0 {
+                return String::new();
+            }
+            if UnicodeWidthStr::width(formatted.as_str()) > max_width {
+                return crate::text_formatting::center_truncate_path(&formatted, max_width);
+            }
         }
+
+        formatted
     }
 
     fn reasoning_label(&self) -> Option<&'static str> {
@@ -753,79 +812,93 @@ impl HistoryCell for SessionHeaderHistoryCell {
         top.push('╭');
         top.push_str(&"─".repeat(inner_width));
         top.push('╮');
-        out.push(Line::from(top));
+        out.push(Line::from(top.dim()));
 
         // Title line rendered inside the box: " >_ OpenAI Codex (vX)"
         let title_text = format!(" >_ OpenAI Codex (v{})", self.version);
         let title_w = UnicodeWidthStr::width(title_text.as_str());
         let pad_w = inner_width.saturating_sub(title_w);
         let mut title_spans: Vec<Span<'static>> = vec![
-            "│".into(),
-            " ".into(),
-            ">_ ".into(),
-            "OpenAI Codex".bold(),
-            " ".into(),
-            format!("(v{})", self.version).dim(),
+            Span::from("│").dim(),
+            Span::from(" ").dim(),
+            Span::from(">_ ").dim(),
+            Span::from("OpenAI Codex").bold(),
+            Span::from(" ").dim(),
+            Span::from(format!("(v{})", self.version)).dim(),
         ];
         if pad_w > 0 {
-            title_spans.push(" ".repeat(pad_w).into());
+            title_spans.push(Span::from(" ".repeat(pad_w)).dim());
         }
-        title_spans.push("│".into());
+        title_spans.push(Span::from("│").dim());
         out.push(Line::from(title_spans));
 
         // Spacer row between title and details
         out.push(Line::from(vec![
-            "│".into(),
-            " ".repeat(inner_width).into(),
-            "│".into(),
+            Span::from(format!("│{}│", " ".repeat(inner_width))).dim(),
         ]));
 
-        // Model line: " Model: <model> <reasoning_label> (change with /model)"
-        const CHANGE_MODEL_HINT: &str = "(change with /model)";
+        // Model line: " model: <model> <reasoning_label> (change with /model)"
+        const CHANGE_MODEL_HINT_COMMAND: &str = "/model";
+        const CHANGE_MODEL_HINT_EXPLANATION: &str = " to change";
+        const DIR_LABEL: &str = "directory:";
+        let label_width = DIR_LABEL.len();
+        let model_label = format!(
+            "{model_label:<label_width$}",
+            model_label = "model:",
+            label_width = label_width
+        );
         let reasoning_label = self.reasoning_label();
-        let mut model_text = format!(" Model: {}", self.model);
+        let mut model_value_for_width = self.model.clone();
         if let Some(reasoning) = reasoning_label {
-            model_text.push(' ');
-            model_text.push_str(reasoning);
+            model_value_for_width.push(' ');
+            model_value_for_width.push_str(reasoning);
         }
-        model_text.push(' ');
-        model_text.push_str(CHANGE_MODEL_HINT);
-        let model_w = UnicodeWidthStr::width(model_text.as_str());
+        let model_text_for_width_calc = format!(
+            " {model_label} {model_value_for_width}   {CHANGE_MODEL_HINT_COMMAND}{CHANGE_MODEL_HINT_EXPLANATION}",
+        );
+        let model_w = UnicodeWidthStr::width(model_text_for_width_calc.as_str());
         let pad_w = inner_width.saturating_sub(model_w);
         let mut spans: Vec<Span<'static>> = vec![
-            "│".into(),
-            " ".into(),
-            "Model: ".bold(),
-            self.model.clone().into(),
+            Span::from(format!("│ {model_label} ")).dim(),
+            Span::from(self.model.clone()),
         ];
         if let Some(reasoning) = reasoning_label {
-            spans.push(" ".into());
-            spans.push(reasoning.into());
+            spans.push(Span::from(" "));
+            spans.push(Span::from(reasoning));
         }
-        spans.push(" ".into());
-        spans.push(CHANGE_MODEL_HINT.dim());
+        spans.push(Span::from("   ").dim());
+        spans.push(Span::from(CHANGE_MODEL_HINT_COMMAND).cyan());
+        spans.push(Span::from(CHANGE_MODEL_HINT_EXPLANATION).dim());
         if pad_w > 0 {
-            spans.push(" ".repeat(pad_w).into());
+            spans.push(Span::from(" ".repeat(pad_w)).dim());
         }
-        spans.push("│".into());
+        spans.push(Span::from("│").dim());
         out.push(Line::from(spans));
 
         // Directory line: " Directory: <cwd>"
-        let dir = self.format_directory();
-        let dir_text = format!(" Directory: {dir}");
+        let dir_label = format!("{DIR_LABEL:<label_width$}");
+        let dir_prefix = format!(" {dir_label} ");
+        let dir_max_width = inner_width.saturating_sub(UnicodeWidthStr::width(dir_prefix.as_str()));
+        let dir = self.format_directory(Some(dir_max_width));
+        let dir_text = format!(" {dir_label} {dir}");
         let dir_w = UnicodeWidthStr::width(dir_text.as_str());
         let pad_w = inner_width.saturating_sub(dir_w);
-        let mut spans: Vec<Span<'static>> =
-            vec!["│".into(), " ".into(), "Directory: ".bold(), dir.into()];
+        let mut spans: Vec<Span<'static>> = vec![
+            Span::from("│").dim(),
+            Span::from(" ").dim(),
+            Span::from(dir_label).dim(),
+            Span::from(" ").dim(),
+            Span::from(dir),
+        ];
         if pad_w > 0 {
-            spans.push(" ".repeat(pad_w).into());
+            spans.push(Span::from(" ".repeat(pad_w)).dim());
         }
-        spans.push("│".into());
+        spans.push(Span::from("│").dim());
         out.push(Line::from(spans));
 
         // Bottom border
         let bottom = format!("╰{}╯", "─".repeat(inner_width));
-        out.push(Line::from(bottom));
+        out.push(Line::from(bottom.dim()));
 
         out
     }
@@ -1383,7 +1456,7 @@ pub(crate) fn new_reasoning_block(
 pub(crate) fn new_reasoning_summary_block(
     full_reasoning_buffer: String,
     config: &Config,
-) -> Vec<Box<dyn HistoryCell>> {
+) -> Box<dyn HistoryCell> {
     if config.model_family.reasoning_summary_format == ReasoningSummaryFormat::Experimental {
         // Experimental format is following:
         // ** header **
@@ -1400,27 +1473,19 @@ pub(crate) fn new_reasoning_summary_block(
                 // then we don't have a summary to inject into history
                 if after_close_idx < full_reasoning_buffer.len() {
                     let header_buffer = full_reasoning_buffer[..after_close_idx].to_string();
-                    let summary_buffer = full_reasoning_buffer[after_close_idx..].to_string();
-
-                    let mut header_lines: Vec<Line<'static>> = Vec::new();
-                    header_lines.push(Line::from("Thinking".magenta().italic()));
+                    let mut header_lines = Vec::new();
                     append_markdown(&header_buffer, &mut header_lines, config);
 
-                    let mut summary_lines: Vec<Line<'static>> = Vec::new();
-                    summary_lines.push(Line::from("Thinking".magenta().bold()));
+                    let summary_buffer = full_reasoning_buffer[after_close_idx..].to_string();
+                    let mut summary_lines = Vec::new();
                     append_markdown(&summary_buffer, &mut summary_lines, config);
 
-                    return vec![
-                        Box::new(TranscriptOnlyHistoryCell {
-                            lines: header_lines,
-                        }),
-                        Box::new(AgentMessageCell::new(summary_lines, true)),
-                    ];
+                    return Box::new(ReasoningSummaryCell::new(header_lines, summary_lines));
                 }
             }
         }
     }
-    vec![Box::new(new_reasoning_block(full_reasoning_buffer, config))]
+    Box::new(new_reasoning_block(full_reasoning_buffer, config))
 }
 
 struct OutputLinesParams {
@@ -1523,6 +1588,8 @@ mod tests {
     use codex_core::config::Config;
     use codex_core::config::ConfigOverrides;
     use codex_core::config::ConfigToml;
+    use dirs::home_dir;
+    use pretty_assertions::assert_eq;
 
     fn test_config() -> Config {
         Config::load_from_base_config_with_overrides(
@@ -1561,11 +1628,35 @@ mod tests {
         let lines = render_lines(&cell.display_lines(80));
         let model_line = lines
             .into_iter()
-            .find(|line| line.contains("Model:"))
+            .find(|line| line.contains("model:"))
             .expect("model line");
 
-        assert!(model_line.contains("Model: gpt-4o high"));
-        assert!(model_line.contains("(change with /model)"));
+        assert!(model_line.contains("gpt-4o high"));
+        assert!(model_line.contains("/model to change"));
+    }
+
+    #[test]
+    fn session_header_directory_center_truncates() {
+        let mut dir = home_dir().expect("home directory");
+        for part in ["hello", "the", "fox", "is", "very", "fast"] {
+            dir.push(part);
+        }
+
+        let formatted = SessionHeaderHistoryCell::format_directory_inner(&dir, Some(24));
+        let sep = std::path::MAIN_SEPARATOR;
+        let expected = format!("~{sep}hello{sep}the{sep}…{sep}very{sep}fast");
+        assert_eq!(formatted, expected);
+    }
+
+    #[test]
+    fn session_header_directory_front_truncates_long_segment() {
+        let mut dir = home_dir().expect("home directory");
+        dir.push("supercalifragilisticexpialidocious");
+
+        let formatted = SessionHeaderHistoryCell::format_directory_inner(&dir, Some(18));
+        let sep = std::path::MAIN_SEPARATOR;
+        let expected = format!("~{sep}…cexpialidocious");
+        assert_eq!(formatted, expected);
     }
 
     #[test]
@@ -2017,17 +2108,35 @@ mod tests {
         let rendered = render_lines(&lines).join("\n");
         insta::assert_snapshot!(rendered);
     }
+    #[test]
+    fn reasoning_summary_block() {
+        let mut config = test_config();
+        config.model_family.reasoning_summary_format = ReasoningSummaryFormat::Experimental;
+
+        let cell = new_reasoning_summary_block(
+            "**High level reasoning**\n\nDetailed reasoning goes here.".to_string(),
+            &config,
+        );
+
+        let rendered_display = render_lines(&cell.display_lines(80));
+        assert_eq!(rendered_display, vec!["• Detailed reasoning goes here."]);
+
+        let rendered_transcript = render_transcript(cell.as_ref());
+        assert_eq!(
+            rendered_transcript,
+            vec!["thinking", "Detailed reasoning goes here."]
+        );
+    }
 
     #[test]
     fn reasoning_summary_block_returns_reasoning_cell_when_feature_disabled() {
         let mut config = test_config();
         config.model_family.reasoning_summary_format = ReasoningSummaryFormat::Experimental;
 
-        let cells =
+        let cell =
             new_reasoning_summary_block("Detailed reasoning goes here.".to_string(), &config);
 
-        assert_eq!(cells.len(), 1);
-        let rendered = render_transcript(cells[0].as_ref());
+        let rendered = render_transcript(cell.as_ref());
         assert_eq!(rendered, vec!["thinking", "Detailed reasoning goes here."]);
     }
 
@@ -2036,13 +2145,12 @@ mod tests {
         let mut config = test_config();
         config.model_family.reasoning_summary_format = ReasoningSummaryFormat::Experimental;
 
-        let cells = new_reasoning_summary_block(
+        let cell = new_reasoning_summary_block(
             "**High level reasoning without closing".to_string(),
             &config,
         );
 
-        assert_eq!(cells.len(), 1);
-        let rendered = render_transcript(cells[0].as_ref());
+        let rendered = render_transcript(cell.as_ref());
         assert_eq!(
             rendered,
             vec!["thinking", "**High level reasoning without closing"]
@@ -2054,25 +2162,23 @@ mod tests {
         let mut config = test_config();
         config.model_family.reasoning_summary_format = ReasoningSummaryFormat::Experimental;
 
-        let cells = new_reasoning_summary_block(
+        let cell = new_reasoning_summary_block(
             "**High level reasoning without closing**".to_string(),
             &config,
         );
 
-        assert_eq!(cells.len(), 1);
-        let rendered = render_transcript(cells[0].as_ref());
+        let rendered = render_transcript(cell.as_ref());
         assert_eq!(
             rendered,
             vec!["thinking", "High level reasoning without closing"]
         );
 
-        let cells = new_reasoning_summary_block(
+        let cell = new_reasoning_summary_block(
             "**High level reasoning without closing**\n\n  ".to_string(),
             &config,
         );
 
-        assert_eq!(cells.len(), 1);
-        let rendered = render_transcript(cells[0].as_ref());
+        let rendered = render_transcript(cell.as_ref());
         assert_eq!(
             rendered,
             vec!["thinking", "High level reasoning without closing"]
@@ -2084,21 +2190,18 @@ mod tests {
         let mut config = test_config();
         config.model_family.reasoning_summary_format = ReasoningSummaryFormat::Experimental;
 
-        let cells = new_reasoning_summary_block(
+        let cell = new_reasoning_summary_block(
             "**High level plan**\n\nWe should fix the bug next.".to_string(),
             &config,
         );
 
-        assert_eq!(cells.len(), 2);
+        let rendered_display = render_lines(&cell.display_lines(80));
+        assert_eq!(rendered_display, vec!["• We should fix the bug next."]);
 
-        let header_lines = render_transcript(cells[0].as_ref());
-        assert_eq!(header_lines, vec!["Thinking", "High level plan"]);
-
-        let summary_lines = render_transcript(cells[1].as_ref());
-
+        let rendered_transcript = render_transcript(cell.as_ref());
         assert_eq!(
-            summary_lines,
-            vec!["codex", "Thinking", "We should fix the bug next."]
-        )
+            rendered_transcript,
+            vec!["thinking", "We should fix the bug next."]
+        );
     }
 }

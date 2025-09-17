@@ -4,7 +4,7 @@ use crate::tool_apply_patch::ApplyPatchToolType;
 /// The `instructions` field in the payload sent to a model should always start
 /// with this content.
 const BASE_INSTRUCTIONS: &str = include_str!("../prompt.md");
-const SWIFTFOX_INSTRUCTIONS: &str = include_str!("../swiftfox_prompt.md");
+const GPT_5_CODEX_INSTRUCTIONS: &str = include_str!("../gpt_5_codex_prompt.md");
 
 /// A model family is a group of models that share certain characteristics.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -99,12 +99,12 @@ pub fn find_family_for_model(slug: &str) -> Option<ModelFamily> {
         model_family!(slug, "gpt-4o", needs_special_apply_patch_instructions: true)
     } else if slug.starts_with("gpt-3.5") {
         model_family!(slug, "gpt-3.5", needs_special_apply_patch_instructions: true)
-    } else if slug.starts_with("codex-") || slug.starts_with("swiftfox") {
+    } else if slug.starts_with("codex-") || slug.starts_with("gpt-5-codex") {
         model_family!(
             slug, slug,
             supports_reasoning_summaries: true,
             reasoning_summary_format: ReasoningSummaryFormat::Experimental,
-            base_instructions: SWIFTFOX_INSTRUCTIONS.to_string(),
+            base_instructions: GPT_5_CODEX_INSTRUCTIONS.to_string(),
         )
     } else if slug.starts_with("gpt-5") {
         model_family!(

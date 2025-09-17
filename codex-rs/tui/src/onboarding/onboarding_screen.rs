@@ -319,6 +319,8 @@ pub(crate) async fn run_onboarding_app(
     use tokio_stream::StreamExt;
 
     let mut onboarding_screen = OnboardingScreen::new(tui, args);
+    // One-time guard to fully clear the screen after ChatGPT login success message is shown
+    let mut did_full_clear_after_success = false;
 
     tui.draw(u16::MAX, |frame| {
         frame.render_widget_ref(&onboarding_screen, frame.area());
@@ -337,6 +339,36 @@ pub(crate) async fn run_onboarding_app(
                     onboarding_screen.handle_paste(text);
                 }
                 TuiEvent::Draw => {
+                    if !did_full_clear_after_success
+                        && onboarding_screen.steps.iter().any(|step| {
+                            if let Step::Auth(w) = step {
+                                w.sign_in_state.read().is_ok_and(|g| {
+                                    matches!(&*g, super::auth::SignInState::ChatGptSuccessMessage)
+                                })
+                            } else {
+                                false
+                            }
+                        })
+                    {
+                        // Reset any lingering SGR (underline/color) before clearing
+                        let _ = ratatui::crossterm::execute!(
+                            std::io::stdout(),
+                            ratatui::crossterm::style::SetAttribute(
+                                ratatui::crossterm::style::Attribute::Reset
+                            ),
+                            ratatui::crossterm::style::SetAttribute(
+                                ratatui::crossterm::style::Attribute::NoUnderline
+                            ),
+                            ratatui::crossterm::style::SetForegroundColor(
+                                ratatui::crossterm::style::Color::Reset
+                            ),
+                            ratatui::crossterm::style::SetBackgroundColor(
+                                ratatui::crossterm::style::Color::Reset
+                            )
+                        );
+                        let _ = tui.terminal.clear();
+                        did_full_clear_after_success = true;
+                    }
                     let _ = tui.draw(u16::MAX, |frame| {
                         frame.render_widget_ref(&onboarding_screen, frame.area());
                     });
