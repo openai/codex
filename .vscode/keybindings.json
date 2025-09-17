@@ -1,0 +1,10 @@
+[
+    {
+        "key": "backspace",
+        "command": "deleteLeft"
+    },
+    {
+        "key": "delete",
+        "command": "deleteRight"
+    }
+]
