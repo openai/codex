@@ -542,10 +542,15 @@ pub struct TaskStartedEvent {
 
 #[derive(Debug, Clone, Deserialize, Serialize, Default, TS)]
 pub struct TokenUsage {
+    #[serde(alias = "prompt_tokens", default)]
     pub input_tokens: u64,
+    #[serde(default)]
     pub cached_input_tokens: u64,
+    #[serde(alias = "completion_tokens", default)]
     pub output_tokens: u64,
+    #[serde(default)]
     pub reasoning_output_tokens: u64,
+    #[serde(default)]
     pub total_tokens: u64,
 }
 

@@ -27,6 +27,7 @@ use crate::util::backoff;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ReasoningItemContent;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::TokenUsage;
 
 /// Implementation for the classic Chat Completions API.
 pub(crate) async fn stream_chat_completions(
@@ -369,6 +370,7 @@ async fn process_chat_sse<S>(
     let mut fn_call_state = FunctionCallState::default();
     let mut assistant_text = String::new();
     let mut reasoning_text = String::new();
+    let mut last_usage: Option<TokenUsage> = None;
 
     loop {
         let sse = match timeout(idle_timeout, stream.next()).await {
@@ -384,17 +386,17 @@ async fn process_chat_sse<S>(
                 let _ = tx_event
                     .send(Ok(ResponseEvent::Completed {
                         response_id: String::new(),
-                        token_usage: None,
+                        token_usage: last_usage.clone(),
                     }))
                     .await;
                 return;
             }
             Err(_) => {
                 let _ = tx_event
-                    .send(Err(CodexErr::Stream(
-                        "idle timeout waiting for SSE".into(),
-                        None,
-                    )))
+                    .send(Ok(ResponseEvent::Completed {
+                        response_id: String::new(),
+                        token_usage: last_usage.clone(),
+                    }))
                     .await;
                 return;
             }
@@ -430,7 +432,7 @@ async fn process_chat_sse<S>(
             let _ = tx_event
                 .send(Ok(ResponseEvent::Completed {
                     response_id: String::new(),
-                    token_usage: None,
+                    token_usage: last_usage.clone(),
                 }))
                 .await;
             return;
@@ -603,11 +605,22 @@ async fn process_chat_sse<S>(
                     _ => {}
                 }
 
+                // Extract token usage information if available and store it for later use
+                if let Some(u) = chunk.get("usage")
+                    && let Ok(mut usage) = serde_json::from_value::<TokenUsage>(u.clone())
+                {
+                    // Chat Completions API doesn't provide cached tokens info
+                    usage.cached_input_tokens = 0;
+                    // Chat Completions API doesn't provide reasoning tokens info
+                    usage.reasoning_output_tokens = 0;
+                    last_usage = Some(usage);
+                }
+
                 // Emit Completed regardless of reason so the agent can advance.
                 let _ = tx_event
                     .send(Ok(ResponseEvent::Completed {
                         response_id: String::new(),
-                        token_usage: None,
+                        token_usage: last_usage.clone(),
                     }))
                     .await;
 
