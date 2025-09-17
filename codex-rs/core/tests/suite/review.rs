@@ -122,7 +122,7 @@ async fn review_op_emits_lifecycle_and_review_output() {
     assert_eq!(expected, review);
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    // Also verify that a developer message with the header and a formatted finding
+    // Also verify that a user message with the header and a formatted finding
     // was recorded back in the parent session's rollout.
     codex.submit(Op::GetPath).await.unwrap();
     let history_event =
@@ -142,7 +142,7 @@ async fn review_op_emits_lifecycle_and_review_output() {
         let v: serde_json::Value = serde_json::from_str(line).expect("jsonl line");
         let rl: RolloutLine = serde_json::from_value(v).expect("rollout line");
         if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = rl.item
-            && role == "developer"
+            && role == "user"
         {
             for c in content {
                 if let ContentItem::InputText { text } = c {
@@ -156,7 +156,7 @@ async fn review_op_emits_lifecycle_and_review_output() {
             }
         }
     }
-    assert!(saw_header, "developer header missing from rollout");
+    assert!(saw_header, "user header missing from rollout");
     assert!(
         saw_finding_line,
         "formatted finding line missing from rollout"
@@ -497,7 +497,7 @@ async fn review_input_isolated_from_parent_history() {
         format!("{REVIEW_PROMPT}\n\n---\n\nNow, here's your task: Please review only this",)
     );
 
-    // Also verify that a developer interruption note was recorded in the rollout.
+    // Also verify that a user interruption note was recorded in the rollout.
     codex.submit(Op::GetPath).await.unwrap();
     let history_event =
         wait_for_event(&codex, |ev| matches!(ev, EventMsg::ConversationPath(_))).await;
@@ -514,11 +514,11 @@ async fn review_input_isolated_from_parent_history() {
         let v: serde_json::Value = serde_json::from_str(line).expect("jsonl line");
         let rl: RolloutLine = serde_json::from_value(v).expect("rollout line");
         if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = rl.item
-            && role == "developer"
+            && role == "user"
         {
             for c in content {
                 if let ContentItem::InputText { text } = c
-                    && text.contains("[User initiated a review task, but was interrupted.")
+                    && text.contains("User initiated a review task, but was interrupted.")
                 {
                     saw_interruption_message = true;
                     break;
@@ -531,7 +531,7 @@ async fn review_input_isolated_from_parent_history() {
     }
     assert!(
         saw_interruption_message,
-        "expected developer interruption message in rollout"
+        "expected user interruption message in rollout"
     );
 
     server.verify().await;
