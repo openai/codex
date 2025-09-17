@@ -1,6 +1,7 @@
 use crate::config_profile::ConfigProfile;
 use crate::config_types::History;
 use crate::config_types::McpServerConfig;
+use crate::config_types::McpTransport;
 use crate::config_types::Notifications;
 use crate::config_types::ReasoningSummaryFormat;
 use crate::config_types::SandboxWorkspaceWrite;
@@ -310,7 +311,17 @@ pub fn write_global_mcp_servers(
         for (name, config) in servers {
             let mut entry = TomlTable::new();
             entry.set_implicit(false);
-            entry["command"] = toml_edit::value(config.command.clone());
+            if config.transport != McpTransport::Stdio {
+                entry["transport"] = toml_edit::value(match config.transport {
+                    McpTransport::Stdio => "stdio",
+                    McpTransport::Sse => "sse",
+                    McpTransport::Http => "http",
+                });
+            }
+
+            if let Some(command) = &config.command {
+                entry["command"] = toml_edit::value(command.clone());
+            }
 
             if !config.args.is_empty() {
                 let mut args = TomlArray::new();
@@ -331,6 +342,27 @@ pub fn write_global_mcp_servers(
                     env_table.insert(key, toml_edit::value(value.clone()));
                 }
                 entry["env"] = TomlItem::Table(env_table);
+            }
+
+            if let Some(url) = &config.url {
+                entry["url"] = toml_edit::value(url.clone());
+            }
+
+            if let Some(messages_url) = &config.messages_url {
+                entry["messages_url"] = toml_edit::value(messages_url.clone());
+            }
+
+            if let Some(headers) = &config.headers
+                && !headers.is_empty()
+            {
+                let mut headers_table = TomlTable::new();
+                headers_table.set_implicit(false);
+                let mut pairs: Vec<_> = headers.iter().collect();
+                pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+                for (key, value) in pairs {
+                    headers_table.insert(key, toml_edit::value(value.clone()));
+                }
+                entry["headers"] = TomlItem::Table(headers_table);
             }
 
             if let Some(timeout) = config.startup_timeout_ms {
@@ -1275,9 +1307,13 @@ exclude_slash_tmp = true
         servers.insert(
             "docs".to_string(),
             McpServerConfig {
-                command: "echo".to_string(),
+                transport: McpTransport::Stdio,
+                command: Some("echo".to_string()),
                 args: vec!["hello".to_string()],
                 env: None,
+                url: None,
+                messages_url: None,
+                headers: None,
                 startup_timeout_ms: None,
             },
         );
@@ -1287,7 +1323,8 @@ exclude_slash_tmp = true
         let loaded = load_global_mcp_servers(codex_home.path())?;
         assert_eq!(loaded.len(), 1);
         let docs = loaded.get("docs").expect("docs entry");
-        assert_eq!(docs.command, "echo");
+        assert_eq!(docs.transport, McpTransport::Stdio);
+        assert_eq!(docs.command.as_deref(), Some("echo"));
         assert_eq!(docs.args, vec!["hello".to_string()]);
 
         let empty = BTreeMap::new();

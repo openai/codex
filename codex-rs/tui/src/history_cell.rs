@@ -17,6 +17,7 @@ use codex_common::elapsed::format_duration;
 use codex_core::auth::get_auth_file;
 use codex_core::auth::try_read_auth_json;
 use codex_core::config::Config;
+use codex_core::config_types::McpTransport;
 use codex_core::config_types::ReasoningSummaryFormat;
 use codex_core::plan_tool::PlanItemArg;
 use codex_core::plan_tool::StepStatus;
@@ -1275,11 +1276,48 @@ pub(crate) fn new_mcp_tools_output(
         names.sort();
 
         lines.push(vec!["  • Server: ".into(), server.clone().into()].into());
+        lines.push(
+            vec![
+                "    • Transport: ".into(),
+                transport_label(cfg.transport).into(),
+            ]
+            .into(),
+        );
 
-        if !cfg.command.is_empty() {
-            let cmd_display = format!("{} {}", cfg.command, cfg.args.join(" "));
+        match cfg.transport {
+            McpTransport::Stdio => {
+                if let Some(command) = &cfg.command {
+                    let mut parts = Vec::new();
+                    parts.push(command.clone());
+                    parts.extend(cfg.args.clone());
+                    let cmd_display = parts.join(" ").trim().to_string();
+                    if !cmd_display.is_empty() {
+                        lines.push(vec!["    • Command: ".into(), cmd_display.into()].into());
+                    }
+                }
 
-            lines.push(vec!["    • Command: ".into(), cmd_display.into()].into());
+                if let Some(env) = cfg.env.as_ref()
+                    && !env.is_empty()
+                {
+                    lines.push(vec!["    • Env: ".into(), format_kv_map(env).into()].into());
+                }
+            }
+            McpTransport::Sse | McpTransport::Http => {
+                if let Some(url) = &cfg.url {
+                    lines.push(vec!["    • URL: ".into(), url.clone().into()].into());
+                }
+                if let Some(messages_url) = &cfg.messages_url {
+                    lines.push(
+                        vec!["    • Messages URL: ".into(), messages_url.clone().into()].into(),
+                    );
+                }
+                if let Some(headers) = cfg.headers.as_ref()
+                    && !headers.is_empty()
+                {
+                    lines
+                        .push(vec!["    • Headers: ".into(), format_kv_map(headers).into()].into());
+                }
+            }
         }
 
         if names.is_empty() {
@@ -1291,6 +1329,24 @@ pub(crate) fn new_mcp_tools_output(
     }
 
     PlainHistoryCell { lines }
+}
+
+fn transport_label(transport: McpTransport) -> &'static str {
+    match transport {
+        McpTransport::Stdio => "stdio",
+        McpTransport::Sse => "sse",
+        McpTransport::Http => "http",
+    }
+}
+
+fn format_kv_map(map: &HashMap<String, String>) -> String {
+    let mut pairs: Vec<_> = map.iter().collect();
+    pairs.sort_by(|(a, _), (b, _)| a.cmp(b));
+    pairs
+        .into_iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 pub(crate) fn new_info_event(message: String, hint: Option<String>) -> PlainHistoryCell {

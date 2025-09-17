@@ -338,7 +338,7 @@ You can further customize how Codex runs at the command line using the `--ask-fo
 
 ## mcp_servers
 
-Defines the list of MCP servers that Codex can consult for tool use. Currently, only servers that are launched by executing a program that communicate over stdio are supported. For servers that use the SSE transport, consider an adapter like [mcp-proxy](https://github.com/sparfenyuk/mcp-proxy).
+Defines the list of MCP servers that Codex can consult for tool use. Codex can talk to servers over stdio (local processes), native SSE streams, or the streamable HTTP transport described in the [MCP specification](https://modelcontextprotocol.io). Stdio remains the default; set `transport = "sse"` or `transport = "http"` and provide the appropriate URLs to connect to remote servers.
 
 **Note:** Codex may cache the list of tools and resources from an MCP server so that Codex can include this information in context at startup without spawning all the servers. This is designed to save resources by loading MCP servers lazily.
 
@@ -365,18 +365,28 @@ Should be represented as follows in `~/.codex/config.toml`:
 ```toml
 # IMPORTANT: the top-level key is `mcp_servers` rather than `mcpServers`.
 [mcp_servers.server-name]
+transport = "stdio"
 command = "npx"
 args = ["-y", "mcp-server"]
 env = { "API_KEY" = "value" }
 # Optional: override the default 10s startup timeout
 startup_timeout_ms = 20_000
+
+[mcp_servers.remote-tools]
+transport = "sse"
+url = "http://localhost:3000/stream"
+messages_url = "http://localhost:3000/messages"
+headers = { "Authorization" = "Bearer sk-..." }
 ```
 
 You can also manage these entries from the CLI [experimental]:
 
 ```shell
-# Add a server (env can be repeated; `--` separates the launcher command)
+# Add a stdio-backed server (env can be repeated; `--` separates the launcher command)
 codex mcp add docs -- docs-server --port 4000
+
+# Add a remote SSE server
+codex mcp add remote --transport sse --url http://localhost:3000/stream --messages-url http://localhost:3000/messages --header Authorization=Bearer:token
 
 # List configured servers (pretty table or JSON)
 codex mcp list
@@ -616,9 +626,13 @@ notifications = [ "agent-turn-complete", "approval-requested" ]
 | `disable_response_storage` | boolean | Required for ZDR orgs. |
 | `notify` | array<string> | External program for notifications. |
 | `instructions` | string | Currently ignored; use `experimental_instructions_file` or `AGENTS.md`. |
-| `mcp_servers.<id>.command` | string | MCP server launcher command. |
-| `mcp_servers.<id>.args` | array<string> | MCP server args. |
-| `mcp_servers.<id>.env` | map<string,string> | MCP server env vars. |
+| `mcp_servers.<id>.transport` | `stdio` \| `sse` \| `http` | `stdio` | Transport to use when contacting the MCP server. |
+| `mcp_servers.<id>.command` | string | Launch command for stdio transports. |
+| `mcp_servers.<id>.args` | array<string> | Command-line args for stdio transports. |
+| `mcp_servers.<id>.env` | map<string,string> | Environment variables for stdio transports. |
+| `mcp_servers.<id>.url` | string | Stream endpoint for `sse`/`http` transports. |
+| `mcp_servers.<id>.messages_url` | string | Optional override for the POST endpoint used to send JSON-RPC messages (defaults to `url`). |
+| `mcp_servers.<id>.headers` | map<string,string> | Extra HTTP headers for `sse`/`http` transports. |
 | `mcp_servers.<id>.startup_timeout_ms` | number | Startup timeout in milliseconds (default: 10_000). Timeout is applied both for initializing MCP server and initially listing tools. |
 | `model_providers.<id>.name` | string | Display name. |
 | `model_providers.<id>.base_url` | string | API base URL. |
