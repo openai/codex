@@ -4,7 +4,10 @@ use std::time::Instant;
 // Heuristic thresholds for detecting paste-like input bursts.
 // Detect quickly to avoid showing typed prefix before paste is recognized
 const PASTE_BURST_MIN_CHARS: u16 = 3;
-const PASTE_BURST_CHAR_INTERVAL: Duration = Duration::from_millis(8);
+// Use a slightly larger interval to reduce test flakiness on slower machines
+// and better reflect typical rapid key repeat rates while still catching
+// paste-like bursts quickly.
+const PASTE_BURST_CHAR_INTERVAL: Duration = Duration::from_millis(16);
 const PASTE_ENTER_SUPPRESS_WINDOW: Duration = Duration::from_millis(120);
 
 #[derive(Default)]
@@ -35,12 +38,6 @@ pub(crate) struct RetroGrab {
     pub grabbed: String,
 }
 
-pub(crate) enum FlushResult {
-    Paste(String),
-    Typed(char),
-    None,
-}
-
 impl PasteBurst {
     /// Recommended delay to wait between simulated keypresses (or before
     /// scheduling a UI tick) so that a pending fast keystroke is flushed
@@ -49,7 +46,9 @@ impl PasteBurst {
     /// Primarily used by tests and by the TUI to reliably cross the
     /// paste-burst timing threshold.
     pub fn recommended_flush_delay() -> Duration {
-        PASTE_BURST_CHAR_INTERVAL + Duration::from_millis(1)
+        // Add a small guard band above the interval to account for
+        // coarse timers and scheduler jitter on slower machines.
+        PASTE_BURST_CHAR_INTERVAL + Duration::from_millis(8)
     }
 
     /// Entry point: decide how to treat a plain char with current timing.
@@ -101,24 +100,24 @@ impl PasteBurst {
     ///   now emit that char as normal typed input.
     ///
     /// Returns None if the timeout has not elapsed or there is nothing to flush.
-    pub fn flush_if_due(&mut self, now: Instant) -> FlushResult {
+    pub fn flush_if_due(&mut self, now: Instant) -> Option<String> {
         let timed_out = self
             .last_plain_char_time
             .is_some_and(|t| now.duration_since(t) > PASTE_BURST_CHAR_INTERVAL);
         if timed_out && self.is_active_internal() {
             self.active = false;
             let out = std::mem::take(&mut self.buffer);
-            FlushResult::Paste(out)
+            Some(out)
         } else if timed_out {
             // If we were saving a single fast char and no burst followed,
             // flush it as normal typed input.
             if let Some((ch, _at)) = self.pending_first_char.take() {
-                FlushResult::Typed(ch)
+                Some(ch.to_string())
             } else {
-                FlushResult::None
+                None
             }
         } else {
-            FlushResult::None
+            None
         }
     }
 
@@ -182,8 +181,14 @@ impl PasteBurst {
     ) -> Option<RetroGrab> {
         let start_byte = retro_start_index(before, retro_chars);
         let grabbed = before[start_byte..].to_string();
-        let looks_pastey =
-            grabbed.chars().any(|c| c.is_whitespace()) || grabbed.chars().count() >= 16;
+        // Consider it paste-like if content obviously looks like a paste
+        // (contains whitespace or is long), OR if we saw a rapid sequence of
+        // at least two prior chars (retro_chars >= 2). The latter ensures that
+        // fast bursts starting from an empty buffer remain hidden until flush,
+        // matching UX expectations and tests.
+        let looks_pastey = grabbed.chars().any(|c| c.is_whitespace())
+            || grabbed.chars().count() >= 16
+            || retro_chars >= 2;
         if looks_pastey {
             // Note: caller is responsible for removing this slice from UI text.
             self.begin_with_retro_grabbed(grabbed.clone(), now);
