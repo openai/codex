@@ -1101,45 +1101,54 @@ pub(crate) fn new_status_output(
     lines.push(vec!["  • Sandbox: ".into(), sandbox_name.into()].into());
 
     // AGENTS.md files discovered via core's project_doc logic
-    let agents_list = {
-        match discover_project_doc_paths(config) {
-            Ok(paths) => {
-                let mut rels: Vec<String> = Vec::new();
-                for p in paths {
-                    let display = if let Some(parent) = p.parent() {
-                        if parent == config.cwd {
-                            "AGENTS.md".to_string()
-                        } else {
-                            let mut cur = config.cwd.as_path();
-                            let mut ups = 0usize;
-                            let mut reached = false;
-                            while let Some(c) = cur.parent() {
-                                if cur == parent {
-                                    reached = true;
-                                    break;
-                                }
-                                cur = c;
-                                ups += 1;
-                            }
-                            if reached {
-                                let up = format!("..{}", std::path::MAIN_SEPARATOR);
-                                format!("{}AGENTS.md", up.repeat(ups))
-                            } else if let Ok(stripped) = p.strip_prefix(&config.cwd) {
-                                stripped.display().to_string()
-                            } else {
-                                p.display().to_string()
-                            }
+    let mut agents_list: Vec<String> = Vec::new();
+
+    if config.user_instructions.is_some() {
+        let global_path = config.codex_home.join("AGENTS.md");
+        let display = match relativize_to_home(&global_path) {
+            Some(rel) if !rel.as_os_str().is_empty() => {
+                let sep = std::path::MAIN_SEPARATOR;
+                format!("~{sep}{}", rel.display())
+            }
+            Some(_) => "~".to_string(),
+            None => global_path.display().to_string(),
+        };
+        agents_list.push(format!("Global ({display})"));
+    }
+
+    if let Ok(paths) = discover_project_doc_paths(config) {
+        for p in paths {
+            let display = if let Some(parent) = p.parent() {
+                if parent == config.cwd {
+                    "AGENTS.md".to_string()
+                } else {
+                    let mut cur = config.cwd.as_path();
+                    let mut ups = 0usize;
+                    let mut reached = false;
+                    while let Some(c) = cur.parent() {
+                        if cur == parent {
+                            reached = true;
+                            break;
                         }
+                        cur = c;
+                        ups += 1;
+                    }
+                    if reached {
+                        let up = format!("..{}", std::path::MAIN_SEPARATOR);
+                        format!("{}AGENTS.md", up.repeat(ups))
+                    } else if let Ok(stripped) = p.strip_prefix(&config.cwd) {
+                        stripped.display().to_string()
                     } else {
                         p.display().to_string()
-                    };
-                    rels.push(display);
+                    }
                 }
-                rels
-            }
-            Err(_) => Vec::new(),
+            } else {
+                p.display().to_string()
+            };
+            agents_list.push(display);
         }
-    };
+    }
+
     if agents_list.is_empty() {
         lines.push("  • AGENTS files: (none)".into());
     } else {
@@ -1588,8 +1597,24 @@ mod tests {
     use codex_core::config::Config;
     use codex_core::config::ConfigOverrides;
     use codex_core::config::ConfigToml;
+    use codex_core::protocol::TokenUsage;
     use dirs::home_dir;
     use pretty_assertions::assert_eq;
+    use std::fs;
+    use std::path::Path;
+    use tempfile::TempDir;
+
+    fn load_config_with(codex_home: &TempDir, cwd: &Path) -> Config {
+        Config::load_from_base_config_with_overrides(
+            ConfigToml::default(),
+            ConfigOverrides {
+                cwd: Some(cwd.to_path_buf()),
+                ..ConfigOverrides::default()
+            },
+            codex_home.path().to_path_buf(),
+        )
+        .expect("config")
+    }
 
     fn test_config() -> Config {
         Config::load_from_base_config_with_overrides(
@@ -1614,6 +1639,52 @@ mod tests {
 
     fn render_transcript(cell: &dyn HistoryCell) -> Vec<String> {
         render_lines(&cell.transcript_lines())
+    }
+
+    fn status_agents_line(lines: &[String]) -> Option<&str> {
+        lines
+            .iter()
+            .find(|line| line.contains("AGENTS files"))
+            .map(|line| line.as_str())
+    }
+
+    #[test]
+    fn status_shows_global_agents() {
+        let codex_home = TempDir::new().expect("codex home");
+        fs::write(codex_home.path().join("AGENTS.md"), "global guidance")
+            .expect("write global AGENTS");
+
+        let workspace = TempDir::new().expect("workspace");
+        let config = load_config_with(&codex_home, workspace.path());
+
+        let cell = new_status_output(&config, &TokenUsage::default(), &None);
+        let lines = render_lines(&cell.display_lines(80));
+        let agents_line = status_agents_line(&lines).expect("agents line");
+
+        assert!(agents_line.contains("Global ("));
+        assert!(!agents_line.contains("(none)"));
+    }
+
+    #[test]
+    fn status_shows_global_and_workspace_agents() {
+        let codex_home = TempDir::new().expect("codex home");
+        fs::write(codex_home.path().join("AGENTS.md"), "global guidance")
+            .expect("write global AGENTS");
+
+        let workspace = TempDir::new().expect("workspace");
+        fs::create_dir(workspace.path().join(".git")).expect("git dir");
+        fs::write(workspace.path().join("AGENTS.md"), "workspace guidance")
+            .expect("write workspace AGENTS");
+
+        let config = load_config_with(&codex_home, workspace.path());
+
+        let cell = new_status_output(&config, &TokenUsage::default(), &None);
+        let lines = render_lines(&cell.display_lines(80));
+        let agents_line = status_agents_line(&lines).expect("agents line");
+
+        assert!(agents_line.contains("Global ("));
+        assert!(agents_line.contains("AGENTS.md"));
+        assert!(agents_line.contains(","));
     }
 
     #[test]
