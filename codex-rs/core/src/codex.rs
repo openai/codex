@@ -3283,10 +3283,8 @@ async fn exit_review_mode(
             findings_str.push_str(text);
         }
         if !out.findings.is_empty() {
-            let lines = format_review_findings_block(&out.findings, false, None);
-            for line in lines {
-                findings_str.push_str(&format!("\n{line}"));
-            }
+            let block = format_review_findings_block(&out.findings, None);
+            findings_str.push_str(&format!("\n{block}"));
         }
         user_message.push_str(&format!(
             r#"<user_action>
