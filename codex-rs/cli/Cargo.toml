@@ -27,6 +27,7 @@ codex-login = { path = "../login" }
 codex-mcp-server = { path = "../mcp-server" }
 codex-protocol = { path = "../protocol" }
 codex-tui = { path = "../tui" }
+inquire = "0.7"
 serde_json = "1"
 tokio = { version = "1", features = [
     "io-std",

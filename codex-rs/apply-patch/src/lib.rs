@@ -665,7 +665,17 @@ fn derive_new_contents_from_chunks(
     if !new_lines.last().is_some_and(|s| s.is_empty()) {
         new_lines.push(String::new());
     }
-    let new_contents = new_lines.join("\n");
+
+    let separator = if original_contents.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let new_contents = if new_lines.is_empty() {
+        String::new()
+    } else {
+        new_lines.join(separator)
+    };
     Ok(AppliedPatch {
         original_contents,
         new_contents,

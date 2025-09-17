@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use codex_core::config::Config;
+use codex_core::config_types::McpServerConfig;
 use codex_core::config_types::Notifications;
+use codex_core::mcp::templates::TemplateCatalog;
 use codex_core::protocol::AgentMessageDeltaEvent;
 use codex_core::protocol::AgentMessageEvent;
 use codex_core::protocol::AgentReasoningDeltaEvent;
@@ -67,6 +69,12 @@ use crate::history_cell::CommandOutput;
 use crate::history_cell::ExecCell;
 use crate::history_cell::HistoryCell;
 use crate::history_cell::PatchEventType;
+use crate::mcp::McpManagerEntry;
+use crate::mcp::McpManagerInit;
+use crate::mcp::McpManagerView;
+use crate::mcp::McpWizardDraft;
+use crate::mcp::McpWizardInit;
+use crate::mcp::McpWizardView;
 use crate::slash_command::SlashCommand;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
@@ -1351,6 +1359,52 @@ impl ChatWidget {
     }
 
     pub(crate) fn add_mcp_output(&mut self) {
+        if self.config.experimental_mcp_overhaul {
+            self.app_event_tx.send(AppEvent::OpenMcpManager);
+            return;
+        }
+
+        self.show_mcp_history_summary();
+    }
+
+    pub(crate) fn show_mcp_manager(
+        &mut self,
+        entries: Vec<McpManagerEntry>,
+        template_count: usize,
+    ) {
+        let init = McpManagerInit {
+            app_event_tx: self.app_event_tx.clone(),
+            entries,
+            template_count,
+        };
+        self.bottom_pane
+            .show_custom_view(Box::new(McpManagerView::new(init)));
+    }
+
+    pub(crate) fn show_mcp_wizard(
+        &mut self,
+        catalog: TemplateCatalog,
+        draft: Option<McpWizardDraft>,
+        existing_name: Option<String>,
+    ) {
+        let init = McpWizardInit {
+            app_event_tx: self.app_event_tx.clone(),
+            catalog,
+            draft,
+            existing_name,
+        };
+        self.bottom_pane
+            .show_custom_view(Box::new(McpWizardView::new(init)));
+    }
+
+    pub(crate) fn set_mcp_servers(
+        &mut self,
+        servers: std::collections::BTreeMap<String, McpServerConfig>,
+    ) {
+        self.config.mcp_servers = servers.into_iter().collect();
+    }
+
+    pub(crate) fn show_mcp_history_summary(&mut self) {
         if self.config.mcp_servers.is_empty() {
             self.add_to_history(history_cell::empty_mcp_output());
         } else {

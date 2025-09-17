@@ -47,6 +47,7 @@ struct MultitoolCli {
     subcommand: Option<Subcommand>,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, clap::Subcommand)]
 enum Subcommand {
     /// Run Codex non-interactively.

@@ -6,6 +6,12 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use anyhow::bail;
+use codex_cli::mcp::cli::WizardArgs;
+use codex_cli::mcp::wizard::WizardOutcome;
+use codex_cli::mcp::wizard::build_non_interactive as build_wizard_non_interactive;
+use codex_cli::mcp::wizard::confirm_apply as wizard_confirm_apply;
+use codex_cli::mcp::wizard::render_json_summary as wizard_render_json;
+use codex_cli::mcp::wizard::run_interactive as run_wizard_interactive;
 use codex_common::CliConfigOverrides;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -16,6 +22,7 @@ use codex_core::config::migrations::mcp::{self};
 use codex_core::config::write_global_mcp_servers;
 use codex_core::config_types::McpServerConfig;
 use codex_core::mcp::registry::McpRegistry;
+use codex_core::mcp::registry::validate_server_name;
 use codex_core::mcp::templates::TemplateCatalog;
 
 /// [experimental] Launch Codex as an MCP server or manage configured MCP servers.
@@ -35,6 +42,7 @@ pub struct McpCli {
     pub cmd: Option<McpSubcommand>,
 }
 
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, clap::Subcommand)]
 pub enum McpSubcommand {
     /// [experimental] Run the Codex MCP server (stdio transport).
@@ -105,17 +113,6 @@ pub struct MigrateArgs {
     /// Migrate even when the schema version is already up-to-date.
     #[arg(long, default_value_t = false)]
     pub force: bool,
-}
-
-#[derive(Debug, clap::Parser)]
-pub struct WizardArgs {
-    /// Optional template to preselect when starting the wizard.
-    #[arg(long)]
-    pub template: Option<String>,
-
-    /// Output summary as JSON instead of launching interactive flow.
-    #[arg(long)]
-    pub json: bool,
 }
 
 impl McpCli {
@@ -230,7 +227,7 @@ fn run_remove(config_overrides: &CliConfigOverrides, remove_args: RemoveArgs) ->
 fn run_migrate(config_overrides: &CliConfigOverrides, args: MigrateArgs) -> Result<()> {
     let overrides = config_overrides.parse_overrides().map_err(|e| anyhow!(e))?;
 
-    let config = Config::load_with_cli_overrides(overrides.clone(), ConfigOverrides::default())
+    let config = Config::load_with_cli_overrides(overrides, ConfigOverrides::default())
         .context("failed to load configuration")?;
 
     if !config.experimental_mcp_overhaul && !args.force {
@@ -289,37 +286,89 @@ fn run_wizard(config_overrides: &CliConfigOverrides, args: WizardArgs) -> Result
     });
     let registry = McpRegistry::new(&config, templates.clone());
 
+    let has_non_interactive_inputs = args.name.is_some()
+        || args.command.is_some()
+        || !args.args.is_empty()
+        || !args.env.is_empty()
+        || args.startup_timeout_ms.is_some()
+        || args.description.is_some()
+        || !args.tags.is_empty()
+        || args.auth_type.is_some()
+        || args.auth_secret_ref.is_some()
+        || !args.auth_env.is_empty()
+        || args.health_type.is_some()
+        || args.health_command.is_some()
+        || !args.health_args.is_empty()
+        || args.health_timeout_ms.is_some()
+        || args.health_interval_seconds.is_some()
+        || args.health_endpoint.is_some()
+        || args.health_protocol.is_some();
+
     if args.json {
-        let summary = serde_json::json!({
-            "experimental_overhaul": registry.experimental_enabled(),
-            "server_count": registry.servers().count(),
-            "template_ids": templates.templates().keys().cloned().collect::<Vec<_>>(),
-            "preselected_template": args.template,
-        });
-        println!("{}", serde_json::to_string_pretty(&summary)?);
+        if has_non_interactive_inputs {
+            let outcome = build_wizard_non_interactive(&registry, &args)?;
+            println!("{}", wizard_render_json(&outcome)?);
+        } else {
+            let summary = serde_json::json!({
+                "experimental_overhaul": registry.experimental_enabled(),
+                "server_count": registry.servers().count(),
+                "template_ids": templates
+                    .templates()
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                "preselected_template": args.template,
+            });
+            println!("{}", serde_json::to_string_pretty(&summary)?);
+        }
         return Ok(());
     }
 
-    println!("MCP wizard (preview) is not yet implemented.");
-    println!("- Feature flag: experimental.mcp_overhaul=true");
-    println!("- Configured servers: {}", registry.servers().count());
-    if let Some(template) = args.template.as_ref() {
-        if registry.templates().contains_key(template) {
-            println!("- Preselected template: {template}");
-        } else {
-            println!("- Requested template '{template}' not found in catalog");
-        }
-    }
-    if registry.templates().is_empty() {
-        println!(
-            "- No templates detected. Add JSON files under resources/mcp_templates/ to populate the catalog."
-        );
+    let outcome = if has_non_interactive_inputs {
+        build_wizard_non_interactive(&registry, &args)?
     } else {
-        println!("- {} template(s) available.", registry.templates().len());
+        run_wizard_interactive(&registry, args.template.as_deref())?
+    };
+
+    let mut applied = false;
+    let mut summary_shown = false;
+
+    if args.apply {
+        print_wizard_summary(&outcome);
+        summary_shown = true;
+        registry
+            .upsert_server(&outcome.name, outcome.server.clone())
+            .context("failed to persist MCP server")?;
+        applied = true;
+    } else if wizard_confirm_apply(&outcome)? {
+        summary_shown = true;
+        registry
+            .upsert_server(&outcome.name, outcome.server.clone())
+            .context("failed to persist MCP server")?;
+        applied = true;
     }
-    println!("This preview command currently reports summary information only.");
+
+    if applied {
+        println!(
+            "Saved server '{name}' to {path}",
+            name = outcome.name,
+            path = registry.codex_home().display()
+        );
+        if !summary_shown {
+            print_wizard_summary(&outcome);
+        }
+    } else {
+        println!("No changes saved.");
+    }
 
     Ok(())
+}
+
+fn print_wizard_summary(outcome: &WizardOutcome) {
+    println!("Configuration summary:");
+    for (key, value) in outcome.summary() {
+        println!("  {key}: {value}");
+    }
 }
 
 fn run_list(config_overrides: &CliConfigOverrides, list_args: ListArgs) -> Result<()> {
@@ -486,7 +535,7 @@ fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Result<(
     } else {
         server.args.join(" ")
     };
-    println!("  args: {}", args);
+    println!("  args: {args}");
 
     match server.env.as_ref() {
         None => println!("  env: -"),
@@ -501,20 +550,22 @@ fn run_get(config_overrides: &CliConfigOverrides, get_args: GetArgs) -> Result<(
     }
 
     if let Some(timeout) = server.startup_timeout_ms {
-        println!("  startup_timeout_ms: {}", timeout);
+        println!("  startup_timeout_ms: {timeout}");
     }
     if let Some(display_name) = &server.display_name {
-        println!("  display_name: {}", display_name);
+        println!("  display_name: {display_name}");
     }
     if let Some(category) = &server.category {
-        println!("  category: {}", category);
+        println!("  category: {category}");
     }
     if let Some(template_id) = &server.template_id {
-        println!("  template_id: {}", template_id);
+        println!("  template_id: {template_id}");
     }
     if let Some(description) = &server.description {
-        println!("  description: {}", description);
+        println!("  description: {description}");
     }
+
+    println!("  remove: codex mcp remove {}", get_args.name);
 
     Ok(())
 }
@@ -532,17 +583,4 @@ fn parse_env_pair(raw: &str) -> Result<(String, String), String> {
         .ok_or_else(|| "environment entries must be in KEY=VALUE form".to_string())?;
 
     Ok((key.to_string(), value))
-}
-
-fn validate_server_name(name: &str) -> Result<()> {
-    let is_valid = !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
-
-    if is_valid {
-        Ok(())
-    } else {
-        bail!("invalid server name '{name}' (use letters, numbers, '-', '_')");
-    }
 }

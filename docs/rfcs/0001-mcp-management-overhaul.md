@@ -1,7 +1,7 @@
 # RFC 0001: MCP Management Overhaul
 
 **Status**: Draft  
-**Author**: Codex Agent  
+**Author**: iMAGRAY  
 **Created**: 2025-09-17  
 **Updated**: 2025-09-17  
 **Reviewers**: Core, Security, UX, TUI  

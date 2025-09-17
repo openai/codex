@@ -1,0 +1,22 @@
+---
+source: tui/src/mcp/wizard_view.rs
+expression: render(&view)
+---
+┌MCP Wizard──────────────────────────────────────────────────────────────────┐
+│Field                       Value                                           │
+│Template                    anthropic/cli                                   │
+│Name                        anthropic-mcp                                   │
+│Command                     anthropic-mcp                                   │
+│Args                        --serve --port 8080                             │
+│Env                         1 entry                                         │
+│Description                 Anthropic MCP bridge                            │
+│Tags                        anthropic, beta                                 │
+│Startup timeout (ms)        15000                                           │
+│Auth type                   env                                             │
+│Auth secret                 vault:anthropic                                 │
+└────────────────────────────────────────────────────────────────────────────┘
+┌Help────────────────────────────────────────────────────────────────────────┐
+│Command must not be empty                                                   │
+│Keys: ↑/↓ move  Enter edit/select  s summary  Esc close                     │
+│                                                                            │
+└────────────────────────────────────────────────────────────────────────────┘

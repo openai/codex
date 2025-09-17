@@ -52,21 +52,11 @@ impl MigrationReport {
 }
 
 /// Result of creating/rotating configuration backups.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct BackupOutcome {
     pub created: bool,
     pub rotated: bool,
     pub backup_path: Option<PathBuf>,
-}
-
-impl Default for BackupOutcome {
-    fn default() -> Self {
-        Self {
-            created: false,
-            rotated: false,
-            backup_path: None,
-        }
-    }
 }
 
 /// Performs a best-effort migration of MCP-related configuration to schema version 2.
@@ -170,7 +160,7 @@ pub fn create_backup_with_rotation(codex_home: &Path) -> std::io::Result<BackupO
 }
 
 fn backup_path(codex_home: &Path, index: usize) -> PathBuf {
-    codex_home.join(format!("config.toml.bak{}", index))
+    codex_home.join(format!("config.toml.bak{index}"))
 }
 
 fn load_config_as_document(path: &Path) -> std::io::Result<DocumentMut> {

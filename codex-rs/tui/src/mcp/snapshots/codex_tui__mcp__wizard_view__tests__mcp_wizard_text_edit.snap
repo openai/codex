@@ -1,0 +1,22 @@
+---
+source: tui/src/mcp/wizard_view.rs
+expression: render(&view)
+---
+┌Edit────────────────────────────────────────────────────────────────────────┐
+│Env                                                                         │
+│Expected KEY=VALUE pairs                                                    │
+│Enter to save • Esc to cancel                                               │
+│                                                                            │
+│API_KEY=ORG_ID=1234                                                         │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+└────────────────────────────────────────────────────────────────────────────┘

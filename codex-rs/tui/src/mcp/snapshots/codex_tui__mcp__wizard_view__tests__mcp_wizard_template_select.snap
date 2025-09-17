@@ -1,0 +1,22 @@
+---
+source: tui/src/mcp/wizard_view.rs
+expression: render(&view)
+---
+┌Select MCP Template─────────────────────────────────────────────────────────┐
+│Template                Summary                                             │
+│anthropic/cli           Anthropic CLI bridge (llm)                          │
+│openai/web              OpenAI Browser agent (llm)                          │
+│manual                  Start from scratch                                  │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+│                                                                            │
+Enter to select • Esc to cancel──────────────────────────────────────────────┘
