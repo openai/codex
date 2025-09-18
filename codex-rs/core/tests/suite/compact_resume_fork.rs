@@ -74,7 +74,7 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         "compact+resume test expects resumed path {resumed_path:?} to exist",
     );
 
-    let forked = fork_conversation(&manager, &config, resumed_path, 1).await;
+    let forked = fork_conversation(&manager, &config, resumed_path, 2).await;
     user_turn(&forked, "AFTER_FORK").await;
 
     // 3. Capture the requests to the model and validate the history slices.
@@ -100,17 +100,15 @@ async fn compact_resume_and_fork_preserve_model_history_view() {
         "after-resume input should have at least as many items as after-compact",
     );
     assert_eq!(compact_arr.as_slice(), &resume_arr[..compact_arr.len()]);
-    eprint!(
-        "len of compact: {}, len of fork: {}",
-        compact_arr.len(),
-        fork_arr.len()
-    );
-    eprintln!("input_after_fork:{}", json!(input_after_fork));
+
     assert!(
         compact_arr.len() <= fork_arr.len(),
         "after-fork input should have at least as many items as after-compact",
     );
-    assert_eq!(compact_arr.as_slice(), &fork_arr[..compact_arr.len()]);
+    assert_eq!(
+        &compact_arr.as_slice()[..compact_arr.len()],
+        &fork_arr[..compact_arr.len()]
+    );
 
     let prompt = requests[0]["instructions"]
         .as_str()
@@ -824,14 +822,15 @@ async fn resume_conversation(
     conversation
 }
 
+#[cfg(test)]
 async fn fork_conversation(
     manager: &ConversationManager,
     config: &Config,
     path: std::path::PathBuf,
-    back_steps: usize,
+    nth_user_message: usize,
 ) -> Arc<CodexConversation> {
     let NewConversation { conversation, .. } = manager
-        .fork_conversation(back_steps, config.clone(), path)
+        .fork_conversation(nth_user_message, config.clone(), path)
         .await
         .expect("fork conversation");
     conversation

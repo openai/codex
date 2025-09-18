@@ -4,9 +4,9 @@ name = "codex-core"
 version = { workspace = true }
 
 [lib]
+doctest = false
 name = "codex_core"
 path = "src/lib.rs"
-doctest = false
 
 [lints]
 workspace = true
@@ -41,7 +41,12 @@ similar = "2.7.0"
 strum_macros = "0.27.2"
 tempfile = "3"
 thiserror = "2.0.16"
-time = { version = "0.3", features = ["formatting", "parsing", "local-offset", "macros"] }
+time = { version = "0.3", features = [
+    "formatting",
+    "parsing",
+    "local-offset",
+    "macros",
+] }
 tokio = { version = "1", features = [
     "io-std",
     "macros",
