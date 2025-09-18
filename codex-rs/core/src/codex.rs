@@ -1190,6 +1190,7 @@ async fn submission_loop(
                 model,
                 effort,
                 summary,
+                enable_web_search,
             } => {
                 // Recalculate the persistent turn context with provided overrides.
                 let prev = Arc::clone(&turn_context);
@@ -1214,12 +1215,14 @@ async fn submission_loop(
                 let mut updated_config = (*config).clone();
                 updated_config.model = effective_model.clone();
                 updated_config.model_family = effective_family.clone();
+                updated_config.tools_web_search_request =
+                    enable_web_search.unwrap_or(config.tools_web_search_request);
                 if let Some(model_info) = get_model_info(&effective_family) {
                     updated_config.model_context_window = Some(model_info.context_window);
                 }
 
                 let client = ModelClient::new(
-                    Arc::new(updated_config),
+                    Arc::new(updated_config.clone()),
                     auth_manager,
                     provider,
                     effective_effort,
@@ -1232,14 +1235,14 @@ async fn submission_loop(
                     .clone()
                     .unwrap_or(prev.sandbox_policy.clone());
                 let new_cwd = cwd.clone().unwrap_or_else(|| prev.cwd.clone());
-
+                // TODO: we need to not have both updated config and global config
                 let tools_config = ToolsConfig::new(&ToolsConfigParams {
                     model_family: &effective_family,
                     approval_policy: new_approval_policy,
                     sandbox_policy: new_sandbox_policy.clone(),
                     include_plan_tool: config.include_plan_tool,
                     include_apply_patch_tool: config.include_apply_patch_tool,
-                    include_web_search_request: config.tools_web_search_request,
+                    include_web_search_request: updated_config.tools_web_search_request,
                     use_streamable_shell_tool: config.use_experimental_streamable_shell_tool,
                     include_view_image_tool: config.include_view_image_tool,
                     experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
@@ -1289,6 +1292,7 @@ async fn submission_loop(
                 model,
                 effort,
                 summary,
+                enable_web_search,
             } => {
                 // attempt to inject input into current task
                 if let Err(items) = sess.inject_input(items).await {
@@ -1304,6 +1308,7 @@ async fn submission_loop(
                     let mut per_turn_config = (*config).clone();
                     per_turn_config.model = model.clone();
                     per_turn_config.model_family = model_family.clone();
+                    per_turn_config.tools_web_search_request = enable_web_search;
                     if let Some(model_info) = get_model_info(&model_family) {
                         per_turn_config.model_context_window = Some(model_info.context_window);
                     }
@@ -1311,7 +1316,7 @@ async fn submission_loop(
                     // Build a new client with per‑turn reasoning settings.
                     // Reuse the same provider and session id; auth defaults to env/API key.
                     let client = ModelClient::new(
-                        Arc::new(per_turn_config),
+                        Arc::new(per_turn_config.clone()),
                         auth_manager,
                         provider,
                         effort,
@@ -1319,6 +1324,7 @@ async fn submission_loop(
                         sess.conversation_id,
                     );
 
+                    // TODO: we need to not have both updated config and global config
                     let fresh_turn_context = TurnContext {
                         client,
                         tools_config: ToolsConfig::new(&ToolsConfigParams {
@@ -1327,7 +1333,7 @@ async fn submission_loop(
                             sandbox_policy: sandbox_policy.clone(),
                             include_plan_tool: config.include_plan_tool,
                             include_apply_patch_tool: config.include_apply_patch_tool,
-                            include_web_search_request: config.tools_web_search_request,
+                            include_web_search_request: per_turn_config.tools_web_search_request,
                             use_streamable_shell_tool: config
                                 .use_experimental_streamable_shell_tool,
                             include_view_image_tool: config.include_view_image_tool,

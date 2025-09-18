@@ -973,6 +973,7 @@ impl CodexMessageProcessor {
             model,
             effort,
             summary,
+            enable_web_search,
         } = params;
 
         let Ok(conversation) = self
@@ -1007,6 +1008,7 @@ impl CodexMessageProcessor {
                 model,
                 effort,
                 summary,
+                enable_web_search,
             })
             .await;
 
