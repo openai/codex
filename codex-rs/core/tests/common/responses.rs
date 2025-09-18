@@ -1,9 +1,10 @@
 use serde_json::Value;
-use wiremock::matchers::{method, path};
+use wiremock::BodyPrintLimit;
 use wiremock::Mock;
 use wiremock::MockServer;
-use wiremock::BodyPrintLimit;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::method;
+use wiremock::matchers::path;
 
 /// Build an SSE stream body from a list of JSON events.
 pub fn sse(events: Vec<Value>) -> String {

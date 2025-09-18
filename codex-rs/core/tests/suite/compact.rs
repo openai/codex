@@ -12,7 +12,8 @@ use codex_core::protocol::Op;
 use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
-use core_test_support::{load_default_config_for_test, responses};
+use core_test_support::load_default_config_for_test;
+use core_test_support::responses;
 use core_test_support::wait_for_event;
 use tempfile::TempDir;
 use wiremock::Mock;
@@ -23,11 +24,14 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 use pretty_assertions::assert_eq;
+use responses::ev_assistant_message;
+use responses::ev_completed;
+use responses::sse;
+use responses::start_mock_server;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
-use responses::{ev_assistant_message, ev_completed, sse, start_mock_server};
 // --- Test helpers -----------------------------------------------------------
 
 pub(super) const FIRST_REPLY: &str = "FIRST_REPLY";
