@@ -408,6 +408,32 @@ mod tests {
         assert_eq!(auth_dot_json, same_auth_dot_json);
     }
 
+    #[test]
+    fn login_with_api_key_overwrites_existing_auth_json() {
+        let dir = tempdir().unwrap();
+        let auth_path = dir.path().join("auth.json");
+        let stale_auth = json!({
+            "OPENAI_API_KEY": "sk-old",
+            "tokens": {
+                "id_token": "stale.header.payload",
+                "access_token": "stale-access",
+                "refresh_token": "stale-refresh",
+                "account_id": "stale-acc"
+            }
+        });
+        std::fs::write(
+            &auth_path,
+            serde_json::to_string_pretty(&stale_auth).unwrap(),
+        )
+        .unwrap();
+
+        super::login_with_api_key(dir.path(), "sk-new").expect("login_with_api_key should succeed");
+
+        let auth = super::try_read_auth_json(&auth_path).expect("auth.json should parse");
+        assert_eq!(auth.openai_api_key.as_deref(), Some("sk-new"));
+        assert!(auth.tokens.is_none(), "tokens should be cleared");
+    }
+
     #[tokio::test]
     async fn pro_account_with_no_api_key_uses_chatgpt_auth() {
         let codex_home = tempdir().unwrap();

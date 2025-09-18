@@ -38,16 +38,20 @@ impl ExecCommandSession {
         writer_handle: JoinHandle<()>,
         wait_handle: JoinHandle<()>,
         exit_status: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    ) -> Self {
-        Self {
-            writer_tx,
-            output_tx,
-            killer: StdMutex::new(Some(killer)),
-            reader_handle: StdMutex::new(Some(reader_handle)),
-            writer_handle: StdMutex::new(Some(writer_handle)),
-            wait_handle: StdMutex::new(Some(wait_handle)),
-            exit_status,
-        }
+    ) -> (Self, broadcast::Receiver<Vec<u8>>) {
+        let initial_output_rx = output_tx.subscribe();
+        (
+            Self {
+                writer_tx,
+                output_tx,
+                killer: StdMutex::new(Some(killer)),
+                reader_handle: StdMutex::new(Some(reader_handle)),
+                writer_handle: StdMutex::new(Some(writer_handle)),
+                wait_handle: StdMutex::new(Some(wait_handle)),
+                exit_status,
+            },
+            initial_output_rx,
+        )
     }
 
     pub(crate) fn writer_sender(&self) -> mpsc::Sender<Vec<u8>> {

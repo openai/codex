@@ -1,10 +1,16 @@
 use codex_core::CodexAuth;
 use codex_core::CodexConversation;
+use codex_core::ContentItem;
 use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
+use codex_core::REVIEW_PROMPT;
+use codex_core::ResponseItem;
 use codex_core::built_in_model_providers;
 use codex_core::config::Config;
+use codex_core::protocol::ConversationPathResponseEvent;
+use codex_core::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_core::protocol::EventMsg;
+use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::ReviewCodeLocation;
@@ -12,6 +18,8 @@ use codex_core::protocol::ReviewFinding;
 use codex_core::protocol::ReviewLineRange;
 use codex_core::protocol::ReviewOutputEvent;
 use codex_core::protocol::ReviewRequest;
+use codex_core::protocol::RolloutItem;
+use codex_core::protocol::RolloutLine;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id_from_str;
@@ -89,8 +97,10 @@ async fn review_op_emits_lifecycle_and_review_output() {
     let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
     let closed = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExitedReviewMode(_))).await;
     let review = match closed {
-        EventMsg::ExitedReviewMode(Some(r)) => r,
-        other => panic!("expected ExitedReviewMode(Some(..)), got {other:?}"),
+        EventMsg::ExitedReviewMode(ev) => ev
+            .review_output
+            .expect("expected ExitedReviewMode with Some(review_output)"),
+        other => panic!("expected ExitedReviewMode(..), got {other:?}"),
     };
 
     // Deep compare full structure using PartialEq (floats are f32 on both sides).
@@ -112,13 +122,55 @@ async fn review_op_emits_lifecycle_and_review_output() {
     assert_eq!(expected, review);
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
+    // Also verify that a user message with the header and a formatted finding
+    // was recorded back in the parent session's rollout.
+    codex.submit(Op::GetPath).await.unwrap();
+    let history_event =
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::ConversationPath(_))).await;
+    let path = match history_event {
+        EventMsg::ConversationPath(ConversationPathResponseEvent { path, .. }) => path,
+        other => panic!("expected ConversationPath event, got {other:?}"),
+    };
+    let text = std::fs::read_to_string(&path).expect("read rollout file");
+
+    let mut saw_header = false;
+    let mut saw_finding_line = false;
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let v: serde_json::Value = serde_json::from_str(line).expect("jsonl line");
+        let rl: RolloutLine = serde_json::from_value(v).expect("rollout line");
+        if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = rl.item
+            && role == "user"
+        {
+            for c in content {
+                if let ContentItem::InputText { text } = c {
+                    if text.contains("full review output from reviewer model") {
+                        saw_header = true;
+                    }
+                    if text.contains("- Prefer Stylize helpers — /tmp/file.rs:10-20") {
+                        saw_finding_line = true;
+                    }
+                }
+            }
+        }
+    }
+    assert!(saw_header, "user header missing from rollout");
+    assert!(
+        saw_finding_line,
+        "formatted finding line missing from rollout"
+    );
+
     server.verify().await;
 }
 
 /// When the model returns plain text that is not JSON, ensure the child
 /// lifecycle still occurs and the plain text is surfaced via
 /// ExitedReviewMode(Some(..)) as the overall_explanation.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
+#[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
+#[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
 async fn review_op_with_plain_text_emits_review_fallback() {
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
@@ -151,8 +203,10 @@ async fn review_op_with_plain_text_emits_review_fallback() {
     let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
     let closed = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExitedReviewMode(_))).await;
     let review = match closed {
-        EventMsg::ExitedReviewMode(Some(r)) => r,
-        other => panic!("expected ExitedReviewMode(Some(..)), got {other:?}"),
+        EventMsg::ExitedReviewMode(ev) => ev
+            .review_output
+            .expect("expected ExitedReviewMode with Some(review_output)"),
+        other => panic!("expected ExitedReviewMode(..), got {other:?}"),
     };
 
     // Expect a structured fallback carrying the plain text.
@@ -168,7 +222,9 @@ async fn review_op_with_plain_text_emits_review_fallback() {
 
 /// When the model returns structured JSON in a review, ensure no AgentMessage
 /// is emitted; the UI consumes the structured result via ExitedReviewMode.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
+#[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
+#[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
 async fn review_does_not_emit_agent_message_on_structured_output() {
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
@@ -279,7 +335,15 @@ async fn review_uses_custom_review_model_from_config() {
 
     // Wait for completion
     let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
-    let _closed = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExitedReviewMode(None))).await;
+    let _closed = wait_for_event(&codex, |ev| {
+        matches!(
+            ev,
+            EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+                review_output: None
+            })
+        )
+    })
+    .await;
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
     // Assert the request body model equals the configured review model
@@ -293,7 +357,9 @@ async fn review_uses_custom_review_model_from_config() {
 /// When a review session begins, it must not prepend prior chat history from
 /// the parent session. The request `input` should contain only the review
 /// prompt from the user.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// Windows CI only: bump to 4 workers to prevent SSE/event starvation and test timeouts.
+#[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
+#[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
 async fn review_input_isolated_from_parent_history() {
     if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
         println!(
@@ -373,13 +439,8 @@ async fn review_input_isolated_from_parent_history() {
             .await
             .unwrap();
     }
-    config.experimental_resume = Some(session_file);
-
-    let codex = new_conversation_for_server(&server, &codex_home, |cfg| {
-        // apply resume file
-        cfg.experimental_resume = config.experimental_resume.clone();
-    })
-    .await;
+    let codex =
+        resume_conversation_for_server(&server, &codex_home, session_file.clone(), |_| {}).await;
 
     // Submit review request; it must start fresh (no parent history in `input`).
     let review_prompt = "Please review only this".to_string();
@@ -394,20 +455,84 @@ async fn review_input_isolated_from_parent_history() {
         .unwrap();
 
     let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
-    let _closed = wait_for_event(&codex, |ev| matches!(ev, EventMsg::ExitedReviewMode(None))).await;
+    let _closed = wait_for_event(&codex, |ev| {
+        matches!(
+            ev,
+            EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+                review_output: None
+            })
+        )
+    })
+    .await;
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    // Assert the request `input` contains only the single review user message.
+    // Assert the request `input` contains the environment context followed by the review prompt.
     let request = &server.received_requests().await.unwrap()[0];
     let body = request.body_json::<serde_json::Value>().unwrap();
-    let expected_input = serde_json::json!([
-        {
-            "type": "message",
-            "role": "user",
-            "content": [{"type": "input_text", "text": review_prompt}]
+    let input = body["input"].as_array().expect("input array");
+    assert_eq!(
+        input.len(),
+        2,
+        "expected environment context and review prompt"
+    );
+
+    let env_msg = &input[0];
+    assert_eq!(env_msg["type"].as_str().unwrap(), "message");
+    assert_eq!(env_msg["role"].as_str().unwrap(), "user");
+    let env_text = env_msg["content"][0]["text"].as_str().expect("env text");
+    assert!(
+        env_text.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG),
+        "environment context must be the first item"
+    );
+    assert!(
+        env_text.contains("<cwd>"),
+        "environment context should include cwd"
+    );
+
+    let review_msg = &input[1];
+    assert_eq!(review_msg["type"].as_str().unwrap(), "message");
+    assert_eq!(review_msg["role"].as_str().unwrap(), "user");
+    assert_eq!(
+        review_msg["content"][0]["text"].as_str().unwrap(),
+        format!("{REVIEW_PROMPT}\n\n---\n\nNow, here's your task: Please review only this",)
+    );
+
+    // Also verify that a user interruption note was recorded in the rollout.
+    codex.submit(Op::GetPath).await.unwrap();
+    let history_event =
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::ConversationPath(_))).await;
+    let path = match history_event {
+        EventMsg::ConversationPath(ConversationPathResponseEvent { path, .. }) => path,
+        other => panic!("expected ConversationPath event, got {other:?}"),
+    };
+    let text = std::fs::read_to_string(&path).expect("read rollout file");
+    let mut saw_interruption_message = false;
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
         }
-    ]);
-    assert_eq!(body["input"], expected_input);
+        let v: serde_json::Value = serde_json::from_str(line).expect("jsonl line");
+        let rl: RolloutLine = serde_json::from_value(v).expect("rollout line");
+        if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = rl.item
+            && role == "user"
+        {
+            for c in content {
+                if let ContentItem::InputText { text } = c
+                    && text.contains("User initiated a review task, but was interrupted.")
+                {
+                    saw_interruption_message = true;
+                    break;
+                }
+            }
+        }
+        if saw_interruption_message {
+            break;
+        }
+    }
+    assert!(
+        saw_interruption_message,
+        "expected user interruption message in rollout"
+    );
 
     server.verify().await;
 }
@@ -448,7 +573,12 @@ async fn review_history_does_not_leak_into_parent_session() {
         .unwrap();
     let _entered = wait_for_event(&codex, |ev| matches!(ev, EventMsg::EnteredReviewMode(_))).await;
     let _closed = wait_for_event(&codex, |ev| {
-        matches!(ev, EventMsg::ExitedReviewMode(Some(_)))
+        matches!(
+            ev,
+            EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+                review_output: Some(_)
+            })
+        )
     })
     .await;
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
@@ -538,5 +668,34 @@ where
         .new_conversation(config)
         .await
         .expect("create conversation")
+        .conversation
+}
+
+/// Create a conversation resuming from a rollout file, configured to talk to the provided mock server.
+#[expect(clippy::expect_used)]
+async fn resume_conversation_for_server<F>(
+    server: &MockServer,
+    codex_home: &TempDir,
+    resume_path: std::path::PathBuf,
+    mutator: F,
+) -> Arc<CodexConversation>
+where
+    F: FnOnce(&mut Config),
+{
+    let model_provider = ModelProviderInfo {
+        base_url: Some(format!("{}/v1", server.uri())),
+        ..built_in_model_providers()["openai"].clone()
+    };
+    let mut config = load_default_config_for_test(codex_home);
+    config.model_provider = model_provider;
+    mutator(&mut config);
+    let conversation_manager =
+        ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+    let auth_manager =
+        codex_core::AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
+    conversation_manager
+        .resume_conversation_from_rollout(config, resume_path, auth_manager)
+        .await
+        .expect("resume conversation")
         .conversation
 }

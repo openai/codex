@@ -92,10 +92,35 @@ impl CommandPopup {
             .ensure_visible(matches_len, MAX_POPUP_ROWS.min(matches_len));
     }
 
-    /// Determine the preferred height of the popup. This is the number of
-    /// rows required to show at most MAX_POPUP_ROWS commands.
-    pub(crate) fn calculate_required_height(&self) -> u16 {
-        self.filtered_items().len().clamp(1, MAX_POPUP_ROWS) as u16
+    /// Determine the preferred height of the popup for a given width.
+    /// Accounts for wrapped descriptions so that long tooltips don't overflow.
+    pub(crate) fn calculate_required_height(&self, width: u16) -> u16 {
+        use super::selection_popup_common::GenericDisplayRow;
+        use super::selection_popup_common::measure_rows_height;
+        let matches = self.filtered();
+        let rows_all: Vec<GenericDisplayRow> = if matches.is_empty() {
+            Vec::new()
+        } else {
+            matches
+                .into_iter()
+                .map(|(item, indices, _)| match item {
+                    CommandItem::Builtin(cmd) => GenericDisplayRow {
+                        name: format!("/{}", cmd.command()),
+                        match_indices: indices.map(|v| v.into_iter().map(|i| i + 1).collect()),
+                        is_current: false,
+                        description: Some(cmd.description().to_string()),
+                    },
+                    CommandItem::UserPrompt(i) => GenericDisplayRow {
+                        name: format!("/{}", self.prompts[i].name),
+                        match_indices: indices.map(|v| v.into_iter().map(|i| i + 1).collect()),
+                        is_current: false,
+                        description: Some("send saved prompt".to_string()),
+                    },
+                })
+                .collect()
+        };
+
+        measure_rows_height(&rows_all, &self.state, MAX_POPUP_ROWS, width)
     }
 
     /// Compute fuzzy-filtered matches over built-in commands and user prompts,

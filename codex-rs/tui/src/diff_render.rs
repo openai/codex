@@ -265,7 +265,7 @@ fn render_changes_block(
     out
 }
 
-fn display_path_for(path: &Path, cwd: &Path) -> String {
+pub(crate) fn display_path_for(path: &Path, cwd: &Path) -> String {
     let path_in_same_repo = match (get_git_repo_root(cwd), get_git_repo_root(path)) {
         (Some(cwd_repo), Some(path_repo)) => cwd_repo == path_repo,
         _ => false,

@@ -1,10 +1,13 @@
+use crate::frames::ALL_VARIANTS as FRAME_VARIANTS;
+use crate::frames::FRAME_TICK_DEFAULT;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
-use codex_core::config::SWIFTFOX_MEDIUM_MODEL;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
+use crossterm::event::KeyModifiers;
+use rand::Rng as _;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::prelude::Widget;
@@ -14,7 +17,12 @@ use ratatui::widgets::Clear;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
+use std::time::Duration;
 use tokio_stream::StreamExt;
+
+const FRAME_TICK: Duration = FRAME_TICK_DEFAULT;
+const MIN_ANIMATION_HEIGHT: u16 = 24;
+const MIN_ANIMATION_WIDTH: u16 = 60;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ModelUpgradeDecision {
@@ -32,6 +40,8 @@ struct ModelUpgradePopup {
     highlighted: ModelUpgradeOption,
     decision: Option<ModelUpgradeDecision>,
     request_frame: FrameRequester,
+    frame_idx: usize,
+    variant_idx: usize,
 }
 
 impl ModelUpgradePopup {
@@ -40,6 +50,8 @@ impl ModelUpgradePopup {
             highlighted: ModelUpgradeOption::TryNewModel,
             decision: None,
             request_frame,
+            frame_idx: 0,
+            variant_idx: 0,
         }
     }
 
@@ -51,6 +63,11 @@ impl ModelUpgradePopup {
             KeyCode::Char('2') => self.select(ModelUpgradeOption::KeepCurrent),
             KeyCode::Enter => self.select(self.highlighted),
             KeyCode::Esc => self.select(ModelUpgradeOption::KeepCurrent),
+            KeyCode::Char('.') => {
+                if key_event.modifiers.contains(KeyModifiers::CONTROL) {
+                    self.pick_random_variant();
+                }
+            }
             _ => {}
         }
     }
@@ -64,6 +81,30 @@ impl ModelUpgradePopup {
 
     fn select(&mut self, option: ModelUpgradeOption) {
         self.decision = Some(option.into());
+        self.request_frame.schedule_frame();
+    }
+
+    fn advance_animation(&mut self) {
+        let len = self.frames().len();
+        self.frame_idx = (self.frame_idx + 1) % len;
+        self.request_frame.schedule_frame_in(FRAME_TICK);
+    }
+
+    fn frames(&self) -> &'static [&'static str] {
+        FRAME_VARIANTS[self.variant_idx]
+    }
+
+    fn pick_random_variant(&mut self) {
+        let total = FRAME_VARIANTS.len();
+        if total <= 1 {
+            return;
+        }
+        let mut rng = rand::rng();
+        let mut next = self.variant_idx;
+        while next == self.variant_idx {
+            next = rng.random_range(0..total);
+        }
+        self.variant_idx = next;
         self.request_frame.schedule_frame();
     }
 }
@@ -81,18 +122,28 @@ impl WidgetRef for &ModelUpgradePopup {
     fn render_ref(&self, area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
 
-        let mut lines: Vec<Line> = vec![
-            String::new().into(),
-            format!("   Codex is now powered by {SWIFTFOX_MEDIUM_MODEL}, a new model that is")
-                .into(),
-            Line::from(vec![
-                "   ".into(),
-                "faster, a better collaborator, ".bold(),
-                "and ".into(),
-                "more steerable.".bold(),
-            ]),
-            "".into(),
-        ];
+        // Skip the animation entirely when the viewport is too small so we don't clip frames.
+        let show_animation =
+            area.height >= MIN_ANIMATION_HEIGHT && area.width >= MIN_ANIMATION_WIDTH;
+
+        let mut lines: Vec<Line> = Vec::new();
+        if show_animation {
+            let frame = self.frames()[self.frame_idx];
+            lines.extend(frame.lines().map(|l| l.into()));
+            // Spacer between animation and text content.
+            lines.push("".into());
+        }
+
+        lines.push(Line::from(vec![
+            "  ".into(),
+            "Introducing GPT-5-Codex".bold(),
+        ]));
+        lines.push("".into());
+        lines.push(
+            "  GPT-5-Codex works faster through easy tasks and harder on complex tasks,".into(),
+        );
+        lines.push("  improves on code quality, and is more steerable with AGENTS.md.".into());
+        lines.push("".into());
 
         let create_option =
             |index: usize, option: ModelUpgradeOption, text: &str| -> Line<'static> {
@@ -109,12 +160,13 @@ impl WidgetRef for &ModelUpgradePopup {
         lines.push(create_option(
             0,
             ModelUpgradeOption::TryNewModel,
-            &format!("Yes, switch me to {SWIFTFOX_MEDIUM_MODEL}"),
+            "Try the new GPT-5-Codex model",
         ));
+        lines.push("".into());
         lines.push(create_option(
             1,
             ModelUpgradeOption::KeepCurrent,
-            "Not right now",
+            "Continue using current model",
         ));
         lines.push("".into());
         lines.push(
@@ -136,6 +188,8 @@ pub(crate) async fn run_model_upgrade_popup(tui: &mut Tui) -> Result<ModelUpgrad
         frame.render_widget_ref(&popup, frame.area());
     })?;
 
+    popup.advance_animation();
+
     let events = tui.event_stream();
     tokio::pin!(events);
     while popup.decision.is_none() {
@@ -143,6 +197,7 @@ pub(crate) async fn run_model_upgrade_popup(tui: &mut Tui) -> Result<ModelUpgrad
             match event {
                 TuiEvent::Key(key_event) => popup.handle_key_event(key_event),
                 TuiEvent::Draw => {
+                    popup.advance_animation();
                     let _ = tui.draw(u16::MAX, |frame| {
                         frame.render_widget_ref(&popup, frame.area());
                     });

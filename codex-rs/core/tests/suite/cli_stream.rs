@@ -420,12 +420,6 @@ async fn integration_creates_and_checks_session_file() {
     // Second run: resume should update the existing file.
     let marker2 = format!("integration-resume-{}", Uuid::new_v4());
     let prompt2 = format!("echo {marker2}");
-    // Cross‑platform safe resume override.  On Windows, backslashes in a TOML string must be escaped
-    // or the parse will fail and the raw literal (including quotes) may be preserved all the way down
-    // to Config, which in turn breaks resume because the path is invalid. Normalize to forward slashes
-    // to sidestep the issue.
-    let resume_path_str = path.to_string_lossy().replace('\\', "/");
-    let resume_override = format!("experimental_resume=\"{resume_path_str}\"");
     let mut cmd2 = AssertCommand::new("cargo");
     cmd2.arg("run")
         .arg("-p")
@@ -434,11 +428,11 @@ async fn integration_creates_and_checks_session_file() {
         .arg("--")
         .arg("exec")
         .arg("--skip-git-repo-check")
-        .arg("-c")
-        .arg(&resume_override)
         .arg("-C")
         .arg(env!("CARGO_MANIFEST_DIR"))
-        .arg(&prompt2);
+        .arg(&prompt2)
+        .arg("resume")
+        .arg("--last");
     cmd2.env("CODEX_HOME", home.path())
         .env("OPENAI_API_KEY", "dummy")
         .env("CODEX_RS_SSE_FIXTURE", &fixture)

@@ -121,7 +121,7 @@ async fn test_writable_root() {
 }
 
 #[tokio::test]
-#[should_panic(expected = "Sandbox(Timeout)")]
+#[should_panic(expected = "Sandbox(Timeout")]
 async fn test_timeout() {
     run_cmd(&["sleep", "2"], &[], 50).await;
 }
@@ -156,26 +156,27 @@ async fn assert_network_blocked(cmd: &[&str]) {
     )
     .await;
 
-    let (exit_code, stdout, stderr) = match result {
-        Ok(output) => (output.exit_code, output.stdout.text, output.stderr.text),
-        Err(CodexErr::Sandbox(SandboxErr::Denied(exit_code, stdout, stderr))) => {
-            (exit_code, stdout, stderr)
-        }
+    let output = match result {
+        Ok(output) => output,
+        Err(CodexErr::Sandbox(SandboxErr::Denied { output })) => *output,
         _ => {
             panic!("expected sandbox denied error, got: {result:?}");
         }
     };
 
-    dbg!(&stderr);
-    dbg!(&stdout);
-    dbg!(&exit_code);
+    dbg!(&output.stderr.text);
+    dbg!(&output.stdout.text);
+    dbg!(&output.exit_code);
 
     // A completely missing binary exits with 127.  Anything else should also
     // be non‑zero (EPERM from seccomp will usually bubble up as 1, 2, 13…)
     // If—*and only if*—the command exits 0 we consider the sandbox breached.
 
-    if exit_code == 0 {
-        panic!("Network sandbox FAILED - {cmd:?} exited 0\nstdout:\n{stdout}\nstderr:\n{stderr}",);
+    if output.exit_code == 0 {
+        panic!(
+            "Network sandbox FAILED - {cmd:?} exited 0\nstdout:\n{}\nstderr:\n{}",
+            output.stdout.text, output.stderr.text
+        );
     }
 }
 

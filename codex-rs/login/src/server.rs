@@ -238,8 +238,8 @@ async fn process_request(
                         &opts.codex_home,
                         api_key.clone(),
                         tokens.id_token.clone(),
-                        Some(tokens.access_token.clone()),
-                        Some(tokens.refresh_token.clone()),
+                        tokens.access_token.clone(),
+                        tokens.refresh_token.clone(),
                     )
                     .await
                     {
@@ -446,8 +446,8 @@ async fn persist_tokens_async(
     codex_home: &Path,
     api_key: Option<String>,
     id_token: String,
-    access_token: Option<String>,
-    refresh_token: Option<String>,
+    access_token: String,
+    refresh_token: String,
 ) -> io::Result<()> {
     // Reuse existing synchronous logic but run it off the async runtime.
     let codex_home = codex_home.to_path_buf();
@@ -459,41 +459,27 @@ async fn persist_tokens_async(
             std::fs::create_dir_all(parent).map_err(io::Error::other)?;
         }
 
-        let mut auth = read_or_default(&auth_file);
-        if let Some(key) = api_key {
-            auth.openai_api_key = Some(key);
-        }
-        let tokens = auth.tokens.get_or_insert_with(TokenData::default);
-        tokens.id_token = parse_id_token(&id_token).map_err(io::Error::other)?;
-        // Persist chatgpt_account_id if present in claims
+        let mut tokens = TokenData {
+            id_token: parse_id_token(&id_token).map_err(io::Error::other)?,
+            access_token,
+            refresh_token,
+            account_id: None,
+        };
         if let Some(acc) = jwt_auth_claims(&id_token)
             .get("chatgpt_account_id")
             .and_then(|v| v.as_str())
         {
             tokens.account_id = Some(acc.to_string());
         }
-        if let Some(at) = access_token {
-            tokens.access_token = at;
-        }
-        if let Some(rt) = refresh_token {
-            tokens.refresh_token = rt;
-        }
-        auth.last_refresh = Some(Utc::now());
+        let auth = AuthDotJson {
+            openai_api_key: api_key,
+            tokens: Some(tokens),
+            last_refresh: Some(Utc::now()),
+        };
         codex_core::auth::write_auth_json(&auth_file, &auth)
     })
     .await
     .map_err(|e| io::Error::other(format!("persist task failed: {e}")))?
-}
-
-fn read_or_default(path: &Path) -> AuthDotJson {
-    match codex_core::auth::try_read_auth_json(path) {
-        Ok(auth) => auth,
-        Err(_) => AuthDotJson {
-            openai_api_key: None,
-            tokens: None,
-            last_refresh: None,
-        },
-    }
 }
 
 fn compose_success_url(port: u16, issuer: &str, id_token: &str, access_token: &str) -> String {

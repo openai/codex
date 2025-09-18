@@ -15,7 +15,8 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/openai/codex.git"
+    "url": "git+https://github.com/openai/codex.git",
+    "directory": "codex-cli"
   },
   "dependencies": {
     "@vscode/ripgrep": "^1.15.14"

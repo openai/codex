@@ -15,11 +15,17 @@ use tokio::time::timeout;
 
 const DEFAULT_READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-// Helper to create a config.toml; mirrors create_conversation.rs
-fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {
+fn create_config_toml_custom_provider(
+    codex_home: &Path,
+    requires_openai_auth: bool,
+) -> std::io::Result<()> {
     let config_toml = codex_home.join("config.toml");
-    std::fs::write(
-        config_toml,
+    let requires_line = if requires_openai_auth {
+        "requires_openai_auth = true\n"
+    } else {
+        ""
+    };
+    let contents = format!(
         r#"
 model = "mock-model"
 approval_policy = "never"
@@ -33,6 +39,20 @@ base_url = "http://127.0.0.1:0/v1"
 wire_api = "chat"
 request_max_retries = 0
 stream_max_retries = 0
+{requires_line}
+"#
+    );
+    std::fs::write(config_toml, contents)
+}
+
+fn create_config_toml(codex_home: &Path) -> std::io::Result<()> {
+    let config_toml = codex_home.join("config.toml");
+    std::fs::write(
+        config_toml,
+        r#"
+model = "mock-model"
+approval_policy = "never"
+sandbox_mode = "danger-full-access"
 "#,
     )
 }
@@ -122,6 +142,47 @@ async fn get_auth_status_with_api_key() {
     let status: GetAuthStatusResponse = to_response(resp).expect("deserialize status");
     assert_eq!(status.auth_method, Some(AuthMode::ApiKey));
     assert_eq!(status.auth_token, Some("sk-test-key".to_string()));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn get_auth_status_with_api_key_when_auth_not_required() {
+    let codex_home = TempDir::new().unwrap_or_else(|e| panic!("create tempdir: {e}"));
+    create_config_toml_custom_provider(codex_home.path(), false)
+        .unwrap_or_else(|err| panic!("write config.toml: {err}"));
+
+    let mut mcp = McpProcess::new(codex_home.path())
+        .await
+        .expect("spawn mcp process");
+    timeout(DEFAULT_READ_TIMEOUT, mcp.initialize())
+        .await
+        .expect("init timeout")
+        .expect("init failed");
+
+    login_with_api_key_via_request(&mut mcp, "sk-test-key").await;
+
+    let request_id = mcp
+        .send_get_auth_status_request(GetAuthStatusParams {
+            include_token: Some(true),
+            refresh_token: Some(false),
+        })
+        .await
+        .expect("send getAuthStatus");
+
+    let resp: JSONRPCResponse = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_stream_until_response_message(RequestId::Integer(request_id)),
+    )
+    .await
+    .expect("getAuthStatus timeout")
+    .expect("getAuthStatus response");
+    let status: GetAuthStatusResponse = to_response(resp).expect("deserialize status");
+    assert_eq!(status.auth_method, None, "expected no auth method");
+    assert_eq!(status.auth_token, None, "expected no token");
+    assert_eq!(
+        status.requires_openai_auth,
+        Some(false),
+        "requires_openai_auth should be false",
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

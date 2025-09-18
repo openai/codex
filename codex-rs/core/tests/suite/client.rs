@@ -236,20 +236,21 @@ async fn resume_includes_initial_messages_and_sends_prior_items() {
     let codex_home = TempDir::new().unwrap();
     let mut config = load_default_config_for_test(&codex_home);
     config.model_provider = model_provider;
-    config.experimental_resume = Some(session_path.clone());
     // Also configure user instructions to ensure they are NOT delivered on resume.
     config.user_instructions = Some("be nice".to_string());
 
     let conversation_manager =
         ConversationManager::with_auth(CodexAuth::from_api_key("Test API Key"));
+    let auth_manager =
+        codex_core::AuthManager::from_auth_for_testing(CodexAuth::from_api_key("Test API Key"));
     let NewConversation {
         conversation: codex,
         session_configured,
         ..
     } = conversation_manager
-        .new_conversation(config)
+        .resume_conversation_from_rollout(config, session_path.clone(), auth_manager)
         .await
-        .expect("create new conversation");
+        .expect("resume conversation");
 
     // 1) Assert initial_messages only includes existing EventMsg entries; response items are not converted
     let initial_msgs = session_configured
