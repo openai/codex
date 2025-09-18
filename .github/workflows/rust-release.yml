@@ -260,6 +260,7 @@ jobs:
           tag="${{ needs.release.outputs.tag }}"
           mkdir -p dist/npm
           gh release download "$tag" \
+            --repo "${GITHUB_REPOSITORY}" \
             --pattern "codex-npm-${version}.tgz" \
             --dir dist/npm
 
