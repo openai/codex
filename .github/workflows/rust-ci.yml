@@ -76,7 +76,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@1.89
-      - uses: taiki-e/install-action@0c5db7f7f897c03b771660e91d065338615679f4 # v2
+      - uses: taiki-e/install-action@67cc679904bee382389bf22082124fa963c6f6bd # v2
         with:
           tool: cargo-shear
           version: 1.5.1
@@ -180,7 +180,7 @@ jobs:
           find . -name Cargo.toml -mindepth 2 -maxdepth 2 -print0 \
             | xargs -0 -n1 -I{} bash -c 'cd "$(dirname "{}")" && cargo check --profile ${{ matrix.profile }}'
 
-      - uses: taiki-e/install-action@0c5db7f7f897c03b771660e91d065338615679f4 # v2
+      - uses: taiki-e/install-action@67cc679904bee382389bf22082124fa963c6f6bd # v2
         with:
           tool: nextest
           version: 0.9.103
