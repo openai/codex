@@ -5,6 +5,8 @@ use codex_core::ModelProviderInfo;
 use codex_core::NewConversation;
 use codex_core::ResponseItem;
 use codex_core::built_in_model_providers;
+use codex_core::content_items_to_text;
+use codex_core::is_session_prefix_message;
 use codex_core::protocol::ConversationPathResponseEvent;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::InputItem;
@@ -112,6 +114,8 @@ async fn fork_conversation_twice_drops_to_first_message() {
         for (i, it) in items.iter().enumerate() {
             if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = it
                 && role == "user"
+                && content_items_to_text(content)
+                    .is_some_and(|text| !is_session_prefix_message(&text))
             {
                 // Consider any user message as an input boundary; recorder stores both EventMsg and ResponseItem.
                 // We specifically look for input items, which are represented as ContentItem::InputText.

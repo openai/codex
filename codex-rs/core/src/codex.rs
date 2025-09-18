@@ -130,7 +130,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::models::ShellToolCallParams;
 use codex_protocol::protocol::InitialHistory;
 
-pub(crate) mod compact;
+pub mod compact;
 use self::compact::build_compacted_history;
 use self::compact::collect_user_messages;
 
