@@ -861,14 +861,29 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
         .await
         .unwrap();
 
+    let mut auto_compact_lifecycle_events = Vec::new();
     loop {
         let event = codex.next_event().await.unwrap();
+        if event.id.starts_with("auto-compact-")
+            && matches!(
+                event.msg,
+                EventMsg::TaskStarted(_) | EventMsg::TaskComplete(_)
+            )
+        {
+            auto_compact_lifecycle_events.push(event);
+            continue;
+        }
         if let EventMsg::TaskComplete(_) = &event.msg
             && !event.id.starts_with("auto-compact-")
         {
             break;
         }
     }
+
+    assert!(
+        auto_compact_lifecycle_events.is_empty(),
+        "auto compact should not emit task lifecycle events"
+    );
 
     let request_bodies: Vec<String> = responder
         .recorded_requests()

@@ -68,6 +68,7 @@ pub(super) async fn run_inline_auto_compact_task(
         input,
         SUMMARIZATION_PROMPT.to_string(),
         false,
+        false,
     )
     .await;
 }
@@ -86,6 +87,7 @@ pub(super) async fn run_compact_task(
         input,
         compact_instructions,
         true,
+        true,
     )
     .await;
 }
@@ -97,15 +99,18 @@ async fn run_compact_task_inner(
     input: Vec<InputItem>,
     compact_instructions: String,
     remove_task_on_completion: bool,
+    emit_task_events: bool,
 ) {
     let model_context_window = turn_context.client.get_model_context_window();
-    let start_event = Event {
-        id: sub_id.clone(),
-        msg: EventMsg::TaskStarted(TaskStartedEvent {
-            model_context_window,
-        }),
-    };
-    sess.send_event(start_event).await;
+    if emit_task_events {
+        let start_event = Event {
+            id: sub_id.clone(),
+            msg: EventMsg::TaskStarted(TaskStartedEvent {
+                model_context_window,
+            }),
+        };
+        sess.send_event(start_event).await;
+    }
 
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
     let instructions_override = compact_instructions;
@@ -195,13 +200,15 @@ async fn run_compact_task_inner(
         }),
     };
     sess.send_event(event).await;
-    let event = Event {
-        id: sub_id.clone(),
-        msg: EventMsg::TaskComplete(TaskCompleteEvent {
-            last_agent_message: None,
-        }),
-    };
-    sess.send_event(event).await;
+    if emit_task_events {
+        let event = Event {
+            id: sub_id.clone(),
+            msg: EventMsg::TaskComplete(TaskCompleteEvent {
+                last_agent_message: None,
+            }),
+        };
+        sess.send_event(event).await;
+    }
 }
 
 fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
