@@ -1,5 +1,3 @@
-#![expect(clippy::unwrap_used)]
-
 use codex_core::CodexAuth;
 use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
