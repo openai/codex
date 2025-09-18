@@ -79,15 +79,29 @@ pub(super) async fn run_compact_task(
     input: Vec<InputItem>,
     compact_instructions: String,
 ) {
+    let start_event = Event {
+        id: sub_id.clone(),
+        msg: EventMsg::TaskStarted(TaskStartedEvent {
+            model_context_window: turn_context.client.get_model_context_window(),
+        }),
+    };
+    sess.send_event(start_event).await;
     run_compact_task_inner(
-        sess,
+        sess.clone(),
         turn_context,
-        sub_id,
+        sub_id.clone(),
         input,
         compact_instructions,
         true,
     )
     .await;
+    let event = Event {
+        id: sub_id,
+        msg: EventMsg::TaskComplete(TaskCompleteEvent {
+            last_agent_message: None,
+        }),
+    };
+    sess.send_event(event).await;
 }
 
 async fn run_compact_task_inner(
@@ -98,15 +112,6 @@ async fn run_compact_task_inner(
     compact_instructions: String,
     remove_task_on_completion: bool,
 ) {
-    let model_context_window = turn_context.client.get_model_context_window();
-    let start_event = Event {
-        id: sub_id.clone(),
-        msg: EventMsg::TaskStarted(TaskStartedEvent {
-            model_context_window,
-        }),
-    };
-    sess.send_event(start_event).await;
-
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
     let instructions_override = compact_instructions;
     let turn_input = sess.turn_input_with_history(vec![initial_input_for_turn.clone().into()]);
@@ -192,13 +197,6 @@ async fn run_compact_task_inner(
         id: sub_id.clone(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Compact task completed".to_string(),
-        }),
-    };
-    sess.send_event(event).await;
-    let event = Event {
-        id: sub_id.clone(),
-        msg: EventMsg::TaskComplete(TaskCompleteEvent {
-            last_agent_message: None,
         }),
     };
     sess.send_event(event).await;
