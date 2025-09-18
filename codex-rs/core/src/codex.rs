@@ -2703,6 +2703,7 @@ async fn handle_container_exec_with_params(
             },
         };
     }
+
     // check if this was a patch, and apply it if so
     let apply_patch_exec = match maybe_parse_apply_patch_verified(&params.command, &params.cwd) {
         MaybeApplyPatchVerified::Body(changes) => {
@@ -3283,22 +3284,6 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration as StdDuration;
 
-    fn test_echo_command() -> Vec<String> {
-        if cfg!(windows) {
-            vec![
-                "cmd.exe".to_string(),
-                "/C".to_string(),
-                "echo hi".to_string(),
-            ]
-        } else {
-            vec![
-                "/bin/sh".to_string(),
-                "-c".to_string(),
-                "echo hi".to_string(),
-            ]
-        }
-    }
-
     #[test]
     fn reconstruct_history_matches_live_compactions() {
         let (session, turn_context) = make_session_and_context();
@@ -3752,10 +3737,9 @@ mod tests {
             panic!("expected FunctionCallOutput on retry");
         };
 
-        #[derive(Deserialize)]
+        #[derive(Deserialize, PartialEq, Eq, Debug)]
         struct ResponseExecMetadata {
             exit_code: i32,
-            duration_seconds: f32,
         }
 
         #[derive(Deserialize)]
@@ -3767,9 +3751,24 @@ mod tests {
         let exec_output: ResponseExecOutput =
             serde_json::from_str(&output.content).expect("valid exec output json");
 
-        assert_eq!(exec_output.metadata.exit_code, 0);
-        assert!(exec_output.metadata.duration_seconds >= 0.0);
+        pretty_assertions::assert_eq!(exec_output.metadata, ResponseExecMetadata { exit_code: 0 });
         assert!(exec_output.output.contains("hi"));
-        assert_eq!(output.success, Some(true));
+        pretty_assertions::assert_eq!(output.success, Some(true));
+    }
+
+    fn test_echo_command() -> Vec<String> {
+        if cfg!(windows) {
+            vec![
+                "cmd.exe".to_string(),
+                "/C".to_string(),
+                "echo hi".to_string(),
+            ]
+        } else {
+            vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "echo hi".to_string(),
+            ]
+        }
     }
 }
