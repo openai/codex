@@ -1,4 +1,5 @@
 use crate::protocol::SandboxPolicy;
+use crate::spawn::SpawnChildParams;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
 use std::collections::HashMap;
@@ -20,6 +21,7 @@ pub async fn spawn_command_under_linux_sandbox<P>(
     cwd: PathBuf,
     stdio_policy: StdioPolicy,
     env: HashMap<String, String>,
+    prevent_sleep: bool,
 ) -> std::io::Result<Child>
 where
     P: AsRef<Path>,
@@ -30,10 +32,13 @@ where
         codex_linux_sandbox_exe.as_ref().to_path_buf(),
         args,
         arg0,
-        cwd,
-        sandbox_policy,
-        stdio_policy,
-        env,
+        SpawnChildParams {
+            cwd,
+            sandbox_policy,
+            stdio_policy,
+            env,
+            prevent_sleep,
+        },
     )
     .await
 }

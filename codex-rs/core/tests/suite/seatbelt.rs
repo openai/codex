@@ -183,6 +183,7 @@ async fn python_getpwuid_works_under_seatbelt() {
         std::env::current_dir().expect("should be able to get current dir"),
         StdioPolicy::RedirectForShellTool,
         HashMap::new(),
+        false,
     )
     .await
     .expect("should be able to spawn python under seatbelt");
@@ -225,6 +226,7 @@ async fn touch(path: &Path, policy: &SandboxPolicy) -> bool {
         std::env::current_dir().expect("should be able to get current dir"),
         StdioPolicy::RedirectForShellTool,
         HashMap::new(),
+        false,
     )
     .await
     .expect("should be able to spawn command under seatbelt");

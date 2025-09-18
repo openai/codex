@@ -72,6 +72,10 @@ pub struct Cli {
     #[arg(long = "search", default_value_t = false)]
     pub web_search: bool,
 
+    /// Prevent the system from sleeping while commands run (macOS only).
+    #[arg(long = "no-sleep", default_value_t = false)]
+    pub no_sleep: bool,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 }

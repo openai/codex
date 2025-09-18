@@ -24,6 +24,7 @@ use crate::protocol::ExecCommandOutputDeltaEvent;
 use crate::protocol::ExecOutputStream;
 use crate::protocol::SandboxPolicy;
 use crate::seatbelt::spawn_command_under_seatbelt;
+use crate::spawn::SpawnChildParams;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
 
@@ -52,6 +53,7 @@ pub struct ExecParams {
     pub env: HashMap<String, String>,
     pub with_escalated_permissions: Option<bool>,
     pub justification: Option<String>,
+    pub prevent_sleep: bool,
 }
 
 impl ExecParams {
@@ -94,7 +96,11 @@ pub async fn process_exec_tool_call(
         SandboxType::None => exec(params, sandbox_policy, stdout_stream.clone()).await,
         SandboxType::MacosSeatbelt => {
             let ExecParams {
-                command, cwd, env, ..
+                command,
+                cwd,
+                env,
+                prevent_sleep,
+                ..
             } = params;
             let child = spawn_command_under_seatbelt(
                 command,
@@ -102,13 +108,18 @@ pub async fn process_exec_tool_call(
                 cwd,
                 StdioPolicy::RedirectForShellTool,
                 env,
+                prevent_sleep,
             )
             .await?;
             consume_truncated_output(child, timeout_duration, stdout_stream.clone()).await
         }
         SandboxType::LinuxSeccomp => {
             let ExecParams {
-                command, cwd, env, ..
+                command,
+                cwd,
+                env,
+                prevent_sleep,
+                ..
             } = params;
 
             let codex_linux_sandbox_exe = codex_linux_sandbox_exe
@@ -121,6 +132,7 @@ pub async fn process_exec_tool_call(
                 cwd,
                 StdioPolicy::RedirectForShellTool,
                 env,
+                prevent_sleep,
             )
             .await?;
 
@@ -256,7 +268,11 @@ async fn exec(
 ) -> Result<RawExecToolCallOutput> {
     let timeout = params.timeout_duration();
     let ExecParams {
-        command, cwd, env, ..
+        command,
+        cwd,
+        env,
+        prevent_sleep,
+        ..
     } = params;
 
     let (program, args) = command.split_first().ok_or_else(|| {
@@ -270,10 +286,13 @@ async fn exec(
         PathBuf::from(program),
         args.into(),
         arg0,
-        cwd,
-        sandbox_policy,
-        StdioPolicy::RedirectForShellTool,
-        env,
+        SpawnChildParams {
+            cwd,
+            sandbox_policy,
+            stdio_policy: StdioPolicy::RedirectForShellTool,
+            env,
+            prevent_sleep,
+        },
     )
     .await?;
     consume_truncated_output(child, timeout, stdout_stream).await

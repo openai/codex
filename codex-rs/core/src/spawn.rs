@@ -28,6 +28,15 @@ pub enum StdioPolicy {
     Inherit,
 }
 
+#[derive(Debug)]
+pub(crate) struct SpawnChildParams<'a> {
+    pub cwd: PathBuf,
+    pub sandbox_policy: &'a SandboxPolicy,
+    pub stdio_policy: StdioPolicy,
+    pub env: HashMap<String, String>,
+    pub prevent_sleep: bool,
+}
+
 /// Spawns the appropriate child process for the ExecParams and SandboxPolicy,
 /// ensuring the args and environment variables used to create the `Command`
 /// (and `Child`) honor the configuration.
@@ -39,18 +48,43 @@ pub(crate) async fn spawn_child_async(
     program: PathBuf,
     args: Vec<String>,
     #[cfg_attr(not(unix), allow(unused_variables))] arg0: Option<&str>,
-    cwd: PathBuf,
-    sandbox_policy: &SandboxPolicy,
-    stdio_policy: StdioPolicy,
-    env: HashMap<String, String>,
+    params: SpawnChildParams<'_>,
 ) -> std::io::Result<Child> {
+    let SpawnChildParams {
+        cwd,
+        sandbox_policy,
+        stdio_policy,
+        env,
+        prevent_sleep,
+    } = params;
+    let mut program = program;
+    let mut args = args;
+    let mut should_set_arg0 = true;
+
+    #[cfg(target_os = "macos")]
+    {
+        const MACOS_PATH_TO_CAFFEINATE: &str = "/usr/bin/caffeinate";
+        let caffeinate_path = std::path::Path::new(MACOS_PATH_TO_CAFFEINATE);
+        if prevent_sleep && caffeinate_path.exists() {
+            let mut caffeinate_args = Vec::with_capacity(args.len() + 2);
+            caffeinate_args.push("-i".to_string());
+            caffeinate_args.push(program.to_string_lossy().to_string());
+            caffeinate_args.extend(args);
+            program = caffeinate_path.to_path_buf();
+            args = caffeinate_args;
+            should_set_arg0 = false;
+        }
+    }
+
     trace!(
-        "spawn_child_async: {program:?} {args:?} {arg0:?} {cwd:?} {sandbox_policy:?} {stdio_policy:?} {env:?}"
+        "spawn_child_async: {program:?} {args:?} {arg0:?} {cwd:?} {sandbox_policy:?} {stdio_policy:?} prevent_sleep={prevent_sleep} {env:?}"
     );
 
     let mut cmd = Command::new(&program);
     #[cfg(unix)]
-    cmd.arg0(arg0.map_or_else(|| program.to_string_lossy().to_string(), String::from));
+    if should_set_arg0 {
+        cmd.arg0(arg0.map_or_else(|| program.to_string_lossy().to_string(), String::from));
+    }
     cmd.args(args);
     cmd.current_dir(cwd);
     cmd.env_clear();

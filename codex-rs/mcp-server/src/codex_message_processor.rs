@@ -573,6 +573,7 @@ impl CodexMessageProcessor {
             env,
             with_escalated_permissions: None,
             justification: None,
+            prevent_sleep: self.config.prevent_sleep,
         };
 
         let effective_policy = params
@@ -1270,6 +1271,7 @@ fn derive_config_from_params(
         include_view_image_tool: None,
         show_raw_agent_reasoning: None,
         tools_web_search_request: None,
+        prevent_sleep: None,
     };
 
     let cli_overrides = cli_overrides

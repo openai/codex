@@ -80,8 +80,15 @@ async fn run_command_under_sandbox(
 
     let mut child = match sandbox_type {
         SandboxType::Seatbelt => {
-            spawn_command_under_seatbelt(command, &config.sandbox_policy, cwd, stdio_policy, env)
-                .await?
+            spawn_command_under_seatbelt(
+                command,
+                &config.sandbox_policy,
+                cwd,
+                stdio_policy,
+                env,
+                config.prevent_sleep,
+            )
+            .await?
         }
         SandboxType::Landlock => {
             #[expect(clippy::expect_used)]
@@ -95,6 +102,7 @@ async fn run_command_under_sandbox(
                 cwd,
                 stdio_policy,
                 env,
+                config.prevent_sleep,
             )
             .await?
         }

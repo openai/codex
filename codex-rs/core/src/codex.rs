@@ -299,6 +299,7 @@ pub(crate) struct TurnContext {
     pub(crate) shell_environment_policy: ShellEnvironmentPolicy,
     pub(crate) tools_config: ToolsConfig,
     pub(crate) is_review_mode: bool,
+    pub(crate) prevent_sleep: bool,
 }
 
 impl TurnContext {
@@ -471,6 +472,7 @@ impl Session {
             shell_environment_policy: config.shell_environment_policy.clone(),
             cwd,
             is_review_mode: false,
+            prevent_sleep: config.prevent_sleep,
         };
         let sess = Arc::new(Session {
             conversation_id,
@@ -1255,6 +1257,7 @@ async fn submission_loop(
                     shell_environment_policy: prev.shell_environment_policy.clone(),
                     cwd: new_cwd.clone(),
                     is_review_mode: false,
+                    prevent_sleep: config.prevent_sleep,
                 };
 
                 // Install the new persistent context for subsequent tasks/turns.
@@ -1341,6 +1344,7 @@ async fn submission_loop(
                         shell_environment_policy: turn_context.shell_environment_policy.clone(),
                         cwd,
                         is_review_mode: false,
+                        prevent_sleep: config.prevent_sleep,
                     };
 
                     // if the environment context has changed, record it in the conversation history
@@ -1597,6 +1601,7 @@ async fn spawn_review_thread(
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
         cwd: parent_turn_context.cwd.clone(),
         is_review_mode: true,
+        prevent_sleep: config.prevent_sleep,
     };
 
     // Seed the child task with the review prompt as the initial user message.
@@ -2517,6 +2522,7 @@ async fn handle_function_call(
                 env: HashMap::new(),
                 with_escalated_permissions: None,
                 justification: None,
+                prevent_sleep: turn_context.prevent_sleep,
             };
             handle_container_exec_with_params(
                 exec_params,
@@ -2621,6 +2627,7 @@ async fn handle_custom_tool_call(
                 env: HashMap::new(),
                 with_escalated_permissions: None,
                 justification: None,
+                prevent_sleep: turn_context.prevent_sleep,
             };
             let resp = handle_container_exec_with_params(
                 exec_params,
@@ -2662,6 +2669,7 @@ fn to_exec_params(params: ShellToolCallParams, turn_context: &TurnContext) -> Ex
         env: create_env(&turn_context.shell_environment_policy),
         with_escalated_permissions: params.with_escalated_permissions,
         justification: params.justification,
+        prevent_sleep: turn_context.prevent_sleep,
     }
 }
 
@@ -2779,6 +2787,7 @@ async fn handle_container_exec_with_params(
                 env: HashMap::new(),
                 with_escalated_permissions: params.with_escalated_permissions,
                 justification: params.justification.clone(),
+                prevent_sleep: params.prevent_sleep,
             };
             let safety = if *user_explicitly_approved_this_action {
                 SafetyCheck::AutoApprove {
@@ -3605,6 +3614,7 @@ mod tests {
             shell_environment_policy: config.shell_environment_policy.clone(),
             tools_config,
             is_review_mode: false,
+            prevent_sleep: config.prevent_sleep,
         };
         let session = Session {
             conversation_id,

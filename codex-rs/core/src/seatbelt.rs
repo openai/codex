@@ -5,6 +5,7 @@ use tokio::process::Child;
 
 use crate::protocol::SandboxPolicy;
 use crate::spawn::CODEX_SANDBOX_ENV_VAR;
+use crate::spawn::SpawnChildParams;
 use crate::spawn::StdioPolicy;
 use crate::spawn::spawn_child_async;
 
@@ -22,6 +23,7 @@ pub async fn spawn_command_under_seatbelt(
     cwd: PathBuf,
     stdio_policy: StdioPolicy,
     mut env: HashMap<String, String>,
+    prevent_sleep: bool,
 ) -> std::io::Result<Child> {
     let args = create_seatbelt_command_args(command, sandbox_policy, &cwd);
     let arg0 = None;
@@ -30,10 +32,13 @@ pub async fn spawn_command_under_seatbelt(
         PathBuf::from(MACOS_PATH_TO_SEATBELT_EXECUTABLE),
         args,
         arg0,
-        cwd,
-        sandbox_policy,
-        stdio_policy,
-        env,
+        SpawnChildParams {
+            cwd,
+            sandbox_policy,
+            stdio_policy,
+            env,
+            prevent_sleep,
+        },
     )
     .await
 }
