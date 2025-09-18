@@ -44,6 +44,7 @@ use ratatui::style::Stylize;
 use ratatui::widgets::Paragraph;
 use ratatui::widgets::WidgetRef;
 use ratatui::widgets::Wrap;
+use std::any::Any;
 use std::collections::HashMap;
 use std::io::Cursor;
 use std::path::Path;
@@ -70,7 +71,7 @@ pub(crate) enum PatchEventType {
 /// Represents an event to display in the conversation history. Returns its
 /// `Vec<Line<'static>>` representation to make it easier to display in a
 /// scrollable list.
-pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync {
+pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync + Any {
     fn display_lines(&self, width: u16) -> Vec<Line<'static>>;
 
     fn transcript_lines(&self) -> Vec<Line<'static>> {
@@ -90,9 +91,15 @@ pub(crate) trait HistoryCell: std::fmt::Debug + Send + Sync {
     }
 }
 
+impl dyn HistoryCell {
+    pub(crate) fn as_any(&self) -> &dyn Any {
+        self
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct UserHistoryCell {
-    message: String,
+    pub message: String,
 }
 
 impl HistoryCell for UserHistoryCell {
@@ -226,6 +233,13 @@ impl HistoryCell for TranscriptOnlyHistoryCell {
 
     fn transcript_lines(&self) -> Vec<Line<'static>> {
         self.lines.clone()
+    }
+}
+
+/// Cyan history cell line showing the current review status.
+pub(crate) fn new_review_status_line(message: String) -> PlainHistoryCell {
+    PlainHistoryCell {
+        lines: vec![Line::from(message.cyan())],
     }
 }
 
