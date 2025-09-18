@@ -1216,6 +1216,17 @@ persistence = "none"
     }
 
     #[test]
+    fn tui_config_with_unrecognized_fields_is_ignored() {
+        let cfg = r#"tui = { theme = { name = "dark-charcoal-rainbow" } }"#;
+
+        let parsed = toml::from_str::<ConfigToml>(cfg)
+            .expect("TUI config with unrecognized fields should succeed");
+        let tui = parsed.tui.expect("config should include tui section");
+
+        assert_eq!(tui.notifications, Notifications::Enabled(false));
+    }
+
+    #[test]
     fn test_sandbox_config_parsing() {
         let sandbox_full_access = r#"
 sandbox_mode = "danger-full-access"

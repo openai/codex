@@ -8,6 +8,8 @@ use std::path::PathBuf;
 use wildmatch::WildMatchPattern;
 
 use serde::Deserialize;
+use serde::de::Deserializer;
+use serde::de::IgnoredAny;
 
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
@@ -90,12 +92,32 @@ impl Default for Notifications {
 }
 
 /// Collection of settings that are specific to the TUI.
-#[derive(Deserialize, Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Tui {
     /// Enable desktop notifications from the TUI when the terminal is unfocused.
     /// Defaults to `false`.
-    #[serde(default)]
     pub notifications: Notifications,
+}
+
+impl<'de> Deserialize<'de> for Tui {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct Inner {
+            #[serde(default)]
+            notifications: Notifications,
+            #[serde(flatten)]
+            #[allow(dead_code)]
+            extra: HashMap<String, IgnoredAny>,
+        }
+
+        let inner = Inner::deserialize(deserializer)?;
+        Ok(Self {
+            notifications: inner.notifications,
+        })
+    }
 }
 
 #[derive(Deserialize, Debug, Clone, PartialEq, Default)]
