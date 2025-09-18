@@ -3,6 +3,7 @@ use std::os::unix::process::ExitStatusExt;
 
 use std::collections::HashMap;
 use std::io;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::ExitStatus;
 use std::time::Duration;
@@ -82,6 +83,7 @@ pub async fn process_exec_tool_call(
     params: ExecParams,
     sandbox_type: SandboxType,
     sandbox_policy: &SandboxPolicy,
+    sandbox_cwd: &Path,
     codex_linux_sandbox_exe: &Option<PathBuf>,
     stdout_stream: Option<StdoutStream>,
 ) -> Result<ExecToolCallOutput> {
@@ -94,12 +96,16 @@ pub async fn process_exec_tool_call(
         SandboxType::None => exec(params, sandbox_policy, stdout_stream.clone()).await,
         SandboxType::MacosSeatbelt => {
             let ExecParams {
-                command, cwd, env, ..
+                command,
+                cwd: command_cwd,
+                env,
+                ..
             } = params;
             let child = spawn_command_under_seatbelt(
                 command,
+                command_cwd,
                 sandbox_policy,
-                cwd,
+                sandbox_cwd,
                 StdioPolicy::RedirectForShellTool,
                 env,
             )
@@ -108,7 +114,10 @@ pub async fn process_exec_tool_call(
         }
         SandboxType::LinuxSeccomp => {
             let ExecParams {
-                command, cwd, env, ..
+                command,
+                cwd: command_cwd,
+                env,
+                ..
             } = params;
 
             let codex_linux_sandbox_exe = codex_linux_sandbox_exe
@@ -117,8 +126,9 @@ pub async fn process_exec_tool_call(
             let child = spawn_command_under_linux_sandbox(
                 codex_linux_sandbox_exe,
                 command,
+                command_cwd,
                 sandbox_policy,
-                cwd,
+                sandbox_cwd,
                 StdioPolicy::RedirectForShellTool,
                 env,
             )
