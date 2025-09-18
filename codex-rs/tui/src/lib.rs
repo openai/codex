@@ -34,7 +34,6 @@ mod app_backtrack;
 mod app_event;
 mod app_event_sender;
 mod ascii_animation;
-mod backtrack_helpers;
 mod bottom_pane;
 mod chatwidget;
 mod citation_regex;
