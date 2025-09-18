@@ -130,7 +130,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::models::ShellToolCallParams;
 use codex_protocol::protocol::InitialHistory;
 
-mod compact;
+pub mod compact;
 use self::compact::build_compacted_history;
 use self::compact::collect_user_messages;
 
@@ -710,7 +710,7 @@ impl Session {
         self.persist_rollout_items(&rollout_items).await;
     }
 
-    fn build_initial_context(&self, turn_context: &TurnContext) -> Vec<ResponseItem> {
+    pub(crate) fn build_initial_context(&self, turn_context: &TurnContext) -> Vec<ResponseItem> {
         let mut items = Vec::<ResponseItem>::with_capacity(2);
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
             items.push(UserInstructions::new(user_instructions.to_string()).into());
@@ -3326,6 +3326,9 @@ async fn exit_review_mode(
 }
 
 #[cfg(test)]
+pub(crate) use tests::make_session_and_context;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::ConfigOverrides;
@@ -3565,7 +3568,7 @@ mod tests {
         })
     }
 
-    fn make_session_and_context() -> (Session, TurnContext) {
+    pub(crate) fn make_session_and_context() -> (Session, TurnContext) {
         let (tx_event, _rx_event) = async_channel::unbounded();
         let codex_home = tempfile::tempdir().expect("create temp dir");
         let config = Config::load_from_base_config_with_overrides(
