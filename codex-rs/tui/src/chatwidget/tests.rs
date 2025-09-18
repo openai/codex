@@ -19,10 +19,17 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
+use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::InputMessageKind;
+use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
+use codex_core::protocol::ReviewCodeLocation;
+use codex_core::protocol::ReviewFinding;
+use codex_core::protocol::ReviewLineRange;
+use codex_core::protocol::ReviewOutputEvent;
+use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TaskStartedEvent;
@@ -184,6 +191,79 @@ fn resumed_initial_messages_render_history() {
     );
 }
 
+/// Entering review mode uses the hint provided by the review request.
+#[test]
+fn entered_review_mode_uses_request_hint() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual();
+
+    chat.handle_codex_event(Event {
+        id: "review-start".into(),
+        msg: EventMsg::EnteredReviewMode(ReviewRequest {
+            prompt: "Review the latest changes".to_string(),
+            user_facing_hint: "feature branch".to_string(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let banner = lines_to_single_string(cells.last().expect("review banner"));
+    assert_eq!(banner, ">> Code review started: feature branch <<\n");
+    assert!(chat.is_review_mode);
+}
+
+/// Entering review mode renders the current changes banner when requested.
+#[test]
+fn entered_review_mode_defaults_to_current_changes_banner() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual();
+
+    chat.handle_codex_event(Event {
+        id: "review-start".into(),
+        msg: EventMsg::EnteredReviewMode(ReviewRequest {
+            prompt: "Review the current changes".to_string(),
+            user_facing_hint: "current changes".to_string(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let banner = lines_to_single_string(cells.last().expect("review banner"));
+    assert_eq!(banner, ">> Code review started: current changes <<\n");
+    assert!(chat.is_review_mode);
+}
+
+/// Completing review with findings shows the selection popup and finishes with
+/// the closing banner while clearing review mode state.
+#[test]
+fn exited_review_mode_emits_results_and_finishes() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual();
+
+    let review = ReviewOutputEvent {
+        findings: vec![ReviewFinding {
+            title: "[P1] Fix bug".to_string(),
+            body: "Something went wrong".to_string(),
+            confidence_score: 0.9,
+            priority: 1,
+            code_location: ReviewCodeLocation {
+                absolute_file_path: PathBuf::from("src/lib.rs"),
+                line_range: ReviewLineRange { start: 10, end: 12 },
+            },
+        }],
+        overall_correctness: "needs work".to_string(),
+        overall_explanation: "Investigate the failure".to_string(),
+        overall_confidence_score: 0.5,
+    };
+
+    chat.handle_codex_event(Event {
+        id: "review-end".into(),
+        msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+            review_output: Some(review),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let banner = lines_to_single_string(cells.last().expect("finished banner"));
+    assert_eq!(banner, "\n<< Code review finished >>\n");
+    assert!(!chat.is_review_mode);
+}
+
 #[cfg_attr(
     target_os = "macos",
     ignore = "system configuration APIs are blocked under macOS seatbelt"
@@ -252,6 +332,7 @@ fn make_chatwidget_manual() -> (
         queued_user_messages: VecDeque::new(),
         suppress_session_configured_redraw: false,
         pending_notification: None,
+        is_review_mode: false,
     };
     (widget, rx, op_rx)
 }

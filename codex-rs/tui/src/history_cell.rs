@@ -236,6 +236,13 @@ impl HistoryCell for TranscriptOnlyHistoryCell {
     }
 }
 
+/// Cyan history cell line showing the current review status.
+pub(crate) fn new_review_status_line(message: String) -> PlainHistoryCell {
+    PlainHistoryCell {
+        lines: vec![Line::from(message.cyan())],
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct PatchHistoryCell {
     event_type: PatchEventType,
