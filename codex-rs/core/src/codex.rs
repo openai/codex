@@ -3680,7 +3680,19 @@ mod tests {
         turn_context.approval_policy = AskForApproval::OnFailure;
 
         let params = ExecParams {
-            command: test_echo_command(),
+            command: if cfg!(windows) {
+                vec![
+                    "cmd.exe".to_string(),
+                    "/C".to_string(),
+                    "echo hi".to_string(),
+                ]
+            } else {
+                vec![
+                    "/bin/sh".to_string(),
+                    "-c".to_string(),
+                    "echo hi".to_string(),
+                ]
+            },
             cwd: turn_context.cwd.clone(),
             timeout_ms: Some(1000),
             env: HashMap::new(),
@@ -3754,21 +3766,5 @@ mod tests {
         pretty_assertions::assert_eq!(exec_output.metadata, ResponseExecMetadata { exit_code: 0 });
         assert!(exec_output.output.contains("hi"));
         pretty_assertions::assert_eq!(output.success, Some(true));
-    }
-
-    fn test_echo_command() -> Vec<String> {
-        if cfg!(windows) {
-            vec![
-                "cmd.exe".to_string(),
-                "/C".to_string(),
-                "echo hi".to_string(),
-            ]
-        } else {
-            vec![
-                "/bin/sh".to_string(),
-                "-c".to_string(),
-                "echo hi".to_string(),
-            ]
-        }
     }
 }
