@@ -32,15 +32,19 @@ pub enum Shell {
 impl Shell {
     pub fn format_default_shell_invocation(&self, command: Vec<String>) -> Option<Vec<String>> {
         match self {
-            Shell::Zsh(zsh) => {
-                format_shell_invocation_with_rc(&command, &zsh.shell_path, &zsh.zshrc_path)
-            }
-            Shell::Bash(bash) => {
-                format_shell_invocation_with_rc(&command, &bash.shell_path, &bash.bashrc_path)
-            }
+            Shell::Zsh(zsh) => format_shell_invocation_with_rc(
+                command.as_slice(),
+                &zsh.shell_path,
+                &zsh.zshrc_path,
+            ),
+            Shell::Bash(bash) => format_shell_invocation_with_rc(
+                command.as_slice(),
+                &bash.shell_path,
+                &bash.bashrc_path,
+            ),
             Shell::PowerShell(ps) => {
                 // If model generated a bash command, prefer a detected bash fallback
-                if let Some(script) = strip_bash_lc(&command) {
+                if let Some(script) = strip_bash_lc(command.as_slice()) {
                     return match &ps.bash_exe_fallback {
                         Some(bash) => Some(vec![
                             bash.to_string_lossy().to_string(),
@@ -102,7 +106,7 @@ impl Shell {
 }
 
 fn format_shell_invocation_with_rc(
-    command: &Vec<String>,
+    command: &[String],
     shell_path: &str,
     rc_path: &str,
 ) -> Option<Vec<String>> {
@@ -118,8 +122,8 @@ fn format_shell_invocation_with_rc(
     Some(vec![shell_path.to_string(), "-lc".to_string(), rc_command])
 }
 
-fn strip_bash_lc(command: &Vec<String>) -> Option<String> {
-    match command.as_slice() {
+fn strip_bash_lc(command: &[String]) -> Option<String> {
+    match command {
         // exactly three items
         [first, second, third]
             // first two must be "bash", "-lc"
