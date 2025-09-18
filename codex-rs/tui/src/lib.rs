@@ -4,6 +4,7 @@
 #![deny(clippy::print_stdout, clippy::print_stderr)]
 #![deny(clippy::disallowed_methods)]
 use app::App;
+pub use app::AppExitInfo;
 use codex_core::AuthManager;
 use codex_core::BUILT_IN_OSS_MODEL_PROVIDER_ID;
 use codex_core::CodexAuth;
@@ -32,6 +33,7 @@ mod app;
 mod app_backtrack;
 mod app_event;
 mod app_event_sender;
+mod ascii_animation;
 mod backtrack_helpers;
 mod bottom_pane;
 mod chatwidget;
@@ -85,7 +87,7 @@ use codex_core::internal_storage::InternalStorage;
 pub async fn run_main(
     cli: Cli,
     codex_linux_sandbox_exe: Option<PathBuf>,
-) -> std::io::Result<codex_core::protocol::TokenUsage> {
+) -> std::io::Result<AppExitInfo> {
     let (sandbox_mode, approval_policy) = if cli.full_auto {
         (
             Some(SandboxMode::WorkspaceWrite),
@@ -257,7 +259,7 @@ async fn run_ratatui_app(
     mut internal_storage: InternalStorage,
     active_profile: Option<String>,
     should_show_trust_screen: bool,
-) -> color_eyre::Result<codex_core::protocol::TokenUsage> {
+) -> color_eyre::Result<AppExitInfo> {
     let mut config = config;
     color_eyre::install()?;
 
@@ -369,7 +371,10 @@ async fn run_ratatui_app(
             resume_picker::ResumeSelection::Exit => {
                 restore();
                 session_log::log_session_end();
-                return Ok(codex_core::protocol::TokenUsage::default());
+                return Ok(AppExitInfo {
+                    token_usage: codex_core::protocol::TokenUsage::default(),
+                    conversation_id: None,
+                });
             }
             other => other,
         }
