@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use super::AgentTask;
-use super::MutexExt;
 use super::Session;
 use super::TurnContext;
 use super::get_last_assistant_message_from_turn;
@@ -37,7 +36,7 @@ struct HistoryBridgeTemplate<'a> {
     summary_text: &'a str,
 }
 
-pub(super) fn spawn_compact_task(
+pub(super) async fn spawn_compact_task(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     sub_id: String,
@@ -50,7 +49,7 @@ pub(super) fn spawn_compact_task(
         input,
         SUMMARIZATION_PROMPT.to_string(),
     );
-    sess.set_task(task);
+    sess.set_task(task).await;
 }
 
 pub(super) async fn run_inline_auto_compact_task(
@@ -79,15 +78,29 @@ pub(super) async fn run_compact_task(
     input: Vec<InputItem>,
     compact_instructions: String,
 ) {
+    let start_event = Event {
+        id: sub_id.clone(),
+        msg: EventMsg::TaskStarted(TaskStartedEvent {
+            model_context_window: turn_context.client.get_model_context_window(),
+        }),
+    };
+    sess.send_event(start_event).await;
     run_compact_task_inner(
-        sess,
+        sess.clone(),
         turn_context,
-        sub_id,
+        sub_id.clone(),
         input,
         compact_instructions,
         true,
     )
     .await;
+    let event = Event {
+        id: sub_id,
+        msg: EventMsg::TaskComplete(TaskCompleteEvent {
+            last_agent_message: None,
+        }),
+    };
+    sess.send_event(event).await;
 }
 
 async fn run_compact_task_inner(
@@ -98,18 +111,11 @@ async fn run_compact_task_inner(
     compact_instructions: String,
     remove_task_on_completion: bool,
 ) {
-    let model_context_window = turn_context.client.get_model_context_window();
-    let start_event = Event {
-        id: sub_id.clone(),
-        msg: EventMsg::TaskStarted(TaskStartedEvent {
-            model_context_window,
-        }),
-    };
-    sess.send_event(start_event).await;
-
     let initial_input_for_turn: ResponseInputItem = ResponseInputItem::from(input);
     let instructions_override = compact_instructions;
-    let turn_input = sess.turn_input_with_history(vec![initial_input_for_turn.clone().into()]);
+    let turn_input = sess
+        .turn_input_with_history(vec![initial_input_for_turn.clone().into()])
+        .await;
 
     let prompt = Prompt {
         input: turn_input,
@@ -168,10 +174,10 @@ async fn run_compact_task_inner(
     }
 
     if remove_task_on_completion {
-        sess.remove_task(&sub_id);
+        sess.remove_task(&sub_id).await;
     }
     let history_snapshot = {
-        let state = sess.state.lock_unchecked();
+        let state = sess.state.lock().await;
         state.history.contents()
     };
     let summary_text = get_last_assistant_message_from_turn(&history_snapshot).unwrap_or_default();
@@ -179,7 +185,7 @@ async fn run_compact_task_inner(
     let initial_context = sess.build_initial_context(turn_context.as_ref());
     let new_history = build_compacted_history(initial_context, &user_messages, &summary_text);
     {
-        let mut state = sess.state.lock_unchecked();
+        let mut state = sess.state.lock().await;
         state.history.replace(new_history);
     }
 
@@ -192,13 +198,6 @@ async fn run_compact_task_inner(
         id: sub_id.clone(),
         msg: EventMsg::AgentMessage(AgentMessageEvent {
             message: "Compact task completed".to_string(),
-        }),
-    };
-    sess.send_event(event).await;
-    let event = Event {
-        id: sub_id.clone(),
-        msg: EventMsg::TaskComplete(TaskCompleteEvent {
-            last_agent_message: None,
         }),
     };
     sess.send_event(event).await;
@@ -290,7 +289,7 @@ async fn drain_to_completed(
         };
         match event {
             Ok(ResponseEvent::OutputItemDone(item)) => {
-                let mut state = sess.state.lock_unchecked();
+                let mut state = sess.state.lock().await;
                 state.history.record_items(std::slice::from_ref(&item));
             }
             Ok(ResponseEvent::Completed { .. }) => {
