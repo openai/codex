@@ -3,6 +3,7 @@
 use anyhow::Context;
 use assert_cmd::prelude::*;
 use codex_core::CODEX_APPLY_PATCH_ARG1;
+use core_test_support::non_sandbox_test;
 use std::fs;
 use std::process::Command;
 use tempfile::tempdir;
@@ -44,14 +45,8 @@ fn test_standalone_exec_cli_can_use_apply_patch() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_apply_patch_tool() -> anyhow::Result<()> {
     use crate::suite::common::run_e2e_exec_test;
-    use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return Ok(());
-    }
+    non_sandbox_test!(result);
 
     let tmp_cwd = tempdir().expect("failed to create temp dir");
     let tmp_path = tmp_cwd.path().to_path_buf();
@@ -76,14 +71,8 @@ async fn test_apply_patch_tool() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_apply_patch_freeform_tool() -> anyhow::Result<()> {
     use crate::suite::common::run_e2e_exec_test;
-    use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return Ok(());
-    }
+    non_sandbox_test!(result);
 
     let tmp_cwd = tempdir().expect("failed to create temp dir");
     run_e2e_exec_test(
