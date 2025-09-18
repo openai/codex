@@ -589,12 +589,14 @@ impl CodexMessageProcessor {
         let codex_linux_sandbox_exe = self.config.codex_linux_sandbox_exe.clone();
         let outgoing = self.outgoing.clone();
         let req_id = request_id;
+        let sandbox_cwd = self.config.cwd.clone();
 
         tokio::spawn(async move {
             match codex_core::exec::process_exec_tool_call(
                 exec_params,
                 sandbox_type,
                 &effective_policy,
+                sandbox_cwd.as_path(),
                 &codex_linux_sandbox_exe,
                 None,
             )
