@@ -167,6 +167,12 @@ jobs:
     needs: build
     name: release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    outputs:
+      version: ${{ steps.release_name.outputs.name }}
+      tag: ${{ github.ref_name }}
 
     steps:
       - name: Checkout repository
@@ -219,6 +225,48 @@ jobs:
         with:
           tag: ${{ github.ref_name }}
           config: .github/dotslash-config.json
+
+  # Publish to npm using OIDC authentication.
+  # July 31, 2025: https://github.blog/changelog/2025-07-31-npm-trusted-publishing-with-oidc-is-generally-available/
+  # npm docs: https://docs.npmjs.com/trusted-publishers
+  publish-npm:
+    # Skip this step for pre-releases (alpha/beta).
+    if: ${{ !contains(needs.release.outputs.version, '-') }}
+    name: publish-npm
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # Required for OIDC
+      contents: read
+
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          registry-url: "https://registry.npmjs.org"
+          scope: "@openai"
+
+      # Trusted publishing requires npm CLI version 11.5.1 or later.
+      - name: Update npm
+        run: npm install -g npm@latest
+
+      - name: Download npm tarball from release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${{ needs.release.outputs.version }}"
+          tag="${{ needs.release.outputs.tag }}"
+          mkdir -p dist/npm
+          gh release download "$tag" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern "codex-npm-${version}.tgz" \
+            --dir dist/npm
+
+      # No NODE_AUTH_TOKEN needed because we use OIDC.
+      - name: Publish to npm
+        run: npm publish "${GITHUB_WORKSPACE}/dist/npm/codex-npm-${{ needs.release.outputs.version }}.tgz"
 
   update-branch:
     name: Update latest-alpha-cli branch

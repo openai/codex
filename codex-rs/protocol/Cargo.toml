@@ -23,8 +23,12 @@ strum = "0.27.2"
 strum_macros = "0.27.2"
 sys-locale = "0.3.2"
 tracing = "0.1.41"
-ts-rs = { version = "11", features = ["uuid-impl", "serde-json-impl", "no-serde-warnings"] }
-uuid = { version = "1", features = ["serde", "v4"] }
+ts-rs = { version = "11", features = [
+    "uuid-impl",
+    "serde-json-impl",
+    "no-serde-warnings",
+] }
+uuid = { version = "1", features = ["serde", "v7"] }
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"

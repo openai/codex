@@ -177,8 +177,11 @@ async fn cli_main(codex_linux_sandbox_exe: Option<PathBuf>) -> anyhow::Result<()
                 root_config_overrides.clone(),
             );
             let usage = codex_tui::run_main(interactive, codex_linux_sandbox_exe).await?;
-            if !usage.is_zero() {
-                println!("{}", codex_core::protocol::FinalOutput::from(usage));
+            if !usage.token_usage.is_zero() {
+                println!(
+                    "{}",
+                    codex_core::protocol::FinalOutput::from(usage.token_usage)
+                );
             }
         }
         Some(Subcommand::Exec(mut exec_cli)) => {
