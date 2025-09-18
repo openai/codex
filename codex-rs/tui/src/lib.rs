@@ -319,6 +319,8 @@ async fn run_ratatui_app(
         }
 
         lines.push("".into());
+        let banner_lines = lines.clone();
+        tui.set_update_banner(banner_lines);
         tui.insert_history_lines(lines);
     }
 
