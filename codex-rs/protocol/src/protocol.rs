@@ -1252,7 +1252,8 @@ mod tests {
     /// amount of nesting.
     #[test]
     fn serialize_event() {
-        let conversation_id = ConversationId(uuid::uuid!("67e55044-10b1-426f-9247-bb680e5fe0c8"));
+        let conversation_id =
+            ConversationId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap();
         let rollout_file = NamedTempFile::new().unwrap();
         let event = Event {
             id: "1234".to_string(),

@@ -263,7 +263,7 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_task_complete(&mut self) {
+    fn on_task_complete(&mut self, last_agent_message: Option<String>) {
         // If a stream is currently active, finalize only that stream to flush any tail
         // without emitting stray headers for other streams.
         if self.stream.is_write_cycle_active() {
@@ -278,7 +278,9 @@ impl ChatWidget {
         // If there is a queued user message, send exactly one now to begin the next turn.
         self.maybe_send_next_queued_input();
         // Emit a notification when the turn completes (suppressed if focused).
-        self.notify(Notification::AgentTurnComplete);
+        self.notify(Notification::AgentTurnComplete {
+            response: last_agent_message.unwrap_or_default(),
+        });
     }
 
     pub(crate) fn set_token_info(&mut self, info: Option<TokenUsageInfo>) {
@@ -1090,7 +1092,9 @@ impl ChatWidget {
             }
             EventMsg::AgentReasoningSectionBreak(_) => self.on_reasoning_section_break(),
             EventMsg::TaskStarted(_) => self.on_task_started(),
-            EventMsg::TaskComplete(TaskCompleteEvent { .. }) => self.on_task_complete(),
+            EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }) => {
+                self.on_task_complete(last_agent_message)
+            }
             EventMsg::TokenCount(ev) => self.set_token_info(ev.info),
             EventMsg::Error(ErrorEvent { message }) => self.on_error(message),
             EventMsg::TurnAborted(ev) => match ev.reason {
@@ -1533,7 +1537,7 @@ impl WidgetRef for &ChatWidget {
 }
 
 enum Notification {
-    AgentTurnComplete,
+    AgentTurnComplete { response: String },
     ExecApprovalRequested { command: String },
     EditApprovalRequested { cwd: PathBuf, changes: Vec<PathBuf> },
 }
@@ -1541,7 +1545,10 @@ enum Notification {
 impl Notification {
     fn display(&self) -> String {
         match self {
-            Notification::AgentTurnComplete => "Agent turn complete".to_string(),
+            Notification::AgentTurnComplete { response } => {
+                Notification::agent_turn_preview(response)
+                    .unwrap_or_else(|| "Agent turn complete".to_string())
+            }
             Notification::ExecApprovalRequested { command } => {
                 format!("Approval requested: {}", truncate_text(command, 30))
             }
@@ -1561,7 +1568,7 @@ impl Notification {
 
     fn type_name(&self) -> &str {
         match self {
-            Notification::AgentTurnComplete => "agent-turn-complete",
+            Notification::AgentTurnComplete { .. } => "agent-turn-complete",
             Notification::ExecApprovalRequested { .. }
             | Notification::EditApprovalRequested { .. } => "approval-requested",
         }
@@ -1573,7 +1580,25 @@ impl Notification {
             Notifications::Custom(allowed) => allowed.iter().any(|a| a == self.type_name()),
         }
     }
+
+    fn agent_turn_preview(response: &str) -> Option<String> {
+        let mut normalized = String::new();
+        for part in response.split_whitespace() {
+            if !normalized.is_empty() {
+                normalized.push(' ');
+            }
+            normalized.push_str(part);
+        }
+        let trimmed = normalized.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(truncate_text(trimmed, AGENT_NOTIFICATION_PREVIEW_GRAPHEMES))
+        }
+    }
 }
+
+const AGENT_NOTIFICATION_PREVIEW_GRAPHEMES: usize = 200;
 
 const EXAMPLE_PROMPTS: [&str; 6] = [
     "Explain this codebase",
