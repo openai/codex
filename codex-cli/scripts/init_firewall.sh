@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail  # Exit on error, undefined vars, and pipeline failures
-IFS=$'\n\t'       # Stricter word splitting
+# IFS=$'\n\t'       # Stricter word splitting
 
 # Read allowed domains from file
 ALLOWED_DOMAINS_FILE="/etc/codex/allowed_domains.txt"
