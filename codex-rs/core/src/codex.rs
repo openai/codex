@@ -3277,10 +3277,27 @@ mod tests {
     use mcp_types::ContentBlock;
     use mcp_types::TextContent;
     use pretty_assertions::assert_eq;
+    use serde::Deserialize;
     use serde_json::json;
     use std::path::PathBuf;
     use std::sync::Arc;
     use std::time::Duration as StdDuration;
+
+    fn test_echo_command() -> Vec<String> {
+        if cfg!(windows) {
+            vec![
+                "cmd.exe".to_string(),
+                "/C".to_string(),
+                "echo hi".to_string(),
+            ]
+        } else {
+            vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "echo hi".to_string(),
+            ]
+        }
+    }
 
     #[test]
     fn reconstruct_history_matches_live_compactions() {
@@ -3678,16 +3695,17 @@ mod tests {
         turn_context.approval_policy = AskForApproval::OnFailure;
 
         let params = ExecParams {
-            command: vec![
-                "/bin/sh".to_string(),
-                "-c".to_string(),
-                "echo hi".to_string(),
-            ],
+            command: test_echo_command(),
             cwd: turn_context.cwd.clone(),
             timeout_ms: Some(1000),
             env: HashMap::new(),
             with_escalated_permissions: Some(true),
             justification: Some("test".to_string()),
+        };
+
+        let params2 = ExecParams {
+            with_escalated_permissions: Some(false),
+            ..params.clone()
         };
 
         let mut turn_diff_tracker = TurnDiffTracker::new();
@@ -3720,19 +3738,6 @@ mod tests {
         // Force DangerFullAccess to avoid platform sandbox dependencies in tests.
         turn_context.sandbox_policy = SandboxPolicy::DangerFullAccess;
 
-        let params2 = ExecParams {
-            command: vec![
-                "/bin/sh".to_string(),
-                "-c".to_string(),
-                "echo hi".to_string(),
-            ],
-            cwd: turn_context.cwd.clone(),
-            timeout_ms: Some(1000),
-            env: HashMap::new(),
-            with_escalated_permissions: Some(false),
-            justification: Some("test".to_string()),
-        };
-
         let resp2 = handle_container_exec_with_params(
             params2,
             &session,
@@ -3747,11 +3752,24 @@ mod tests {
             panic!("expected FunctionCallOutput on retry");
         };
 
-        // Parse the structured exec output and assert success without new structs
-        let v: serde_json::Value =
+        #[derive(Deserialize)]
+        struct ResponseExecMetadata {
+            exit_code: i32,
+            duration_seconds: f32,
+        }
+
+        #[derive(Deserialize)]
+        struct ResponseExecOutput {
+            output: String,
+            metadata: ResponseExecMetadata,
+        }
+
+        let exec_output: ResponseExecOutput =
             serde_json::from_str(&output.content).expect("valid exec output json");
-        assert_eq!(v["metadata"]["exit_code"].as_i64(), Some(0));
-        assert!(v["output"].as_str().unwrap_or("").contains("hi"));
+
+        assert_eq!(exec_output.metadata.exit_code, 0);
+        assert!(exec_output.metadata.duration_seconds >= 0.0);
+        assert!(exec_output.output.contains("hi"));
         assert_eq!(output.success, Some(true));
     }
 }

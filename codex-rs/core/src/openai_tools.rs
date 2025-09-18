@@ -1033,7 +1033,7 @@ mod tests {
     }
 
     #[test]
-    fn test_shell_tool_for_sandbox_workspace_write() {
+    fn test_shell_tool() {
         let tool = super::create_shell_tool();
         let OpenAiTool::Function(ResponsesApiTool {
             description, name, ..
@@ -1045,34 +1045,5 @@ mod tests {
 
         let expected = "Runs a shell command and returns its output.";
         assert_eq!(description, expected);
-    }
-
-    #[test]
-    fn test_shell_tool_for_sandbox_readonly() {
-        let tool = super::create_shell_tool();
-        let OpenAiTool::Function(ResponsesApiTool {
-            description, name, ..
-        }) = &tool
-        else {
-            panic!("expected function tool");
-        };
-        assert_eq!(name, "shell");
-
-        let expected = "Runs a shell command and returns its output.";
-        assert_eq!(description, expected);
-    }
-
-    #[test]
-    fn test_shell_tool_for_sandbox_danger_full_access() {
-        let tool = super::create_shell_tool();
-        let OpenAiTool::Function(ResponsesApiTool {
-            description, name, ..
-        }) = &tool
-        else {
-            panic!("expected function tool");
-        };
-        assert_eq!(name, "shell");
-
-        assert_eq!(description, "Runs a shell command and returns its output.");
     }
 }
