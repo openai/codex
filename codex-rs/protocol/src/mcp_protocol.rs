@@ -17,7 +17,6 @@ use serde::Deserialize;
 use serde::Serialize;
 use strum_macros::Display;
 use ts_rs::TS;
-use uuid::Error;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, TS, Hash)]
@@ -33,7 +32,7 @@ impl ConversationId {
         }
     }
 
-    pub fn from_string(s: &str) -> Result<Self, Error> {
+    pub fn from_string(s: &str) -> Result<Self, uuid::Error> {
         Ok(Self {
             uuid: Uuid::parse_str(s)?,
         })
