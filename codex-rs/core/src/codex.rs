@@ -2689,6 +2689,20 @@ async fn handle_container_exec_with_params(
     sub_id: String,
     call_id: String,
 ) -> ResponseInputItem {
+    if params.with_escalated_permissions.unwrap_or(false)
+        && !matches!(turn_context.approval_policy, AskForApproval::OnRequest)
+    {
+        return ResponseInputItem::FunctionCallOutput {
+            call_id,
+            output: FunctionCallOutputPayload {
+                content: format!(
+                    "approval policy is {policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {policy:?}",
+                    policy = turn_context.approval_policy
+                ),
+                success: None,
+            },
+        };
+    }
     // check if this was a patch, and apply it if so
     let apply_patch_exec = match maybe_parse_apply_patch_verified(&params.command, &params.cwd) {
         MaybeApplyPatchVerified::Body(changes) => {
@@ -3649,5 +3663,95 @@ mod tests {
         rollout_items.push(RolloutItem::ResponseItem(assistant3.clone()));
 
         (rollout_items, live_history.contents())
+    }
+
+    #[tokio::test]
+    async fn rejects_escalated_permissions_when_policy_not_on_request() {
+        use crate::exec::ExecParams;
+        use crate::protocol::AskForApproval;
+        use crate::protocol::SandboxPolicy;
+        use crate::turn_diff_tracker::TurnDiffTracker;
+        use std::collections::HashMap;
+
+        let (session, mut turn_context) = make_session_and_context();
+        // Ensure policy is NOT OnRequest so the early rejection path triggers
+        turn_context.approval_policy = AskForApproval::OnFailure;
+
+        let params = ExecParams {
+            command: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "echo hi".to_string(),
+            ],
+            cwd: turn_context.cwd.clone(),
+            timeout_ms: Some(1000),
+            env: HashMap::new(),
+            with_escalated_permissions: Some(true),
+            justification: Some("test".to_string()),
+        };
+
+        let mut turn_diff_tracker = TurnDiffTracker::new();
+
+        let sub_id = "test-sub".to_string();
+        let call_id = "test-call".to_string();
+
+        let resp = handle_container_exec_with_params(
+            params,
+            &session,
+            &turn_context,
+            &mut turn_diff_tracker,
+            sub_id,
+            call_id,
+        )
+        .await;
+
+        let ResponseInputItem::FunctionCallOutput { output, .. } = resp else {
+            panic!("expected FunctionCallOutput");
+        };
+
+        let expected = format!(
+            "approval policy is {policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {policy:?}",
+            policy = turn_context.approval_policy
+        );
+
+        pretty_assertions::assert_eq!(output.content, expected);
+
+        // Now retry the same command WITHOUT escalated permissions; should succeed.
+        // Force DangerFullAccess to avoid platform sandbox dependencies in tests.
+        turn_context.sandbox_policy = SandboxPolicy::DangerFullAccess;
+
+        let params2 = ExecParams {
+            command: vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "echo hi".to_string(),
+            ],
+            cwd: turn_context.cwd.clone(),
+            timeout_ms: Some(1000),
+            env: HashMap::new(),
+            with_escalated_permissions: Some(false),
+            justification: Some("test".to_string()),
+        };
+
+        let resp2 = handle_container_exec_with_params(
+            params2,
+            &session,
+            &turn_context,
+            &mut turn_diff_tracker,
+            "test-sub".to_string(),
+            "test-call-2".to_string(),
+        )
+        .await;
+
+        let ResponseInputItem::FunctionCallOutput { output, .. } = resp2 else {
+            panic!("expected FunctionCallOutput on retry");
+        };
+
+        // Parse the structured exec output and assert success without new structs
+        let v: serde_json::Value =
+            serde_json::from_str(&output.content).expect("valid exec output json");
+        assert_eq!(v["metadata"]["exit_code"].as_i64(), Some(0));
+        assert!(v["output"].as_str().unwrap_or("").contains("hi"));
+        assert_eq!(output.success, Some(true));
     }
 }

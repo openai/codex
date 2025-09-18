@@ -3,7 +3,6 @@ use std::path::Component;
 use std::path::Path;
 use std::path::PathBuf;
 
-use AskForApproval::*;
 use codex_apply_patch::ApplyPatchAction;
 use codex_apply_patch::ApplyPatchFileChange;
 
@@ -99,18 +98,7 @@ pub fn assess_command_safety(
     // would probably be fine to run the command in a sandbox, but when
     // `approved.contains(command)` is `true`, the user may have approved it for
     // the session _because_ they know it needs to run outside a sandbox.
-    let command_is_trusted = is_known_safe_command(command) || approved.contains(command);
-
-    // reject function calls when the model asks for escalated permissions when it should not have to
-    if let Some(decision) = reject_forbidden_escalation(
-        approval_policy,
-        with_escalated_permissions,
-        command_is_trusted,
-    ) {
-        return decision;
-    }
-
-    if command_is_trusted {
+    if is_known_safe_command(command) || approved.contains(command) {
         return SafetyCheck::AutoApprove {
             sandbox_type: SandboxType::None,
         };
@@ -126,12 +114,6 @@ pub(crate) fn assess_safety_for_untrusted_command(
 ) -> SafetyCheck {
     use AskForApproval::*;
     use SandboxPolicy::*;
-
-    if let Some(decision) =
-        reject_forbidden_escalation(approval_policy, with_escalated_permissions, false)
-    {
-        return decision;
-    }
 
     match (approval_policy, sandbox_policy) {
         (UnlessTrusted, _) => {
@@ -192,38 +174,6 @@ pub fn get_platform_sandbox() -> Option<SandboxType> {
     } else {
         None
     }
-}
-
-/// Forbidden escalation is when the model asks for escalated permissions when it should not have to
-/// Rules:
-/// The model shouldn't ask for escalated permissions if the command is trusted
-/// The model shouldn't ask for escalated permissions if the approval policy is Never
-/// The model shouldn't ask for escalated permissions if the approval policy is OnFailure and it hasn't failed
-fn reject_forbidden_escalation(
-    approval_policy: AskForApproval,
-    with_escalated_permissions: bool,
-    command_is_trusted: bool,
-) -> Option<SafetyCheck> {
-    if !with_escalated_permissions {
-        return None;
-    }
-
-    let reason = match approval_policy {
-        Never => Some(
-            "auto-rejected. You should not ask for escalated permissions if the approval policy is Never".to_string(),
-        ),
-        OnFailure => Some(
-            "auto-rejected. You should not ask for escalated permissions if the approval policy is OnFailure and it hasn't failed"
-                .to_string(),
-        ),
-        UnlessTrusted if command_is_trusted => Some(
-            "auto-rejected. The command is already trusted under the UnlessTrusted approval policy. You do not need to ask for escalated permissions"
-                .to_string(),
-        ),
-        OnRequest | UnlessTrusted => None,
-    }?;
-
-    Some(SafetyCheck::Reject { reason })
 }
 
 fn is_write_patch_constrained_to_writable_paths(
@@ -396,63 +346,5 @@ mod tests {
             None => SafetyCheck::AskUser,
         };
         assert_eq!(safety_check, expected);
-    }
-
-    #[test]
-    fn test_escalation_rejected_when_policy_is_never() {
-        let command = vec!["git".to_string(), "status".to_string()];
-        let approval_policy = AskForApproval::Never;
-        let sandbox_policy = SandboxPolicy::ReadOnly;
-        let approved = HashSet::new();
-
-        let safety_check =
-            assess_command_safety(&command, approval_policy, &sandbox_policy, &approved, true);
-
-        assert_eq!(
-            safety_check,
-            SafetyCheck::Reject {
-                reason: "auto-rejected. You should not ask for escalated permissions if the approval policy is Never"
-                    .to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn test_escalation_rejected_for_on_failure_policy() {
-        let command = vec!["git".to_string(), "status".to_string()];
-        let approval_policy = AskForApproval::OnFailure;
-        let sandbox_policy = SandboxPolicy::ReadOnly;
-        let approved = HashSet::new();
-
-        let safety_check =
-            assess_command_safety(&command, approval_policy, &sandbox_policy, &approved, true);
-
-        assert_eq!(
-            safety_check,
-            SafetyCheck::Reject {
-                reason:
-                    "auto-rejected. You should not ask for escalated permissions if the approval policy is OnFailure and it hasn't failed"
-                        .to_string(),
-            }
-        );
-    }
-
-    #[test]
-    fn test_escalation_rejected_when_trusted_under_unless_trusted() {
-        let command = vec!["just".to_string(), "fmt".to_string()];
-        let approval_policy = AskForApproval::UnlessTrusted;
-        let sandbox_policy = SandboxPolicy::ReadOnly;
-        let approved = HashSet::from([command.clone()]);
-
-        let safety_check =
-            assess_command_safety(&command, approval_policy, &sandbox_policy, &approved, true);
-
-        assert_eq!(
-            safety_check,
-            SafetyCheck::Reject {
-                reason: "auto-rejected. The command is already trusted under the UnlessTrusted approval policy. You do not need to ask for escalated permissions"
-                    .to_string(),
-            }
-        );
     }
 }
