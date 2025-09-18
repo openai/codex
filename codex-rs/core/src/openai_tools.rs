@@ -333,7 +333,7 @@ pub(crate) struct ApplyPatchToolArgs {
 /// Responses API:
 /// https://platform.openai.com/docs/guides/function-calling?api-mode=responses
 pub fn create_tools_json_for_responses_api(
-    tools: &Vec<OpenAiTool>,
+    tools: &[OpenAiTool],
 ) -> crate::error::Result<Vec<serde_json::Value>> {
     let mut tools_json = Vec::new();
 
@@ -348,7 +348,7 @@ pub fn create_tools_json_for_responses_api(
 /// Chat Completions API:
 /// https://platform.openai.com/docs/guides/function-calling?api-mode=chat
 pub(crate) fn create_tools_json_for_chat_completions_api(
-    tools: &Vec<OpenAiTool>,
+    tools: &[OpenAiTool],
 ) -> crate::error::Result<Vec<serde_json::Value>> {
     // We start with the JSON for the Responses API and than rewrite it to match
     // the chat completions tool call format.
