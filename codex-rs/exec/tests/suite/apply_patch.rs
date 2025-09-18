@@ -3,7 +3,6 @@
 use anyhow::Context;
 use assert_cmd::prelude::*;
 use codex_core::CODEX_APPLY_PATCH_ARG1;
-use core_test_support::non_sandbox_test;
 use std::fs;
 use std::process::Command;
 use tempfile::tempdir;
@@ -45,6 +44,7 @@ fn test_standalone_exec_cli_can_use_apply_patch() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_apply_patch_tool() -> anyhow::Result<()> {
     use crate::suite::common::run_e2e_exec_test;
+    use core_test_support::non_sandbox_test;
 
     non_sandbox_test!(result);
 
@@ -71,6 +71,7 @@ async fn test_apply_patch_tool() -> anyhow::Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn test_apply_patch_freeform_tool() -> anyhow::Result<()> {
     use crate::suite::common::run_e2e_exec_test;
+    use core_test_support::non_sandbox_test;
 
     non_sandbox_test!(result);
 
