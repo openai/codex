@@ -170,6 +170,7 @@ jobs:
     permissions:
       contents: write
       actions: read
+      id-token: write  # Required for sigstore OIDC authentication
     outputs:
       version: ${{ steps.release_name.outputs.name }}
       tag: ${{ github.ref_name }}
@@ -225,6 +226,11 @@ jobs:
         with:
           tag: ${{ github.ref_name }}
           config: .github/dotslash-config.json
+
+      - name: Sign release artifacts with sigstore
+        uses: sigstore/gh-action-sigstore-python@v3.0.1
+        with:
+          release-signing-artifacts: true
 
   # Publish to npm using OIDC authentication.
   # July 31, 2025: https://github.blog/changelog/2025-07-31-npm-trusted-publishing-with-oidc-is-generally-available/

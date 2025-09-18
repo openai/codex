@@ -28,6 +28,17 @@ Running the publishing script will kick off a GitHub Action to build the release
 
 When the workflow finishes, the GitHub Release is "done," but you still have to consider npm and Homebrew.
 
+## Release Artifact Signatures
+
+All release artifacts are automatically signed with [Sigstore](https://sigstore.dev/) for supply chain security. The signing process:
+
+- Uses GitHub's OIDC token for keyless signing
+- Generates signatures for all release artifacts (binaries, archives, npm packages)
+- Uploads signatures alongside the original artifacts to the GitHub Release
+- Provides transparency and verification through the public Rekor transparency log
+
+Users can verify signatures using [cosign](https://docs.sigstore.dev/cosign/verifying/verify/) or other Sigstore-compatible tools.
+
 ## Publishing to npm
 
 The GitHub Action is responsible for publishing to npm.

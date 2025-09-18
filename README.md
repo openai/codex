@@ -49,6 +49,8 @@ Each GitHub Release contains many executables, but in practice, you likely want 
 
 Each archive contains a single entry with the platform baked into the name (e.g., `codex-x86_64-unknown-linux-musl`), so you likely want to rename it to `codex` after extracting it.
 
+**Security**: All release artifacts are signed with [Sigstore](https://sigstore.dev/) for supply chain security. Signature files (`.sig`) and certificate files (`.pem`) are included with each release and can be verified using [cosign](https://docs.sigstore.dev/cosign/verifying/verify/) or other Sigstore-compatible tools.
+
 </details>
 
 ### Using Codex with your ChatGPT plan

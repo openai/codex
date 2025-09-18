@@ -34,11 +34,13 @@ pub struct Prompt {
 }
 
 impl Prompt {
-    pub(crate) fn get_full_instructions<'a>(&'a self, model: &'a ModelFamily) -> Cow<'a, str> {
+    pub(crate) fn get_full_instructions(&self, model: &ModelFamily) -> Cow<'_, str> {
         let base = self
             .base_instructions_override
             .as_deref()
             .unwrap_or(model.base_instructions.deref());
+        let mut sections: Vec<&str> = vec![base];
+
         // When there are no custom instructions, add apply_patch_tool_instructions if:
         // - the model needs special instructions (4.1)
         // AND
@@ -52,10 +54,9 @@ impl Prompt {
             && model.needs_special_apply_patch_instructions
             && !is_apply_patch_tool_present
         {
-            Cow::Owned(format!("{base}\n{APPLY_PATCH_TOOL_INSTRUCTIONS}"))
-        } else {
-            Cow::Borrowed(base)
+            sections.push(APPLY_PATCH_TOOL_INSTRUCTIONS);
         }
+        Cow::Owned(sections.join("\n"))
     }
 
     pub(crate) fn get_formatted_input(&self) -> Vec<ResponseItem> {
