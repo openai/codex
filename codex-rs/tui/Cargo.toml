@@ -85,6 +85,7 @@ unicode-segmentation = "1.12.0"
 unicode-width = "0.1"
 url = "2"
 pathdiff = "0.2"
+owo-colors = "4.2.0"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
