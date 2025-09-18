@@ -278,6 +278,7 @@ async fn run_codex_tool_session_inner(
                     | EventMsg::PlanUpdate(_)
                     | EventMsg::TurnAborted(_)
                     | EventMsg::ConversationPath(_)
+                    | EventMsg::WorktreeRemoved(_)
                     | EventMsg::UserMessage(_)
                     | EventMsg::ShutdownComplete
                     | EventMsg::EnteredReviewMode(_)

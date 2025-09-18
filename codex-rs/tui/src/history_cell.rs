@@ -655,6 +655,7 @@ pub(crate) fn new_session_info(
         history_entry_count: _,
         initial_messages: _,
         rollout_path: _,
+        worktree_path: _,
     } = event;
     if is_first_event {
         // Header box rendered as history (so it appears at the very top)

@@ -171,6 +171,9 @@ pub enum Op {
     /// Request a code review from the agent.
     Review { review_request: ReviewRequest },
 
+    /// Remove the git worktree associated with the current session, if any.
+    RemoveWorktree,
+
     /// Request to shut down codex instance.
     Shutdown,
 }
@@ -516,6 +519,9 @@ pub enum EventMsg {
 
     /// Exited review mode with an optional final result to apply.
     ExitedReviewMode(ExitedReviewModeEvent),
+
+    /// Confirmation that a git worktree has been removed.
+    WorktreeRemoved(WorktreeRemovedEvent),
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
@@ -1183,6 +1189,16 @@ pub struct SessionConfiguredEvent {
     pub initial_messages: Option<Vec<EventMsg>>,
 
     pub rollout_path: PathBuf,
+
+    /// When set, the session is running inside this git worktree checkout.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, TS)]
+pub struct WorktreeRemovedEvent {
+    /// Filesystem path that was removed, relative to the host running Codex.
+    pub path: PathBuf,
 }
 
 /// User's decision in response to an ExecApprovalRequest.
@@ -1265,6 +1281,7 @@ mod tests {
                 history_entry_count: 0,
                 initial_messages: None,
                 rollout_path: rollout_file.path().to_path_buf(),
+                worktree_path: None,
             }),
         };
 

@@ -28,6 +28,7 @@ mod exec_command;
 pub mod exec_env;
 mod flags;
 pub mod git_info;
+mod git_worktree;
 pub mod internal_storage;
 mod is_safe_command;
 pub mod landlock;

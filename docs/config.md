@@ -640,6 +640,7 @@ notifications = [ "agent-turn-complete", "approval-requested" ]
 | `tui.notifications` | boolean \| array<string> | Enable desktop notifications in the tui (default: false). |
 | `hide_agent_reasoning` | boolean | Hide model reasoning events. |
 | `show_raw_agent_reasoning` | boolean | Show raw reasoning (when available). |
+| `[Experimental] enable_git_worktree` | boolean | Create a linked git worktree per session under `cwd/codex/<conversation_id>` (default: false). |
 | `model_reasoning_effort` | `minimal` \| `low` \| `medium` \| `high` | Responses API reasoning effort. |
 | `model_reasoning_summary` | `auto` \| `concise` \| `detailed` \| `none` | Reasoning summaries. |
 | `model_verbosity` | `low` \| `medium` \| `high` | GPT‑5 text verbosity (Responses API). |
@@ -652,3 +653,12 @@ notifications = [ "agent-turn-complete", "approval-requested" ]
 | `responses_originator_header_internal_override` | string | Override `originator` header value. |
 | `projects.<path>.trust_level` | string | Mark project/worktree as trusted (only `"trusted"` is recognized). |
 | `tools.web_search` | boolean | Enable web search tool (alias: `web_search_request`) (default: false). |
+
+#### Experimental git worktree mode
+
+Enabling `[Experimental] enable_git_worktree` creates a linked checkout at
+`<cwd>/codex/<conversation_id>` via `git worktree add --detach HEAD`. The worktree starts in a
+detached HEAD state so Codex never clashes with a branch you already have checked out. When you
+want to commit, run `git switch -c <branch>` (or attach to an existing branch) inside the worktree
+and work as usual. Codex automatically appends `/codex/` to `.git/info/exclude` so these
+directories stay out of `git status` without touching your tracked `.gitignore`.

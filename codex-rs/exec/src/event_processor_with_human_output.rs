@@ -26,6 +26,7 @@ use codex_core::protocol::TurnAbortReason;
 use codex_core::protocol::TurnDiffEvent;
 use codex_core::protocol::WebSearchBeginEvent;
 use codex_core::protocol::WebSearchEndEvent;
+use codex_core::protocol::WorktreeRemovedEvent;
 use codex_protocol::num_format::format_with_separators;
 use owo_colors::OwoColorize;
 use owo_colors::Style;
@@ -198,6 +199,14 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                         format_with_separators(usage_info.total_token_usage.blended_total())
                     );
                 }
+            }
+            EventMsg::WorktreeRemoved(WorktreeRemovedEvent { path }) => {
+                ts_println!(
+                    self,
+                    "{} {}",
+                    "git worktree removed:".style(self.cyan),
+                    path.display()
+                );
             }
             EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }) => {
                 if !self.answer_started {
@@ -525,6 +534,7 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                     history_entry_count: _,
                     initial_messages: _,
                     rollout_path: _,
+                    worktree_path,
                 } = session_configured_event;
 
                 ts_println!(
@@ -535,6 +545,9 @@ impl EventProcessor for EventProcessorWithHumanOutput {
                 );
 
                 ts_println!(self, "model: {}", model);
+                if let Some(path) = worktree_path {
+                    ts_println!(self, "git worktree: {}", path.display());
+                }
                 println!();
             }
             EventMsg::PlanUpdate(plan_update_event) => {

@@ -155,6 +155,7 @@ fn resumed_initial_messages_render_history() {
             }),
         ]),
         rollout_path: rollout_file.path().to_path_buf(),
+        worktree_path: None,
     };
 
     chat.handle_codex_event(Event {

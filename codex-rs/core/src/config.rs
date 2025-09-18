@@ -186,6 +186,8 @@ pub struct Config {
 
     /// Include the `view_image` tool that lets the agent attach a local image path to context.
     pub include_view_image_tool: bool,
+    /// When true, sessions run inside a linked git worktree under `cwd/codex/<conversation>`.
+    pub enable_git_worktree: bool,
 
     /// The active profile name used to derive this `Config` (if any).
     pub active_profile: Option<String>,
@@ -676,6 +678,9 @@ pub struct ConfigToml {
     /// Defaults to `false`.
     pub show_raw_agent_reasoning: Option<bool>,
 
+    /// Enable per-session git worktree checkouts.
+    pub enable_git_worktree: Option<bool>,
+
     pub model_reasoning_effort: Option<ReasoningEffort>,
     pub model_reasoning_summary: Option<ReasoningSummary>,
     /// Optional verbosity control for GPT-5 models (Responses API `text.verbosity`).
@@ -845,6 +850,7 @@ pub struct ConfigOverrides {
     pub include_view_image_tool: Option<bool>,
     pub show_raw_agent_reasoning: Option<bool>,
     pub tools_web_search_request: Option<bool>,
+    pub enable_git_worktree: Option<bool>,
 }
 
 impl Config {
@@ -873,6 +879,7 @@ impl Config {
             include_view_image_tool,
             show_raw_agent_reasoning,
             tools_web_search_request: override_tools_web_search_request,
+            enable_git_worktree: override_enable_git_worktree,
         } = overrides;
 
         let active_profile_name = config_profile_key
@@ -945,6 +952,10 @@ impl Config {
         let include_view_image_tool = include_view_image_tool
             .or(cfg.tools.as_ref().and_then(|t| t.view_image))
             .unwrap_or(true);
+
+        let enable_git_worktree = override_enable_git_worktree
+            .or(cfg.enable_git_worktree)
+            .unwrap_or(false);
 
         let model = model
             .or(config_profile.model)
@@ -1046,6 +1057,7 @@ impl Config {
                 .experimental_use_unified_exec_tool
                 .unwrap_or(false),
             include_view_image_tool,
+            enable_git_worktree,
             active_profile: active_profile_name,
             disable_paste_burst: cfg.disable_paste_burst.unwrap_or(false),
             tui_notifications: cfg
@@ -1614,6 +1626,7 @@ model_verbosity = "high"
                 use_experimental_streamable_shell_tool: false,
                 use_experimental_unified_exec_tool: false,
                 include_view_image_tool: true,
+                enable_git_worktree: false,
                 active_profile: Some("o3".to_string()),
                 disable_paste_burst: false,
                 tui_notifications: Default::default(),
@@ -1672,6 +1685,7 @@ model_verbosity = "high"
             use_experimental_streamable_shell_tool: false,
             use_experimental_unified_exec_tool: false,
             include_view_image_tool: true,
+            enable_git_worktree: false,
             active_profile: Some("gpt3".to_string()),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
@@ -1745,6 +1759,7 @@ model_verbosity = "high"
             use_experimental_streamable_shell_tool: false,
             use_experimental_unified_exec_tool: false,
             include_view_image_tool: true,
+            enable_git_worktree: false,
             active_profile: Some("zdr".to_string()),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
@@ -1804,6 +1819,7 @@ model_verbosity = "high"
             use_experimental_streamable_shell_tool: false,
             use_experimental_unified_exec_tool: false,
             include_view_image_tool: true,
+            enable_git_worktree: false,
             active_profile: Some("gpt5".to_string()),
             disable_paste_burst: false,
             tui_notifications: Default::default(),
