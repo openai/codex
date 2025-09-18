@@ -10,10 +10,10 @@
 use super::compact::FIRST_REPLY;
 use super::compact::SUMMARIZE_TRIGGER;
 use super::compact::SUMMARY_TEXT;
-use super::compact::ev_assistant_message;
-use super::compact::ev_completed;
-use super::compact::mount_sse_once;
-use super::compact::sse;
+use core_test_support::responses::ev_assistant_message;
+use core_test_support::responses::ev_completed;
+use core_test_support::responses::mount_sse_once;
+use core_test_support::responses::sse;
 use codex_core::CodexAuth;
 use codex_core::CodexConversation;
 use codex_core::ConversationManager;
