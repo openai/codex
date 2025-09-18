@@ -22,6 +22,7 @@ use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
+use crate::tui::render_persistent_banner;
 use codex_protocol::models::ContentItem;
 use codex_protocol::models::ResponseItem;
 use codex_protocol::protocol::InputMessageKind;
@@ -319,8 +320,10 @@ fn preview_from_head(head: &[serde_json::Value]) -> Option<String> {
 fn draw_picker(tui: &mut Tui, state: &PickerState) -> std::io::Result<()> {
     // Render full-screen overlay
     let height = tui.terminal.size()?.height;
+    let banner = tui.update_banner_lines().cloned();
     tui.draw(height, |frame| {
-        let area = frame.area();
+        let mut area = frame.area();
+        render_persistent_banner(frame, &mut area, banner.as_deref());
         let [header, search, list, hint] = Layout::vertical([
             Constraint::Length(1),
             Constraint::Length(1),
