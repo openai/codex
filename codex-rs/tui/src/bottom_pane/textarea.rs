@@ -214,6 +214,12 @@ impl TextArea {
             KeyEvent { code: KeyCode::Char('\u{0006}'), modifiers: KeyModifiers::NONE, .. } /* ^F */ => {
                 self.move_cursor_right();
             }
+            KeyEvent { code: KeyCode::Char('\u{000E}'), modifiers: KeyModifiers::NONE, .. } /* ^N */ => {
+                self.move_cursor_down();
+            }
+            KeyEvent { code: KeyCode::Char('\u{0010}'), modifiers: KeyModifiers::NONE, .. } /* ^P */ => {
+                self.move_cursor_up();
+            }
             KeyEvent {
                 code: KeyCode::Char(c),
                 // Insert plain characters (and Shift-modified). Do NOT insert when ALT is held,
@@ -334,6 +340,20 @@ impl TextArea {
                 ..
             } => {
                 self.move_cursor_right();
+            }
+            KeyEvent {
+                code: KeyCode::Char('p'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                self.move_cursor_up();
+            }
+            KeyEvent {
+                code: KeyCode::Char('n'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                self.move_cursor_down();
             }
             // Some terminals send Alt+Arrow for word-wise movement:
             // Option/Left -> Alt+Left (previous word start)
@@ -1228,6 +1248,18 @@ mod tests {
     }
 
     #[test]
+    fn control_p_and_n_move_cursor() {
+        let mut t = ta_with("ab\ncd");
+        t.set_cursor(3);
+
+        t.input(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
+        assert_eq!(t.cursor(), 0);
+
+        t.input(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
+        assert_eq!(t.cursor(), 3);
+    }
+
+    #[test]
     fn control_b_f_fallback_control_chars_move_cursor() {
         let mut t = ta_with("abcd");
         t.set_cursor(2);
@@ -1240,6 +1272,20 @@ mod tests {
         // ^F (U+0006) should move right
         t.input(KeyEvent::new(KeyCode::Char('\u{0006}'), KeyModifiers::NONE));
         assert_eq!(t.cursor(), 2);
+    }
+
+    #[test]
+    fn control_p_n_fallback_control_chars_move_cursor() {
+        let mut t = ta_with("ab\ncd");
+        t.set_cursor(3);
+
+        // ^P (U+0010) should move up
+        t.input(KeyEvent::new(KeyCode::Char('\u{0010}'), KeyModifiers::NONE));
+        assert_eq!(t.cursor(), 0);
+
+        // ^N (U+000E) should move down
+        t.input(KeyEvent::new(KeyCode::Char('\u{000E}'), KeyModifiers::NONE));
+        assert_eq!(t.cursor(), 3);
     }
 
     #[test]
