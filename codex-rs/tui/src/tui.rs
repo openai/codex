@@ -14,6 +14,7 @@ use std::time::Instant;
 
 use crossterm::Command;
 use crossterm::SynchronizedUpdate;
+#[cfg(unix)]
 use crossterm::cursor::MoveTo;
 use crossterm::event::DisableBracketedPaste;
 use crossterm::event::DisableFocusChange;
