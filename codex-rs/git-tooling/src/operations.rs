@@ -65,7 +65,8 @@ pub fn create_ghost_commit(
     let repo_prefix = repo_subdir(repo_root.as_path(), options.repo_path);
     let parent = resolve_head(repo_root.as_path())?;
 
-    let normalized_force = options.force_include
+    let normalized_force = options
+        .force_include
         .iter()
         .map(|path| normalize_relative_path(path))
         .collect::<Result<Vec<_>, _>>()?;
@@ -84,12 +85,15 @@ pub fn create_ghost_commit(
     }
 
     run_git_for_status(repo_root.as_path(), add_args, Some(base_env.as_slice()))?;
-    for path in &force_include {
-        let args = [
-            OsString::from("add"),
-            OsString::from("--force"),
-            OsString::from(path.as_os_str()),
-        ];
+    if !force_include.is_empty() {
+        let mut args = Vec::with_capacity(force_include.len() + 2);
+        args.push(OsString::from("add"));
+        args.push(OsString::from("--force"));
+        args.extend(
+            force_include
+                .iter()
+                .map(|path| OsString::from(path.as_os_str())),
+        );
         run_git_for_status(repo_root.as_path(), args, Some(base_env.as_slice()))?;
     }
 
@@ -316,10 +320,12 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    let args_vec: Vec<OsString> = args
-        .into_iter()
-        .map(|arg| OsString::from(arg.as_ref()))
-        .collect();
+    let iterator = args.into_iter();
+    let (lower, upper) = iterator.size_hint();
+    let mut args_vec = Vec::with_capacity(upper.unwrap_or(lower));
+    for arg in iterator {
+        args_vec.push(OsString::from(arg.as_ref()));
+    }
     let command_string = build_command_string(&args_vec);
     let mut command = Command::new("git");
     command.current_dir(dir);
@@ -328,7 +334,7 @@ where
             command.env(key, value);
         }
     }
-    command.args(args_vec.iter().map(|arg| arg.as_os_str()));
+    command.args(&args_vec);
     let output = command.output()?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
