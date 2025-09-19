@@ -1,6 +1,11 @@
 use std::collections::HashMap;
+use std::io::Cursor;
+use std::path::Path;
 
 use base64::Engine;
+use image::ImageFormat;
+use image::ImageReader;
+use image::imageops::FilterType;
 use mcp_types::CallToolResult;
 use serde::Deserialize;
 use serde::Deserializer;
@@ -214,13 +219,9 @@ impl From<Vec<InputItem>> for ResponseInputItem {
                 .filter_map(|c| match c {
                     InputItem::Text { text } => Some(ContentItem::InputText { text }),
                     InputItem::Image { image_url } => Some(ContentItem::InputImage { image_url }),
-                    InputItem::LocalImage { path } => match std::fs::read(&path) {
-                        Ok(bytes) => {
-                            let mime = mime_guess::from_path(&path)
-                                .first()
-                                .map(|m| m.essence_str().to_owned())
-                                .unwrap_or_else(|| "image".to_string());
-                            let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+                    InputItem::LocalImage { path } => match load_local_image(&path) {
+                        Ok((bytes, mime)) => {
+                            let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
                             Some(ContentItem::InputImage {
                                 image_url: format!("data:{mime};base64,{encoded}"),
                             })
@@ -238,6 +239,107 @@ impl From<Vec<InputItem>> for ResponseInputItem {
                 .collect::<Vec<ContentItem>>(),
         }
     }
+}
+
+const MAX_IMAGE_WIDTH: u32 = 2048;
+const MAX_IMAGE_HEIGHT: u32 = 768;
+
+fn load_local_image(path: &Path) -> Result<(Vec<u8>, String), std::io::Error> {
+    let mut bytes = std::fs::read(path)?;
+    let mut mime = guess_mime(path);
+
+    if let Some(resized) = resize_image_if_needed(&bytes) {
+        if let Some(mime_override) = resized.mime_override {
+            mime = mime_override;
+        }
+        bytes = resized.bytes;
+    }
+
+    Ok((bytes, mime))
+}
+
+#[derive(Debug)]
+struct ResizedImage {
+    bytes: Vec<u8>,
+    mime_override: Option<String>,
+}
+
+fn resize_image_if_needed(bytes: &[u8]) -> Option<ResizedImage> {
+    let reader = ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
+    let format = reader.format();
+    let image = reader.decode().ok()?;
+
+    let width = image.width();
+    let height = image.height();
+    if width <= MAX_IMAGE_WIDTH && height <= MAX_IMAGE_HEIGHT {
+        return None;
+    }
+
+    let scale = f64::min(
+        MAX_IMAGE_WIDTH as f64 / width as f64,
+        MAX_IMAGE_HEIGHT as f64 / height as f64,
+    );
+    let new_width = (width as f64 * scale).floor().max(1.0) as u32;
+    let new_height = (height as f64 * scale).floor().max(1.0) as u32;
+
+    if new_width == width && new_height == height {
+        return None;
+    }
+
+    tracing::debug!(
+        original_width = width,
+        original_height = height,
+        resized_width = new_width,
+        resized_height = new_height,
+        "resizing local image before upload",
+    );
+
+    let resized = image.resize(new_width, new_height, FilterType::Lanczos3);
+    let mut cursor = Cursor::new(Vec::new());
+    let mut mime_override = None;
+
+    match format {
+        Some(fmt) => {
+            if resized.write_to(&mut cursor, fmt).is_err() {
+                cursor = Cursor::new(Vec::new());
+                if resized.write_to(&mut cursor, ImageFormat::Png).is_err() {
+                    return None;
+                }
+                mime_override = Some("image/png".to_string());
+            } else if let Some(mime) = mime_from_image_format(fmt) {
+                mime_override = Some(mime);
+            }
+        }
+        None => {
+            if resized.write_to(&mut cursor, ImageFormat::Png).is_err() {
+                return None;
+            }
+            mime_override = Some("image/png".to_string());
+        }
+    }
+
+    let bytes = cursor.into_inner();
+    Some(ResizedImage {
+        bytes,
+        mime_override,
+    })
+}
+
+fn guess_mime(path: &Path) -> String {
+    mime_guess::from_path(path)
+        .first()
+        .map(|m| m.essence_str().to_owned())
+        .unwrap_or_else(|| "image".to_string())
+}
+
+fn mime_from_image_format(format: ImageFormat) -> Option<String> {
+    format
+        .extensions_str()
+        .iter()
+        .find_map(|ext| mime_guess::from_ext(ext).first())
+        .map(|mime| mime.essence_str().to_owned())
 }
 
 /// If the `name` of a `ResponseItem::FunctionCall` is either `container.exec`
@@ -318,6 +420,12 @@ impl std::ops::Deref for FunctionCallOutputPayload {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::DynamicImage;
+    use image::ImageFormat;
+    use image::ImageReader as TestImageReader;
+    use image::Rgba;
+    use image::RgbaImage;
+    use std::io::Cursor as TestCursor;
 
     #[test]
     fn serializes_success_as_plain_string() {
@@ -371,5 +479,37 @@ mod tests {
             },
             params
         );
+    }
+
+    #[test]
+    fn resize_image_if_needed_skips_small_images() {
+        let image = RgbaImage::from_pixel(1024, 512, Rgba([0, 0, 0, 255]));
+        let dynamic = DynamicImage::ImageRgba8(image);
+        let mut cursor = TestCursor::new(Vec::new());
+        dynamic.write_to(&mut cursor, ImageFormat::Png).unwrap();
+        let bytes = cursor.into_inner();
+
+        assert!(resize_image_if_needed(&bytes).is_none());
+    }
+
+    #[test]
+    fn resize_image_if_needed_constrains_to_bounding_box() {
+        let image = RgbaImage::from_pixel(4096, 2048, Rgba([255, 0, 0, 255]));
+        let dynamic = DynamicImage::ImageRgba8(image);
+        let mut cursor = TestCursor::new(Vec::new());
+        dynamic.write_to(&mut cursor, ImageFormat::Png).unwrap();
+        let bytes = cursor.into_inner();
+
+        let resized = resize_image_if_needed(&bytes).expect("image should be resized");
+        assert_eq!(resized.mime_override.as_deref(), Some("image/png"));
+
+        let decoded = TestImageReader::new(TestCursor::new(&resized.bytes))
+            .with_guessed_format()
+            .unwrap()
+            .decode()
+            .unwrap();
+
+        assert_eq!(decoded.width(), 1536);
+        assert_eq!(decoded.height(), 768);
     }
 }

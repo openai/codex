@@ -874,6 +874,7 @@ dependencies = [
  "base64",
  "icu_decimal",
  "icu_locale_core",
+ "image",
  "mcp-types",
  "mime_guess",
  "pretty_assertions",
