@@ -52,6 +52,10 @@ pub struct Cli {
     #[arg(long = "skip-git-repo-check", default_value_t = false)]
     pub skip_git_repo_check: bool,
 
+    /// Force-enable the experimental apply_patch tool even for models that do not opt into it by default.
+    #[arg(long = "custom-apply-patch", default_value_t = false)]
+    pub custom_apply_patch: bool,
+
     #[clap(skip)]
     pub config_overrides: CliConfigOverrides,
 
