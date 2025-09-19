@@ -14,7 +14,7 @@ use std::time::Instant;
 
 use crossterm::Command;
 use crossterm::SynchronizedUpdate;
-use crossterm::cursor;
+#[cfg(unix)]
 use crossterm::cursor::MoveTo;
 use crossterm::event::DisableBracketedPaste;
 use crossterm::event::DisableFocusChange;
@@ -27,7 +27,6 @@ use crossterm::event::PopKeyboardEnhancementFlags;
 use crossterm::event::PushKeyboardEnhancementFlags;
 use crossterm::terminal::EnterAlternateScreen;
 use crossterm::terminal::LeaveAlternateScreen;
-use crossterm::terminal::ScrollUp;
 use ratatui::backend::Backend;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::execute;
@@ -126,15 +125,6 @@ pub fn init() -> Result<Terminal> {
     set_modes()?;
 
     set_panic_hook();
-
-    // Instead of clearing the screen (which can drop scrollback in some terminals),
-    // scroll existing lines up until the cursor reaches the top, then start at (0, 0).
-    if let Ok((_x, y)) = cursor::position()
-        && y > 0
-    {
-        execute!(stdout(), ScrollUp(y))?;
-    }
-    execute!(stdout(), MoveTo(0, 0))?;
 
     let backend = CrosstermBackend::new(stdout());
     let tui = CustomTerminal::with_options(backend)?;
