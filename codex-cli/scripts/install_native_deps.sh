@@ -91,4 +91,6 @@ zstd -d "$ARTIFACTS_DIR/x86_64-pc-windows-msvc/codex-x86_64-pc-windows-msvc.exe.
 zstd -d "$ARTIFACTS_DIR/aarch64-pc-windows-msvc/codex-aarch64-pc-windows-msvc.exe.zst" \
     -o "$BIN_DIR/codex-aarch64-pc-windows-msvc.exe"
 
-echo "Installed native dependencies into $BIN_DIR"
+python3 "$CODEX_CLI_ROOT/scripts/install_rg.py" --bin-dir "$BIN_DIR"
+
+echo "Installed native dependencies (including ripgrep) into $BIN_DIR"

@@ -23,7 +23,11 @@ forwarded to stage_release.sh.
     )
     parser.add_argument(
         "--tmp",
-        help="Optional path to stage the npm package; forwarded to stage_release.sh",
+        help="Optional path to stage the npm package; forwarded to the builder",
+    )
+    parser.add_argument(
+        "--pack-output",
+        help="Optional path to write the generated npm tarball.",
     )
     args = parser.parse_args()
     version = args.release_version
@@ -51,17 +55,19 @@ forwarded to stage_release.sh.
 
     current_dir = Path(__file__).parent.resolve()
     cmd = [
-        str(current_dir / "stage_release.sh"),
+        sys.executable,
+        str(current_dir / "build_npm_package.py"),
         "--version",
         version,
         "--workflow-url",
         workflow["url"],
     ]
     if args.tmp:
-        cmd.extend(["--tmp", args.tmp])
+        cmd.extend(["--staging-dir", args.tmp])
+    if args.pack_output:
+        cmd.extend(["--pack-output", args.pack_output])
 
-    stage_release = subprocess.run(cmd)
-    stage_release.check_returncode()
+    subprocess.run(cmd, check=True)
 
     return 0
 

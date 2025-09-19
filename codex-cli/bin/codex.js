@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Unified entry point for the Codex CLI.
 
+import { existsSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -66,23 +67,6 @@ const binaryPath = path.join(__dirname, "..", "bin", `codex-${targetTriple}`);
 // receives a fatal signal, both processes exit in a predictable manner.
 const { spawn } = await import("child_process");
 
-async function tryImport(moduleName) {
-  try {
-    // eslint-disable-next-line node/no-unsupported-features/es-syntax
-    return await import(moduleName);
-  } catch (err) {
-    return null;
-  }
-}
-
-async function resolveRgDir() {
-  const ripgrep = await tryImport("@vscode/ripgrep");
-  if (!ripgrep?.rgPath) {
-    return null;
-  }
-  return path.dirname(ripgrep.rgPath);
-}
-
 function getUpdatedPath(newDirs) {
   const pathSep = process.platform === "win32" ? ";" : ":";
   const existingPath = process.env.PATH || "";
@@ -94,9 +78,10 @@ function getUpdatedPath(newDirs) {
 }
 
 const additionalDirs = [];
-const rgDir = await resolveRgDir();
-if (rgDir) {
-  additionalDirs.push(rgDir);
+const rgBinaryName = `rg-${targetTriple}`;
+const rgBinaryPath = path.join(__dirname, "..", "bin", rgBinaryName);
+if (existsSync(rgBinaryPath)) {
+  additionalDirs.push(path.dirname(rgBinaryPath));
 }
 const updatedPath = getUpdatedPath(additionalDirs);
 

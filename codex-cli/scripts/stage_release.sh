@@ -7,22 +7,23 @@
 # Usage:
 #
 #   --tmp <dir>  : Use <dir> instead of a freshly created temp directory.
+#   --version    : Version string to write into package.json.
+#   --workflow-url <url>: Workflow run that produced the native binaries.
 #   -h|--help    : Print usage.
 #
 # -----------------------------------------------------------------------------
 
 set -euo pipefail
 
-# Helper - usage / flag parsing
-
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [--tmp DIR] [--version VERSION]
+Usage: $(basename "$0") [--tmp DIR] [--version VERSION] [--workflow-url URL]
 
 Options
-  --tmp DIR   Use DIR to stage the release (defaults to a fresh mktemp dir)
-  --version   Specify the version to release (defaults to a timestamp-based version)
-  -h, --help  Show this help
+  --tmp DIR         Use DIR to stage the release (defaults to a fresh mktemp dir)
+  --version VERSION Set the npm package version (defaults to timestamp scheme)
+  --workflow-url URL  Workflow run URL that produced the native binaries
+  -h, --help        Show this help
 
 Legacy positional argument: the first non-flag argument is still interpreted
 as the temporary directory (for backwards compatibility) but is deprecated.
@@ -31,11 +32,9 @@ EOF
 }
 
 TMPDIR=""
-# Default to a timestamp-based version (keep same scheme as before)
 VERSION="$(printf '0.1.%d' "$(date +%y%m%d%H%M)")"
 WORKFLOW_URL=""
 
-# Manual flag parser - Bash getopts does not handle GNU long options well.
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --tmp)
@@ -50,7 +49,7 @@ while [[ $# -gt 0 ]]; do
       VERSION="$1"
       ;;
     --workflow-url)
-      shift || { echo "--workflow-url requires an argument"; exit 1; }
+      shift || { echo "--workflow-url requires an argument"; usage 1; }
       WORKFLOW_URL="$1"
       ;;
     -h|--help)
@@ -61,60 +60,43 @@ while [[ $# -gt 0 ]]; do
       usage 1
       ;;
     *)
-      echo "Unexpected extra argument: $1" >&2
-      usage 1
+      if [[ -z "$TMPDIR" ]]; then
+        TMPDIR="$1"
+      else
+        echo "Unexpected extra argument: $1" >&2
+        usage 1
+      fi
       ;;
   esac
   shift
 done
 
-# Fallback when the caller did not specify a directory.
-# If no directory was specified create a fresh temporary one.
 if [[ -z "$TMPDIR" ]]; then
   TMPDIR="$(mktemp -d)"
 fi
 
-# Ensure the directory exists, then resolve to an absolute path.
 mkdir -p "$TMPDIR"
 TMPDIR="$(cd "$TMPDIR" && pwd)"
 
-# Main build logic
-
-echo "Staging release in $TMPDIR"
-
-# The script lives in codex-cli/scripts/ - change into codex-cli root so that
-# relative paths keep working.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CODEX_CLI_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-pushd "$CODEX_CLI_ROOT" >/dev/null
+BUILD_ARGS=(
+  --version "$VERSION"
+  --staging-dir "$TMPDIR"
+)
+if [[ -n "$WORKFLOW_URL" ]]; then
+  BUILD_ARGS+=(--workflow-url "$WORKFLOW_URL")
+fi
 
-# 1. Build the JS artifacts ---------------------------------------------------
+python3 "$CODEX_CLI_ROOT/scripts/build_npm_package.py" "${BUILD_ARGS[@]}"
 
-# Paths inside the staged package
-mkdir -p "$TMPDIR/bin"
+cat <<EOF
+Staged version $VERSION for release in $TMPDIR
 
-cp -r bin/codex.js "$TMPDIR/bin/codex.js"
-cp ../README.md "$TMPDIR" || true # README is one level up - ignore if missing
+Verify the CLI:
+    node ${TMPDIR}/bin/codex.js --version
+    node ${TMPDIR}/bin/codex.js --help
 
-# Modify package.json - bump version and optionally add the native directory to
-# the files array so that the binaries are published to npm.
-
-jq --arg version "$VERSION" \
-    '.version = $version' \
-    package.json > "$TMPDIR/package.json"
-
-# 2. Native runtime deps (sandbox plus optional Rust binaries)
-
-./scripts/install_native_deps.sh --workflow-url "$WORKFLOW_URL" "$TMPDIR"
-
-popd >/dev/null
-
-echo "Staged version $VERSION for release in $TMPDIR"
-
-echo "Verify the CLI:"
-echo "    node ${TMPDIR}/bin/codex.js --version"
-echo "    node ${TMPDIR}/bin/codex.js --help"
-
-# Print final hint for convenience
-echo "Next:  cd \"$TMPDIR\" && npm publish"
+Next:  cd "$TMPDIR" && npm publish
+EOF

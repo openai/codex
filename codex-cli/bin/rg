@@ -1,0 +1,79 @@
+#!/usr/bin/env dotslash
+
+{
+  "name": "rg",
+  "platforms": {
+    "macos-aarch64": {
+      "size": 1787248,
+      "hash": "blake3",
+      "digest": "8d9942032585ea8ee805937634238d9aee7b210069f4703c88fbe568e26fb78a",
+      "format": "tar.gz",
+      "path": "ripgrep-14.1.1-aarch64-apple-darwin/rg",
+      "providers": [
+        {
+          "url": "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/ripgrep-14.1.1-aarch64-apple-darwin.tar.gz"
+        }
+      ]
+    },
+    "linux-aarch64": {
+      "size": 2047405,
+      "hash": "blake3",
+      "digest": "0b670b8fa0a3df2762af2fc82cc4932f684ca4c02dbd1260d4f3133fd4b2a515",
+      "format": "tar.gz",
+      "path": "ripgrep-14.1.1-aarch64-unknown-linux-gnu/rg",
+      "providers": [
+        {
+          "url": "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/ripgrep-14.1.1-aarch64-unknown-linux-gnu.tar.gz"
+        }
+      ]
+    },
+    "macos-x86_64": {
+      "size": 2082672,
+      "hash": "blake3",
+      "digest": "e9b862fc8da3127f92791f0ff6a799504154ca9d36c98bf3e60a81c6b1f7289e",
+      "format": "tar.gz",
+      "path": "ripgrep-14.1.1-x86_64-apple-darwin/rg",
+      "providers": [
+        {
+          "url": "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/ripgrep-14.1.1-x86_64-apple-darwin.tar.gz"
+        }
+      ]
+    },
+    "linux-x86_64": {
+      "size": 2566310,
+      "hash": "blake3",
+      "digest": "f73cca4e54d78c31f832c7f6e2c0b4db8b04fa3eaa747915727d570893dbee76",
+      "format": "tar.gz",
+      "path": "ripgrep-14.1.1-x86_64-unknown-linux-musl/rg",
+      "providers": [
+        {
+          "url": "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/ripgrep-14.1.1-x86_64-unknown-linux-musl.tar.gz"
+        }
+      ]
+    },
+    "windows-x86_64": {
+      "size": 2058893,
+      "hash": "blake3",
+      "digest": "a8ce1a6fed4f8093ee997e57f33254e94b2cd18e26358b09db599c89882eadbd",
+      "format": "zip",
+      "path": "ripgrep-14.1.1-x86_64-pc-windows-msvc/rg.exe",
+      "providers": [
+        {
+          "url": "https://github.com/BurntSushi/ripgrep/releases/download/14.1.1/ripgrep-14.1.1-x86_64-pc-windows-msvc.zip"
+        }
+      ]
+    },
+    "windows-aarch64": {
+      "size": 1667740,
+      "hash": "blake3",
+      "digest": "47b971a8c4fca1d23a4e7c19bd4d88465ebc395598458133139406d3bf85f3fa",
+      "format": "zip",
+      "path": "rg.exe",
+      "providers": [
+        {
+          "url": "https://github.com/microsoft/ripgrep-prebuilt/releases/download/v13.0.0-13/ripgrep-v13.0.0-13-aarch64-pc-windows-msvc.zip"
+        }
+      ]
+    }
+  }
+}
