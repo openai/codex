@@ -19,6 +19,12 @@ struct TextElement {
     range: Range<usize>,
 }
 
+#[derive(Debug, Clone)]
+struct KilledText {
+    text: String,
+    element_ranges: Vec<Range<usize>>,
+}
+
 #[derive(Debug)]
 pub(crate) struct TextArea {
     text: String,
@@ -26,6 +32,8 @@ pub(crate) struct TextArea {
     wrap_cache: RefCell<Option<WrapCache>>,
     preferred_col: Option<usize>,
     elements: Vec<TextElement>,
+    // Stores the most recently "killed" text (via word/line delete/kill commands) for yank (Ctrl+Y).
+    last_killed: Option<KilledText>,
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +56,7 @@ impl TextArea {
             wrap_cache: RefCell::new(None),
             preferred_col: None,
             elements: Vec::new(),
+            last_killed: None,
         }
     }
 
@@ -305,6 +314,13 @@ impl TextArea {
             } => {
                 self.kill_to_end_of_line();
             }
+            KeyEvent {
+                code: KeyCode::Char('y'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => {
+                self.yank_last_killed();
+            }
 
             // Cursor movement
             KeyEvent {
@@ -437,7 +453,8 @@ impl TextArea {
 
     pub fn delete_backward_word(&mut self) {
         let start = self.beginning_of_previous_word();
-        self.replace_range(start..self.cursor_pos, "");
+        let range = self.record_kill(start..self.cursor_pos);
+        self.replace_range(range, "");
     }
 
     /// Delete text to the right of the cursor using "word" semantics.
@@ -448,7 +465,8 @@ impl TextArea {
     pub fn delete_forward_word(&mut self) {
         let end = self.end_of_next_word();
         if end > self.cursor_pos {
-            self.replace_range(self.cursor_pos..end, "");
+            let range = self.record_kill(self.cursor_pos..end);
+            self.replace_range(range, "");
         }
     }
 
@@ -456,10 +474,12 @@ impl TextArea {
         let eol = self.end_of_current_line();
         if self.cursor_pos == eol {
             if eol < self.text.len() {
-                self.replace_range(self.cursor_pos..eol + 1, "");
+                let range = self.record_kill(self.cursor_pos..eol + 1);
+                self.replace_range(range, "");
             }
         } else {
-            self.replace_range(self.cursor_pos..eol, "");
+            let range = self.record_kill(self.cursor_pos..eol);
+            self.replace_range(range, "");
         }
     }
 
@@ -467,10 +487,52 @@ impl TextArea {
         let bol = self.beginning_of_current_line();
         if self.cursor_pos == bol {
             if bol > 0 {
-                self.replace_range(bol - 1..bol, "");
+                let range = self.record_kill(bol - 1..bol);
+                self.replace_range(range, "");
             }
         } else {
-            self.replace_range(bol..self.cursor_pos, "");
+            let range = self.record_kill(bol..self.cursor_pos);
+            self.replace_range(range, "");
+        }
+    }
+
+    fn record_kill(&mut self, range: Range<usize>) -> Range<usize> {
+        let range = self.expand_range_to_element_boundaries(range);
+        if range.start < range.end && range.end <= self.text.len() {
+            let text = self.text[range.clone()].to_string();
+            let element_ranges = self
+                .elements
+                .iter()
+                .filter_map(|e| {
+                    if e.range.start >= range.start && e.range.end <= range.end {
+                        Some((e.range.start - range.start)..(e.range.end - range.start))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if !text.is_empty() {
+                self.last_killed = Some(KilledText {
+                    text,
+                    element_ranges,
+                });
+            }
+        }
+        range
+    }
+
+    fn yank_last_killed(&mut self) {
+        if let Some(killed) = self.last_killed.clone() {
+            if killed.text.is_empty() {
+                return;
+            }
+            let insert_at = self.cursor_pos;
+            self.insert_str(&killed.text);
+            for rel_range in killed.element_ranges {
+                let start = insert_at + rel_range.start;
+                let end = insert_at + rel_range.end;
+                self.add_element(start..end);
+            }
         }
     }
 
@@ -1117,6 +1179,52 @@ mod tests {
         t.kill_to_beginning_of_line();
         assert_eq!(t.text(), "abcdef");
         assert_eq!(t.cursor(), 3);
+    }
+
+    #[test]
+    fn yank_after_delete_backward_word_restores_text() {
+        let mut t = ta_with("foo bar");
+        t.set_cursor(t.text().len());
+        t.delete_backward_word();
+        assert_eq!(t.text(), "foo ");
+        t.yank_last_killed();
+        assert_eq!(t.text(), "foo bar");
+    }
+
+    #[test]
+    fn yank_after_kill_to_end_of_line_restores_suffix() {
+        let mut t = ta_with("hello world");
+        t.set_cursor(5);
+        t.kill_to_end_of_line();
+        assert_eq!(t.text(), "hello");
+        t.yank_last_killed();
+        assert_eq!(t.text(), "hello world");
+    }
+
+    #[test]
+    fn yank_with_nothing_killed_is_noop() {
+        let mut t = ta_with("abc");
+        t.set_cursor(1);
+        t.yank_last_killed();
+        assert_eq!(t.text(), "abc");
+        assert_eq!(t.cursor(), 1);
+    }
+
+    #[test]
+    fn yank_restores_element_metadata() {
+        let mut t = TextArea::new();
+        t.insert_element("<element>");
+        t.insert_str(" tail");
+        t.set_cursor(t.text().len());
+        t.kill_to_beginning_of_line();
+        assert!(t.elements.is_empty());
+
+        t.yank_last_killed();
+
+        assert_eq!(t.text(), "<element> tail");
+        assert_eq!(t.cursor(), "<element> tail".len());
+        assert_eq!(t.elements.len(), 1);
+        assert_eq!(t.elements[0].range, 0.."<element>".len());
     }
 
     #[test]
