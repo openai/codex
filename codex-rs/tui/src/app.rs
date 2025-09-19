@@ -213,6 +213,7 @@ impl App {
     async fn handle_event(&mut self, tui: &mut tui::Tui, event: AppEvent) -> Result<bool> {
         match event {
             AppEvent::NewSession => {
+                self.reset_transcript_history_state();
                 let init = crate::chatwidget::ChatWidgetInit {
                     config: self.config.clone(),
                     frame_requester: tui.frame_requester(),
@@ -357,6 +358,12 @@ impl App {
             }
         }
         Ok(true)
+    }
+
+    pub(crate) fn reset_transcript_history_state(&mut self) {
+        self.transcript_cells.clear();
+        self.deferred_history_lines.clear();
+        self.has_emitted_history_lines = false;
     }
 
     pub(crate) fn token_usage(&self) -> codex_core::protocol::TokenUsage {
