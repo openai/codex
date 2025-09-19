@@ -32,7 +32,6 @@ use std::thread;
 use std::time::Duration;
 use tokio::select;
 use tokio::sync::mpsc::unbounded_channel;
-// use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct AppExitInfo {
@@ -194,6 +193,8 @@ impl App {
                     {
                         return Ok(true);
                     }
+                    // Allow widgets to process any pending timers before rendering.
+                    self.chat_widget.pre_draw_tick();
                     tui.draw(
                         self.chat_widget.desired_height(tui.terminal.size()?.width),
                         |frame| {
@@ -354,6 +355,22 @@ impl App {
             AppEvent::UpdateSandboxPolicy(policy) => {
                 self.chat_widget.set_sandbox_policy(policy);
             }
+            #[cfg(not(target_env = "musl"))]
+            AppEvent::TranscriptionComplete { id, text } => {
+                self.chat_widget.replace_transcription(&id, &text);
+            }
+            #[cfg(not(target_env = "musl"))]
+            AppEvent::TranscriptionFailed { id, error: _ } => {
+                self.chat_widget.remove_transcription_placeholder(&id);
+            }
+            #[cfg(not(target_env = "musl"))]
+            AppEvent::UpdateRecordingMeter { id, text } => {
+                // Update in place to preserve the element id for subsequent frames.
+                let updated = self.chat_widget.update_transcription_in_place(&id, &text);
+                if updated {
+                    tui.frame_requester().schedule_frame();
+                }
+            }
         }
         Ok(true)
     }
@@ -421,7 +438,7 @@ impl App {
                 self.chat_widget.handle_key_event(key_event);
             }
             _ => {
-                // Ignore Release key events.
+                self.chat_widget.handle_key_event(key_event);
             }
         };
     }

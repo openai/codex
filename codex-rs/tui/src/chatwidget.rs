@@ -444,6 +444,11 @@ impl ChatWidget {
         self.add_to_history(history_cell::new_stream_error_event(message));
         self.request_redraw();
     }
+
+    pub(crate) fn pre_draw_tick(&mut self) {
+        self.bottom_pane.pre_draw_tick();
+    }
+
     /// Periodic tick to commit at most one queued line to history with a small delay,
     /// animating the output.
     pub(crate) fn on_commit_tick(&mut self) {
@@ -1537,6 +1542,29 @@ impl ChatWidget {
     pub fn cursor_pos(&self, area: Rect) -> Option<(u16, u16)> {
         let [_, _, bottom_pane_area] = self.layout_areas(area);
         self.bottom_pane.cursor_pos(bottom_pane_area)
+    }
+}
+
+#[cfg(not(target_env = "musl"))]
+impl ChatWidget {
+    pub(crate) fn replace_transcription(&mut self, id: &str, text: &str) {
+        self.bottom_pane.replace_transcription(id, text);
+        // Ensure the UI redraws to reflect the updated transcription.
+        self.request_redraw();
+    }
+
+    pub(crate) fn update_transcription_in_place(&mut self, id: &str, text: &str) -> bool {
+        let updated = self.bottom_pane.update_transcription_in_place(id, text);
+        if updated {
+            self.request_redraw();
+        }
+        updated
+    }
+
+    pub(crate) fn remove_transcription_placeholder(&mut self, id: &str) {
+        self.bottom_pane.remove_transcription_placeholder(id);
+        // Ensure the UI redraws to reflect placeholder removal.
+        self.request_redraw();
     }
 }
 

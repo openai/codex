@@ -65,4 +65,27 @@ pub(crate) enum AppEvent {
 
     /// Forwarded conversation history snapshot from the current conversation.
     ConversationHistory(ConversationPathResponseEvent),
+
+    /// Live update for the in-progress voice recording placeholder. Carries
+    /// the placeholder `id` and the text to display (e.g., an ASCII meter).
+    #[cfg(not(target_env = "musl"))]
+    UpdateRecordingMeter {
+        id: String,
+        text: String,
+    },
+
+    /// Voice transcription finished for the given placeholder id.
+    #[cfg(not(target_env = "musl"))]
+    TranscriptionComplete {
+        id: String,
+        text: String,
+    },
+
+    /// Voice transcription failed; remove the placeholder identified by `id`.
+    #[cfg(not(target_env = "musl"))]
+    TranscriptionFailed {
+        id: String,
+        #[allow(dead_code)]
+        error: String,
+    },
 }

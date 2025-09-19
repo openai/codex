@@ -67,6 +67,8 @@ mod tui;
 mod ui_consts;
 mod user_approval_widget;
 mod version;
+#[cfg(not(target_env = "musl"))]
+mod voice;
 mod wrapping;
 
 #[cfg(not(debug_assertions))]
