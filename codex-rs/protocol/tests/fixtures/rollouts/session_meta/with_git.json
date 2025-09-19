@@ -1,0 +1,17 @@
+{
+  "timestamp": "2025-01-02T03:04:05.678Z",
+  "type": "session_meta",
+  "payload": {
+    "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+    "timestamp": "2025-01-02T03:04:05.678Z",
+    "cwd": "/workspace",
+    "originator": "codex-cli",
+    "cli_version": "1.0.0",
+    "instructions": "Remember the tests",
+    "git": {
+      "commit_hash": "abc123",
+      "branch": "main",
+      "repository_url": "https://example.com/repo.git"
+    }
+  }
+}

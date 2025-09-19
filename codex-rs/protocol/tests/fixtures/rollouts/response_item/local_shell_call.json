@@ -1,0 +1,23 @@
+{
+  "timestamp": "2025-01-02T03:04:05.678Z",
+  "type": "response_item",
+  "payload": {
+    "type": "local_shell_call",
+    "id": "legacy-shell-call",
+    "call_id": "shell-call-1",
+    "status": "completed",
+    "action": {
+      "type": "exec",
+      "command": [
+        "ls",
+        "-la"
+      ],
+      "timeout_ms": 1200,
+      "working_directory": "/workspace",
+      "env": {
+        "PATH": "/usr/bin"
+      },
+      "user": "codex"
+    }
+  }
+}

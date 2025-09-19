@@ -1,0 +1,27 @@
+{
+  "timestamp": "2025-01-02T03:04:05.678Z",
+  "type": "event_msg",
+  "payload": {
+    "type": "exited_review_mode",
+    "review_output": {
+      "findings": [
+        {
+          "title": "Bug",
+          "body": "Found an issue",
+          "confidence_score": 0.4,
+          "priority": 1,
+          "code_location": {
+            "absolute_file_path": "/workspace/src/lib.rs",
+            "line_range": {
+              "start": 1,
+              "end": 3
+            }
+          }
+        }
+      ],
+      "overall_correctness": "needs_changes",
+      "overall_explanation": "Please fix",
+      "overall_confidence_score": 0.9
+    }
+  }
+}
