@@ -11,8 +11,8 @@ use codex_core::protocol::InputItem;
 use codex_core::protocol::Op;
 use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
-use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use core_test_support::load_default_config_for_test;
+use core_test_support::non_sandbox_test;
 use core_test_support::wait_for_event;
 use serde_json::Value;
 use tempfile::TempDir;
@@ -144,12 +144,7 @@ const DUMMY_CALL_ID: &str = "call-multi-auto";
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn summarize_context_three_requests_and_instructions() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    non_sandbox_test!();
 
     // Set up a mock server that we can inspect after the run.
     let server = start_mock_server().await;
@@ -370,12 +365,7 @@ async fn summarize_context_three_requests_and_instructions() {
 #[cfg_attr(windows, tokio::test(flavor = "multi_thread", worker_threads = 4))]
 #[cfg_attr(not(windows), tokio::test(flavor = "multi_thread", worker_threads = 2))]
 async fn auto_compact_runs_after_token_limit_hit() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    non_sandbox_test!();
 
     let server = start_mock_server().await;
 
@@ -511,12 +501,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_compact_persists_rollout_entries() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    non_sandbox_test!();
 
     let server = start_mock_server().await;
 
@@ -644,12 +629,7 @@ async fn auto_compact_persists_rollout_entries() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_compact_stops_after_failed_attempt() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    non_sandbox_test!();
 
     let server = start_mock_server().await;
 
@@ -758,12 +738,7 @@ async fn auto_compact_stops_after_failed_attempt() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_events() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    non_sandbox_test!();
 
     let server = start_mock_server().await;
 

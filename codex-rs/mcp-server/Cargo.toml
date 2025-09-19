@@ -46,3 +46,4 @@ os_info = "3.12.0"
 pretty_assertions = "1.4.1"
 tempfile = "3"
 wiremock = "0.6"
+core_test_support = { path = "../core/tests/common" }

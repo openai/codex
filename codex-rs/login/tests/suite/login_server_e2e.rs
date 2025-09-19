@@ -8,10 +8,10 @@ use std::time::Duration;
 use base64::Engine;
 use codex_login::ServerOptions;
 use codex_login::run_login_server;
+use core_test_support::non_sandbox_test;
 use tempfile::tempdir;
 
 // See spawn.rs for details
-pub const CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR: &str = "CODEX_SANDBOX_NETWORK_DISABLED";
 
 fn start_mock_issuer() -> (SocketAddr, thread::JoinHandle<()>) {
     // Bind to a random available port
@@ -77,12 +77,7 @@ fn start_mock_issuer() -> (SocketAddr, thread::JoinHandle<()>) {
 
 #[tokio::test]
 async fn end_to_end_login_flow_persists_auth_json() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    non_sandbox_test!();
 
     let (issuer_addr, issuer_handle) = start_mock_issuer();
     let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
@@ -152,12 +147,7 @@ async fn end_to_end_login_flow_persists_auth_json() {
 
 #[tokio::test]
 async fn creates_missing_codex_home_dir() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    non_sandbox_test!();
 
     let (issuer_addr, _issuer_handle) = start_mock_issuer();
     let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
@@ -196,12 +186,7 @@ async fn creates_missing_codex_home_dir() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cancels_previous_login_server_when_port_is_in_use() {
-    if std::env::var(CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR).is_ok() {
-        println!(
-            "Skipping test because it cannot execute when network is disabled in a Codex sandbox."
-        );
-        return;
-    }
+    non_sandbox_test!();
 
     let (issuer_addr, _issuer_handle) = start_mock_issuer();
     let issuer = format!("http://{}:{}", issuer_addr.ip(), issuer_addr.port());
