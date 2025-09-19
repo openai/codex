@@ -429,9 +429,11 @@ mod tests {
     }
 
     fn sample_exit_info(conversation: Option<&str>) -> AppExitInfo {
-        let mut token_usage = TokenUsage::default();
-        token_usage.output_tokens = 2;
-        token_usage.total_tokens = 2;
+        let token_usage = TokenUsage {
+            output_tokens: 2,
+            total_tokens: 2,
+            ..Default::default()
+        };
         AppExitInfo {
             token_usage,
             conversation_id: conversation
