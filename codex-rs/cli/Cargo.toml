@@ -28,6 +28,7 @@ codex-mcp-server = { path = "../mcp-server" }
 codex-protocol = { path = "../protocol" }
 codex-tui = { path = "../tui" }
 serde_json = "1"
+toml_edit = "0.23.4"
 tokio = { version = "1", features = [
     "io-std",
     "macros",
@@ -44,3 +45,4 @@ assert_cmd = "2"
 predicates = "3"
 pretty_assertions = "1"
 tempfile = "3"
+toml = "0.9.5"
