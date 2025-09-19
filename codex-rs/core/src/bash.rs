@@ -73,6 +73,9 @@ pub fn try_parse_word_only_commands_sequence(tree: &Tree, src: &str) -> Option<V
         }
     }
 
+    // Walk uses a stack (LIFO), so re-sort by position to restore source order.
+    command_nodes.sort_by_key(|node| node.start_byte());
+
     let mut commands = Vec::new();
     for node in command_nodes {
         if let Some(words) = parse_plain_command_from_node(node, src) {
@@ -150,10 +153,10 @@ mod tests {
         let src = "ls && pwd; echo 'hi there' | wc -l";
         let cmds = parse_seq(src).unwrap();
         let expected: Vec<Vec<String>> = vec![
-            vec!["wc".to_string(), "-l".to_string()],
-            vec!["echo".to_string(), "hi there".to_string()],
-            vec!["pwd".to_string()],
             vec!["ls".to_string()],
+            vec!["pwd".to_string()],
+            vec!["echo".to_string(), "hi there".to_string()],
+            vec!["wc".to_string(), "-l".to_string()],
         ];
         assert_eq!(cmds, expected);
     }
