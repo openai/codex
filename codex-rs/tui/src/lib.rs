@@ -65,12 +65,10 @@ mod streaming;
 mod text_formatting;
 mod tui;
 mod ui_consts;
+mod updates;
 mod user_approval_widget;
 mod version;
 mod wrapping;
-
-#[cfg(not(debug_assertions))]
-mod updates;
 
 use crate::new_model_popup::ModelUpgradeDecision;
 use crate::new_model_popup::run_model_upgrade_popup;
@@ -276,10 +274,12 @@ async fn run_ratatui_app(
 
     let mut tui = Tui::new(terminal);
 
+    let login_status = get_login_status(&config);
+    let show_login_screen = should_show_login_screen(login_status, &config);
+
     // Show update banner in terminal history (instead of stderr) so it is visible
     // within the TUI scrollback. Building spans keeps styling consistent.
-    #[cfg(not(debug_assertions))]
-    if let Some(latest_version) = updates::get_upgrade_version(&config) {
+    if !show_login_screen && let Some(latest_version) = updates::get_upgrade_version(&config) {
         use ratatui::style::Stylize as _;
         use ratatui::text::Line;
 
@@ -326,13 +326,12 @@ async fn run_ratatui_app(
     session_log::maybe_init(&config);
 
     let auth_manager = AuthManager::shared(config.codex_home.clone());
-    let login_status = get_login_status(&config);
     let should_show_onboarding =
         should_show_onboarding(login_status, &config, should_show_trust_screen);
     if should_show_onboarding {
         let directory_trust_decision = run_onboarding_app(
             OnboardingScreenArgs {
-                show_login_screen: should_show_login_screen(login_status, &config),
+                show_login_screen,
                 show_trust_screen: should_show_trust_screen,
                 login_status,
                 auth_manager: auth_manager.clone(),
