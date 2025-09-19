@@ -27,7 +27,9 @@ codex-login = { path = "../login" }
 codex-mcp-server = { path = "../mcp-server" }
 codex-protocol = { path = "../protocol" }
 codex-tui = { path = "../tui" }
+owo-colors = "4.2.0"
 serde_json = "1"
+supports-color = "3.0.2"
 tokio = { version = "1", features = [
     "io-std",
     "macros",
