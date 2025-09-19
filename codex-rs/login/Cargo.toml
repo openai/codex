@@ -31,3 +31,4 @@ webbrowser = "1.0"
 
 [dev-dependencies]
 tempfile = "3"
+pretty_assertions = "1"
