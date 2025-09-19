@@ -109,10 +109,30 @@ impl BottomPaneView for ListSelectionView {
     fn handle_key_event(&mut self, _pane: &mut BottomPane, key_event: KeyEvent) {
         match key_event {
             KeyEvent {
+                code: KeyCode::Char('\u{0010}'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.move_up(),
+            KeyEvent {
+                code: KeyCode::Char('\u{000E}'),
+                modifiers: KeyModifiers::NONE,
+                ..
+            } => self.move_down(),
+            KeyEvent {
                 code: KeyCode::Up, ..
             } => self.move_up(),
             KeyEvent {
                 code: KeyCode::Down,
+                ..
+            } => self.move_down(),
+            KeyEvent {
+                code: KeyCode::Char('p'),
+                modifiers: KeyModifiers::CONTROL,
+                ..
+            } => self.move_up(),
+            KeyEvent {
+                code: KeyCode::Char('n'),
+                modifiers: KeyModifiers::CONTROL,
                 ..
             } => self.move_down(),
             KeyEvent {
@@ -279,9 +299,24 @@ mod tests {
     use super::BottomPaneView;
     use super::*;
     use crate::app_event::AppEvent;
+    use crate::bottom_pane::BottomPane;
+    use crate::bottom_pane::BottomPaneParams;
+    use crate::tui::FrameRequester;
     use insta::assert_snapshot;
     use ratatui::layout::Rect;
     use tokio::sync::mpsc::unbounded_channel;
+
+    fn dummy_bottom_pane() -> BottomPane {
+        let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
+        BottomPane::new(BottomPaneParams {
+            app_event_tx: AppEventSender::new(tx_raw),
+            frame_requester: FrameRequester::test_dummy(),
+            has_input_focus: true,
+            enhanced_keys_supported: true,
+            placeholder_text: "".to_string(),
+            disable_paste_burst: false,
+        })
+    }
 
     fn make_selection_view(subtitle: Option<&str>) -> ListSelectionView {
         let (tx_raw, _rx) = unbounded_channel::<AppEvent>();
@@ -346,5 +381,43 @@ mod tests {
     fn renders_blank_line_between_subtitle_and_items() {
         let view = make_selection_view(Some("Switch between Codex approval presets"));
         assert_snapshot!("list_selection_spacing_with_subtitle", render_lines(&view));
+    }
+
+    #[test]
+    fn control_p_and_n_move_selection() {
+        let mut view = make_selection_view(None);
+        let mut pane = dummy_bottom_pane();
+
+        assert_eq!(view.state.selected_idx, Some(0));
+
+        view.handle_key_event(
+            &mut pane,
+            KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(view.state.selected_idx, Some(1));
+
+        view.handle_key_event(
+            &mut pane,
+            KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL),
+        );
+        assert_eq!(view.state.selected_idx, Some(0));
+    }
+
+    #[test]
+    fn control_p_n_fallback_control_chars_move_selection() {
+        let mut view = make_selection_view(None);
+        let mut pane = dummy_bottom_pane();
+
+        view.handle_key_event(
+            &mut pane,
+            KeyEvent::new(KeyCode::Char('\u{000E}'), KeyModifiers::NONE),
+        );
+        assert_eq!(view.state.selected_idx, Some(1));
+
+        view.handle_key_event(
+            &mut pane,
+            KeyEvent::new(KeyCode::Char('\u{0010}'), KeyModifiers::NONE),
+        );
+        assert_eq!(view.state.selected_idx, Some(0));
     }
 }
