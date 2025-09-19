@@ -4,6 +4,7 @@ members = [
     "apply-patch",
     "arg0",
     "cli",
+    "codex-git-tooling",
     "common",
     "core",
     "exec",

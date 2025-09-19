@@ -777,6 +777,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "codex-git-tooling"
+version = "0.0.0"
+dependencies = [
+ "pretty_assertions",
+ "tempfile",
+ "thiserror 2.0.16",
+ "walkdir",
+]
+
+[[package]]
 name = "codex-linux-sandbox"
 version = "0.0.0"
 dependencies = [
