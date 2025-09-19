@@ -2,6 +2,7 @@ use crate::ascii_animation::AsciiAnimation;
 use crate::tui::FrameRequester;
 use crate::tui::Tui;
 use crate::tui::TuiEvent;
+use crate::tui::render_persistent_banner;
 use color_eyre::eyre::Result;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -153,8 +154,11 @@ impl WidgetRef for &ModelUpgradePopup {
 pub(crate) async fn run_model_upgrade_popup(tui: &mut Tui) -> Result<ModelUpgradeDecision> {
     let mut popup = ModelUpgradePopup::new(tui.frame_requester());
 
+    let banner = tui.update_banner_lines().cloned();
     tui.draw(u16::MAX, |frame| {
-        frame.render_widget_ref(&popup, frame.area());
+        let mut area = frame.area();
+        render_persistent_banner(frame, &mut area, banner.as_deref());
+        frame.render_widget_ref(&popup, area);
     })?;
 
     let events = tui.event_stream();
@@ -164,8 +168,11 @@ pub(crate) async fn run_model_upgrade_popup(tui: &mut Tui) -> Result<ModelUpgrad
             match event {
                 TuiEvent::Key(key_event) => popup.handle_key_event(key_event),
                 TuiEvent::Draw => {
+                    let banner = tui.update_banner_lines().cloned();
                     let _ = tui.draw(u16::MAX, |frame| {
-                        frame.render_widget_ref(&popup, frame.area());
+                        let mut area = frame.area();
+                        render_persistent_banner(frame, &mut area, banner.as_deref());
+                        frame.render_widget_ref(&popup, area);
                     });
                 }
                 _ => {}
