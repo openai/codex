@@ -422,12 +422,18 @@ mod tests {
         String::from_utf8_lossy(&output.stdout).trim().to_string()
     }
 
+    /// Initializes a repository with consistent settings for cross-platform tests.
+    fn init_test_repo(repo: &Path) {
+        run_git_in(repo, &["init", "--initial-branch=main"]);
+        run_git_in(repo, &["config", "core.autocrlf", "false"]);
+    }
+
     #[test]
     /// Verifies a ghost commit can be created and restored end to end.
     fn create_and_restore_roundtrip() -> Result<(), GitToolingError> {
         let temp = tempfile::tempdir()?;
         let repo = temp.path();
-        run_git_in(repo, &["init", "--initial-branch=main"]);
+        init_test_repo(repo);
         std::fs::write(repo.join("tracked.txt"), "initial\n")?;
         std::fs::write(repo.join("delete-me.txt"), "to be removed\n")?;
         run_git_in(repo, &["add", "tracked.txt", "delete-me.txt"]);
@@ -492,7 +498,7 @@ mod tests {
     fn create_snapshot_without_existing_head() -> Result<(), GitToolingError> {
         let temp = tempfile::tempdir()?;
         let repo = temp.path();
-        run_git_in(repo, &["init", "--initial-branch=main"]);
+        init_test_repo(repo);
 
         let tracked_contents = "first contents\n";
         std::fs::write(repo.join("tracked.txt"), tracked_contents)?;
@@ -520,7 +526,7 @@ mod tests {
     fn create_ghost_commit_uses_custom_message() -> Result<(), GitToolingError> {
         let temp = tempfile::tempdir()?;
         let repo = temp.path();
-        run_git_in(repo, &["init", "--initial-branch=main"]);
+        init_test_repo(repo);
         std::fs::write(repo.join("file.txt"), "hello\n")?;
         run_git_in(repo, &["add", "file.txt"]);
         run_git_in(
@@ -552,7 +558,7 @@ mod tests {
     fn force_include_requires_relative_paths() -> Result<(), GitToolingError> {
         let temp = tempfile::tempdir()?;
         let repo = temp.path();
-        run_git_in(repo, &["init", "--initial-branch=main"]);
+        init_test_repo(repo);
 
         let options = CreateGhostCommitOptions::new(repo)
             .force_include(vec![PathBuf::from("/absolute/path")]);
@@ -566,7 +572,7 @@ mod tests {
     fn restore_from_subdirectory_path() -> Result<(), GitToolingError> {
         let temp = tempfile::tempdir()?;
         let repo = temp.path();
-        run_git_in(repo, &["init", "--initial-branch=main"]);
+        init_test_repo(repo);
 
         let workspace = repo.join("codex-rs");
         std::fs::create_dir_all(&workspace)?;
@@ -611,7 +617,7 @@ mod tests {
     fn restore_from_subdirectory_preserves_parent_vscode() -> Result<(), GitToolingError> {
         let temp = tempfile::tempdir()?;
         let repo = temp.path();
-        run_git_in(repo, &["init", "--initial-branch=main"]);
+        init_test_repo(repo);
 
         let workspace = repo.join("codex-rs");
         std::fs::create_dir_all(&workspace)?;
@@ -655,7 +661,7 @@ mod tests {
     fn restore_preserves_ignored_files() -> Result<(), GitToolingError> {
         let temp = tempfile::tempdir()?;
         let repo = temp.path();
-        run_git_in(repo, &["init", "--initial-branch=main"]);
+        init_test_repo(repo);
 
         std::fs::write(repo.join(".gitignore"), ".vscode/\n")?;
         std::fs::write(repo.join("tracked.txt"), "snapshot version\n")?;
