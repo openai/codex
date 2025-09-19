@@ -1,5 +1,3 @@
-#![expect(clippy::unwrap_used)]
-
 use codex_core::CodexAuth;
 use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
@@ -13,12 +11,10 @@ use codex_core::protocol::RolloutItem;
 use codex_core::protocol::RolloutLine;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use core_test_support::load_default_config_for_test;
+use core_test_support::responses;
 use core_test_support::wait_for_event;
-use serde_json::Value;
 use tempfile::TempDir;
-use wiremock::BodyPrintLimit;
 use wiremock::Mock;
-use wiremock::MockServer;
 use wiremock::Request;
 use wiremock::Respond;
 use wiremock::ResponseTemplate;
@@ -26,105 +22,15 @@ use wiremock::matchers::method;
 use wiremock::matchers::path;
 
 use pretty_assertions::assert_eq;
+use responses::ev_assistant_message;
+use responses::ev_completed;
+use responses::sse;
+use responses::start_mock_server;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
-
 // --- Test helpers -----------------------------------------------------------
-
-/// Build an SSE stream body from a list of JSON events.
-pub(super) fn sse(events: Vec<Value>) -> String {
-    use std::fmt::Write as _;
-    let mut out = String::new();
-    for ev in events {
-        let kind = ev.get("type").and_then(|v| v.as_str()).unwrap();
-        writeln!(&mut out, "event: {kind}").unwrap();
-        if !ev.as_object().map(|o| o.len() == 1).unwrap_or(false) {
-            write!(&mut out, "data: {ev}\n\n").unwrap();
-        } else {
-            out.push('\n');
-        }
-    }
-    out
-}
-
-/// Convenience: SSE event for a completed response with a specific id.
-pub(super) fn ev_completed(id: &str) -> Value {
-    serde_json::json!({
-        "type": "response.completed",
-        "response": {
-            "id": id,
-            "usage": {"input_tokens":0,"input_tokens_details":null,"output_tokens":0,"output_tokens_details":null,"total_tokens":0}
-        }
-    })
-}
-
-fn ev_completed_with_tokens(id: &str, total_tokens: u64) -> Value {
-    serde_json::json!({
-        "type": "response.completed",
-        "response": {
-            "id": id,
-            "usage": {
-                "input_tokens": total_tokens,
-                "input_tokens_details": null,
-                "output_tokens": 0,
-                "output_tokens_details": null,
-                "total_tokens": total_tokens
-            }
-        }
-    })
-}
-
-/// Convenience: SSE event for a single assistant message output item.
-pub(super) fn ev_assistant_message(id: &str, text: &str) -> Value {
-    serde_json::json!({
-        "type": "response.output_item.done",
-        "item": {
-            "type": "message",
-            "role": "assistant",
-            "id": id,
-            "content": [{"type": "output_text", "text": text}]
-        }
-    })
-}
-
-fn ev_function_call(call_id: &str, name: &str, arguments: &str) -> Value {
-    serde_json::json!({
-        "type": "response.output_item.done",
-        "item": {
-            "type": "function_call",
-            "call_id": call_id,
-            "name": name,
-            "arguments": arguments
-        }
-    })
-}
-
-pub(super) fn sse_response(body: String) -> ResponseTemplate {
-    ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_raw(body, "text/event-stream")
-}
-
-pub(super) async fn mount_sse_once<M>(server: &MockServer, matcher: M, body: String)
-where
-    M: wiremock::Match + Send + Sync + 'static,
-{
-    Mock::given(method("POST"))
-        .and(path("/v1/responses"))
-        .and(matcher)
-        .respond_with(sse_response(body))
-        .mount(server)
-        .await;
-}
-
-async fn start_mock_server() -> MockServer {
-    MockServer::builder()
-        .body_print_limit(BodyPrintLimit::Limited(80_000))
-        .start()
-        .await
-}
 
 pub(super) const FIRST_REPLY: &str = "FIRST_REPLY";
 pub(super) const SUMMARY_TEXT: &str = "SUMMARY_ONLY_CONTEXT";
@@ -175,19 +81,19 @@ async fn summarize_context_three_requests_and_instructions() {
         body.contains("\"text\":\"hello world\"")
             && !body.contains(&format!("\"text\":\"{SUMMARIZE_TRIGGER}\""))
     };
-    mount_sse_once(&server, first_matcher, sse1).await;
+    responses::mount_sse_once(&server, first_matcher, sse1).await;
 
     let second_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(&format!("\"text\":\"{SUMMARIZE_TRIGGER}\""))
     };
-    mount_sse_once(&server, second_matcher, sse2).await;
+    responses::mount_sse_once(&server, second_matcher, sse2).await;
 
     let third_matcher = |req: &wiremock::Request| {
         let body = std::str::from_utf8(&req.body).unwrap_or("");
         body.contains(&format!("\"text\":\"{THIRD_USER_MSG}\""))
     };
-    mount_sse_once(&server, third_matcher, sse3).await;
+    responses::mount_sse_once(&server, third_matcher, sse3).await;
 
     // Build config pointing to the mock server and spawn Codex.
     let model_provider = ModelProviderInfo {
@@ -381,17 +287,17 @@ async fn auto_compact_runs_after_token_limit_hit() {
 
     let sse1 = sse(vec![
         ev_assistant_message("m1", FIRST_REPLY),
-        ev_completed_with_tokens("r1", 70_000),
+        responses::ev_completed_with_tokens("r1", 70_000),
     ]);
 
     let sse2 = sse(vec![
         ev_assistant_message("m2", "SECOND_REPLY"),
-        ev_completed_with_tokens("r2", 330_000),
+        responses::ev_completed_with_tokens("r2", 330_000),
     ]);
 
     let sse3 = sse(vec![
         ev_assistant_message("m3", AUTO_SUMMARY_TEXT),
-        ev_completed_with_tokens("r3", 200),
+        responses::ev_completed_with_tokens("r3", 200),
     ]);
 
     let first_matcher = |req: &wiremock::Request| {
@@ -403,7 +309,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .and(first_matcher)
-        .respond_with(sse_response(sse1))
+        .respond_with(responses::sse_response(sse1))
         .mount(&server)
         .await;
 
@@ -416,7 +322,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .and(second_matcher)
-        .respond_with(sse_response(sse2))
+        .respond_with(responses::sse_response(sse2))
         .mount(&server)
         .await;
 
@@ -427,7 +333,7 @@ async fn auto_compact_runs_after_token_limit_hit() {
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .and(third_matcher)
-        .respond_with(sse_response(sse3))
+        .respond_with(responses::sse_response(sse3))
         .mount(&server)
         .await;
 
@@ -522,17 +428,17 @@ async fn auto_compact_persists_rollout_entries() {
 
     let sse1 = sse(vec![
         ev_assistant_message("m1", FIRST_REPLY),
-        ev_completed_with_tokens("r1", 70_000),
+        responses::ev_completed_with_tokens("r1", 70_000),
     ]);
 
     let sse2 = sse(vec![
         ev_assistant_message("m2", "SECOND_REPLY"),
-        ev_completed_with_tokens("r2", 330_000),
+        responses::ev_completed_with_tokens("r2", 330_000),
     ]);
 
     let sse3 = sse(vec![
         ev_assistant_message("m3", AUTO_SUMMARY_TEXT),
-        ev_completed_with_tokens("r3", 200),
+        responses::ev_completed_with_tokens("r3", 200),
     ]);
 
     let first_matcher = |req: &wiremock::Request| {
@@ -544,7 +450,7 @@ async fn auto_compact_persists_rollout_entries() {
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .and(first_matcher)
-        .respond_with(sse_response(sse1))
+        .respond_with(responses::sse_response(sse1))
         .mount(&server)
         .await;
 
@@ -557,7 +463,7 @@ async fn auto_compact_persists_rollout_entries() {
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .and(second_matcher)
-        .respond_with(sse_response(sse2))
+        .respond_with(responses::sse_response(sse2))
         .mount(&server)
         .await;
 
@@ -568,7 +474,7 @@ async fn auto_compact_persists_rollout_entries() {
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .and(third_matcher)
-        .respond_with(sse_response(sse3))
+        .respond_with(responses::sse_response(sse3))
         .mount(&server)
         .await;
 
@@ -655,17 +561,17 @@ async fn auto_compact_stops_after_failed_attempt() {
 
     let sse1 = sse(vec![
         ev_assistant_message("m1", FIRST_REPLY),
-        ev_completed_with_tokens("r1", 500),
+        responses::ev_completed_with_tokens("r1", 500),
     ]);
 
     let sse2 = sse(vec![
         ev_assistant_message("m2", SUMMARY_TEXT),
-        ev_completed_with_tokens("r2", 50),
+        responses::ev_completed_with_tokens("r2", 50),
     ]);
 
     let sse3 = sse(vec![
         ev_assistant_message("m3", STILL_TOO_BIG_REPLY),
-        ev_completed_with_tokens("r3", 500),
+        responses::ev_completed_with_tokens("r3", 500),
     ]);
 
     let first_matcher = |req: &wiremock::Request| {
@@ -676,7 +582,7 @@ async fn auto_compact_stops_after_failed_attempt() {
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .and(first_matcher)
-        .respond_with(sse_response(sse1.clone()))
+        .respond_with(responses::sse_response(sse1.clone()))
         .mount(&server)
         .await;
 
@@ -687,7 +593,7 @@ async fn auto_compact_stops_after_failed_attempt() {
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .and(second_matcher)
-        .respond_with(sse_response(sse2.clone()))
+        .respond_with(responses::sse_response(sse2.clone()))
         .mount(&server)
         .await;
 
@@ -699,7 +605,7 @@ async fn auto_compact_stops_after_failed_attempt() {
     Mock::given(method("POST"))
         .and(path("/v1/responses"))
         .and(third_matcher)
-        .respond_with(sse_response(sse3.clone()))
+        .respond_with(responses::sse_response(sse3.clone()))
         .mount(&server)
         .await;
 
@@ -769,27 +675,27 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
 
     let sse1 = sse(vec![
         ev_assistant_message("m1", FIRST_REPLY),
-        ev_completed_with_tokens("r1", 500),
+        responses::ev_completed_with_tokens("r1", 500),
     ]);
     let sse2 = sse(vec![
         ev_assistant_message("m2", FIRST_AUTO_SUMMARY),
-        ev_completed_with_tokens("r2", 50),
+        responses::ev_completed_with_tokens("r2", 50),
     ]);
     let sse3 = sse(vec![
-        ev_function_call(DUMMY_CALL_ID, DUMMY_FUNCTION_NAME, "{}"),
-        ev_completed_with_tokens("r3", 150),
+        responses::ev_function_call(DUMMY_CALL_ID, DUMMY_FUNCTION_NAME, "{}"),
+        responses::ev_completed_with_tokens("r3", 150),
     ]);
     let sse4 = sse(vec![
         ev_assistant_message("m4", SECOND_LARGE_REPLY),
-        ev_completed_with_tokens("r4", 450),
+        responses::ev_completed_with_tokens("r4", 450),
     ]);
     let sse5 = sse(vec![
         ev_assistant_message("m5", SECOND_AUTO_SUMMARY),
-        ev_completed_with_tokens("r5", 60),
+        responses::ev_completed_with_tokens("r5", 60),
     ]);
     let sse6 = sse(vec![
         ev_assistant_message("m6", FINAL_REPLY),
-        ev_completed_with_tokens("r6", 120),
+        responses::ev_completed_with_tokens("r6", 120),
     ]);
 
     #[derive(Clone)]
@@ -861,14 +767,29 @@ async fn auto_compact_allows_multiple_attempts_when_interleaved_with_other_turn_
         .await
         .unwrap();
 
+    let mut auto_compact_lifecycle_events = Vec::new();
     loop {
         let event = codex.next_event().await.unwrap();
+        if event.id.starts_with("auto-compact-")
+            && matches!(
+                event.msg,
+                EventMsg::TaskStarted(_) | EventMsg::TaskComplete(_)
+            )
+        {
+            auto_compact_lifecycle_events.push(event);
+            continue;
+        }
         if let EventMsg::TaskComplete(_) = &event.msg
             && !event.id.starts_with("auto-compact-")
         {
             break;
         }
     }
+
+    assert!(
+        auto_compact_lifecycle_events.is_empty(),
+        "auto compact should not emit task lifecycle events"
+    );
 
     let request_bodies: Vec<String> = responder
         .recorded_requests()

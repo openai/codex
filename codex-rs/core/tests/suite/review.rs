@@ -1,9 +1,14 @@
 use codex_core::CodexAuth;
 use codex_core::CodexConversation;
+use codex_core::ContentItem;
 use codex_core::ConversationManager;
 use codex_core::ModelProviderInfo;
+use codex_core::REVIEW_PROMPT;
+use codex_core::ResponseItem;
 use codex_core::built_in_model_providers;
 use codex_core::config::Config;
+use codex_core::protocol::ConversationPathResponseEvent;
+use codex_core::protocol::ENVIRONMENT_CONTEXT_OPEN_TAG;
 use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::InputItem;
@@ -13,6 +18,8 @@ use codex_core::protocol::ReviewFinding;
 use codex_core::protocol::ReviewLineRange;
 use codex_core::protocol::ReviewOutputEvent;
 use codex_core::protocol::ReviewRequest;
+use codex_core::protocol::RolloutItem;
+use codex_core::protocol::RolloutLine;
 use codex_core::spawn::CODEX_SANDBOX_NETWORK_DISABLED_ENV_VAR;
 use core_test_support::load_default_config_for_test;
 use core_test_support::load_sse_fixture_with_id_from_str;
@@ -114,6 +121,46 @@ async fn review_op_emits_lifecycle_and_review_output() {
     };
     assert_eq!(expected, review);
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
+
+    // Also verify that a user message with the header and a formatted finding
+    // was recorded back in the parent session's rollout.
+    codex.submit(Op::GetPath).await.unwrap();
+    let history_event =
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::ConversationPath(_))).await;
+    let path = match history_event {
+        EventMsg::ConversationPath(ConversationPathResponseEvent { path, .. }) => path,
+        other => panic!("expected ConversationPath event, got {other:?}"),
+    };
+    let text = std::fs::read_to_string(&path).expect("read rollout file");
+
+    let mut saw_header = false;
+    let mut saw_finding_line = false;
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let v: serde_json::Value = serde_json::from_str(line).expect("jsonl line");
+        let rl: RolloutLine = serde_json::from_value(v).expect("rollout line");
+        if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = rl.item
+            && role == "user"
+        {
+            for c in content {
+                if let ContentItem::InputText { text } = c {
+                    if text.contains("full review output from reviewer model") {
+                        saw_header = true;
+                    }
+                    if text.contains("- Prefer Stylize helpers — /tmp/file.rs:10-20") {
+                        saw_finding_line = true;
+                    }
+                }
+            }
+        }
+    }
+    assert!(saw_header, "user header missing from rollout");
+    assert!(
+        saw_finding_line,
+        "formatted finding line missing from rollout"
+    );
 
     server.verify().await;
 }
@@ -419,17 +466,73 @@ async fn review_input_isolated_from_parent_history() {
     .await;
     let _complete = wait_for_event(&codex, |ev| matches!(ev, EventMsg::TaskComplete(_))).await;
 
-    // Assert the request `input` contains only the single review user message.
+    // Assert the request `input` contains the environment context followed by the review prompt.
     let request = &server.received_requests().await.unwrap()[0];
     let body = request.body_json::<serde_json::Value>().unwrap();
-    let expected_input = serde_json::json!([
-        {
-            "type": "message",
-            "role": "user",
-            "content": [{"type": "input_text", "text": review_prompt}]
+    let input = body["input"].as_array().expect("input array");
+    assert_eq!(
+        input.len(),
+        2,
+        "expected environment context and review prompt"
+    );
+
+    let env_msg = &input[0];
+    assert_eq!(env_msg["type"].as_str().unwrap(), "message");
+    assert_eq!(env_msg["role"].as_str().unwrap(), "user");
+    let env_text = env_msg["content"][0]["text"].as_str().expect("env text");
+    assert!(
+        env_text.starts_with(ENVIRONMENT_CONTEXT_OPEN_TAG),
+        "environment context must be the first item"
+    );
+    assert!(
+        env_text.contains("<cwd>"),
+        "environment context should include cwd"
+    );
+
+    let review_msg = &input[1];
+    assert_eq!(review_msg["type"].as_str().unwrap(), "message");
+    assert_eq!(review_msg["role"].as_str().unwrap(), "user");
+    assert_eq!(
+        review_msg["content"][0]["text"].as_str().unwrap(),
+        format!("{REVIEW_PROMPT}\n\n---\n\nNow, here's your task: Please review only this",)
+    );
+
+    // Also verify that a user interruption note was recorded in the rollout.
+    codex.submit(Op::GetPath).await.unwrap();
+    let history_event =
+        wait_for_event(&codex, |ev| matches!(ev, EventMsg::ConversationPath(_))).await;
+    let path = match history_event {
+        EventMsg::ConversationPath(ConversationPathResponseEvent { path, .. }) => path,
+        other => panic!("expected ConversationPath event, got {other:?}"),
+    };
+    let text = std::fs::read_to_string(&path).expect("read rollout file");
+    let mut saw_interruption_message = false;
+    for line in text.lines() {
+        if line.trim().is_empty() {
+            continue;
         }
-    ]);
-    assert_eq!(body["input"], expected_input);
+        let v: serde_json::Value = serde_json::from_str(line).expect("jsonl line");
+        let rl: RolloutLine = serde_json::from_value(v).expect("rollout line");
+        if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = rl.item
+            && role == "user"
+        {
+            for c in content {
+                if let ContentItem::InputText { text } = c
+                    && text.contains("User initiated a review task, but was interrupted.")
+                {
+                    saw_interruption_message = true;
+                    break;
+                }
+            }
+        }
+        if saw_interruption_message {
+            break;
+        }
+    }
+    assert!(
+        saw_interruption_message,
+        "expected user interruption message in rollout"
+    );
 
     server.verify().await;
 }
