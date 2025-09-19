@@ -1,4 +1,4 @@
-#![allow(clippy::expect_used, clippy::unwrap_used)]
+#![allow(clippy::expect_used, clippy::unwrap_used, unused_imports)]
 
 use anyhow::Context;
 use assert_cmd::prelude::*;
