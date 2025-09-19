@@ -589,12 +589,14 @@ impl CodexMessageProcessor {
         let codex_linux_sandbox_exe = self.config.codex_linux_sandbox_exe.clone();
         let outgoing = self.outgoing.clone();
         let req_id = request_id;
+        let sandbox_cwd = self.config.cwd.clone();
 
         tokio::spawn(async move {
             match codex_core::exec::process_exec_tool_call(
                 exec_params,
                 sandbox_type,
                 &effective_policy,
+                sandbox_cwd.as_path(),
                 &codex_linux_sandbox_exe,
                 None,
             )
@@ -814,7 +816,7 @@ impl CodexMessageProcessor {
             return;
         };
 
-        let required_suffix = format!("{}.jsonl", conversation_id.0);
+        let required_suffix = format!("{conversation_id}.jsonl");
         let Some(file_name) = canonical_rollout_path.file_name().map(OsStr::to_owned) else {
             let error = JSONRPCErrorError {
                 code: INVALID_REQUEST_ERROR_CODE,
@@ -1414,13 +1416,13 @@ mod tests {
     #[test]
     fn extract_conversation_summary_prefers_plain_user_messages() {
         let conversation_id =
-            ConversationId(Uuid::parse_str("3f941c35-29b3-493b-b0a4-e25800d9aeb0").unwrap());
+            ConversationId::from_string("3f941c35-29b3-493b-b0a4-e25800d9aeb0").unwrap();
         let timestamp = Some("2025-09-05T16:53:11.850Z".to_string());
         let path = PathBuf::from("rollout.jsonl");
 
         let head = vec![
             json!({
-                "id": conversation_id.0,
+                "id": conversation_id.to_string(),
                 "timestamp": timestamp,
                 "cwd": "/",
                 "originator": "codex",
