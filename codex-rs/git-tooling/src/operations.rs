@@ -21,6 +21,7 @@ pub struct CreateGhostCommitOptions<'a> {
 }
 
 impl<'a> CreateGhostCommitOptions<'a> {
+    /// Creates options scoped to the provided repository path.
     pub fn new(repo_path: &'a Path) -> Self {
         Self {
             repo_path,
@@ -29,11 +30,13 @@ impl<'a> CreateGhostCommitOptions<'a> {
         }
     }
 
+    /// Sets a custom commit message for the ghost commit.
     pub fn message(mut self, message: &'a str) -> Self {
         self.message = Some(message);
         self
     }
 
+    /// Supplies the entire force-include path list at once.
     pub fn force_include<I>(mut self, paths: I) -> Self
     where
         I: IntoIterator<Item = PathBuf>,
@@ -42,6 +45,7 @@ impl<'a> CreateGhostCommitOptions<'a> {
         self
     }
 
+    /// Adds a single path to the force-include list.
     pub fn push_force_include<P>(mut self, path: P) -> Self
     where
         P: Into<PathBuf>,
@@ -60,7 +64,11 @@ pub fn create_ghost_commit(
     let repo_root = resolve_repository_root(options.repo_path)?;
     let repo_prefix = repo_subdir(repo_root.as_path(), options.repo_path);
     let parent = resolve_head(repo_root.as_path())?;
-    let normalized_force = normalize_force_include(&options.force_include)?;
+
+    let normalized_force = options.force_include
+        .iter()
+        .map(|path| normalize_relative_path(path))
+        .collect::<Result<Vec<_>, _>>()?;
     let force_include =
         apply_repo_prefix_to_force_include(repo_prefix.as_deref(), &normalized_force);
     let index_tempdir = Builder::new().prefix("codex-git-index-").tempdir()?;
@@ -69,14 +77,15 @@ pub fn create_ghost_commit(
         OsString::from("GIT_INDEX_FILE"),
         OsString::from(index_path.as_os_str()),
     )];
+
     let mut add_args = vec![OsString::from("add"), OsString::from("--all")];
     if let Some(prefix) = repo_prefix.as_deref() {
-        add_args.push(OsString::from("--"));
-        add_args.push(prefix.as_os_str().to_os_string());
+        add_args.extend([OsString::from("--"), prefix.as_os_str().to_os_string()]);
     }
+
     run_git_for_status(repo_root.as_path(), add_args, Some(base_env.as_slice()))?;
     for path in &force_include {
-        let args = vec![
+        let args = [
             OsString::from("add"),
             OsString::from("--force"),
             OsString::from(path.as_os_str()),
@@ -93,14 +102,16 @@ pub fn create_ghost_commit(
     let mut commit_env = base_env;
     commit_env.extend(default_commit_identity());
     let message = options.message.unwrap_or(DEFAULT_COMMIT_MESSAGE);
-    let mut commit_args = vec![OsString::from("commit-tree"), OsString::from(&tree_id)];
-    if let Some(parent) = parent.as_deref() {
-        commit_args.push(OsString::from("-p"));
-        commit_args.push(OsString::from(parent));
-    }
-    commit_args.push(OsString::from("-m"));
-    commit_args.push(OsString::from(message));
+    let commit_args = {
+        let mut result = vec![OsString::from("commit-tree"), OsString::from(&tree_id)];
+        if let Some(parent) = parent.as_deref() {
+            result.extend([OsString::from("-p"), OsString::from(parent)]);
+        }
+        result.extend([OsString::from("-m"), OsString::from(message)]);
+        result
+    };
 
+    // Retrieve commit ID.
     let commit_id = run_git_for_stdout(
         repo_root.as_path(),
         commit_args,
@@ -140,6 +151,7 @@ pub fn restore_to_commit(repo_path: &Path, commit_id: &str) -> Result<(), GitToo
     Ok(())
 }
 
+/// Verifies that the given path resides inside a Git work tree.
 fn ensure_git_repository(path: &Path) -> Result<(), GitToolingError> {
     match run_git_for_stdout(
         path,
@@ -162,6 +174,7 @@ fn ensure_git_repository(path: &Path) -> Result<(), GitToolingError> {
     }
 }
 
+/// Determines the HEAD commit SHA, if it exists.
 fn resolve_head(path: &Path) -> Result<Option<String>, GitToolingError> {
     match run_git_for_stdout(
         path,
@@ -173,18 +186,13 @@ fn resolve_head(path: &Path) -> Result<Option<String>, GitToolingError> {
         None,
     ) {
         Ok(sha) => Ok(Some(sha)),
+        // No head
         Err(GitToolingError::GitCommand { status, .. }) if status.code() == Some(128) => Ok(None),
         Err(other) => Err(other),
     }
 }
 
-fn normalize_force_include(paths: &[PathBuf]) -> Result<Vec<PathBuf>, GitToolingError> {
-    paths
-        .iter()
-        .map(|path| normalize_relative_path(path))
-        .collect()
-}
-
+/// Normalizes a user-supplied relative path for Git consumption.
 fn normalize_relative_path(path: &Path) -> Result<PathBuf, GitToolingError> {
     let mut result = PathBuf::new();
     let mut saw_component = false;
@@ -217,6 +225,7 @@ fn normalize_relative_path(path: &Path) -> Result<PathBuf, GitToolingError> {
     Ok(result)
 }
 
+/// Finds the absolute path to the repository root.
 fn resolve_repository_root(path: &Path) -> Result<PathBuf, GitToolingError> {
     let root = run_git_for_stdout(
         path,
@@ -229,6 +238,7 @@ fn resolve_repository_root(path: &Path) -> Result<PathBuf, GitToolingError> {
     Ok(PathBuf::from(root))
 }
 
+/// Applies the repository prefix to each force-included path.
 fn apply_repo_prefix_to_force_include(prefix: Option<&Path>, paths: &[PathBuf]) -> Vec<PathBuf> {
     if paths.is_empty() {
         return Vec::new();
@@ -240,6 +250,7 @@ fn apply_repo_prefix_to_force_include(prefix: Option<&Path>, paths: &[PathBuf]) 
     }
 }
 
+/// Computes the repository-relative subdirectory for the workspace path.
 fn repo_subdir(repo_root: &Path, repo_path: &Path) -> Option<PathBuf> {
     if repo_root == repo_path {
         return None;
@@ -259,6 +270,7 @@ fn repo_subdir(repo_root: &Path, repo_path: &Path) -> Option<PathBuf> {
         })
 }
 
+/// Converts a non-empty path slice into an owned path buffer.
 fn non_empty_path(path: &Path) -> Option<PathBuf> {
     if path.as_os_str().is_empty() {
         None
@@ -267,6 +279,7 @@ fn non_empty_path(path: &Path) -> Option<PathBuf> {
     }
 }
 
+/// Returns the default author and committer identity for ghost commits.
 fn default_commit_identity() -> Vec<(OsString, OsString)> {
     vec![
         (
@@ -293,6 +306,7 @@ struct GitRun {
     output: std::process::Output,
 }
 
+/// Executes a git command and returns its captured output.
 fn run_git<I, S>(
     dir: &Path,
     args: I,
@@ -330,6 +344,7 @@ where
     })
 }
 
+/// Runs a git command when the exit status is the only concern.
 fn run_git_for_status<I, S>(
     dir: &Path,
     args: I,
@@ -339,9 +354,11 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
-    run_git(dir, args, env).map(|_| ())
+    run_git(dir, args, env)?;
+    Ok(())
 }
 
+/// Runs a git command and returns trimmed standard output.
 fn run_git_for_stdout<I, S>(
     dir: &Path,
     args: I,
@@ -360,6 +377,7 @@ where
         })
 }
 
+/// Builds a printable git command string for diagnostics.
 fn build_command_string(args: &[OsString]) -> String {
     if args.is_empty() {
         return "git".to_string();
@@ -377,6 +395,7 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
+    /// Runs a git command in the test repository and asserts success.
     fn run_git_in(repo_path: &Path, args: &[&str]) {
         let status = Command::new("git")
             .current_dir(repo_path)
@@ -386,6 +405,7 @@ mod tests {
         assert!(status.success(), "git command failed: {args:?}");
     }
 
+    /// Runs a git command and returns its trimmed stdout output.
     fn run_git_stdout(repo_path: &Path, args: &[&str]) -> String {
         let output = Command::new("git")
             .current_dir(repo_path)
@@ -397,6 +417,7 @@ mod tests {
     }
 
     #[test]
+    /// Verifies a ghost commit can be created and restored end to end.
     fn create_and_restore_roundtrip() -> Result<(), GitToolingError> {
         let temp = tempfile::tempdir()?;
         let repo = temp.path();
@@ -461,6 +482,7 @@ mod tests {
     }
 
     #[test]
+    /// Ensures ghost commits succeed in repositories without an existing HEAD.
     fn create_snapshot_without_existing_head() -> Result<(), GitToolingError> {
         let temp = tempfile::tempdir()?;
         let repo = temp.path();
@@ -488,6 +510,7 @@ mod tests {
     }
 
     #[test]
+    /// Confirms custom messages are used when creating ghost commits.
     fn create_ghost_commit_uses_custom_message() -> Result<(), GitToolingError> {
         let temp = tempfile::tempdir()?;
         let repo = temp.path();
@@ -519,6 +542,7 @@ mod tests {
     }
 
     #[test]
+    /// Rejects absolute paths passed to force-include.
     fn force_include_requires_relative_paths() -> Result<(), GitToolingError> {
         let temp = tempfile::tempdir()?;
         let repo = temp.path();
@@ -532,6 +556,7 @@ mod tests {
     }
 
     #[test]
+    /// Restores ghost state created from within a repository subdirectory.
     fn restore_from_subdirectory_path() -> Result<(), GitToolingError> {
         let temp = tempfile::tempdir()?;
         let repo = temp.path();
@@ -576,6 +601,7 @@ mod tests {
     }
 
     #[test]
+    /// Restoring from a subdirectory preserves ignored files in parent folders.
     fn restore_from_subdirectory_preserves_parent_vscode() -> Result<(), GitToolingError> {
         let temp = tempfile::tempdir()?;
         let repo = temp.path();
@@ -619,6 +645,7 @@ mod tests {
     }
 
     #[test]
+    /// Restoring from the repository root keeps ignored files intact.
     fn restore_preserves_ignored_files() -> Result<(), GitToolingError> {
         let temp = tempfile::tempdir()?;
         let repo = temp.path();
@@ -663,6 +690,7 @@ mod tests {
     }
 
     #[test]
+    /// Fails when attempting to restore outside a Git repository.
     fn restore_requires_git_repository() {
         let temp = tempfile::tempdir().expect("tempdir");
         let err = restore_to_commit(temp.path(), "deadbeef").unwrap_err();
