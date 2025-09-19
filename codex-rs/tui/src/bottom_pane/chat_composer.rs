@@ -29,6 +29,7 @@ use super::paste_burst::CharDecision;
 use super::paste_burst::PasteBurst;
 use crate::bottom_pane::paste_burst::FlushResult;
 use crate::slash_command::SlashCommand;
+use codex_core::custom_prompts::expand_prompt_invocation_for_tests;
 use codex_protocol::custom_prompts::CustomPrompt;
 
 use crate::app_event::AppEvent;
@@ -417,11 +418,33 @@ impl ChatComposer {
             } => {
                 if let Some(sel) = popup.selected_item() {
                     // Clear textarea so no residual text remains.
+                    let first_line = self
+                        .textarea
+                        .text()
+                        .lines()
+                        .next()
+                        .unwrap_or("")
+                        .to_string();
                     self.textarea.set_text("");
-                    // Capture any needed data from popup before clearing it.
+                    // For user prompts, parse arguments independently of the selected prompt name
+                    // and apply them to the selected prompt's content so arguments survive when
+                    // users change selection.
                     let prompt_content = match sel {
                         CommandItem::UserPrompt(idx) => {
-                            popup.prompt_content(idx).map(|s| s.to_string())
+                            let base = popup.prompt_content(idx).map(|s| s.to_string());
+                            if let Some(mut content) = base {
+                                if content.contains("$ARGUMENTS") {
+                                    if let Some(args) = Self::extract_args_after_slash(&first_line)
+                                    {
+                                        content = content.replace("$ARGUMENTS", args);
+                                    } else {
+                                        content = content.replace("$ARGUMENTS", "");
+                                    }
+                                }
+                                Some(content)
+                            } else {
+                                None
+                            }
                         }
                         _ => None,
                     };
@@ -682,6 +705,35 @@ impl ChatComposer {
         left_at.or(right_at)
     }
 
+    /// Extract the raw arguments substring after a leading "/command" token
+    /// on the first line of input. Drops exactly one ASCII whitespace between
+    /// the command and its arguments and preserves all remaining whitespace and
+    /// punctuation. Returns `None` when the line does not start with '/'.
+    fn extract_args_after_slash(line: &str) -> Option<&str> {
+        let trimmed = line.trim_start_matches(' ');
+        let rest = trimmed.strip_prefix('/')?;
+        // Find the end of the command token (first ASCII whitespace)
+        let mut name_len = 0usize;
+        for &b in rest.as_bytes() {
+            if b.is_ascii_whitespace() {
+                break;
+            }
+            name_len += 1;
+        }
+        if name_len >= rest.len() {
+            // No args present
+            None
+        } else {
+            let mut s = &rest[name_len..];
+            if let Some(first) = s.as_bytes().first()
+                && first.is_ascii_whitespace()
+            {
+                s = &s[1..];
+            }
+            Some(s)
+        }
+    }
+
     /// Replace the active `@token` (the one under the cursor) with `path`.
     ///
     /// The algorithm mirrors `current_at_token` so replacement works no matter
@@ -812,6 +864,14 @@ impl ChatComposer {
                 }
                 let mut text = self.textarea.text().to_string();
                 self.textarea.set_text("");
+
+                // If this is a custom prompt invocation like "/name args",
+                // expand $ARGUMENTS before proceeding.
+                if let Some(expanded) =
+                    expand_prompt_invocation_for_tests(&text, &self.custom_prompts)
+                {
+                    text = expanded;
+                }
 
                 // Replace all pending pastes in the text
                 for (placeholder, actual) in &self.pending_pastes {
@@ -1757,6 +1817,152 @@ mod tests {
                 .unwrap_or_else(|e| panic!("Failed to draw {name} composer: {e}"));
 
             insta::assert_snapshot!(name, terminal.backend());
+        }
+    }
+
+    #[test]
+    fn slash_prompt_arguments_substituted_on_submit() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+        use tokio::sync::mpsc::unbounded_channel;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "hello".to_string(),
+            path: "/tmp/hello.md".to_string().into(),
+            content: "Hi $ARGUMENTS!".to_string(),
+        }]);
+
+        // Type "/hello world" humanlike to avoid paste-burst suppression.
+        type_chars_humanlike(
+            &mut composer,
+            &['/', 'h', 'e', 'l', 'l', 'o', ' ', 'w', 'o', 'r', 'l', 'd'],
+        );
+
+        let (result, _redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::Submitted(s) => assert_eq!(s, "Hi world!"),
+            other => panic!("expected Submitted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn slash_popup_preserves_args_on_partial_name_selection() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+        use tokio::sync::mpsc::unbounded_channel;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "hello".to_string(),
+            path: "/tmp/hello.md".to_string().into(),
+            content: "Hi $ARGUMENTS!".to_string(),
+        }]);
+
+        // Type a partial command name followed by arguments, then press Enter to select the
+        // single matching prompt from the popup.
+        type_chars_humanlike(
+            &mut composer,
+            &['/', 'h', 'e', 'l', ' ', 'w', 'o', 'r', 'l', 'd'],
+        );
+
+        let (result, _redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::Submitted(s) => assert_eq!(s, "Hi world!"),
+            other => panic!("expected Submitted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn slash_popup_preserves_spacing_and_punctuation_in_args() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+        use tokio::sync::mpsc::unbounded_channel;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "hello".to_string(),
+            path: "/tmp/hello.md".to_string().into(),
+            content: "Args=[$ARGUMENTS]".to_string(),
+        }]);
+
+        type_chars_humanlike(
+            &mut composer,
+            &[
+                '/', 'h', 'e', ' ', ' ', ' ', 'b', 'i', 'g', ' ', ' ', 't', 'h', 'i', 'n', 'g',
+                ' ', ' ', '!', '@', '#', ' ', ' ',
+            ],
+        );
+
+        let (result, _redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::Submitted(s) => assert_eq!(s, "Args=[  big  thing  !@#  ]"),
+            other => panic!("expected Submitted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn slash_popup_empty_args_replaced_with_empty_string() {
+        use crossterm::event::KeyCode;
+        use crossterm::event::KeyEvent;
+        use crossterm::event::KeyModifiers;
+        use tokio::sync::mpsc::unbounded_channel;
+
+        let (tx, _rx) = unbounded_channel::<AppEvent>();
+        let sender = AppEventSender::new(tx);
+        let mut composer = ChatComposer::new(
+            true,
+            sender,
+            false,
+            "Ask Codex to do anything".to_string(),
+            false,
+        );
+
+        composer.set_custom_prompts(vec![CustomPrompt {
+            name: "hello".to_string(),
+            path: "/tmp/hello.md".to_string().into(),
+            content: "Hi<$ARGUMENTS>".to_string(),
+        }]);
+
+        type_chars_humanlike(&mut composer, &['/', 'h', 'e']);
+        let (result, _redraw) =
+            composer.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE));
+        match result {
+            InputResult::Submitted(s) => assert_eq!(s, "Hi<>"),
+            other => panic!("expected Submitted, got {other:?}"),
         }
     }
 
