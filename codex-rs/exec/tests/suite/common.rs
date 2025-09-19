@@ -4,7 +4,6 @@
 
 use anyhow::Context;
 use assert_cmd::prelude::*;
-use core_test_support::load_sse_fixture_with_id_from_str;
 use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::AtomicUsize;
@@ -27,10 +26,7 @@ impl Respond for SeqResponder {
         match self.responses.get(call_num) {
             Some(body) => wiremock::ResponseTemplate::new(200)
                 .insert_header("content-type", "text/event-stream")
-                .set_body_raw(
-                    load_sse_fixture_with_id_from_str(body, &format!("request_{call_num}")),
-                    "text/event-stream",
-                ),
+                .set_body_string(body.clone()),
             None => panic!("no response for {call_num}"),
         }
     }
