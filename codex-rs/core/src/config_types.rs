@@ -94,6 +94,7 @@ impl Default for Notifications {
 pub struct Tui {
     /// Enable desktop notifications from the TUI when the terminal is unfocused.
     /// Defaults to `false`.
+    #[serde(default)]
     pub notifications: Notifications,
 }
 

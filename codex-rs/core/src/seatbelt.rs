@@ -18,19 +18,20 @@ const MACOS_PATH_TO_SEATBELT_EXECUTABLE: &str = "/usr/bin/sandbox-exec";
 
 pub async fn spawn_command_under_seatbelt(
     command: Vec<String>,
+    command_cwd: PathBuf,
     sandbox_policy: &SandboxPolicy,
-    cwd: PathBuf,
+    sandbox_policy_cwd: &Path,
     stdio_policy: StdioPolicy,
     mut env: HashMap<String, String>,
 ) -> std::io::Result<Child> {
-    let args = create_seatbelt_command_args(command, sandbox_policy, &cwd);
+    let args = create_seatbelt_command_args(command, sandbox_policy, sandbox_policy_cwd);
     let arg0 = None;
     env.insert(CODEX_SANDBOX_ENV_VAR.to_string(), "seatbelt".to_string());
     spawn_child_async(
         PathBuf::from(MACOS_PATH_TO_SEATBELT_EXECUTABLE),
         args,
         arg0,
-        cwd,
+        command_cwd,
         sandbox_policy,
         stdio_policy,
         env,
@@ -41,7 +42,7 @@ pub async fn spawn_command_under_seatbelt(
 fn create_seatbelt_command_args(
     command: Vec<String>,
     sandbox_policy: &SandboxPolicy,
-    cwd: &Path,
+    sandbox_policy_cwd: &Path,
 ) -> Vec<String> {
     let (file_write_policy, extra_cli_args) = {
         if sandbox_policy.has_full_disk_write_access() {
@@ -51,7 +52,7 @@ fn create_seatbelt_command_args(
                 Vec::<String>::new(),
             )
         } else {
-            let writable_roots = sandbox_policy.get_writable_roots_with_cwd(cwd);
+            let writable_roots = sandbox_policy.get_writable_roots_with_cwd(sandbox_policy_cwd);
 
             let mut writable_folder_policies: Vec<String> = Vec::new();
             let mut cli_args: Vec<String> = Vec::new();
