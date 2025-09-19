@@ -9,6 +9,7 @@ members = [
     "exec",
     "execpolicy",
     "file-search",
+    "git-tooling",
     "linux-sandbox",
     "login",
     "mcp-client",
