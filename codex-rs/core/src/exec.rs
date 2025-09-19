@@ -45,7 +45,7 @@ const AGGREGATE_BUFFER_INITIAL_CAPACITY: usize = 8 * 1024; // 8 KiB
 /// Aggregation still collects full output; only the live event stream is capped.
 pub(crate) const MAX_EXEC_OUTPUT_DELTAS_PER_CALL: usize = 10_000;
 
-#[derive(Debug, Clone)]
+#[derive(Clone, Debug)]
 pub struct ExecParams {
     pub command: Vec<String>,
     pub cwd: PathBuf,
