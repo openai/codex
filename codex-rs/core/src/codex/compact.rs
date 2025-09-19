@@ -203,7 +203,7 @@ async fn run_compact_task_inner(
     sess.send_event(event).await;
 }
 
-fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
+pub fn content_items_to_text(content: &[ContentItem]) -> Option<String> {
     let mut pieces = Vec::new();
     for item in content {
         match item {
@@ -235,7 +235,7 @@ pub(crate) fn collect_user_messages(items: &[ResponseItem]) -> Vec<String> {
         .collect()
 }
 
-fn is_session_prefix_message(text: &str) -> bool {
+pub fn is_session_prefix_message(text: &str) -> bool {
     matches!(
         InputMessageKind::from(("user", text)),
         InputMessageKind::UserInstructions | InputMessageKind::EnvironmentContext

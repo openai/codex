@@ -92,6 +92,8 @@ pub use client_common::Prompt;
 pub use client_common::REVIEW_PROMPT;
 pub use client_common::ResponseEvent;
 pub use client_common::ResponseStream;
+pub use codex::compact::content_items_to_text;
+pub use codex::compact::is_session_prefix_message;
 pub use codex_protocol::models::ContentItem;
 pub use codex_protocol::models::LocalShellAction;
 pub use codex_protocol::models::LocalShellExecAction;

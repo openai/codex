@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -130,7 +131,7 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::models::ShellToolCallParams;
 use codex_protocol::protocol::InitialHistory;
 
-mod compact;
+pub mod compact;
 use self::compact::build_compacted_history;
 use self::compact::collect_user_messages;
 
@@ -455,8 +456,6 @@ impl Session {
             client,
             tools_config: ToolsConfig::new(&ToolsConfigParams {
                 model_family: &config.model_family,
-                approval_policy,
-                sandbox_policy: sandbox_policy.clone(),
                 include_plan_tool: config.include_plan_tool,
                 include_apply_patch_tool: config.include_apply_patch_tool,
                 include_web_search_request: config.tools_web_search_request,
@@ -710,7 +709,7 @@ impl Session {
         self.persist_rollout_items(&rollout_items).await;
     }
 
-    fn build_initial_context(&self, turn_context: &TurnContext) -> Vec<ResponseItem> {
+    pub(crate) fn build_initial_context(&self, turn_context: &TurnContext) -> Vec<ResponseItem> {
         let mut items = Vec::<ResponseItem>::with_capacity(2);
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
             items.push(UserInstructions::new(user_instructions.to_string()).into());
@@ -898,6 +897,7 @@ impl Session {
             exec_args.params,
             exec_args.sandbox_type,
             exec_args.sandbox_policy,
+            exec_args.sandbox_cwd,
             exec_args.codex_linux_sandbox_exe,
             exec_args.stdout_stream,
         )
@@ -1235,8 +1235,6 @@ async fn submission_loop(
 
                 let tools_config = ToolsConfig::new(&ToolsConfigParams {
                     model_family: &effective_family,
-                    approval_policy: new_approval_policy,
-                    sandbox_policy: new_sandbox_policy.clone(),
                     include_plan_tool: config.include_plan_tool,
                     include_apply_patch_tool: config.include_apply_patch_tool,
                     include_web_search_request: config.tools_web_search_request,
@@ -1323,8 +1321,6 @@ async fn submission_loop(
                         client,
                         tools_config: ToolsConfig::new(&ToolsConfigParams {
                             model_family: &model_family,
-                            approval_policy,
-                            sandbox_policy: sandbox_policy.clone(),
                             include_plan_tool: config.include_plan_tool,
                             include_apply_patch_tool: config.include_apply_patch_tool,
                             include_web_search_request: config.tools_web_search_request,
@@ -1551,8 +1547,6 @@ async fn spawn_review_thread(
         .unwrap_or_else(|| parent_turn_context.client.get_model_family());
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_family: &review_model_family,
-        approval_policy: parent_turn_context.approval_policy,
-        sandbox_policy: parent_turn_context.sandbox_policy.clone(),
         include_plan_tool: false,
         include_apply_patch_tool: config.include_apply_patch_tool,
         include_web_search_request: false,
@@ -2691,6 +2685,7 @@ pub struct ExecInvokeArgs<'a> {
     pub params: ExecParams,
     pub sandbox_type: SandboxType,
     pub sandbox_policy: &'a SandboxPolicy,
+    pub sandbox_cwd: &'a Path,
     pub codex_linux_sandbox_exe: &'a Option<PathBuf>,
     pub stdout_stream: Option<StdoutStream>,
 }
@@ -2721,6 +2716,21 @@ async fn handle_container_exec_with_params(
     sub_id: String,
     call_id: String,
 ) -> ResponseInputItem {
+    if params.with_escalated_permissions.unwrap_or(false)
+        && !matches!(turn_context.approval_policy, AskForApproval::OnRequest)
+    {
+        return ResponseInputItem::FunctionCallOutput {
+            call_id,
+            output: FunctionCallOutputPayload {
+                content: format!(
+                    "approval policy is {policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {policy:?}",
+                    policy = turn_context.approval_policy
+                ),
+                success: None,
+            },
+        };
+    }
+
     // check if this was a patch, and apply it if so
     let apply_patch_exec = match maybe_parse_apply_patch_verified(&params.command, &params.cwd) {
         MaybeApplyPatchVerified::Body(changes) => {
@@ -2882,6 +2892,7 @@ async fn handle_container_exec_with_params(
                 params: params.clone(),
                 sandbox_type,
                 sandbox_policy: &turn_context.sandbox_policy,
+                sandbox_cwd: &turn_context.cwd,
                 codex_linux_sandbox_exe: &sess.codex_linux_sandbox_exe,
                 stdout_stream: if exec_command_context.apply_patch.is_some() {
                     None
@@ -3016,6 +3027,7 @@ async fn handle_sandbox_error(
                         params,
                         sandbox_type: SandboxType::None,
                         sandbox_policy: &turn_context.sandbox_policy,
+                        sandbox_cwd: &turn_context.cwd,
                         codex_linux_sandbox_exe: &sess.codex_linux_sandbox_exe,
                         stdout_stream: if exec_command_context.apply_patch.is_some() {
                             None
@@ -3303,7 +3315,7 @@ async fn exit_review_mode(
   <results>
   {findings_str}
   </results>
-</user_tool>
+</user_action>
 "#));
     } else {
         user_message.push_str(r#"<user_action>
@@ -3312,7 +3324,7 @@ async fn exit_review_mode(
   <results>
   None.
   </results>
-</user_tool>
+</user_action>
 "#);
     }
 
@@ -3326,6 +3338,9 @@ async fn exit_review_mode(
 }
 
 #[cfg(test)]
+pub(crate) use tests::make_session_and_context;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::ConfigOverrides;
@@ -3337,6 +3352,7 @@ mod tests {
     use mcp_types::ContentBlock;
     use mcp_types::TextContent;
     use pretty_assertions::assert_eq;
+    use serde::Deserialize;
     use serde_json::json;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -3565,7 +3581,7 @@ mod tests {
         })
     }
 
-    fn make_session_and_context() -> (Session, TurnContext) {
+    pub(crate) fn make_session_and_context() -> (Session, TurnContext) {
         let (tx_event, _rx_event) = async_channel::unbounded();
         let codex_home = tempfile::tempdir().expect("create temp dir");
         let config = Config::load_from_base_config_with_overrides(
@@ -3586,8 +3602,6 @@ mod tests {
         );
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &config.model_family,
-            approval_policy: config.approval_policy,
-            sandbox_policy: config.sandbox_policy.clone(),
             include_plan_tool: config.include_plan_tool,
             include_apply_patch_tool: config.include_apply_patch_tool,
             include_web_search_request: config.tools_web_search_request,
@@ -3726,5 +3740,106 @@ mod tests {
         rollout_items.push(RolloutItem::ResponseItem(assistant3.clone()));
 
         (rollout_items, live_history.contents())
+    }
+
+    #[tokio::test]
+    async fn rejects_escalated_permissions_when_policy_not_on_request() {
+        use crate::exec::ExecParams;
+        use crate::protocol::AskForApproval;
+        use crate::protocol::SandboxPolicy;
+        use crate::turn_diff_tracker::TurnDiffTracker;
+        use std::collections::HashMap;
+
+        let (session, mut turn_context) = make_session_and_context();
+        // Ensure policy is NOT OnRequest so the early rejection path triggers
+        turn_context.approval_policy = AskForApproval::OnFailure;
+
+        let params = ExecParams {
+            command: if cfg!(windows) {
+                vec![
+                    "cmd.exe".to_string(),
+                    "/C".to_string(),
+                    "echo hi".to_string(),
+                ]
+            } else {
+                vec![
+                    "/bin/sh".to_string(),
+                    "-c".to_string(),
+                    "echo hi".to_string(),
+                ]
+            },
+            cwd: turn_context.cwd.clone(),
+            timeout_ms: Some(1000),
+            env: HashMap::new(),
+            with_escalated_permissions: Some(true),
+            justification: Some("test".to_string()),
+        };
+
+        let params2 = ExecParams {
+            with_escalated_permissions: Some(false),
+            ..params.clone()
+        };
+
+        let mut turn_diff_tracker = TurnDiffTracker::new();
+
+        let sub_id = "test-sub".to_string();
+        let call_id = "test-call".to_string();
+
+        let resp = handle_container_exec_with_params(
+            params,
+            &session,
+            &turn_context,
+            &mut turn_diff_tracker,
+            sub_id,
+            call_id,
+        )
+        .await;
+
+        let ResponseInputItem::FunctionCallOutput { output, .. } = resp else {
+            panic!("expected FunctionCallOutput");
+        };
+
+        let expected = format!(
+            "approval policy is {policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {policy:?}",
+            policy = turn_context.approval_policy
+        );
+
+        pretty_assertions::assert_eq!(output.content, expected);
+
+        // Now retry the same command WITHOUT escalated permissions; should succeed.
+        // Force DangerFullAccess to avoid platform sandbox dependencies in tests.
+        turn_context.sandbox_policy = SandboxPolicy::DangerFullAccess;
+
+        let resp2 = handle_container_exec_with_params(
+            params2,
+            &session,
+            &turn_context,
+            &mut turn_diff_tracker,
+            "test-sub".to_string(),
+            "test-call-2".to_string(),
+        )
+        .await;
+
+        let ResponseInputItem::FunctionCallOutput { output, .. } = resp2 else {
+            panic!("expected FunctionCallOutput on retry");
+        };
+
+        #[derive(Deserialize, PartialEq, Eq, Debug)]
+        struct ResponseExecMetadata {
+            exit_code: i32,
+        }
+
+        #[derive(Deserialize)]
+        struct ResponseExecOutput {
+            output: String,
+            metadata: ResponseExecMetadata,
+        }
+
+        let exec_output: ResponseExecOutput =
+            serde_json::from_str(&output.content).expect("valid exec output json");
+
+        pretty_assertions::assert_eq!(exec_output.metadata, ResponseExecMetadata { exit_code: 0 });
+        assert!(exec_output.output.contains("hi"));
+        pretty_assertions::assert_eq!(output.success, Some(true));
     }
 }
