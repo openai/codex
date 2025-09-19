@@ -1,5 +1,6 @@
 // Aggregates all former standalone integration tests as modules.
 
+mod agent_harness;
 mod cli_stream;
 mod client;
 mod compact;

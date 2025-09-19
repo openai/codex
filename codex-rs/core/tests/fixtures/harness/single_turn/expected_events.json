@@ -1,0 +1,64 @@
+[
+  {
+    "id": "",
+    "msg": {
+      "history_entry_count": 0,
+      "history_log_id": 0,
+      "model": "gpt-5",
+      "rollout_path": "<rollout>",
+      "session_id": "<session>",
+      "type": "session_configured"
+    }
+  },
+  {
+    "id": "0",
+    "msg": {
+      "model_context_window": 272000,
+      "type": "task_started"
+    }
+  },
+  {
+    "id": "0",
+    "msg": {
+      "delta": "Hello from fixture",
+      "type": "agent_message_delta"
+    }
+  },
+  {
+    "id": "0",
+    "msg": {
+      "message": "Hello from fixture",
+      "type": "agent_message"
+    }
+  },
+  {
+    "id": "0",
+    "msg": {
+      "info": {
+        "last_token_usage": {
+          "cached_input_tokens": 0,
+          "input_tokens": 10,
+          "output_tokens": 5,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 15
+        },
+        "model_context_window": 272000,
+        "total_token_usage": {
+          "cached_input_tokens": 0,
+          "input_tokens": 10,
+          "output_tokens": 5,
+          "reasoning_output_tokens": 0,
+          "total_tokens": 15
+        }
+      },
+      "type": "token_count"
+    }
+  },
+  {
+    "id": "0",
+    "msg": {
+      "last_agent_message": "Hello from fixture",
+      "type": "task_complete"
+    }
+  }
+]

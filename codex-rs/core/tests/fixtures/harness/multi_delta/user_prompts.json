@@ -1,0 +1,8 @@
+[
+  {
+    "type": "user_input",
+    "items": [
+      {"type": "text", "text": "Can you hear me?"}
+    ]
+  }
+]

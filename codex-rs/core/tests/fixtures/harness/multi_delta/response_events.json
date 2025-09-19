@@ -1,0 +1,23 @@
+[
+  {"type": "response.created", "response": {"id": "resp_multi"}},
+  {"type": "response.output_text.delta", "delta": "I can"},
+  {"type": "response.output_text.delta", "delta": " hear"},
+  {"type": "response.output_text.delta", "delta": " you!"},
+  {"type": "response.output_item.done", "item": {
+    "type": "message",
+    "role": "assistant",
+    "content": [
+      {"type": "output_text", "text": "I can hear you!"}
+    ]
+  }},
+  {"type": "response.completed", "response": {
+    "id": "resp_multi",
+    "usage": {
+      "input_tokens": 12,
+      "input_tokens_details": null,
+      "output_tokens": 6,
+      "output_tokens_details": null,
+      "total_tokens": 18
+    }
+  }}
+]

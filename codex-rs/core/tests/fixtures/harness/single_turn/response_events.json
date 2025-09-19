@@ -1,0 +1,21 @@
+[
+  {"type": "response.created", "response": {"id": "resp_123"}},
+  {"type": "response.output_text.delta", "delta": "Hello from fixture"},
+  {"type": "response.output_item.done", "item": {
+    "type": "message",
+    "role": "assistant",
+    "content": [
+      {"type": "output_text", "text": "Hello from fixture"}
+    ]
+  }},
+  {"type": "response.completed", "response": {
+    "id": "resp_123",
+    "usage": {
+      "input_tokens": 10,
+      "input_tokens_details": null,
+      "output_tokens": 5,
+      "output_tokens_details": null,
+      "total_tokens": 15
+    }
+  }}
+]
