@@ -3,6 +3,8 @@ use crate::CodexAuth;
 use crate::codex::Codex;
 use crate::codex::CodexSpawnOk;
 use crate::codex::INITIAL_SUBMIT_ID;
+use crate::codex::compact::content_items_to_text;
+use crate::codex::compact::is_session_prefix_message;
 use crate::codex_conversation::CodexConversation;
 use crate::config::Config;
 use crate::error::CodexErr;
@@ -59,21 +61,11 @@ impl ConversationManager {
         config: Config,
         auth_manager: Arc<AuthManager>,
     ) -> CodexResult<NewConversation> {
-        // TO BE REFACTORED: use the config experimental_resume field until we have a mainstream way.
-        if let Some(resume_path) = config.experimental_resume.as_ref() {
-            let initial_history = RolloutRecorder::get_rollout_history(resume_path).await?;
-            let CodexSpawnOk {
-                codex,
-                conversation_id,
-            } = Codex::spawn(config, auth_manager, initial_history).await?;
-            self.finalize_spawn(codex, conversation_id).await
-        } else {
-            let CodexSpawnOk {
-                codex,
-                conversation_id,
-            } = Codex::spawn(config, auth_manager, InitialHistory::New).await?;
-            self.finalize_spawn(codex, conversation_id).await
-        }
+        let CodexSpawnOk {
+            codex,
+            conversation_id,
+        } = Codex::spawn(config, auth_manager, InitialHistory::New).await?;
+        self.finalize_spawn(codex, conversation_id).await
     }
 
     async fn finalize_spawn(
@@ -144,19 +136,19 @@ impl ConversationManager {
         self.conversations.write().await.remove(conversation_id)
     }
 
-    /// Fork an existing conversation by dropping the last `drop_last_messages`
-    /// user/assistant messages from its transcript and starting a new
+    /// Fork an existing conversation by taking messages up to the given position
+    /// (not including the message at the given position) and starting a new
     /// conversation with identical configuration (unless overridden by the
     /// caller's `config`). The new conversation will have a fresh id.
     pub async fn fork_conversation(
         &self,
-        conversation_history: Vec<ResponseItem>,
-        num_messages_to_drop: usize,
+        nth_user_message: usize,
         config: Config,
+        path: PathBuf,
     ) -> CodexResult<NewConversation> {
         // Compute the prefix up to the cut point.
-        let history =
-            truncate_after_dropping_last_messages(conversation_history, num_messages_to_drop);
+        let history = RolloutRecorder::get_rollout_history(&path).await?;
+        let history = truncate_before_nth_user_message(history, nth_user_message);
 
         // Spawn a new conversation with the computed initial history.
         let auth_manager = self.auth_manager.clone();
@@ -169,38 +161,35 @@ impl ConversationManager {
     }
 }
 
-/// Return a prefix of `items` obtained by dropping the last `n` user messages
-/// and all items that follow them.
-fn truncate_after_dropping_last_messages(items: Vec<ResponseItem>, n: usize) -> InitialHistory {
-    if n == 0 {
-        let rolled: Vec<RolloutItem> = items.into_iter().map(RolloutItem::ResponseItem).collect();
-        return InitialHistory::Forked(rolled);
-    }
+/// Return a prefix of `items` obtained by cutting strictly before the nth user message
+/// (0-based) and all items that follow it.
+fn truncate_before_nth_user_message(history: InitialHistory, n: usize) -> InitialHistory {
+    // Work directly on rollout items, and cut the vector at the nth user message input.
+    let items: Vec<RolloutItem> = history.get_rollout_items();
 
-    // Walk backwards counting only `user` Message items, find cut index.
-    let mut count = 0usize;
-    let mut cut_index = 0usize;
-    for (idx, item) in items.iter().enumerate().rev() {
-        if let ResponseItem::Message { role, .. } = item
+    // Find indices of user message inputs in rollout order.
+    let mut user_positions: Vec<usize> = Vec::new();
+    for (idx, item) in items.iter().enumerate() {
+        if let RolloutItem::ResponseItem(ResponseItem::Message { role, content, .. }) = item
             && role == "user"
+            && content_items_to_text(content).is_some_and(|text| !is_session_prefix_message(&text))
         {
-            count += 1;
-            if count == n {
-                // Cut everything from this user message to the end.
-                cut_index = idx;
-                break;
-            }
+            user_positions.push(idx);
         }
     }
-    if cut_index == 0 {
-        // No prefix remains after dropping; start a new conversation.
+
+    // If fewer than or equal to n user messages exist, treat as empty (out of range).
+    if user_positions.len() <= n {
+        return InitialHistory::New;
+    }
+
+    // Cut strictly before the nth user message (do not keep the nth itself).
+    let cut_idx = user_positions[n];
+    let rolled: Vec<RolloutItem> = items.into_iter().take(cut_idx).collect();
+
+    if rolled.is_empty() {
         InitialHistory::New
     } else {
-        let rolled: Vec<RolloutItem> = items
-            .into_iter()
-            .take(cut_index)
-            .map(RolloutItem::ResponseItem)
-            .collect();
         InitialHistory::Forked(rolled)
     }
 }
@@ -208,9 +197,11 @@ fn truncate_after_dropping_last_messages(items: Vec<ResponseItem>, n: usize) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codex::make_session_and_context;
     use codex_protocol::models::ContentItem;
     use codex_protocol::models::ReasoningItemReasoningSummary;
     use codex_protocol::models::ResponseItem;
+    use pretty_assertions::assert_eq;
 
     fn user_msg(text: &str) -> ResponseItem {
         ResponseItem::Message {
@@ -256,7 +247,13 @@ mod tests {
             assistant_msg("a4"),
         ];
 
-        let truncated = truncate_after_dropping_last_messages(items.clone(), 1);
+        // Wrap as InitialHistory::Forked with response items only.
+        let initial: Vec<RolloutItem> = items
+            .iter()
+            .cloned()
+            .map(RolloutItem::ResponseItem)
+            .collect();
+        let truncated = truncate_before_nth_user_message(InitialHistory::Forked(initial), 1);
         let got_items = truncated.get_rollout_items();
         let expected_items = vec![
             RolloutItem::ResponseItem(items[0].clone()),
@@ -268,7 +265,42 @@ mod tests {
             serde_json::to_value(&expected_items).unwrap()
         );
 
-        let truncated2 = truncate_after_dropping_last_messages(items, 2);
+        let initial2: Vec<RolloutItem> = items
+            .iter()
+            .cloned()
+            .map(RolloutItem::ResponseItem)
+            .collect();
+        let truncated2 = truncate_before_nth_user_message(InitialHistory::Forked(initial2), 2);
         assert!(matches!(truncated2, InitialHistory::New));
+    }
+
+    #[test]
+    fn ignores_session_prefix_messages_when_truncating() {
+        let (session, turn_context) = make_session_and_context();
+        let mut items = session.build_initial_context(&turn_context);
+        items.push(user_msg("feature request"));
+        items.push(assistant_msg("ack"));
+        items.push(user_msg("second question"));
+        items.push(assistant_msg("answer"));
+
+        let rollout_items: Vec<RolloutItem> = items
+            .iter()
+            .cloned()
+            .map(RolloutItem::ResponseItem)
+            .collect();
+
+        let truncated = truncate_before_nth_user_message(InitialHistory::Forked(rollout_items), 1);
+        let got_items = truncated.get_rollout_items();
+
+        let expected: Vec<RolloutItem> = vec![
+            RolloutItem::ResponseItem(items[0].clone()),
+            RolloutItem::ResponseItem(items[1].clone()),
+            RolloutItem::ResponseItem(items[2].clone()),
+        ];
+
+        assert_eq!(
+            serde_json::to_value(&got_items).unwrap(),
+            serde_json::to_value(&expected).unwrap()
+        );
     }
 }

@@ -19,13 +19,23 @@ use strum_macros::Display;
 use ts_rs::TS;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, TS, Hash)]
 #[ts(type = "string")]
-pub struct ConversationId(pub Uuid);
+pub struct ConversationId {
+    uuid: Uuid,
+}
 
 impl ConversationId {
     pub fn new() -> Self {
-        Self(Uuid::new_v4())
+        Self {
+            uuid: Uuid::now_v7(),
+        }
+    }
+
+    pub fn from_string(s: &str) -> Result<Self, uuid::Error> {
+        Ok(Self {
+            uuid: Uuid::parse_str(s)?,
+        })
     }
 }
 
@@ -37,19 +47,27 @@ impl Default for ConversationId {
 
 impl Display for ConversationId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
+        write!(f, "{}", self.uuid)
     }
 }
 
-impl From<Uuid> for ConversationId {
-    fn from(value: Uuid) -> Self {
-        Self(value)
+impl Serialize for ConversationId {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.collect_str(&self.uuid)
     }
 }
 
-impl From<ConversationId> for Uuid {
-    fn from(value: ConversationId) -> Self {
-        value.0
+impl<'de> Deserialize<'de> for ConversationId {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        let uuid = Uuid::parse_str(&value).map_err(serde::de::Error::custom)?;
+        Ok(Self { uuid })
     }
 }
 
@@ -126,6 +144,11 @@ pub enum ClientRequest {
         request_id: RequestId,
         params: GitDiffToRemoteParams,
     },
+    LoginApiKey {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: LoginApiKeyParams,
+    },
     LoginChatGpt {
         #[serde(rename = "id")]
         request_id: RequestId,
@@ -148,7 +171,16 @@ pub enum ClientRequest {
         #[serde(rename = "id")]
         request_id: RequestId,
     },
+    SetDefaultModel {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+        params: SetDefaultModelParams,
+    },
     GetUserAgent {
+        #[serde(rename = "id")]
+        request_id: RequestId,
+    },
+    UserInfo {
         #[serde(rename = "id")]
         request_id: RequestId,
     },
@@ -208,6 +240,9 @@ pub struct NewConversationParams {
 pub struct NewConversationResponse {
     pub conversation_id: ConversationId,
     pub model: String,
+    /// Note this could be ignored by the model.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
     pub rollout_path: PathBuf,
 }
 
@@ -283,6 +318,16 @@ pub struct ArchiveConversationResponse {}
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoveConversationSubscriptionResponse {}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginApiKeyParams {
+    pub api_key: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct LoginApiKeyResponse {}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
@@ -363,9 +408,14 @@ pub struct ExecArbitraryCommandResponse {
 pub struct GetAuthStatusResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_method: Option<AuthMode>,
-    pub preferred_auth_method: AuthMode,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_token: Option<String>,
+
+    // Indicates that auth method must be valid to use the server.
+    // This can be false if using a custom provider that is configured
+    // with requires_openai_auth == false.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub requires_openai_auth: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
@@ -376,9 +426,35 @@ pub struct GetUserAgentResponse {
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
 #[serde(rename_all = "camelCase")]
+pub struct UserInfoResponse {
+    /// Note: `alleged_user_email` is not currently verified. We read it from
+    /// the local auth.json, which the user could theoretically modify. In the
+    /// future, we may add logic to verify the email against the server before
+    /// returning it.
+    pub alleged_user_email: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
 pub struct GetUserSavedConfigResponse {
     pub config: UserSavedConfig,
 }
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SetDefaultModelParams {
+    /// If set to None, this means `model` should be cleared in config.toml.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// If set to None, this means `model_reasoning_effort` should be cleared
+    /// in config.toml.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct SetDefaultModelResponse {}
 
 /// UserSavedConfig contains a subset of the config. It is meant to expose mcp
 /// client-configurable settings that can be specified in the NewConversation
@@ -469,7 +545,8 @@ pub struct SendUserTurnParams {
     pub approval_policy: AskForApproval,
     pub sandbox_policy: SandboxPolicy,
     pub model: String,
-    pub effort: ReasoningEffort,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub effort: Option<ReasoningEffort>,
     pub summary: ReasoningSummary,
 }
 
@@ -660,6 +737,27 @@ mod tests {
     #[test]
     fn test_conversation_id_default_is_not_zeroes() {
         let id = ConversationId::default();
-        assert_ne!(id.0, Uuid::nil());
+        assert_ne!(id.uuid, Uuid::nil());
+    }
+
+    #[test]
+    fn conversation_id_serializes_as_plain_string() {
+        let id = ConversationId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap();
+
+        assert_eq!(
+            json!("67e55044-10b1-426f-9247-bb680e5fe0c8"),
+            serde_json::to_value(id).unwrap()
+        );
+    }
+
+    #[test]
+    fn conversation_id_deserializes_from_plain_string() {
+        let id: ConversationId =
+            serde_json::from_value(json!("67e55044-10b1-426f-9247-bb680e5fe0c8")).unwrap();
+
+        assert_eq!(
+            ConversationId::from_string("67e55044-10b1-426f-9247-bb680e5fe0c8").unwrap(),
+            id,
+        );
     }
 }

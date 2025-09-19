@@ -802,7 +802,7 @@ mod tests {
     async fn resolve_root_git_project_for_trust_regular_repo_returns_repo_root() {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         let repo_path = create_test_git_repo(&temp_dir).await;
-        let expected = std::fs::canonicalize(&repo_path).unwrap().to_path_buf();
+        let expected = std::fs::canonicalize(&repo_path).unwrap();
 
         assert_eq!(
             resolve_root_git_project_for_trust(&repo_path),
@@ -810,10 +810,7 @@ mod tests {
         );
         let nested = repo_path.join("sub/dir");
         std::fs::create_dir_all(&nested).unwrap();
-        assert_eq!(
-            resolve_root_git_project_for_trust(&nested),
-            Some(expected.clone())
-        );
+        assert_eq!(resolve_root_git_project_for_trust(&nested), Some(expected));
     }
 
     #[tokio::test]

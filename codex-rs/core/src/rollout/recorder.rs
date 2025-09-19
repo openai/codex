@@ -77,7 +77,13 @@ pub enum RolloutRecorderParams {
 
 enum RolloutCmd {
     AddItems(Vec<RolloutItem>),
-    Shutdown { ack: oneshot::Sender<()> },
+    /// Ensure all prior writes are processed; respond when flushed.
+    Flush {
+        ack: oneshot::Sender<()>,
+    },
+    Shutdown {
+        ack: oneshot::Sender<()>,
+    },
 }
 
 impl RolloutRecorderParams {
@@ -185,9 +191,19 @@ impl RolloutRecorder {
             .map_err(|e| IoError::other(format!("failed to queue rollout items: {e}")))
     }
 
+    /// Flush all queued writes and wait until they are committed by the writer task.
+    pub async fn flush(&self) -> std::io::Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.tx
+            .send(RolloutCmd::Flush { ack: tx })
+            .await
+            .map_err(|e| IoError::other(format!("failed to queue rollout flush: {e}")))?;
+        rx.await
+            .map_err(|e| IoError::other(format!("failed waiting for rollout flush: {e}")))
+    }
+
     pub(crate) async fn get_rollout_history(path: &Path) -> std::io::Result<InitialHistory> {
         info!("Resuming rollout from {path:?}");
-        tracing::error!("Resuming rollout from {path:?}");
         let text = tokio::fs::read_to_string(path).await?;
         if text.trim().is_empty() {
             return Err(IoError::other("empty session file"));
@@ -211,15 +227,21 @@ impl RolloutRecorder {
             match serde_json::from_value::<RolloutLine>(v.clone()) {
                 Ok(rollout_line) => match rollout_line.item {
                     RolloutItem::SessionMeta(session_meta_line) => {
-                        tracing::error!(
-                            "Parsed conversation ID from rollout file: {:?}",
-                            session_meta_line.meta.id
-                        );
-                        conversation_id = Some(session_meta_line.meta.id);
+                        // Use the FIRST SessionMeta encountered in the file as the canonical
+                        // conversation id and main session information. Keep all items intact.
+                        if conversation_id.is_none() {
+                            conversation_id = Some(session_meta_line.meta.id);
+                        }
                         items.push(RolloutItem::SessionMeta(session_meta_line));
                     }
                     RolloutItem::ResponseItem(item) => {
                         items.push(RolloutItem::ResponseItem(item));
+                    }
+                    RolloutItem::Compacted(item) => {
+                        items.push(RolloutItem::Compacted(item));
+                    }
+                    RolloutItem::TurnContext(item) => {
+                        items.push(RolloutItem::TurnContext(item));
                     }
                     RolloutItem::EventMsg(_ev) => {
                         items.push(RolloutItem::EventMsg(_ev));
@@ -231,7 +253,7 @@ impl RolloutRecorder {
             }
         }
 
-        tracing::error!(
+        info!(
             "Resumed rollout with {} items, conversation ID: {:?}",
             items.len(),
             conversation_id
@@ -249,6 +271,10 @@ impl RolloutRecorder {
             history: items,
             rollout_path: path.to_path_buf(),
         }))
+    }
+
+    pub(crate) fn get_rollout_path(&self) -> PathBuf {
+        self.rollout_path.clone()
     }
 
     pub async fn shutdown(&self) -> std::io::Result<()> {
@@ -350,6 +376,14 @@ async fn rollout_writer(
                         writer.write_rollout_item(item).await?;
                     }
                 }
+            }
+            RolloutCmd::Flush { ack } => {
+                // Ensure underlying file is flushed and then ack.
+                if let Err(e) = writer.file.flush().await {
+                    let _ = ack.send(());
+                    return Err(e);
+                }
+                let _ = ack.send(());
             }
             RolloutCmd::Shutdown { ack } => {
                 let _ = ack.send(());

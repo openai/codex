@@ -80,7 +80,10 @@ pub struct ModelProviderInfo {
     /// the connection as lost.
     pub stream_idle_timeout_ms: Option<u64>,
 
-    /// Whether this provider requires some form of standard authentication (API key, ChatGPT token).
+    /// Does this provider require an OpenAI API Key or ChatGPT login token? If true,
+    /// user is presented with login screen on first run, and login preference and token/key
+    /// are stored in auth.json. If false (which is the default), login screen is skipped,
+    /// and API key (if needed) comes from the "env_key" environment variable.
     #[serde(default)]
     pub requires_openai_auth: bool,
 }
@@ -157,6 +160,21 @@ impl ModelProviderInfo {
             WireApi::Responses => format!("{base_url}/responses{query_string}"),
             WireApi::Chat => format!("{base_url}/chat/completions{query_string}"),
         }
+    }
+
+    pub(crate) fn is_azure_responses_endpoint(&self) -> bool {
+        if self.wire_api != WireApi::Responses {
+            return false;
+        }
+
+        if self.name.eq_ignore_ascii_case("azure") {
+            return true;
+        }
+
+        self.base_url
+            .as_ref()
+            .map(|base| matches_azure_responses_base_url(base))
+            .unwrap_or(false)
     }
 
     /// Apply provider-specific HTTP headers (both static and environment-based)
@@ -326,6 +344,18 @@ pub fn create_oss_provider_with_base_url(base_url: &str) -> ModelProviderInfo {
     }
 }
 
+fn matches_azure_responses_base_url(base_url: &str) -> bool {
+    let base = base_url.to_ascii_lowercase();
+    const AZURE_MARKERS: [&str; 5] = [
+        "openai.azure.",
+        "cognitiveservices.azure.",
+        "aoai.azure.",
+        "azure-api.",
+        "azurefd.",
+    ];
+    AZURE_MARKERS.iter().any(|marker| base.contains(marker))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -415,5 +445,70 @@ env_http_headers = { "X-Example-Env-Header" = "EXAMPLE_ENV_VAR" }
 
         let provider: ModelProviderInfo = toml::from_str(azure_provider_toml).unwrap();
         assert_eq!(expected_provider, provider);
+    }
+
+    #[test]
+    fn detects_azure_responses_base_urls() {
+        fn provider_for(base_url: &str) -> ModelProviderInfo {
+            ModelProviderInfo {
+                name: "test".into(),
+                base_url: Some(base_url.into()),
+                env_key: None,
+                env_key_instructions: None,
+                wire_api: WireApi::Responses,
+                query_params: None,
+                http_headers: None,
+                env_http_headers: None,
+                request_max_retries: None,
+                stream_max_retries: None,
+                stream_idle_timeout_ms: None,
+                requires_openai_auth: false,
+            }
+        }
+
+        let positive_cases = [
+            "https://foo.openai.azure.com/openai",
+            "https://foo.openai.azure.us/openai/deployments/bar",
+            "https://foo.cognitiveservices.azure.cn/openai",
+            "https://foo.aoai.azure.com/openai",
+            "https://foo.openai.azure-api.net/openai",
+            "https://foo.z01.azurefd.net/",
+        ];
+        for base_url in positive_cases {
+            let provider = provider_for(base_url);
+            assert!(
+                provider.is_azure_responses_endpoint(),
+                "expected {base_url} to be detected as Azure"
+            );
+        }
+
+        let named_provider = ModelProviderInfo {
+            name: "Azure".into(),
+            base_url: Some("https://example.com".into()),
+            env_key: None,
+            env_key_instructions: None,
+            wire_api: WireApi::Responses,
+            query_params: None,
+            http_headers: None,
+            env_http_headers: None,
+            request_max_retries: None,
+            stream_max_retries: None,
+            stream_idle_timeout_ms: None,
+            requires_openai_auth: false,
+        };
+        assert!(named_provider.is_azure_responses_endpoint());
+
+        let negative_cases = [
+            "https://api.openai.com/v1",
+            "https://example.com/openai",
+            "https://myproxy.azurewebsites.net/openai",
+        ];
+        for base_url in negative_cases {
+            let provider = provider_for(base_url);
+            assert!(
+                !provider.is_azure_responses_endpoint(),
+                "expected {base_url} not to be detected as Azure"
+            );
+        }
     }
 }

@@ -868,7 +868,7 @@ pub fn parse_command_impl(command: &[String]) -> Vec<ParsedCommand> {
     let parts = if contains_connectors(&normalized) {
         split_on_connectors(&normalized)
     } else {
-        vec![normalized.clone()]
+        vec![normalized]
     };
 
     // Preserve left-to-right execution order for all commands, including bash -c/-lc
@@ -1156,10 +1156,8 @@ fn parse_bash_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
         // bias toward the primary command when pipelines are present.
         // First, drop obvious small formatting helpers (e.g., wc/awk/etc).
         let had_multiple_commands = all_commands.len() > 1;
-        // The bash AST walker yields commands in right-to-left order for
-        // connector/pipeline sequences. Reverse to reflect actual execution order.
-        let mut filtered_commands = drop_small_formatting_commands(all_commands);
-        filtered_commands.reverse();
+        // Commands arrive in source order; drop formatting helpers while preserving it.
+        let filtered_commands = drop_small_formatting_commands(all_commands);
         if filtered_commands.is_empty() {
             return Some(vec![ParsedCommand::Unknown {
                 cmd: script.clone(),
@@ -1201,10 +1199,7 @@ fn parse_bash_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
                                     name,
                                 }
                             } else {
-                                ParsedCommand::Read {
-                                    cmd: cmd.clone(),
-                                    name,
-                                }
+                                ParsedCommand::Read { cmd, name }
                             }
                         } else {
                             ParsedCommand::Read {
@@ -1215,10 +1210,7 @@ fn parse_bash_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
                     }
                     ParsedCommand::ListFiles { path, cmd, .. } => {
                         if had_connectors {
-                            ParsedCommand::ListFiles {
-                                cmd: cmd.clone(),
-                                path,
-                            }
+                            ParsedCommand::ListFiles { cmd, path }
                         } else {
                             ParsedCommand::ListFiles {
                                 cmd: shlex_join(&script_tokens),
@@ -1230,11 +1222,7 @@ fn parse_bash_lc_commands(original: &[String]) -> Option<Vec<ParsedCommand>> {
                         query, path, cmd, ..
                     } => {
                         if had_connectors {
-                            ParsedCommand::Search {
-                                cmd: cmd.clone(),
-                                query,
-                                path,
-                            }
+                            ParsedCommand::Search { cmd, query, path }
                         } else {
                             ParsedCommand::Search {
                                 cmd: shlex_join(&script_tokens),

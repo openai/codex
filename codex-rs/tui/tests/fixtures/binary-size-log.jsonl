@@ -1,4 +1,4 @@
-{"ts":"2025-08-09T15:51:04.827Z","dir":"meta","kind":"session_start","cwd":"/Users/easong/code/codex/codex-rs","model":"gpt-5","model_provider_id":"openai","model_provider_name":"OpenAI"}
+{"ts":"2025-08-09T15:51:04.827Z","dir":"meta","kind":"session_start","cwd":"/Users/easong/code/codex/codex-rs","model":"gpt-5","reasoning_effort":"medium","model_provider_id":"openai","model_provider_name":"OpenAI"}
 {"ts":"2025-08-09T15:51:04.827Z","dir":"to_tui","kind":"key_event","event":"KeyEvent { code: Char('c'), modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }"}
 {"ts":"2025-08-09T15:51:04.827Z","dir":"to_tui","kind":"key_event","event":"KeyEvent { code: Char('o'), modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }"}
 {"ts":"2025-08-09T15:51:04.827Z","dir":"to_tui","kind":"key_event","event":"KeyEvent { code: Char('m'), modifiers: KeyModifiers(0x0), kind: Press, state: KeyEventState(0x0) }"}
@@ -34,7 +34,7 @@
 {"ts":"2025-08-09T15:51:04.829Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
 {"ts":"2025-08-09T15:51:04.829Z","dir":"to_tui","kind":"log_line","line":"[INFO codex_core::codex] resume_path: None"}
 {"ts":"2025-08-09T15:51:04.830Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
-{"ts":"2025-08-09T15:51:04.856Z","dir":"to_tui","kind":"codex_event","payload":{"id":"0","msg":{"type":"session_configured","session_id":"d126e3d0-80ed-480a-be8c-09d97ff602cf","model":"gpt-5","history_log_id":2532619,"history_entry_count":339,"rollout_path":"/tmp/codex-test-rollout.jsonl"}}}
+{"ts":"2025-08-09T15:51:04.856Z","dir":"to_tui","kind":"codex_event","payload":{"id":"0","msg":{"type":"session_configured","session_id":"d126e3d0-80ed-480a-be8c-09d97ff602cf","model":"gpt-5","reasoning_effort":"medium","history_log_id":2532619,"history_entry_count":339,"rollout_path":"/tmp/codex-test-rollout.jsonl"}}}
 {"ts":"2025-08-09T15:51:04.856Z","dir":"to_tui","kind":"insert_history","lines":9}
 {"ts":"2025-08-09T15:51:04.857Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
 {"ts":"2025-08-09T15:51:04.857Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
@@ -16447,7 +16447,7 @@
 {"ts":"2025-08-09T16:06:58.083Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
 {"ts":"2025-08-09T16:06:58.085Z","dir":"to_tui","kind":"app_event","variant":"Redraw"}
 {"ts":"2025-08-09T16:06:58.085Z","dir":"to_tui","kind":"log_line","line":"[INFO codex_core::codex] resume_path: None"}
-{"ts":"2025-08-09T16:06:58.136Z","dir":"to_tui","kind":"codex_event","payload":{"id":"0","msg":{"type":"session_configured","session_id":"c7df96da-daec-4fe9-aed9-3cd19b7a6192","model":"gpt-5","history_log_id":2532619,"history_entry_count":342,"rollout_path":"/tmp/codex-test-rollout.jsonl"}}}
+{"ts":"2025-08-09T16:06:58.136Z","dir":"to_tui","kind":"codex_event","payload":{"id":"0","msg":{"type":"session_configured","session_id":"c7df96da-daec-4fe9-aed9-3cd19b7a6192","model":"gpt-5","reasoning_effort":"medium","history_log_id":2532619,"history_entry_count":342,"rollout_path":"/tmp/codex-test-rollout.jsonl"}}}
 {"ts":"2025-08-09T16:06:58.136Z","dir":"to_tui","kind":"insert_history","lines":9}
 {"ts":"2025-08-09T16:06:58.136Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}
 {"ts":"2025-08-09T16:06:58.136Z","dir":"to_tui","kind":"app_event","variant":"RequestRedraw"}

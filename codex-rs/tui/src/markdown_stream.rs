@@ -4,8 +4,6 @@ use codex_core::config::Config;
 use ratatui::text::Line;
 
 use crate::markdown;
-use crate::render::markdown_utils::is_inside_unclosed_fence;
-use crate::render::markdown_utils::strip_empty_fenced_code_blocks;
 
 /// Newline-gated accumulator that renders markdown and commits only fully
 /// completed logical lines.
@@ -42,6 +40,7 @@ impl MarkdownStreamCollector {
     }
 
     pub fn push_delta(&mut self, delta: &str) {
+        tracing::trace!("push_delta: {delta:?}");
         self.buffer.push_str(delta);
     }
 
@@ -49,14 +48,15 @@ impl MarkdownStreamCollector {
     /// since the last commit. When the buffer does not end with a newline, the
     /// final rendered line is considered incomplete and is not emitted.
     pub fn commit_complete_lines(&mut self, config: &Config) -> Vec<Line<'static>> {
-        // In non-test builds, unwrap an outer ```markdown fence during commit as well,
-        // so fence markers never appear in streamed history.
-        let source = unwrap_markdown_language_fence_if_enabled(self.buffer.clone());
-        let source = strip_empty_fenced_code_blocks(&source);
-
+        let source = self.buffer.clone();
+        let last_newline_idx = source.rfind('\n');
+        let source = if let Some(last_newline_idx) = last_newline_idx {
+            source[..=last_newline_idx].to_string()
+        } else {
+            return Vec::new();
+        };
         let mut rendered: Vec<Line<'static>> = Vec::new();
         markdown::append_markdown(&source, &mut rendered, config);
-
         let mut complete_line_count = rendered.len();
         if complete_line_count > 0
             && crate::render::line_utils::is_blank_line_spaces_only(
@@ -65,87 +65,12 @@ impl MarkdownStreamCollector {
         {
             complete_line_count -= 1;
         }
-        // Heuristic: if the buffer ends with a double newline and the last non-blank
-        // rendered line looks like a list bullet with inline content (e.g., "- item"),
-        // defer committing that line. Subsequent context (e.g., another list item)
-        // can cause the renderer to split the bullet marker and text into separate
-        // logical lines ("- " then "item"), which would otherwise duplicate content.
-        if self.buffer.ends_with("\n\n") && complete_line_count > 0 {
-            let last = &rendered[complete_line_count - 1];
-            let mut text = String::new();
-            for s in &last.spans {
-                text.push_str(&s.content);
-            }
-            if text.starts_with("- ") && text.trim() != "-" {
-                complete_line_count = complete_line_count.saturating_sub(1);
-            }
-        }
-        if !self.buffer.ends_with('\n') {
-            complete_line_count = complete_line_count.saturating_sub(1);
-            // If we're inside an unclosed fenced code block, also drop the
-            // last rendered line to avoid committing a partial code line.
-            if is_inside_unclosed_fence(&source) {
-                complete_line_count = complete_line_count.saturating_sub(1);
-            }
-            // If the next (incomplete) line appears to begin a list item,
-            // also defer the previous completed line because the renderer may
-            // retroactively treat it as part of the list (e.g., ordered list item 1).
-            if let Some(last_nl) = source.rfind('\n') {
-                let tail = &source[last_nl + 1..];
-                if starts_with_list_marker(tail) {
-                    complete_line_count = complete_line_count.saturating_sub(1);
-                }
-            }
-        }
-
-        // Conservatively withhold trailing list-like lines (unordered or ordered)
-        // because streaming mid-item can cause the renderer to later split or
-        // restructure them (e.g., duplicating content or separating the marker).
-        // Only defers lines at the end of the out slice so previously committed
-        // lines remain stable.
-        if complete_line_count > self.committed_line_count {
-            let mut safe_count = complete_line_count;
-            while safe_count > self.committed_line_count {
-                let l = &rendered[safe_count - 1];
-                let mut text = String::new();
-                for s in &l.spans {
-                    text.push_str(&s.content);
-                }
-                let listish = is_potentially_volatile_list_line(&text);
-                if listish {
-                    safe_count -= 1;
-                    continue;
-                }
-                break;
-            }
-            complete_line_count = safe_count;
-        }
 
         if self.committed_line_count >= complete_line_count {
             return Vec::new();
         }
 
         let out_slice = &rendered[self.committed_line_count..complete_line_count];
-        // Strong correctness: while a fenced code block is open (no closing fence yet),
-        // do not emit any new lines from inside it. Wait until the fence closes to emit
-        // the entire block together. This avoids stray backticks and misformatted content.
-        if is_inside_unclosed_fence(&source) {
-            return Vec::new();
-        }
-
-        // Additional conservative hold-back: if exactly one short, plain word
-        // line would be emitted, defer it. This avoids committing a lone word
-        // that might become the first ordered-list item once the next delta
-        // arrives (e.g., next line starts with "2 " or "2. ").
-        if out_slice.len() == 1 {
-            let mut s = String::new();
-            for sp in &out_slice[0].spans {
-                s.push_str(&sp.content);
-            }
-            if is_short_plain_word(&s) {
-                return Vec::new();
-            }
-        }
 
         let out = out_slice.to_vec();
         self.committed_line_count = complete_line_count;
@@ -157,12 +82,19 @@ impl MarkdownStreamCollector {
     /// for rendering. Optionally unwraps ```markdown language fences in
     /// non-test builds.
     pub fn finalize_and_drain(&mut self, config: &Config) -> Vec<Line<'static>> {
-        let mut source: String = self.buffer.clone();
+        let raw_buffer = self.buffer.clone();
+        let mut source: String = raw_buffer.clone();
         if !source.ends_with('\n') {
             source.push('\n');
         }
-        let source = unwrap_markdown_language_fence_if_enabled(source);
-        let source = strip_empty_fenced_code_blocks(&source);
+        tracing::debug!(
+            raw_len = raw_buffer.len(),
+            source_len = source.len(),
+            "markdown finalize (raw length: {}, rendered length: {})",
+            raw_buffer.len(),
+            source.len()
+        );
+        tracing::trace!("markdown finalize (raw source):\n---\n{source}\n---");
 
         let mut rendered: Vec<Line<'static>> = Vec::new();
         markdown::append_markdown(&source, &mut rendered, config);
@@ -177,122 +109,6 @@ impl MarkdownStreamCollector {
         self.clear();
         out
     }
-}
-
-#[inline]
-fn is_potentially_volatile_list_line(text: &str) -> bool {
-    let t = text.trim_end();
-    if t == "-" || t == "*" || t == "- " || t == "* " {
-        return true;
-    }
-    if t.starts_with("- ") || t.starts_with("* ") {
-        return true;
-    }
-    // ordered list like "1. " or "23. "
-    let mut it = t.chars().peekable();
-    let mut saw_digit = false;
-    while let Some(&ch) = it.peek() {
-        if ch.is_ascii_digit() {
-            saw_digit = true;
-            it.next();
-            continue;
-        }
-        break;
-    }
-    if saw_digit && it.peek() == Some(&'.') {
-        // consume '.'
-        it.next();
-        if it.peek() == Some(&' ') {
-            return true;
-        }
-    }
-    false
-}
-
-#[inline]
-fn starts_with_list_marker(text: &str) -> bool {
-    let t = text.trim_start();
-    if t.starts_with("- ") || t.starts_with("* ") || t.starts_with("-\t") || t.starts_with("*\t") {
-        return true;
-    }
-    // ordered list marker like "1 ", "1. ", "23 ", "23. "
-    let mut it = t.chars().peekable();
-    let mut saw_digit = false;
-    while let Some(&ch) = it.peek() {
-        if ch.is_ascii_digit() {
-            saw_digit = true;
-            it.next();
-        } else {
-            break;
-        }
-    }
-    if !saw_digit {
-        return false;
-    }
-    match it.peek() {
-        Some('.') => {
-            it.next();
-            matches!(it.peek(), Some(' '))
-        }
-        Some(' ') => true,
-        _ => false,
-    }
-}
-
-#[inline]
-fn is_short_plain_word(s: &str) -> bool {
-    let t = s.trim();
-    if t.is_empty() || t.len() > 5 {
-        return false;
-    }
-    t.chars().all(|c| c.is_alphanumeric())
-}
-
-/// fence helpers are provided by `crate::render::markdown_utils`
-#[cfg(test)]
-fn unwrap_markdown_language_fence_if_enabled(s: String) -> String {
-    // In tests, keep content exactly as provided to simplify assertions.
-    s
-}
-
-#[cfg(not(test))]
-fn unwrap_markdown_language_fence_if_enabled(s: String) -> String {
-    // Best-effort unwrap of a single outer fenced markdown block.
-    // Recognizes common forms like ```markdown, ```md (any case), optional
-    // surrounding whitespace, and flexible trailing newlines/CRLF.
-    // If the block is not recognized, return the input unchanged.
-    let lines = s.lines().collect::<Vec<_>>();
-    if lines.len() < 2 {
-        return s;
-    }
-
-    // Identify opening fence and language.
-    let open = lines.first().map(|l| l.trim_start()).unwrap_or("");
-    if !open.starts_with("```") {
-        return s;
-    }
-    let lang = open.trim_start_matches("```").trim();
-    let is_markdown_lang = lang.eq_ignore_ascii_case("markdown") || lang.eq_ignore_ascii_case("md");
-    if !is_markdown_lang {
-        return s;
-    }
-
-    // Find the last non-empty line and ensure it is a closing fence.
-    let mut last_idx = lines.len() - 1;
-    while last_idx > 0 && lines[last_idx].trim().is_empty() {
-        last_idx -= 1;
-    }
-    if lines[last_idx].trim() != "```" {
-        return s;
-    }
-
-    // Reconstruct the inner content between the fences.
-    let mut out = String::new();
-    for l in lines.iter().take(last_idx).skip(1) {
-        out.push_str(l);
-        out.push('\n');
-    }
-    out
 }
 
 pub(crate) struct StepResult {
@@ -373,6 +189,7 @@ mod tests {
     use super::*;
     use codex_core::config::Config;
     use codex_core::config::ConfigOverrides;
+    use ratatui::style::Color;
 
     fn test_config() -> Config {
         let overrides = ConfigOverrides {
@@ -404,6 +221,125 @@ mod tests {
         c.push_delta("Line without newline");
         let out = c.finalize_and_drain(&cfg);
         assert_eq!(out.len(), 1);
+    }
+
+    #[test]
+    fn e2e_stream_blockquote_simple_is_green() {
+        let cfg = test_config();
+        let out = super::simulate_stream_markdown_for_tests(&["> Hello\n"], true, &cfg);
+        assert_eq!(out.len(), 1);
+        let l = &out[0];
+        assert_eq!(
+            l.style.fg,
+            Some(Color::Green),
+            "expected blockquote line fg green, got {:?}",
+            l.style.fg
+        );
+    }
+
+    #[test]
+    fn e2e_stream_blockquote_nested_is_green() {
+        let cfg = test_config();
+        let out =
+            super::simulate_stream_markdown_for_tests(&["> Level 1\n>> Level 2\n"], true, &cfg);
+        // Filter out any blank lines that may be inserted at paragraph starts.
+        let non_blank: Vec<_> = out
+            .into_iter()
+            .filter(|l| {
+                let s = l
+                    .spans
+                    .iter()
+                    .map(|sp| sp.content.clone())
+                    .collect::<Vec<_>>()
+                    .join("");
+                let t = s.trim();
+                // Ignore quote-only blank lines like ">" inserted at paragraph boundaries.
+                !(t.is_empty() || t == ">")
+            })
+            .collect();
+        assert_eq!(non_blank.len(), 2);
+        assert_eq!(non_blank[0].style.fg, Some(Color::Green));
+        assert_eq!(non_blank[1].style.fg, Some(Color::Green));
+    }
+
+    #[test]
+    fn e2e_stream_blockquote_with_list_items_is_green() {
+        let cfg = test_config();
+        let out =
+            super::simulate_stream_markdown_for_tests(&["> - item 1\n> - item 2\n"], true, &cfg);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].style.fg, Some(Color::Green));
+        assert_eq!(out[1].style.fg, Some(Color::Green));
+    }
+
+    #[test]
+    fn e2e_stream_nested_mixed_lists_ordered_marker_is_light_blue() {
+        let cfg = test_config();
+        let md = [
+            "1. First\n",
+            "   - Second level\n",
+            "     1. Third level (ordered)\n",
+            "        - Fourth level (bullet)\n",
+            "          - Fifth level to test indent consistency\n",
+        ];
+        let out = super::simulate_stream_markdown_for_tests(&md, true, &cfg);
+        // Find the line that contains the third-level ordered text
+        let find_idx = out.iter().position(|l| {
+            l.spans
+                .iter()
+                .map(|s| s.content.clone())
+                .collect::<String>()
+                .contains("Third level (ordered)")
+        });
+        let idx = find_idx.expect("expected third-level ordered line");
+        let line = &out[idx];
+        // Expect at least one span on this line to be styled light blue
+        let has_light_blue = line
+            .spans
+            .iter()
+            .any(|s| s.style.fg == Some(ratatui::style::Color::LightBlue));
+        assert!(
+            has_light_blue,
+            "expected an ordered-list marker span with light blue fg on: {line:?}"
+        );
+    }
+
+    #[test]
+    fn e2e_stream_blockquote_wrap_preserves_green_style() {
+        let cfg = test_config();
+        let long = "> This is a very long quoted line that should wrap across multiple columns to verify style preservation.";
+        let out = super::simulate_stream_markdown_for_tests(&[long, "\n"], true, &cfg);
+        // Wrap to a narrow width to force multiple output lines.
+        let wrapped = crate::wrapping::word_wrap_lines(
+            out.iter().collect::<Vec<_>>(),
+            crate::wrapping::RtOptions::new(24),
+        );
+        // Filter out purely blank lines
+        let non_blank: Vec<_> = wrapped
+            .into_iter()
+            .filter(|l| {
+                let s = l
+                    .spans
+                    .iter()
+                    .map(|sp| sp.content.clone())
+                    .collect::<Vec<_>>()
+                    .join("");
+                !s.trim().is_empty()
+            })
+            .collect();
+        assert!(
+            non_blank.len() >= 2,
+            "expected wrapped blockquote to span multiple lines"
+        );
+        for (i, l) in non_blank.iter().enumerate() {
+            assert_eq!(
+                l.spans[0].style.fg,
+                Some(Color::Green),
+                "wrapped line {} should preserve green style, got {:?}",
+                i,
+                l.spans[0].style.fg
+            );
+        }
     }
 
     #[test]
@@ -490,7 +426,7 @@ mod tests {
             .collect();
         assert_eq!(
             s1,
-            vec!["Sounds good!", ""],
+            vec!["Sounds good!"],
             "expected paragraph followed by blank separator before heading chunk"
         );
 
@@ -509,7 +445,7 @@ mod tests {
             .collect();
         assert_eq!(
             s2,
-            vec!["## Adding Bird subcommand"],
+            vec!["", "## Adding Bird subcommand"],
             "expected the heading line only on the final commit"
         );
 
@@ -531,18 +467,6 @@ mod tests {
             vec!["Hello."],
             "unexpected markdown lines: {rendered_strings:?}"
         );
-
-        let line_to_string = |l: &ratatui::text::Line<'_>| -> String {
-            l.spans
-                .iter()
-                .map(|s| s.content.clone())
-                .collect::<Vec<_>>()
-                .join("")
-        };
-
-        assert_eq!(line_to_string(&out1[0]), "Sounds good!");
-        assert_eq!(line_to_string(&out1[1]), "");
-        assert_eq!(line_to_string(&out2[0]), "## Adding Bird subcommand");
     }
 
     fn lines_to_plain_strings(lines: &[ratatui::text::Line<'_>]) -> Vec<String> {
@@ -560,35 +484,11 @@ mod tests {
 
     #[test]
     fn lists_and_fences_commit_without_duplication() {
-        let cfg = test_config();
-
         // List case
-        let deltas = vec!["- a\n- ", "b\n- c\n"];
-        let streamed = simulate_stream_markdown_for_tests(&deltas, true, &cfg);
-        let streamed_str = lines_to_plain_strings(&streamed);
-
-        let mut rendered_all: Vec<ratatui::text::Line<'static>> = Vec::new();
-        crate::markdown::append_markdown("- a\n- b\n- c\n", &mut rendered_all, &cfg);
-        let rendered_all_str = lines_to_plain_strings(&rendered_all);
-
-        assert_eq!(
-            streamed_str, rendered_all_str,
-            "list streaming should equal full render without duplication"
-        );
+        assert_streamed_equals_full(&["- a\n- ", "b\n- c\n"]);
 
         // Fenced code case: stream in small chunks
-        let deltas2 = vec!["```", "\nco", "de 1\ncode 2\n", "```\n"];
-        let streamed2 = simulate_stream_markdown_for_tests(&deltas2, true, &cfg);
-        let streamed2_str = lines_to_plain_strings(&streamed2);
-
-        let mut rendered_all2: Vec<ratatui::text::Line<'static>> = Vec::new();
-        crate::markdown::append_markdown("```\ncode 1\ncode 2\n```\n", &mut rendered_all2, &cfg);
-        let rendered_all2_str = lines_to_plain_strings(&rendered_all2);
-
-        assert_eq!(
-            streamed2_str, rendered_all2_str,
-            "fence streaming should equal full render without duplication"
-        );
+        assert_streamed_equals_full(&["```", "\nco", "de 1\ncode 2\n", "```\n"]);
     }
 
     #[test]
@@ -619,6 +519,56 @@ mod tests {
         assert_eq!(
             streamed_str, rendered_all_str,
             "utf8/wide-char streaming should equal full render without duplication or truncation"
+        );
+    }
+
+    #[test]
+    fn e2e_stream_deep_nested_third_level_marker_is_light_blue() {
+        let cfg = test_config();
+        let md = "1. First\n   - Second level\n     1. Third level (ordered)\n        - Fourth level (bullet)\n          - Fifth level to test indent consistency\n";
+        let streamed = super::simulate_stream_markdown_for_tests(&[md], true, &cfg);
+        let streamed_strs = lines_to_plain_strings(&streamed);
+
+        // Locate the third-level line in the streamed output; avoid relying on exact indent.
+        let target_suffix = "1. Third level (ordered)";
+        let mut found = None;
+        for line in &streamed {
+            let s: String = line.spans.iter().map(|sp| sp.content.clone()).collect();
+            if s.contains(target_suffix) {
+                found = Some(line.clone());
+                break;
+            }
+        }
+        let line = found.unwrap_or_else(|| {
+            panic!("expected to find the third-level ordered list line; got: {streamed_strs:?}")
+        });
+
+        // The marker (including indent and "1.") is expected to be in the first span
+        // and colored LightBlue; following content should be default color.
+        assert!(
+            !line.spans.is_empty(),
+            "expected non-empty spans for the third-level line"
+        );
+        let marker_span = &line.spans[0];
+        assert_eq!(
+            marker_span.style.fg,
+            Some(Color::LightBlue),
+            "expected LightBlue 3rd-level ordered marker, got {:?}",
+            marker_span.style.fg
+        );
+        // Find the first non-empty non-space content span and verify it is default color.
+        let mut content_fg = None;
+        for sp in &line.spans[1..] {
+            let t = sp.content.trim();
+            if !t.is_empty() {
+                content_fg = Some(sp.style.fg);
+                break;
+            }
+        }
+        assert_eq!(
+            content_fg.flatten(),
+            None,
+            "expected default color for 3rd-level content, got {content_fg:?}"
         );
     }
 
@@ -768,16 +718,12 @@ mod tests {
         let expected = vec![
             "Loose vs. tight list items:".to_string(),
             "".to_string(),
-            "1. ".to_string(),
-            "Tight item".to_string(),
-            "2. ".to_string(),
-            "Another tight item".to_string(),
-            "3. ".to_string(),
-            "Loose item with its own paragraph.".to_string(),
+            "1. Tight item".to_string(),
+            "2. Another tight item".to_string(),
+            "3. Loose item with its own paragraph.".to_string(),
             "".to_string(),
-            "This paragraph belongs to the same list item.".to_string(),
-            "4. ".to_string(),
-            "Second loose item with a nested list after a blank line.".to_string(),
+            "   This paragraph belongs to the same list item.".to_string(),
+            "4. Second loose item with a nested list after a blank line.".to_string(),
             "    - Nested bullet under a loose item".to_string(),
             "    - Another nested bullet".to_string(),
         ];
@@ -788,63 +734,39 @@ mod tests {
     }
 
     // Targeted tests derived from fuzz findings. Each asserts streamed == full render.
-
-    #[test]
-    fn fuzz_class_bare_dash_then_task_item() {
+    fn assert_streamed_equals_full(deltas: &[&str]) {
         let cfg = test_config();
-        // Case similar to: ["two\n", "- \n* [x] done "]
-        let deltas = vec!["two\n", "- \n* [x] done \n"];
-        let streamed = simulate_stream_markdown_for_tests(&deltas, true, &cfg);
+        let streamed = simulate_stream_markdown_for_tests(deltas, true, &cfg);
         let streamed_strs = lines_to_plain_strings(&streamed);
         let full: String = deltas.iter().copied().collect();
         let mut rendered: Vec<ratatui::text::Line<'static>> = Vec::new();
         crate::markdown::append_markdown(&full, &mut rendered, &cfg);
         let rendered_strs = lines_to_plain_strings(&rendered);
-        assert_eq!(streamed_strs, rendered_strs);
+        assert_eq!(streamed_strs, rendered_strs, "full:\n---\n{full}\n---");
     }
 
     #[test]
     fn fuzz_class_bullet_duplication_variant_1() {
-        let cfg = test_config();
-        // Case similar to: ["aph.\n- let one\n- bull", "et two\n\n  second paragraph "]
-        let deltas = vec!["aph.\n- let one\n- bull", "et two\n\n  second paragraph \n"];
-        let streamed = simulate_stream_markdown_for_tests(&deltas, true, &cfg);
-        let streamed_strs = lines_to_plain_strings(&streamed);
-        let full: String = deltas.iter().copied().collect();
-        let mut rendered: Vec<ratatui::text::Line<'static>> = Vec::new();
-        crate::markdown::append_markdown(&full, &mut rendered, &cfg);
-        let rendered_strs = lines_to_plain_strings(&rendered);
-        assert_eq!(streamed_strs, rendered_strs);
+        assert_streamed_equals_full(&[
+            "aph.\n- let one\n- bull",
+            "et two\n\n  second paragraph \n",
+        ]);
     }
 
     #[test]
     fn fuzz_class_bullet_duplication_variant_2() {
-        let cfg = test_config();
-        // Case similar to: ["- e\n  c", "e\n- bullet two\n\n  second paragraph in bullet two\n"]
-        let deltas = vec![
+        assert_streamed_equals_full(&[
             "- e\n  c",
             "e\n- bullet two\n\n  second paragraph in bullet two\n",
-        ];
-        let streamed = simulate_stream_markdown_for_tests(&deltas, true, &cfg);
-        let streamed_strs = lines_to_plain_strings(&streamed);
-        let full: String = deltas.iter().copied().collect();
-        let mut rendered: Vec<ratatui::text::Line<'static>> = Vec::new();
-        crate::markdown::append_markdown(&full, &mut rendered, &cfg);
-        let rendered_strs = lines_to_plain_strings(&rendered);
-        assert_eq!(streamed_strs, rendered_strs);
+        ]);
     }
 
     #[test]
-    fn fuzz_class_ordered_list_split_weirdness() {
-        let cfg = test_config();
-        // Case similar to: ["one\n2", " two\n- \n* [x] d"]
-        let deltas = vec!["one\n2", " two\n- \n* [x] d\n"];
-        let streamed = simulate_stream_markdown_for_tests(&deltas, true, &cfg);
-        let streamed_strs = lines_to_plain_strings(&streamed);
-        let full: String = deltas.iter().copied().collect();
-        let mut rendered: Vec<ratatui::text::Line<'static>> = Vec::new();
-        crate::markdown::append_markdown(&full, &mut rendered, &cfg);
-        let rendered_strs = lines_to_plain_strings(&rendered);
-        assert_eq!(streamed_strs, rendered_strs);
+    fn streaming_html_block_then_text_matches_full() {
+        assert_streamed_equals_full(&[
+            "HTML block:\n",
+            "<div>inline block</div>\n",
+            "more stuff\n",
+        ]);
     }
 }

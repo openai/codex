@@ -30,14 +30,7 @@ When the workflow finishes, the GitHub Release is "done," but you still have to 
 
 ## Publishing to npm
 
-After the GitHub Release is done, you can publish to npm. Note the GitHub Release includes the appropriate artifact for npm (which is the output of `npm pack`), which should be named `codex-npm-VERSION.tgz`. To publish to npm, run:
-
-```
-VERSION=0.21.0
-./scripts/publish_to_npm.py "$VERSION"
-```
-
-Note that you must have permissions to publish to https://www.npmjs.com/package/@openai/codex for this to succeed.
+The GitHub Action is responsible for publishing to npm.
 
 ## Publishing to Homebrew
 

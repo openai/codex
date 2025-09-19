@@ -1,6 +1,7 @@
 use super::*;
 use crate::app_event::AppEvent;
 use crate::app_event_sender::AppEventSender;
+use codex_core::AuthManager;
 use codex_core::CodexAuth;
 use codex_core::config::Config;
 use codex_core::config::ConfigOverrides;
@@ -18,10 +19,17 @@ use codex_core::protocol::EventMsg;
 use codex_core::protocol::ExecApprovalRequestEvent;
 use codex_core::protocol::ExecCommandBeginEvent;
 use codex_core::protocol::ExecCommandEndEvent;
+use codex_core::protocol::ExitedReviewModeEvent;
 use codex_core::protocol::FileChange;
 use codex_core::protocol::InputMessageKind;
+use codex_core::protocol::Op;
 use codex_core::protocol::PatchApplyBeginEvent;
 use codex_core::protocol::PatchApplyEndEvent;
+use codex_core::protocol::ReviewCodeLocation;
+use codex_core::protocol::ReviewFinding;
+use codex_core::protocol::ReviewLineRange;
+use codex_core::protocol::ReviewOutputEvent;
+use codex_core::protocol::ReviewRequest;
 use codex_core::protocol::StreamErrorEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use codex_core::protocol::TaskStartedEvent;
@@ -79,7 +87,9 @@ fn final_answer_without_newline_is_flushed_immediately() {
 
     // Set up a VT100 test terminal to capture ANSI visual output
     let width: u16 = 80;
-    let height: u16 = 2000;
+    // Increased height to keep the initial banner/help lines in view even if
+    // the session renders an extra header line or minor layout changes occur.
+    let height: u16 = 2500;
     let viewport = Rect::new(0, height - 1, width, 1);
     let backend = ratatui::backend::TestBackend::new(width, height);
     let mut terminal = crate::custom_terminal::Terminal::with_options(backend)
@@ -138,6 +148,7 @@ fn resumed_initial_messages_render_history() {
     let configured = codex_core::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         model: "test-model".to_string(),
+        reasoning_effort: Some(ReasoningEffortConfig::default()),
         history_log_id: 0,
         history_entry_count: 0,
         initial_messages: Some(vec![
@@ -180,6 +191,79 @@ fn resumed_initial_messages_render_history() {
     );
 }
 
+/// Entering review mode uses the hint provided by the review request.
+#[test]
+fn entered_review_mode_uses_request_hint() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual();
+
+    chat.handle_codex_event(Event {
+        id: "review-start".into(),
+        msg: EventMsg::EnteredReviewMode(ReviewRequest {
+            prompt: "Review the latest changes".to_string(),
+            user_facing_hint: "feature branch".to_string(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let banner = lines_to_single_string(cells.last().expect("review banner"));
+    assert_eq!(banner, ">> Code review started: feature branch <<\n");
+    assert!(chat.is_review_mode);
+}
+
+/// Entering review mode renders the current changes banner when requested.
+#[test]
+fn entered_review_mode_defaults_to_current_changes_banner() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual();
+
+    chat.handle_codex_event(Event {
+        id: "review-start".into(),
+        msg: EventMsg::EnteredReviewMode(ReviewRequest {
+            prompt: "Review the current changes".to_string(),
+            user_facing_hint: "current changes".to_string(),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let banner = lines_to_single_string(cells.last().expect("review banner"));
+    assert_eq!(banner, ">> Code review started: current changes <<\n");
+    assert!(chat.is_review_mode);
+}
+
+/// Completing review with findings shows the selection popup and finishes with
+/// the closing banner while clearing review mode state.
+#[test]
+fn exited_review_mode_emits_results_and_finishes() {
+    let (mut chat, mut rx, _ops) = make_chatwidget_manual();
+
+    let review = ReviewOutputEvent {
+        findings: vec![ReviewFinding {
+            title: "[P1] Fix bug".to_string(),
+            body: "Something went wrong".to_string(),
+            confidence_score: 0.9,
+            priority: 1,
+            code_location: ReviewCodeLocation {
+                absolute_file_path: PathBuf::from("src/lib.rs"),
+                line_range: ReviewLineRange { start: 10, end: 12 },
+            },
+        }],
+        overall_correctness: "needs work".to_string(),
+        overall_explanation: "Investigate the failure".to_string(),
+        overall_confidence_score: 0.5,
+    };
+
+    chat.handle_codex_event(Event {
+        id: "review-end".into(),
+        msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+            review_output: Some(review),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let banner = lines_to_single_string(cells.last().expect("finished banner"));
+    assert_eq!(banner, "\n<< Code review finished >>\n");
+    assert!(!chat.is_review_mode);
+}
+
 #[cfg_attr(
     target_os = "macos",
     ignore = "system configuration APIs are blocked under macOS seatbelt"
@@ -192,6 +276,7 @@ async fn helpers_are_available_and_do_not_panic() {
     let conversation_manager = Arc::new(ConversationManager::with_auth(CodexAuth::from_api_key(
         "test",
     )));
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
     let init = ChatWidgetInit {
         config: cfg,
         frame_requester: FrameRequester::test_dummy(),
@@ -199,6 +284,7 @@ async fn helpers_are_available_and_do_not_panic() {
         initial_prompt: None,
         initial_images: Vec::new(),
         enhanced_keys_supported: false,
+        auth_manager,
     };
     let mut w = ChatWidget::new(init, conversation_manager);
     // Basic construction sanity.
@@ -223,12 +309,15 @@ fn make_chatwidget_manual() -> (
         placeholder_text: "Ask Codex to do anything".to_string(),
         disable_paste_burst: false,
     });
+    let auth_manager = AuthManager::from_auth_for_testing(CodexAuth::from_api_key("test"));
     let widget = ChatWidget {
         app_event_tx,
         codex_op_tx: op_tx,
         bottom_pane: bottom,
         active_exec_cell: None,
         config: cfg.clone(),
+        auth_manager,
+        session_header: SessionHeader::new(cfg.model.clone()),
         initial_user_message: None,
         token_info: None,
         stream: StreamController::new(cfg),
@@ -242,8 +331,21 @@ fn make_chatwidget_manual() -> (
         show_welcome_banner: true,
         queued_user_messages: VecDeque::new(),
         suppress_session_configured_redraw: false,
+        pending_notification: None,
+        is_review_mode: false,
     };
     (widget, rx, op_rx)
+}
+
+pub(crate) fn make_chatwidget_manual_with_sender() -> (
+    ChatWidget,
+    AppEventSender,
+    tokio::sync::mpsc::UnboundedReceiver<AppEvent>,
+    tokio::sync::mpsc::UnboundedReceiver<Op>,
+) {
+    let (widget, rx, op_rx) = make_chatwidget_manual();
+    let app_event_tx = widget.app_event_tx.clone();
+    (widget, app_event_tx, rx, op_rx)
 }
 
 fn drain_insert_history(
@@ -352,7 +454,7 @@ fn exec_approval_decision_truncates_multiline_and_long_commands() {
     let long = format!("echo {}", "a".repeat(200));
     let ev_long = ExecApprovalRequestEvent {
         call_id: "call-long".into(),
-        command: vec!["bash".into(), "-lc".into(), long.clone()],
+        command: vec!["bash".into(), "-lc".into(), long],
         cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
         reason: None,
     };
@@ -761,10 +863,10 @@ async fn binary_size_transcript_snapshot() {
     // Consider content only after the last session banner marker. Skip the transient
     // 'thinking' header if present, and start from the first non-empty content line
     // that follows. This keeps the snapshot stable across sessions.
-    const MARKER_PREFIX: &str = ">_ You are using OpenAI Codex in ";
+    const MARKER_PREFIX: &str = "To get started, describe a task or try one of these commands:";
     let last_marker_line_idx = lines
         .iter()
-        .rposition(|l| l.starts_with(MARKER_PREFIX))
+        .rposition(|l| l.trim_start().starts_with(MARKER_PREFIX))
         .expect("marker not found in visible output");
     // Prefer the first assistant content line (blockquote '>' prefix) after the marker;
     // fallback to the first non-empty, non-'thinking' line.
@@ -1753,6 +1855,126 @@ fn chatwidget_exec_and_status_layout_vt100_snapshot() {
         vt_lines[y as usize] = line.trim_end().to_string();
     }
 
+    let visual = vt_lines.join("\n");
+    assert_snapshot!(visual);
+}
+
+// E2E vt100 snapshot for complex markdown with indented and nested fenced code blocks
+#[test]
+fn chatwidget_markdown_code_blocks_vt100_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual();
+
+    // Simulate a final agent message via streaming deltas instead of a single message
+
+    chat.handle_codex_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::TaskStarted(TaskStartedEvent {
+            model_context_window: None,
+        }),
+    });
+    // Build a vt100 visual from the history insertions only (no UI overlay)
+    let width: u16 = 80;
+    let height: u16 = 50;
+    let backend = ratatui::backend::TestBackend::new(width, height);
+    let mut term = crate::custom_terminal::Terminal::with_options(backend).expect("terminal");
+    // Place viewport at the last line so that history lines insert above it
+    term.set_viewport_area(Rect::new(0, height - 1, width, 1));
+
+    let mut ansi: Vec<u8> = Vec::new();
+
+    // Simulate streaming via AgentMessageDelta in 2-character chunks (no final AgentMessage).
+    let source: &str = r#"
+
+    -- Indented code block (4 spaces)
+    SELECT *
+    FROM "users"
+    WHERE "email" LIKE '%@example.com';
+
+````markdown
+```sh
+printf 'fenced within fenced\n'
+```
+````
+
+```jsonc
+{
+  // comment allowed in jsonc
+  "path": "C:\\Program Files\\App",
+  "regex": "^foo.*(bar)?$"
+}
+```
+"#;
+
+    let mut it = source.chars();
+    loop {
+        let mut delta = String::new();
+        match it.next() {
+            Some(c) => delta.push(c),
+            None => break,
+        }
+        if let Some(c2) = it.next() {
+            delta.push(c2);
+        }
+
+        chat.handle_codex_event(Event {
+            id: "t1".into(),
+            msg: EventMsg::AgentMessageDelta(AgentMessageDeltaEvent { delta }),
+        });
+        // Drive commit ticks and drain emitted history lines into the vt100 buffer.
+        loop {
+            chat.on_commit_tick();
+            let mut inserted_any = false;
+            while let Ok(app_ev) = rx.try_recv() {
+                if let AppEvent::InsertHistoryCell(cell) = app_ev {
+                    let lines = cell.display_lines(width);
+                    crate::insert_history::insert_history_lines_to_writer(
+                        &mut term, &mut ansi, lines,
+                    );
+                    inserted_any = true;
+                }
+            }
+            if !inserted_any {
+                break;
+            }
+        }
+    }
+
+    // Finalize the stream without sending a final AgentMessage, to flush any tail.
+    chat.handle_codex_event(Event {
+        id: "t1".into(),
+        msg: EventMsg::TaskComplete(TaskCompleteEvent {
+            last_agent_message: None,
+        }),
+    });
+    for lines in drain_insert_history(&mut rx) {
+        crate::insert_history::insert_history_lines_to_writer(&mut term, &mut ansi, lines);
+    }
+
+    let mut parser = vt100::Parser::new(height, width, 0);
+    parser.process(&ansi);
+
+    let mut vt_lines: Vec<String> = (0..height)
+        .map(|row| {
+            let mut s = String::with_capacity(width as usize);
+            for col in 0..width {
+                if let Some(cell) = parser.screen().cell(row, col) {
+                    if let Some(ch) = cell.contents().chars().next() {
+                        s.push(ch);
+                    } else {
+                        s.push(' ');
+                    }
+                } else {
+                    s.push(' ');
+                }
+            }
+            s.trim_end().to_string()
+        })
+        .collect();
+
+    // Compact trailing blank rows for a stable snapshot
+    while matches!(vt_lines.last(), Some(l) if l.trim().is_empty()) {
+        vt_lines.pop();
+    }
     let visual = vt_lines.join("\n");
     assert_snapshot!(visual);
 }

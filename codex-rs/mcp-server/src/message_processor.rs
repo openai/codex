@@ -36,7 +36,6 @@ use serde_json::json;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::task;
-use uuid::Uuid;
 
 pub(crate) struct MessageProcessor {
     codex_message_processor: CodexMessageProcessor,
@@ -56,8 +55,7 @@ impl MessageProcessor {
         config: Arc<Config>,
     ) -> Self {
         let outgoing = Arc::new(outgoing);
-        let auth_manager =
-            AuthManager::shared(config.codex_home.clone(), config.preferred_auth_method);
+        let auth_manager = AuthManager::shared(config.codex_home.clone());
         let conversation_manager = Arc::new(ConversationManager::new(auth_manager.clone()));
         let codex_message_processor = CodexMessageProcessor::new(
             auth_manager,
@@ -234,11 +232,11 @@ impl MessageProcessor {
             },
             instructions: None,
             protocol_version: params.protocol_version.clone(),
-            server_info: mcp_types::McpServerInfo {
+            server_info: mcp_types::Implementation {
                 name: "codex-mcp-server".to_string(),
                 version: env!("CARGO_PKG_VERSION").to_string(),
                 title: Some("Codex".to_string()),
-                user_agent: get_codex_user_agent(),
+                user_agent: Some(get_codex_user_agent()),
             },
         };
 
@@ -485,8 +483,8 @@ impl MessageProcessor {
                 return;
             }
         };
-        let conversation_id = match Uuid::parse_str(&conversation_id) {
-            Ok(id) => ConversationId::from(id),
+        let conversation_id = match ConversationId::from_string(&conversation_id) {
+            Ok(id) => id,
             Err(e) => {
                 tracing::error!("Failed to parse conversation_id: {e}");
                 let result = CallToolResult {
@@ -532,7 +530,6 @@ impl MessageProcessor {
 
         // Spawn the long-running reply handler.
         tokio::spawn({
-            let codex = codex.clone();
             let outgoing = outgoing.clone();
             let prompt = prompt.clone();
             let running_requests_id_to_codex_uuid = running_requests_id_to_codex_uuid.clone();
