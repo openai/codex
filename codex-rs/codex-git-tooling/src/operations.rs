@@ -6,11 +6,9 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use tempfile::Builder;
-use walkdir::WalkDir;
 
 use crate::GhostCommit;
 use crate::GitToolingError;
-use crate::platform;
 
 /// Default commit message used for ghost commits when none is provided.
 const DEFAULT_COMMIT_MESSAGE: &str = "codex snapshot";
@@ -59,30 +57,35 @@ pub fn create_ghost_commit(
 ) -> Result<GhostCommit, GitToolingError> {
     ensure_git_repository(options.repo_path)?;
 
-    let parent = resolve_head(options.repo_path)?;
+    let repo_root = resolve_repository_root(options.repo_path)?;
+    let repo_prefix = repo_subdir(repo_root.as_path(), options.repo_path);
+    let parent = resolve_head(repo_root.as_path())?;
     let normalized_force = normalize_force_include(&options.force_include)?;
+    let force_include =
+        apply_repo_prefix_to_force_include(repo_prefix.as_deref(), &normalized_force);
     let index_tempdir = Builder::new().prefix("codex-git-index-").tempdir()?;
     let index_path = index_tempdir.path().join("index");
     let base_env = vec![(
         OsString::from("GIT_INDEX_FILE"),
         OsString::from(index_path.as_os_str()),
     )];
-    run_git_for_status(
-        options.repo_path,
-        vec![OsString::from("add"), OsString::from("--all")],
-        Some(base_env.as_slice()),
-    )?;
-    for path in &normalized_force {
+    let mut add_args = vec![OsString::from("add"), OsString::from("--all")];
+    if let Some(prefix) = repo_prefix.as_deref() {
+        add_args.push(OsString::from("--"));
+        add_args.push(prefix.as_os_str().to_os_string());
+    }
+    run_git_for_status(repo_root.as_path(), add_args, Some(base_env.as_slice()))?;
+    for path in &force_include {
         let args = vec![
             OsString::from("add"),
             OsString::from("--force"),
             OsString::from(path.as_os_str()),
         ];
-        run_git_for_status(options.repo_path, args, Some(base_env.as_slice()))?;
+        run_git_for_status(repo_root.as_path(), args, Some(base_env.as_slice()))?;
     }
 
     let tree_id = run_git_for_stdout(
-        options.repo_path,
+        repo_root.as_path(),
         vec![OsString::from("write-tree")],
         Some(base_env.as_slice()),
     )?;
@@ -98,8 +101,11 @@ pub fn create_ghost_commit(
     commit_args.push(OsString::from("-m"));
     commit_args.push(OsString::from(message));
 
-    let commit_id =
-        run_git_for_stdout(options.repo_path, commit_args, Some(commit_env.as_slice()))?;
+    let commit_id = run_git_for_stdout(
+        repo_root.as_path(),
+        commit_args,
+        Some(commit_env.as_slice()),
+    )?;
 
     Ok(GhostCommit::new(commit_id, parent))
 }
@@ -113,9 +119,24 @@ pub fn restore_ghost_commit(repo_path: &Path, commit: &GhostCommit) -> Result<()
 pub fn restore_to_commit(repo_path: &Path, commit_id: &str) -> Result<(), GitToolingError> {
     ensure_git_repository(repo_path)?;
 
-    let mut worktree = TemporaryWorktree::create(repo_path, commit_id)?;
-    sync_worktree_contents(worktree.path(), repo_path)?;
-    worktree.remove()?;
+    let repo_root = resolve_repository_root(repo_path)?;
+    let repo_prefix = repo_subdir(repo_root.as_path(), repo_path);
+
+    let mut restore_args = vec![
+        OsString::from("restore"),
+        OsString::from("--source"),
+        OsString::from(commit_id),
+        OsString::from("--worktree"),
+        OsString::from("--staged"),
+        OsString::from("--"),
+    ];
+    if let Some(prefix) = repo_prefix.as_deref() {
+        restore_args.push(prefix.as_os_str().to_os_string());
+    } else {
+        restore_args.push(OsString::from("."));
+    }
+
+    run_git_for_status(repo_root.as_path(), restore_args, None)?;
     Ok(())
 }
 
@@ -196,127 +217,53 @@ fn normalize_relative_path(path: &Path) -> Result<PathBuf, GitToolingError> {
     Ok(result)
 }
 
-fn sync_worktree_contents(source: &Path, destination: &Path) -> Result<(), GitToolingError> {
-    clean_directory(destination)?;
-    let mut walker = WalkDir::new(source).follow_links(false).into_iter();
-    while let Some(entry) = walker.next() {
-        let entry = entry?;
-        if entry.depth() == 0 {
-            continue;
-        }
-        let relative = entry.path().strip_prefix(source)?;
-        if relative.components().next().map(|c| c.as_os_str()) == Some(OsStr::new(".git")) {
-            if entry.file_type().is_dir() {
-                walker.skip_current_dir();
-            }
-            continue;
-        }
+fn resolve_repository_root(path: &Path) -> Result<PathBuf, GitToolingError> {
+    let root = run_git_for_stdout(
+        path,
+        vec![
+            OsString::from("rev-parse"),
+            OsString::from("--show-toplevel"),
+        ],
+        None,
+    )?;
+    Ok(PathBuf::from(root))
+}
 
-        let target = destination.join(relative);
-        if entry.file_type().is_dir() {
-            std::fs::create_dir_all(&target)?;
-        } else if entry.file_type().is_symlink() {
-            create_symlink(entry.path(), &target)?;
-        } else if entry.file_type().is_file() {
-            if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::copy(entry.path(), &target)?;
-        } else {
-            return Err(GitToolingError::Io(std::io::Error::other(format!(
-                "unsupported file type at {}",
-                entry.path().display()
-            ))));
-        }
+fn apply_repo_prefix_to_force_include(prefix: Option<&Path>, paths: &[PathBuf]) -> Vec<PathBuf> {
+    if paths.is_empty() {
+        return Vec::new();
     }
-    Ok(())
-}
 
-fn clean_directory(path: &Path) -> Result<(), GitToolingError> {
-    for entry in std::fs::read_dir(path)? {
-        let entry = entry?;
-        if entry.file_name() == ".git" {
-            continue;
-        }
-        let file_type = entry.file_type()?;
-        let entry_path = entry.path();
-        if file_type.is_dir() {
-            std::fs::remove_dir_all(entry_path)?;
-        } else {
-            std::fs::remove_file(entry_path)?;
-        }
+    match prefix {
+        Some(prefix) => paths.iter().map(|path| prefix.join(path)).collect(),
+        None => paths.to_vec(),
     }
-    Ok(())
 }
 
-fn create_symlink(source: &Path, destination: &Path) -> Result<(), GitToolingError> {
-    let link_target = std::fs::read_link(source)?;
-    if let Some(parent) = destination.parent() {
-        std::fs::create_dir_all(parent)?;
+fn repo_subdir(repo_root: &Path, repo_path: &Path) -> Option<PathBuf> {
+    if repo_root == repo_path {
+        return None;
     }
-    platform::create_symlink(source, &link_target, destination)
-}
 
-#[derive(Debug)]
-struct TemporaryWorktree {
-    repo_path: PathBuf,
-    path: PathBuf,
-    removed: bool,
-}
-
-impl TemporaryWorktree {
-    fn create(repo_path: &Path, reference: &str) -> Result<Self, GitToolingError> {
-        let tempdir = Builder::new().prefix("codex-git-tooling-").tempdir()?;
-        let worktree_path = tempdir.path().to_path_buf();
-        let args = vec![
-            OsString::from("worktree"),
-            OsString::from("add"),
-            OsString::from("--detach"),
-            OsString::from(worktree_path.as_os_str()),
-            OsString::from(reference),
-        ];
-        run_git_for_status(repo_path, args, None)?;
-        let path = tempdir.keep();
-        Ok(Self {
-            repo_path: repo_path.to_path_buf(),
-            path,
-            removed: false,
+    repo_path
+        .strip_prefix(repo_root)
+        .ok()
+        .and_then(non_empty_path)
+        .or_else(|| {
+            let repo_root_canon = repo_root.canonicalize().ok()?;
+            let repo_path_canon = repo_path.canonicalize().ok()?;
+            repo_path_canon
+                .strip_prefix(&repo_root_canon)
+                .ok()
+                .and_then(non_empty_path)
         })
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
-    }
-
-    fn remove(&mut self) -> Result<(), GitToolingError> {
-        if self.removed {
-            return Ok(());
-        }
-        let args = vec![
-            OsString::from("worktree"),
-            OsString::from("remove"),
-            OsString::from("--force"),
-            OsString::from(self.path.as_os_str()),
-        ];
-        run_git_for_status(self.repo_path.as_path(), args, None)?;
-        self.removed = true;
-        Ok(())
-    }
 }
 
-impl Drop for TemporaryWorktree {
-    fn drop(&mut self) {
-        if self.removed {
-            return;
-        }
-        let args = vec![
-            OsString::from("worktree"),
-            OsString::from("remove"),
-            OsString::from("--force"),
-            OsString::from(self.path.as_os_str()),
-        ];
-        let _ = run_git(self.repo_path.as_path(), args, None);
-        let _ = std::fs::remove_dir_all(&self.path);
+fn non_empty_path(path: &Path) -> Option<PathBuf> {
+    if path.as_os_str().is_empty() {
+        None
+    } else {
+        Some(path.to_path_buf())
     }
 }
 
@@ -508,7 +455,7 @@ mod tests {
         let new_file_after = std::fs::read_to_string(repo.join("new-file.txt"))?;
         assert_eq!(new_file_after, new_file_contents);
         assert_eq!(repo.join("delete-me.txt").exists(), false);
-        assert_eq!(repo.join("ephemeral.txt").exists(), false);
+        assert!(repo.join("ephemeral.txt").exists());
 
         Ok(())
     }
@@ -581,6 +528,137 @@ mod tests {
             .force_include(vec![PathBuf::from("/absolute/path")]);
         let err = create_ghost_commit(&options).unwrap_err();
         assert!(matches!(err, GitToolingError::NonRelativePath { .. }));
+        Ok(())
+    }
+
+    #[test]
+    fn restore_from_subdirectory_path() -> Result<(), GitToolingError> {
+        let temp = tempfile::tempdir()?;
+        let repo = temp.path();
+        run_git_in(repo, &["init", "--initial-branch=main"]);
+
+        let workspace = repo.join("codex-rs");
+        std::fs::create_dir_all(&workspace)?;
+
+        std::fs::write(repo.join("root.txt"), "root snapshot\n")?;
+        std::fs::write(workspace.join("nested.txt"), "nested snapshot\n")?;
+        run_git_in(repo, &["add", "."]);
+        run_git_in(
+            repo,
+            &[
+                "-c",
+                "user.name=Tester",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "initial",
+            ],
+        );
+
+        std::fs::write(repo.join("root.txt"), "root modified\n")?;
+        std::fs::write(workspace.join("nested.txt"), "nested modified\n")?;
+
+        let ghost = create_ghost_commit(&CreateGhostCommitOptions::new(&workspace))?;
+
+        std::fs::write(repo.join("root.txt"), "root after\n")?;
+        std::fs::write(workspace.join("nested.txt"), "nested after\n")?;
+
+        restore_ghost_commit(&workspace, &ghost)?;
+
+        let root_after = std::fs::read_to_string(repo.join("root.txt"))?;
+        assert_eq!(root_after, "root after\n");
+        let nested_after = std::fs::read_to_string(workspace.join("nested.txt"))?;
+        assert_eq!(nested_after, "nested modified\n");
+        assert!(!workspace.join("codex-rs").exists());
+
+        Ok(())
+    }
+
+    #[test]
+    fn restore_from_subdirectory_preserves_parent_vscode() -> Result<(), GitToolingError> {
+        let temp = tempfile::tempdir()?;
+        let repo = temp.path();
+        run_git_in(repo, &["init", "--initial-branch=main"]);
+
+        let workspace = repo.join("codex-rs");
+        std::fs::create_dir_all(&workspace)?;
+        std::fs::write(repo.join(".gitignore"), ".vscode/\n")?;
+        std::fs::write(workspace.join("tracked.txt"), "snapshot version\n")?;
+        run_git_in(repo, &["add", "."]);
+        run_git_in(
+            repo,
+            &[
+                "-c",
+                "user.name=Tester",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "initial",
+            ],
+        );
+
+        std::fs::write(workspace.join("tracked.txt"), "snapshot delta\n")?;
+        let ghost = create_ghost_commit(&CreateGhostCommitOptions::new(&workspace))?;
+
+        std::fs::write(workspace.join("tracked.txt"), "post-snapshot\n")?;
+        let vscode = repo.join(".vscode");
+        std::fs::create_dir_all(&vscode)?;
+        std::fs::write(vscode.join("settings.json"), "{\n  \"after\": true\n}\n")?;
+
+        restore_ghost_commit(&workspace, &ghost)?;
+
+        let tracked_after = std::fs::read_to_string(workspace.join("tracked.txt"))?;
+        assert_eq!(tracked_after, "snapshot delta\n");
+        assert!(vscode.join("settings.json").exists());
+        let settings_after = std::fs::read_to_string(vscode.join("settings.json"))?;
+        assert_eq!(settings_after, "{\n  \"after\": true\n}\n");
+
+        Ok(())
+    }
+
+    #[test]
+    fn restore_preserves_ignored_files() -> Result<(), GitToolingError> {
+        let temp = tempfile::tempdir()?;
+        let repo = temp.path();
+        run_git_in(repo, &["init", "--initial-branch=main"]);
+
+        std::fs::write(repo.join(".gitignore"), ".vscode/\n")?;
+        std::fs::write(repo.join("tracked.txt"), "snapshot version\n")?;
+        let vscode = repo.join(".vscode");
+        std::fs::create_dir_all(&vscode)?;
+        std::fs::write(vscode.join("settings.json"), "{\n  \"before\": true\n}\n")?;
+        run_git_in(repo, &["add", ".gitignore", "tracked.txt"]);
+        run_git_in(
+            repo,
+            &[
+                "-c",
+                "user.name=Tester",
+                "-c",
+                "user.email=test@example.com",
+                "commit",
+                "-m",
+                "initial",
+            ],
+        );
+
+        std::fs::write(repo.join("tracked.txt"), "snapshot delta\n")?;
+        let ghost = create_ghost_commit(&CreateGhostCommitOptions::new(repo))?;
+
+        std::fs::write(repo.join("tracked.txt"), "post-snapshot\n")?;
+        std::fs::write(vscode.join("settings.json"), "{\n  \"after\": true\n}\n")?;
+        std::fs::write(repo.join("temp.txt"), "new file\n")?;
+
+        restore_ghost_commit(repo, &ghost)?;
+
+        let tracked_after = std::fs::read_to_string(repo.join("tracked.txt"))?;
+        assert_eq!(tracked_after, "snapshot delta\n");
+        assert!(vscode.join("settings.json").exists());
+        let settings_after = std::fs::read_to_string(vscode.join("settings.json"))?;
+        assert_eq!(settings_after, "{\n  \"after\": true\n}\n");
+        assert!(repo.join("temp.txt").exists());
+
         Ok(())
     }
 

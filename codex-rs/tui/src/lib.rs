@@ -565,7 +565,6 @@ mod tests {
         );
         codex_home.push(unique_suffix);
         std::fs::create_dir_all(&codex_home).expect("create unique CODEX_HOME");
-
         Config::load_from_base_config_with_overrides(
             ConfigToml::default(),
             ConfigOverrides::default(),
