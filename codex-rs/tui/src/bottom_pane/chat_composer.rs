@@ -47,6 +47,18 @@ use std::path::PathBuf;
 use std::time::Duration;
 use std::time::Instant;
 
+#[cfg(windows)]
+#[inline]
+fn is_altgr(mods: KeyModifiers) -> bool {
+    mods.contains(KeyModifiers::ALT) && mods.contains(KeyModifiers::CONTROL)
+}
+
+#[cfg(not(windows))]
+#[inline]
+fn is_altgr(_mods: KeyModifiers) -> bool {
+    false
+}
+
 /// If the pasted content exceeds this number of characters, replace it with a
 /// placeholder in the UI.
 const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
@@ -883,9 +895,12 @@ impl ChatComposer {
             ..
         } = input
         {
-            let has_ctrl_or_alt =
-                modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::ALT);
-            if !has_ctrl_or_alt {
+            // Treat Windows AltGr (ALT|CONTROL) as a plain char to preserve symbols
+            // like backslash, backtick, brackets, etc., when typing or pasting.
+            let is_plain_char = (!modifiers.contains(KeyModifiers::CONTROL)
+                && !modifiers.contains(KeyModifiers::ALT))
+                || is_altgr(modifiers);
+            if is_plain_char {
                 // Non-ASCII characters (e.g., from IMEs) can arrive in quick bursts and be
                 // misclassified by paste heuristics. Flush any active burst buffer and insert
                 // non-ASCII characters directly.
@@ -954,9 +969,11 @@ impl ChatComposer {
         } = input;
         match code {
             KeyCode::Char(_) => {
-                let has_ctrl_or_alt = modifiers.contains(KeyModifiers::CONTROL)
-                    || modifiers.contains(KeyModifiers::ALT);
-                if has_ctrl_or_alt {
+                // Treat Windows AltGr (ALT|CONTROL) as a plain char: keep burst window.
+                let is_plain_char = (!modifiers.contains(KeyModifiers::CONTROL)
+                    && !modifiers.contains(KeyModifiers::ALT))
+                    || is_altgr(modifiers);
+                if !is_plain_char {
                     self.paste_burst.clear_window_after_non_char();
                 }
             }
