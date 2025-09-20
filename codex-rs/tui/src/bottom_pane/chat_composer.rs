@@ -73,7 +73,6 @@ pub(crate) struct ChatComposer {
     history: ChatComposerHistory,
     ctrl_c_quit_hint: bool,
     esc_backtrack_hint: bool,
-    use_shift_enter_hint: bool,
     dismissed_file_popup_token: Option<String>,
     current_file_query: Option<String>,
     pending_pastes: Vec<(String, String)>,
@@ -81,6 +80,8 @@ pub(crate) struct ChatComposer {
     has_focus: bool,
     attached_images: Vec<AttachedImage>,
     placeholder_text: String,
+    // If true, show Shift+Enter for newline in footer hints; otherwise Ctrl+J.
+    use_shift_enter_hint: bool,
     is_task_running: bool,
     // Non-bracketed paste burst tracker.
     paste_burst: PasteBurst,
@@ -108,8 +109,6 @@ impl ChatComposer {
         placeholder_text: String,
         disable_paste_burst: bool,
     ) -> Self {
-        let use_shift_enter_hint = enhanced_keys_supported;
-
         let mut this = Self {
             textarea: TextArea::new(),
             textarea_state: RefCell::new(TextAreaState::default()),
@@ -118,7 +117,6 @@ impl ChatComposer {
             history: ChatComposerHistory::new(),
             ctrl_c_quit_hint: false,
             esc_backtrack_hint: false,
-            use_shift_enter_hint,
             dismissed_file_popup_token: None,
             current_file_query: None,
             pending_pastes: Vec::new(),
@@ -126,6 +124,7 @@ impl ChatComposer {
             has_focus: has_input_focus,
             attached_images: Vec::new(),
             placeholder_text,
+            use_shift_enter_hint: enhanced_keys_supported,
             is_task_running: false,
             paste_burst: PasteBurst::default(),
             disable_paste_burst: false,
@@ -865,8 +864,14 @@ impl ChatComposer {
     fn handle_input_basic(&mut self, input: KeyEvent) -> (InputResult, bool) {
         // If we have a buffered non-bracketed paste burst and enough time has
         // elapsed since the last char, flush it before handling a new input.
+        // IMPORTANT: Do not flush here for plain Char inputs — that could
+        // prematurely emit a pending first fast char right before the next
+        // keystroke, causing visible text during burst capture. For Char
+        // cases we let the branch below decide and early-return as needed.
         let now = Instant::now();
-        self.handle_paste_burst_flush(now);
+        if !matches!(input.code, KeyCode::Char(_)) {
+            self.handle_paste_burst_flush(now);
+        }
 
         // If we're capturing a burst and receive Enter, accumulate it instead of inserting.
         if matches!(input.code, KeyCode::Enter)
@@ -1254,7 +1259,13 @@ impl WidgetRef for ChatComposer {
                 popup.render_ref(popup_rect, buf);
             }
             ActivePopup::None => {
-                let hint_rect = if hint_spacing > 0 {
+                // Prefer a visual spacing row above hints when there is room.
+                // When space is extremely constrained (e.g., terminal height=2),
+                // render hints directly into the only available popup row so
+                // they remain visible instead of being elided.
+                let hint_rect = if hint_spacing > 0
+                    && popup_rect.height >= FOOTER_HINT_HEIGHT + hint_spacing
+                {
                     let [_, hint_rect] = Layout::vertical([
                         Constraint::Length(hint_spacing),
                         Constraint::Length(FOOTER_HINT_HEIGHT),
@@ -1287,8 +1298,8 @@ impl WidgetRef for ChatComposer {
                         " send   ".into(),
                         newline_hint_key,
                         " newline   ".into(),
-                        key_hint::ctrl('T'),
-                        " transcript   ".into(),
+                        key_hint::ctrl('O'),
+                        " shortcuts   ".into(),
                         key_hint::ctrl('C'),
                         " quit".into(),
                     ]
