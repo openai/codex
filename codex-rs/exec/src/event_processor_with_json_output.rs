@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use codex_core::config::Config;
 use codex_core::protocol::Event;
 use codex_core::protocol::EventMsg;
+use codex_core::protocol::SessionConfiguredEvent;
 use codex_core::protocol::TaskCompleteEvent;
 use serde_json::json;
 
@@ -23,11 +24,20 @@ impl EventProcessorWithJsonOutput {
 }
 
 impl EventProcessor for EventProcessorWithJsonOutput {
-    fn print_config_summary(&mut self, config: &Config, prompt: &str) {
-        let entries = create_config_summary_entries(config)
+    fn print_config_summary(
+        &mut self,
+        config: &Config,
+        prompt: &str,
+        session_configured: &SessionConfiguredEvent,
+    ) {
+        let mut entries = create_config_summary_entries(config)
             .into_iter()
             .map(|(key, value)| (key.to_string(), value))
             .collect::<HashMap<String, String>>();
+        entries.insert(
+            "session_id".to_string(),
+            session_configured.session_id.to_string(),
+        );
         #[expect(clippy::expect_used)]
         let config_json =
             serde_json::to_string(&entries).expect("Failed to serialize config summary to JSON");

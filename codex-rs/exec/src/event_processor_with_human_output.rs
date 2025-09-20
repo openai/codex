@@ -141,7 +141,12 @@ impl EventProcessor for EventProcessorWithHumanOutput {
     /// Print a concise summary of the effective configuration that will be used
     /// for the session. This mirrors the information shown in the TUI welcome
     /// screen.
-    fn print_config_summary(&mut self, config: &Config, prompt: &str) {
+    fn print_config_summary(
+        &mut self,
+        config: &Config,
+        prompt: &str,
+        session_configured: &SessionConfiguredEvent,
+    ) {
         const VERSION: &str = env!("CARGO_PKG_VERSION");
         ts_println!(
             self,
@@ -149,7 +154,8 @@ impl EventProcessor for EventProcessorWithHumanOutput {
             VERSION
         );
 
-        let entries = create_config_summary_entries(config);
+        let mut entries = create_config_summary_entries(config);
+        entries.insert(0, ("session id", session_configured.session_id.to_string()));
 
         for (key, value) in entries {
             println!("{} {}", format!("{key}:").style(self.bold), value);
