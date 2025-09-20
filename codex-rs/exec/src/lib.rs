@@ -198,6 +198,17 @@ pub async fn run_main(cli: Cli, codex_linux_sandbox_exe: Option<PathBuf>) -> any
         std::process::exit(1);
     }
 
+    // If inside a git repo but with no commits, provide a clearer message.
+    if !skip_git_repo_check
+        && get_git_repo_root(&config.cwd.to_path_buf()).is_some()
+        && !codex_core::git_info::git_repo_has_commits(&config.cwd).await
+    {
+        eprintln!(
+            "This Git repository has no commits. Initialize it first:\n  git add -A && git commit -m 'Initial commit'\nOr pass --skip-git-repo-check to bypass."
+        );
+        std::process::exit(1);
+    }
+
     let conversation_manager =
         ConversationManager::new(AuthManager::shared(config.codex_home.clone()));
 
