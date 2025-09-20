@@ -15,6 +15,7 @@ use ratatui::widgets::Paragraph;
 use ratatui::widgets::Widget;
 
 use super::scroll_state::ScrollState;
+use crate::ui_consts::LIVE_PREFIX_COLS;
 
 /// A generic representation of a display row for selection popups.
 pub(crate) struct GenericDisplayRow {
@@ -99,13 +100,33 @@ pub(crate) fn render_rows(
         .border_style(Style::default().add_modifier(Modifier::DIM));
     block.render(area, buf);
 
-    // Content renders to the right of the border.
+    // Content renders to the right of the border with the same live prefix
+    // padding used by the composer so the popup aligns with the input text.
+    let prefix_cols = LIVE_PREFIX_COLS;
     let content_area = Rect {
-        x: area.x.saturating_add(1),
+        x: area.x.saturating_add(prefix_cols),
         y: area.y,
-        width: area.width.saturating_sub(1),
+        width: area.width.saturating_sub(prefix_cols),
         height: area.height,
     };
+
+    // Clear the padding column(s) so stale characters never peek between the
+    // border and the popup contents.
+    let padding_cols = prefix_cols.saturating_sub(1);
+    if padding_cols > 0 {
+        let pad_start = area.x.saturating_add(1);
+        let pad_end = pad_start
+            .saturating_add(padding_cols)
+            .min(area.x.saturating_add(area.width));
+        let pad_bottom = area.y.saturating_add(area.height);
+        for x in pad_start..pad_end {
+            for y in area.y..pad_bottom {
+                if let Some(cell) = buf.cell_mut((x, y)) {
+                    cell.set_symbol(" ");
+                }
+            }
+        }
+    }
 
     if rows_all.is_empty() {
         if content_area.height > 0 {
