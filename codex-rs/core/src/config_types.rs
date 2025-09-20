@@ -9,15 +9,46 @@ use wildmatch::WildMatchPattern;
 
 use serde::Deserialize;
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum McpTransport {
+    Stdio,
+    Sse,
+    Http,
+}
+
+impl Default for McpTransport {
+    fn default() -> Self {
+        Self::Stdio
+    }
+}
+
 #[derive(Deserialize, Debug, Clone, PartialEq)]
 pub struct McpServerConfig {
-    pub command: String,
+    #[serde(default)]
+    pub transport: McpTransport,
+
+    /// Command to launch a stdio-based MCP server. Required when `transport = "stdio"`.
+    #[serde(default)]
+    pub command: Option<String>,
 
     #[serde(default)]
     pub args: Vec<String>,
 
     #[serde(default)]
     pub env: Option<HashMap<String, String>>,
+
+    /// Base URL for HTTP or SSE transports. Required when `transport` is `sse` or `http`.
+    #[serde(default)]
+    pub url: Option<String>,
+
+    /// Optional override for the URL used when sending JSON-RPC messages via HTTP POST.
+    #[serde(default)]
+    pub messages_url: Option<String>,
+
+    /// Extra HTTP headers to include with HTTP/SSE requests.
+    #[serde(default)]
+    pub headers: Option<HashMap<String, String>>,
 
     /// Startup timeout in milliseconds for initializing MCP server & initially listing tools.
     #[serde(default)]
