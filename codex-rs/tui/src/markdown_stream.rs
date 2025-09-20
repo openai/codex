@@ -20,23 +20,9 @@ impl MarkdownStreamCollector {
         }
     }
 
-    /// Returns the number of logical lines that have already been committed
-    /// (i.e., previously returned from `commit_complete_lines`).
-    pub fn committed_count(&self) -> usize {
-        self.committed_line_count
-    }
-
     pub fn clear(&mut self) {
         self.buffer.clear();
         self.committed_line_count = 0;
-    }
-
-    /// Replace the buffered content and mark that the first `committed_count`
-    /// logical lines are already committed.
-    pub fn replace_with_and_mark_committed(&mut self, s: &str, committed_count: usize) {
-        self.buffer.clear();
-        self.buffer.push_str(s);
-        self.committed_line_count = committed_count;
     }
 
     pub fn push_delta(&mut self, delta: &str) {
