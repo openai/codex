@@ -77,6 +77,17 @@ pub fn fuzzy_indices(haystack: &str, needle: &str) -> Option<Vec<usize>> {
     })
 }
 
+/// Returns true when `needle` fuzzy-matches `haystack`.
+pub fn fuzzy_matches(haystack: &str, needle: &str) -> bool {
+    fuzzy_match(haystack, needle).is_some()
+}
+
+/// Returns the computed fuzzy score for `needle` against `haystack` if it
+/// matches; smaller is better. Useful when a caller only needs the score.
+pub fn fuzzy_score(haystack: &str, needle: &str) -> Option<i32> {
+    fuzzy_match(haystack, needle).map(|(_idx, score)| score)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,5 +184,16 @@ mod tests {
         assert_eq!(idx, vec![0]);
         // Lowercasing 'İ' expands to two chars; contiguous prefix -> window 0 with bonus
         assert_eq!(score, -100);
+    }
+
+    #[test]
+    fn helpers_match_and_score() {
+        assert!(fuzzy_matches("hello", "hl"));
+        assert!(!fuzzy_matches("hello", "xz"));
+
+        let score = fuzzy_score("hello", "hl").expect("should have score");
+        assert!(score < 0);
+
+        assert!(fuzzy_score("hello", "xz").is_none());
     }
 }
