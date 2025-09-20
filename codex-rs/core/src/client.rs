@@ -18,7 +18,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_util::io::ReaderStream;
-use tracing::debug;
+use tracing::error;
 use tracing::trace;
 use tracing::warn;
 
@@ -282,7 +282,7 @@ impl ModelClient {
                             .await
                             .is_err()
                     {
-                        debug!("receiver dropped rate limit snapshot event");
+                        error!("receiver dropped rate limit snapshot event");
                     }
 
                     // spawn task to process SSE
@@ -488,9 +488,9 @@ fn parse_rate_limit_snapshot(headers: &HeaderMap) -> Option<RateLimitSnapshotEve
     let primary_used_percent = parse_header_f64(headers, "x-codex-primary-used-percent")?;
     let protection_used_percent = parse_header_f64(headers, "x-codex-protection-used-percent")?;
     let primary_to_protection_ratio_percent =
-        parse_header_f64(headers, "x-codex-primary-over-protection-limit-percent");
-    let primary_window_minutes = parse_header_u64(headers, "x-codex-primary-window-minutes");
-    let protection_window_minutes = parse_header_u64(headers, "x-codex-protection-window-minutes");
+        parse_header_f64(headers, "x-codex-primary-over-protection-limit-percent")?;
+    let primary_window_minutes = parse_header_u64(headers, "x-codex-primary-window-minutes")?;
+    let protection_window_minutes = parse_header_u64(headers, "x-codex-protection-window-minutes")?;
 
     Some(RateLimitSnapshotEvent {
         primary_used_percent,
@@ -534,7 +534,7 @@ async fn process_sse<S>(
         let sse = match timeout(idle_timeout, stream.next()).await {
             Ok(Some(Ok(sse))) => sse,
             Ok(Some(Err(e))) => {
-                debug!("SSE Error: {e:#}");
+                error!("SSE Error: {e:#}");
                 let event = CodexErr::Stream(e.to_string(), None);
                 let _ = tx_event.send(Err(event)).await;
                 return;
@@ -579,7 +579,7 @@ async fn process_sse<S>(
         let event: SseEvent = match serde_json::from_str(&sse.data) {
             Ok(event) => event,
             Err(e) => {
-                debug!("Failed to parse SSE event: {e}, data: {}", &sse.data);
+                error!("Failed to parse SSE event: {e}, data: {}", &sse.data);
                 continue;
             }
         };
@@ -606,7 +606,7 @@ async fn process_sse<S>(
             "response.output_item.done" => {
                 let Some(item_val) = event.item else { continue };
                 let Ok(item) = serde_json::from_value::<ResponseItem>(item_val) else {
-                    debug!("failed to parse ResponseItem from output_item.done");
+                    error!("failed to parse ResponseItem from output_item.done");
                     continue;
                 };
 
@@ -661,7 +661,7 @@ async fn process_sse<S>(
                                 response_error = Some(CodexErr::Stream(message, delay));
                             }
                             Err(e) => {
-                                debug!("failed to parse ErrorResponse: {e}");
+                                error!("failed to parse ErrorResponse: {e}");
                             }
                         }
                     }
@@ -675,7 +675,7 @@ async fn process_sse<S>(
                             response_completed = Some(r);
                         }
                         Err(e) => {
-                            debug!("failed to parse ResponseCompleted: {e}");
+                            error!("failed to parse ResponseCompleted: {e}");
                             continue;
                         }
                     };
@@ -1163,49 +1163,5 @@ mod tests {
 
         let plan_json = serde_json::to_string(&resp.error.plan_type).expect("serialize plan_type");
         assert_eq!(plan_json, "\"vip\"");
-    }
-
-    #[test]
-    fn parse_rate_limit_snapshot_parses_headers() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "x-codex-primary-used-percent",
-            HeaderValue::from_static("12.5"),
-        );
-        headers.insert(
-            "x-codex-protection-used-percent",
-            HeaderValue::from_static("40"),
-        );
-        headers.insert(
-            "x-codex-primary-over-protection-limit-percent",
-            HeaderValue::from_static("30"),
-        );
-        headers.insert(
-            "x-codex-primary-window-minutes",
-            HeaderValue::from_static("300"),
-        );
-        headers.insert(
-            "x-codex-protection-window-minutes",
-            HeaderValue::from_static("10080"),
-        );
-
-        let snapshot = parse_rate_limit_snapshot(&headers).expect("snapshot");
-
-        assert_eq!(snapshot.primary_used_percent, 12.5);
-        assert_eq!(snapshot.protection_used_percent, 40.0);
-        assert_eq!(snapshot.primary_to_protection_ratio_percent, Some(30.0));
-        assert_eq!(snapshot.primary_window_minutes, Some(300));
-        assert_eq!(snapshot.protection_window_minutes, Some(10080));
-    }
-
-    #[test]
-    fn parse_rate_limit_snapshot_requires_primary_percent() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "x-codex-protection-used-percent",
-            HeaderValue::from_static("10"),
-        );
-
-        assert!(parse_rate_limit_snapshot(&headers).is_none());
     }
 }

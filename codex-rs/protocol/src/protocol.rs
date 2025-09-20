@@ -601,14 +601,11 @@ pub struct RateLimitSnapshotEvent {
     /// Percentage (0-100) of the protection window that has been consumed.
     pub protection_used_percent: f64,
     /// Size of the primary window relative to protection (0-100).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub primary_to_protection_ratio_percent: Option<f64>,
+    pub primary_to_protection_ratio_percent: f64,
     /// Rolling window duration for the primary limit, in minutes.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub primary_window_minutes: Option<u64>,
+    pub primary_window_minutes: u64,
     /// Rolling window duration for the protection limit, in minutes.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub protection_window_minutes: Option<u64>,
+    pub protection_window_minutes: u64,
 }
 
 // Includes prompts, tools and space to call compact.
