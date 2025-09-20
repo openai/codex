@@ -1,16 +1,16 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::Mutex;
-use std::sync::MutexGuard;
 use std::sync::atomic::AtomicU64;
 use std::time::Duration;
 
 use crate::AuthManager;
 use crate::client_common::REVIEW_PROMPT;
 use crate::event_mapping::map_response_item_to_event_messages;
+use crate::review_format::format_review_findings_block;
 use async_channel::Receiver;
 use async_channel::Sender;
 use codex_apply_patch::ApplyPatchAction;
@@ -30,6 +30,7 @@ use mcp_types::CallToolResult;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json;
+use tokio::sync::Mutex;
 use tokio::sync::oneshot;
 use tokio::task::AbortHandle;
 use tracing::debug;
@@ -130,24 +131,9 @@ use codex_protocol::models::ResponseItem;
 use codex_protocol::models::ShellToolCallParams;
 use codex_protocol::protocol::InitialHistory;
 
-mod compact;
+pub mod compact;
 use self::compact::build_compacted_history;
 use self::compact::collect_user_messages;
-
-// A convenience extension trait for acquiring mutex locks where poisoning is
-// unrecoverable and should abort the program. This avoids scattered `.unwrap()`
-// calls on `lock()` while still surfacing a clear panic message when a lock is
-// poisoned.
-trait MutexExt<T> {
-    fn lock_unchecked(&self) -> MutexGuard<'_, T>;
-}
-
-impl<T> MutexExt<T> for Mutex<T> {
-    fn lock_unchecked(&self) -> MutexGuard<'_, T> {
-        #[expect(clippy::expect_used)]
-        self.lock().expect("poisoned lock")
-    }
-}
 
 /// The high-level interface to the Codex system.
 /// It operates as a queue pair where you send submissions and receive events.
@@ -271,7 +257,6 @@ struct State {
     pending_input: Vec<ResponseInputItem>,
     history: ConversationHistory,
     token_info: Option<TokenUsageInfo>,
-    next_internal_sub_id: u64,
 }
 
 /// Context for an initialized model agent
@@ -297,6 +282,7 @@ pub(crate) struct Session {
     codex_linux_sandbox_exe: Option<PathBuf>,
     user_shell: shell::Shell,
     show_raw_agent_reasoning: bool,
+    next_internal_sub_id: AtomicU64,
 }
 
 /// The context needed for a single turn of the conversation.
@@ -470,8 +456,6 @@ impl Session {
             client,
             tools_config: ToolsConfig::new(&ToolsConfigParams {
                 model_family: &config.model_family,
-                approval_policy,
-                sandbox_policy: sandbox_policy.clone(),
                 include_plan_tool: config.include_plan_tool,
                 include_apply_patch_tool: config.include_apply_patch_tool,
                 include_web_search_request: config.tools_web_search_request,
@@ -499,6 +483,7 @@ impl Session {
             codex_linux_sandbox_exe: config.codex_linux_sandbox_exe.clone(),
             user_shell: default_shell,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+            next_internal_sub_id: AtomicU64::new(0),
         });
 
         // Dispatch the SessionConfiguredEvent first and then report any errors.
@@ -527,16 +512,16 @@ impl Session {
         Ok((sess, turn_context))
     }
 
-    pub fn set_task(&self, task: AgentTask) {
-        let mut state = self.state.lock_unchecked();
+    pub async fn set_task(&self, task: AgentTask) {
+        let mut state = self.state.lock().await;
         if let Some(current_task) = state.current_task.take() {
             current_task.abort(TurnAbortReason::Replaced);
         }
         state.current_task = Some(task);
     }
 
-    pub fn remove_task(&self, sub_id: &str) {
-        let mut state = self.state.lock_unchecked();
+    pub async fn remove_task(&self, sub_id: &str) {
+        let mut state = self.state.lock().await;
         if let Some(task) = &state.current_task
             && task.sub_id == sub_id
         {
@@ -545,9 +530,9 @@ impl Session {
     }
 
     fn next_internal_sub_id(&self) -> String {
-        let mut state = self.state.lock_unchecked();
-        let id = state.next_internal_sub_id;
-        state.next_internal_sub_id += 1;
+        let id = self
+            .next_internal_sub_id
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         format!("auto-compact-{id}")
     }
 
@@ -570,7 +555,7 @@ impl Session {
                 let reconstructed_history =
                     self.reconstruct_history_from_rollout(turn_context, &rollout_items);
                 if !reconstructed_history.is_empty() {
-                    self.record_into_history(&reconstructed_history);
+                    self.record_into_history(&reconstructed_history).await;
                 }
 
                 // If persisting, persist all rollout items as-is (recorder filters)
@@ -603,7 +588,7 @@ impl Session {
         let (tx_approve, rx_approve) = oneshot::channel();
         let event_id = sub_id.clone();
         let prev_entry = {
-            let mut state = self.state.lock_unchecked();
+            let mut state = self.state.lock().await;
             state.pending_approvals.insert(sub_id, tx_approve)
         };
         if prev_entry.is_some() {
@@ -635,7 +620,7 @@ impl Session {
         let (tx_approve, rx_approve) = oneshot::channel();
         let event_id = sub_id.clone();
         let prev_entry = {
-            let mut state = self.state.lock_unchecked();
+            let mut state = self.state.lock().await;
             state.pending_approvals.insert(sub_id, tx_approve)
         };
         if prev_entry.is_some() {
@@ -655,9 +640,9 @@ impl Session {
         rx_approve
     }
 
-    pub fn notify_approval(&self, sub_id: &str, decision: ReviewDecision) {
+    pub async fn notify_approval(&self, sub_id: &str, decision: ReviewDecision) {
         let entry = {
-            let mut state = self.state.lock_unchecked();
+            let mut state = self.state.lock().await;
             state.pending_approvals.remove(sub_id)
         };
         match entry {
@@ -670,15 +655,15 @@ impl Session {
         }
     }
 
-    pub fn add_approved_command(&self, cmd: Vec<String>) {
-        let mut state = self.state.lock_unchecked();
+    pub async fn add_approved_command(&self, cmd: Vec<String>) {
+        let mut state = self.state.lock().await;
         state.approved_commands.insert(cmd);
     }
 
     /// Records input items: always append to conversation history and
     /// persist these response items to rollout.
     async fn record_conversation_items(&self, items: &[ResponseItem]) {
-        self.record_into_history(items);
+        self.record_into_history(items).await;
         self.persist_rollout_response_items(items).await;
     }
 
@@ -710,11 +695,9 @@ impl Session {
     }
 
     /// Append ResponseItems to the in-memory conversation history only.
-    fn record_into_history(&self, items: &[ResponseItem]) {
-        self.state
-            .lock_unchecked()
-            .history
-            .record_items(items.iter());
+    async fn record_into_history(&self, items: &[ResponseItem]) {
+        let mut state = self.state.lock().await;
+        state.history.record_items(items.iter());
     }
 
     async fn persist_rollout_response_items(&self, items: &[ResponseItem]) {
@@ -726,7 +709,7 @@ impl Session {
         self.persist_rollout_items(&rollout_items).await;
     }
 
-    fn build_initial_context(&self, turn_context: &TurnContext) -> Vec<ResponseItem> {
+    pub(crate) fn build_initial_context(&self, turn_context: &TurnContext) -> Vec<ResponseItem> {
         let mut items = Vec::<ResponseItem>::with_capacity(2);
         if let Some(user_instructions) = turn_context.user_instructions.as_deref() {
             items.push(UserInstructions::new(user_instructions.to_string()).into());
@@ -742,8 +725,8 @@ impl Session {
 
     async fn persist_rollout_items(&self, items: &[RolloutItem]) {
         let recorder = {
-            let guard = self.rollout.lock_unchecked();
-            guard.as_ref().cloned()
+            let guard = self.rollout.lock().await;
+            guard.clone()
         };
         if let Some(rec) = recorder
             && let Err(e) = rec.record_items(items).await
@@ -752,12 +735,12 @@ impl Session {
         }
     }
 
-    fn update_token_usage_info(
+    async fn update_token_usage_info(
         &self,
         turn_context: &TurnContext,
         token_usage: &Option<TokenUsage>,
     ) -> Option<TokenUsageInfo> {
-        let mut state = self.state.lock_unchecked();
+        let mut state = self.state.lock().await;
         let info = TokenUsageInfo::new_or_append(
             &state.token_info,
             token_usage,
@@ -914,6 +897,7 @@ impl Session {
             exec_args.params,
             exec_args.sandbox_type,
             exec_args.sandbox_policy,
+            exec_args.sandbox_cwd,
             exec_args.codex_linux_sandbox_exe,
             exec_args.stdout_stream,
         )
@@ -972,13 +956,17 @@ impl Session {
 
     /// Build the full turn input by concatenating the current conversation
     /// history with additional items for this turn.
-    pub fn turn_input_with_history(&self, extra: Vec<ResponseItem>) -> Vec<ResponseItem> {
-        [self.state.lock_unchecked().history.contents(), extra].concat()
+    pub async fn turn_input_with_history(&self, extra: Vec<ResponseItem>) -> Vec<ResponseItem> {
+        let history = {
+            let state = self.state.lock().await;
+            state.history.contents()
+        };
+        [history, extra].concat()
     }
 
     /// Returns the input if there was no task running to inject into
-    pub fn inject_input(&self, input: Vec<InputItem>) -> Result<(), Vec<InputItem>> {
-        let mut state = self.state.lock_unchecked();
+    pub async fn inject_input(&self, input: Vec<InputItem>) -> Result<(), Vec<InputItem>> {
+        let mut state = self.state.lock().await;
         if state.current_task.is_some() {
             state.pending_input.push(input.into());
             Ok(())
@@ -987,8 +975,8 @@ impl Session {
         }
     }
 
-    pub fn get_pending_input(&self) -> Vec<ResponseInputItem> {
-        let mut state = self.state.lock_unchecked();
+    pub async fn get_pending_input(&self) -> Vec<ResponseInputItem> {
+        let mut state = self.state.lock().await;
         if state.pending_input.is_empty() {
             Vec::with_capacity(0)
         } else {
@@ -1010,13 +998,23 @@ impl Session {
             .await
     }
 
-    fn interrupt_task(&self) {
+    pub async fn interrupt_task(&self) {
         info!("interrupt received: abort current task, if any");
-        let mut state = self.state.lock_unchecked();
+        let mut state = self.state.lock().await;
         state.pending_approvals.clear();
         state.pending_input.clear();
         if let Some(task) = state.current_task.take() {
             task.abort(TurnAbortReason::Interrupted);
+        }
+    }
+
+    fn interrupt_task_sync(&self) {
+        if let Ok(mut state) = self.state.try_lock() {
+            state.pending_approvals.clear();
+            state.pending_input.clear();
+            if let Some(task) = state.current_task.take() {
+                task.abort(TurnAbortReason::Interrupted);
+            }
         }
     }
 
@@ -1052,7 +1050,7 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        self.interrupt_task();
+        self.interrupt_task_sync();
     }
 }
 
@@ -1154,20 +1152,16 @@ impl AgentTask {
     fn abort(self, reason: TurnAbortReason) {
         // TOCTOU?
         if !self.handle.is_finished() {
-            if self.kind == AgentTaskKind::Review {
-                let sess = self.sess.clone();
-                let sub_id = self.sub_id.clone();
-                tokio::spawn(async move {
-                    exit_review_mode(sess, sub_id, None).await;
-                });
-            }
             self.handle.abort();
             let event = Event {
-                id: self.sub_id,
+                id: self.sub_id.clone(),
                 msg: EventMsg::TurnAborted(TurnAbortedEvent { reason }),
             };
             let sess = self.sess;
             tokio::spawn(async move {
+                if self.kind == AgentTaskKind::Review {
+                    exit_review_mode(sess.clone(), self.sub_id, None).await;
+                }
                 sess.send_event(event).await;
             });
         }
@@ -1187,7 +1181,7 @@ async fn submission_loop(
         debug!(?sub, "Submission");
         match sub.op {
             Op::Interrupt => {
-                sess.interrupt_task();
+                sess.interrupt_task().await;
             }
             Op::OverrideTurnContext {
                 cwd,
@@ -1241,8 +1235,6 @@ async fn submission_loop(
 
                 let tools_config = ToolsConfig::new(&ToolsConfigParams {
                     model_family: &effective_family,
-                    approval_policy: new_approval_policy,
-                    sandbox_policy: new_sandbox_policy.clone(),
                     include_plan_tool: config.include_plan_tool,
                     include_apply_patch_tool: config.include_apply_patch_tool,
                     include_web_search_request: config.tools_web_search_request,
@@ -1280,11 +1272,11 @@ async fn submission_loop(
             }
             Op::UserInput { items } => {
                 // attempt to inject input into current task
-                if let Err(items) = sess.inject_input(items) {
+                if let Err(items) = sess.inject_input(items).await {
                     // no current task, spawn a new one
                     let task =
                         AgentTask::spawn(sess.clone(), Arc::clone(&turn_context), sub.id, items);
-                    sess.set_task(task);
+                    sess.set_task(task).await;
                 }
             }
             Op::UserTurn {
@@ -1297,7 +1289,7 @@ async fn submission_loop(
                 summary,
             } => {
                 // attempt to inject input into current task
-                if let Err(items) = sess.inject_input(items) {
+                if let Err(items) = sess.inject_input(items).await {
                     // Derive a fresh TurnContext for this turn using the provided overrides.
                     let provider = turn_context.client.get_provider();
                     let auth_manager = turn_context.client.get_auth_manager();
@@ -1329,8 +1321,6 @@ async fn submission_loop(
                         client,
                         tools_config: ToolsConfig::new(&ToolsConfigParams {
                             model_family: &model_family,
-                            approval_policy,
-                            sandbox_policy: sandbox_policy.clone(),
                             include_plan_tool: config.include_plan_tool,
                             include_apply_patch_tool: config.include_apply_patch_tool,
                             include_web_search_request: config.tools_web_search_request,
@@ -1348,24 +1338,35 @@ async fn submission_loop(
                         cwd,
                         is_review_mode: false,
                     };
-                    // TODO: record the new environment context in the conversation history
+
+                    // if the environment context has changed, record it in the conversation history
+                    let previous_env_context = EnvironmentContext::from(turn_context.as_ref());
+                    let new_env_context = EnvironmentContext::from(&fresh_turn_context);
+                    if !new_env_context.equals_except_shell(&previous_env_context) {
+                        sess.record_conversation_items(&[ResponseItem::from(new_env_context)])
+                            .await;
+                    }
+
+                    // Install the new persistent context for subsequent tasks/turns.
+                    turn_context = Arc::new(fresh_turn_context);
+
                     // no current task, spawn a new one with the per‑turn context
                     let task =
-                        AgentTask::spawn(sess.clone(), Arc::new(fresh_turn_context), sub.id, items);
-                    sess.set_task(task);
+                        AgentTask::spawn(sess.clone(), Arc::clone(&turn_context), sub.id, items);
+                    sess.set_task(task).await;
                 }
             }
             Op::ExecApproval { id, decision } => match decision {
                 ReviewDecision::Abort => {
-                    sess.interrupt_task();
+                    sess.interrupt_task().await;
                 }
-                other => sess.notify_approval(&id, other),
+                other => sess.notify_approval(&id, other).await,
             },
             Op::PatchApproval { id, decision } => match decision {
                 ReviewDecision::Abort => {
-                    sess.interrupt_task();
+                    sess.interrupt_task().await;
                 }
-                other => sess.notify_approval(&id, other),
+                other => sess.notify_approval(&id, other).await,
             },
             Op::AddToHistory { text } => {
                 let id = sess.conversation_id;
@@ -1444,15 +1445,19 @@ async fn submission_loop(
             }
             Op::Compact => {
                 // Attempt to inject input into current task
-                if let Err(items) = sess.inject_input(vec![InputItem::Text {
-                    text: compact::COMPACT_TRIGGER_TEXT.to_string(),
-                }]) {
+                if let Err(items) = sess
+                    .inject_input(vec![InputItem::Text {
+                        text: compact::COMPACT_TRIGGER_TEXT.to_string(),
+                    }])
+                    .await
+                {
                     compact::spawn_compact_task(
                         sess.clone(),
                         Arc::clone(&turn_context),
                         sub.id,
                         items,
-                    );
+                    )
+                    .await;
                 }
             }
             Op::Shutdown => {
@@ -1460,7 +1465,10 @@ async fn submission_loop(
 
                 // Gracefully flush and shutdown rollout recorder on session end so tests
                 // that inspect the rollout file do not race with the background writer.
-                let recorder_opt = sess.rollout.lock_unchecked().take();
+                let recorder_opt = {
+                    let mut guard = sess.rollout.lock().await;
+                    guard.take()
+                };
                 if let Some(rec) = recorder_opt
                     && let Err(e) = rec.shutdown().await
                 {
@@ -1485,7 +1493,7 @@ async fn submission_loop(
                 let sub_id = sub.id.clone();
                 // Flush rollout writes before returning the path so readers observe a consistent file.
                 let (path, rec_opt) = {
-                    let guard = sess.rollout.lock_unchecked();
+                    let guard = sess.rollout.lock().await;
                     match guard.as_ref() {
                         Some(rec) => (rec.get_rollout_path(), Some(rec.clone())),
                         None => {
@@ -1539,8 +1547,6 @@ async fn spawn_review_thread(
         .unwrap_or_else(|| parent_turn_context.client.get_model_family());
     let tools_config = ToolsConfig::new(&ToolsConfigParams {
         model_family: &review_model_family,
-        approval_policy: parent_turn_context.approval_policy,
-        sandbox_policy: parent_turn_context.sandbox_policy.clone(),
         include_plan_tool: false,
         include_apply_patch_tool: config.include_apply_patch_tool,
         include_web_search_request: false,
@@ -1549,7 +1555,8 @@ async fn spawn_review_thread(
         experimental_unified_exec_tool: config.use_experimental_unified_exec_tool,
     });
 
-    let base_instructions = Some(REVIEW_PROMPT.to_string());
+    let base_instructions = REVIEW_PROMPT.to_string();
+    let review_prompt = review_request.prompt.clone();
     let provider = parent_turn_context.client.get_provider();
     let auth_manager = parent_turn_context.client.get_auth_manager();
     let model_family = review_model_family.clone();
@@ -1558,16 +1565,19 @@ async fn spawn_review_thread(
     let mut per_turn_config = (*config).clone();
     per_turn_config.model = model.clone();
     per_turn_config.model_family = model_family.clone();
+    per_turn_config.model_reasoning_effort = Some(ReasoningEffortConfig::Low);
+    per_turn_config.model_reasoning_summary = ReasoningSummaryConfig::Detailed;
     if let Some(model_info) = get_model_info(&model_family) {
         per_turn_config.model_context_window = Some(model_info.context_window);
     }
 
+    let per_turn_config = Arc::new(per_turn_config);
     let client = ModelClient::new(
-        Arc::new(per_turn_config),
+        per_turn_config.clone(),
         auth_manager,
         provider,
-        parent_turn_context.client.get_reasoning_effort(),
-        parent_turn_context.client.get_reasoning_summary(),
+        per_turn_config.model_reasoning_effort,
+        per_turn_config.model_reasoning_summary,
         sess.conversation_id,
     );
 
@@ -1575,7 +1585,7 @@ async fn spawn_review_thread(
         client,
         tools_config,
         user_instructions: None,
-        base_instructions,
+        base_instructions: Some(base_instructions.clone()),
         approval_policy: parent_turn_context.approval_policy,
         sandbox_policy: parent_turn_context.sandbox_policy.clone(),
         shell_environment_policy: parent_turn_context.shell_environment_policy.clone(),
@@ -1585,14 +1595,14 @@ async fn spawn_review_thread(
 
     // Seed the child task with the review prompt as the initial user message.
     let input: Vec<InputItem> = vec![InputItem::Text {
-        text: review_request.prompt.clone(),
+        text: format!("{base_instructions}\n\n---\n\nNow, here's your task: {review_prompt}"),
     }];
     let tc = Arc::new(review_turn_context);
 
     // Clone sub_id for the upcoming announcement before moving it into the task.
     let sub_id_for_event = sub_id.clone();
     let task = AgentTask::review(sess.clone(), tc.clone(), sub_id, input);
-    sess.set_task(task);
+    sess.set_task(task).await;
 
     // Announce entering review mode so UIs can switch modes.
     sess.send_event(Event {
@@ -1643,6 +1653,8 @@ async fn run_task(
     let is_review_mode = turn_context.is_review_mode;
     let mut review_thread_history: Vec<ResponseItem> = Vec::new();
     if is_review_mode {
+        // Seed review threads with environment context so the model knows the working directory.
+        review_thread_history.extend(sess.build_initial_context(turn_context.as_ref()));
         review_thread_history.push(initial_input_for_turn.into());
     } else {
         sess.record_input_and_rollout_usermsg(&initial_input_for_turn)
@@ -1661,6 +1673,7 @@ async fn run_task(
         // may support this, the model might not.
         let pending_input = sess
             .get_pending_input()
+            .await
             .into_iter()
             .map(ResponseItem::from)
             .collect::<Vec<ResponseItem>>();
@@ -1682,7 +1695,7 @@ async fn run_task(
             review_thread_history.clone()
         } else {
             sess.record_conversation_items(&pending_input).await;
-            sess.turn_input_with_history(pending_input)
+            sess.turn_input_with_history(pending_input).await
         };
 
         let turn_input_messages: Vec<String> = turn_input
@@ -1894,7 +1907,7 @@ async fn run_task(
         .await;
     }
 
-    sess.remove_task(&sub_id);
+    sess.remove_task(&sub_id).await;
     let event = Event {
         id: sub_id,
         msg: EventMsg::TaskComplete(TaskCompleteEvent { last_agent_message }),
@@ -2127,7 +2140,9 @@ async fn try_run_turn(
                 response_id: _,
                 token_usage,
             } => {
-                let info = sess.update_token_usage_info(turn_context, &token_usage);
+                let info = sess
+                    .update_token_usage_info(turn_context, &token_usage)
+                    .await;
                 let _ = sess
                     .send_event(Event {
                         id: sub_id.to_string(),
@@ -2461,7 +2476,10 @@ async fn handle_function_call(
                 }
             };
             let abs = turn_context.resolve_path(Some(args.path));
-            let output = match sess.inject_input(vec![InputItem::LocalImage { path: abs }]) {
+            let output = match sess
+                .inject_input(vec![InputItem::LocalImage { path: abs }])
+                .await
+            {
                 Ok(()) => FunctionCallOutputPayload {
                     content: "attached local image path".to_string(),
                     success: Some(true),
@@ -2667,6 +2685,7 @@ pub struct ExecInvokeArgs<'a> {
     pub params: ExecParams,
     pub sandbox_type: SandboxType,
     pub sandbox_policy: &'a SandboxPolicy,
+    pub sandbox_cwd: &'a Path,
     pub codex_linux_sandbox_exe: &'a Option<PathBuf>,
     pub stdout_stream: Option<StdoutStream>,
 }
@@ -2697,6 +2716,21 @@ async fn handle_container_exec_with_params(
     sub_id: String,
     call_id: String,
 ) -> ResponseInputItem {
+    if params.with_escalated_permissions.unwrap_or(false)
+        && !matches!(turn_context.approval_policy, AskForApproval::OnRequest)
+    {
+        return ResponseInputItem::FunctionCallOutput {
+            call_id,
+            output: FunctionCallOutputPayload {
+                content: format!(
+                    "approval policy is {policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {policy:?}",
+                    policy = turn_context.approval_policy
+                ),
+                success: None,
+            },
+        };
+    }
+
     // check if this was a patch, and apply it if so
     let apply_patch_exec = match maybe_parse_apply_patch_verified(&params.command, &params.cwd) {
         MaybeApplyPatchVerified::Body(changes) => {
@@ -2775,7 +2809,7 @@ async fn handle_container_exec_with_params(
         }
         None => {
             let safety = {
-                let state = sess.state.lock_unchecked();
+                let state = sess.state.lock().await;
                 assess_command_safety(
                     &params.command,
                     turn_context.approval_policy,
@@ -2809,7 +2843,7 @@ async fn handle_container_exec_with_params(
                 match rx_approve.await.unwrap_or_default() {
                     ReviewDecision::Approved => (),
                     ReviewDecision::ApprovedForSession => {
-                        sess.add_approved_command(params.command.clone());
+                        sess.add_approved_command(params.command.clone()).await;
                     }
                     ReviewDecision::Denied | ReviewDecision::Abort => {
                         return ResponseInputItem::FunctionCallOutput {
@@ -2864,6 +2898,7 @@ async fn handle_container_exec_with_params(
                 params: params.clone(),
                 sandbox_type,
                 sandbox_policy: &turn_context.sandbox_policy,
+                sandbox_cwd: &turn_context.cwd,
                 codex_linux_sandbox_exe: &sess.codex_linux_sandbox_exe,
                 stdout_stream: if exec_command_context.apply_patch.is_some() {
                     None
@@ -2983,7 +3018,7 @@ async fn handle_sandbox_error(
             // remainder of the session so future
             // executions skip the sandbox directly.
             // TODO(ragona): Isn't this a bug? It always saves the command in an | fork?
-            sess.add_approved_command(params.command.clone());
+            sess.add_approved_command(params.command.clone()).await;
             // Inform UI we are retrying without sandbox.
             sess.notify_background_event(&sub_id, "retrying command without sandbox")
                 .await;
@@ -2998,6 +3033,7 @@ async fn handle_sandbox_error(
                         params,
                         sandbox_type: SandboxType::None,
                         sandbox_policy: &turn_context.sandbox_policy,
+                        sandbox_cwd: &turn_context.cwd,
                         codex_linux_sandbox_exe: &sess.codex_linux_sandbox_exe,
                         stdout_stream: if exec_command_context.apply_patch.is_some() {
                             None
@@ -3252,7 +3288,8 @@ fn convert_call_tool_result_to_function_call_output_payload(
     }
 }
 
-/// Emits an ExitedReviewMode Event with optional ReviewOutput.
+/// Emits an ExitedReviewMode Event with optional ReviewOutput,
+/// and records a developer message with the review output.
 async fn exit_review_mode(
     session: Arc<Session>,
     task_sub_id: String,
@@ -3260,10 +3297,54 @@ async fn exit_review_mode(
 ) {
     let event = Event {
         id: task_sub_id,
-        msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent { review_output }),
+        msg: EventMsg::ExitedReviewMode(ExitedReviewModeEvent {
+            review_output: review_output.clone(),
+        }),
     };
     session.send_event(event).await;
+
+    let mut user_message = String::new();
+    if let Some(out) = review_output {
+        let mut findings_str = String::new();
+        let text = out.overall_explanation.trim();
+        if !text.is_empty() {
+            findings_str.push_str(text);
+        }
+        if !out.findings.is_empty() {
+            let block = format_review_findings_block(&out.findings, None);
+            findings_str.push_str(&format!("\n{block}"));
+        }
+        user_message.push_str(&format!(
+            r#"<user_action>
+  <context>User initiated a review task. Here's the full review output from reviewer model. User may select one or more comments to resolve.</context>
+  <action>review</action>
+  <results>
+  {findings_str}
+  </results>
+</user_action>
+"#));
+    } else {
+        user_message.push_str(r#"<user_action>
+  <context>User initiated a review task, but was interrupted. If user asks about this, tell them to re-initiate a review with `/review` and wait for it to complete.</context>
+  <action>review</action>
+  <results>
+  None.
+  </results>
+</user_action>
+"#);
+    }
+
+    session
+        .record_conversation_items(&[ResponseItem::Message {
+            id: None,
+            role: "user".to_string(),
+            content: vec![ContentItem::InputText { text: user_message }],
+        }])
+        .await;
 }
+
+#[cfg(test)]
+pub(crate) use tests::make_session_and_context;
 
 #[cfg(test)]
 mod tests {
@@ -3277,6 +3358,7 @@ mod tests {
     use mcp_types::ContentBlock;
     use mcp_types::TextContent;
     use pretty_assertions::assert_eq;
+    use serde::Deserialize;
     use serde_json::json;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -3306,7 +3388,7 @@ mod tests {
             }),
         ));
 
-        let actual = session.state.lock_unchecked().history.contents();
+        let actual = tokio_test::block_on(async { session.state.lock().await.history.contents() });
         assert_eq!(expected, actual);
     }
 
@@ -3319,7 +3401,7 @@ mod tests {
             session.record_initial_history(&turn_context, InitialHistory::Forked(rollout_items)),
         );
 
-        let actual = session.state.lock_unchecked().history.contents();
+        let actual = tokio_test::block_on(async { session.state.lock().await.history.contents() });
         assert_eq!(expected, actual);
     }
 
@@ -3505,7 +3587,7 @@ mod tests {
         })
     }
 
-    fn make_session_and_context() -> (Session, TurnContext) {
+    pub(crate) fn make_session_and_context() -> (Session, TurnContext) {
         let (tx_event, _rx_event) = async_channel::unbounded();
         let codex_home = tempfile::tempdir().expect("create temp dir");
         let config = Config::load_from_base_config_with_overrides(
@@ -3526,8 +3608,6 @@ mod tests {
         );
         let tools_config = ToolsConfig::new(&ToolsConfigParams {
             model_family: &config.model_family,
-            approval_policy: config.approval_policy,
-            sandbox_policy: config.sandbox_policy.clone(),
             include_plan_tool: config.include_plan_tool,
             include_apply_patch_tool: config.include_apply_patch_tool,
             include_web_search_request: config.tools_web_search_request,
@@ -3561,6 +3641,7 @@ mod tests {
             codex_linux_sandbox_exe: None,
             user_shell: shell::Shell::Unknown,
             show_raw_agent_reasoning: config.show_raw_agent_reasoning,
+            next_internal_sub_id: AtomicU64::new(0),
         };
         (session, turn_context)
     }
@@ -3665,5 +3746,106 @@ mod tests {
         rollout_items.push(RolloutItem::ResponseItem(assistant3.clone()));
 
         (rollout_items, live_history.contents())
+    }
+
+    #[tokio::test]
+    async fn rejects_escalated_permissions_when_policy_not_on_request() {
+        use crate::exec::ExecParams;
+        use crate::protocol::AskForApproval;
+        use crate::protocol::SandboxPolicy;
+        use crate::turn_diff_tracker::TurnDiffTracker;
+        use std::collections::HashMap;
+
+        let (session, mut turn_context) = make_session_and_context();
+        // Ensure policy is NOT OnRequest so the early rejection path triggers
+        turn_context.approval_policy = AskForApproval::OnFailure;
+
+        let params = ExecParams {
+            command: if cfg!(windows) {
+                vec![
+                    "cmd.exe".to_string(),
+                    "/C".to_string(),
+                    "echo hi".to_string(),
+                ]
+            } else {
+                vec![
+                    "/bin/sh".to_string(),
+                    "-c".to_string(),
+                    "echo hi".to_string(),
+                ]
+            },
+            cwd: turn_context.cwd.clone(),
+            timeout_ms: Some(1000),
+            env: HashMap::new(),
+            with_escalated_permissions: Some(true),
+            justification: Some("test".to_string()),
+        };
+
+        let params2 = ExecParams {
+            with_escalated_permissions: Some(false),
+            ..params.clone()
+        };
+
+        let mut turn_diff_tracker = TurnDiffTracker::new();
+
+        let sub_id = "test-sub".to_string();
+        let call_id = "test-call".to_string();
+
+        let resp = handle_container_exec_with_params(
+            params,
+            &session,
+            &turn_context,
+            &mut turn_diff_tracker,
+            sub_id,
+            call_id,
+        )
+        .await;
+
+        let ResponseInputItem::FunctionCallOutput { output, .. } = resp else {
+            panic!("expected FunctionCallOutput");
+        };
+
+        let expected = format!(
+            "approval policy is {policy:?}; reject command — you should not ask for escalated permissions if the approval policy is {policy:?}",
+            policy = turn_context.approval_policy
+        );
+
+        pretty_assertions::assert_eq!(output.content, expected);
+
+        // Now retry the same command WITHOUT escalated permissions; should succeed.
+        // Force DangerFullAccess to avoid platform sandbox dependencies in tests.
+        turn_context.sandbox_policy = SandboxPolicy::DangerFullAccess;
+
+        let resp2 = handle_container_exec_with_params(
+            params2,
+            &session,
+            &turn_context,
+            &mut turn_diff_tracker,
+            "test-sub".to_string(),
+            "test-call-2".to_string(),
+        )
+        .await;
+
+        let ResponseInputItem::FunctionCallOutput { output, .. } = resp2 else {
+            panic!("expected FunctionCallOutput on retry");
+        };
+
+        #[derive(Deserialize, PartialEq, Eq, Debug)]
+        struct ResponseExecMetadata {
+            exit_code: i32,
+        }
+
+        #[derive(Deserialize)]
+        struct ResponseExecOutput {
+            output: String,
+            metadata: ResponseExecMetadata,
+        }
+
+        let exec_output: ResponseExecOutput =
+            serde_json::from_str(&output.content).expect("valid exec output json");
+
+        pretty_assertions::assert_eq!(exec_output.metadata, ResponseExecMetadata { exit_code: 0 });
+        assert!(exec_output.output.contains("hi"));
+        pretty_assertions::assert_eq!(output.success, Some(true));
     }
 }
