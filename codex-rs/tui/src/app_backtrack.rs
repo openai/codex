@@ -327,6 +327,7 @@ impl App {
         nth_user_message: usize,
         prefill: &str,
     ) {
+        self.reset_transcript_history_state();
         let conv = new_conv.conversation;
         let session_configured = new_conv.session_configured;
         let init = crate::chatwidget::ChatWidgetInit {
