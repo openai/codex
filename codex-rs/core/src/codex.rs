@@ -2136,6 +2136,13 @@ async fn try_run_turn(
                     })
                     .await;
             }
+            ResponseEvent::RateLimits(snapshot) => {
+                let event = Event {
+                    id: sub_id.to_string(),
+                    msg: EventMsg::RateLimitSnapshot(snapshot),
+                };
+                sess.send_event(event).await;
+            }
             ResponseEvent::Completed {
                 response_id: _,
                 token_usage,
