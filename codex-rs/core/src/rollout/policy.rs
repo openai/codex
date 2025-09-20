@@ -69,7 +69,6 @@ pub(crate) fn should_persist_event_msg(ev: &EventMsg) -> bool {
         | EventMsg::McpListToolsResponse(_)
         | EventMsg::ListCustomPromptsResponse(_)
         | EventMsg::PlanUpdate(_)
-        | EventMsg::RateLimitSnapshot(_)
         | EventMsg::ShutdownComplete
         | EventMsg::ConversationPath(_) => false,
     }

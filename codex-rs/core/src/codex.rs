@@ -98,6 +98,7 @@ use crate::protocol::ListCustomPromptsResponseEvent;
 use crate::protocol::Op;
 use crate::protocol::PatchApplyBeginEvent;
 use crate::protocol::PatchApplyEndEvent;
+use crate::protocol::RateLimitSnapshotEvent;
 use crate::protocol::ReviewDecision;
 use crate::protocol::ReviewOutputEvent;
 use crate::protocol::SandboxPolicy;
@@ -105,6 +106,7 @@ use crate::protocol::SessionConfiguredEvent;
 use crate::protocol::StreamErrorEvent;
 use crate::protocol::Submission;
 use crate::protocol::TaskCompleteEvent;
+use crate::protocol::TokenCountEvent;
 use crate::protocol::TokenUsage;
 use crate::protocol::TokenUsageInfo;
 use crate::protocol::TurnDiffEvent;
@@ -257,6 +259,7 @@ struct State {
     pending_input: Vec<ResponseInputItem>,
     history: ConversationHistory,
     token_info: Option<TokenUsageInfo>,
+    latest_rate_limits: Option<RateLimitSnapshotEvent>,
 }
 
 /// Context for an initialized model agent
@@ -735,19 +738,27 @@ impl Session {
         }
     }
 
-    async fn update_token_usage_info(
+    async fn update_token_count(
         &self,
         turn_context: &TurnContext,
-        token_usage: &Option<TokenUsage>,
-    ) -> Option<TokenUsageInfo> {
+        token_usage: Option<&TokenUsage>,
+        new_rate_limits: Option<RateLimitSnapshotEvent>,
+    ) -> TokenCountEvent {
         let mut state = self.state.lock().await;
+        if let Some(snapshot) = new_rate_limits {
+            state.latest_rate_limits = Some(snapshot);
+        }
+        let token_usage_owned = token_usage.cloned();
         let info = TokenUsageInfo::new_or_append(
             &state.token_info,
-            token_usage,
+            &token_usage_owned,
             turn_context.client.get_model_context_window(),
         );
         state.token_info = info.clone();
-        info
+        TokenCountEvent {
+            info,
+            rate_limits: state.latest_rate_limits.clone(),
+        }
     }
 
     /// Record a user input item to conversation history and also persist a
@@ -2137,9 +2148,12 @@ async fn try_run_turn(
                     .await;
             }
             ResponseEvent::RateLimits(snapshot) => {
+                let token_event = sess
+                    .update_token_count(turn_context, None, Some(snapshot))
+                    .await;
                 let event = Event {
                     id: sub_id.to_string(),
-                    msg: EventMsg::RateLimitSnapshot(snapshot),
+                    msg: EventMsg::TokenCount(token_event),
                 };
                 sess.send_event(event).await;
             }
@@ -2147,13 +2161,13 @@ async fn try_run_turn(
                 response_id: _,
                 token_usage,
             } => {
-                let info = sess
-                    .update_token_usage_info(turn_context, &token_usage)
+                let token_event = sess
+                    .update_token_count(turn_context, token_usage.as_ref(), None)
                     .await;
                 let _ = sess
                     .send_event(Event {
                         id: sub_id.to_string(),
-                        msg: EventMsg::TokenCount(crate::protocol::TokenCountEvent { info }),
+                        msg: EventMsg::TokenCount(token_event),
                     })
                     .await;
 

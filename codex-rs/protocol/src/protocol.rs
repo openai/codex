@@ -504,9 +504,6 @@ pub enum EventMsg {
 
     PlanUpdate(UpdatePlanArgs),
 
-    /// Snapshot of the primary/protection rate limits reported by the provider.
-    RateLimitSnapshot(RateLimitSnapshotEvent),
-
     TurnAborted(TurnAbortedEvent),
 
     /// Notification that the agent is shutting down.
@@ -592,6 +589,7 @@ impl TokenUsageInfo {
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
 pub struct TokenCountEvent {
     pub info: Option<TokenUsageInfo>,
+    pub rate_limits: Option<RateLimitSnapshotEvent>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, TS)]
