@@ -212,22 +212,18 @@ impl Config {
         // `Config` instance.
         let codex_home = find_codex_home()?;
 
-        // Step 1: parse `config.toml` into a generic JSON value.
-        let mut root_value = load_config_as_toml(&codex_home)?;
+        // Step 1: load the base config layered with CLI overrides while
+        // ensuring admin overrides always win.
+        let root_value = load_layered_config_with_cli_overrides(&codex_home, cli_overrides)?;
 
-        // Step 2: apply the `-c` overrides.
-        for (path, value) in cli_overrides.into_iter() {
-            apply_toml_override(&mut root_value, &path, value);
-        }
-
-        // Step 3: deserialize into `ConfigToml` so that Serde can enforce the
+        // Step 2: deserialize into `ConfigToml` so that Serde can enforce the
         // correct types.
         let cfg: ConfigToml = root_value.try_into().map_err(|e| {
             tracing::error!("Failed to deserialize overridden config: {e}");
             std::io::Error::new(std::io::ErrorKind::InvalidData, e)
         })?;
 
-        // Step 4: merge with the strongly-typed overrides.
+        // Step 3: merge with the strongly-typed overrides.
         Self::load_from_base_config_with_overrides(cfg, overrides, codex_home)
     }
 }
@@ -236,11 +232,7 @@ pub fn load_config_as_toml_with_cli_overrides(
     codex_home: &Path,
     cli_overrides: Vec<(String, TomlValue)>,
 ) -> std::io::Result<ConfigToml> {
-    let mut root_value = load_config_as_toml(codex_home)?;
-
-    for (path, value) in cli_overrides.into_iter() {
-        apply_toml_override(&mut root_value, &path, value);
-    }
+    let root_value = load_layered_config_with_cli_overrides(codex_home, cli_overrides)?;
 
     let cfg: ConfigToml = root_value.try_into().map_err(|e| {
         tracing::error!("Failed to deserialize overridden config: {e}");
@@ -250,33 +242,33 @@ pub fn load_config_as_toml_with_cli_overrides(
     Ok(cfg)
 }
 
-/// Read `CODEX_HOME/config.toml` and return it as a generic TOML value. Returns
-/// an empty TOML table when the file does not exist.
-pub fn load_config_as_toml(codex_home: &Path) -> std::io::Result<TomlValue> {
-    let config_path = codex_home.join(CONFIG_TOML_FILE);
-    match std::fs::read_to_string(&config_path) {
-        Ok(contents) => match toml::from_str::<TomlValue>(&contents) {
-            Ok(val) => Ok(val),
-            Err(e) => {
-                tracing::error!("Failed to parse config.toml: {e}");
-                Err(std::io::Error::new(std::io::ErrorKind::InvalidData, e))
-            }
-        },
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            tracing::info!("config.toml not found, using defaults");
-            Ok(TomlValue::Table(Default::default()))
-        }
-        Err(e) => {
-            tracing::error!("Failed to read config.toml: {e}");
-            Err(e)
-        }
+fn load_layered_config_with_cli_overrides(
+    codex_home: &Path,
+    cli_overrides: Vec<(String, TomlValue)>,
+) -> std::io::Result<TomlValue> {
+    let crate::config_loader::LoadedConfigLayers {
+        mut base,
+        override_layer,
+        managed_layer,
+    } = crate::config_loader::load_config_layers(codex_home)?;
+
+    for (path, value) in cli_overrides.into_iter() {
+        apply_toml_override(&mut base, &path, value);
     }
+
+    for overlay in [override_layer, managed_layer].into_iter().flatten() {
+        crate::config_loader::merge_toml_values(&mut base, &overlay);
+    }
+
+    Ok(base)
 }
+
+pub use crate::config_loader::load_config_as_toml;
 
 pub fn load_global_mcp_servers(
     codex_home: &Path,
 ) -> std::io::Result<BTreeMap<String, McpServerConfig>> {
-    let root_value = load_config_as_toml(codex_home)?;
+    let root_value = crate::config_loader::load_config_as_toml(codex_home)?;
     let Some(servers_value) = root_value.get("mcp_servers") else {
         return Ok(BTreeMap::new());
     };
@@ -1308,6 +1300,29 @@ exclude_slash_tmp = true
         write_global_mcp_servers(codex_home.path(), &empty)?;
         let loaded = load_global_mcp_servers(codex_home.path())?;
         assert!(loaded.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn config_override_wins_over_cli_overrides() -> anyhow::Result<()> {
+        let codex_home = TempDir::new()?;
+
+        std::fs::write(
+            codex_home.path().join(CONFIG_TOML_FILE),
+            "model = \"base\"\n",
+        )?;
+        std::fs::write(
+            codex_home.path().join("config_override.toml"),
+            "model = \"override\"\n",
+        )?;
+
+        let cfg = load_config_as_toml_with_cli_overrides(
+            codex_home.path(),
+            vec![("model".to_string(), TomlValue::String("cli".to_string()))],
+        )?;
+
+        assert_eq!(cfg.model.as_deref(), Some("override"));
 
         Ok(())
     }
