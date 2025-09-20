@@ -54,12 +54,6 @@ pub(crate) fn build_limits_view(
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-struct GridState {
-    weekly_used_ratio: f64,
-    hourly_remaining_ratio: f64,
-}
-
 #[derive(Debug)]
 struct RateLimitMetrics {
     hourly_used: f64,
@@ -95,6 +89,86 @@ impl RateLimitMetrics {
     fn weekly_exhausted(&self) -> bool {
         self.weekly_remaining <= 0.0
     }
+}
+
+fn format_window_label(minutes: Option<u64>) -> String {
+    approximate_duration(minutes)
+        .map(|(value, unit)| format!("≈{value} {} window", pluralize_unit(unit, value)))
+        .unwrap_or_else(|| "window unknown".to_string())
+}
+
+fn format_reset_hint(minutes: Option<u64>) -> String {
+    approximate_duration(minutes)
+        .map(|(value, unit)| format!("≈{value} {}", pluralize_unit(unit, value)))
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn approximate_duration(minutes: Option<u64>) -> Option<(u64, DurationUnit)> {
+    let minutes = minutes?;
+    if minutes == 0 {
+        return Some((1, DurationUnit::Minute));
+    }
+    if minutes < 60 {
+        return Some((minutes, DurationUnit::Minute));
+    }
+    if minutes < 1_440 {
+        let hours = ((minutes as f64) / 60.0).round().max(1.0) as u64;
+        return Some((hours, DurationUnit::Hour));
+    }
+    let days = ((minutes as f64) / 1_440.0).round().max(1.0) as u64;
+    if days >= 7 {
+        let weeks = ((days as f64) / 7.0).round().max(1.0) as u64;
+        Some((weeks, DurationUnit::Week))
+    } else {
+        Some((days, DurationUnit::Day))
+    }
+}
+
+fn pluralize_unit(unit: DurationUnit, value: u64) -> String {
+    match unit {
+        DurationUnit::Minute => {
+            if value == 1 {
+                "minute".to_string()
+            } else {
+                "minutes".to_string()
+            }
+        }
+        DurationUnit::Hour => {
+            if value == 1 {
+                "hour".to_string()
+            } else {
+                "hours".to_string()
+            }
+        }
+        DurationUnit::Day => {
+            if value == 1 {
+                "day".to_string()
+            } else {
+                "days".to_string()
+            }
+        }
+        DurationUnit::Week => {
+            if value == 1 {
+                "week".to_string()
+            } else {
+                "weeks".to_string()
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DurationUnit {
+    Minute,
+    Hour,
+    Day,
+    Week,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct GridState {
+    weekly_used_ratio: f64,
+    hourly_remaining_ratio: f64,
 }
 
 fn build_summary_lines(metrics: &RateLimitMetrics) -> Vec<Line<'static>> {
@@ -188,10 +262,7 @@ fn extract_capacity_fraction(snapshot: &RateLimitSnapshotEvent) -> Option<f64> {
     }
 }
 
-fn compute_grid_state(
-    metrics: &RateLimitMetrics,
-    capacity_fraction: f64,
-) -> Option<GridState> {
+fn compute_grid_state(metrics: &RateLimitMetrics, capacity_fraction: f64) -> Option<GridState> {
     if capacity_fraction <= 0.0 {
         return None;
     }
@@ -224,88 +295,10 @@ fn scale_grid_state(state: GridState, grid: GridConfig) -> GridState {
 }
 
 /// Convert the grid state to rendered lines for the TUI.
-fn render_limit_grid(
-    state: GridState,
-    grid_config: GridConfig,
-    width: u16,
-) -> Vec<Line<'static>> {
+fn render_limit_grid(state: GridState, grid_config: GridConfig, width: u16) -> Vec<Line<'static>> {
     GridLayout::new(grid_config, width)
         .map(|layout| layout.render(state))
         .unwrap_or_default()
-}
-
-fn format_window_label(minutes: Option<u64>) -> String {
-    approximate_duration(minutes)
-        .map(|(value, unit)| format!("≈{value} {} window", pluralize_unit(unit, value)))
-        .unwrap_or_else(|| "window unknown".to_string())
-}
-
-fn format_reset_hint(minutes: Option<u64>) -> String {
-    approximate_duration(minutes)
-        .map(|(value, unit)| format!("≈{value} {}", pluralize_unit(unit, value)))
-        .unwrap_or_else(|| "unknown".to_string())
-}
-
-fn approximate_duration(minutes: Option<u64>) -> Option<(u64, DurationUnit)> {
-    let minutes = minutes?;
-    if minutes == 0 {
-        return Some((1, DurationUnit::Minute));
-    }
-    if minutes < 60 {
-        return Some((minutes, DurationUnit::Minute));
-    }
-    if minutes < 1_440 {
-        let hours = ((minutes as f64) / 60.0).round().max(1.0) as u64;
-        return Some((hours, DurationUnit::Hour));
-    }
-    let days = ((minutes as f64) / 1_440.0).round().max(1.0) as u64;
-    if days >= 7 {
-        let weeks = ((days as f64) / 7.0).round().max(1.0) as u64;
-        Some((weeks, DurationUnit::Week))
-    } else {
-        Some((days, DurationUnit::Day))
-    }
-}
-
-fn pluralize_unit(unit: DurationUnit, value: u64) -> String {
-    match unit {
-        DurationUnit::Minute => {
-            if value == 1 {
-                "minute".to_string()
-            } else {
-                "minutes".to_string()
-            }
-        }
-        DurationUnit::Hour => {
-            if value == 1 {
-                "hour".to_string()
-            } else {
-                "hours".to_string()
-            }
-        }
-        DurationUnit::Day => {
-            if value == 1 {
-                "day".to_string()
-            } else {
-                "days".to_string()
-            }
-        }
-        DurationUnit::Week => {
-            if value == 1 {
-                "week".to_string()
-            } else {
-                "weeks".to_string()
-            }
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DurationUnit {
-    Minute,
-    Hour,
-    Day,
-    Week,
 }
 
 /// Precomputed layout information for the usage grid.
