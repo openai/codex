@@ -276,7 +276,6 @@ impl ModelClient {
                 Ok(resp) if resp.status().is_success() => {
                     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
 
-                    warn!("resp: {:?}", resp);
                     if let Some(snapshot) = parse_rate_limit_snapshot(resp.headers())
                         && tx_event
                             .send(Ok(ResponseEvent::RateLimits(snapshot)))
@@ -782,6 +781,8 @@ fn try_parse_retry_after(err: &Error) -> Option<Duration> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use reqwest::header::HeaderMap;
+    use reqwest::header::HeaderValue;
     use serde_json::json;
     use tokio::sync::mpsc;
     use tokio_test::io::Builder as IoBuilder;
@@ -1162,5 +1163,49 @@ mod tests {
 
         let plan_json = serde_json::to_string(&resp.error.plan_type).expect("serialize plan_type");
         assert_eq!(plan_json, "\"vip\"");
+    }
+
+    #[test]
+    fn parse_rate_limit_snapshot_parses_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-codex-primary-used-percent",
+            HeaderValue::from_static("12.5"),
+        );
+        headers.insert(
+            "x-codex-protection-used-percent",
+            HeaderValue::from_static("40"),
+        );
+        headers.insert(
+            "x-codex-primary-over-protection-limit-percent",
+            HeaderValue::from_static("30"),
+        );
+        headers.insert(
+            "x-codex-primary-window-minutes",
+            HeaderValue::from_static("300"),
+        );
+        headers.insert(
+            "x-codex-protection-window-minutes",
+            HeaderValue::from_static("10080"),
+        );
+
+        let snapshot = parse_rate_limit_snapshot(&headers).expect("snapshot");
+
+        assert_eq!(snapshot.primary_used_percent, 12.5);
+        assert_eq!(snapshot.protection_used_percent, 40.0);
+        assert_eq!(snapshot.primary_to_protection_ratio_percent, Some(30.0));
+        assert_eq!(snapshot.primary_window_minutes, Some(300));
+        assert_eq!(snapshot.protection_window_minutes, Some(10080));
+    }
+
+    #[test]
+    fn parse_rate_limit_snapshot_requires_primary_percent() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-codex-protection-used-percent",
+            HeaderValue::from_static("10"),
+        );
+
+        assert!(parse_rate_limit_snapshot(&headers).is_none());
     }
 }
