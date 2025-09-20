@@ -327,8 +327,8 @@ impl ChatWidget {
 
     fn on_rate_limit_snapshot(&mut self, snapshot: RateLimitSnapshotEvent) {
         let warnings = self.rate_limit_warnings.take_warnings(
-            snapshot.primary_used_percent,
             snapshot.protection_used_percent,
+            snapshot.primary_used_percent,
         );
         self.rate_limit_snapshot = Some(snapshot);
         if !warnings.is_empty() {

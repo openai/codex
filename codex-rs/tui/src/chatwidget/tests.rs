@@ -494,9 +494,12 @@ fn rate_limit_warnings_emit_thresholds() {
     let mut state = RateLimitWarningState::default();
     let mut warnings: Vec<String> = Vec::new();
 
-    for percent in [45.0, 50.0, 76.0, 92.0] {
-        warnings.extend(state.take_warnings(percent, percent));
-    }
+    warnings.extend(state.take_warnings(10.0, 55.0));
+    warnings.extend(state.take_warnings(55.0, 10.0));
+    warnings.extend(state.take_warnings(10.0, 80.0));
+    warnings.extend(state.take_warnings(80.0, 10.0));
+    warnings.extend(state.take_warnings(10.0, 95.0));
+    warnings.extend(state.take_warnings(95.0, 10.0));
 
     assert_eq!(
         warnings.len(),
@@ -506,22 +509,26 @@ fn rate_limit_warnings_emit_thresholds() {
     assert!(
         warnings
             .iter()
-            .any(|w| w.contains("Weekly usage exceeded 50%"))
+            .any(|w| w.contains("Hourly usage exceeded 50%")),
+        "expected hourly 50% warning"
     );
     assert!(
         warnings
             .iter()
-            .any(|w| w.contains("Hourly usage exceeded 50%"))
+            .any(|w| w.contains("Weekly usage exceeded 50%")),
+        "expected weekly 50% warning"
     );
     assert!(
         warnings
             .iter()
-            .any(|w| w.contains("Weekly usage exceeded 90%"))
+            .any(|w| w.contains("Hourly usage exceeded 90%")),
+        "expected hourly 90% warning"
     );
     assert!(
         warnings
             .iter()
-            .any(|w| w.contains("Hourly usage exceeded 90%"))
+            .any(|w| w.contains("Weekly usage exceeded 90%")),
+        "expected weekly 90% warning"
     );
 }
 
