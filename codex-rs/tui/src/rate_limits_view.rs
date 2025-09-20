@@ -57,14 +57,14 @@ pub(crate) fn build_rate_limit_display(
             "  • Hourly limit".into(),
             format!(" ({hourly_window_label})").dim(),
             ": ".into(),
-            format!("{hourly_used:.1}% used").yellow(),
+            format!("{hourly_used:.1}% used").dark_gray().bold(),
         ]
         .into(),
         vec![
             "  • Weekly limit".into(),
             format!(" ({weekly_window_label})").dim(),
             ": ".into(),
-            format!("{weekly_used:.1}% used").yellow(),
+            format!("{weekly_used:.1}% used").dark_gray().bold(),
         ]
         .into(),
     ];
@@ -101,7 +101,7 @@ pub(crate) fn build_rate_limit_display(
             vec!["Legend".bold()].into(),
             vec![
                 "  • ".into(),
-                "Yellow".yellow().bold(),
+                "Dark gray".dark_gray().bold(),
                 " = weekly usage so far".into(),
             ]
             .into(),
@@ -113,7 +113,7 @@ pub(crate) fn build_rate_limit_display(
             .into(),
             vec![
                 "  • ".into(),
-                "White".bold(),
+                "Default".bold(),
                 " = weekly capacity beyond the hourly window".into(),
             ]
             .into(),
@@ -215,13 +215,13 @@ fn render_limit_gauge(
     let inner_width = side * cell_width + side.saturating_sub(1);
     let total_cells = side * side;
 
-    let mut yellow_cells = (state.weekly_used_ratio * total_cells as f64).round() as isize;
-    yellow_cells = yellow_cells.clamp(0, total_cells as isize);
+    let mut dark_cells = (state.weekly_used_ratio * total_cells as f64).round() as isize;
+    dark_cells = dark_cells.clamp(0, total_cells as isize);
     let mut green_cells = (state.hourly_remaining_ratio * total_cells as f64).round() as isize;
-    if yellow_cells + green_cells > total_cells as isize {
-        green_cells = (total_cells as isize - yellow_cells).max(0);
+    if dark_cells + green_cells > total_cells as isize {
+        green_cells = (total_cells as isize - dark_cells).max(0);
     }
-    let white_cells = (total_cells as isize - yellow_cells - green_cells).max(0);
+    let white_cells = (total_cells as isize - dark_cells - green_cells).max(0);
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push("".into());
@@ -242,9 +242,9 @@ fn render_limit_gauge(
             if col > 0 {
                 spans.push(" ".into());
             }
-            let span = if cell_index < yellow_cells {
-                gauge.logo.yellow()
-            } else if cell_index < yellow_cells + green_cells {
+            let span = if cell_index < dark_cells {
+                gauge.logo.dark_gray()
+            } else if cell_index < dark_cells + green_cells {
                 gauge.logo.green()
             } else {
                 gauge.logo.into()
