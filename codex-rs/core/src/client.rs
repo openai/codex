@@ -780,8 +780,6 @@ fn try_parse_retry_after(err: &Error) -> Option<Duration> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use reqwest::header::HeaderMap;
-    use reqwest::header::HeaderValue;
     use serde_json::json;
     use tokio::sync::mpsc;
     use tokio_test::io::Builder as IoBuilder;
