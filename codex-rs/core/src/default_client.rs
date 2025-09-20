@@ -105,6 +105,27 @@ fn sanitize_user_agent(candidate: String, fallback: &str) -> String {
 }
 
 /// Create a reqwest client with default `originator` and `User-Agent` headers set.
+/// Apply proxy settings from standard env vars to a reqwest ClientBuilder.
+///
+/// Honors the first non-empty of HTTPS_PROXY, HTTP_PROXY, or ALL_PROXY using
+/// a single catch-all proxy. This keeps configuration minimal and works for
+/// both HTTP and HTTPS requests. If the proxy value is invalid, it is ignored.
+pub fn apply_env_proxy(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+    let proxy_var = std::env::var("HTTPS_PROXY")
+        .or_else(|_| std::env::var("HTTP_PROXY"))
+        .or_else(|_| std::env::var("ALL_PROXY"));
+    match proxy_var {
+        Ok(p) if !p.is_empty() => match reqwest::Proxy::all(&p) {
+            Ok(proxy) => builder.proxy(proxy),
+            Err(e) => {
+                tracing::warn!("Ignoring invalid proxy URL from env: {e}");
+                builder
+            }
+        },
+        _ => builder,
+    }
+}
+
 pub fn create_client() -> reqwest::Client {
     use reqwest::header::HeaderMap;
 
@@ -112,10 +133,12 @@ pub fn create_client() -> reqwest::Client {
     headers.insert("originator", ORIGINATOR.header_value.clone());
     let ua = get_codex_user_agent();
 
-    reqwest::Client::builder()
+    let builder = reqwest::Client::builder()
         // Set UA via dedicated helper to avoid header validation pitfalls
         .user_agent(ua)
-        .default_headers(headers)
+        .default_headers(headers);
+
+    apply_env_proxy(builder)
         .build()
         .unwrap_or_else(|_| reqwest::Client::new())
 }
