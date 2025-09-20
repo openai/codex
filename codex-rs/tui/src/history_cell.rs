@@ -1225,7 +1225,7 @@ pub(crate) fn new_status_output(
     ];
     if usage.cached_input_tokens > 0 {
         let cached = usage.cached_input_tokens;
-        input_line_spans.push(format!(" (+ {cached} cached)").into());
+        input_line_spans.push(format!(" (+ {} cached)", format_with_separators(cached)).into());
     }
     lines.push(Line::from(input_line_spans));
     // Output: <output>
