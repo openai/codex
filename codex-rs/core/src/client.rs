@@ -276,14 +276,15 @@ impl ModelClient {
                 Ok(resp) if resp.status().is_success() => {
                     let (tx_event, rx_event) = mpsc::channel::<Result<ResponseEvent>>(1600);
 
+                    warn!("resp: {:?}", resp);
                     if let Some(snapshot) = parse_rate_limit_snapshot(resp.headers())
                         && tx_event
                             .send(Ok(ResponseEvent::RateLimits(snapshot)))
                             .await
                             .is_err()
-                        {
-                            debug!("receiver dropped rate limit snapshot event");
-                        }
+                    {
+                        debug!("receiver dropped rate limit snapshot event");
+                    }
 
                     // spawn task to process SSE
                     let stream = resp.bytes_stream().map_err(CodexErr::Reqwest);
