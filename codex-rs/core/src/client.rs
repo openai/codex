@@ -18,7 +18,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::time::timeout;
 use tokio_util::io::ReaderStream;
-use tracing::error;
+use tracing::debug;
 use tracing::trace;
 use tracing::warn;
 
@@ -282,7 +282,7 @@ impl ModelClient {
                             .await
                             .is_err()
                     {
-                        error!("receiver dropped rate limit snapshot event");
+                        debug!("receiver dropped rate limit snapshot event");
                     }
 
                     // spawn task to process SSE
@@ -534,7 +534,7 @@ async fn process_sse<S>(
         let sse = match timeout(idle_timeout, stream.next()).await {
             Ok(Some(Ok(sse))) => sse,
             Ok(Some(Err(e))) => {
-                error!("SSE Error: {e:#}");
+                debug!("SSE Error: {e:#}");
                 let event = CodexErr::Stream(e.to_string(), None);
                 let _ = tx_event.send(Err(event)).await;
                 return;
@@ -579,7 +579,7 @@ async fn process_sse<S>(
         let event: SseEvent = match serde_json::from_str(&sse.data) {
             Ok(event) => event,
             Err(e) => {
-                error!("Failed to parse SSE event: {e}, data: {}", &sse.data);
+                debug!("Failed to parse SSE event: {e}, data: {}", &sse.data);
                 continue;
             }
         };
@@ -606,7 +606,7 @@ async fn process_sse<S>(
             "response.output_item.done" => {
                 let Some(item_val) = event.item else { continue };
                 let Ok(item) = serde_json::from_value::<ResponseItem>(item_val) else {
-                    error!("failed to parse ResponseItem from output_item.done");
+                    debug!("failed to parse ResponseItem from output_item.done");
                     continue;
                 };
 
@@ -661,7 +661,7 @@ async fn process_sse<S>(
                                 response_error = Some(CodexErr::Stream(message, delay));
                             }
                             Err(e) => {
-                                error!("failed to parse ErrorResponse: {e}");
+                                debug!("failed to parse ErrorResponse: {e}");
                             }
                         }
                     }
@@ -675,7 +675,7 @@ async fn process_sse<S>(
                             response_completed = Some(r);
                         }
                         Err(e) => {
-                            error!("failed to parse ResponseCompleted: {e}");
+                            debug!("failed to parse ResponseCompleted: {e}");
                             continue;
                         }
                     };
